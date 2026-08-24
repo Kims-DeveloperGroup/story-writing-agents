@@ -39,7 +39,9 @@
 > `$`/`$$` prompt-editing consumer. #160 separates current canonical
 > filesystem-source discovery from publication provenance and recovery. #209
 > adds the bounded startup welcome,
-> native provider-authentication gate, and global `/auth` workflow.
+> native provider-authentication gate, and global `/auth` workflow. #241
+> refines that welcome into a clean colored ASCII wordmark with explicit
+> application color-default semantics.
 
 This contract governs every human-facing interactive view and control in the
 installed shell. It preserves scrollback and the established command/runtime
@@ -52,7 +54,7 @@ provider-bound `$`/`$$` prompt editing without exporting it as a command.
 The words **must**, **must not**, and **may** below constrain the delivery
 issues. Requirements beyond the implemented #82, #83, #84, #85, #86, #79,
 #87, #94, #93, #105, #106, #111, #115, #119, #123, #126, #127, #142,
-#160, #162, #164, #209 provider OAuth initiative, and #73 slices do not describe
+#160, #162, #164, #209 provider OAuth initiative, #237, #241, and #73 slices do not describe
 current production behavior.
 
 ## Delivery status
@@ -79,7 +81,8 @@ current production behavior.
 | #127 leading routed-agent suggestions | Implemented: the capable main prompt projects `@lead`, `@plot`, `@character`, and `@execution` for a cursor-active first leading token, using canonical preferred route aliases and the existing completion controls. |
 | #142 live resume choices and transient input | Implemented: interactive session and conversation selection use only `/session resume [NAME]` and `/conversation resume [ID]`; exact omitted commands show controller-owned choices before submission on capable streams when a disposable read yields eligible rows. A submitted omitted command uses the generic picker—live on a capable stream and numbered in fallback—only after its fresh read succeeds with eligible rows; empty and failed reads report without a picker. Dynamic-choice Enter submits an explicit identity directly. Every capable input read clears its complete live frame before returning and attempts the same cleanup on failure, while persistent semantic results remain in scrollback. |
 | #209 provider OAuth onboarding | Implemented: a four-frame accessible welcome precedes native Codex/Antigravity status and sign-in; startup hard-gates every distinct effective route, `/auth` exposes the same global workflow, settings authenticates before route assignment and Save, and absent-only workspace defaults preserve explicit routing. Provider output, URLs, accounts, tokens, credentials, and native persistence remain provider-owned. |
-| #237 high-visibility startup welcome | Implemented: the four immutable semantic stages project to an original colored `STORY` masthead at 48+ columns, a compact identity at 32–47, and stacked fields below 32. The cadence remains 0.4 seconds, while static, reduced-motion, `NO_COLOR`, callback, non-TTY, and uncertain-capability paths render the width-appropriate final stage once. The startup remains scrollback-friendly, never hides the cursor or enters the alternate screen, and does not copy Oh My Zsh branding or artwork. |
+| #237 high-visibility startup welcome | Implemented: the bounded four-frame startup lifecycle precedes native Codex/Antigravity authentication, preserves scrollback, and keeps provider output outside the terminal-owned presentation. |
+| #241 clean colored startup wordmark | Implemented: physical width selects the prefix-free ASCII wordmark tier at 48/32 columns; eligible ANSI uses bold cyan `S`, magenta `T`, yellow `O`, blue `R`, and green `Y` with local foreground resets. The wide final projection is nine rows and at most 44 cells for the logo; compact and narrow final projections are five rows. Capable animation has exactly three 0.4-second waits; reduced motion independently renders one final colored frame. `NO_COLOR` is color-eligible when unset, empty/whitespace, or trimmed exact `0`, and otherwise disables decoration without changing the environment. |
 | #160 canonical filesystem sources | Implemented: one private writing-artifact leaf discovers and captures safe current canonical filesystem sources independently of publication provenance and recovery. The repository remains the locking and evidence coordinator; the terminal receives only call-local source-list and verified-text callbacks. |
 | #162 independent ranged text viewer | Implemented package-internally: exact caller-supplied text, logical-line count, and complete fallback projection are bounded before terminal access; pure immutable state selects normalized one-based inclusive ranges; capable streams use one bounded alternate-screen lifecycle; and ordinary-line fallback accepts exact ASCII `START-END` or `/cancel` without truncating accepted content. One per-driver input latch now selects `LIVE` or `FALLBACK` permanently and preserves exact-byte decoding across all input routes. Results contain only an exit kind and optional range. No shell command, public API, artifact read, reference construction, composer restoration, or agent integration is added. |
 | #164 interactive artifact references | Implemented: the controller gates activation to attached/focused provider-bound spans, borrows fresh canonical-filesystem-path and verified-text callbacks, and restores exact origin state. The private activation leaf projects `$` completion, direct `$${path}` viewing, `$$` picker/viewer, ordered token replacement, and fixed content-free failures. The driver owns same-latch nested input and fallback second confirmation. Normal submission, parsing, runtime capture, and per-agent enforcement remain established downstream boundaries; no command, automation UI, public selection API, or export is added. |
@@ -747,7 +750,7 @@ Cancel
 | Language | The picker candidates are exactly `KO`, `EN`, `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, `RU`, in that order. A schema-valid existing value outside this UI catalog remains visible and may be preserved, but is not synthesized as a candidate. |
 | Persona | Candidates come only from the existing safe persona-template catalog. Duplicate identifiers resolve with the top-level template taking precedence over `alternative_templates`; the resulting identifiers are ordered lexically. The picker does not read, preview, create, or edit template content. |
 | Maximum debate rounds | A numeric `Prompt` accepts a pending nonnegative integer under the existing validation rule. Blank, negative, fractional, and nonnumeric values produce an inline error `Notice` and retain focus without changing the pending value. `0` remains valid and means audit-only consensus. |
-| Providers | A nested agent picker follows canonical `ROSTER` order, then a Provider/Model/Reasoning effort picker edits only that agent's pending `agent_configs` values. Codex and Antigravity are selectable; nullable routes inherit the workspace default and final Codex fallback. A provider freshly authenticates before its route becomes pending. Changing the route preserves the inactive provider's model/effort settings. Legacy `gemini` is not a selectable or valid backend. The UI neither invents providers nor changes roster identity. |
+| Providers | A nested agent picker follows canonical `ROSTER` order, then a Provider/Model/Reasoning effort picker edits only that agent's pending `agent_configs` values. Codex and Antigravity are selectable; nullable routes inherit the workspace default and final Codex fallback. A provider freshly authenticates before its route becomes pending. Changing the route preserves the inactive provider's model/effort settings. Unsupported legacy provider names are not selectable or valid backends. The UI neither invents providers nor changes roster identity. |
 | Agent Model | A nested free-text `Prompt` uses the active provider's implemented safe-model validator; blank stores null and inherits that provider's workspace system model. It performs no network lookup and does not offer a model catalog. |
 | Agent Reasoning effort | A nested picker offers Inherit plus `minimal`, `low`, `medium`, `high`, and `xhigh` for Codex, or Inherit plus `low`, `medium`, and `high` for Antigravity. Inherit uses the active provider's workspace system value, then the provider default. The UI does not add a Codex reasoning CLI flag. |
 
@@ -868,24 +871,37 @@ the shell's outer interruption cleanup. Settings authenticates before candidate
 mutation; Save gates each distinct effective provider before its file
 transaction.
 
-The welcome is exactly four fixed semantic frames. A capable POSIX ANSI
-terminal projects them at the observed width: a colored `STORY` masthead at 48+
-columns, a compact `STORY WRITING AGENTS` identity at 32–47, and stacked
-`Agents` fields below 32. It replaces those frames at 0.4-second intervals, a
-maximum 2.5 changes per second, and stops after the completed final stage.
-Login guidance and result frames last 0.8 seconds each. Width is reobserved
-before every capable frame, the right margin is reserved, transient rows are
+The welcome is exactly four fixed semantic frames. Physical width selects the
+prefix-free ASCII wordmark tier: 48+ columns use the five-row logo, 32–47 use
+the compact spaced identity, and below 32 use the short identity. The wide
+completed projection is exactly nine rows and its logo is at most 44 cells;
+compact and narrow completed projections are five rows. No startup frame adds
+bracketed semantic labels or wall-to-wall rules. The capable POSIX ANSI driver
+replaces the four frames and waits exactly three times for 0.4 seconds, then
+leaves the completed frame in scrollback before native sign-in. Width is
+reobserved before every capable frame and the live projection reserves the
+rightmost physical cell; static stream output uses its configured safe width,
+while callback construction uses its configured width. Transient rows are
 cleared, SGR is reset, and captured termios is restored with type-ahead discard
 before native sign-in. The flow never hides the cursor or uses the alternate
 screen.
 
-`NO_COLOR`, `STORY_REDUCED_MOTION`, callback, non-TTY, `TERM=dumb`, non-POSIX,
-incomplete termios, and uncertain-capability paths emit the width-appropriate
-completed welcome once, followed by one meaningful static LF record for each
-guidance or result event, with no sleep, ANSI, or flashing. Color never carries
-status or recovery meaning, and the plain text is equivalent to the colored
-projection. The masthead is original and does not copy Oh My Zsh branding or
-artwork. Welcome and auth timing remain private constants behind
+Eligible ANSI uses fixed bold 16-color foreground spans with local resets:
+cyan `S`, magenta `T`, yellow `O`, blue `R`, and green `Y`. Removing SGR
+produces the exact same ASCII text topology as plain output. The wordmark is
+original; Oh My Zsh and FIGlet are research inspiration only, not runtime
+dependencies or copied branding.
+
+The application color gate keeps decoration eligible when `NO_COLOR` is
+unset, empty, whitespace-only, or whitespace-trimmed exact `0`; `NO_COLOR=0`
+is therefore an explicit color-enabled default. Any other value disables
+decorative ANSI, and the runtime only reads the environment—it does not
+overwrite or export it. `STORY_REDUCED_MOTION` is a separate presence-based
+control: on an otherwise ANSI-eligible TTY it emits one final colored frame
+without animation, sleep, raw mode, cursor control, or clearing. Truthy/nonzero
+`NO_COLOR`, non-TTY, `TERM=dumb`, non-POSIX, callback, and uncertain-output
+paths emit one width-appropriate plain final frame without delay or ANSI.
+Welcome and auth timing remain private constants behind
 `InteractiveStartupPresentation`; no public animation, prompt/theme, or
 configuration surface is added.
 
@@ -919,8 +935,8 @@ does not width-ellipsize fallback content; long lines wrap in scrollback.
 
 | Profile | Selection | Output and input behavior |
 | --- | --- | --- |
-| Capable interactive ANSI | Real CLI with trusted TTY capability and non-`dumb` `TERM`; `NO_COLOR` absent for decoration | Structured layout plus fixed foreground/emphasis SGR. Safe functional cursor controls may support the focused live control. |
-| Capable interactive plain | Same interactive capability with `NO_COLOR` present | The identical semantic structure without decorative SGR. Safe functional cursor controls may remain because `NO_COLOR` governs color, not editing capability. |
+| Capable interactive ANSI | Real CLI with trusted TTY capability and non-`dumb` `TERM`; `NO_COLOR` unset, empty/whitespace, or trimmed exact `0` | Structured layout plus fixed foreground/emphasis SGR. Safe functional cursor controls may support the focused live control. |
+| Capable interactive plain | Same interactive capability with any other `NO_COLOR` value or uncertain color read | The identical semantic structure without decorative SGR. Safe functional cursor controls may remain because the application color gate governs decoration, not editing capability. |
 | Plain line fallback | Non-TTY, `TERM=dumb`, missing capability, or any uncertain capability result | Structured plain records; semantic input prompts pass once through the ordinary line callback and remain visible. Internal picker reads use complete numbered prompts and exact line grammar. No raw mode, cursor movement, live overlay, terminal mutation, or synthetic final control frame. |
 
 For the viewer, either capable profile selects raw mode plus one alternate
@@ -995,8 +1011,9 @@ The ANSI policy is intentionally fixed:
   separate viewer may additionally use fixed inverse SGR for selected rows;
 - background detection or selection, backgrounds, dim, blink, OSC, terminal
   queries, and untrusted control sequences are forbidden;
-- `NO_COLOR` disables decorative SGR only and does not flatten the structured
-  layout;
+- the application `NO_COLOR` gate disables decorative SGR only for values other
+  than unset, empty/whitespace, or trimmed exact `0`; it does not flatten the
+  structured layout or mutate/export the environment;
 - each styled span uses a local reset so style cannot bleed into adjacent
   content, prompts, or the user's shell;
 - untrusted text is sanitized before styling, wrapping, padding, or joining
@@ -1381,7 +1398,7 @@ The current 56-unit inventory and 216 edges remain canonical in the module index
 | Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field`, `Message` | Loading, debate identity, handoff/action metadata, agent messages, result/cancelled/completed/error | #83, #119 (implemented) |
 | Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics; post-workspace application errors supply one fixed sanitized debug-log availability notice, while pre-workspace errors include no debug-log path | #83, #131 terminal seam, and #132 application wiring (implemented) |
 | Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Exact top-level order; changed-only Current/Pending confirmation context with `(Changed)` cues and explicit no-diff notice; nested Escape silent; transient cleanup and fallback honesty; disabled provider, validation, error, cancelled, and completed meaning; guarded two-file Save boundary | #93, #106, and #115 (implemented) |
-| Welcome and provider authentication | `Panel`, `Prompt`, `Picker`, `Choice`, `Notice` | Four bounded capable welcome frames with width-aware wide/compact/narrow projections; static accessibility fallback; four explicit provider states; disabled unavailable choice; transient guidance/result; no provider-controlled content | #209, #237 (implemented) |
+| Welcome and provider authentication | Private startup wordmark renderer, `Prompt`, `Picker`, `Choice`, `Notice` | Four bounded capable welcome frames with physical-width wide/compact/narrow projections; clean prefix-free ASCII wordmark; static accessibility fallback; four explicit provider states; disabled unavailable choice; transient guidance/result; no provider-controlled content | #209, #237, #241 (implemented) |
 
 ### Control groups
 
@@ -1482,8 +1499,8 @@ privacy, and the bounded/static startup presentation matrix.
 | Picker and live resume choices | Highlight-versus-selection, disabled-skipping clamped navigation, exact resume ordering/highlights, Tab no-op and one-Enter dynamic commit, Escape cancel/dismissal, typed interrupt/EOF, empty/all-disabled/one/long lists, exact fallback acceptance/rejection, stable identity reconciliation and fresh controller validation, selected-outside-window summary, no synthetic final control frame, complete capable cleanup on every returned outcome/failure, honest fallback visibility, and resize on each live redraw. |
 | Permanent input lifecycle | Resource-free `UNDECIDED` construction; first-read irreversible `LIVE`/`FALLBACK`; sticky fallback and no post-live downgrade; stable source/decoder/configuration correlation; canonical ASCII/UTF-8/ISO-8859-1 plus built-in strict/surrogateescape admission; exact one-byte reads; fragmented code points; maximum four-code-point pending suffix before Escape readiness; clean and partial EOF; read/decode/shape poison; interrupt reset without mode change; synchronous reentry rejection; PENDIN-only tolerated configuration drift; capable history-free subject frames; and cross-prompt/viewer preservation without mixed wrapper/raw reads. |
 | Ranged text viewer | Exact `str`, display-name, strict-UTF-8, private 8 MiB source, exact 65,536-line and 16 MiB complete-fallback boundaries, initial-line, empty/final-LF validation before terminal access; ordinary and Shift+Arrow clamped selection including reversal; configured VINTR/VEOF raw-byte disable/decode/round-trip classification and priority; singleton/range commit; distinct cancel/interrupt/EOF; one row per logical line; safe CR/U+2028/control display; bounded-prefix plain/ANSI current and selected cues; wide/combining/ellipsis behavior; suffix-independent redraw work; bounded height and next-nonexit-key resize; exact untruncated `START-END` or `/cancel` fallback with reverse normalization and visible retry; content-free results; close-on-select/cancel, repeat-open disposal; and no workspace/artifact/runtime/controller dependencies. |
-| Settings | Two-snapshot current/pending separation; exact top-level/language/effort/roster order; safe persona precedence and lexical order; numeric `0`, positive, blank, negative, fractional, and nonnumeric cases; selectable Codex/Antigravity routes with nullable agent/default fallback, authentication-before-assignment, inactive-provider setting preservation, and legacy `gemini` rejection; implemented provider-specific safe model text and blank/null provider default; exact Codex and Antigravity effort enumerations; fresh distinct-effective-provider Save gate outside the transaction; one focused control and deterministic focus return; nested and whole-panel cancellation; exact-byte and catalog conflict before writes; changed-only canonical system-then-agent save; per-file atomic replacement; failing-target-inclusive reverse exact-byte rollback and rollback uncertainty; pending retention; no candidate write on open/edit/highlight/error/cancel; durable completed auth/default writes; next-lifecycle-only application with higher live overrides; plain/ANSI/`NO_COLOR`/narrow/line fallback; hostile display content; and unchanged identity, thread, precedence, public, and machine contracts. |
-| Authentication startup | Exact Codex and resolved-executable Antigravity probes and logins; four states; disabled unavailable choice; login followed by fresh full refresh; no optimistic authorization; initial/effective-route hard gates; `/auth`; absent-only default policy; settings integration; inherited terminal/environment/root; no output/URL/account/token/credential capture; four width-aware 0.4-second welcome frames; 0.8-second transient notices; right-margin/resize safety; termios restoration; no cursor hiding or alternate screen; static no-delay `NO_COLOR`/reduced-motion/callback/non-TTY/`TERM=dumb`/non-POSIX/uncertain fallbacks. |
+| Settings | Two-snapshot current/pending separation; exact top-level/language/effort/roster order; safe persona precedence and lexical order; numeric `0`, positive, blank, negative, fractional, and nonnumeric cases; selectable Codex/Antigravity routes with nullable agent/default fallback, authentication-before-assignment, inactive-provider setting preservation, and unsupported legacy-provider rejection; implemented provider-specific safe model text and blank/null provider default; exact Codex and Antigravity effort enumerations; fresh distinct-effective-provider Save gate outside the transaction; one focused control and deterministic focus return; nested and whole-panel cancellation; exact-byte and catalog conflict before writes; changed-only canonical system-then-agent save; per-file atomic replacement; failing-target-inclusive reverse exact-byte rollback and rollback uncertainty; pending retention; no candidate write on open/edit/highlight/error/cancel; durable completed auth/default writes; next-lifecycle-only application with higher live overrides; plain/ANSI/`NO_COLOR`/narrow/line fallback; hostile display content; and unchanged identity, thread, precedence, public, and machine contracts. |
+| Authentication startup | Exact Codex and resolved-executable Antigravity probes and logins; four states; disabled unavailable choice; login followed by fresh full refresh; no optimistic authorization; initial/effective-route hard gates; `/auth`; absent-only default policy; settings integration; inherited terminal/environment/root; no output/URL/account/token/credential capture; four physical-width-aware welcome frames with exactly three 0.4-second waits; bold cyan/magenta/yellow/blue/green wordmark spans with local resets; reduced-motion one-final-colored-frame path; 0.8-second transient notices; right-margin/resize safety; termios restoration; no cursor hiding or alternate screen; static no-delay nonzero-`NO_COLOR`/callback/non-TTY/`TERM=dumb`/non-POSIX/uncertain fallbacks. |
 | Advisory progress | One four-glyph cycle only for capable raw advisory and consensus awaitables; `NO_COLOR` glyph preservation; clear/redraw around semantic writes; clear and task joining before result/cancel/error; silent callback/non-TTY/`TERM=dumb`/uncertain fallback; operation-error precedence; indicator-only internal-error mapping; no `[routing]`/`[waiting]` records or reusable animation API. |
 | Parser and mutation boundary | The exact visible committed main buffer reaches the established parser once; previews, recall, replacement, highlight, rerender, cancel, Ctrl-C, empty VEOF, and physical EOF cause no parser/runtime/storage call. |
 | Artifact-reference activation | Provider-bound ordinary/routed/`/say`/`/run` and composer spans only; escaped-dollar inertness; fresh sorted canonical-filesystem projection; `$` whole-file completion; explicit `$${path}` viewer; `$$` picker then viewer; multiple ordered indicators; exact marker replacement/cursor; capable same-read return; fallback second confirmation and repeated marker handling; empty/stale/unreadable/unavailable/invalid content-free failures; exact origin/focus/mode restoration; no submit/history/residue; listing-to-view stale detection; independent current runtime capture without viewer-byte reuse; and per-agent enforcement after later normal submission. |

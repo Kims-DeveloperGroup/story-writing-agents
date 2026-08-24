@@ -185,31 +185,62 @@ operation to the terminal's indicator without changing the supported public API.
 ## Startup welcome and authentication
 
 The real stream terminal uses four fixed semantic welcome frames with a
-width-aware projection. At 48 columns and wider, the frames progressively
-reveal an original, high-visibility colored `STORY` masthead and `WRITING
-AGENTS` identity. At 32–47 columns, the same stages use a compact
-`STORY WRITING AGENTS` identity; below 32 columns, they use stacked `Agents`,
-`team`, `space`, and `next` fields so the startup copy remains legible. These
-layouts are projections of the same four semantic stages, not a new component
-or theme surface.
+physical-width projection. At 48 columns and wider, the frames progressively
+reveal an original, prefix-free ASCII `STORY` wordmark. The completed wide
+projection is exactly nine rows, its logo is at most 44 cells wide, and it
+finishes with `WRITING AGENTS`, a blank row, and two concise access-orientation
+lines:
 
-On a capable POSIX terminal, the driver replaces those frames at 0.4-second
-intervals—2.5 changes per second, below the three-flashes-per-second limit—and
-then finishes below the final width-appropriate frame. The sequence is bounded
-to four frames and never enters the alternate screen or hides the cursor.
+```text
+  ____     _____     ___     ____    __   __
+ / ___|   |_   _|   / _ \   |  _ \   \ \ / /
+ \___ \     | |    | | | |  | |_) |   \ V /
+  ___) |    | |    | |_| |  |  _ <     | |
+ |____/     |_|     \___/   |_| \_\    |_|
+        W R I T I N G   A G E N T S
 
-ANSI colors are semantic/decorative only: the masthead uses the existing cyan
-information, yellow warning, and magenta command roles, while bold framing and
-plain text remain equivalent when colors are unavailable. The design is
-original and does not copy Oh My Zsh branding or artwork.
+Four roles. One shared story workspace.
+Next: checking Codex + Antigravity access.
+```
 
-Capable startup animation requires known ANSI, raw mode, cursor controls,
-decorative SGR, and no `STORY_REDUCED_MOTION` environment entry. `NO_COLOR`,
-reduced motion, callback construction, `TERM=dumb`, non-TTY, non-POSIX,
-incomplete termios support, or uncertain capability renders only the meaningful
-width-appropriate final frame as one static LF-terminated plain record, with no
-sleep, ANSI, or flashing. `STORY_REDUCED_MOTION` is an opt-in presence check;
-its value is not parsed.
+At 32–47 physical columns, the compact projection uses the spaced `STORY`
+title and `W R I T I N G   A G E N T S` identity; below 32 columns, the narrow
+projection uses `STORY` and `WRITING AGENTS`. Both compact and narrow completed
+projections are five rows and remain within their tier's safe width. The
+wordmark has no bracketed semantic labels or wall-to-wall rules.
+
+The physical width selects the tier before rendering. A capable live
+projection reserves the rightmost physical cell, so the renderer receives
+`physical width - 1` while still selecting the tier from the original physical
+width; it reobserves that geometry for every frame. Static stream output uses
+its configured safe width, and callback construction uses its configured width.
+
+On a capable POSIX ANSI TTY with reduced motion absent, the driver replaces the
+four frames and waits exactly three times for 0.4 seconds each, then writes one
+final newline so the completed frame remains in scrollback before provider
+authentication. It never enters the alternate screen or hides the cursor.
+
+When ANSI decoration is eligible, the five letters use fixed bold 16-color
+foreground spans: `S` cyan, `T` magenta, `O` yellow, `R` blue, and `Y` green.
+Each span has a local reset only; there are no backgrounds, blink, OSC, or
+cursor sequences. Removing the local SGR produces the exact same ASCII text
+and line topology as plain output. The wordmark is original; Oh My Zsh and
+FIGlet are visual research inspiration only, not runtime dependencies or copied
+branding.
+
+The application color gate treats `NO_COLOR` as color-eligible when it is
+unset, empty, whitespace-only, or whitespace-trimmed exact `0`—so
+`NO_COLOR=0` explicitly keeps eligible color enabled. Any other value disables
+decorative ANSI. The runtime only reads this value; it does not overwrite or
+export the process environment.
+
+`STORY_REDUCED_MOTION` is separate and presence-based; its value is not parsed.
+When it is present on an otherwise ANSI-eligible capable TTY, the driver emits
+one final colored frame with no animation, sleep, raw-mode activation, cursor
+control, or clearing. A truthy/nonzero `NO_COLOR`, non-TTY, `TERM=dumb`,
+non-POSIX, callback, or uncertain output path emits one width-appropriate plain
+final frame with no delay or ANSI. These fallbacks do not include provider
+output, account facts, URLs, tokens, credentials, or executable diagnostics.
 
 The driver reobserves width before each capable frame and reserves the rightmost
 column so wrapping and clearing stay inside the current terminal. It disables

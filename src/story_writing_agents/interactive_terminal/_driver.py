@@ -173,6 +173,9 @@ _HistoryAppend: TypeAlias = Callable[
 _InputRenderer: TypeAlias = Callable[
     [InputPromptView, TerminalCapabilities], RenderedInputFrame
 ]
+_StartupFrameRenderer: TypeAlias = Callable[
+    [int, TerminalCapabilities, int], RenderedFrame
+]
 _PickerTransition: TypeAlias = Callable[
     [PickerControlState, KeyEvent],
     tuple[PickerControlState, ControlOutcome | None],
@@ -541,7 +544,7 @@ class RawTerminalDriver:
 
     def run_startup_welcome(
         self,
-        frame_renderer: Callable[[int, TerminalCapabilities], RenderedFrame],
+        frame_renderer: _StartupFrameRenderer,
         sleeper: Callable[[float], object],
     ) -> None:
         """Render one bounded startup sequence without selecting input mode."""
@@ -552,9 +555,13 @@ class RawTerminalDriver:
             raise TypeError("sleeper must be callable")
         with self._input_latch.input_operation():
             base_capabilities = self._observe_input_capabilities()
+            reduced_motion = self._startup_reduced_motion_preference()
             configuration = (
                 self._startup_terminal_configuration(base_capabilities)
-                if self._startup_animation_is_safe(base_capabilities)
+                if self._startup_animation_is_safe(
+                    base_capabilities,
+                    reduced_motion,
+                )
                 else None
             )
             if configuration is None or not self._run_guarded_startup_presentation(
@@ -565,18 +572,31 @@ class RawTerminalDriver:
                     base_capabilities,
                 ),
             ):
-                static_capabilities = _static_startup_capabilities(base_capabilities)
+                physical_width = base_capabilities.width
+                safe_width = _startup_safe_projection_width(
+                    base_capabilities,
+                    physical_width,
+                )
+                static_capabilities = _static_startup_capabilities(
+                    _capabilities_with_width(base_capabilities, safe_width),
+                    decorative_sgr=(
+                        reduced_motion is True
+                        and base_capabilities.profile is CapabilityProfile.ANSI
+                        and base_capabilities.decorative_sgr
+                    ),
+                )
                 final_frame = _startup_frame(
                     frame_renderer,
                     _STARTUP_WELCOME_FRAME_COUNT - 1,
                     static_capabilities,
+                    physical_width,
                 )
                 self._write_raw_text(f"{final_frame.text}\n")
         return
 
     def _run_startup_welcome_frames(
         self,
-        frame_renderer: Callable[[int, TerminalCapabilities], RenderedFrame],
+        frame_renderer: _StartupFrameRenderer,
         sleeper: Callable[[float], object],
         base_capabilities: TerminalCapabilities,
     ) -> None:
@@ -586,13 +606,14 @@ class RawTerminalDriver:
         active_failure: BaseException | None = None
         try:
             for index in range(_STARTUP_WELCOME_FRAME_COUNT):
-                render_capabilities = self._startup_render_capabilities(
-                    base_capabilities
+                render_capabilities, physical_width = (
+                    self._startup_welcome_render_context(base_capabilities)
                 )
                 frame = _startup_frame(
                     frame_renderer,
                     index,
                     render_capabilities,
+                    physical_width,
                 )
                 self._replace_startup_frame(frame, live_state)
                 if index < _STARTUP_WELCOME_FRAME_COUNT - 1:
@@ -640,9 +661,13 @@ class RawTerminalDriver:
             raise TypeError("result_boundary must be a bool")
         with self._input_latch.input_operation():
             base_capabilities = self._observe_input_capabilities()
+            reduced_motion = self._startup_reduced_motion_preference()
             configuration = (
                 self._startup_terminal_configuration(base_capabilities)
-                if self._startup_animation_is_safe(base_capabilities)
+                if self._startup_animation_is_safe(
+                    base_capabilities,
+                    reduced_motion,
+                )
                 else None
             )
             if configuration is None or not self._run_guarded_startup_presentation(
@@ -795,6 +820,7 @@ class RawTerminalDriver:
     def _startup_animation_is_safe(
         self,
         capabilities: TerminalCapabilities,
+        reduced_motion: bool | None,
     ) -> bool:
         """Require known ANSI cursor support and no reduced-motion request."""
 
@@ -805,12 +831,17 @@ class RawTerminalDriver:
             or not capabilities.decorative_sgr
         ):
             return False
+        return reduced_motion is False
+
+    def _startup_reduced_motion_preference(self) -> bool | None:
+        """Observe the presence-based motion opt-out or return uncertainty."""
+
         try:
             os_module = self._os_provider()
             environment = getattr(os_module, "environ", {})
-            return _REDUCED_MOTION_ENVIRONMENT_KEY not in environment
+            return _REDUCED_MOTION_ENVIRONMENT_KEY in environment
         except Exception:
-            return False
+            return None
 
     def _replace_startup_frame(
         self,
@@ -875,6 +906,22 @@ class RawTerminalDriver:
         return _capabilities_with_width(
             base_capabilities,
             max(1, observed_width - 1),
+        )
+
+    def _startup_welcome_render_context(
+        self,
+        base_capabilities: TerminalCapabilities,
+    ) -> tuple[TerminalCapabilities, int]:
+        """Observe physical width separately from the safe welcome width."""
+
+        physical_width = self.capabilities().width
+        safe_width = _startup_safe_projection_width(
+            base_capabilities,
+            physical_width,
+        )
+        return (
+            _capabilities_with_width(base_capabilities, safe_width),
+            physical_width,
         )
 
     def _clear_startup_state(self, state: _StartupFrameState) -> None:
@@ -2878,31 +2925,53 @@ class RawTerminalDriver:
 
 
 def _startup_frame(
-    renderer: Callable[[int, TerminalCapabilities], RenderedFrame],
+    renderer: _StartupFrameRenderer,
     index: int,
     capabilities: TerminalCapabilities,
+    physical_width: int,
 ) -> RenderedFrame:
     """Render and validate one frame from the fixed startup vocabulary."""
 
-    frame = renderer(index, capabilities)
+    frame = renderer(index, capabilities, physical_width)
     _require_startup_frame(frame, capabilities)
     return frame
 
 
 def _static_startup_capabilities(
     capabilities: TerminalCapabilities,
+    *,
+    decorative_sgr: bool = False,
 ) -> TerminalCapabilities:
     """Remove styling and cursor authority from one startup fallback profile."""
 
+    if type(decorative_sgr) is not bool:
+        raise TypeError("decorative_sgr must be a bool")
     return TerminalCapabilities(
-        CapabilityProfile.LINE,
+        CapabilityProfile.ANSI if decorative_sgr else CapabilityProfile.LINE,
         capabilities.width,
         input_tty=capabilities.input_tty,
         output_tty=capabilities.output_tty,
         raw_mode=False,
         cursor_controls=False,
-        decorative_sgr=False,
+        decorative_sgr=decorative_sgr,
     )
+
+
+def _startup_safe_projection_width(
+    capabilities: TerminalCapabilities,
+    physical_width: int,
+) -> int:
+    """Reserve the rightmost cell only for a real terminal destination."""
+
+    if type(capabilities) is not TerminalCapabilities:
+        raise TypeError("capabilities must be TerminalCapabilities")
+    if type(physical_width) is not int:
+        raise TypeError("physical_width must be an integer")
+    if physical_width <= 0:
+        raise ValueError("physical_width must be positive")
+    if capabilities.output_tty:
+        return max(1, physical_width - 1)
+    return physical_width
 
 
 def _require_startup_frame(
@@ -2998,11 +3067,7 @@ def detect_terminal_capabilities(
         except Exception:
             width = _DEFAULT_TERMINAL_WIDTH
 
-    no_color = False
-    try:
-        no_color = "NO_COLOR" in environment
-    except Exception:
-        no_color = True
+    no_color = _no_color_is_requested(environment)
     decorative_sgr = raw_capable and not no_color
     if decorative_sgr:
         profile = CapabilityProfile.ANSI
@@ -3019,6 +3084,21 @@ def detect_terminal_capabilities(
         cursor_controls=raw_capable,
         decorative_sgr=decorative_sgr,
     )
+
+
+def _no_color_is_requested(environment: object) -> bool:
+    """Treat only nonempty, nonzero NO_COLOR text as an explicit opt-out."""
+
+    missing = object()
+    try:
+        value = environment.get("NO_COLOR", missing)
+    except Exception:
+        return True
+    if value is missing:
+        return False
+    if type(value) is not str:
+        return True
+    return value.strip() not in {"", "0"}
 
 
 def _stream_is_tty(stream: TextIO) -> bool:

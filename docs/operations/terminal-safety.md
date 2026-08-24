@@ -72,9 +72,14 @@ output width. The internal live picker observes capability and width on every
 redraw and limits its contiguous viewport to seven choices; its line fallback
 renders the complete list.
 
-The internal profiles are fixed ANSI, capable plain, and line fallback. Presence
-of `NO_COLOR` disables decorative SGR only; it does not disable safe functional
-cursor controls on an otherwise capable terminal. There is no public theme API.
+The internal profiles are fixed ANSI, capable plain, and line fallback. The
+application color gate keeps ANSI eligible when `NO_COLOR` is unset, empty,
+whitespace-only, or whitespace-trimmed exact `0`; `NO_COLOR=0` is therefore an
+explicit color-enabled default. Any other value, including a nonzero/truthy
+value, non-string value, or uncertain environment read, disables decorative
+SGR. The runtime reads this value but does not overwrite or export it. Color
+selection does not disable safe functional cursor controls on an otherwise
+capable terminal, and there is no public theme API.
 
 The internal viewer uses those same capability facts but has a distinct
 interaction. A capable stream uses raw input and one alternate screen; an
@@ -95,22 +100,29 @@ this component fallback can be used.
 
 Startup uses a separate bounded policy from the advisory indicator. Only a
 capable POSIX ANSI terminal with decorative SGR and no
-`STORY_REDUCED_MOTION` entry receives the four fixed semantic welcome frames.
-The renderer selects a wide colored `STORY` masthead at 48 columns and wider,
-a compact identity at 32–47 columns, or stacked fields below 32 columns. The
-three changes are 0.4 seconds apart, or 2.5 per second, and therefore do not
-exceed three flashes per second. Native sign-in guidance and result notices
-each use one fixed 0.8-second capable frame. There is no alternate screen,
-cursor hiding, general animation service, signal loop, or unbounded repetition.
+`STORY_REDUCED_MOTION` entry receives the four animated welcome frames. Physical
+width selects the projection: 48+ columns use the clean five-row ASCII logo,
+32–47 use the compact spaced identity, and below 32 use the short identity.
+The completed wide projection is nine rows with a 44-cell maximum logo width;
+it has no bracketed semantic labels or wall-to-wall rules. The three changes
+are exactly 0.4 seconds apart. The final frame remains in scrollback before
+native provider authentication. There is no alternate screen, cursor hiding,
+general animation service, signal loop, or unbounded repetition.
 
-`NO_COLOR`, reduced motion, callback construction, non-TTY, `TERM=dumb`,
-non-POSIX, incomplete termios, or uncertain capability emits only the
-meaningful width-appropriate final welcome or notice once as plain LF output.
-Those paths do not sleep, emit ANSI, flash, acquire raw mode, or claim
-transient cleanup. The final welcome retains the same semantic status information without
-decorative color, and `NO_COLOR` intentionally selects this static startup
-fallback because the startup ceremony requires decorative SGR as part of its
-capability proof.
+The live driver reserves the rightmost physical cell and reobserves width for
+each frame; static stream output uses its configured safe width, while callback
+construction uses its configured width. A present `STORY_REDUCED_MOTION` entry
+is independent of color: on an otherwise ANSI-eligible TTY it emits one final
+colored frame without animation, sleep, raw-mode activation, cursor control,
+or clearing. A nonzero/truthy `NO_COLOR`, non-TTY, `TERM=dumb`, non-POSIX,
+callback, or uncertain-output path emits one width-appropriate plain final
+frame without delay or ANSI.
+
+Native sign-in guidance and result notices each use one fixed 0.8-second
+capable frame. Capable startup preserves exact terminal restoration and
+type-ahead discard safety; static and callback paths perform no terminal
+mutation. No provider output, account facts, URLs, tokens, credentials, or
+executable diagnostics enter the welcome.
 
 Every capable frame reobserves width and reserves one right-margin column. The
 driver disables echo and canonical input only while it owns the frame, accepts
@@ -123,11 +135,11 @@ uncertain restoration remains fatal rather than handing a damaged terminal to
 the provider.
 
 All welcome and authentication copy is closed, semantic, and sanitized. The
-welcome's color is decorative and never carries status or recovery meaning;
-plain and colored projections of each selected width have equivalent text. The
-startup does not copy Oh My Zsh branding or artwork, and no provider output,
-account facts, URLs, tokens, credentials, login return codes, or executable
-diagnostics enter its frames. See the
+wordmark uses fixed bold 16-color foreground spans—cyan `S`, magenta `T`,
+yellow `O`, blue `R`, and green `Y`—with local resets only. Color is
+decorative, and removing SGR preserves the exact ASCII text topology. The
+wordmark is original; Oh My Zsh and FIGlet are research inspiration only, not
+runtime dependencies or copied branding. See the
 [terminal reference](../reference/interactive-terminal.md#startup-welcome-and-authentication)
 and [native authentication privacy boundary](privacy-and-provider.md#native-authentication-boundary).
 

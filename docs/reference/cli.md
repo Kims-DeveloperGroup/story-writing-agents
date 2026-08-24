@@ -191,8 +191,8 @@ Every installed command that constructs an `AgentBackend` validates and
 snapshots both the workspace system defaults and per-agent configuration. The
 repeatable `--backend AGENT=BACKEND` accepts canonical
 agent IDs and exactly `codex` or `antigravity`; it changes only that backend
-instance. Duplicate agents are rejected. `gemini` is rejected with fixed
-migration guidance to use `antigravity`.
+instance. Duplicate agents are rejected. Unsupported legacy provider names are
+rejected with fixed migration guidance to use `antigravity`.
 
 For Codex, a non-null `--codex-model` on `story chat` or `story run` overrides
 all persisted Codex model values; otherwise each agent inherits its
@@ -251,14 +251,25 @@ written after that boundary and remain visible. Conversation-subject input is
 always an ordinary read.
 
 After workspace resolution, a capable POSIX terminal shows a bounded,
-width-aware four-frame welcome at 0.4-second intervals, then the authentication
-gate. At 48 columns and wider it progressively reveals the colored `STORY`
-masthead; 32–47 columns use a compact identity, and narrower terminals use
-stacked fields. Sign-in guidance and its sanitized result are each transient
-for 0.8 seconds. `NO_COLOR`, `STORY_REDUCED_MOTION`, non-POSIX, `TERM=dumb`,
-callback, or uncertain capability renders the width-appropriate completed
-welcome once with no delay, ANSI, or flashing. The welcome does not use the
-alternate screen or hide the cursor, and it never includes provider output.
+width-aware four-frame welcome before the authentication gate. Physical widths
+of 48 columns and wider progressively reveal the original five-letter colored
+`STORY` wordmark; 32–47 columns use the compact spaced identity, and narrower
+terminals use the short identity. The capable animation has exactly three
+0.4-second waits, then leaves the completed frame in scrollback. The wide
+completed projection is nine rows with a 44-cell maximum logo width; compact
+and narrow projections remain five rows. Sign-in guidance and its sanitized
+result are each transient for 0.8 seconds.
+
+The application treats `NO_COLOR` as color-eligible when it is unset, empty,
+whitespace-only, or trimmed exact `0`; `NO_COLOR=0` therefore explicitly keeps
+eligible ANSI decoration enabled. Any other value disables decorative ANSI,
+without the runtime overwriting or exporting the environment. Presence of
+`STORY_REDUCED_MOTION` independently selects one final colored frame when the
+TTY is otherwise ANSI-eligible, with no animation, sleep, raw mode, cursor
+control, or clearing. Nonzero/truthy `NO_COLOR`, non-TTY, `TERM=dumb`,
+non-POSIX, callback, and uncertain-output paths render one plain final frame
+without delay or ANSI. The welcome does not use the alternate screen or hide
+the cursor, and it never includes provider output.
 See the exact [terminal startup contract](interactive-terminal.md#startup-welcome-and-authentication).
 
 Main prompts project canonical root, subcommand, and finite fixed-option

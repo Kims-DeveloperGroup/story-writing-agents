@@ -2333,26 +2333,44 @@ print(
     ) -> None:
         """Render the bounded capable welcome and restore the inherited PTY."""
 
+        self._set_auth_state(
+            codex="unauthenticated",
+            antigravity="indeterminate",
+        )
         process = self._spawn_cli(
             (),
-            environment_overrides={"TERM": "xterm-256color"},
-            decorative_color=True,
+            environment_overrides={"TERM": "xterm-256color", "NO_COLOR": "0"},
             reduced_motion=False,
         )
-        process.wait_for_text("story[lobby]> ")
+        process.wait_for_text("Provider authentication")
         capture = process.normalized_text
-        self.assertIn("Story.", capture)
-        self.assertIn("Story Writing", capture)
-        self.assertIn("Story Writing Agents", capture)
-        self.assertIn(
-            "Provider access will be checked before the story session starts.",
-            capture,
+        raw_before_auth = bytes(process.raw_bytes).split(
+            b"Provider authentication",
+            maxsplit=1,
+        )[0]
+        self.assertTrue(raw_before_auth.startswith(b"\x1b[1;36mS\x1b[0m"))
+        for sgr in (
+            b"\x1b[1;36m",
+            b"\x1b[1;35m",
+            b"\x1b[1;33m",
+            b"\x1b[1;34m",
+            b"\x1b[1;32m",
+        ):
+            self.assertIn(sgr, raw_before_auth)
+        self.assertIn("W R I T I N G", capture)
+        self.assertIn("W R I T I N G   A G E N T S", capture)
+        self.assertIn("Four roles. One shared story workspace.", capture)
+        next_copy = "Next: checking Codex + Antigravity access."
+        self.assertIn(next_copy, capture)
+        self.assertLess(
+            capture.rfind(next_copy),
+            capture.index("Provider authentication"),
         )
-        self.assertIn(b"\x1b[", process.raw_bytes)
         self.assertNotIn(b"\x1b[?1049", process.raw_bytes)
+        self.assertNotIn(b"\x1b[?25", process.raw_bytes)
         self.assertFalse(self.provider_log.exists())
 
-        process.send_text("/quit\n\n")
+        process.send_interrupt()
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertNotIn(
             "PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR",
@@ -2366,32 +2384,43 @@ print(
     def test_startup_welcome_scales_wide_and_narrow_without_provider_leakage(
         self,
     ) -> None:
-        """Keep the masthead visible across PTY widths before provider work."""
+        """Keep the colored wordmark legible across real PTY widths."""
 
         cases = (
-            (80, "SSSS", "WRITING AGENTS"),
-            (20, "provider check", "Agents"),
+            (
+                80,
+                " / ___| ",
+                "W R I T I N G   A G E N T S",
+                "Next: checking Codex + Antigravity access.",
+            ),
+            (20, "Four roles.", "WRITING AGENTS", "Next: access check."),
         )
-        for terminal_columns, masthead_marker, final_marker in cases:
+        for terminal_columns, logo_marker, identity, next_copy in cases:
             with self.subTest(terminal_columns=terminal_columns):
                 process = self._spawn_cli(
                     (),
-                    environment_overrides={"TERM": "xterm-256color"},
+                    environment_overrides={
+                        "TERM": "xterm-256color",
+                        "NO_COLOR": "0",
+                    },
                     terminal_columns=terminal_columns,
-                    decorative_color=True,
                     reduced_motion=False,
                 )
                 process.wait_for_text("story[lobby]> ")
                 capture = process.normalized_text
-                self.assertIn(masthead_marker, capture)
-                self.assertIn(final_marker, capture)
-                self.assertIn(
-                    "Provider access will be checked before the story session starts."
-                    if terminal_columns >= 48
-                    else "provider check",
-                    " ".join(capture.split()),
-                )
+                self.assertIn(logo_marker, capture)
+                self.assertIn(identity, capture)
+                self.assertIn(next_copy, capture)
+                for sgr in (
+                    b"\x1b[1;36m",
+                    b"\x1b[1;35m",
+                    b"\x1b[1;33m",
+                    b"\x1b[1;34m",
+                    b"\x1b[1;32m",
+                ):
+                    self.assertIn(sgr, process.raw_bytes)
                 self.assertNotIn(b"\x1b[?1049", process.raw_bytes)
+                self.assertNotIn(b"\x1b[?25", process.raw_bytes)
                 self.assertFalse(self.provider_log.exists())
 
                 process.send_text("/quit\n\n")

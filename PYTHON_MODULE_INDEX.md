@@ -1632,13 +1632,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   terminal-default foreground with the same plain meaning and local reset.
   `render_advisory_progress_frame` projects the fixed one-cell `◐`, `◓`,
   `◑`, and `◒` cycle without ANSI, cursor controls, dynamic content, or
-  state.
+  state. Package-internal `render_startup_welcome_frame` separately projects
+  the fixed four-stage startup welcome without entering the closed semantic
+  component vocabulary. It selects its prefix-free wide, compact, or narrow
+  layout from the supplied physical terminal width while fitting every row to
+  the independently supplied safe projection width. The wide layout assembles
+  five baseline-aligned printable-ASCII `STORY` glyph rows with one fixed bold
+  cyan, magenta, yellow, blue, or green foreground per letter; compact and
+  narrow layouts retain the same five-color identity. Fixed local resets make
+  the ANSI projection strip to exactly the plain text, and the completed view
+  includes explicit team and next-provider-check copy independent of color.
 - **Direct internal dependencies:** `interactive_terminal._model`.
 - **State, resources, and side effects:** Pure projections only. Dynamic text
   is sanitized before wrapping or fixed styling; the module writes and flushes
   no stream, emits no OSC, query, background, dim, blink, or cursor sequence,
   and owns no environment, terminal, runtime, provider, filesystem, or storage
-  state.
+  state. The startup glyphs, copy, span palette, and four-stage projections are
+  immutable fixed module data and perform no import-time operation.
 - **Primary verification/documentation:**
   `tests/test_interactive_terminal_completion.py`,
   `tests/test_interactive_terminal_foundation.py`,
@@ -1842,6 +1852,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   renderers and timing, progressively display the fixed four-frame welcome or
   one transient authentication notice, and establish a fresh post-provider
   output boundary before results without introducing a general animation API.
+  The private welcome-renderer contract carries the latest physical terminal
+  width separately from capabilities whose width is the safe projection bound,
+  so physical 48- and 32-column layout tiers remain identical across animated
+  and static paths while real-terminal output reserves the rightmost cell.
 - **Direct internal dependencies:** `interactive_terminal._input_lifecycle`,
   `interactive_terminal._model`, `interactive_terminal._reference_activation`,
   and
@@ -1922,18 +1936,25 @@ every intermediate arrow. The current runtime graph is acyclic.
   call-local noncanonical/no-echo attributes, discards only type-ahead received
   during the guarded delay, and exactly restores the original terminal before
   native login or subsequent input. It reobserves width for every startup
-  frame, reserves the right-margin column, retains write-time physical-row
-  geometry, resets SGR during cleanup, and preserves the primary error while
-  avoiding speculative cursor erasure after unknown write progress. Welcome
-  frames change at 0.4-second intervals and notices are bounded to 0.8 seconds.
-  `NO_COLOR`, reduced motion, callbacks, missing or uncertain capability,
-  non-TTY, non-POSIX, `TERM=dumb`, or unavailable safe input discard instead
-  emits one meaningful plain LF-delimited static rendering with no delay, ANSI,
-  cursor animation, or flashing. Missing, uncertain, non-TTY,
+  frame, uses that physical width for welcome-tier selection, supplies a
+  separately right-margin-reserved safe width for rendering to a real
+  terminal, retains write-time physical-row geometry, resets SGR during
+  cleanup, and preserves the primary error while avoiding speculative cursor
+  erasure after unknown write progress. Welcome frames change at 0.4-second
+  intervals and notices are bounded to 0.8 seconds. A present
+  `STORY_REDUCED_MOTION` on an otherwise capable ANSI terminal emits the final
+  welcome once with its fixed foreground decoration but without delay, raw-mode
+  activation, cursor animation, or flashing; its authentication notices remain
+  static plain records. A nonempty, nonzero `NO_COLOR` value, callbacks,
+  missing or uncertain capability, non-TTY, non-POSIX, `TERM=dumb`, or
+  unavailable safe input discard instead emits one meaningful plain
+  LF-delimited static rendering with no delay, ANSI, cursor animation, or
+  flashing. Missing, uncertain, non-TTY,
   non-POSIX, or `TERM=dumb` capability on the first input safely selects
   permanent ordinary line input. `NO_COLOR` affects decorative SGR for ordinary
-  input and selects the static startup presentation. Construction and import
-  remain I/O-free.
+  input and startup: unset, empty or whitespace-only, and exact trimmed `0`
+  permit decoration, while every other value opts out and selects the static
+  plain welcome. Construction and import remain I/O-free.
 - **Primary verification/documentation:**
   `tests/test_interactive_line_editor.py`,
   `tests/test_interactive_terminal_input_lifecycle.py`,
@@ -2063,11 +2084,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   awaitable wrappers: callback construction remains visually silent, and stream
   construction injects the pure fixed-glyph renderer into the sole driver
   without exposing capabilities or streams. Resource-free
-  `InteractiveStartupPresentation` similarly binds a fixed semantic four-stage
-  welcome plus authentication guidance and result notices; callback
-  construction writes one plain static record and stream construction delegates
-  guarded timing, terminal reclaim, and cleanup to the sole driver. The
-  supported public terminal class and facade exports remain unchanged.
+  `InteractiveStartupPresentation` similarly binds the renderer-owned fixed,
+  prefix-free four-stage welcome plus semantic authentication guidance and
+  result notices; callback construction writes the completed plain welcome once
+  and stream construction delegates physical/safe width coordination, guarded
+  timing, terminal reclaim, and cleanup to the sole driver. The supported
+  public terminal class and facade exports remain unchanged.
 - **Direct internal dependencies:** `agents`, `interactive_commands`,
   `interactive_terminal._controls`, `interactive_terminal._driver`,
   `interactive_terminal._model`, `interactive_terminal._reference_activation`,
@@ -2092,9 +2114,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   subject input remains ordinary. Callback-constructed terminals and the core
   itself own no history.
   Startup presentation retains only terminal-owned callbacks and one injectable
-  sleeper; its semantic frame tuple is immutable and all input exclusion,
-  capability, stream, raw-mode, input-discard, delay, geometry, and cleanup
-  resources remain driver-owned.
+  sleeper; it owns no welcome-frame, glyph, palette, or ANSI data, and all input
+  exclusion, capability, stream, raw-mode, input-discard, delay, geometry, and
+  cleanup resources remain driver-owned. The pure fixed startup projection and
+  its immutable visual data remain renderer-owned.
   The semantic adapter retains only the
   terminal's bound component capability and acquires no stream or raw resource.
   The optional debug-log path is call-local presentation input and is not
@@ -3198,10 +3221,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   owns capability and reduced-motion selection, guarded noncanonical/no-echo
   activation, atomic type-ahead discard, exact restoration before native login,
   bounded timing, fresh-width rendering, right-margin safety, write-progress
-  geometry, result line boundaries, SGR reset, and best-effort cleanup. `_core`
-  owns only the immutable semantic welcome and notice components plus the
-  resource-free startup adapter; static, reduced-motion, callback, dumb, and
-  uncertain paths remain meaningful, plain, and delay-free. It receives
+  geometry, result line boundaries, SGR reset, and best-effort cleanup.
+  `_render` owns the fixed wordmark data and pure welcome projections, while
+  `_core` binds that renderer through its resource-free startup adapter and
+  supplies semantic authentication notices. Eligible capable ANSI reduced
+  motion renders one colored final welcome without animation, raw-mode
+  activation, cursor control, clearing, or delay; authentication notices remain
+  static plain records. A decoration-disabling `NO_COLOR` value, callback
+  construction, or a dumb, constrained, or uncertain terminal instead keeps the
+  welcome meaningful, plain, and delay-free. It receives
   completion, palette, preview, and trusted semantic input collaborators only
   per read,
   resets navigation for each main read, and keeps composition and confirmation
