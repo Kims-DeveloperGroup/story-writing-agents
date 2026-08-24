@@ -2363,6 +2363,44 @@ print(
             process.original_terminal_attributes,
         )
 
+    def test_startup_welcome_scales_wide_and_narrow_without_provider_leakage(
+        self,
+    ) -> None:
+        """Keep the masthead visible across PTY widths before provider work."""
+
+        cases = (
+            (80, "SSSS", "WRITING AGENTS"),
+            (20, "provider check", "Agents"),
+        )
+        for terminal_columns, masthead_marker, final_marker in cases:
+            with self.subTest(terminal_columns=terminal_columns):
+                process = self._spawn_cli(
+                    (),
+                    environment_overrides={"TERM": "xterm-256color"},
+                    terminal_columns=terminal_columns,
+                    decorative_color=True,
+                    reduced_motion=False,
+                )
+                process.wait_for_text("story[lobby]> ")
+                capture = process.normalized_text
+                self.assertIn(masthead_marker, capture)
+                self.assertIn(final_marker, capture)
+                self.assertIn(
+                    "Provider access will be checked before the story session starts."
+                    if terminal_columns >= 48
+                    else "provider check",
+                    " ".join(capture.split()),
+                )
+                self.assertNotIn(b"\x1b[?1049", process.raw_bytes)
+                self.assertFalse(self.provider_log.exists())
+
+                process.send_text("/quit\n\n")
+                self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+                self.assertEqual(
+                    process.final_terminal_attributes,
+                    process.original_terminal_attributes,
+                )
+
     def test_bare_entry_creates_session_then_quit_releases_only_access(
         self,
     ) -> None:

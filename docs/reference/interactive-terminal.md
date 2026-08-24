@@ -184,21 +184,32 @@ operation to the terminal's indicator without changing the supported public API.
 
 ## Startup welcome and authentication
 
-The real stream terminal uses four fixed semantic welcome frames:
-`Story.`, `Story Writing`, `Story Writing Agents`, and the completed
-`Story Writing Agents` panel that says provider access will be checked. On a
-capable POSIX terminal, the driver replaces those frames at 0.4-second
+The real stream terminal uses four fixed semantic welcome frames with a
+width-aware projection. At 48 columns and wider, the frames progressively
+reveal an original, high-visibility colored `STORY` masthead and `WRITING
+AGENTS` identity. At 32–47 columns, the same stages use a compact
+`STORY WRITING AGENTS` identity; below 32 columns, they use stacked `Agents`,
+`team`, `space`, and `next` fields so the startup copy remains legible. These
+layouts are projections of the same four semantic stages, not a new component
+or theme surface.
+
+On a capable POSIX terminal, the driver replaces those frames at 0.4-second
 intervals—2.5 changes per second, below the three-flashes-per-second limit—and
-then finishes below the final frame. The sequence is bounded to four frames and
-never enters the alternate screen.
+then finishes below the final width-appropriate frame. The sequence is bounded
+to four frames and never enters the alternate screen or hides the cursor.
+
+ANSI colors are semantic/decorative only: the masthead uses the existing cyan
+information, yellow warning, and magenta command roles, while bold framing and
+plain text remain equivalent when colors are unavailable. The design is
+original and does not copy Oh My Zsh branding or artwork.
 
 Capable startup animation requires known ANSI, raw mode, cursor controls,
 decorative SGR, and no `STORY_REDUCED_MOTION` environment entry. `NO_COLOR`,
 reduced motion, callback construction, `TERM=dumb`, non-TTY, non-POSIX,
 incomplete termios support, or uncertain capability renders only the meaningful
-final frame as one static LF-terminated plain record, with no sleep, ANSI, or
-flashing. `STORY_REDUCED_MOTION` is an opt-in presence check; its value is not
-parsed.
+width-appropriate final frame as one static LF-terminated plain record, with no
+sleep, ANSI, or flashing. `STORY_REDUCED_MOTION` is an opt-in presence check;
+its value is not parsed.
 
 The driver reobserves width before each capable frame and reserves the rightmost
 column so wrapping and clearing stay inside the current terminal. It disables

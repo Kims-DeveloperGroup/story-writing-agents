@@ -95,17 +95,20 @@ this component fallback can be used.
 
 Startup uses a separate bounded policy from the advisory indicator. Only a
 capable POSIX ANSI terminal with decorative SGR and no
-`STORY_REDUCED_MOTION` entry receives the four fixed welcome frames. The three
-changes are 0.4 seconds apart, or 2.5 per second, and therefore do not exceed
-three flashes per second. Native sign-in guidance and result notices each use
-one fixed 0.8-second capable frame. There is no alternate screen, general
-animation service, signal loop, or unbounded repetition.
+`STORY_REDUCED_MOTION` entry receives the four fixed semantic welcome frames.
+The renderer selects a wide colored `STORY` masthead at 48 columns and wider,
+a compact identity at 32–47 columns, or stacked fields below 32 columns. The
+three changes are 0.4 seconds apart, or 2.5 per second, and therefore do not
+exceed three flashes per second. Native sign-in guidance and result notices
+each use one fixed 0.8-second capable frame. There is no alternate screen,
+cursor hiding, general animation service, signal loop, or unbounded repetition.
 
 `NO_COLOR`, reduced motion, callback construction, non-TTY, `TERM=dumb`,
 non-POSIX, incomplete termios, or uncertain capability emits only the
-meaningful final welcome or notice once as plain LF output. Those paths do not
-sleep, emit ANSI, flash, acquire raw mode, or claim transient cleanup. Unlike
-the advisory indicator, `NO_COLOR` intentionally selects this static startup
+meaningful width-appropriate final welcome or notice once as plain LF output.
+Those paths do not sleep, emit ANSI, flash, acquire raw mode, or claim
+transient cleanup. The final welcome retains the same semantic status information without
+decorative color, and `NO_COLOR` intentionally selects this static startup
 fallback because the startup ceremony requires decorative SGR as part of its
 capability proof.
 
@@ -119,9 +122,12 @@ failure or process control still attempts frame cleanup and restoration;
 uncertain restoration remains fatal rather than handing a damaged terminal to
 the provider.
 
-All welcome and authentication copy is closed, semantic, and sanitized.
-Provider output, account details, OAuth URLs, tokens, credentials, login return
-codes, and executable diagnostics never enter a startup frame. See the
+All welcome and authentication copy is closed, semantic, and sanitized. The
+welcome's color is decorative and never carries status or recovery meaning;
+plain and colored projections of each selected width have equivalent text. The
+startup does not copy Oh My Zsh branding or artwork, and no provider output,
+account facts, URLs, tokens, credentials, login return codes, or executable
+diagnostics enter its frames. See the
 [terminal reference](../reference/interactive-terminal.md#startup-welcome-and-authentication)
 and [native authentication privacy boundary](privacy-and-provider.md#native-authentication-boundary).
 

@@ -84,7 +84,14 @@ Bare `story` is the primary interactive entry:
 story
 ```
 
-The welcome is followed by the first interactive gate. The runtime silently
+The welcome is followed by the first interactive gate. On wide terminals it
+opens with a high-visibility colored `STORY` masthead; 32–47-column terminals
+use a compact identity, and narrower terminals use stacked fields. The welcome
+is four bounded stages at 0.4-second intervals when motion is supported.
+Reduced-motion, `NO_COLOR`, non-TTY, and other limited-capability paths render
+the width-appropriate completed stage once without delay or color. It does not
+enter the alternate screen, hide the cursor, or include provider output. The
+runtime silently
 checks Codex with `codex login status` and the resolved Antigravity executable
 with `models` (`agy models` by default). Select an unauthenticated provider to
 hand the real terminal to its native sign-in: `codex login` for Codex or the
