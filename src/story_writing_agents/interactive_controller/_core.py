@@ -76,9 +76,7 @@ from ..interactive_commands import (
     project_provider_text_span,
 )
 from ..interactive_settings import (
-    SETTINGS_ANTIGRAVITY_EFFORTS,
     SETTINGS_LANGUAGES,
-    SETTINGS_REASONING_EFFORTS,
     SettingsError,
     SettingsErrorKind,
     SettingsState,
@@ -141,6 +139,13 @@ from ..models import (
 )
 from ..orchestrator import StoryRuntime
 from ..provider_auth import ProviderAuthSnapshot
+from ..provider_catalog import (
+    ProviderCatalogDiscovery,
+    ProviderCatalogService,
+    ProviderCatalogState,
+    ProviderEffort,
+    ProviderModel,
+)
 from ..run_inputs import read_draft_file
 from ..session_lifecycle import (
     SessionAccessState,
@@ -225,6 +230,13 @@ _CONVERSATION_CATALOG_OPERATIONS = (
     "unarchive",
 )
 _AUTH_COORDINATOR_OPERATIONS = ("choices", "probe_all", "run")
+_PROVIDER_CATALOG_OPERATIONS = ("discover",)
+_SETTINGS_INHERIT_ID = "settings:inherit"
+_SETTINGS_MODEL_ID_PREFIX = "settings:model:"
+_SETTINGS_CURRENT_CUSTOM_MODEL_ID = "settings:model:current-custom"
+_SETTINGS_CUSTOM_MODEL_ID = "settings:model:custom"
+_SETTINGS_EFFORT_ID_PREFIX = "settings:effort:"
+_SETTINGS_CURRENT_EFFORT_ID = "settings:effort:current-compatibility"
 
 
 _ExceptionState = tuple[BaseException, TracebackType | None]
@@ -257,6 +269,70 @@ def _provider_display_name(provider: str) -> str:
     if provider == "antigravity":
         return "Antigravity"
     raise ValueError("provider must be codex or antigravity")
+
+
+def _settings_catalog_notice(
+    provider: str,
+    state: ProviderCatalogState,
+    *,
+    model_picker: bool,
+) -> Notice | None:
+    """Project one fixed discovery state without provider output or diagnostics."""
+
+    if state is ProviderCatalogState.READY:
+        return None
+    provider_name = _provider_display_name(provider)
+    state_copy = {
+        ProviderCatalogState.UNAVAILABLE: "is unavailable",
+        ProviderCatalogState.TIMED_OUT: "timed out",
+        ProviderCatalogState.COMMAND_FAILED: "did not complete successfully",
+        ProviderCatalogState.MALFORMED: "returned an unsupported format",
+        ProviderCatalogState.EMPTY: "returned no visible models",
+        ProviderCatalogState.OVERSIZED: "exceeded the safe output limit",
+        ProviderCatalogState.FAILED: "could not be completed",
+    }
+    detail = state_copy.get(state, "could not be completed")
+    controls = (
+        "Inherit, keep the current custom value, or enter a custom model."
+        if model_picker
+        else "Inherit or keep the current compatibility value."
+    )
+    return Notice(
+        f"{provider_name} catalog discovery {detail}. {controls} Retry later.",
+        label="catalog discovery",
+        role=SemanticRole.WARNING,
+        state=ViewState.IDLE,
+    )
+
+
+def _settings_model_description(model: ProviderModel) -> str:
+    """Render exact validated model identity plus optional safe description."""
+
+    if model.description is None:
+        return model.identity
+    return f"{model.identity} — {model.description}"
+
+
+def _settings_current_model_description(model: str) -> str:
+    """Expose a bounded exact compatibility value when terminal-safe."""
+
+    if not model.isspace() and len(model.encode("utf-8")) <= 256:
+        return f"Exact pending model: {model}"
+    return "Keep the pending model that is not listed in this catalog."
+
+
+def _settings_effort_description(
+    effort: ProviderEffort,
+    *,
+    is_default: bool,
+) -> str | None:
+    """Add model-default guidance without changing the provider projection."""
+
+    if effort.description is None:
+        return "Default for the selected model." if is_default else None
+    if is_default:
+        return f"{effort.description} Default for the selected model."
+    return effort.description
 
 
 def _remember_first_process_control(
@@ -319,6 +395,7 @@ class InteractiveController:
         "_main_input",
         "_picker_input",
         "_prompt_input",
+        "_provider_catalog",
         "_advisory_progress",
         "_debate_progress",
         "_runner",
@@ -342,16 +419,19 @@ class InteractiveController:
         *,
         conversation_catalog: ConversationCatalog | None = None,
         auth_coordinator: InteractiveAuthCoordinator | None = None,
+        provider_catalog: ProviderCatalogService | None = None,
     ) -> None:
         """Bind collaborators and construct one shared transcript adapter.
 
         The four positional arguments remain the established construction
         contract. An omitted keyword-only catalog creates the workspace-backed
-        adapter; injected catalog and authentication coordinators are retained
-        as borrowed state and are never closed by this controller. The event
-        store is shared by the retained runtime and later attachment-scoped
-        memory services. Construction performs no provider call, filesystem
-        write, or access claim.
+        adapter; injected conversation-catalog, authentication, and provider-
+        catalog collaborators are retained as borrowed state and are never
+        closed by this controller. An omitted provider catalog creates the
+        command-free workspace-bound default. The event store is shared by the
+        retained runtime and later attachment-scoped memory services.
+        Construction performs no provider call, filesystem write, or access
+        claim.
         """
 
         if not isinstance(workspace, Workspace):
@@ -369,6 +449,16 @@ class InteractiveController:
             raise TypeError(
                 "auth_coordinator must provide choices, probe_all, and run"
             )
+        resolved_provider_catalog = (
+            ProviderCatalogService(workspace.root)
+            if provider_catalog is None
+            else provider_catalog
+        )
+        if any(
+            not callable(getattr(resolved_provider_catalog, operation, None))
+            for operation in _PROVIDER_CATALOG_OPERATIONS
+        ):
+            raise TypeError("provider_catalog must provide discover")
         self._workspace = workspace
         self._debug_log = WorkspaceDebugLog(workspace)
         self._error_write_count = 0
@@ -376,6 +466,7 @@ class InteractiveController:
         self._backend = backend
         self._terminal = terminal
         self._auth_coordinator = auth_coordinator
+        self._provider_catalog = resolved_provider_catalog
         self._semantic_output = InteractiveSemanticOutput(terminal)
         self._picker_input = InteractivePickerInput(terminal)
         self._prompt_input = InteractivePromptInput(terminal)
@@ -2341,8 +2432,8 @@ class InteractiveController:
                 ),
                 (
                     Choice("provider", "Provider"),
-                    Choice("model", f"{provider_name} model"),
-                    Choice("reasoning", f"{provider_name} effort"),
+                    Choice("model", "Model"),
+                    Choice("reasoning", "Effort"),
                 ),
                 highlighted_id="provider",
                 transient=True,
@@ -2514,25 +2605,134 @@ class InteractiveController:
         state: SettingsState,
         agent_id: str,
     ) -> tuple[SettingsState, bool]:
-        """Read one agent's exact active-provider model or clear it."""
+        """Select one discovered active-provider model or a custom value."""
 
+        agent = state.pending.agent_configs[agent_id]
+        provider = _effective_settings_provider(state, agent_id)
+        antigravity = provider == "antigravity"
+        provider_name = _provider_display_name(provider)
+        pending = (
+            agent.antigravity_model if antigravity else agent.codex_model
+        )
+        discovery = self._discover_settings_catalog(provider)
+        catalog = discovery.catalog
+        choices: list[Choice] = [
+            Choice(
+                _SETTINGS_INHERIT_ID,
+                "Inherit",
+                description=(
+                    f"Use the workspace {provider_name} model, then the "
+                    "provider default."
+                ),
+            )
+        ]
+        discovered_values: dict[str, str] = {}
+        selected_id = _SETTINGS_INHERIT_ID
+        matched_model: ProviderModel | None = None
+        if catalog is not None:
+            for index, model in enumerate(catalog.models):
+                choice_id = f"{_SETTINGS_MODEL_ID_PREFIX}{index}"
+                discovered_values[choice_id] = model.identity
+                choices.append(
+                    Choice(
+                        choice_id,
+                        model.label,
+                        description=_settings_model_description(model),
+                    )
+                )
+                if pending == model.identity:
+                    selected_id = choice_id
+                    matched_model = model
+        if pending is not None and matched_model is None:
+            choices.append(
+                Choice(
+                    _SETTINGS_CURRENT_CUSTOM_MODEL_ID,
+                    "Current custom",
+                    description=_settings_current_model_description(pending),
+                )
+            )
+            selected_id = _SETTINGS_CURRENT_CUSTOM_MODEL_ID
+        choices.append(
+            Choice(
+                _SETTINGS_CUSTOM_MODEL_ID,
+                "Custom model",
+                description=(
+                    f"Enter an exact safe {provider_name} model value."
+                ),
+            )
+        )
+        outcome = self._picker_input.read_picker(
+            Prompt(
+                "Model",
+                scope=(
+                    f"{AGENT_SPECS[agent_id].display_name} · {provider_name}"
+                ),
+                instruction=(
+                    f"Choose a model for the pending {provider_name} provider."
+                ),
+            ),
+            tuple(choices),
+            highlighted_id=selected_id,
+            selected_id=selected_id,
+            notice=_settings_catalog_notice(
+                provider,
+                discovery.state,
+                model_picker=True,
+            ),
+            transient=True,
+        )
+        value, whole_cancel = self._nested_settings_value(outcome)
+        if whole_cancel:
+            return state, True
+        if value is None:
+            return state, False
+        if value == _SETTINGS_CURRENT_CUSTOM_MODEL_ID:
+            return state, False
+        if value == _SETTINGS_CUSTOM_MODEL_ID:
+            return self._edit_settings_custom_model(state, agent_id, provider)
+        updater = (
+            update_agent_antigravity_model
+            if antigravity
+            else update_agent_codex_model
+        )
+        if value == _SETTINGS_INHERIT_ID:
+            return updater(state, agent_id, None), False
+        if value not in discovered_values:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        return updater(state, agent_id, discovered_values[value]), False
+
+    def _edit_settings_custom_model(
+        self,
+        state: SettingsState,
+        agent_id: str,
+        provider: str,
+    ) -> tuple[SettingsState, bool]:
+        """Read one safe custom model while preserving nested cancellation."""
+
+        antigravity = provider == "antigravity"
+        provider_name = _provider_display_name(provider)
         while True:
             agent = state.pending.agent_configs[agent_id]
-            provider = _effective_settings_provider(state, agent_id)
-            antigravity = provider == "antigravity"
-            provider_name = "Antigravity" if antigravity else "Codex"
-            current = (
+            pending = (
                 agent.antigravity_model if antigravity else agent.codex_model
             )
             outcome = self._prompt_input.read_prompt(
                 Prompt(
-                    f"{provider_name} model",
-                    scope=AGENT_SPECS[agent_id].display_name,
-                    instruction=(
-                        f"Enter an exact {provider_name} model or leave blank "
-                        "to inherit the system setting."
+                    "Custom model",
+                    scope=(
+                        f"{AGENT_SPECS[agent_id].display_name} · {provider_name}"
                     ),
-                    default=current or "inherit",
+                    instruction=(
+                        f"Enter an exact {provider_name} model, or leave blank "
+                        "to inherit the workspace setting."
+                    ),
+                    default=(
+                        pending
+                        if pending is not None and not pending.isspace()
+                        else None
+                    ),
                 ),
                 transient=True,
             )
@@ -2548,7 +2748,9 @@ class InteractiveController:
                     else update_agent_codex_model
                 )
                 return updater(
-                    state, agent_id, None if value == "" else value
+                    state,
+                    agent_id,
+                    None if value == "" else value,
                 ), False
             except ConfigurationError:
                 self._write_settings_validation(
@@ -2561,53 +2763,172 @@ class InteractiveController:
         state: SettingsState,
         agent_id: str,
     ) -> tuple[SettingsState, bool]:
-        """Select one active-provider effort or inherited system value."""
+        """Select exact discovered effort for the pending effective model."""
 
         agent = state.pending.agent_configs[agent_id]
+        defaults = state.pending.system_defaults
         provider = _effective_settings_provider(state, agent_id)
         antigravity = provider == "antigravity"
-        provider_name = "Antigravity" if antigravity else "Codex"
+        provider_name = _provider_display_name(provider)
         pending = (
             agent.antigravity_effort
             if antigravity
             else agent.codex_reasoning_effort
         )
-        efforts = (
-            SETTINGS_ANTIGRAVITY_EFFORTS
+        inherited_effort = (
+            defaults.antigravity_effort
             if antigravity
-            else SETTINGS_REASONING_EFFORTS
+            else defaults.codex_reasoning_effort
         )
-        selected = "default" if pending is None else pending
+        effective_model = (
+            (agent.antigravity_model or defaults.antigravity_model)
+            if antigravity
+            else (agent.codex_model or defaults.codex_model)
+        )
+        discovery = self._discover_settings_catalog(provider)
+        catalog = discovery.catalog
+        selected_model: ProviderModel | None = None
+        efforts: tuple[ProviderEffort, ...] = ()
+        if catalog is not None:
+            if antigravity:
+                efforts = catalog.models[0].efforts
+            else:
+                selected_model = catalog.model_for(effective_model)
+                if selected_model is not None:
+                    efforts = selected_model.efforts
+
+        if inherited_effort is not None:
+            inherit_description = (
+                f"Use the workspace {provider_name} effort: "
+                f"{inherited_effort}."
+            )
+        elif (
+            selected_model is not None
+            and selected_model.default_effort is not None
+        ):
+            inherit_description = (
+                f"Use the selected model default: {selected_model.default_effort}."
+            )
+        else:
+            inherit_description = (
+                "Use the workspace setting, then provider default."
+            )
+
+        choices: list[Choice] = [
+            Choice(
+                _SETTINGS_INHERIT_ID,
+                "Inherit",
+                description=inherit_description,
+            )
+        ]
+        effort_values: dict[str, str] = {}
+        selected_id = _SETTINGS_INHERIT_ID
+        for index, effort in enumerate(efforts):
+            choice_id = f"{_SETTINGS_EFFORT_ID_PREFIX}{index}"
+            effort_values[choice_id] = effort.identity
+            choices.append(
+                Choice(
+                    choice_id,
+                    effort.label,
+                    description=_settings_effort_description(
+                        effort,
+                        is_default=(
+                            selected_model is not None
+                            and selected_model.default_effort == effort.identity
+                        ),
+                    ),
+                )
+            )
+            if pending == effort.identity:
+                selected_id = choice_id
+        if pending is not None and pending not in effort_values.values():
+            choices.append(
+                Choice(
+                    _SETTINGS_CURRENT_EFFORT_ID,
+                    "Current compatibility",
+                    description=f"Keep exact pending effort: {pending}",
+                )
+            )
+            selected_id = _SETTINGS_CURRENT_EFFORT_ID
+
+        notice = _settings_catalog_notice(
+            provider,
+            discovery.state,
+            model_picker=False,
+        )
+        if discovery.ready and not antigravity and selected_model is None:
+            notice = Notice(
+                "The inherited or selected Codex model does not match this "
+                "catalog. Choose a matching Model before selecting a model-"
+                "specific effort; pending settings were preserved.",
+                label="model-specific effort",
+                role=SemanticRole.WARNING,
+            )
+        elif discovery.ready and not efforts:
+            notice = Notice(
+                f"The selected {provider_name} model reports no effort choices. "
+                "Inherit or keep the current compatibility value.",
+                label="effort catalog",
+                role=SemanticRole.WARNING,
+            )
+
         outcome = self._picker_input.read_picker(
             Prompt(
-                f"{provider_name} effort",
-                scope=AGENT_SPECS[agent_id].display_name,
-                instruction="Choose inheritance or one fixed effort level.",
-            ),
-            (
-                Choice("default", "Inherit"),
-                *tuple(
-                    Choice(effort, effort)
-                    for effort in efforts
+                "Effort",
+                scope=(
+                    f"{AGENT_SPECS[agent_id].display_name} · {provider_name}"
+                ),
+                instruction=(
+                    f"Choose effort for the pending {provider_name} provider "
+                    "and effective model."
                 ),
             ),
-            highlighted_id=selected,
-            selected_id=selected,
+            tuple(choices),
+            highlighted_id=selected_id,
+            selected_id=selected_id,
+            notice=notice,
             transient=True,
         )
         value, whole_cancel = self._nested_settings_value(outcome)
         if whole_cancel:
             return state, True
-        if value is None:
+        if value is None or value == _SETTINGS_CURRENT_EFFORT_ID:
             return state, False
         updater = (
             update_agent_antigravity_effort
             if antigravity
             else update_agent_codex_reasoning_effort
         )
-        return updater(
-            state, agent_id, None if value == "default" else value
-        ), False
+        if value == _SETTINGS_INHERIT_ID:
+            return updater(state, agent_id, None), False
+        if value not in effort_values:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        return updater(state, agent_id, effort_values[value]), False
+
+    def _discover_settings_catalog(
+        self,
+        provider: str,
+    ) -> ProviderCatalogDiscovery:
+        """Contain collaborator failures behind one fixed discovery state."""
+
+        try:
+            discovery = self._provider_catalog.discover(provider)
+        except Exception:
+            return ProviderCatalogDiscovery(
+                provider,
+                ProviderCatalogState.FAILED,
+            )
+        if (
+            type(discovery) is not ProviderCatalogDiscovery
+            or discovery.provider != provider
+        ):
+            return ProviderCatalogDiscovery(
+                provider,
+                ProviderCatalogState.FAILED,
+            )
+        return discovery
 
     @staticmethod
     def _require_settings_commit(outcome: ControlOutcome) -> str:

@@ -14,13 +14,7 @@ from .workspace import Workspace
 
 
 _LANGUAGE = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,15}")
-_CODEX_REASONING_EFFORTS: tuple[str, ...] = (
-    "minimal",
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-)
+_CODEX_REASONING_EFFORT = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 _ANTIGRAVITY_EFFORTS: tuple[str, ...] = ("low", "medium", "high")
 KNOWN_AGENT_BACKENDS: tuple[str, ...] = ("codex", "antigravity")
 
@@ -138,11 +132,13 @@ class ConfigManager:
     def validate_codex_reasoning_effort(value: Any) -> str | None:
         if value is None:
             return None
-        if not isinstance(value, str) or value not in _CODEX_REASONING_EFFORTS:
-            expected = ", ".join(_CODEX_REASONING_EFFORTS)
+        if (
+            not isinstance(value, str)
+            or _CODEX_REASONING_EFFORT.fullmatch(value) is None
+        ):
             raise ConfigurationError(
-                "codex_reasoning_effort must be null or one of: "
-                f"{expected}"
+                "codex_reasoning_effort must be null or match "
+                "[a-z][a-z0-9_-]{0,31}"
             )
         return value
 

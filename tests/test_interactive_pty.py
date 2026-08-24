@@ -1,4 +1,4 @@
-"""Provider-free process verification for the interactive CLI over a POSIX PTY."""
+"""Deterministic process verification for the interactive CLI over a POSIX PTY."""
 
 from __future__ import annotations
 
@@ -119,6 +119,32 @@ signal.signal(signal.SIGINT, signal.SIG_IGN)
 signal.signal(signal.SIGTERM, terminate)
 
 argv = sys.argv[1:]
+if argv == ["debug", "models", "--bundled"]:
+    sys.stdout.write(
+        json.dumps(
+            {
+                "models": [
+                    {
+                        "slug": "gpt-pty",
+                        "display_name": "GPT PTY",
+                        "description": "Deterministic PTY catalog model",
+                        "visibility": "list",
+                        "supported_reasoning_levels": [
+                            {"effort": "low", "description": "Quick"},
+                            {
+                                "effort": "future_2",
+                                "description": "Future-safe",
+                            },
+                        ],
+                        "default_reasoning_level": "future_2",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+    )
+    sys.stdout.flush()
+    raise SystemExit(0)
 if argv in (["login", "status"], ["login"]):
     state = json.loads(AUTH_STATE_PATH.read_text(encoding="utf-8"))
     operation = "probe" if argv == ["login", "status"] else "login"
@@ -337,6 +363,11 @@ append_record(
     }
 )
 if operation == "probe":
+    sys.stdout.write(
+        "agy-pty  Antigravity PTY\n"
+        "agy-pty-next  Antigravity PTY Next\n"
+    )
+    sys.stdout.flush()
     raise SystemExit(
         0
         if state["antigravity"] == "authenticated"
@@ -2115,6 +2146,115 @@ print(
                     process.original_terminal_attributes,
                 )
 
+    def test_settings_ansi_discovered_model_and_future_effort_save_on_capable_pty(
+        self,
+    ) -> None:
+        """Drive both discovered pickers through raw ANSI input and persist IDs."""
+
+        process = self._spawn_cli(
+            (),
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=48,
+            decorative_color=True,
+        )
+        process.wait_for_text("story[lobby]> ")
+        mark = process.output_mark()
+        process.send_text("/settings\n\n")
+        process.wait_for_text(
+            "Choose a setting to edit, save, or cancel.",
+            after=mark,
+        )
+
+        process.send_text(("\x1b[B" * 3) + "\n")
+        process.wait_for_text("Choose an agent provider route to edit.", after=mark)
+        process.send_text("\x1b[B\n")
+        process.wait_for_text(
+            "Choose a provider, model, or effort setting.",
+            after=mark,
+        )
+        process.send_text("\x1b[B\n")
+        model_picker = process.wait_for_text("GPT PTY", after=mark)
+        self.assertIn("GPT PTY", model_picker)
+        self.assertIn("gpt-pty", model_picker)
+        process.send_text("\x1b[B\n")
+        process.wait_for_text("Settings [focused] [open]", after=mark)
+
+        process.send_text("\n")
+        process.wait_for_text("Choose an agent provider route to edit.", after=mark)
+        process.send_text("\x1b[B\n")
+        process.wait_for_text(
+            "Choose a provider, model, or effort setting.",
+            after=mark,
+        )
+        process.send_text(("\x1b[B" * 2) + "\n")
+        effort_picker = process.wait_for_text("future_2", after=mark)
+        self.assertIn("future_2", effort_picker)
+        process.send_text(("\x1b[B" * 2) + "\n")
+        process.wait_for_text("Settings [focused] [open]", after=mark)
+
+        process.send_text("\x1b[B\n")
+        process.wait_for_text("Save settings?", after=mark)
+        process.send_text("\n")
+        saved = process.wait_for_text("[saved] Settings saved.", after=mark)
+        self.assertIn("gpt-pty", saved)
+        self.assertIn("future_2", saved)
+        process.wait_for_text("story[lobby]> ", after=mark)
+        self.assertIn(b"\x1b[", bytes(process.raw_bytes[mark:]))
+        process.send_text("/quit\n\n")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+
+        agent = self.workspace.read_json("config/agent_configs.json")[
+            "plot_architect"
+        ]
+        self.assertEqual(agent["codex_model"], "gpt-pty")
+        self.assertEqual(agent["codex_reasoning_effort"], "future_2")
+        self.assertFalse(self.provider_log.exists())
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
+    def test_settings_no_color_discovered_model_cancel_has_no_sgr_or_mutation(
+        self,
+    ) -> None:
+        """Render one discovered picker without decoration and cancel it safely."""
+
+        process = self._spawn_cli(
+            (),
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=36,
+        )
+        process.wait_for_text("story[lobby]> ")
+        before = _durable_tree(self.workspace.root)
+        mark = process.output_mark()
+        process.send_text("/settings\n\n")
+        process.wait_for_text("[highlighted] Language", after=mark)
+        process.send_text(("\x1b[B" * 3) + "\n")
+        process.wait_for_text("Providers [focused] [open]", after=mark)
+        process.send_text("\x1b[B\n")
+        process.wait_for_text("Agent settings", after=mark)
+        process.send_text("\x1b[B\n")
+        process.wait_for_text("GPT PTY", after=mark)
+        self.assertNotRegex(
+            process.text_after(mark),
+            r"\x1b\[(?:0|1|3[1-7])m",
+        )
+        returned_mark = process.output_mark()
+        process.send_text("\x1b")
+        process.wait_for_text("Settings [focused] [open]", after=returned_mark)
+        cancelled_mark = process.output_mark()
+        process.send_text("\x1b")
+        process.wait_for_text("[cancelled] Settings", after=cancelled_mark)
+        process.wait_for_text("story[lobby]> ", after=cancelled_mark)
+        process.send_text("/quit\n\n")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
     def test_settings_no_color_cancel_events_clear_and_restore_repeatedly(self) -> None:
         """Cancel settings through Escape, VINTR, and VEOF without mutation."""
 
@@ -2170,8 +2310,8 @@ print(
                         process.original_terminal_attributes,
                     )
 
-    def test_settings_dumb_fallback_keeps_cancel_literal_and_provider_free(self) -> None:
-        """Use numbered settings fallback and preserve model text literally."""
+    def test_settings_dumb_fallback_keeps_cancel_literal_with_catalog(self) -> None:
+        """Use numbered discovered settings and preserve custom model text."""
 
         process = self._spawn_cli((), terminal_columns=36)
         process.wait_for_text("story[lobby]> ")
@@ -2184,10 +2324,12 @@ print(
         process.wait_for_text("Agent settings", after=mark)
         process.send_line("2")
         process.wait_for_text(
-            "Codex model [Plot & Structure Archit",
+            "Model [Plot & Structure Architect",
             after=mark,
         )
         model_mark = process.output_mark()
+        process.send_line("3")
+        process.wait_for_text("Custom model", after=model_mark)
         process.send_line("/cancel")
         process.wait_for_text("6. [available] Cancel", after=model_mark)
         process.send_line("5")

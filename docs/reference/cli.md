@@ -236,8 +236,12 @@ options, so a configured Antigravity route requires `agy` on `PATH`.
 There is no `--codex-reasoning-effort` option or supported public
 system-default save API. Global `/settings` provides the installed interactive
 edit/save workflow; choose `Providers`, then an agent, then Provider, Model, or
-Reasoning effort. It supports Codex and Antigravity and edits only the active
+Effort. It supports Codex and Antigravity and edits only the active
 provider's per-agent model/effort while retaining inactive-provider values.
+Entering Model or Effort discovers the pending effective provider afresh;
+opening Settings and provider navigation do not launch catalog commands.
+Custom models and inheritance remain supported. See the exact
+[picker contract](interactive-terminal.md#provider-model-and-effort-pickers).
 Direct edits to the validated JSON documents remain possible. An active backend
 and runtime keep their construction-time configuration snapshot. Existing
 three-key system-default files remain valid and provide no provider-specific
@@ -406,9 +410,27 @@ or without an attached session. `/auth` follows the authentication contract
 above. `/settings` edits isolated Current and Pending snapshots for
 Language, Persona, Maximum debate rounds, and Providers through a six-choice
 editor in this order: those four fields, Save, Cancel. `Providers` opens a
-nested canonical-agent picker, then a Provider/Model/Reasoning effort picker;
-Model and Reasoning edit only that agent and `null`/Inherit falls back to the
-system defaults. Settings pickers and prompts follow the same transient input
+nested canonical-agent picker, then a provider-neutral Provider/Model/Effort
+picker. Current/Pending confirmations retain provider-qualified rows for both
+providers so inactive values remain identifiable.
+
+Only entering Model or Effort runs discovery. Each entry uses the pending
+effective provider; Effort also uses the pending effective model. Model order
+is Inherit, provider-order discovered models, Current custom when the pending
+value is absent, then Custom model. Effort order is Inherit, exact selected-
+model Codex efforts or Antigravity's global `low`, `medium`, `high`, then
+Current compatibility when a pending effort is unreported.
+
+Codex runs `codex debug models --bundled` and projects list-visible rows with
+exact per-model supported/default reasoning. Antigravity runs `agy models` or
+the resolved executable's `models` subcommand, preserves aligned opaque
+slug/display order, and never infers effort from model text. Each fresh attempt
+is limited to five seconds and one MiB of retained stdout; stderr/raw
+diagnostics are discarded, with no automatic retry, cache, or catalog
+persistence. Fixed failure guidance preserves inherit/current/custom paths.
+Only the chosen opaque model/effort value is saved.
+
+Settings pickers and prompts follow the same transient input
 lifecycle as all capable input; fallback readers retain printed input and add no
 synthetic final picker frame. Nested Escape returns to
 the parent silently without a Current/Pending snapshot or cancellation record.
@@ -421,7 +443,7 @@ level Escape, Ctrl-C, or EOF cancels the whole workflow without writing. The
 submitted `/settings` line has already been cleared with the capable main frame;
 its history entry remains. Ordinary-line fallback leaves its printed input
 visible, with the same history semantics. `/cancel` is literal model text in the
-free-text prompt.
+Custom model prompt.
 
 Choosing a provider starts authentication before changing that agent's pending
 route. A failed or cancelled authentication leaves the route candidate
@@ -441,7 +463,7 @@ every attempted target, including the failing target; rollback uncertainty is
 reported separately. Success returns to the main prompt and applies to the next
 shell/backend construction only. It does not refresh the active backend or
 runtime, invoke a story-model turn, alter session/explicit overrides, or add
-credentials, model discovery, or automatic save.
+credentials, persisted catalog data, or automatic save.
 
 On capable real-CLI streams, orientation/current context, `/status`, `/inspect`,
 central errors/recovery, and accepted management, advisory, retrieval, and

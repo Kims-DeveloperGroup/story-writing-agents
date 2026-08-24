@@ -3094,7 +3094,7 @@ class ConfigurationCascadeTests(unittest.TestCase):
                 PLOT_ARCHITECT,
             )
 
-    def test_codex_defaults_accept_missing_null_exact_enum_and_unicode(self) -> None:
+    def test_codex_defaults_accept_missing_null_safe_efforts_and_unicode(self) -> None:
         legacy = self.manager.load_system_defaults()
         self.assertEqual(
             legacy,
@@ -3117,7 +3117,16 @@ class ConfigurationCascadeTests(unittest.TestCase):
         )
 
         exact_model = " GPT-e\u0301 한🙂 "
-        for effort in ("minimal", "low", "medium", "high", "xhigh"):
+        for effort in (
+            "a",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "future_2",
+            "z" * 32,
+        ):
             with self.subTest(effort=effort):
                 self.workspace.write_json(
                     "config/system_defaults.json",
@@ -3181,11 +3190,13 @@ class ConfigurationCascadeTests(unittest.TestCase):
             "MINIMAL",
             " low",
             "low ",
-            "ultra",
+            "-low",
+            "low.value",
+            "a" * 33,
         )
         expected = (
-            "codex_reasoning_effort must be null or one of: "
-            "minimal, low, medium, high, xhigh"
+            "codex_reasoning_effort must be null or match "
+            "[a-z][a-z0-9_-]{0,31}"
         )
         for effort in invalid:
             with self.subTest(effort=effort):
@@ -3281,7 +3292,7 @@ class ConfigurationCascadeTests(unittest.TestCase):
 
         for field, value in (
             ("codex_model", "-unsafe"),
-            ("codex_reasoning_effort", "default"),
+            ("codex_reasoning_effort", "unsafe.value"),
             ("antigravity_model", "-unsafe"),
             ("antigravity_effort", "minimal"),
             ("antigravity_effort", "xhigh"),

@@ -54,6 +54,7 @@ from .interactive_terminal import (
 from .models import DebateStatus
 from .orchestrator import StoryRuntime
 from .provider_auth import ProviderAuthService, ProviderAuthSnapshot
+from .provider_catalog import ProviderCatalogService
 from .run_inputs import read_draft_file
 from .session_lifecycle import (
     SessionAccessState,
@@ -746,6 +747,10 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
             workspace.root,
             antigravity_executable=antigravity_executable,
         )
+        catalog_service = ProviderCatalogService(
+            workspace.root,
+            antigravity_executable=antigravity_executable,
+        )
         auth_coordinator = InteractiveAuthCoordinator(
             auth_service,
             terminal,
@@ -889,6 +894,7 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
             backend,
             terminal,
             auth_coordinator=auth_coordinator,
+            provider_catalog=catalog_service,
         )
     except Exception as exc:
         _record_cli_error(debug_log, DebugOperation.CLI_COMMAND, exc)
