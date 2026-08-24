@@ -1,7 +1,7 @@
 # Session and workspace storage
 
 > **Availability:** V2 defaults, provider sessions, debates, conversations,
-> current canonical filesystem sources, provenance-backed publication records,
+> current writing-artifact reference sources, provenance-backed publication records,
 > part-scoped manuscripts, explicit-reference evidence, provider-native state,
 > and bounded runtime debug logs persist as plaintext workspace files.
 > Runtime-managed documents and records are strict UTF-8.

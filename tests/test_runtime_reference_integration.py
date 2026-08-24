@@ -131,6 +131,7 @@ def _ui_built_source_text() -> str:
                     ReferenceActivationKind.VIEW,
                     start,
                     start + 1,
+                    ReferenceInputScope(0, len(line)),
                     path=path,
                 ),
                 *selected_range,
@@ -146,7 +147,7 @@ def _ui_built_source_text() -> str:
         token = f"${{{path}}}"
         state = replace_reference_completion(
             state,
-            projected.completion,
+            projected,
             token,
         )
     return state.main_input.line_state.buffer

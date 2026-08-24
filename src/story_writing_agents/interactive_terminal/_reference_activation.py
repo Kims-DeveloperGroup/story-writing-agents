@@ -14,6 +14,8 @@ from ..writing_artifacts import (
 from ._model import (
     ARTIFACT_REFERENCE_POSITION_PREFIX,
     EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX,
+    EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX,
+    RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX,
     CommandCompletionCandidate,
     CommandCompletionProjection,
     LineInputState,
@@ -22,9 +24,7 @@ from ._model import (
 )
 
 
-_REFERENCE_FRAGMENT_CHARACTERS = frozenset(
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./-{}"
-)
+_REFERENCE_FRAGMENT_CHARACTERS = frozenset("_./-{}")
 
 
 class ReferenceActivationKind(StrEnum):
@@ -78,6 +78,7 @@ class ReferenceActivationRequest:
     kind: ReferenceActivationKind
     start: int
     end: int
+    scope: ReferenceInputScope
     paths: tuple[str, ...] = ()
     path: str | None = None
 
@@ -89,8 +90,12 @@ class ReferenceActivationRequest:
                 raise TypeError(f"{name} must be an integer")
             if value < 0:
                 raise ValueError(f"{name} must not be negative")
+        if type(self.scope) is not ReferenceInputScope:
+            raise TypeError("scope must be a ReferenceInputScope")
         if self.end <= self.start:
             raise ValueError("activation span must be nonempty")
+        if not self.scope.start <= self.start < self.end <= self.scope.end:
+            raise ValueError("activation span must fit inside its reference scope")
         if type(self.paths) is not tuple or any(
             type(path) is not str for path in self.paths
         ):
@@ -117,6 +122,7 @@ class ReferenceInputProjection:
     completion: CommandCompletionProjection | None = None
     request: ReferenceActivationRequest | None = None
     failure: ReferenceInputFailureKind | None = None
+    scope: ReferenceInputScope | None = None
 
     def __post_init__(self) -> None:
         if self.completion is not None and type(
@@ -134,6 +140,22 @@ class ReferenceInputProjection:
             ReferenceInputFailureKind,
         ):
             raise TypeError("failure must be a ReferenceInputFailureKind or None")
+        if self.scope is not None and type(self.scope) is not ReferenceInputScope:
+            raise TypeError("scope must be a ReferenceInputScope or None")
+        if self.completion is not None or self.request is not None:
+            if self.scope is None:
+                raise ValueError("completion and request outcomes require a scope")
+        if self.completion is not None:
+            assert self.scope is not None
+            if not (
+                self.scope.start
+                <= self.completion.start
+                < self.completion.end
+                <= self.scope.end
+            ):
+                raise ValueError("completion span must fit inside its reference scope")
+        if self.request is not None and self.request.scope != self.scope:
+            raise ValueError("request and projection scopes must match")
         outcome_count = sum(
             value is not None
             for value in (self.completion, self.request, self.failure)
@@ -144,12 +166,50 @@ class ReferenceInputProjection:
             and self.request is None
             and self.failure is ReferenceInputFailureKind.EMPTY_SOURCES
             and self.completion.position.startswith(
-                EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX
+                (
+                    EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX,
+                    EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX,
+                )
             )
             and not self.completion.candidates
         )
-        if outcome_count != 1 and not deferred_empty_preview:
+        ranged_picker_preview = (
+            outcome_count == 2
+            and self.completion is not None
+            and self.request is not None
+            and self.failure is None
+            and self.request.kind is ReferenceActivationKind.PICK
+            and self.completion.position.startswith(
+                RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX
+            )
+            and (self.completion.start, self.completion.end)
+            == (self.request.start, self.request.end)
+            and tuple(
+                candidate.replacement
+                for candidate in self.completion.candidates
+            )
+            == self.request.paths
+        )
+        if (
+            outcome_count != 1
+            and not deferred_empty_preview
+            and not ranged_picker_preview
+        ):
             raise ValueError("a reference projection requires exactly one outcome")
+
+    @property
+    def defers_empty_ranged_failure(self) -> bool:
+        """Whether an open empty ranged panel must precede its fixed failure."""
+
+        return (
+            self.completion is not None
+            and self.request is None
+            and self.failure is ReferenceInputFailureKind.EMPTY_SOURCES
+            and self.completion.position.startswith(
+                EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX
+            )
+            and not self.completion.candidates
+        )
 
 
 def project_reference_input(
@@ -199,45 +259,71 @@ def project_reference_input(
     if expression.startswith("$$"):
         if expression == "$$":
             if failure is not None:
-                return ReferenceInputProjection(failure=failure)
+                return ReferenceInputProjection(failure=failure, scope=scope)
             if not canonical_paths:
                 return ReferenceInputProjection(
-                    failure=ReferenceInputFailureKind.EMPTY_SOURCES
+                    completion=CommandCompletionProjection(
+                        f"{EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX}{start}",
+                        start,
+                        end,
+                        (),
+                    ),
+                    failure=ReferenceInputFailureKind.EMPTY_SOURCES,
+                    scope=scope,
                 )
+            position = f"{RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX}{start}"
             return ReferenceInputProjection(
+                completion=CommandCompletionProjection(
+                    position,
+                    start,
+                    end,
+                    tuple(
+                        CommandCompletionCandidate(position, path)
+                        for path in canonical_paths
+                    ),
+                ),
                 request=ReferenceActivationRequest(
                     ReferenceActivationKind.PICK,
                     start,
                     end,
+                    scope,
                     canonical_paths,
-                )
+                ),
+                scope=scope,
             )
         path = _direct_view_path(expression)
         if path is None:
             return ReferenceInputProjection(
-                failure=ReferenceInputFailureKind.INVALID
+                failure=ReferenceInputFailureKind.INVALID,
+                scope=scope,
             )
         try:
             canonical = ArtifactReference(path).path
         except (TypeError, ValueError):
             return ReferenceInputProjection(
-                failure=ReferenceInputFailureKind.INVALID
+                failure=ReferenceInputFailureKind.INVALID,
+                scope=scope,
             )
         if failure is not None:
-            return ReferenceInputProjection(failure=failure)
+            return ReferenceInputProjection(failure=failure, scope=scope)
         if canonical not in canonical_paths:
-            return ReferenceInputProjection(failure=ReferenceInputFailureKind.STALE)
+            return ReferenceInputProjection(
+                failure=ReferenceInputFailureKind.STALE,
+                scope=scope,
+            )
         return ReferenceInputProjection(
             request=ReferenceActivationRequest(
                 ReferenceActivationKind.VIEW,
                 start,
                 end,
+                scope,
                 path=canonical,
-            )
+            ),
+            scope=scope,
         )
 
     if failure is not None:
-        return ReferenceInputProjection(failure=failure)
+        return ReferenceInputProjection(failure=failure, scope=scope)
     position = f"{ARTIFACT_REFERENCE_POSITION_PREFIX}{start}"
     if not canonical_paths:
         return ReferenceInputProjection(
@@ -248,25 +334,36 @@ def project_reference_input(
                 (),
             ),
             failure=ReferenceInputFailureKind.EMPTY_SOURCES,
+            scope=scope,
         )
     candidates: list[CommandCompletionCandidate] = []
     for path in canonical_paths:
         token = ArtifactReference(path).token
-        updated = _replace_span(buffer, start, end, token)
+        scoped_buffer = buffer[scope.start : scope.end]
+        updated = _replace_span(
+            scoped_buffer,
+            start - scope.start,
+            end - scope.start,
+            token,
+        )
         try:
             parse_artifact_references(updated)
         except ArtifactReferenceDirectiveError:
             continue
         candidates.append(CommandCompletionCandidate(position, token))
     if not candidates:
-        return ReferenceInputProjection(failure=ReferenceInputFailureKind.INVALID)
+        return ReferenceInputProjection(
+            failure=ReferenceInputFailureKind.INVALID,
+            scope=scope,
+        )
     return ReferenceInputProjection(
         completion=CommandCompletionProjection(
             position,
             start,
             end,
             tuple(candidates),
-        )
+        ),
+        scope=scope,
     )
 
 
@@ -297,68 +394,45 @@ def replace_reference_range(
         ).token
     except (TypeError, ValueError):
         raise ReferenceInputFailure(ReferenceInputFailureKind.INVALID) from None
-    line = state.main_input.line_state
-    if not 0 <= request.start < request.end <= len(line.buffer):
-        raise ReferenceInputFailure(ReferenceInputFailureKind.INVALID)
-    updated_buffer = _replace_span(
-        line.buffer,
+    return _replace_reference_span(
+        state,
+        request.scope,
         request.start,
         request.end,
         token,
     )
-    try:
-        parse_artifact_references(updated_buffer)
-    except ArtifactReferenceDirectiveError:
-        raise ReferenceInputFailure(ReferenceInputFailureKind.INVALID) from None
-    updated_line = LineInputState(updated_buffer, request.start + len(token))
-    updated_main = MainInputControlState(
-        updated_line,
-        state.main_input.history_index,
-        state.main_input.saved_draft,
-        overlay_open=False,
-    )
-    return MainCommandControlState(updated_main)
 
 
 def replace_reference_completion(
     state: MainCommandControlState,
-    projection: CommandCompletionProjection,
+    projection: ReferenceInputProjection,
     replacement: str,
 ) -> MainCommandControlState:
     """Apply one catalog completion without submitting the surrounding line."""
 
     if type(state) is not MainCommandControlState:
         raise TypeError("state must be a MainCommandControlState")
-    if type(projection) is not CommandCompletionProjection:
-        raise TypeError("projection must be a CommandCompletionProjection")
-    if type(replacement) is not str or replacement not in tuple(
-        candidate.replacement for candidate in projection.candidates
+    if type(projection) is not ReferenceInputProjection:
+        raise TypeError("projection must be a ReferenceInputProjection")
+    completion = projection.completion
+    if (
+        completion is None
+        or projection.request is not None
+        or projection.failure is not None
+        or projection.scope is None
     ):
         raise ReferenceInputFailure(ReferenceInputFailureKind.INVALID)
-    line = state.main_input.line_state
-    if not 0 <= projection.start < projection.end <= len(line.buffer):
+    if type(replacement) is not str or replacement not in tuple(
+        candidate.replacement for candidate in completion.candidates
+    ):
         raise ReferenceInputFailure(ReferenceInputFailureKind.INVALID)
-    updated_buffer = _replace_span(
-        line.buffer,
-        projection.start,
-        projection.end,
+    return _replace_reference_span(
+        state,
+        projection.scope,
+        completion.start,
+        completion.end,
         replacement,
     )
-    try:
-        parse_artifact_references(updated_buffer)
-    except ArtifactReferenceDirectiveError:
-        raise ReferenceInputFailure(ReferenceInputFailureKind.INVALID) from None
-    updated_line = LineInputState(
-        updated_buffer,
-        projection.start + len(replacement),
-    )
-    updated_main = MainInputControlState(
-        updated_line,
-        state.main_input.history_index,
-        state.main_input.saved_draft,
-        overlay_open=False,
-    )
-    return MainCommandControlState(updated_main)
 
 
 def selected_reference_request(
@@ -377,6 +451,7 @@ def selected_reference_request(
         ReferenceActivationKind.VIEW,
         request.start,
         request.end,
+        request.scope,
         path=path,
     )
 
@@ -388,11 +463,14 @@ def _active_marker(
 ) -> tuple[int, int] | None:
     """Return the cursor-active marker span using directive escape parity."""
 
+    braced = _containing_braced_marker(buffer, cursor, scope)
+    if braced is not None:
+        start, end, active = braced
+        return (start, end) if active else None
+
     search = cursor - 1
     while search >= scope.start:
         character = buffer[search]
-        if character in " \t\r\n":
-            return None
         if character == "$" and not _dollar_is_escaped(buffer, search):
             start = search
             if search > scope.start and buffer[search - 1] == "$" and not _dollar_is_escaped(
@@ -401,23 +479,73 @@ def _active_marker(
             ):
                 start = search - 1
             end = _marker_end(buffer, start, scope.end)
-            if start <= cursor <= end:
+            if start < cursor <= end:
                 return start, end
         search -= 1
     return None
 
 
+def _containing_braced_marker(
+    buffer: str,
+    cursor: int,
+    scope: ReferenceInputScope,
+) -> tuple[int, int, bool] | None:
+    """Return the outer braced span containing the cursor, including drafts."""
+
+    search = scope.start
+    while search <= cursor:
+        start = buffer.find("$", search, min(scope.end, cursor + 1))
+        if start < 0:
+            return None
+        end = _braced_marker_end(buffer, start, scope.end)
+        if end is None:
+            search = start + 1
+            continue
+        if _dollar_is_escaped(buffer, start):
+            if buffer.startswith("$${", start, scope.end):
+                search = start + 1
+                continue
+            search = end
+            if start < cursor <= end:
+                return start, end, False
+            continue
+        if start < cursor <= end:
+            return start, end, True
+        search = end
+    return None
+
+
+def _braced_marker_end(
+    buffer: str,
+    start: int,
+    scope_end: int,
+) -> int | None:
+    """Return one complete or in-progress single/double braced marker end."""
+
+    if buffer.startswith("$${", start, scope_end):
+        content_start = start + 3
+    elif buffer.startswith("${", start, scope_end):
+        content_start = start + 2
+    else:
+        return None
+    closing_brace = buffer.find("}", content_start, scope_end)
+    return scope_end if closing_brace < 0 else closing_brace + 1
+
+
 def _marker_end(buffer: str, start: int, scope_end: int) -> int:
     """Return the maximal activation fragment without consuming punctuation."""
 
-    if buffer.startswith("$${", start, scope_end):
-        closing_brace = buffer.find("}", start + 3, scope_end)
-        if closing_brace >= 0:
-            return closing_brace + 1
+    braced_end = _braced_marker_end(buffer, start, scope_end)
+    if braced_end is not None:
+        return braced_end
     end = start + 1
     if end < scope_end and buffer[end] == "$":
         end += 1
-    while end < scope_end and buffer[end] in _REFERENCE_FRAGMENT_CHARACTERS:
+    while end < scope_end and (
+        buffer[end] in _REFERENCE_FRAGMENT_CHARACTERS
+        or buffer[end].isalnum()
+        or f"a{buffer[end]}".isidentifier()
+    ):
         end += 1
     return end
 
@@ -446,6 +574,39 @@ def _replace_span(buffer: str, start: int, end: int, replacement: str) -> str:
     """Replace one validated buffer span without normalizing adjacent text."""
 
     return f"{buffer[:start]}{replacement}{buffer[end:]}"
+
+
+def _replace_reference_span(
+    state: MainCommandControlState,
+    scope: ReferenceInputScope,
+    start: int,
+    end: int,
+    replacement: str,
+) -> MainCommandControlState:
+    """Atomically replace and validate one complete provider-visible scope."""
+
+    line = state.main_input.line_state
+    if (
+        scope.end > len(line.buffer)
+        or not scope.start <= start < end <= scope.end
+    ):
+        raise ReferenceInputFailure(ReferenceInputFailureKind.INVALID)
+    updated_buffer = _replace_span(line.buffer, start, end, replacement)
+    adjusted_scope_end = scope.end + len(replacement) - (end - start)
+    try:
+        parse_artifact_references(
+            updated_buffer[scope.start : adjusted_scope_end]
+        )
+    except ArtifactReferenceDirectiveError:
+        raise ReferenceInputFailure(ReferenceInputFailureKind.INVALID) from None
+    updated_line = LineInputState(updated_buffer, start + len(replacement))
+    updated_main = MainInputControlState(
+        updated_line,
+        state.main_input.history_index,
+        state.main_input.saved_draft,
+        overlay_open=False,
+    )
+    return MainCommandControlState(updated_main)
 
 
 __all__ = [

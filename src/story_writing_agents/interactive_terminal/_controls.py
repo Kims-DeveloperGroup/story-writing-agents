@@ -7,6 +7,8 @@ from collections.abc import Callable
 from ._model import (
     ARTIFACT_REFERENCE_POSITION_PREFIX,
     EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX,
+    EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX,
+    RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX,
     Choice,
     CommandCompletionCandidate,
     CommandCompletionProjection,
@@ -36,9 +38,13 @@ _ARTIFACT_REFERENCE_PALETTE_TITLE = "Writing artifact selection"
 _ARTIFACT_REFERENCE_PALETTE_INSTRUCTION = (
     "Up/Down selects; Enter/Tab inserts a whole-file reference."
 )
+_RANGED_ARTIFACT_REFERENCE_PALETTE_INSTRUCTION = (
+    "Up/Down selects; Enter/Tab opens the ranged viewer."
+)
 _ARTIFACT_REFERENCE_EMPTY_SOURCES_TEXT = (
     "No writing artifacts. Add a supported canonical core document or "
-    "part-scoped Markdown manuscript. Consensus can also publish one."
+    "Markdown file with a lowercase .md suffix under manuscript/. "
+    "Consensus can also publish one."
 )
 _ARTIFACT_REFERENCE_NO_MATCH_TEXT = (
     "No matching writing artifacts. Change the path fragment."
@@ -282,13 +288,40 @@ def transition_main_command_input(
                 MainCommandControlState(closed_main),
                 ControlOutcome(ControlOutcomeKind.COMMIT, text=committed),
             )
+        if _is_ranged_artifact_reference_palette(state.palette):
+            return state, None
         return _apply_main_command_completion(
             state,
             completion_provider,
             dismiss_palette=True,
         ), None
+    if (
+        event.kind in {KeyKind.ENTER, KeyKind.TAB}
+        and state.palette is None
+        and state.dismissal_latch is not None
+    ):
+        line = state.main_input.line_state
+        projection = completion_provider(line.buffer, line.cursor)
+        if (
+            projection is not None
+            and projection.position.startswith(
+                RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX
+            )
+        ):
+            return (
+                _project_main_command_projection(
+                    state.main_input,
+                    projection,
+                    previous_palette=None,
+                ),
+                None,
+            )
     if event.kind is KeyKind.TAB:
         if state.palette is not None and _is_main_choice_palette(state.palette):
+            return state, None
+        if state.palette is not None and _is_ranged_artifact_reference_palette(
+            state.palette
+        ):
             return state, None
         return _apply_main_command_completion(
             state,
@@ -365,6 +398,9 @@ def project_main_suggestion_palette(
     is_artifact_reference = position.startswith(
         ARTIFACT_REFERENCE_POSITION_PREFIX
     )
+    is_ranged_artifact_reference = position.startswith(
+        RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX
+    )
     return SuggestionPalette(
         state.main_input.line_state.buffer,
         choices,
@@ -375,13 +411,20 @@ def project_main_suggestion_palette(
             else "Suggestions"
         ),
         instruction=(
-            _ARTIFACT_REFERENCE_PALETTE_INSTRUCTION
+            _RANGED_ARTIFACT_REFERENCE_PALETTE_INSTRUCTION
+            if is_ranged_artifact_reference
+            else _ARTIFACT_REFERENCE_PALETTE_INSTRUCTION
             if is_artifact_reference
             else None
         ),
         empty_text=(
             _ARTIFACT_REFERENCE_EMPTY_SOURCES_TEXT
-            if position.startswith(EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX)
+            if position.startswith(
+                (
+                    EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX,
+                    EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX,
+                )
+            )
             else _ARTIFACT_REFERENCE_NO_MATCH_TEXT
             if is_artifact_reference
             else "No suggestions."
@@ -972,6 +1015,16 @@ def _is_main_choice_palette(palette: MainCommandPaletteState) -> bool:
     return palette.projection.position.startswith(_MAIN_CHOICE_POSITION_PREFIX)
 
 
+def _is_ranged_artifact_reference_palette(
+    palette: MainCommandPaletteState,
+) -> bool:
+    """Identify the editor-correlated nonmodal ranged-source picker."""
+
+    return palette.projection.position.startswith(
+        RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX
+    )
+
+
 def _main_choice_highlight_index(projection: CommandCompletionProjection) -> int:
     """Decode the provider-selected initial enabled-choice ordinal."""
 
@@ -1010,11 +1063,35 @@ def _project_main_command_state(
     ):
         raise ValueError("completion projection must contain the active cursor")
 
+    return _project_main_command_projection(
+        main_input,
+        projection,
+        previous_palette=previous_palette,
+        snapshot=snapshot,
+    )
+
+
+def _project_main_command_projection(
+    main_input: MainInputControlState,
+    projection: CommandCompletionProjection,
+    *,
+    previous_palette: MainCommandPaletteState | None,
+    snapshot: LineInputState | None = None,
+) -> MainCommandControlState:
+    """Open one already-projected completion without repeating its provider."""
+
+    line = main_input.line_state
     prefix = line.buffer[projection.start : line.cursor]
-    candidates = tuple(
-        candidate
-        for candidate in projection.candidates
-        if completion_candidate_matches(candidate.replacement, prefix)
+    candidates = (
+        projection.candidates
+        if projection.position.startswith(
+            RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX
+        )
+        else tuple(
+            candidate
+            for candidate in projection.candidates
+            if completion_candidate_matches(candidate.replacement, prefix)
+        )
     )
     filtered = CommandCompletionProjection(
         projection.position,
@@ -1068,6 +1145,37 @@ def completion_candidate_matches(replacement: str, prefix: str) -> bool:
     ):
         return replacement.startswith("${" + prefix[1:])
     return replacement.startswith(prefix)
+
+
+def ranged_artifact_picker_selection(
+    state: MainCommandControlState,
+    projection: CommandCompletionProjection,
+) -> tuple[bool, str | None]:
+    """Return the exact highlighted path from one correlated ranged palette."""
+
+    if type(state) is not MainCommandControlState:
+        raise TypeError("state must be a MainCommandControlState")
+    if type(projection) is not CommandCompletionProjection:
+        raise TypeError("projection must be a CommandCompletionProjection")
+    palette = state.palette
+    if palette is None or not _is_ranged_artifact_reference_palette(palette):
+        return False, None
+    if (
+        not projection.position.startswith(
+            RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX
+        )
+        or palette.projection.position != projection.position
+        or (palette.projection.start, palette.projection.end)
+        != (projection.start, projection.end)
+        or palette.highlighted is None
+    ):
+        return True, None
+    selected = palette.highlighted.replacement
+    if selected not in tuple(
+        candidate.replacement for candidate in projection.candidates
+    ):
+        return True, None
+    return True, selected
 
 
 def _move_main_command_highlight(

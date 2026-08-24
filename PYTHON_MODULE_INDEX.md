@@ -1515,7 +1515,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `SlashCommandSuggestion`, internal `CommandCompletionCandidate`,
   `CommandCompletionProjection`, the package-internal
   `ARTIFACT_REFERENCE_POSITION_PREFIX` and
-  `EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX` completion namespaces,
+  `EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX` completion namespaces, and the
+  distinct `RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX` namespace for an
+  editor-correlated nonmodal source picker plus its
+  `EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX` empty-source namespace,
   `MainCommandPaletteState`, and correlated `MainCommandControlState`, internal
   `PickerControlState` and bounded
   `PickerViewport` transfer values, the internal rejected control outcome, the
@@ -1533,7 +1536,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   retaining or persisting them. Command-completion values correlate grammar
   position, replacement literal and span, highlighted candidate, pre-change
   buffer/cursor snapshot, and restored-state latch without owning projection or
-  I/O. Picker-control values retain one validated semantic picker and its
+  I/O. The ranged-source namespace reuses that same main-command palette state;
+  it introduces no second live picker state. Picker-control values retain one
+  validated semantic picker and its
   call-local window origin, while viewport values carry one contiguous
   at-most-seven-choice slice; stable choice identities remain internal
   correlation keys. Composer values retain exact accepted lines
@@ -1568,7 +1573,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   commits with oldest-first eviction at 100, while `transition_main_input`
   performs pure newest/older/newer history navigation, draft restoration, and
   overlay-open arrow suppression. `project_main_suggestion_palette` turns one
-  correlated completion projection into the existing semantic palette;
+  correlated completion projection into the existing semantic palette with
+  distinct whole-file insertion and ranged-viewer instructions. Both whole-
+  file and ranged empty-source namespaces render the same actionable guidance;
   `project_main_choice_completion` and `project_main_choice_palette` adapt
   controller-owned semantic choices into that same immutable state while
   keeping committed identities opaque, while `main_command_uses_choices`
@@ -1577,12 +1584,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   cycles, palette open/filter/highlight/clamp, static Tab/Enter completion and
   snapshot, dynamic Up/Down highlight and direct Enter commit, Escape
   restoration and latch, and the exact open-palette versus closed-history arrow
-  routing. Unlisted `completion_candidate_matches` is the single pure,
-  case-sensitive candidate predicate used by capable controls and injected
-  fallback: it preserves literal prefix matching and the existing omitted `/`
-  help-token match, permits only an omitted `{` after exactly one `$` for
-  canonical `${...}` candidates, and performs no `$$` normalization, fuzzy or
-  substring matching, or case folding.
+  routing. A ranged-source projection opens immediately through that existing
+  nonmodal palette, preserves exact candidates instead of applying ordinary
+  completion filtering, and never inserts its highlighted path. Enter or Tab
+  with a ranged palette remains available for driver-owned viewer activation;
+  after Escape, either key reopens the still-correlated palette rather than
+  submitting the line. Typing `{` or further direct-marker text leaves the
+  editor active, closes or transforms the overlay through normal projection,
+  and preserves the exact `$${path}` buffer. Unlisted
+  `ranged_artifact_picker_selection` purely
+  validates the live palette/projection/span correlation and returns only its
+  exact highlighted path. Unlisted `completion_candidate_matches` is the
+  single pure, case-sensitive candidate predicate used by capable controls and
+  injected fallback: it preserves literal prefix matching and the existing
+  omitted `/` help-token match, permits only an omitted `{` after exactly one
+  `$` for validated `${...}` candidates, and performs no `$$` normalization, fuzzy or
+  substring matching, or case folding. Ranged-source candidates bypass
+  ordinary completion insertion and matching.
   `transition_composer_line`
   applies exact `/send`, `/cancel`, `/say /send`, and `/say /cancel` semantics
   to immutable composer state, while `transition_confirmation_answer`
@@ -1783,13 +1801,27 @@ every intermediate arrow. The current runtime graph is acyclic.
   while `read_reference_main_command_line` and `read_reference_input_line`
   accept private call-local activation bindings for main and RUN/CHAT input
   without changing that established method signature. Those bindings carry the
-  controls-owned completion predicate so capable controls and ordinary
-  fallback apply the same exact matching relation; the driver interprets no
-  artifact-reference prefix grammar and retains no matching collaborator.
-  Enter or Tab activates a correlated request before line completion or
-  history mutation. A single `$` stays in the completion vocabulary; `$$`
-  opens the generic picker and then the supplied-text viewer, while `$${path}`
-  opens that viewer directly.
+  controls-owned completion predicate and ranged-palette selection callback.
+  Fallback raw-probes dollar positions right to left and delegates provider-
+  scope, escape-parity, and marker correlation decisions to the supplied
+  reference projection; the driver interprets no artifact-reference grammar
+  and retains none of those collaborators. On a capable live editor, the
+  second character of
+  exact `$$` immediately projects the existing main-command palette as a
+  nonmodal ranged-source overlay. Up/Down remains controls-owned; Enter or Tab
+  consumes only a freshly correlated highlighted path and opens the supplied-
+  text viewer without inserting a completion, submitting the line, or mutating
+  history. For an empty ranged projection, the driver consumes the reference-
+  owned deferred-failure semantic: Enter or Tab reports `EMPTY_SOURCES` only
+  while the empty panel is open, while a dismissed panel yields to the
+  controls-owned palette reprojection. Exact `$${path}` opens that viewer
+  directly, including eligible
+  paths with ordinary spaces or Unicode. A single `$` remains ordinary whole-
+  file completion. Ordinary fallback activates only after a submitted line:
+  its raw probes become actionable only when the scope-aware reference
+  projection accepts them, `$$` uses the existing numbered picker before the
+  supplied-text viewer, and `$${path}` opens that viewer directly. Neither path
+  uses a timer heuristic.
   `read_live_line` remains the history-free contextual compatibility route,
   `read_input_line` accepts an injected trusted semantic renderer for
   history-free composition and confirmation, and `read_line` uses the same
@@ -1877,9 +1909,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   store. Cancellable prompt and picker input
   likewise never consult or mutate history or completion state; their live
   paths reuse the sole driver's decoding, raw-mode, cursor, write, flush, and
-  restoration lifecycle. Reference picker/viewer children run inside that same
-  held input latch and raw-mode lifetime rather than invoking another public
-  input operation. Success replaces only the activation span; cancel,
+  restoration lifecycle. The capable ranged-source overlay remains part of the
+  outer editor control state; only its correlated viewer child runs inside that
+  same held input latch and raw-mode lifetime rather than invoking another
+  public input operation. Ordinary fallback keeps its callback-owned numbered
+  picker and viewer flow. Success replaces only the activation span; cancel,
   interrupt, EOF, expected failure, or disposal restores the outer control
   state and never appends history or submits a composition. Picker input
   observes width again for each redraw,
@@ -1895,8 +1929,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   cleanup with termios restoration taking precedence over screen cleanup and
   the active failure. Viewer fallback
   uses no ANSI, raw mode, or alternate screen. Reference-aware fallback renders
-  complete numbered choices, retains or amends the draft, and requires a
-  separate blank confirmation before an amended canonical token can return;
+  complete numbered choices only after the marker-bearing line is submitted,
+  retains or amends the draft, and requires a separate blank confirmation
+  before an amended canonical token can return;
   unresolved markers cannot bypass activation through that confirmation.
   Semantic input resolves capability and
   width once per read, uses the plain projection for fallback and cursor
@@ -1956,13 +1991,29 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Package-internal frozen/slotted
   `ReferenceInputScope`, `ReferenceActivationRequest`, and
   `ReferenceInputProjection`; content-free `ReferenceInputFailureKind` and
-  `ReferenceInputFailure`; plus pure `project_reference_input`, catalog-token
+  `ReferenceInputFailure`; plus pure `project_reference_input`, reference-source
   completion, selected-path correlation, whole-span insertion, and inclusive
-  range-replacement helpers. Projection scans only the supplied cursor-active
-  provider scope, follows the directive parser's odd-backslash escape parity,
-  recognizes `$`, `$$`, and exact `$${path}` markers, and validates every
-  emitted `${path}` or `${path}#Lx-Ly` token through the existing writing-
-  artifact facade. It performs no catalog discovery, text read, display,
+  range-replacement helpers. Each actionable completion or request carries its
+  immutable exact provider scope through selection and replacement. Projection
+  scans only that supplied cursor-active provider scope, follows the directive
+  parser's odd-backslash escape parity, and recognizes `$`, `$$`, and exact
+  `$${path}` markers only when the cursor is strictly after the marker start.
+  Nonempty exact `$$`
+  produces one span-correlated ranged-source completion/`PICK` pair for the
+  live overlay and ordinary fallback; empty exact `$$` instead pairs an empty
+  ranged completion with deferred `EMPTY_SOURCES`, keeping actionable capable-
+  terminal guidance visible before activation. Active-marker containment
+  preserves outer braced spaces, `#`, and Unicode while applying directive-
+  parser parity: an odd-escaped `$${...}` can rescan from its second dollar,
+  whereas other protected nested dollars do not activate. Fallback delegates
+  each raw probe to that same scope-aware projection. Marker discovery remains
+  correct for batched or bracketed paste. Replacement validates the complete
+  adjusted provider span atomically before constructing new editor state, so
+  earlier provider-visible references participate while unrelated command text
+  remains excluded.
+  Every emitted `${path}` or `${path}#Lx-Ly` token is validated through
+  the existing writing-artifact facade. It performs no catalog discovery, text
+  read, display,
   submission, history, or authorization operation and is not exported by the
   terminal or project-root `__all__` contracts.
 - **Direct internal dependencies:** `interactive_terminal._model` and
@@ -2017,11 +2068,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   never invokes the provider. Its unlisted facade adapters supply the pure
   selectable control projection plus existing semantic palette renderer to the
   driver. The same coordinator combines command-owned provider scopes with the
-  pure reference-activation projection and call-local catalog/read/fixed-error
+  pure reference-activation projection and call-local source-path/read/fixed-error
   callbacks. It gives reference completion precedence only inside an eligible
-  span, injects the controls-owned completion predicate into each call-local
-  `ReferenceInputBindings`, and binds the existing generic picker and
-  supplied-text viewer controls to driver-owned nested activation.
+  span, injects both the controls-owned completion predicate and exact ranged-
+  palette selection into each call-local `ReferenceInputBindings`, and binds
+  the existing generic picker for ordinary fallback plus the independent
+  supplied-text viewer for both capable and fallback activation. Its fixed
+  empty-source guidance reflects the broader lowercase-`.md` manuscript-source
+  grammar. Filesystem listing and text reads remain caller-supplied callbacks;
+  the terminal coordinator acquires neither resource.
   Callback-constructed terminals preserve their established ordinary behavior.
   The internal contextual factory preserves explicit ordinary/main/composition
   callback routing through deterministic plain semantic adapters, while the
@@ -3249,10 +3304,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   separate from editable line, history, and completion state. `_controls`
   supplies immutable history,
   selectable palette, composer, confirmation, and generic picker transitions:
-  open-palette Up and Down
-  move the clamped highlight, while closed-palette Up and Down remain history
-  keys; picker Up and Down skip disabled choices and clamp within their own
-  at-most-seven-row viewport. Opaque choice identities remain internal
+  open-palette Up and Down move the clamped highlight, while closed-palette Up
+  and Down remain history keys; picker Up and Down skip disabled choices and
+  clamp within their own at-most-seven-row viewport. Exact `$$` on a capable
+  editor uses a distinct completion namespace but the same nonmodal palette
+  state, opens immediately when the second `$` is projected, and never enters
+  the generic picker lifecycle. Its empty namespace keeps the same overlay open
+  with actionable guidance and a deferred empty-source failure. `_driver`
+  consumes the controls-correlated Enter/Tab selection only to open the
+  independent viewer; ordinary fallback retains the generic numbered picker
+  after its line is submitted. No timer participates in either path. Opaque
+  choice identities remain internal
   correlation keys and are never rendered. Composition preview remains
   nonselectable. The real CLI constructs one
   stream-backed terminal rather than injecting a second editor. The terminal
@@ -3274,16 +3336,26 @@ every intermediate arrow. The current runtime graph is acyclic.
   completed terminal outcomes, alone passes exact lines to the parser once, and
   neither it nor parser or storage code owns or persists command history.
 - `interactive_terminal._reference_activation` owns only pure active-marker,
-  completion, request, and replacement values. `_core` combines them with
-  controller-supplied provider scopes, sorted canonical paths, bounded text
-  reads, and fixed errors; `_driver` alone runs picker/viewer children under the
-  already-held input latch and raw-mode lifetime. This preserves outer buffer,
-  cursor, completion, history navigation, saved draft, overlay, composer, focus,
-  and mode state on cancellation or failure and mutates only the active span on
-  success. Main history and RUN/CHAT dispatch occur only after the returned
-  line's normal final commit. The controller and terminal retain no catalog or
-  artifact body after a call, and the emitted token remains subject to the
-  unchanged writing-artifact directive and runtime enforcement path.
+  completion, request, and replacement values, including the paired ranged-
+  source completion/PICK projection, paired empty completion/failure, and
+  immutable provider-scope and directive-parity correlation. It validates each
+  complete adjusted provider-visible span atomically, including earlier
+  references while excluding command options outside that scope. `_core`
+  combines them with controller-supplied provider scopes, sorted eligible
+  source paths, bounded text reads, fixed errors, and the controls-owned
+  selection callback. `_controls` owns pure overlay projection, highlighting,
+  Escape restoration, and selection correlation; `_driver` alone turns that
+  correlated capable selection into a VIEW request and runs the supplied-text
+  viewer under the already-held input latch and raw-mode lifetime. Its generic
+  picker remains only the ordinary-fallback `$$` selection mechanism. This
+  preserves outer buffer, cursor, completion, history navigation, saved draft,
+  overlay, composer, focus, and mode state on cancellation or failure and
+  mutates only the active span on success. Main history and RUN/CHAT dispatch
+  occur only after the returned line's normal final commit. Filesystem listing
+  and reads remain explicit caller callbacks; the controller and terminal
+  retain no catalog or artifact body after a call, and the emitted token remains
+  subject to the unchanged writing-artifact directive and runtime enforcement
+  path.
 - The ranged text viewer remains wholly inside `interactive_terminal`:
   `_viewer_model` owns immutable LF-derived document/state/viewport/result
   values, the private terminal-local 8 MiB source and 65,536-line capacities,
