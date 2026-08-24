@@ -31,6 +31,7 @@ from ._controls import (
     project_composition_suggestions,
     project_main_suggestion_palette,
     project_slash_suggestions,
+    ranged_artifact_picker_selection,
     transition_composer_line,
     transition_confirmation_answer,
     transition_main_input as transition_main_input,
@@ -475,8 +476,9 @@ _MAIN_PROMPT_EXCLUSIONS = frozenset({"/compose", "/send", "/cancel"})
 
 _ARTIFACT_REFERENCE_GUIDANCE = (
     "Artifact references require an attached session and focused conversation. "
-    "In provider-bound prompts, $ chooses a whole-file reference; $$ then "
-    "Enter/Tab opens ranged selection."
+    "In provider-bound prompts, $ opens whole-file selection and completion; "
+    "exact $$ immediately opens ranged selection, where Enter/Tab opens the "
+    "highlighted source in the viewer."
 )
 _STARTUP_WELCOME_SEQUENCE = (
     StartupWelcome(StartupWelcomeStage.STORY),
@@ -2033,6 +2035,7 @@ def _reference_input_bindings(
     return ReferenceInputBindings(
         projection_provider,
         completion_candidate_matches,
+        ranged_artifact_picker_selection,
         text_reader,
         failure_writer,
         _reference_picker_state,
@@ -2058,8 +2061,9 @@ def _reference_input_error(kind: ReferenceInputFailureKind) -> InteractiveError:
     copy = {
         ReferenceInputFailureKind.EMPTY_SOURCES: (
             "No current writing artifacts are available.",
-            "Add a supported canonical core document or part-scoped Markdown "
-            "manuscript. Consensus can also publish one.",
+            "Add a supported canonical core document or Markdown file with a "
+            "lowercase .md suffix under manuscript/. Consensus can also "
+            "publish one.",
         ),
         ReferenceInputFailureKind.STALE: (
             "The selected writing artifact is no longer current.",

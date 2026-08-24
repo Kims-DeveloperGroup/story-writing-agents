@@ -28,6 +28,35 @@ HandlerResult: TypeAlias = AgentReply | BaseException | Awaitable[AgentReply]
 RequestHandler: TypeAlias = Callable[[AgentRequest], HandlerResult]
 
 
+SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE = r"""def schema_uses_supported_array_items(specification):
+    if isinstance(specification, bool):
+        return True
+    if not isinstance(specification, dict):
+        return False
+    if specification.get("type") == "array":
+        items = specification.get("items")
+        if not isinstance(items, (dict, bool)):
+            return False
+        if "additionalItems" in specification or "prefixItems" in specification:
+            return False
+    for key, value in specification.items():
+        if key == "properties":
+            if not isinstance(value, dict) or not all(
+                schema_uses_supported_array_items(child)
+                for child in value.values()
+            ):
+                return False
+        elif key == "items" and not schema_uses_supported_array_items(value):
+            return False
+        elif key == "anyOf":
+            if not isinstance(value, list) or not value or not all(
+                schema_uses_supported_array_items(child) for child in value
+            ):
+                return False
+    return True
+"""
+
+
 def initialized_workspace(test_case: TestCase) -> Workspace:
     """Create an initialized test workspace with explicit core inputs.
 

@@ -36,6 +36,7 @@ from story_writing_agents import (
     ConversationRetrievalSemanticError,
     ConversationSearchScope,
     DebateStatus,
+    EXECUTION_SPECIALIST,
     FilesystemConversationCatalog,
     FilesystemConversationEventStore,
     PLOT_ARCHITECT,
@@ -50,8 +51,22 @@ from story_writing_agents import (
 from story_writing_agents.config import ConfigManager
 from story_writing_agents.prompts import PromptAssembler
 from story_writing_agents.provider_adapter import ProviderResult
+from story_writing_agents.writing_artifacts import (
+    ArtifactLineRange,
+    ArtifactReference,
+    ArtifactReferenceBatch,
+    ReferenceInvocationCorrelation,
+    ReferenceInvocationState,
+    ReferenceOperationState,
+)
+from story_writing_agents.writing_artifacts.repository import (
+    WritingArtifactRepository,
+)
 
-from tests.helpers import initialized_workspace
+from tests.helpers import (
+    SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE,
+    initialized_workspace,
+)
 
 
 _PROCESS_EXIT_HANDSHAKE_SECONDS = 2.0
@@ -60,7 +75,8 @@ _PROCESS_KILL_GRACE_SECONDS = 1.0
 _PROCESS_POLL_INTERVAL_SECONDS = 0.01
 
 
-_FAKE_AGY = r"""#!/usr/bin/env python3
+_FAKE_AGY = (
+    r"""#!/usr/bin/env python3
 import json
 import os
 from pathlib import Path
@@ -90,7 +106,12 @@ def append(value):
 def emit(value):
     print(json.dumps(value, ensure_ascii=False, separators=(",", ":")), flush=True)
 
+"""
+    + SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE
+    + r"""
 def matches_schema(value, specification):
+    if isinstance(specification, bool):
+        return specification
     if "anyOf" in specification:
         return any(matches_schema(value, branch) for branch in specification["anyOf"])
     expected_type = specification.get("type")
@@ -112,9 +133,13 @@ def matches_schema(value, specification):
             for field, child in properties.items()
         )
     if expected_type == "array":
-        return isinstance(value, list) and all(
-            matches_schema(item, specification.get("items", {})) for item in value
-        )
+        if not isinstance(value, list):
+            return False
+        if len(value) < specification.get("minItems", 0):
+            return False
+        if "maxItems" in specification and len(value) > specification["maxItems"]:
+            return False
+        return all(matches_schema(item, specification["items"]) for item in value)
     if expected_type == "string":
         if not isinstance(value, str):
             return False
@@ -179,7 +204,7 @@ if mode == "hang":
 elif mode == "ignore_term":
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
-append({
+record = {
     "argv": argv,
     "cwd": str(Path.cwd()),
     "provider_state": str(provider_state),
@@ -196,7 +221,13 @@ append({
     "resume_known": resume_known,
     "schema": schema,
     "pid": os.getpid(),
-})
+}
+if os.environ.get("STORY_FAKE_AGY_CAPTURE_PAYLOAD") == "1":
+    record["payload"] = payload
+append(record)
+
+if not schema_uses_supported_array_items(schema):
+    raise SystemExit(86)
 
 fail_action = os.environ.get("STORY_FAKE_AGY_FAIL_ACTION")
 if (
@@ -216,7 +247,13 @@ if mode == "hang":
 if mode == "ignore_term":
     threading.Event().wait()
 
-if "operation" in payload and payload["operation"] == "conversation_retrieval":
+if payload.get("operation") == "writing_artifact_reference_read":
+    output = {"action": {
+        "kind": "read_writing_artifacts",
+        "correlation": payload["correlation"],
+        "references": payload["references"],
+    }}
+elif "operation" in payload and payload["operation"] == "conversation_retrieval":
     action_index = payload["retrieval"]["action_index"]
     if action_index == 1:
         output = {"action": {
@@ -323,6 +360,7 @@ else:
     emit({"event": "step_update", "step_update": {}})
 emit({"event": "result", "result": terminal})
 """
+)
 
 
 _WINDOWS_FAKE_AGY_LAUNCHER = r"""import ctypes
@@ -619,6 +657,65 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             candidate_payload="PRIVATE_STORY_CANDIDATE",
         )
 
+    def reference_invocation(
+        self,
+        *,
+        operation_id: str,
+        invocation_id: str,
+    ):
+        """Create one mixed whole/range read for provider-parity coverage."""
+
+        repository = WritingArtifactRepository(self.workspace.root)
+        repository.commit_consensus(
+            output_path="part-01/antigravity-reference.md",
+            candidate="ANTIGRAVITY-WHOLE-MARKER\n",
+            core_updates={},
+            session_id="antigravity_reference_fixture",
+            debate_id="antigravity_reference_fixture",
+            revision_id="r0",
+            candidate_author_agent_id=EXECUTION_SPECIALIST,
+        )
+        self.workspace.root.joinpath(
+            "manuscript/part-01/antigravity-range.md"
+        ).write_text(
+            "ANTIGRAVITY-RANGE-OMITTED\n"
+            "ANTIGRAVITY-RANGE-MARKER\n"
+            "ANTIGRAVITY-RANGE-OMITTED\n",
+            encoding="utf-8",
+        )
+        references = (
+            ArtifactReference(
+                "manuscript/part-01/antigravity-reference.md"
+            ),
+            ArtifactReference(
+                "manuscript/part-01/antigravity-range.md",
+                ArtifactLineRange(2, 2),
+            ),
+        )
+        authorization = repository.capture_reference_authorization(
+            operation_id=operation_id,
+            batch=ArtifactReferenceBatch(
+                "reference request",
+                "reference request",
+                references,
+            ),
+        )
+        assert authorization is not None
+        self.addCleanup(authorization.close)
+        invocation = repository.begin_reference_invocation(
+            authorization,
+            ReferenceInvocationCorrelation(
+                operation_id=operation_id,
+                invocation_id=invocation_id,
+                invocation_ordinal=1,
+                agent_id=PLOT_ARCHITECT,
+                phase=Phase.DRAFT.value,
+                round_number=0,
+                attempt=1,
+            ),
+        )
+        return repository, authorization, invocation
+
     def invocations(self) -> list[dict[str, object]]:
         if not self.log_path.exists():
             return []
@@ -871,6 +968,119 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         else:
             self.assertEqual(self.executable, self.fake_script)
             self.assertFalse(self.windows_launcher.exists())
+
+    async def test_reference_read_mixed_batch_preserves_sequence_and_privacy(
+        self,
+    ) -> None:
+        session_id = "antigravity-reference-session"
+        operation_id = "antigravity_reference_operation"
+        backend = self.backend()
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        repository, authorization, invocation = self.reference_invocation(
+            operation_id=operation_id,
+            invocation_id="antigravity_reference_invocation",
+        )
+        request = self.request(
+            session_id=session_id,
+            debate_id="antigravity-reference-debate",
+            phase=Phase.DRAFT,
+        )
+
+        with mock.patch.dict(
+            os.environ,
+            {"STORY_FAKE_AGY_CAPTURE_PAYLOAD": "1"},
+        ):
+            reply = await bound.invoke(request, reference_read=invocation)
+        self.assertEqual(reply, AgentReply.candidate("r0", "reply-draft"))
+        repository.finish_reference_operation(authorization, outcome=None)
+
+        calls = self.provider_invocations()
+        self.assertEqual(len(calls), 2)
+        prelude, substantive = calls
+        self.assertEqual(
+            prelude["payload"],
+            AgentBackend._reference_read_prelude_payload(invocation.request),
+        )
+        reference_schema = prelude["schema"]["properties"]["action"][
+            "properties"
+        ]["references"]
+        self.assertIs(type(reference_schema["items"]), dict)
+        self.assertEqual(
+            (reference_schema["minItems"], reference_schema["maxItems"]),
+            (2, 2),
+        )
+        self.assertNotIn("additionalItems", json.dumps(prelude["schema"]))
+        self.assertNotIn("prefixItems", json.dumps(prelude["schema"]))
+
+        expected_payload = AgentBackend._request_payload(request)
+        expected_payload["untrusted_writing_artifact_context"] = [
+            {
+                "reference": {
+                    "path": "manuscript/part-01/antigravity-reference.md",
+                    "line_range": None,
+                },
+                "content": "ANTIGRAVITY-WHOLE-MARKER\n",
+            },
+            {
+                "reference": {
+                    "path": "manuscript/part-01/antigravity-range.md",
+                    "line_range": {"start": 2, "end": 2},
+                },
+                "content": "ANTIGRAVITY-RANGE-MARKER\n",
+            },
+        ]
+        self.assertEqual(substantive["payload"], expected_payload)
+        manifest = self.manifest(session_id)
+        thread = manifest["provider_threads"]["antigravity:plot_architect"]
+        self.assertIsNone(prelude["resumed_id"])
+        self.assertEqual(substantive["resumed_id"], thread["thread_id"])
+        self.assertIs(thread["tainted"], False)
+
+        history = repository.inspect_reference_operation(operation_id)
+        assert history is not None
+        self.assertEqual(
+            tuple(event.operation_state for event in history.operation_events),
+            (
+                ReferenceOperationState.REQUESTED,
+                ReferenceOperationState.CAPTURED,
+                ReferenceOperationState.ACCEPTED,
+            ),
+        )
+        self.assertEqual(
+            tuple(
+                event.invocation_state
+                for event in history.invocation_events[0]
+            ),
+            (
+                ReferenceInvocationState.AUTHORIZED,
+                ReferenceInvocationState.DELIVERED,
+                ReferenceInvocationState.RESULT_RECEIVED,
+                ReferenceInvocationState.ACCEPTED,
+            ),
+        )
+        prelude_projection = json.dumps(
+            {"payload": prelude["payload"], "schema": prelude["schema"]},
+            ensure_ascii=False,
+        )
+        debug_path = self.workspace.path("debug_logs/runtime.jsonl")
+        debug_projection = (
+            debug_path.read_text(encoding="utf-8")
+            if debug_path.exists()
+            else ""
+        )
+        durable_projection = repr(history)
+        provider_projection = json.dumps(calls, ensure_ascii=False)
+        for marker in (
+            "ANTIGRAVITY-WHOLE-MARKER",
+            "ANTIGRAVITY-RANGE-MARKER",
+        ):
+            self.assertNotIn(marker, prelude_projection)
+            self.assertNotIn(marker, debug_projection)
+            self.assertNotIn(marker, durable_projection)
+            self.assertEqual(provider_projection.count(marker), 1)
+        self.assertNotIn("ANTIGRAVITY-RANGE-OMITTED", provider_projection)
+        authorization.close()
 
     async def test_all_phases_direct_and_retrieval_conversation_are_correlated(
         self,

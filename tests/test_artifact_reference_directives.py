@@ -1,4 +1,4 @@
-"""Pure contracts for canonical writing-artifact reference directives."""
+"""Pure contracts for eligible writing-artifact reference-source directives."""
 
 from __future__ import annotations
 
@@ -165,6 +165,32 @@ class ArtifactReferenceDirectiveParsingTests(unittest.TestCase):
             ),
         )
 
+    def test_source_only_paths_spaces_unicode_and_delimiters_preserve_order(
+        self,
+    ) -> None:
+        paths = (
+            "manuscript/root.md",
+            "manuscript/older drafts/世界 章.md",
+            "manuscript/{archive$/scene#1.md",
+        )
+        text = (
+            f"Use {_token(paths[0])}, then {_token(paths[1], '#L2-L4')} "
+            f"and {_token(paths[2])}."
+        )
+
+        batch = parse_artifact_references(text)
+
+        self.assertEqual(batch.source_text, text)
+        self.assertEqual(batch.provider_text, text)
+        self.assertEqual(
+            batch.references,
+            (
+                ArtifactReference(paths[0]),
+                ArtifactReference(paths[1], ArtifactLineRange(2, 4)),
+                ArtifactReference(paths[2]),
+            ),
+        )
+
     def test_range_word_and_additional_range_continuations_reject(self) -> None:
         suffixes = (
             "x",
@@ -203,8 +229,13 @@ class ArtifactReferenceDirectiveValidationTests(unittest.TestCase):
             "discussion_logs/private.md",
             "agent_states/orchestrator_state/state.md",
             "core_documents/extra.md",
-            "manuscript/chapter.md",
             "manuscript/part-01/chapter.txt",
+            "manuscript/part-01/chapter.MD",
+            "manuscript/closing}brace.md",
+            "manuscript/control\tname.md",
+            "manuscript/format\u200dname.md",
+            "manuscript/line\u2028separator.md",
+            "manuscript/paragraph\u2029separator.md",
             "manuscript/part-01/../chapter.md",
             "/manuscript/part-01/chapter.md",
             "manuscript\\part-01\\chapter.md",
@@ -217,21 +248,14 @@ class ArtifactReferenceDirectiveValidationTests(unittest.TestCase):
                     parse_artifact_references(_token(path))
                 self.assertEqual(
                     str(raised.exception),
-                    "reference path is not a canonical writing artifact",
+                    "reference path is not an eligible writing-artifact source",
                 )
                 self.assertNotIn(path, str(raised.exception))
 
-    def test_empty_and_whitespace_paths_have_one_safe_error(self) -> None:
-        for path in ("", " ", "bad path", "bad\tpath", "bad\u2003path"):
-            with self.subTest(path=path):
-                with self.assertRaises(ArtifactReferenceDirectiveError) as raised:
-                    parse_artifact_references(_token(path))
-                self.assertEqual(
-                    str(raised.exception),
-                    "reference path must be nonempty and contain no whitespace",
-                )
-                if path.strip():
-                    self.assertNotIn(path, str(raised.exception))
+    def test_empty_path_has_one_safe_error(self) -> None:
+        with self.assertRaises(ArtifactReferenceDirectiveError) as raised:
+            parse_artifact_references(_token(""))
+        self.assertEqual(str(raised.exception), "reference path must be nonempty")
 
     def test_positive_uppercase_ordered_range_grammar_is_exact(self) -> None:
         text = (
@@ -410,7 +434,7 @@ class ArtifactReferenceValueContractTests(unittest.TestCase):
             ArtifactLineRange(3, 2)
         with self.assertRaisesRegex(
             ValueError,
-            "reference path is not a canonical writing artifact",
+            "reference path is not an eligible writing-artifact source",
         ):
             ArtifactReference("discussion_logs/private.md")
         with self.assertRaisesRegex(
@@ -535,7 +559,7 @@ class ArtifactReferenceValueContractTests(unittest.TestCase):
         self.assertIsInstance(raised.exception, ValueError)
         self.assertEqual(
             str(raised.exception),
-            "reference path is not a canonical writing artifact",
+            "reference path is not an eligible writing-artifact source",
         )
         self.assertNotIn(secret, str(raised.exception))
 

@@ -3,21 +3,24 @@
 > **Availability:** inline `${path}` and `${path}#Lx-Ly` references are active
 > in provider-bound conversation, retrieval, and consensus input. In the TTY
 > shell on a capable terminal, `$` opens the labeled whole-file selection
-> panel, `$${path}` opens one artifact directly, and `$$` opens a picker before
-> the independent ranged viewer. These controls augment prompt editing; `$` is
+> panel. Typing the second `$` immediately changes it into ranged-source
+> selection before any third key or newline; Enter/Tab opens the highlighted
+> source in the independent viewer. A completed `$${path}` marker opens that
+> source directly on Enter/Tab. These controls augment prompt editing; `$` is
 > not a command and does not submit the prompt. Ordinary-line fallback uses the
 > numbered flows described below.
 
 An artifact reference tells every addressed story agent which existing output
-it must read before its reply can be accepted. It carries a canonical path and
-optional inclusive line range, not a copy of the file. The runtime captures the
-selected bytes once, requires a fresh exact read action from each provider
-invocation, and revalidates the source before accepting the operation.
+it must read before its reply can be accepted. It carries an eligible
+workspace-relative source path and optional inclusive line range, not a copy of
+the file. The runtime captures the selected bytes once, requires a fresh exact
+read action from each provider invocation, and revalidates the source before
+accepting the operation.
 
 ## User impact
 
 You can now ground an advisory request or consensus modification in one or more
-ordered canonical artifacts without pasting their contents. Each addressed
+ordered writing artifacts without pasting their contents. Each addressed
 agent and debate phase must independently request the full batch; one call
 cannot silently ignore a reference or borrow another call's evidence. This
 guarantees the read sequence and current source identity, not the quality of an
@@ -33,14 +36,19 @@ or public selection API.
 
 Discovery is based on the current filesystem, not publication history. It
 includes safe empty, manually created, pre-provenance, older, published, and
-hash-divergent files at the four exact core paths or recursively below a valid
-`manuscript/PART/` directory. It excludes `.gitkeep`, extra core files,
-root-level manuscripts, unsupported or invalid paths, normalized/case aliases,
-symlinks, multiply linked or nonregular files, and every internal or outside
-path. Listing is deterministic path/type metadata only; file bytes are opened
-later for viewing or runtime capture. The shell uses its normally resolved
-workspace: an explicit `--workspace` wins, otherwise the nearest initialized
-ancestor is selected.
+hash-divergent files at the four exact core paths, plus every eligible
+lowercase-`.md` descendant anywhere below `manuscript/`. That includes
+`manuscript/root.md`, arbitrary nesting, spaces, Unicode, `{`, `$`, and `#` in
+path components. This source rule is deliberately broader than the strict
+`manuscript/PART/PATH.md` grammar used when agents publish new output.
+
+Discovery excludes `.gitkeep`, uppercase `.MD`, a filename that is only
+`.md`, extra core files, `}`, line/control/format/surrogate characters,
+unnormalized or unsafe paths, symlinks, multiply linked or nonregular files,
+and every internal or outside path. Listing is deterministic path/type metadata
+only; file bytes are opened later for viewing or runtime capture. The shell
+uses its normally resolved workspace: an explicit `--workspace` wins,
+otherwise the nearest initialized ancestor is selected.
 
 Missing or corrupt publication catalog, ledger, journal, or recovery state does
 not empty this source list or block safe source reads. It still blocks catalog
@@ -54,14 +62,15 @@ ${core_documents/global_outline.md}
 ${manuscript/part-01/scenes/opening.md}#L40-L65
 ```
 
-Use uppercase `L`, positive ordered line numbers, and one of these canonical
-paths:
+Use uppercase `L`, positive ordered line numbers, and one eligible source path:
 
 - `core_documents/global_outline.md`
 - `core_documents/part_outlines.md`
 - `core_documents/character_sheets.md`
 - `core_documents/narrative_rules.md`
-- `manuscript/PART/PATH.md`
+- any normalized lowercase-`.md` descendant under `manuscript/`, including
+  direct files such as `manuscript/root.md` and deeper paths with spaces or
+  Unicode names
 
 One input may contain up to 16 references. Their order is significant. Each
 selection is limited to 128 KiB of UTF-8 and the combined batch to 256 KiB.
@@ -104,16 +113,18 @@ and distinguish `$` whole-file selection from `$$` ranged selection.
 | Typed control | Capable terminal | Ordinary-line fallback | Result in the draft |
 | --- | --- | --- | --- |
 | `$` | Shows `Writing artifact selection [open]`, then `[controls] Up/Down selects; Enter/Tab inserts a whole-file reference.` Up/Down chooses and Enter or Tab completes. | Shows a numbered source list. | `${path}` replaces only the active marker; the prompt is not submitted. |
-| `$${path}` | Enter or Tab opens that artifact in the independent viewer. | Submitting the marker line opens its complete numbered text viewer. | Enter on a range inserts `${path}#Lx-Ly`. |
-| `$$` | Enter or Tab opens the source picker, then the selected artifact in the viewer. | Submitting the marker line uses a numbered picker, then the complete numbered viewer. | The selected path and inclusive range replace only the marker. |
+| `$${path}` | After the closing `}`, Enter or Tab opens that artifact in the independent viewer. | Submitting the marker line opens its complete numbered text viewer. | Enter on a range inserts `${path}#Lx-Ly`. |
+| `$$` | The second `$` immediately shows ranged-source choices. Up/Down changes the highlight; Enter or Tab opens it in the viewer. | Submitting the marker line uses a numbered picker, then the complete numbered viewer. | The selected path and inclusive range replace only the marker. |
 | `\$` | No activation. | No activation. | A literal dollar remains in the prompt. |
 
 In the capable viewer, Up/Down moves the active line. Shift+Up/Down creates,
 extends, contracts, or reverses a normalized inclusive range; Enter selects it
-and Escape cancels. In fallback, enter exact ASCII `START-END` or `/cancel`.
-The full artifact remains visible in fallback scrollback. The terminal viewer
-receives verified text from the caller, retains no document or selection after
-return, and closes before editing resumes.
+and Escape cancels. The independent viewer stays active while the range is
+being adjusted, then closes and restores the same composer when the selection
+or cancellation completes. In fallback, enter exact ASCII `START-END` or
+`/cancel`. The full artifact remains visible in fallback scrollback. The
+terminal viewer receives verified text from the caller and retains no document
+or selection after return.
 
 One prompt can contain several completed indicators. Each new activation uses
 a fresh filesystem-list/read/view operation; completed indicators stay in their typed
@@ -132,18 +143,27 @@ The panel title is `Writing artifact selection [open]`. The path fragment after
 `$` filters the rows case-sensitively. If
 `${core_documents/character_sheets.md}` is highlighted, Enter or Tab replaces
 only `$core_documents/char` with that whole-file indicator. It does not send
-the line. You can continue editing and add `$$`, then press Enter or Tab to
-choose an artifact and open the independent viewer for a line range. Only a
-later ordinary prompt submission dispatches the resulting references.
+the line. You can continue editing and type `$$`; the ranged-source choices
+appear as soon as the second `$` is entered. Use Up/Down, then Enter or Tab to
+open the highlighted source in the independent viewer. Only a later ordinary
+prompt submission dispatches the resulting references.
+
+Escape closes an immediate `$$` panel but preserves the exact `$$` text.
+Pressing Enter or Tab later reopens the ranged-source choices in place. To name
+a source directly, type a complete marker such as
+`$${manuscript/older drafts/{世界$ 章#1.md}`; typing `{` after `$$` converts
+the panel back into exact text entry, and Enter or Tab after the closing `}`
+opens that file. Character-by-character input, a single terminal write, and
+bracketed paste preserve the marker literally.
 
 If the fragment matches no current safe path, the open panel instead shows
 `[empty] No matching writing artifacts. Change the path fragment.` Edit or
-remove the fragment to recover. If no current safe canonical file exists,
+remove the fragment to recover. If no current safe reference source exists,
 typing `$` immediately shows `[empty] No writing artifacts. Add a supported
-canonical core document or part-scoped Markdown manuscript. Consensus can also
-publish one.` No provider call starts. Enter or Tab then emits the established
-`command_invalid` `empty_sources` error below and restores the
-`$` draft.
+canonical core document or Markdown file with a lowercase .md suffix under
+manuscript/. Consensus can also publish one.` No provider call starts. Enter or
+Tab then emits the established `command_invalid` `empty_sources` error below
+and restores the `$` draft.
 
 ### Capable and fallback completion boundary
 
@@ -161,7 +181,7 @@ start no provider work. The fixed content-free failures are:
 
 | Condition / category | Exact summary | Exact recovery hint |
 | --- | --- | --- |
-| Empty sources / `command_invalid` | `No current writing artifacts are available.` | `Add a supported canonical core document or part-scoped Markdown manuscript. Consensus can also publish one.` |
+| Empty sources / `command_invalid` | `No current writing artifacts are available.` | `Add a supported canonical core document or Markdown file with a lowercase .md suffix under manuscript/. Consensus can also publish one.` |
 | Invalid insertion / `command_invalid` | `The artifact reference cannot be inserted.` | `Remove the active marker or choose a nonconflicting current artifact.` |
 | Stale selection / `workspace_invalid` | `The selected writing artifact is no longer current.` | `Type $ again to refresh the canonical artifact list.` |
 | Unsafe view / `workspace_invalid` | `The selected writing artifact cannot be viewed safely.` | `Inspect its size and UTF-8 repository state, then refresh the list.` |
@@ -331,10 +351,11 @@ work:
 
 ```text
 editing a provider-bound span
-  $              -> filesystem selection -> ${path}        -> same editing span
-  $${path}+Enter -> viewer            -> ${path}#Lx-Ly    -> same editing span
-  $$+Enter       -> picker -> viewer  -> ${path}#Lx-Ly    -> same editing span
-  cancel/error   ------------------------------------------> exact original span
+  $                    -> source completion -> ${path}      -> same editing span
+  second $             -> ranged choices shown immediately
+  $$ + Up/Down + Enter -> viewer -> ${path}#Lx-Ly           -> same editing span
+  $${path} + Enter     -> viewer -> ${path}#Lx-Ly           -> same editing span
+  cancel/error         -------------------------------------> exact original span
 
 later ordinary submit -> parse once -> capture/revalidate -> per-invocation
 read prelude -> transient provider context -> accepted result or atomic failure
@@ -342,18 +363,25 @@ read prelude -> transient provider context -> accepted result or atomic failure
 
 Internally, the controller supplies only the provider-bound buffer span and
 filesystem-source callbacks. A pure activation layer classifies the active
-marker and
-returns a content-free completion, viewer request, or failure. For an available
-but empty source list, it projects an empty artifact panel together with a
-deferred `empty_sources` failure: rendering `$` stays side-effect-free, while Enter or Tab
+marker. Exact `$$` projects both the source choices and a correlated picker
+request; the editor controls own the open panel and highlight. Enter or Tab
+converts the highlighted path into a viewer request, and the terminal driver
+owns that viewer's input and screen lifecycle. For an available but empty
+source list, `$` projects an empty artifact panel together with a deferred
+`empty_sources` failure: rendering stays side-effect-free, while Enter or Tab
 surfaces the fixed error. A no-match panel is instead the filtered view of a
 nonempty completion projection, so changing the path fragment can reveal rows
-again. The terminal driver owns the one input latch and nested picker/viewer
-resources; it restores the immutable origin on every noncommit path and clears
-call-local callbacks. Only the later normal submission reaches the parser and
-runtime. The private viewer remains independent and storage-free: the
-controller safely reads one current source, supplies its text and display name, and
-attaches the returned line numbers to the path.
+again.
+
+The driver restores the immutable origin on every cancel or failed activation
+and clears call-local callbacks. The controller safely reads one current
+source, supplies its text and display name to the independent, storage-free
+viewer, and attaches only the returned inclusive line numbers to the path.
+Only the later normal submission enters history, reaches the parser, and
+dispatches an agent. The runtime then captures and revalidates the complete
+ordered reference batch and requires every addressed agent invocation to read
+each indicator through its one-use authorization; viewer bytes are never
+reused as proof of that read.
 
 Source-list display, highlighting, viewing, and cancellation create no durable
 work-history row. A completed token enters main history only if the user later

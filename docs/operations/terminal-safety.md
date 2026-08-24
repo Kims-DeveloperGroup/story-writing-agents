@@ -542,8 +542,11 @@ Reference discovery is admitted only for the controller-projected
 provider-bound span. The private activation layer scans one cursor-active,
 unescaped marker and emits only pure completion/request/failure values. It
 cannot read a source list or artifact. The controller borrows a fresh sorted
-canonical-filesystem-path callback and bounded verified-text callback for that input call;
-the driver clears both in `finally`.
+reference-source-path callback and bounded verified-text callback for that
+input call; the driver clears both in `finally`. Exact `$$` projects its
+ranged-source panel on the second dollar; the ordinary input controls own
+highlight movement and the driver converts highlighted Enter/Tab into viewer
+entry without committing the outer prompt.
 
 Capable picker and viewer input run under the same admitted source, decoder,
 raw-mode lifetime, and irreversible `LIVE` latch as their originating input.

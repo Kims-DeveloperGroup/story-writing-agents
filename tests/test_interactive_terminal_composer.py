@@ -9,7 +9,7 @@ import re
 import unittest
 from dataclasses import FrozenInstanceError, fields
 from types import SimpleNamespace
-from typing import get_args
+from typing import Callable, get_args
 from unittest import mock
 
 import story_writing_agents
@@ -36,6 +36,10 @@ from story_writing_agents.interactive_terminal._controls import (
     transition_main_input,
 )
 from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
+from story_writing_agents.interactive_terminal._reference_activation import (
+    ReferenceInputFailureKind,
+    ReferenceInputScope,
+)
 from story_writing_agents.interactive_terminal._model import (
     CapabilityProfile,
     ComposerState,
@@ -208,6 +212,7 @@ def _driver(
     width: int = 80,
     output: _RecordingOutput | None = None,
     termios_double: _FakeTermios | None = None,
+    main_transition: Callable[..., object] = transition_main_input,
 ) -> tuple[
     RawTerminalDriver,
     _ScriptedInput,
@@ -247,7 +252,7 @@ def _driver(
         input_stream,  # type: ignore[arg-type]
         output_stream,  # type: ignore[arg-type]
         transition_line_input,
-        transition_main_input,
+        main_transition,  # type: ignore[arg-type]
         append_main_input_history,
         termios_provider=lambda: termios_value,
         os_provider=lambda: os_double,
@@ -627,6 +632,138 @@ class SemanticInputRenderingTests(unittest.TestCase):
 
 class SemanticInputDriverTests(unittest.TestCase):
     """Verify renderer injection, safe fallback, live trust, and cleanup."""
+
+    def test_run_and_chat_exact_double_dollar_open_before_activation_key(
+        self,
+    ) -> None:
+        path = "manuscript/older drafts/{世界$ 章#1.md"
+        paths = (path, "manuscript/root.md")
+        for mode, agent_id, activation_key in (
+            (ComposeMode.RUN, None, "\n"),
+            (ComposeMode.CHAT, PLOT_ARCHITECT, "\t"),
+        ):
+            with self.subTest(mode=mode, activation_key=repr(activation_key)):
+                driver, _input, output, fallback, termios_double, _size = _driver(
+                    "$$" + activation_key + "\x1b[1;2B\n\n",
+                    main_transition=_controls.transition_main_command_input,
+                )
+                view = _core._composer_input_view(mode, agent_id, ComposerState())
+                reader = mock.Mock(return_value="one\ntwo\nthree")
+                failure = mock.Mock()
+
+                with mock.patch.object(
+                    driver_module,
+                    "_escape_input_is_ready",
+                    return_value=True,
+                ):
+                    result = _core.read_reference_composition_line(
+                        driver,
+                        view,
+                        lambda buffer, _cursor: ReferenceInputScope(
+                            0,
+                            len(buffer),
+                        ),
+                        lambda: paths,
+                        reader,
+                        failure,
+                    )
+
+                self.assertEqual(result, f"${{{path}}}#L1-L2")
+                frames = [strip_decorative_sgr(record) for record in output.records]
+                picker_index = next(
+                    index
+                    for index, frame in enumerate(frames)
+                    if "Writing artifact selection [open]" in frame
+                    and "Enter/Tabopenstherangedviewer."
+                    in "".join(frame.split())
+                    and "> $$" in frame
+                )
+                viewer_index = next(
+                    index
+                    for index, record in enumerate(output.records)
+                    if "\x1b[?1049h" in record
+                )
+                self.assertLess(picker_index, viewer_index)
+                for source_path in paths:
+                    self.assertIn(
+                        "".join(source_path.split()),
+                        "".join(frames[picker_index].split()),
+                    )
+                reader.assert_called_once_with(path)
+                failure.assert_not_called()
+                fallback.assert_not_called()
+                self.assertEqual(driver._history_state, MainInputHistoryState())
+                self.assertEqual(
+                    [when for _fd, when, _attrs in termios_double.set_calls],
+                    [termios_double.TCSANOW, termios_double.TCSADRAIN],
+                )
+
+    def test_run_and_chat_empty_double_dollar_preview_precedes_failure(
+        self,
+    ) -> None:
+        for mode, agent_id, activation_key in (
+            (ComposeMode.RUN, None, "\n"),
+            (ComposeMode.CHAT, PLOT_ARCHITECT, "\t"),
+        ):
+            with self.subTest(mode=mode, activation_key=repr(activation_key)):
+                driver, _input, output, fallback, termios_double, _size = _driver(
+                    "$$" + activation_key + "\x03",
+                    main_transition=_controls.transition_main_command_input,
+                )
+                view = _core._composer_input_view(mode, agent_id, ComposerState())
+                reader = mock.Mock(
+                    side_effect=AssertionError("empty sources must not read text")
+                )
+                failure_records: list[tuple[ReferenceInputFailureKind, int]] = []
+
+                def write_failure(kind: ReferenceInputFailureKind) -> None:
+                    failure_records.append((kind, len(output.records)))
+
+                with mock.patch.object(
+                    driver_module,
+                    "_escape_input_is_ready",
+                    return_value=True,
+                ):
+                    with self.assertRaises(KeyboardInterrupt):
+                        _core.read_reference_composition_line(
+                            driver,
+                            view,
+                            lambda buffer, _cursor: ReferenceInputScope(
+                                0,
+                                len(buffer),
+                            ),
+                            lambda: (),
+                            reader,
+                            write_failure,
+                        )
+
+                frames = [strip_decorative_sgr(record) for record in output.records]
+                picker_index = next(
+                    index
+                    for index, frame in enumerate(frames)
+                    if "> $$" in frame
+                    and "Writing artifact selection [open]" in frame
+                    and "No writing artifacts." in frame
+                )
+                self.assertEqual(len(failure_records), 1)
+                self.assertIs(
+                    failure_records[0][0],
+                    ReferenceInputFailureKind.EMPTY_SOURCES,
+                )
+                self.assertLess(picker_index, failure_records[0][1])
+                self.assertIn(
+                    "Enter/Tabopenstherangedviewer.",
+                    "".join(frames[picker_index].split()),
+                )
+                reader.assert_not_called()
+                self.assertNotIn("\x1b[?1049h", "".join(output.records))
+                self.assertNotIn("\x1b[?1049l", "".join(output.records))
+                fallback.assert_not_called()
+                self.assertEqual(driver._history_state, MainInputHistoryState())
+                self.assertEqual(
+                    [when for _fd, when, _attrs in termios_double.set_calls],
+                    [termios_double.TCSANOW, termios_double.TCSADRAIN],
+                )
 
     def test_signature_and_line_fallback_render_once_without_history(self) -> None:
         self.assertEqual(

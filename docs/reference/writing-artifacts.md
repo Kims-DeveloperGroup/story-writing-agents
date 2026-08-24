@@ -8,8 +8,10 @@
 > and evidence values described below. `StoryRuntime` captures inline
 > `${path}` and `${path}#Lx-Ly` indicators and gives every addressed provider
 > invocation a fresh private coordinator. In provider-bound shell prompt spans,
-> `$` lists current safe canonical files and `$${path}` or `$$` opens the independent
-> ranged viewer. No standalone artifact command or public selection API exists.
+> `$` lists current safe reference sources. Exact `$$` immediately shows
+> ranged-source choices; Enter/Tab opens the highlighted source in the
+> independent viewer. A completed `$${path}` marker opens that source directly
+> on Enter/Tab. No standalone artifact command or public selection API exists.
 
 This reference uses **writing artifact path** for the canonical story-output
 topology. A current source at one of those paths may be manual or
@@ -64,8 +66,8 @@ directory; the second is the user-selected part ID.
 > picker, and ranged-viewer attachment are terminal/controller concerns and
 > construct the same content-free indicators before this parser runs.
 
-One directive is a content-free indicator containing either a canonical path
-or that path followed by a one-based inclusive line range:
+One directive is a content-free indicator containing either an eligible source
+path or that path followed by a one-based inclusive line range:
 
 ```text
 ${core_documents/global_outline.md}
@@ -73,10 +75,15 @@ ${manuscript/part-01/scenes/opening.md}#L7-L12
 ```
 
 The path inside `${...}` must be one of the four exact core-document paths or
-a canonical `manuscript/PART/PATH.md` path under the grammar above. A range is
-optional, immediately follows `}`, uses uppercase `L`, contains positive ASCII
-decimal bounds without leading zeroes, and must have `start <= end`. Both
-bounds are inclusive. A value larger than `sys.maxsize` is rejected.
+any safely representable lowercase-`.md` descendant under `manuscript/`. The
+latter includes `manuscript/root.md`, arbitrary nesting, spaces, Unicode, `{`,
+`$`, and `#`; it is intentionally broader than the publication grammar above.
+It excludes `}`, line separators, control/format/surrogate characters, unsafe
+or non-normalized paths, uppercase `.MD`, and a filename that is only `.md`.
+A range is optional, immediately follows `}`, uses uppercase `L`, contains
+positive ASCII decimal bounds without leading zeroes, and must have
+`start <= end`. Both bounds are inclusive. A value larger than `sys.maxsize`
+is rejected.
 
 `parse_artifact_references()` accepts one exact strict-UTF-8 `str` without NUL
 and returns references in source order. One input may contain at most 16 active
@@ -91,8 +98,8 @@ directives. For repeated directives naming the same path:
 Unescaped `$$` is reserved and rejected if it reaches this runtime parser. The
 interactive terminal consumes an active `$$` picker marker before submission;
 it never becomes a command. Every unescaped `${` begins a
-directive and must have a closing brace, a nonempty whitespace-free canonical
-path, and any range that begins with `#L` must be complete. Lowercase `#l`,
+directive and must have a closing brace and a nonempty eligible source path;
+any range that begins with `#L` must be complete. Lowercase `#l`,
 zero or leading-zero bounds, reversed ranges, extra range markers, and a
 letter, number, underscore, or other identifier-continuation character
 immediately following a range are malformed. A single `$` that does not begin
@@ -359,14 +366,16 @@ filesystem. `catalog()` and consensus publication use the catalog, immutable
 commit ledger, journals, and recovery state.
 
 Source discovery checks exactly the four core paths and recursively scans
-regular files below `manuscript/`. A manuscript is included only when its full
-path matches `manuscript/PART/PATH.md`. Results are lexical and contain path and
-type metadata only; listing does not read, decode, hash, or line-split file
-content. Safe empty, manual, initialized by another tool, pre-provenance,
-older, published, and hash-divergent files are included. `.gitkeep`, extra core
-paths, root-level manuscripts, unsupported extensions, invalid/oversize paths,
-case or normalization aliases, symlinks, hard-linked files, special files,
-internal state, and outside paths are excluded.
+regular files below `manuscript/`. Every safely representable lowercase-`.md`
+descendant is eligible, including direct root files, arbitrary nesting, spaces,
+Unicode, `{`, `$`, and `#`. Results are lexical and contain path and type
+metadata only; listing does not read, decode, hash, or line-split file content.
+Safe empty, manual, initialized by another tool, pre-provenance, older,
+published, and hash-divergent files are included. `.gitkeep`, extra core paths,
+unsupported extensions, `}`, invalid/oversize paths, case or normalization
+aliases, symlinks, hard-linked files, special files, internal state, and outside
+paths are excluded. These source rules do not relax the stricter publication
+identity in [Exact output paths](#exact-output-paths).
 
 | State | Source behavior | Publication behavior |
 | --- | --- | --- |

@@ -346,11 +346,13 @@ PATHS = (
     "core_documents/character_sheets.md",
     "core_documents/global_outline.md",
     "core_documents/narrative_rules.md",
+    "manuscript/older drafts/{世界$ 章#1.md",
 )
 CONTENTS = {
     PATHS[0]: "character one\ncharacter two\ncharacter three\n",
     PATHS[1]: "outline one\noutline two\noutline three\noutline four\n",
     PATHS[2]: "rule one\nrule two\nrule three\n",
+    PATHS[3]: "world one\nworld two\nworld three\n",
 }
 catalog_calls = []
 read_calls = []
@@ -889,17 +891,20 @@ class InteractiveCliPtyTests(unittest.TestCase):
             "core_documents/global_outline.md": "",
             "core_documents/narrative_rules.md": "rules\nvoice\n",
             "core_documents/part_outlines.md": "parts\npart one\n",
+            "manuscript/-older/chapter.md": "older\n",
             "manuscript/Part_A/scenes/opening.md": "opening\n",
+            "manuscript/older drafts/{世界$ 章#1.md": "world\nscene\n",
             "manuscript/part-01/scene.md": "scene one\n",
+            "manuscript/root.md": "root manuscript\n",
             "manuscript/volume_2/ending.md": "ending\n",
         }
         excluded = {
             "agent_states/file-picker/internal.md": "internal\n",
             "core_documents/extra.md": "extra\n",
-            "manuscript/-invalid/chapter.md": "invalid part\n",
+            "manuscript/bad}.md": "unsafe delimiter\n",
+            "manuscript/chapter.MD": "unsupported suffix\n",
             "manuscript/part-01/.gitkeep": "",
             "manuscript/part-01/notes.txt": "unsupported\n",
-            "manuscript/root.md": "root manuscript\n",
         }
         for relative, content in (contents | excluded).items():
             target = self.workspace.root / relative
@@ -960,6 +965,7 @@ class InteractiveCliPtyTests(unittest.TestCase):
         stdin_is_terminal: bool = True,
         stdout_is_terminal: bool = True,
         environment_overrides: Mapping[str, str] | None = None,
+        environment_removals: Sequence[str] = (),
         terminal_columns: int = 80,
         decorative_color: bool = False,
         reduced_motion: bool = True,
@@ -1009,6 +1015,10 @@ class InteractiveCliPtyTests(unittest.TestCase):
         environment = self._environment()
         if environment_overrides:
             environment.update(environment_overrides)
+        for name in environment_removals:
+            if type(name) is not str:
+                raise TypeError("environment removal names must be strings")
+            environment.pop(name, None)
         if decorative_color:
             environment.pop("NO_COLOR", None)
         if not reduced_motion:
@@ -2618,14 +2628,8 @@ print(
                 self.assertNotIn(f"${{{path}}}", filtered)
 
         navigation_mark = process.output_mark()
-        process.send_text("\x1b[B")
-        process.wait_for_text(f"[highlighted] {token}", after=navigation_mark)
-        process.send_text("\x1b[A")
-        process.wait_for_text(
-            f"[highlighted] ${{{manuscript_paths[0]}}}",
-            after=navigation_mark,
-        )
-        process.send_text("\x1b[B")
+        target_index = manuscript_paths.index(target)
+        process.send_text("\x1b[B" * target_index)
         process.wait_for_text(f"[highlighted] {token}", after=navigation_mark)
 
         completion_mark = process.output_mark()
@@ -2698,104 +2702,261 @@ print(
         )
         self.assertFalse(catalog_path.exists())
 
+    def test_installed_console_double_dollar_opens_complete_picker_immediately(
+        self,
+    ) -> None:
+        """Launch the installed `story` script without source-path assistance."""
+
+        self._seed_default_session()
+        paths, excluded = self._seed_filesystem_reference_artifacts()
+        sibling = Workspace(self.temporary_root / "sibling").initialize()
+        sibling_source = sibling.root / "manuscript/sibling-only.md"
+        sibling_source.parent.mkdir(parents=True, exist_ok=True)
+        sibling_source.write_text("must not leak\n", encoding="utf-8")
+        catalog_path = self.workspace.root / (
+            "agent_states/orchestrator_state/writing_artifacts/catalog.json"
+        )
+        self.assertFalse(catalog_path.exists())
+
+        virtual_environment = self.temporary_root / "installed-runtime"
+        subprocess.run(
+            (
+                sys.executable,
+                "-m",
+                "venv",
+                "--system-site-packages",
+                str(virtual_environment),
+            ),
+            check=True,
+            cwd=self.temporary_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=120,
+        )
+        binary_directory = virtual_environment / (
+            "Scripts" if os.name == "nt" else "bin"
+        )
+        installed_python = binary_directory / (
+            "python.exe" if os.name == "nt" else "python"
+        )
+        clean_environment = os.environ.copy()
+        clean_environment.pop("PYTHONPATH", None)
+        clean_environment["PYTHONNOUSERSITE"] = "1"
+        installation = subprocess.run(
+            (
+                str(installed_python),
+                "-m",
+                "pip",
+                "install",
+                "--no-deps",
+                "--no-build-isolation",
+                str(_REPOSITORY_ROOT),
+            ),
+            check=False,
+            cwd=self.temporary_root,
+            env=clean_environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=120,
+        )
+        self.assertEqual(
+            installation.returncode,
+            0,
+            installation.stdout,
+        )
+        probe = subprocess.run(
+            (
+                str(installed_python),
+                "-c",
+                "import story_writing_agents as package; print(package.__file__)",
+            ),
+            check=False,
+            cwd=self.temporary_root,
+            env=clean_environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(probe.returncode, 0, probe.stdout)
+        installed_module = Path(probe.stdout.strip()).resolve()
+        self.assertTrue(
+            installed_module.is_relative_to(virtual_environment.resolve()),
+            installed_module,
+        )
+
+        installed_story = binary_directory / (
+            "story.exe" if os.name == "nt" else "story"
+        )
+        self.assertTrue(installed_story.is_file())
+        process = self._spawn_command(
+            (
+                str(installed_story),
+                "chat",
+                "alpha",
+                "--workspace",
+                str(self.workspace.root),
+            ),
+            environment_overrides={
+                "PYTHONNOUSERSITE": "1",
+                "TERM": "xterm-256color",
+            },
+            environment_removals=("PYTHONPATH",),
+            terminal_columns=160,
+        )
+        prompt = "story[alpha:lead]> "
+        process.wait_for_text(prompt)
+        picker_mark = process.output_mark()
+        process.send_text("$$")
+        picker = process.wait_for_text(
+            "[controls] Up/Down selects; Enter/Tab opens the ranged viewer.",
+            after=picker_mark,
+        )
+        self.assertIn(f"{prompt}$$", picker)
+        for path in paths:
+            self.assertIn(path, picker)
+        for path in excluded:
+            self.assertNotIn(path, picker)
+        self.assertNotIn("sibling-only.md", picker)
+        self.assertFalse(self.provider_log.exists())
+        self.assertFalse(catalog_path.exists())
+
+        process.send_interrupt()
+        process.wait_for_text("[cancelled] No action was taken.", after=picker_mark)
+        process.send_text("/quit\n\n")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertFalse(self.provider_log.exists())
+        self.assertFalse(catalog_path.exists())
+        self.assertFalse(
+            any(
+                "history" in path.name.lower()
+                for path in self.workspace.root.rglob("*")
+            )
+        )
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
     def test_public_cli_no_artifact_files_preview_and_activation_are_deferred(
         self,
     ) -> None:
-        """Preview filesystem-empty `$` and preserve its activation failure."""
+        """Preview empty `$`/`$$` before their deferred activation failure."""
 
         self._seed_default_session()
         prompt = "story[alpha:lead]> "
         empty_copy = (
             "No writing artifacts. Add a supported canonical core document or "
-            "part-scoped Markdown manuscript. Consensus can also publish one."
+            "Markdown file with a lowercase .md suffix under manuscript/. "
+            "Consensus can also publish one."
         )
         creation_hint = (
-            "Add a supported canonical core document or part-scoped Markdown "
-            "manuscript. Consensus can also publish one."
+            "Add a supported canonical core document or Markdown file with a "
+            "lowercase .md suffix under manuscript/. Consensus can also publish "
+            "one."
         )
-        for activation_key in ("\t", "\n"):
-            with self.subTest(activation_key=repr(activation_key)):
-                process = self._spawn_cli(
-                    ("chat", "alpha", "--workspace", str(self.workspace.root)),
-                    environment_overrides={"TERM": "xterm-256color"},
-                    terminal_columns=120,
-                )
-                process.wait_for_text(prompt)
-                preview_mark = process.output_mark()
-                process.send_text("$")
-                preview = process.wait_for_text(
-                    "also publish one.",
-                    after=preview_mark,
-                )
-                self.assertIn(
-                    "".join(f"[empty] {empty_copy}".split()),
-                    "".join(preview.split()),
-                )
-                self.assertIn("Writing artifact selection [open]", preview)
-                self.assertIn(
-                    "[controls] Up/Down selects; Enter/Tab inserts a whole-file "
-                    "reference.",
-                    preview,
-                )
-                self.assertIn(f"{prompt}$", preview)
+        for marker in ("$", "$$"):
+            for activation_key in ("\t", "\n"):
+                with self.subTest(
+                    marker=marker,
+                    activation_key=repr(activation_key),
+                ):
+                    instruction = (
+                        "[controls] Up/Down selects; Enter/Tab opens the ranged "
+                        "viewer."
+                        if marker == "$$"
+                        else "[controls] Up/Down selects; Enter/Tab inserts a "
+                        "whole-file reference."
+                    )
+                    process = self._spawn_cli(
+                        (
+                            "chat",
+                            "alpha",
+                            "--workspace",
+                            str(self.workspace.root),
+                        ),
+                        environment_overrides={"TERM": "xterm-256color"},
+                        terminal_columns=120,
+                    )
+                    process.wait_for_text(prompt)
+                    preview_mark = process.output_mark()
+                    process.send_text(marker)
+                    preview = process.wait_for_text(
+                        instruction if marker == "$$" else "also publish one.",
+                        after=preview_mark,
+                    )
+                    self.assertIn(
+                        "".join(f"[empty] {empty_copy}".split()),
+                        "".join(preview.split()),
+                    )
+                    self.assertIn("Writing artifact selection [open]", preview)
+                    self.assertIn(instruction, preview)
+                    self.assertIn(f"{prompt}{marker}", preview)
 
-                activation_mark = process.output_mark()
-                process.send_text(activation_key)
-                failure = process.wait_for_text(
-                    "[error command_invalid] No current writing artifacts are "
-                    "available.",
-                    after=activation_mark,
-                )
-                failure = process.wait_for_text(
-                    "also publish one.",
-                    after=activation_mark,
-                )
-                self.assertIn(
-                    "".join(f"[hint] {creation_hint}".split()),
-                    "".join(failure.split()),
-                )
-                restored = process.wait_for_text(
-                    f"{prompt}$",
-                    after=activation_mark,
-                )
-                self.assertIn(
-                    "[error command_invalid] No current writing artifacts are "
-                    "available.",
-                    failure,
-                )
-                self.assertIn(f"{prompt}$", restored)
-                self.assertFalse(self.provider_log.exists())
+                    activation_mark = process.output_mark()
+                    process.send_text(activation_key)
+                    failure = process.wait_for_text(
+                        "[error command_invalid] No current writing artifacts are "
+                        "available.",
+                        after=activation_mark,
+                    )
+                    failure = process.wait_for_text(
+                        "also publish one.",
+                        after=activation_mark,
+                    )
+                    self.assertIn(
+                        "".join(f"[hint] {creation_hint}".split()),
+                        "".join(failure.split()),
+                    )
+                    restored = process.wait_for_text(
+                        f"{prompt}{marker}",
+                        after=activation_mark,
+                    )
+                    self.assertIn(
+                        "[error command_invalid] No current writing artifacts are "
+                        "available.",
+                        failure,
+                    )
+                    self.assertIn(f"{prompt}{marker}", restored)
+                    self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 0)
+                    self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 0)
+                    self.assertFalse(self.provider_log.exists())
 
-                process.send_interrupt()
-                process.wait_for_text(
-                    "[cancelled] No action was taken.",
-                    after=activation_mark,
-                )
-                history_mark = process.output_mark()
-                process.send_text("\x1b[AX")
-                recalled = process.wait_for_text(f"{prompt}X", after=history_mark)
-                self.assertNotIn(f"{prompt}$X", recalled)
-                process.send_interrupt()
-                process.wait_for_text(
-                    "[cancelled] No action was taken.",
-                    after=history_mark,
-                )
-                process.send_text("/quit\n\n")
-                self.assertEqual(
-                    process.wait_for_exit(),
-                    0,
-                    process.normalized_text,
-                )
-                self.assertFalse(self.provider_log.exists())
-                self.assertFalse(
-                    self.workspace.path(
-                        f"{_SESSION_DIRECTORY}/alpha.access.json"
-                    ).exists()
-                )
-                self.assertEqual(
-                    process.final_terminal_attributes,
-                    process.original_terminal_attributes,
-                )
+                    process.send_interrupt()
+                    process.wait_for_text(
+                        "[cancelled] No action was taken.",
+                        after=activation_mark,
+                    )
+                    history_mark = process.output_mark()
+                    process.send_text("\x1b[AX")
+                    recalled = process.wait_for_text(
+                        f"{prompt}X",
+                        after=history_mark,
+                    )
+                    self.assertNotIn(f"{prompt}{marker}X", recalled)
+                    process.send_interrupt()
+                    process.wait_for_text(
+                        "[cancelled] No action was taken.",
+                        after=history_mark,
+                    )
+                    process.send_text("/quit\n\n")
+                    self.assertEqual(
+                        process.wait_for_exit(),
+                        0,
+                        process.normalized_text,
+                    )
+                    self.assertFalse(self.provider_log.exists())
+                    self.assertFalse(
+                        self.workspace.path(
+                            f"{_SESSION_DIRECTORY}/alpha.access.json"
+                        ).exists()
+                    )
+                    self.assertEqual(
+                        process.final_terminal_attributes,
+                        process.original_terminal_attributes,
+                    )
 
     def test_public_cli_reference_guidance_and_inert_states_are_visible(
         self,
@@ -2804,8 +2965,9 @@ print(
 
         guidance = (
             "Artifact references require an attached session and focused "
-            "conversation. In provider-bound prompts, $ chooses a whole-file "
-            "reference; $$ then Enter/Tab opens ranged selection."
+            "conversation. In provider-bound prompts, $ opens whole-file "
+            "selection and completion; exact $$ immediately opens ranged "
+            "selection, where Enter/Tab opens the highlighted source in the viewer."
         )
         lobby = self._spawn_cli(
             (),
@@ -3178,8 +3340,20 @@ print("RESULT=" + json.dumps({
 
         process.wait_for_text("story[session:plot]>")
         second_prompt_mark = process.output_mark()
+        process.send_text("@plot compare $$")
+        immediate = process.wait_for_text(
+            f"[highlighted] {character}",
+            after=second_prompt_mark,
+        )
+        self.assertIn(
+            "[controls]Up/Downselects;Enter/Tabopenstherangedviewer.",
+            "".join(immediate.split()),
+        )
+        self.assertIn("story[session:plot]> @plot compare $$", immediate)
+        for path in (character, outline, rules):
+            self.assertIn(path, immediate)
+        self.assertFalse(self.provider_log.exists())
         process.send_text(
-            "@plot compare $$\n"
             "\x1b[B\n"
             "\x1b[B\x1b[B\x1b[1;2A\x1b[1;2A\n"
             f" and $${{{rules}}}\n\x1b[B\n\n"
@@ -3192,13 +3366,26 @@ print("RESULT=" + json.dumps({
         )
 
         third_prompt_mark = process.output_mark()
-        process.send_text(f"/say cite $${{{character}}}\n\n\n")
+        process.send_text("/say cite $$")
+        say_picker = process.wait_for_text(
+            f"[highlighted] {character}",
+            after=third_prompt_mark,
+        )
+        self.assertIn("story[session:plot]> /say cite $$", say_picker)
+        process.send_text("\t\n\n")
         process.wait_for_text(f"[viewer] {character}")
         process.wait_for_text(
             "story[session:plot]>",
             after=third_prompt_mark,
         )
-        process.send_text(f"/run use $${{{outline}}}\n\x1b[B\n\n")
+        run_prompt_mark = process.output_mark()
+        process.send_text("/run use $$")
+        run_picker = process.wait_for_text(
+            f"[highlighted] {character}",
+            after=run_prompt_mark,
+        )
+        self.assertIn("story[session:plot]> /run use $$", run_picker)
+        process.send_text("\x1b[B\n\x1b[B\n\n")
         process.wait_for_text('RESULT={"results":')
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
 
@@ -3245,6 +3432,64 @@ print("RESULT=" + json.dumps({
         )
         self.assertFalse(self.provider_log.exists())
 
+    def test_reference_direct_marker_survives_one_write_bracketed_paste(self) -> None:
+        """Keep a complex direct marker intact through one pasted PTY write."""
+
+        source = _REFERENCE_PROBE_PREAMBLE + r'''
+result = main.read_main_with_references(
+    choices,
+    main_scope,
+    paths,
+    text,
+    session_id="session",
+    agent_id=PLOT_ARCHITECT,
+).text
+print("RESULT=" + json.dumps({
+    "result": result,
+    "read_calls": read_calls,
+}, ensure_ascii=False, separators=(",", ":")))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=120,
+        )
+        path = "manuscript/older drafts/{世界$ 章#1.md"
+        marker = f"$${{{path}}}"
+        prompt = "story[session:plot]> "
+        process.wait_for_text(prompt)
+        paste_mark = process.output_mark()
+        process.send_bytes(
+            b"\x1b[200~" + f"cite {marker}".encode("utf-8") + b"\x1b[201~"
+        )
+        pasted = process.wait_for_text(f"{prompt}cite {marker}", after=paste_mark)
+        self.assertIn(f"{prompt}cite {marker}", pasted)
+        self.assertFalse(self.provider_log.exists())
+
+        process.send_text("\n")
+        process.wait_for_text(f"[viewer] {path}", after=paste_mark)
+        process.send_text("\x1b[1;2B\n\n")
+        process.wait_for_text("RESULT=", after=paste_mark)
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+
+        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
+        self.assertIsNotNone(match, process.normalized_text)
+        assert match is not None
+        self.assertEqual(
+            json.loads(match.group(1)),
+            {
+                "result": f"cite ${{{path}}}#L1-L2",
+                "read_calls": [path],
+            },
+        )
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 1)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 1)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertFalse(self.provider_log.exists())
+
     def test_reference_run_and_internal_chat_composers_restore_and_send_exactly(
         self,
     ) -> None:
@@ -3280,13 +3525,35 @@ print("RESULT=" + json.dumps({
 
         process.wait_for_text("compose[run:1]>")
         run_mark = process.output_mark()
-        process.send_text(f"run $${{{outline}}}\n\x1b[B\n\n")
+        process.send_text("run $$")
+        run_picker = process.wait_for_text(
+            f"[highlighted] {character}",
+            after=run_mark,
+        )
+        self.assertIn(
+            "[controls]Up/Downselects;Enter/Tabopenstherangedviewer.",
+            "".join(run_picker.split()),
+        )
+        self.assertIn("compose[run:1]> run $$", run_picker)
+        self.assertFalse(self.provider_log.exists())
+        process.send_text("\x1b[B\n\x1b[B\n\n")
         process.wait_for_text("compose[run:2]>", after=run_mark)
         process.send_line("/send")
 
         process.wait_for_text("compose[chat:plot:1]>")
         chat_mark = process.output_mark()
-        process.send_text(f"chat $${{{character}}}\n\x1b[1;2B\n\n")
+        process.send_text("chat $$")
+        chat_picker = process.wait_for_text(
+            f"[highlighted] {character}",
+            after=chat_mark,
+        )
+        self.assertIn(
+            "[controls]Up/Downselects;Enter/Tabopenstherangedviewer.",
+            "".join(chat_picker.split()),
+        )
+        self.assertIn("compose[chat:plot:1]> chat $$", chat_picker)
+        self.assertFalse(self.provider_log.exists())
+        process.send_text("\t\x1b[1;2B\n\n")
         process.wait_for_text("compose[chat:plot:2]>", after=chat_mark)
         process.send_line("/send")
         process.wait_for_text('RESULT={"run":')
@@ -3313,6 +3580,119 @@ print("RESULT=" + json.dumps({
             process.original_terminal_attributes,
         )
         self.assertFalse(self.provider_log.exists())
+
+    def test_reference_empty_run_and_chat_picker_precedes_deferred_failure(
+        self,
+    ) -> None:
+        """Show empty ranged palettes in both composers without opening viewers."""
+
+        source = _REFERENCE_PROBE_PREAMBLE + r'''
+empty_calls = []
+def empty_paths():
+    empty_calls.append("list")
+    return ()
+
+run = composition.compose(
+    ComposeMode.RUN,
+    reference_scope_provider=composition_scope,
+    reference_paths_provider=empty_paths,
+    reference_text_reader=text,
+)
+chat = composition.compose(
+    ComposeMode.CHAT,
+    agent_id=PLOT_ARCHITECT,
+    reference_scope_provider=composition_scope,
+    reference_paths_provider=empty_paths,
+    reference_text_reader=text,
+)
+print("RESULT=" + json.dumps({
+    "run": run.kind.value,
+    "chat": chat.kind.value,
+    "empty_calls": len(empty_calls),
+    "read_calls": read_calls,
+}, separators=(",", ":")))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=100,
+        )
+
+        for prompt, activation_key in (
+            ("compose[run:1]>", "\n"),
+            ("compose[chat:plot:1]>", "\t"),
+        ):
+            process.wait_for_text(prompt)
+            preview_mark = process.output_mark()
+            process.send_text("$$")
+            preview = process.wait_for_text(
+                "[controls] Up/Down selects; Enter/Tab opens the ranged viewer.",
+                after=preview_mark,
+            )
+            self.assertIn("No writing artifacts.", preview)
+            self.assertIn(f"{prompt} $$", preview)
+            self.assertIn(
+                "Enter/Tabopenstherangedviewer.",
+                "".join(preview.split()),
+            )
+
+            dismiss_mark = process.output_mark()
+            process.send_text("\x1b")
+            dismissed = process.wait_for_text(
+                f"{prompt} $$",
+                after=dismiss_mark,
+            )
+            self.assertNotIn("Writing artifact selection [open]", dismissed)
+            self.assertNotIn(
+                "No current writing artifacts are available.",
+                dismissed,
+            )
+
+            reopen_mark = process.output_mark()
+            process.send_text(activation_key)
+            reopened = process.wait_for_text(
+                "[controls] Up/Down selects; Enter/Tab opens the ranged viewer.",
+                after=reopen_mark,
+            )
+            self.assertIn("No writing artifacts.", reopened)
+            self.assertIn(f"{prompt} $$", reopened)
+            self.assertNotIn(
+                "No current writing artifacts are available.",
+                reopened,
+            )
+
+            activation_mark = process.output_mark()
+            process.send_text(activation_key)
+            process.wait_for_text(
+                "[error command_invalid] No current writing artifacts are available.",
+                after=activation_mark,
+            )
+            self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 0)
+            self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 0)
+            self.assertFalse(self.provider_log.exists())
+            process.send_interrupt()
+
+        process.wait_for_text('RESULT={"run":')
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
+        self.assertIsNotNone(match, process.normalized_text)
+        assert match is not None
+        result = json.loads(match.group(1))
+        self.assertEqual(result["run"], "interrupt")
+        self.assertEqual(result["chat"], "interrupt")
+        self.assertGreater(result["empty_calls"], 0)
+        self.assertEqual(result["read_calls"], [])
+        self.assertEqual(
+            process.normalized_text.count(
+                "[error command_invalid] No current writing artifacts are available."
+            ),
+            2,
+        )
+        self.assertFalse(self.provider_log.exists())
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
 
     def test_reference_nested_cancel_vintr_and_veof_restore_originating_drafts(
         self,
