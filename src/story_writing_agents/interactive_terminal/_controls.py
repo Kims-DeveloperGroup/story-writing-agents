@@ -7,6 +7,7 @@ from collections.abc import Callable
 from ._model import (
     ARTIFACT_REFERENCE_POSITION_PREFIX,
     EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX,
+    EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX,
     RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX,
     Choice,
     CommandCompletionCandidate,
@@ -418,7 +419,12 @@ def project_main_suggestion_palette(
         ),
         empty_text=(
             _ARTIFACT_REFERENCE_EMPTY_SOURCES_TEXT
-            if position.startswith(EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX)
+            if position.startswith(
+                (
+                    EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX,
+                    EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX,
+                )
+            )
             else _ARTIFACT_REFERENCE_NO_MATCH_TEXT
             if is_artifact_reference
             else "No suggestions."

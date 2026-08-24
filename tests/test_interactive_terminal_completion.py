@@ -39,6 +39,7 @@ from story_writing_agents.interactive_terminal._reference_activation import (
     ReferenceInputScope,
 )
 from story_writing_agents.interactive_terminal._model import (
+    EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX,
     RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX,
     CapabilityProfile,
     Choice,
@@ -545,6 +546,36 @@ class CompletionControlTests(unittest.TestCase):
                 instruction="Up/Down selects; Enter/Tab opens the ranged viewer.",
                 empty_text=(
                     "No matching writing artifacts. Change the path fragment."
+                ),
+            ),
+        )
+
+        empty_ranged_position = (
+            f"{EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX}0"
+        )
+        empty_ranged_state = MainCommandControlState(
+            MainInputControlState(LineInputState("$$", 2), overlay_open=True),
+            MainCommandPaletteState(
+                CommandCompletionProjection(
+                    empty_ranged_position,
+                    0,
+                    2,
+                    (),
+                ),
+                None,
+            ),
+        )
+        self.assertEqual(
+            project_main_suggestion_palette(empty_ranged_state),
+            SuggestionPalette(
+                "$$",
+                (),
+                title="Writing artifact selection",
+                instruction="Up/Down selects; Enter/Tab opens the ranged viewer.",
+                empty_text=(
+                    "No writing artifacts. Add a supported canonical core "
+                    "document or Markdown file with a lowercase .md suffix "
+                    "under manuscript/. Consensus can also publish one."
                 ),
             ),
         )
@@ -1337,6 +1368,20 @@ class CompletionDriverTests(unittest.TestCase):
                 ),
             ),
             (
+                "$$",
+                (),
+                None,
+                ReferenceInputProjection(
+                    completion=CommandCompletionProjection(
+                        f"{EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX}0",
+                        0,
+                        2,
+                        (),
+                    ),
+                    failure=ReferenceInputFailureKind.EMPTY_SOURCES,
+                ),
+            ),
+            (
                 "$",
                 (),
                 ReferenceInputFailure(ReferenceInputFailureKind.UNAVAILABLE),
@@ -1665,6 +1710,70 @@ class CompletionDriverTests(unittest.TestCase):
         self.assertEqual(driver._history_state, MainInputHistoryState())
         fallback.assert_not_called()
 
+    def test_empty_ranged_picker_renders_before_deferred_live_failure(self) -> None:
+        for activation_key in ("\n", "\t"):
+            with self.subTest(activation_key=repr(activation_key)):
+                driver, _input, output, fallback, termios, os_module = make_driver(
+                    "$$" + activation_key + "\x03"
+                )
+                reader = mock.Mock(
+                    side_effect=AssertionError("empty sources must not read text")
+                )
+                failure_records: list[tuple[ReferenceInputFailureKind, int]] = []
+
+                def write_failure(kind: ReferenceInputFailureKind) -> None:
+                    failure_records.append((kind, len(output.records)))
+
+                with mock.patch.object(
+                    _driver._select,
+                    "select",
+                    side_effect=lambda readable, writable, exceptional, _timeout: (
+                        readable,
+                        writable,
+                        exceptional,
+                    ),
+                ):
+                    with self.assertRaises(KeyboardInterrupt):
+                        _core.read_main_command_line(
+                            driver,
+                            "main> ",
+                            reference_scope_provider=lambda buffer, _cursor: (
+                                ReferenceInputScope(0, len(buffer))
+                            ),
+                            reference_paths_provider=lambda: (),
+                            reference_text_reader=reader,
+                            reference_failure_writer=write_failure,
+                        )
+
+                frames = [strip_decorative_sgr(record) for record in output.records]
+                picker_index = next(
+                    index
+                    for index, frame in enumerate(frames)
+                    if "main> $$" in frame
+                    and "Writing artifact selection [open]" in frame
+                    and "No writing artifacts." in frame
+                )
+                self.assertEqual(len(failure_records), 1)
+                self.assertIs(
+                    failure_records[0][0],
+                    ReferenceInputFailureKind.EMPTY_SOURCES,
+                )
+                self.assertLess(picker_index, failure_records[0][1])
+                self.assertIn(
+                    "Enter/Tabopenstherangedviewer.",
+                    "".join(frames[picker_index].split()),
+                )
+                reader.assert_not_called()
+                self.assertNotIn("\x1b[?1049h", "".join(output.records))
+                self.assertNotIn("\x1b[?1049l", "".join(output.records))
+                self.assertEqual(driver._history_state, MainInputHistoryState())
+                fallback.assert_not_called()
+                self.assertEqual(os_module.observed_widths[:2], [8, 8])
+                self.assertEqual(
+                    tuple(call[1] for call in termios.set_calls),
+                    (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
+                )
+
     def test_reference_fallback_retains_amendment_until_second_confirmation(
         self,
     ) -> None:
@@ -1754,8 +1863,8 @@ class CompletionDriverTests(unittest.TestCase):
         self.assertEqual(
             scope_provider.call_args_list,
             [
-                mock.call(marker, marker.rfind("$") + 1),
-                mock.call(marker, marker.rfind("$") + 1),
+                mock.call(marker, marker.index("$") + 1),
+                mock.call(marker, marker.index("$") + 1),
             ],
         )
         self.assertEqual(paths_provider.call_count, 2)
@@ -1818,7 +1927,7 @@ class CompletionDriverTests(unittest.TestCase):
         self.assertEqual(
             scope_provider.call_args_list,
             [
-                mock.call(marker, marker.rfind("$") + 1),
+                mock.call(marker, marker.index("$") + 1),
             ],
         )
         paths_provider.assert_called_once_with()
@@ -1964,7 +2073,7 @@ class CompletionDriverTests(unittest.TestCase):
                 )
                 scope_provider.assert_called_once_with(
                     original,
-                    original.rfind("$") + 1,
+                    original.index("$") + 1,
                 )
                 paths_provider.assert_called_once_with()
                 self.assertEqual(
@@ -2031,7 +2140,7 @@ class CompletionDriverTests(unittest.TestCase):
         self,
     ) -> None:
         cases = (
-            ("prefix \\$ suffix", None, 1),
+            ("prefix \\$ suffix", None, 0),
             ("prefix $ suffix", ReferenceInputScope(0, 6), 1),
             ("plain text", None, 0),
         )
@@ -2084,6 +2193,80 @@ class CompletionDriverTests(unittest.TestCase):
                 self.assertEqual(output.records, [])
                 self.assertEqual(termios.set_calls, [])
                 self.assertEqual(os_module.observed_widths, [])
+
+    def test_reference_fallback_braced_spans_shield_nested_dollars(self) -> None:
+        path = "manuscript/older drafts/{世界$ 章#1.md"
+        complete_whole = f"${{{path}}}"
+        unfinished_whole = complete_whole[:-1]
+        complete_direct = f"$${{{path}}}"
+        unfinished_direct = complete_direct[:-1]
+        later = f"literal {complete_whole} then $"
+        cases = (
+            (complete_whole, None, 0, False),
+            (unfinished_whole, "completion", 0, True),
+            (complete_direct, "view", 0, True),
+            (unfinished_direct, "invalid", 0, False),
+            (f"\\{complete_whole}", None, None, False),
+            (f"\\{unfinished_whole}", None, None, False),
+            (f"\\{complete_direct}", None, None, False),
+            (f"\\{unfinished_direct}", None, None, False),
+            (f"\\\\{unfinished_whole}", "completion", 2, True),
+            (later, "completion", later.rfind("$"), True),
+        )
+        for line, outcome, expected_start, reads_paths in cases:
+            with self.subTest(line=line):
+                scope_provider = mock.Mock(
+                    side_effect=lambda buffer, _cursor: ReferenceInputScope(
+                        0,
+                        len(buffer),
+                    )
+                )
+                paths_provider = mock.Mock(
+                    return_value=(path, "manuscript/root.md")
+                )
+                projection_provider = _core._reference_projection_provider(
+                    scope_provider,
+                    paths_provider,
+                )
+                bindings = _core._reference_input_bindings(
+                    projection_provider,
+                    mock.Mock(side_effect=AssertionError("text reader used")),
+                    mock.Mock(),
+                )
+
+                projected = _driver._fallback_reference_projection(line, bindings)
+
+                if outcome is None:
+                    self.assertIsNone(projected)
+                elif outcome == "completion":
+                    assert projected is not None
+                    assert projected.completion is not None
+                    self.assertEqual(projected.completion.start, expected_start)
+                elif outcome == "view":
+                    assert projected is not None and projected.request is not None
+                    self.assertIs(
+                        projected.request.kind,
+                        ReferenceActivationKind.VIEW,
+                    )
+                    self.assertEqual(projected.request.start, expected_start)
+                else:
+                    self.assertEqual(
+                        projected,
+                        ReferenceInputProjection(
+                            failure=ReferenceInputFailureKind.INVALID
+                        ),
+                    )
+                if expected_start is None:
+                    scope_provider.assert_not_called()
+                else:
+                    scope_provider.assert_called_once_with(
+                        line,
+                        expected_start + 1,
+                    )
+                if reads_paths:
+                    paths_provider.assert_called_once_with()
+                else:
+                    paths_provider.assert_not_called()
 
     def test_reference_fallback_resolves_two_markers_right_to_left(self) -> None:
         character = "core_documents/character_sheets.md"

@@ -13,6 +13,7 @@ from story_writing_agents.interactive_terminal import (
     _reference_activation as activation,
 )
 from story_writing_agents.interactive_terminal._model import (
+    EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX,
     RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX,
     CommandCompletionCandidate,
     CommandCompletionProjection,
@@ -359,6 +360,117 @@ class ReferenceProjectionTests(unittest.TestCase):
                 assert projected is not None
                 self.assertIsNotNone(projected.completion)
 
+    def test_outer_braced_spans_shield_nested_dollars_and_later_markers(
+        self,
+    ) -> None:
+        path = _PATHS[3]
+        complete_whole = f"${{{path}}}"
+        unfinished_whole = complete_whole[:-1]
+        complete_direct = f"$${{{path}}}"
+        unfinished_direct = complete_direct[:-1]
+        cases = (
+            (complete_whole, None, None, None),
+            (unfinished_whole, "completion", 0, len(unfinished_whole)),
+            (complete_direct, "view", 0, len(complete_direct)),
+            (unfinished_direct, "invalid", None, None),
+        )
+        for buffer, outcome, start, end in cases:
+            for cursor in (buffer.rfind("$") + 1, len(buffer)):
+                with self.subTest(buffer=buffer, cursor=cursor):
+                    projected = activation.project_reference_input(
+                        buffer,
+                        cursor,
+                        activation.ReferenceInputScope(0, len(buffer)),
+                        _PATHS,
+                    )
+                    if outcome is None:
+                        self.assertIsNone(projected)
+                    elif outcome == "completion":
+                        assert projected is not None
+                        assert projected.completion is not None
+                        self.assertEqual(
+                            (projected.completion.start, projected.completion.end),
+                            (start, end),
+                        )
+                    elif outcome == "view":
+                        assert projected is not None and projected.request is not None
+                        self.assertIs(
+                            projected.request.kind,
+                            activation.ReferenceActivationKind.VIEW,
+                        )
+                        self.assertEqual(
+                            (projected.request.start, projected.request.end),
+                            (start, end),
+                        )
+                    else:
+                        self.assertEqual(
+                            projected,
+                            activation.ReferenceInputProjection(
+                                failure=activation.ReferenceInputFailureKind.INVALID
+                            ),
+                        )
+            self.assertEqual(
+                activation.previous_reference_marker_start(buffer, len(buffer)),
+                0,
+            )
+
+        for marker in (
+            complete_whole,
+            unfinished_whole,
+            complete_direct,
+            unfinished_direct,
+        ):
+            escaped = f"\\{marker}"
+            with self.subTest(escaped=escaped):
+                for cursor in (escaped.rfind("$") + 1, len(escaped)):
+                    self.assertIsNone(
+                        activation.project_reference_input(
+                            escaped,
+                            cursor,
+                            activation.ReferenceInputScope(0, len(escaped)),
+                            _PATHS,
+                        )
+                    )
+                self.assertIsNone(
+                    activation.previous_reference_marker_start(
+                        escaped,
+                        len(escaped),
+                    )
+                )
+
+        even_escape = f"\\\\{unfinished_whole}"
+        even_projection = activation.project_reference_input(
+            even_escape,
+            even_escape.rfind("$") + 1,
+            activation.ReferenceInputScope(0, len(even_escape)),
+            _PATHS,
+        )
+        assert even_projection is not None and even_projection.completion is not None
+        self.assertEqual(even_projection.completion.start, 2)
+        self.assertEqual(
+            activation.previous_reference_marker_start(
+                even_escape,
+                len(even_escape),
+            ),
+            2,
+        )
+
+        later = f"literal {complete_whole} then $"
+        later_start = later.rfind("$")
+        later_projection = activation.project_reference_input(
+            later,
+            len(later),
+            activation.ReferenceInputScope(0, len(later)),
+            _PATHS,
+        )
+        assert later_projection is not None
+        assert later_projection.completion is not None
+        self.assertEqual(later_projection.completion.start, later_start)
+        self.assertEqual(
+            activation.previous_reference_marker_start(later, len(later)),
+            later_start,
+        )
+
     def test_scope_cursor_escape_and_fragment_boundaries_do_not_overreach(self) -> None:
         cases = (
             ("prefix $", 8, None, None),
@@ -409,7 +521,20 @@ class ReferenceProjectionTests(unittest.TestCase):
                     failure=activation.ReferenceInputFailureKind.EMPTY_SOURCES,
                 ),
             ),
-            ("$$", (), None, activation.ReferenceInputFailureKind.EMPTY_SOURCES),
+            (
+                "$$",
+                (),
+                None,
+                activation.ReferenceInputProjection(
+                    completion=CommandCompletionProjection(
+                        f"{EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX}0",
+                        0,
+                        2,
+                        (),
+                    ),
+                    failure=activation.ReferenceInputFailureKind.EMPTY_SOURCES,
+                ),
+            ),
             (
                 direct,
                 _PATHS[1:],

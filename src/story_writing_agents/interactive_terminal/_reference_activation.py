@@ -14,6 +14,7 @@ from ..writing_artifacts import (
 from ._model import (
     ARTIFACT_REFERENCE_POSITION_PREFIX,
     EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX,
+    EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX,
     RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX,
     CommandCompletionCandidate,
     CommandCompletionProjection,
@@ -143,7 +144,10 @@ class ReferenceInputProjection:
             and self.request is None
             and self.failure is ReferenceInputFailureKind.EMPTY_SOURCES
             and self.completion.position.startswith(
-                EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX
+                (
+                    EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX,
+                    EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX,
+                )
             )
             and not self.completion.candidates
         )
@@ -222,7 +226,13 @@ def project_reference_input(
                 return ReferenceInputProjection(failure=failure)
             if not canonical_paths:
                 return ReferenceInputProjection(
-                    failure=ReferenceInputFailureKind.EMPTY_SOURCES
+                    completion=CommandCompletionProjection(
+                        f"{EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX}{start}",
+                        start,
+                        end,
+                        (),
+                    ),
+                    failure=ReferenceInputFailureKind.EMPTY_SOURCES,
                 )
             position = f"{RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX}{start}"
             return ReferenceInputProjection(
@@ -418,6 +428,11 @@ def _active_marker(
 ) -> tuple[int, int] | None:
     """Return the cursor-active marker span using directive escape parity."""
 
+    braced = _containing_braced_marker(buffer, cursor, scope)
+    if braced is not None:
+        start, end, active = braced
+        return (start, end) if active else None
+
     search = cursor - 1
     while search >= scope.start:
         character = buffer[search]
@@ -435,13 +450,82 @@ def _active_marker(
     return None
 
 
+def _containing_braced_marker(
+    buffer: str,
+    cursor: int,
+    scope: ReferenceInputScope,
+) -> tuple[int, int, bool] | None:
+    """Return the outer braced span containing the cursor, including drafts."""
+
+    search = scope.start
+    while search <= cursor:
+        start = buffer.find("$", search, min(scope.end, cursor + 1))
+        if start < 0:
+            return None
+        end = _braced_marker_end(buffer, start, scope.end)
+        if end is None:
+            search = start + 1
+            continue
+        if _dollar_is_escaped(buffer, start):
+            search = end
+            if start <= cursor <= end:
+                return start, end, False
+            continue
+        if start <= cursor <= end:
+            return start, end, True
+        search = end
+    return None
+
+
+def previous_reference_marker_start(buffer: str, search_end: int) -> int | None:
+    """Return the rightmost top-level marker start before one search boundary."""
+
+    search = 0
+    previous: int | None = None
+    while search < search_end:
+        start = buffer.find("$", search, search_end)
+        if start < 0:
+            break
+        braced_end = _braced_marker_end(buffer, start, len(buffer))
+        if braced_end is not None:
+            if _dollar_is_escaped(buffer, start):
+                search = braced_end
+                continue
+            previous = start
+            search = braced_end
+            continue
+        doubled = buffer.startswith("$$", start, len(buffer))
+        if _dollar_is_escaped(buffer, start):
+            search = start + 1
+            continue
+        previous = start
+        search = start + (2 if doubled else 1)
+    return previous
+
+
+def _braced_marker_end(
+    buffer: str,
+    start: int,
+    scope_end: int,
+) -> int | None:
+    """Return one complete or in-progress single/double braced marker end."""
+
+    if buffer.startswith("$${", start, scope_end):
+        content_start = start + 3
+    elif buffer.startswith("${", start, scope_end):
+        content_start = start + 2
+    else:
+        return None
+    closing_brace = buffer.find("}", content_start, scope_end)
+    return scope_end if closing_brace < 0 else closing_brace + 1
+
+
 def _marker_end(buffer: str, start: int, scope_end: int) -> int:
     """Return the maximal activation fragment without consuming punctuation."""
 
-    if buffer.startswith("$${", start, scope_end):
-        closing_brace = buffer.find("}", start + 3, scope_end)
-        if closing_brace >= 0:
-            return closing_brace + 1
+    braced_end = _braced_marker_end(buffer, start, scope_end)
+    if braced_end is not None:
+        return braced_end
     end = start + 1
     if end < scope_end and buffer[end] == "$":
         end += 1

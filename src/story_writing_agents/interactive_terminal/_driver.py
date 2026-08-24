@@ -43,6 +43,7 @@ from ._reference_activation import (
     ReferenceInputFailure,
     ReferenceInputFailureKind,
     ReferenceInputProjection,
+    previous_reference_marker_start,
     replace_reference_completion,
     replace_reference_range,
     selected_reference_request,
@@ -246,8 +247,8 @@ def _fallback_reference_projection(
 
     search_end = len(line)
     while True:
-        marker = line.rfind("$", 0, search_end)
-        if marker < 0:
+        marker = previous_reference_marker_start(line, search_end)
+        if marker is None:
             return None
         projection = bindings.projection_provider(line, marker + 1)
         if projection is not None:

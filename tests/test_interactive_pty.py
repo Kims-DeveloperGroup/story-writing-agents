@@ -2776,7 +2776,7 @@ print(
     def test_public_cli_no_artifact_files_preview_and_activation_are_deferred(
         self,
     ) -> None:
-        """Preview filesystem-empty `$` and preserve its activation failure."""
+        """Preview empty `$`/`$$` before their deferred activation failure."""
 
         self._seed_default_session()
         prompt = "story[alpha:lead]> "
@@ -2790,89 +2790,106 @@ print(
             "lowercase .md suffix under manuscript/. Consensus can also publish "
             "one."
         )
-        for activation_key in ("\t", "\n"):
-            with self.subTest(activation_key=repr(activation_key)):
-                process = self._spawn_cli(
-                    ("chat", "alpha", "--workspace", str(self.workspace.root)),
-                    environment_overrides={"TERM": "xterm-256color"},
-                    terminal_columns=120,
-                )
-                process.wait_for_text(prompt)
-                preview_mark = process.output_mark()
-                process.send_text("$")
-                preview = process.wait_for_text(
-                    "also publish one.",
-                    after=preview_mark,
-                )
-                self.assertIn(
-                    "".join(f"[empty] {empty_copy}".split()),
-                    "".join(preview.split()),
-                )
-                self.assertIn("Writing artifact selection [open]", preview)
-                self.assertIn(
-                    "[controls] Up/Down selects; Enter/Tab inserts a whole-file "
-                    "reference.",
-                    preview,
-                )
-                self.assertIn(f"{prompt}$", preview)
+        for marker in ("$", "$$"):
+            for activation_key in ("\t", "\n"):
+                with self.subTest(
+                    marker=marker,
+                    activation_key=repr(activation_key),
+                ):
+                    instruction = (
+                        "[controls] Up/Down selects; Enter/Tab opens the ranged "
+                        "viewer."
+                        if marker == "$$"
+                        else "[controls] Up/Down selects; Enter/Tab inserts a "
+                        "whole-file reference."
+                    )
+                    process = self._spawn_cli(
+                        (
+                            "chat",
+                            "alpha",
+                            "--workspace",
+                            str(self.workspace.root),
+                        ),
+                        environment_overrides={"TERM": "xterm-256color"},
+                        terminal_columns=120,
+                    )
+                    process.wait_for_text(prompt)
+                    preview_mark = process.output_mark()
+                    process.send_text(marker)
+                    preview = process.wait_for_text(
+                        instruction if marker == "$$" else "also publish one.",
+                        after=preview_mark,
+                    )
+                    self.assertIn(
+                        "".join(f"[empty] {empty_copy}".split()),
+                        "".join(preview.split()),
+                    )
+                    self.assertIn("Writing artifact selection [open]", preview)
+                    self.assertIn(instruction, preview)
+                    self.assertIn(f"{prompt}{marker}", preview)
 
-                activation_mark = process.output_mark()
-                process.send_text(activation_key)
-                failure = process.wait_for_text(
-                    "[error command_invalid] No current writing artifacts are "
-                    "available.",
-                    after=activation_mark,
-                )
-                failure = process.wait_for_text(
-                    "also publish one.",
-                    after=activation_mark,
-                )
-                self.assertIn(
-                    "".join(f"[hint] {creation_hint}".split()),
-                    "".join(failure.split()),
-                )
-                restored = process.wait_for_text(
-                    f"{prompt}$",
-                    after=activation_mark,
-                )
-                self.assertIn(
-                    "[error command_invalid] No current writing artifacts are "
-                    "available.",
-                    failure,
-                )
-                self.assertIn(f"{prompt}$", restored)
-                self.assertFalse(self.provider_log.exists())
+                    activation_mark = process.output_mark()
+                    process.send_text(activation_key)
+                    failure = process.wait_for_text(
+                        "[error command_invalid] No current writing artifacts are "
+                        "available.",
+                        after=activation_mark,
+                    )
+                    failure = process.wait_for_text(
+                        "also publish one.",
+                        after=activation_mark,
+                    )
+                    self.assertIn(
+                        "".join(f"[hint] {creation_hint}".split()),
+                        "".join(failure.split()),
+                    )
+                    restored = process.wait_for_text(
+                        f"{prompt}{marker}",
+                        after=activation_mark,
+                    )
+                    self.assertIn(
+                        "[error command_invalid] No current writing artifacts are "
+                        "available.",
+                        failure,
+                    )
+                    self.assertIn(f"{prompt}{marker}", restored)
+                    self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 0)
+                    self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 0)
+                    self.assertFalse(self.provider_log.exists())
 
-                process.send_interrupt()
-                process.wait_for_text(
-                    "[cancelled] No action was taken.",
-                    after=activation_mark,
-                )
-                history_mark = process.output_mark()
-                process.send_text("\x1b[AX")
-                recalled = process.wait_for_text(f"{prompt}X", after=history_mark)
-                self.assertNotIn(f"{prompt}$X", recalled)
-                process.send_interrupt()
-                process.wait_for_text(
-                    "[cancelled] No action was taken.",
-                    after=history_mark,
-                )
-                process.send_text("/quit\n\n")
-                self.assertEqual(
-                    process.wait_for_exit(),
-                    0,
-                    process.normalized_text,
-                )
-                self.assertFalse(self.provider_log.exists())
-                self.assertFalse(
-                    self.workspace.path(
-                        f"{_SESSION_DIRECTORY}/alpha.access.json"
-                    ).exists()
-                )
-                self.assertEqual(
-                    process.final_terminal_attributes,
-                    process.original_terminal_attributes,
-                )
+                    process.send_interrupt()
+                    process.wait_for_text(
+                        "[cancelled] No action was taken.",
+                        after=activation_mark,
+                    )
+                    history_mark = process.output_mark()
+                    process.send_text("\x1b[AX")
+                    recalled = process.wait_for_text(
+                        f"{prompt}X",
+                        after=history_mark,
+                    )
+                    self.assertNotIn(f"{prompt}{marker}X", recalled)
+                    process.send_interrupt()
+                    process.wait_for_text(
+                        "[cancelled] No action was taken.",
+                        after=history_mark,
+                    )
+                    process.send_text("/quit\n\n")
+                    self.assertEqual(
+                        process.wait_for_exit(),
+                        0,
+                        process.normalized_text,
+                    )
+                    self.assertFalse(self.provider_log.exists())
+                    self.assertFalse(
+                        self.workspace.path(
+                            f"{_SESSION_DIRECTORY}/alpha.access.json"
+                        ).exists()
+                    )
+                    self.assertEqual(
+                        process.final_terminal_attributes,
+                        process.original_terminal_attributes,
+                    )
 
     def test_public_cli_reference_guidance_and_inert_states_are_visible(
         self,
@@ -3496,6 +3513,87 @@ print("RESULT=" + json.dumps({
             process.original_terminal_attributes,
         )
         self.assertFalse(self.provider_log.exists())
+
+    def test_reference_empty_run_and_chat_picker_precedes_deferred_failure(
+        self,
+    ) -> None:
+        """Show empty ranged palettes in both composers without opening viewers."""
+
+        source = _REFERENCE_PROBE_PREAMBLE + r'''
+empty_calls = []
+def empty_paths():
+    empty_calls.append("list")
+    return ()
+
+run = composition.compose(
+    ComposeMode.RUN,
+    reference_scope_provider=composition_scope,
+    reference_paths_provider=empty_paths,
+    reference_text_reader=text,
+)
+chat = composition.compose(
+    ComposeMode.CHAT,
+    agent_id=PLOT_ARCHITECT,
+    reference_scope_provider=composition_scope,
+    reference_paths_provider=empty_paths,
+    reference_text_reader=text,
+)
+print("RESULT=" + json.dumps({
+    "run": run.kind.value,
+    "chat": chat.kind.value,
+    "empty_calls": len(empty_calls),
+    "read_calls": read_calls,
+}, separators=(",", ":")))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=100,
+        )
+
+        for prompt, activation_key in (
+            ("compose[run:1]>", "\n"),
+            ("compose[chat:plot:1]>", "\t"),
+        ):
+            process.wait_for_text(prompt)
+            preview_mark = process.output_mark()
+            process.send_text("$$")
+            preview = process.wait_for_text(
+                "[controls] Up/Down selects; Enter/Tab opens the ranged viewer.",
+                after=preview_mark,
+            )
+            self.assertIn("No writing artifacts.", preview)
+            self.assertIn(f"{prompt} $$", preview)
+            self.assertIn(
+                "Enter/Tabopenstherangedviewer.",
+                "".join(preview.split()),
+            )
+            activation_mark = process.output_mark()
+            process.send_text(activation_key)
+            process.wait_for_text(
+                "[error command_invalid] No current writing artifacts are available.",
+                after=activation_mark,
+            )
+            self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 0)
+            self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 0)
+            self.assertFalse(self.provider_log.exists())
+            process.send_interrupt()
+
+        process.wait_for_text('RESULT={"run":')
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        match = re.search(r"RESULT=(\{[^\r\n]+\})", process.normalized_text)
+        self.assertIsNotNone(match, process.normalized_text)
+        assert match is not None
+        result = json.loads(match.group(1))
+        self.assertEqual(result["run"], "interrupt")
+        self.assertEqual(result["chat"], "interrupt")
+        self.assertGreater(result["empty_calls"], 0)
+        self.assertEqual(result["read_calls"], [])
+        self.assertFalse(self.provider_log.exists())
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
 
     def test_reference_nested_cancel_vintr_and_veof_restore_originating_drafts(
         self,
