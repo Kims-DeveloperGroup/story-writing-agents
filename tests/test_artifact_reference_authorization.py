@@ -569,7 +569,7 @@ class ReferenceCaptureAndEligibilityTests(ReferenceRepositoryTestCase):
         authorization.close()
 
     def test_manual_empty_missing_invalid_and_nul_sources_are_coded_exactly(self) -> None:
-        manual_path = "manuscript/part-01/manual.md"
+        manual_path = "manuscript/manual older 世界.md"
         manual_target = self.root / manual_path
         manual_target.parent.mkdir(parents=True, exist_ok=True)
         manual_target.write_bytes(b"manual")
@@ -592,7 +592,7 @@ class ReferenceCaptureAndEligibilityTests(ReferenceRepositoryTestCase):
         )
         manual.close()
 
-        empty_path = "manuscript/part-01/empty.md"
+        empty_path = "manuscript/empty.md"
         (self.root / empty_path).write_bytes(b"")
         empty = self.repository.capture_reference_authorization(
             operation_id="empty",
@@ -616,7 +616,7 @@ class ReferenceCaptureAndEligibilityTests(ReferenceRepositoryTestCase):
                 ),
             )
 
-        missing_path = "manuscript/part-01/missing.md"
+        missing_path = "manuscript/missing draft.md"
         with _expect_error(self, ReferenceAuthorizationErrorCode.NOT_FOUND):
             self.repository.capture_reference_authorization(
                 operation_id="missing",
@@ -628,7 +628,7 @@ class ReferenceCaptureAndEligibilityTests(ReferenceRepositoryTestCase):
             ("nul", b"safe\x00nul", ReferenceAuthorizationErrorCode.NUL_CONTENT),
         ):
             with self.subTest(label=label):
-                path = f"manuscript/part-01/{label}.md"
+                path = f"manuscript/{label} older.md"
                 (self.root / path).write_bytes(content)
                 with _expect_error(self, code):
                     self.repository.capture_reference_authorization(
@@ -857,6 +857,53 @@ class ReferenceInvocationLifecycleTests(ReferenceRepositoryTestCase):
 
 
 class ReferenceDriftAndLifetimeTests(ReferenceRepositoryTestCase):
+    def test_source_only_hash_replacement_and_deletion_drift_fail_closed(
+        self,
+    ) -> None:
+        path = "manuscript/older draft 世界.md"
+        target = self.root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        original = b"source-only marker\n"
+        target.write_bytes(original)
+        requested = (ArtifactReference(path),)
+
+        changed = self.capture("source_only_hash_drift", requested)
+        changed_capability = self.authorize(changed, "invoke", 1)
+        target.write_bytes(b"changed source-only marker\n")
+        with _expect_error(self, ReferenceAuthorizationErrorCode.DRIFT):
+            self.repository.deliver_authorized_references(
+                changed_capability,
+                requested,
+            )
+        self.repository.finish_reference_operation(
+            changed,
+            outcome=ReferenceAuthorizationErrorCode.DRIFT,
+        )
+
+        target.write_bytes(original)
+        replaced = self.capture("source_only_replacement_drift", requested)
+        replaced_capability = self.authorize(replaced, "invoke", 1)
+        replacement = target.with_name("replacement.md")
+        replacement.write_bytes(original)
+        os.replace(replacement, target)
+        with _expect_error(self, ReferenceAuthorizationErrorCode.DRIFT):
+            self.repository.deliver_authorized_references(
+                replaced_capability,
+                requested,
+            )
+        self.repository.finish_reference_operation(
+            replaced,
+            outcome=ReferenceAuthorizationErrorCode.DRIFT,
+        )
+
+        deleted = self.capture("source_only_deletion_drift", requested)
+        target.unlink()
+        with _expect_error(self, ReferenceAuthorizationErrorCode.DRIFT):
+            self.repository.revalidate_reference_operation(
+                deleted,
+                checkpoint="before_provider",
+            )
+
     def test_drift_before_delivery_terminates_invocation_without_refresh(self) -> None:
         requested = (ArtifactReference(_MANUSCRIPT_PATH),)
         authorization = self.capture("delivery_drift", requested)

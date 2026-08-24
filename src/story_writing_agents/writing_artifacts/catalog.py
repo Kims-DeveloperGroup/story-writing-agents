@@ -32,7 +32,14 @@ class ArtifactKind(StrEnum):
     MANUSCRIPT = "manuscript"
 
 
-def _validate_posix_path(value: object) -> tuple[str, ...]:
+def validate_artifact_path_syntax(value: object) -> tuple[str, ...]:
+    """Validate shared lexical syntax for one artifact-relative POSIX path.
+
+    This package-internal boundary deliberately does not classify either a
+    publication identity or a reference source.  Those policies are owned by
+    their respective modules and consume only this common lexical result.
+    """
+
     if type(value) is not str:
         raise TypeError("artifact path must be a string")
     if not value or "\\" in value or "\x00" in value:
@@ -59,7 +66,7 @@ def canonical_artifact_kind(path: object) -> ArtifactKind | None:
     non-normalized paths raise before a caller can attempt filesystem access.
     """
 
-    parts = _validate_posix_path(path)
+    parts = validate_artifact_path_syntax(path)
     assert isinstance(path, str)
     if path in _CORE_ARTIFACT_SET:
         return ArtifactKind.CORE_DOCUMENT
@@ -77,7 +84,7 @@ def canonical_artifact_kind(path: object) -> ArtifactKind | None:
 def manuscript_artifact_path(output_path: object) -> str:
     """Translate required ``PART/PATH.md`` output syntax to canonical identity."""
 
-    parts = _validate_posix_path(output_path)
+    parts = validate_artifact_path_syntax(output_path)
     assert isinstance(output_path, str)
     artifact_path = f"manuscript/{output_path}"
     if canonical_artifact_kind(artifact_path) is not ArtifactKind.MANUSCRIPT:

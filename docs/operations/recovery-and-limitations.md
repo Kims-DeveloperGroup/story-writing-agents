@@ -289,9 +289,10 @@ different mode.
 ## Ranged-text viewer exits and recovery
 
 The viewer remains an unlisted package-internal supplied-text component rather
-than a command or public API. In provider-bound shell prompt spans, `$${path}`
-opens it directly and `$$` opens a current-source picker before it;
-`$` completes a whole-file indicator without viewing. The controller owns
+than a command or public API. In provider-bound shell prompt spans, exact `$$`
+immediately opens current-source selection on the second dollar; Enter/Tab
+opens the highlighted source. A complete `$${path}` opens it directly on
+Enter/Tab, while `$` completes a whole-file indicator without viewing. The controller owns
 artifact listing, verified reads, exact originating-draft restoration, and
 path/range attachment. The viewer owns none of those concerns.
 

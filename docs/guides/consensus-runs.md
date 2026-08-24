@@ -30,12 +30,13 @@ then `/cancel`; the preview does not complete or run either control. Unsupported
 terminals keep the same line-oriented composer without a panel.
 
 Within `/run` prompt text or its composer, `$` completes an eligible whole-file
-indicator, `$${path}` opens that artifact in the ranged viewer, and `$$` opens
-the artifact picker before viewing. These controls never start consensus;
+indicator. The second `$` immediately shows ranged-source choices; Up/Down
+selects and Enter/Tab opens the independent viewer. A complete `$${path}` opens
+that artifact directly on Enter/Tab. These controls never start consensus;
 selection returns to the exact prompt and `/send` or the normal main-input
-submission remains necessary. Fallback selection requires a second Enter
-confirmation. Noninteractive `story run` has no picker/viewer UI and accepts
-literal quoted `${...}` indicators only.
+submission remains necessary. Fallback selection activates after the submitted
+line and requires a second Enter confirmation. Noninteractive `story run` has
+no picker/viewer UI and accepts literal quoted `${...}` indicators only.
 
 ## Run noninteractively
 

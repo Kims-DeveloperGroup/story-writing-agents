@@ -6,7 +6,7 @@
 > replacement, guarded interactive settings persistence, and content-free
 > explicit-reference authorization evidence and inline runtime/provider
 > enforcement are implemented. Interactive `$`/`$$` discovery and viewer
-> attachment use the catalog-independent canonical filesystem-source boundary
+> attachment use the catalog-independent reference-source boundary
 > and add no artifact
 > write path. Bounded fail-open debug logging uses a separate identity-bound
 > storage path.
@@ -198,13 +198,17 @@ and SHA-256 against capture. Captured content is never refreshed. A path/range
 mismatch consumes the capability; deletion, replacement, unsafe topology,
 oversize, or byte drift fails closed.
 
-Interactive listing inspects metadata for the four exact core paths and
-recursively for valid Markdown paths below `manuscript/PART/`. It includes safe
-empty, manual, pre-provenance, older, published, and hash-divergent files. It
-excludes `.gitkeep`, extra core paths, root manuscripts, unsupported/invalid or
-oversize paths, normalized/case aliases, symlinks, hardlinks, nonregular files,
-transcripts, discussion logs, provider/agent state, configuration, diagnostics,
-outside paths, and repository metadata. The result is sorted and content-free:
+Interactive listing inspects metadata for the four exact core paths and every
+safely representable lowercase-`.md` descendant anywhere under `manuscript/`.
+That includes direct root files, arbitrary nesting, spaces, Unicode, `{`, `$`,
+and `#`; publication output remains subject to the separate stricter
+`manuscript/PART/PATH.md` grammar. Listing includes safe empty, manual,
+pre-provenance, older, published, and hash-divergent files. It excludes
+`.gitkeep`, extra core paths, unsupported/invalid or oversize paths, `}` and
+unrepresentable line/control characters, normalized/case aliases, symlinks,
+hardlinks, nonregular files, transcripts, discussion logs, provider/agent
+state, configuration, diagnostics, outside paths, and repository metadata. The
+result is sorted and content-free:
 listing does not read, decode, hash, or line-split file bytes. A picker/viewer activation performs a
 fresh bounded repository read before displaying text. The viewer receives text,
 not a path or filesystem handle, and retains no repository authority. A stale

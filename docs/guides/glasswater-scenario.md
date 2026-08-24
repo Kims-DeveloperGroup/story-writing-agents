@@ -56,10 +56,12 @@ only `$`, leaves the turn unsubmitted, and produces:
 @plot Check the established bell rule against ${core_documents/narrative_rules.md}
 ```
 
-To ground the same request in selected manuscript lines, add `$$`, choose the
-part-scoped planning manuscript, use Shift+Up/Down in the independent viewer,
-and press Enter. The resulting second indicator remains after the first in the
-same prompt. Escape or Ctrl-C instead restores the exact draft and cursor. In
+To ground the same request in selected manuscript lines, type `$$`; the source
+choices appear immediately on the second dollar. Choose the planning
+manuscript with Up/Down, press Enter or Tab to open the independent viewer, use
+Shift+Up/Down to select an inclusive range, and press Enter. The resulting
+second indicator remains after the first in the same prompt. Escape or Ctrl-C
+instead restores the exact draft and cursor. In
 ordinary-line fallback, select numbered entries and type exact `START-END`,
 then press Enter once more to submit the amended draft.
 

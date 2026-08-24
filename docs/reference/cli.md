@@ -346,7 +346,7 @@ Artifact activation is a separate overlay inside provider-bound text only:
 | --- | --- |
 | `$` | Opens `Writing artifact selection [open]` with `[controls] Up/Down selects; Enter/Tab inserts a whole-file reference.` Enter or Tab inserts `${path}` without submitting. |
 | `$${path}` then Enter or Tab | Opens the named artifact in the independent viewer. |
-| `$$` then Enter or Tab | Opens the artifact picker, then the viewer. |
+| `$$` | The second `$` immediately opens ranged-source selection before a third key or newline. Up/Down moves the highlight; Enter or Tab opens that source in the viewer. |
 | Shift+Up/Down, then Enter in the viewer | Selects a normalized inclusive range and inserts `${path}#Lx-Ly`. |
 | Escape, Ctrl-C, EOF, or handled activation failure | Restores the exact buffer/cursor and performs no dispatch or history append. |
 | `\$` | Leaves a literal dollar and performs no activation. |
@@ -358,22 +358,35 @@ internal chat composer. Lobby input, attached input without focus, management
 commands and arguments, IDs, subjects, options, output paths, settings,
 confirmations, and output are inert. Shell orientation and full `/help` explain
 the attachment/focus prerequisite and distinguish `$` whole-file insertion from
-`$$` ranged selection.
+`$$` ranged selection. Escape dismisses an immediate ranged-source panel but
+leaves `$$` in the buffer; Enter or Tab reopens it in place. Typing `{` after
+`$$` instead continues a direct marker, including paths with spaces, Unicode,
+`{`, `$`, and `#`.
 Multiple inserted indicators retain order. Completion/viewing remains local;
 only the later normal submit reaches the parser and runtime, where each
 provider invocation must perform its own read.
 
 The text after `$` is a case-sensitive path fragment over the current safe
-canonical filesystem sources. Discovery uses the explicit workspace or the
-nearest initialized ancestor selected by normal CLI resolution, returns lexical
-paths, and reads metadata rather than file bytes. No match leaves the
+reference sources. Discovery uses the explicit workspace or the nearest
+initialized ancestor selected by normal CLI resolution, returns lexical paths,
+and reads metadata rather than file bytes. It includes the four supported core
+documents plus every safely representable lowercase-`.md` descendant anywhere
+under `manuscript/`, including direct root files, arbitrary nesting, spaces,
+Unicode, `{`, `$`, and `#`. This reference-source boundary is broader than the
+strict part-scoped grammar for new consensus publications. No match leaves the
 labeled panel open with
 `[empty] No matching writing artifacts. Change the path fragment.` When the
 source list is empty, `$` immediately shows `[empty] No writing artifacts. Add
-a supported canonical core document or part-scoped Markdown manuscript.
-Consensus can also publish one.` Enter or Tab then writes the existing
+a supported canonical core document or Markdown file with a lowercase .md
+suffix under manuscript/. Consensus can also publish one.` Enter or Tab then writes the existing
 `command_invalid` `empty_sources` error and
 restores the draft; previewing the empty state starts no provider work.
+
+The inserted `${path}` or `${path}#Lx-Ly` is an indicator, not embedded file
+content. Several indicators may be attached to one line. On later normal
+submission, the runtime captures and revalidates the ordered batch and requires
+every addressed agent invocation to read every indicator through the
+authorized runtime before accepting its result.
 
 Line fallback prints a numbered source list and complete numbered viewer. It
 accepts exact ASCII `START-END` or `/cancel`, then prints the amended draft and

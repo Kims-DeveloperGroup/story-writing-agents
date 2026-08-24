@@ -97,7 +97,7 @@ class WritingArtifactTestCase(unittest.TestCase):
 
 
 class ArtifactGrammarTests(unittest.TestCase):
-    def test_only_four_core_paths_and_part_manuscripts_are_canonical(self) -> None:
+    def test_publication_grammar_stays_strict_while_sources_are_broader(self) -> None:
         self.assertEqual(
             CORE_ARTIFACT_PATHS,
             tuple(f"core_documents/{name}" for name in CORE_DOCUMENTS),
@@ -120,7 +120,7 @@ class ArtifactGrammarTests(unittest.TestCase):
                     ArtifactKind.MANUSCRIPT,
                 )
 
-        excluded = (
+        excluded_from_publication = (
             "core_documents/extra.md",
             "transcripts/session.md",
             "discussion_logs/debate.md",
@@ -130,9 +130,48 @@ class ArtifactGrammarTests(unittest.TestCase):
             "manuscript/part-01/.md",
             "manuscript/bad part/chapter.md",
         )
-        for path in excluded:
+        for path in excluded_from_publication:
             with self.subTest(path=path):
                 self.assertIsNone(canonical_artifact_kind(path))
+
+        source_only = (
+            "manuscript/root.md",
+            "manuscript/older drafts/act 1/scene.md",
+            "manuscript/世界/章.md",
+            "manuscript/{archive$/scene#1.md",
+        )
+        for path in source_only:
+            with self.subTest(source_only=path):
+                self.assertIsNone(canonical_artifact_kind(path))
+                self.assertEqual(ArtifactReference(path).token, f"${{{path}}}")
+
+    def test_reference_source_paths_reject_unrepresentable_and_unsafe_names(
+        self,
+    ) -> None:
+        overlong = "manuscript/" + "/".join(
+            "a" * 120 for _ in range(9)
+        ) + "/chapter.md"
+        rejected = (
+            "discussion_logs/private.md",
+            "core_documents/extra.md",
+            "manuscript/closing}brace.md",
+            "manuscript/control\nname.md",
+            "manuscript/format\u200dname.md",
+            "manuscript/surrogate\ud800name.md",
+            "manuscript/line\u2028separator.md",
+            "manuscript/paragraph\u2029separator.md",
+            "manuscript/upper.MD",
+            "manuscript/.md",
+            "manuscript/../outside.md",
+            "/manuscript/absolute.md",
+            "manuscript\\backslash.md",
+            "manuscript//duplicate.md",
+            overlong,
+        )
+        for path in rejected:
+            with self.subTest(path=repr(path[:80])):
+                with self.assertRaises(ValueError):
+                    ArtifactReference(path)
 
     def test_unsafe_non_normalized_and_non_text_paths_fail_before_io(self) -> None:
         invalid = (
@@ -224,7 +263,7 @@ class ArtifactGrammarTests(unittest.TestCase):
 
 
 class RepositoryEligibilityTests(WritingArtifactTestCase):
-    def test_metadata_only_discovery_lists_every_safe_canonical_file(self) -> None:
+    def test_metadata_only_discovery_lists_every_safe_reference_source(self) -> None:
         safe = {
             **{
                 path: f"manual::{path}".encode()
@@ -235,6 +274,11 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
             "manuscript/part-01/init.md": b"initialized placeholder",
             "manuscript/part-01/pre-provenance.md": b"pre-provenance",
             "manuscript/Part_A/scenes/opening.v2.md": b"nested",
+            "manuscript/root.md": b"root manuscript",
+            "manuscript/-older/scene.md": b"older",
+            "manuscript/bad part/arbitrary nesting/scene draft.md": b"spaces",
+            "manuscript/世界/章.md": b"unicode",
+            "manuscript/{archive$/scene#1.md": b"delimiters",
             "manuscript/part-01/invalid-utf8.md": b"\xff",
         }
         for path, content in safe.items():
@@ -246,10 +290,15 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
             "core_documents/extra.md",
             "discussion_logs/private.md",
             "agent_states/private.md",
-            "manuscript/root.md",
             "manuscript/part-01/not-markdown.txt",
             "manuscript/part-01/.gitkeep",
-            "manuscript/bad part/chapter.md",
+            "manuscript/part-01/upper.MD",
+            "manuscript/part-01/.md",
+            "manuscript/closing}brace.md",
+            "manuscript/control\tname.md",
+            "manuscript/format\u200dname.md",
+            "manuscript/line\u2028separator.md",
+            "manuscript/paragraph\u2029separator.md",
         )
         for path in excluded:
             target = self.root / path
@@ -286,6 +335,8 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
                 self.repository.list_paths(),
                 tuple(sorted(safe)),
             )
+        with self.assertRaisesRegex(WorkspaceFormatError, "valid UTF-8"):
+            self.repository.read_text("manuscript/part-01/invalid-utf8.md")
         bounded = self.repository._storage.list_regular_files(
             "manuscript",
             max_path_bytes=len("manuscript/part-01/manual.md") - 1,
@@ -293,6 +344,32 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
         self.assertNotIn(
             "manuscript/part-01/manual.md",
             tuple(path for path, _identity in bounded),
+        )
+
+    def test_source_only_files_are_readable_but_never_adopted_by_catalog(
+        self,
+    ) -> None:
+        source_only = {
+            "manuscript/root.md": "root\n",
+            "manuscript/older drafts/世界 章.md": "older\n",
+        }
+        for path, content in source_only.items():
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+
+        self.assertEqual(self.repository.list_paths(), tuple(sorted(source_only)))
+        for path, content in source_only.items():
+            with self.subTest(path=path):
+                self.assertEqual(self.repository.read_text(path), content)
+        self.assertEqual(dict(self.repository.catalog().entries), {})
+
+        published, _ = self.commit()
+        catalog = WritingArtifactRepository(self.root).catalog()
+        self.assertEqual(tuple(catalog.entries), (published,))
+        self.assertEqual(
+            self.repository.list_paths(),
+            tuple(sorted((*source_only, published))),
         )
 
     def test_consensus_persists_exact_agent_bytes_and_all_four_updates(self) -> None:
