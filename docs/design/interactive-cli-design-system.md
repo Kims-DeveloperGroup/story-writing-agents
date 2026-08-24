@@ -909,15 +909,17 @@ mutation; Save gates each distinct effective provider before its file
 transaction.
 
 The welcome is exactly four fixed semantic frames. Physical width selects the
-prefix-free ASCII wordmark tier: 48+ columns use the five-row logo, 32–47 use
-the compact spaced identity, and below 32 use the short identity. The wide
-completed projection is exactly nine rows and its logo is at most 44 cells;
+prefix-free ASCII wordmark tier: at 48+ columns, `STORY` and `WRITING` use
+spaced title/writing reveals, while `AGENTS` and `HANDOFF` switch to the
+five-row logo; 32–47 use the compact spaced identity, and below 32 use the
+short identity. The wide completed projection is exactly nine rows and its
+logo is at most 44 cells;
 compact and narrow completed projections are five rows. No startup frame adds
 bracketed semantic labels or wall-to-wall rules. The capable POSIX ANSI driver
 replaces the four frames and waits exactly three times for 0.4 seconds, then
 leaves the completed frame in scrollback before native sign-in. Width is
 reobserved before every capable frame and the live projection reserves the
-rightmost physical cell; static stream output uses its configured safe width,
+rightmost physical cell; static stream output uses its full configured width,
 while callback construction uses its configured width. Transient rows are
 cleared, SGR is reset, and captured termios is restored with type-ahead discard
 before native sign-in. The flow never hides the cursor or uses the alternate

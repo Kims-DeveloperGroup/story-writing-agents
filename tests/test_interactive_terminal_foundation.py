@@ -2261,6 +2261,8 @@ class StartupPresentationFoundationTests(unittest.TestCase):
         """Reserve the real terminal's rightmost cell at every approved width."""
 
         expected_final_width = {
+            1: 1,
+            19: 18,
             20: 19,
             31: 19,
             32: 29,
@@ -2270,7 +2272,7 @@ class StartupPresentationFoundationTests(unittest.TestCase):
             120: 44,
         }
         for physical, expected_maximum in expected_final_width.items():
-            safe_width = physical - 1
+            safe_width = max(1, physical - 1)
             capabilities = capability(
                 CapabilityProfile.ANSI,
                 width=safe_width,
@@ -2300,7 +2302,9 @@ class StartupPresentationFoundationTests(unittest.TestCase):
     def test_capable_welcome_has_four_frames_point_four_cadence_and_discard(
         self,
     ) -> None:
-        driver, input_stream, output_stream, selected_termios = self.make_driver()
+        driver, input_stream, output_stream, selected_termios = self.make_driver(
+            terminal_width=19,
+        )
         sleeps: list[float] = []
         contexts: list[tuple[int, int, int, CapabilityProfile]] = []
 
@@ -2319,10 +2323,10 @@ class StartupPresentationFoundationTests(unittest.TestCase):
         self.assertEqual(
             contexts,
             [
-                (0, 79, 80, CapabilityProfile.ANSI),
-                (1, 79, 80, CapabilityProfile.ANSI),
-                (2, 79, 80, CapabilityProfile.ANSI),
-                (3, 79, 80, CapabilityProfile.ANSI),
+                (0, 18, 19, CapabilityProfile.ANSI),
+                (1, 18, 19, CapabilityProfile.ANSI),
+                (2, 18, 19, CapabilityProfile.ANSI),
+                (3, 18, 19, CapabilityProfile.ANSI),
             ],
         )
         positions = tuple(rendered.index(f"welcome-{index}-ansi") for index in range(4))
@@ -2345,11 +2349,11 @@ class StartupPresentationFoundationTests(unittest.TestCase):
         self.assertEqual(selected_termios.calls[-1][2], selected_termios.original)
 
     def test_physical_tiers_match_across_animated_and_static_paths(self) -> None:
-        """Select 48/32-column layouts from physical, not reserved, width."""
+        """Select 48/32/20 layouts while reserving only capable live output."""
 
         paths = (
-            ("animated", {"TERM": "xterm"}, 4, [0.4, 0.4, 0.4], True),
-            ("static", {"TERM": "dumb"}, 1, [], False),
+            ("animated", {"TERM": "xterm"}, 4, [0.4, 0.4, 0.4], True, True),
+            ("static", {"TERM": "dumb"}, 1, [], False, False),
             (
                 "reduced",
                 {
@@ -2360,16 +2364,31 @@ class StartupPresentationFoundationTests(unittest.TestCase):
                 1,
                 [],
                 True,
+                False,
             ),
-            ("no-color", {"TERM": "xterm", "NO_COLOR": "1"}, 1, [], False),
+            (
+                "no-color",
+                {"TERM": "xterm", "NO_COLOR": "1"},
+                1,
+                [],
+                False,
+                False,
+            ),
         )
-        for physical in (48, 32):
+        for physical in (48, 32, 20):
             expected = self.render_startup_frame(
                 3,
                 capability(CapabilityProfile.LINE, width=physical),
                 physical,
             ).text
-            for label, environment, call_count, expected_sleeps, decorated in paths:
+            for (
+                label,
+                environment,
+                call_count,
+                expected_sleeps,
+                decorated,
+                live,
+            ) in paths:
                 with self.subTest(physical=physical, path=label):
                     driver, _input, _output, selected_termios = self.make_driver(
                         environment=environment,
@@ -2402,9 +2421,10 @@ class StartupPresentationFoundationTests(unittest.TestCase):
                     driver.run_startup_welcome(render, sleeps.append)
                     self.assertEqual(len(contexts), call_count)
                     self.assertEqual(sleeps, expected_sleeps)
+                    expected_width = physical - 1 if live else physical
                     self.assertEqual(
                         contexts[-1][0:3],
-                        (3, physical - 1, physical),
+                        (3, expected_width, physical),
                     )
                     self.assertEqual(contexts[-1][3], expected)
                     self.assertEqual(contexts[-1][4], decorated)
@@ -2511,7 +2531,7 @@ class StartupPresentationFoundationTests(unittest.TestCase):
 
         expected = self.render_startup_frame(
             3,
-            capability(CapabilityProfile.ANSI, width=79),
+            capability(CapabilityProfile.ANSI, width=80),
             80,
         )
         rendered = output_stream.getvalue()
@@ -2532,30 +2552,59 @@ class StartupPresentationFoundationTests(unittest.TestCase):
         ):
             self.assertNotIn(control, rendered)
 
-    def test_limited_destinations_render_one_plain_final_without_mutation(
+    def test_static_fallback_destinations_use_full_available_width(
         self,
     ) -> None:
-        """Keep non-live and uncertain output useful, static, and ANSI-free."""
+        """Keep static output useful, width-accurate, ANSI-free, and restored."""
+
+        class ActivationFailingTermios(StartupTermios):
+            def tcsetattr(
+                self,
+                descriptor: int,
+                when: int,
+                attributes: list[object],
+            ) -> None:
+                super().tcsetattr(descriptor, when, attributes)
+                if when == self.TCSANOW:
+                    raise OSError("startup activation failed")
+
+        activation_termios = ActivationFailingTermios()
 
         cases = (
-            ("input-non-tty", {"input_is_terminal": False}),
-            ("output-non-tty", {"output_is_terminal": False}),
-            ("dumb", {"environment": {"TERM": "dumb"}}),
-            ("non-posix", {"os_name": "nt"}),
+            ("input-non-tty", {"input_is_terminal": False}, 19, True),
+            ("output-non-tty", {"output_is_terminal": False}, 80, False),
+            ("dumb", {"environment": {"TERM": "dumb"}}, 19, True),
+            ("non-posix", {"os_name": "nt"}, 19, True),
             (
                 "no-color",
                 {"environment": {"TERM": "xterm", "NO_COLOR": "1"}},
+                19,
+                True,
             ),
-            ("termios-unavailable", {"termios_value": CompleteTermios}),
+            ("termios-unavailable", {"termios_value": object()}, 19, True),
+            (
+                "input-discard-unavailable",
+                {"termios_value": CompleteTermios},
+                19,
+                True,
+            ),
+            (
+                "activation-failure",
+                {"termios_value": activation_termios},
+                19,
+                True,
+            ),
             (
                 "uncertain-output",
                 {"output_tty_failure": RuntimeError("uncertain output")},
+                80,
+                False,
             ),
         )
-        for label, arguments in cases:
+        for label, arguments, expected_width, expected_output_tty in cases:
             with self.subTest(label=label):
                 driver, input_stream, output_stream, selected_termios = (
-                    self.make_driver(**arguments)
+                    self.make_driver(terminal_width=19, **arguments)
                 )
                 contexts: list[tuple[int, TerminalCapabilities, int]] = []
 
@@ -2574,14 +2623,29 @@ class StartupPresentationFoundationTests(unittest.TestCase):
                 self.assertEqual(index, 3)
                 self.assertEqual(current.profile, CapabilityProfile.LINE)
                 self.assertFalse(current.decorative_sgr)
+                self.assertEqual(current.output_tty, expected_output_tty)
+                self.assertEqual((current.width, physical), (expected_width,) * 2)
                 self.assertEqual(
                     output_stream.getvalue(),
                     f"{self.render_startup_frame(index, current, physical).text}\n",
                 )
+                if expected_output_tty:
+                    self.assertTrue(
+                        output_stream.getvalue().endswith("Next: access check.\n")
+                    )
                 self.assertEqual(sleeps, [])
                 self.assertEqual(input_stream.read_calls, 0)
                 self.assertNotIn("\x1b", output_stream.getvalue())
-                if isinstance(selected_termios, StartupTermios):
+                if selected_termios is activation_termios:
+                    self.assertEqual(
+                        [call[1] for call in selected_termios.calls],
+                        [selected_termios.TCSANOW, selected_termios.TCSADRAIN],
+                    )
+                    self.assertEqual(
+                        selected_termios.calls[-1][2],
+                        selected_termios.original,
+                    )
+                elif isinstance(selected_termios, StartupTermios):
                     self.assertEqual(selected_termios.calls, [])
 
     def test_callback_welcome_uses_width_aware_final_layout_without_sleep(

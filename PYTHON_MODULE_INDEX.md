@@ -1856,10 +1856,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   renderers and timing, progressively display the fixed four-frame welcome or
   one transient authentication notice, and establish a fresh post-provider
   output boundary before results without introducing a general animation API.
-  The private welcome-renderer contract carries the latest physical terminal
-  width separately from capabilities whose width is the safe projection bound,
-  so physical 48- and 32-column layout tiers remain identical across animated
-  and static paths while real-terminal output reserves the rightmost cell.
+  The private welcome-renderer contract carries physical terminal width
+  separately from capabilities whose width is the active projection bound.
+  This keeps physical 48- and 32-column layout tiers identical across animated
+  and static paths: capable live frame replacement alone reserves the
+  rightmost cell, while persistent/static fallback rendering uses the full
+  configured width.
 - **Direct internal dependencies:** `interactive_terminal._input_lifecycle`,
   `interactive_terminal._model`, `interactive_terminal._reference_activation`,
   and
@@ -1939,13 +1941,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   `STORY_REDUCED_MOTION`, and atomic `TCSAFLUSH` input discard. The driver uses
   call-local noncanonical/no-echo attributes, discards only type-ahead received
   during the guarded delay, and exactly restores the original terminal before
-  native login or subsequent input. It reobserves width for every startup
-  frame, uses that physical width for welcome-tier selection, supplies a
-  separately right-margin-reserved safe width for rendering to a real
-  terminal, retains write-time physical-row geometry, resets SGR during
-  cleanup, and preserves the primary error while avoiding speculative cursor
-  erasure after unknown write progress. Welcome frames change at 0.4-second
-  intervals and notices are bounded to 0.8 seconds. A present
+  native login or subsequent input. For capable live replacement it reobserves
+  width before every startup frame, uses that physical width for welcome-tier
+  selection, supplies a separately right-margin-reserved safe width, retains
+  write-time physical-row geometry, resets SGR during cleanup, and preserves
+  the primary error while avoiding speculative cursor erasure after unknown
+  write progress. Persistent/static fallback instead renders once against the
+  full configured width. Welcome frames change at 0.4-second intervals and
+  notices are bounded to 0.8 seconds. A present
   `STORY_REDUCED_MOTION` on an otherwise capable ANSI terminal emits the final
   welcome once with its fixed foreground decoration but without delay, raw-mode
   activation, cursor animation, or flashing; its authentication notices remain

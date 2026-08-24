@@ -112,7 +112,7 @@ native provider authentication. There is no alternate screen, cursor hiding,
 general animation service, signal loop, or unbounded repetition.
 
 The live driver reserves the rightmost physical cell and reobserves width for
-each frame; static stream output uses its configured safe width, while callback
+each frame; static stream output uses its full configured width, while callback
 construction uses its configured width. A present `STORY_REDUCED_MOTION` entry
 is independent of color: on an otherwise ANSI-eligible TTY it emits one final
 colored frame without animation, sleep, raw-mode activation, cursor control,

@@ -573,12 +573,8 @@ class RawTerminalDriver:
                 ),
             ):
                 physical_width = base_capabilities.width
-                safe_width = _startup_safe_projection_width(
-                    base_capabilities,
-                    physical_width,
-                )
                 static_capabilities = _static_startup_capabilities(
-                    _capabilities_with_width(base_capabilities, safe_width),
+                    base_capabilities,
                     decorative_sgr=(
                         reduced_motion is True
                         and base_capabilities.profile is CapabilityProfile.ANSI

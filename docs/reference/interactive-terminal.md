@@ -238,7 +238,7 @@ The physical width selects the tier before rendering. A capable live
 projection reserves the rightmost physical cell, so the renderer receives
 `physical width - 1` while still selecting the tier from the original physical
 width; it reobserves that geometry for every frame. Static stream output uses
-its configured safe width, and callback construction uses its configured width.
+its full configured width, and callback construction uses its configured width.
 
 On a capable POSIX ANSI TTY with reduced motion absent, the driver replaces the
 four frames and waits exactly three times for 0.4 seconds each, then writes one
