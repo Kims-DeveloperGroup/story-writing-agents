@@ -68,10 +68,8 @@ def _artifact_reference(
     if closing < 0:
         raise ArtifactReferenceDirectiveError("reference directive is malformed")
     path = text[start + 2 : closing]
-    if not path or any(character.isspace() for character in path):
-        raise ArtifactReferenceDirectiveError(
-            "reference path must be nonempty and contain no whitespace"
-        )
+    if not path:
+        raise ArtifactReferenceDirectiveError("reference path must be nonempty")
 
     line_range, end = _line_range(text, closing + 1)
     try:

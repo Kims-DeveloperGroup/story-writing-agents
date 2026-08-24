@@ -1,4 +1,4 @@
-"""Catalog-independent discovery and capture of canonical artifact sources."""
+"""Catalog-independent discovery and capture of referenceable artifact sources."""
 
 from __future__ import annotations
 
@@ -10,12 +10,12 @@ from .catalog import (
     CORE_ARTIFACT_PATHS,
     MAX_ARTIFACT_PATH_BYTES,
     ArtifactKind,
-    canonical_artifact_kind,
 )
 from .references import (
     MAX_VIEWER_UTF8_BYTES,
     ArtifactContentSnapshot,
     ArtifactSourceIdentity,
+    reference_source_kind,
 )
 
 
@@ -28,7 +28,7 @@ class ArtifactSourceNulError(WorkspaceFormatError):
 
 
 class CanonicalArtifactFilesystem:
-    """Discover and capture safe current bytes beneath canonical directories."""
+    """Discover and capture safe current bytes beneath writing directories."""
 
     def __init__(self, storage: SecureWorkspaceStorage) -> None:
         if type(storage) is not SecureWorkspaceStorage:
@@ -36,7 +36,7 @@ class CanonicalArtifactFilesystem:
         self._storage = storage
 
     def list_paths(self) -> tuple[str, ...]:
-        """Return deterministic canonical paths using metadata-only inspection."""
+        """Return deterministic eligible paths using metadata-only inspection."""
 
         found: list[str] = []
         for path in CORE_ARTIFACT_PATHS:
@@ -53,11 +53,13 @@ class CanonicalArtifactFilesystem:
             )
         except FileNotFoundError:
             manuscripts = ()
-        found.extend(
-            path
-            for path, _identity in manuscripts
-            if canonical_artifact_kind(path) is ArtifactKind.MANUSCRIPT
-        )
+        for path, _identity in manuscripts:
+            try:
+                kind = reference_source_kind(path)
+            except (TypeError, ValueError):
+                continue
+            if kind is ArtifactKind.MANUSCRIPT:
+                found.append(path)
         return tuple(sorted(found))
 
     def read_snapshot(
@@ -66,9 +68,14 @@ class CanonicalArtifactFilesystem:
         *,
         max_bytes: int | None = None,
     ) -> ArtifactContentSnapshot:
-        """Read one canonical source into an immutable verified snapshot."""
+        """Read one eligible source into an immutable verified snapshot."""
 
-        kind = canonical_artifact_kind(path)
+        try:
+            kind = reference_source_kind(path)
+        except (TypeError, ValueError) as exc:
+            raise WorkspaceSecurityError(
+                "path is not a canonical writing artifact"
+            ) from exc
         if kind is None:
             raise WorkspaceSecurityError(
                 "path is not a canonical writing artifact"
@@ -113,14 +120,20 @@ class CanonicalArtifactFilesystem:
         self,
         paths: tuple[str, ...],
     ) -> tuple[ArtifactContentSnapshot, ...]:
-        """Read only requested canonical paths, omitting absent unsafe entries."""
+        """Read requested eligible paths, omitting absent unsafe entries."""
 
         if type(paths) is not tuple:
             raise TypeError("artifact paths must be a tuple")
         if len(set(paths)) != len(paths):
             raise ValueError("artifact paths must be unique")
         for path in paths:
-            if canonical_artifact_kind(path) is None:
+            try:
+                kind = reference_source_kind(path)
+            except (TypeError, ValueError) as exc:
+                raise WorkspaceSecurityError(
+                    "path is not a canonical writing artifact"
+                ) from exc
+            if kind is None:
                 raise WorkspaceSecurityError(
                     "path is not a canonical writing artifact"
                 )
@@ -134,7 +147,7 @@ class CanonicalArtifactFilesystem:
         return tuple(snapshots)
 
     def read_text(self, path: str, *, max_bytes: int | None = None) -> str:
-        """Return one bounded, stable, strict-UTF-8 canonical source."""
+        """Return one bounded, stable, strict-UTF-8 reference source."""
 
         return self.read_snapshot(path, max_bytes=max_bytes).read_text()
 

@@ -7,14 +7,15 @@ identities.
 
 from __future__ import annotations
 
+import hashlib
+import unicodedata
 from dataclasses import dataclass
 
-import hashlib
-
 from .catalog import (
+    CORE_ARTIFACT_PATHS,
     MAX_ARTIFACT_PATH_BYTES,
     ArtifactKind,
-    canonical_artifact_kind,
+    validate_artifact_path_syntax,
 )
 
 
@@ -22,11 +23,39 @@ MAX_REFERENCE_COUNT = 16
 MAX_REFERENCE_UTF8_BYTES = 128 * 1024
 MAX_REFERENCE_TOTAL_BYTES = 256 * 1024
 MAX_VIEWER_UTF8_BYTES = 8 * 1024 * 1024
+_CORE_ARTIFACT_SET = frozenset(CORE_ARTIFACT_PATHS)
+_UNREPRESENTABLE_SOURCE_CATEGORIES = frozenset({"Cc", "Cf", "Cs"})
+
+
+def reference_source_kind(path: object) -> ArtifactKind | None:
+    """Return the kind of one safely representable reference source.
+
+    Reference-source eligibility is intentionally broader than publication
+    grammar.  It admits any Markdown descendant of ``manuscript/`` while
+    preserving one-line, brace-delimited indicator round trips.
+    """
+
+    parts = validate_artifact_path_syntax(path)
+    assert isinstance(path, str)
+    if path in _CORE_ARTIFACT_SET:
+        return ArtifactKind.CORE_DOCUMENT
+    if len(parts) < 2 or parts[0] != "manuscript":
+        return None
+    if not parts[-1].endswith(".md") or parts[-1] == ".md":
+        return None
+    if any(
+        character == "}"
+        or character in {"\u2028", "\u2029"}
+        or unicodedata.category(character) in _UNREPRESENTABLE_SOURCE_CATEGORIES
+        for character in path
+    ):
+        return None
+    return ArtifactKind.MANUSCRIPT
 
 
 @dataclass(frozen=True, slots=True)
 class ArtifactSourceIdentity:
-    """Content-free identity for one stable canonical filesystem source."""
+    """Content-free identity for one stable eligible filesystem source."""
 
     path: str
     kind: ArtifactKind
@@ -38,7 +67,7 @@ class ArtifactSourceIdentity:
     changed_ns: int
 
     def __post_init__(self) -> None:
-        if canonical_artifact_kind(self.path) is not self.kind:
+        if reference_source_kind(self.path) is not self.kind:
             raise ValueError("artifact source path and kind must be canonical")
         if (
             type(self.source_sha256) is not str
@@ -63,7 +92,7 @@ class ArtifactSourceIdentity:
 
 @dataclass(frozen=True, slots=True)
 class ArtifactContentSnapshot:
-    """Exact bytes for one stable canonical filesystem source."""
+    """Exact bytes for one stable eligible filesystem source."""
 
     source: ArtifactSourceIdentity
     content: bytes
@@ -115,13 +144,13 @@ class ArtifactLineRange:
 
 @dataclass(frozen=True, slots=True)
 class ArtifactReference:
-    """A canonical artifact identity with an optional exact line range."""
+    """An eligible artifact-source identity with an optional exact line range."""
 
     path: str
     line_range: ArtifactLineRange | None = None
 
     def __post_init__(self) -> None:
-        if canonical_artifact_kind(self.path) is None:
+        if reference_source_kind(self.path) is None:
             raise ValueError("reference path is not a canonical writing artifact")
         if self.line_range is not None and type(self.line_range) is not ArtifactLineRange:
             raise TypeError("line_range must be an ArtifactLineRange or None")

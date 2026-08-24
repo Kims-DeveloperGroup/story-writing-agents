@@ -84,13 +84,13 @@ _SOURCE_TEXT = (
     "Use ${core_documents/global_outline.md} then "
     "${core_documents/character_sheets.md}#L2-L2 and "
     "${core_documents/narrative_rules.md} plus "
-    "${manuscript/part-01/reference-seed.md}; keep \\${literal} unchanged."
+    "${manuscript/older drafts/{世界$ 章#1.md}; keep \\${literal} unchanged."
 )
 _EXPECTED_PATHS = (
     "core_documents/global_outline.md",
     "core_documents/character_sheets.md",
     "core_documents/narrative_rules.md",
-    "manuscript/part-01/reference-seed.md",
+    "manuscript/older drafts/{世界$ 章#1.md",
 )
 _EXPECTED_CONTENTS = (
     _OUTLINE.encode(),
@@ -341,7 +341,7 @@ class RuntimeReferenceIntegrationTests(unittest.IsolatedAsyncioTestCase):
             ("core_documents/part_outlines.md", _PARTS),
             ("core_documents/character_sheets.md", _CHARACTERS),
             ("core_documents/narrative_rules.md", _RULES),
-            ("manuscript/part-01/reference-seed.md", _MANUSCRIPT),
+            ("manuscript/older drafts/{世界$ 章#1.md", _MANUSCRIPT),
         ):
             target = self.workspace.path(path)
             target.parent.mkdir(parents=True, exist_ok=True)
