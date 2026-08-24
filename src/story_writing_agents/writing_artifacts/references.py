@@ -31,7 +31,8 @@ def reference_source_kind(path: object) -> ArtifactKind | None:
     """Return the kind of one safely representable reference source.
 
     Reference-source eligibility is intentionally broader than publication
-    grammar.  It admits any Markdown descendant of ``manuscript/`` while
+    grammar.  It admits the four exact core paths plus every safely
+    representable lowercase-``.md`` descendant of ``manuscript/`` while
     preserving one-line, brace-delimited indicator round trips.
     """
 

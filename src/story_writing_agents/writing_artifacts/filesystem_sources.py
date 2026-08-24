@@ -20,7 +20,7 @@ from .references import (
 
 
 class ArtifactSourceInvalidUtf8Error(WorkspaceFormatError):
-    """One canonical source cannot be decoded as strict UTF-8."""
+    """One eligible reference source cannot be decoded as strict UTF-8."""
 
 
 class ArtifactSourceNulError(WorkspaceFormatError):
