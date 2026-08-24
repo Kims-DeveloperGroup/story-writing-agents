@@ -24,7 +24,7 @@ class ArtifactSourceInvalidUtf8Error(WorkspaceFormatError):
 
 
 class ArtifactSourceNulError(WorkspaceFormatError):
-    """One canonical source contains a forbidden NUL code point."""
+    """One eligible reference source contains a forbidden NUL code point."""
 
 
 class CanonicalArtifactFilesystem:
