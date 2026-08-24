@@ -1,4 +1,4 @@
-"""Pure parsing for canonical writing-artifact reference directives."""
+"""Pure parsing for eligible writing-artifact reference-source directives."""
 
 from __future__ import annotations
 
@@ -68,17 +68,15 @@ def _artifact_reference(
     if closing < 0:
         raise ArtifactReferenceDirectiveError("reference directive is malformed")
     path = text[start + 2 : closing]
-    if not path or any(character.isspace() for character in path):
-        raise ArtifactReferenceDirectiveError(
-            "reference path must be nonempty and contain no whitespace"
-        )
+    if not path:
+        raise ArtifactReferenceDirectiveError("reference path must be nonempty")
 
     line_range, end = _line_range(text, closing + 1)
     try:
         return ArtifactReference(path, line_range), end
     except (TypeError, ValueError):
         raise ArtifactReferenceDirectiveError(
-            "reference path is not a canonical writing artifact"
+            "reference path is not an eligible writing-artifact source"
         ) from None
 
 

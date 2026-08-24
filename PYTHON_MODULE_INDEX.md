@@ -2515,7 +2515,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ReferenceOperationHistory`; content-free `ReferenceReadActionKind`,
   `ReferenceReadRequest`, and `ReferenceReadAction`; plus
   `canonical_artifact_kind`, `manuscript_artifact_path`, and
-  `parse_artifact_references`. The filesystem source adapter, repository,
+  `parse_artifact_references`. `canonical_artifact_kind` and
+  `manuscript_artifact_path` retain strict publication grammar; public
+  reference values independently accept the broader safe filesystem-source
+  grammar owned by `references`. The filesystem source adapter, repository,
   evidence adapter,
   synchronous read coordinator, and transient content-bearing authorization,
   capability, delivery, and read-result values are intentionally not
@@ -2537,15 +2540,18 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.writing_artifacts.catalog`
 
 - **Source:** `src/story_writing_agents/writing_artifacts/catalog.py`
-- **Responsibility:** Define immutable artifact provenance values and exact
-  canonical path grammar.
+- **Responsibility:** Define immutable artifact provenance values and strict
+  publication path grammar.
 - **Supported surface:** Package-supported `CORE_ARTIFACT_PATHS`,
   `ArtifactKind`, `ArtifactCatalogEntry`, `ArtifactCatalog`,
   `canonical_artifact_kind`, and `manuscript_artifact_path`. Canonical core
   identity is limited to the four exact `core_documents/*.md` paths;
   manuscripts require normalized `manuscript/<part-id>/.../*.md` identities,
   and output syntax is the corresponding required `PART/PATH.md` suffix. The
-  safe component `manuscript` is a legal part identifier. Catalog entries are
+  safe component `manuscript` is a legal part identifier. Package-internal
+  `validate_artifact_path_syntax` owns only shared normalized, workspace-
+  relative, strict-UTF-8 POSIX lexical validation; it classifies neither
+  publication nor reference-source eligibility. Catalog entries are
   publication and audit metadata; they do not authorize filesystem discovery
   or reads.
 - **Direct internal dependencies:** None.
@@ -2559,9 +2565,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.writing_artifacts.references`
 
 - **Source:** `src/story_writing_agents/writing_artifacts/references.py`
-- **Responsibility:** Define immutable artifact-reference, directive-batch,
-  filesystem-source, and verified-content snapshot identities plus bounded
-  resource constants.
+- **Responsibility:** Define immutable reference-source eligibility, artifact-
+  reference identities, directive batches, and verified source snapshots.
 - **Supported surface:** Package-supported `ArtifactSourceIdentity`,
   `ArtifactContentSnapshot`, `ArtifactLineRange`, `ArtifactReference`,
   `ArtifactReferenceBatch`,
@@ -2572,10 +2577,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   content-free path/range identities, enforces the 16-reference limit, and
   rejects duplicate, whole/range-conflicting, or overlapping identities.
   Token discovery, runtime token resolution, and provider framing are absent
-  from this value leaf. `ArtifactSourceIdentity` records a canonical path/kind,
-  full-source hash and byte size, plus device, inode, modification, and change
-  stamps; `ArtifactContentSnapshot` correlates exact strict-UTF-8, NUL-free
-  bytes to that content-free identity.
+  from this value leaf. Package-internal `reference_source_kind` accepts only
+  the four exact core paths or a safely representable lowercase-Markdown
+  descendant of `manuscript/`, including direct children, arbitrary nesting,
+  ordinary spaces, and Unicode. It applies no publication part/component
+  regex. Brace-closing, control/format/surrogate, Unicode line/paragraph
+  separator, unsafe lexical, and non-Markdown identities remain ineligible so
+  `${path}` indicators round-trip exactly. `ArtifactSourceIdentity` records
+  that reference-source path/kind, full-source hash and byte size, plus device,
+  inode, modification, and change stamps; `ArtifactContentSnapshot` correlates
+  exact strict-UTF-8, NUL-free bytes to that content-free identity.
 - **Direct internal dependencies:** `writing_artifacts.catalog`.
 - **State, resources, and side effects:** Pure frozen values, including a
   physical filesystem identity and exact hash-verified immutable byte snapshot,
@@ -2588,15 +2599,16 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.writing_artifacts.directives`
 
 - **Source:** `src/story_writing_agents/writing_artifacts/directives.py`
-- **Responsibility:** Parse strict canonical writing-artifact reference
-  directives into immutable content-free batches.
+- **Responsibility:** Parse explicit writing-artifact reference directives into
+  immutable content-free batches.
 - **Supported surface:** Package-supported `parse_artifact_references`. It
   recognizes ordered `${path}` and `${path}#Lx-Ly` tokens, validates complete
-  canonical artifact identities and strict positive-ASCII one-based inclusive
-  ranges, projects odd/even backslash escaping without changing retained source
-  text, and atomically rejects malformed or reserved unresolved dollar syntax,
-  range continuations, the seventeenth occurrence, and ambiguous repeated-path
-  combinations.
+  reference-source identities, including eligible spaces and Unicode, and
+  strict positive-ASCII one-based inclusive ranges. It projects odd/even
+  backslash escaping without changing retained source text and atomically
+  rejects malformed or reserved unresolved dollar syntax, unrepresentable
+  paths, range continuations, the seventeenth occurrence, and ambiguous
+  repeated-path combinations.
 - **Direct internal dependencies:** `writing_artifacts.references`.
 - **State, resources, and side effects:** Pure call-local scanning and immutable
   value construction only; it performs no filesystem, repository, provider,
@@ -2629,7 +2641,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   schema-record conversion, universal-newline selection, ordered proof
   construction, and the unexported `ReferenceAuthorization`, `ReadCapability`,
   and `ArtifactReferenceDelivery` transient values. New durable records use
-  authorization schema version 2 and carry filesystem source identities rather
+  authorization schema version 2 and carry reference-source identities rather
   than catalog entries; version-1 records cannot authorize or resume work.
 - **Direct internal dependencies:** `writing_artifacts.catalog` and
   `writing_artifacts.references`.
@@ -2830,19 +2842,21 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:**
   `src/story_writing_agents/writing_artifacts/filesystem_sources.py`
-- **Responsibility:** Authorize canonical writing-artifact sources from the
+- **Responsibility:** Authorize referenceable writing-artifact sources from the
   current filesystem.
 - **Supported surface:** Package-internal `CanonicalArtifactFilesystem`, plus
   its package-private strict-UTF-8 and NUL format errors. The adapter lists the
-  four exact core paths and recursively valid part-scoped Markdown manuscripts,
-  selectively captures requested paths, returns bounded text, and compares a
-  later complete source identity without consulting publication provenance.
+  four exact core paths and every safely representable regular lowercase-
+  Markdown file recursively below `manuscript/`, including direct children,
+  arbitrary nesting, ordinary spaces, and Unicode. It selectively captures
+  requested paths, returns bounded text, and compares a later complete source
+  identity without consulting publication provenance.
 - **Direct internal dependencies:** `errors`, `writing_artifacts._storage`,
   `writing_artifacts.catalog`, and `writing_artifacts.references`.
 - **State, resources, and side effects:** Retains one borrowed
   `SecureWorkspaceStorage` and owns no descriptor or lock. Listing performs
-  metadata-only safe-file inspection, includes empty files, filters through the
-  canonical path grammar, and orders complete workspace-relative paths.
+  metadata-only safe-file inspection, includes empty files, filters through
+  reference-source eligibility, and orders complete workspace-relative paths.
   Capture validates complete strict UTF-8 and NUL-free bytes and mints one
   immutable content snapshot carrying its full hash, size, and physical stamp.
   All descriptors remain call-local to `_storage`; import performs no I/O.
@@ -2922,13 +2936,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   Source listing acquires the same permanent repository lease without
   recovering transactions or loading or auditing the catalog or ledger. It
   metadata-inspects the four exact core paths and recursively walks only the
-  `manuscript/` tree, filters every result through the canonical path grammar,
+  `manuscript/` tree, filters every result through reference-source eligibility,
   and returns deterministic complete workspace-relative paths. It reads no
   artifact body and includes safe empty, initialized, manual, pre-provenance,
-  published, and hash-divergent current files. Unsafe aliases, overlong or
-  unsupported paths, `.gitkeep`, root-level manuscripts, symlinks, non-unique
-  hardlinks, devices, FIFOs, sockets, and absent files remain excluded.
-  Selective reads reopen only the requested canonical sources and return
+  published, hash-divergent, root-level, arbitrarily nested, space-bearing, and
+  Unicode current Markdown files. Unsafe aliases, overlong, unrepresentable,
+  non-Markdown, `.gitkeep`, symlinked, non-unique hard-linked, device, FIFO,
+  socket, and absent files remain excluded.
+  Selective reads reopen only the requested reference sources and return
   immutable snapshots after stable descriptor reads, strict UTF-8 decoding,
   and NUL rejection. Supplied-text viewing borrows the same source boundary
   with its caller-provided 8 MiB bound. Catalog or ledger absence, corruption,
@@ -2975,9 +2990,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   The repository owns both lock modes and all filesystem and recovery lifetime;
   its source/evidence mode creates only required state/evidence directories and
   never calls recovery or loads publication state. The private filesystem
-  adapter owns source eligibility and capture, the private evidence adapter
-  owns only create-only schema mechanics, and authorization values own only
-  transient bytes and one-use state.
+  adapter applies reference-source eligibility and owns capture, the private
+  evidence adapter owns only create-only schema mechanics, and authorization
+  values own only transient bytes and one-use state.
 - **Primary verification/documentation:** `tests/test_writing_artifacts.py`,
   `tests/test_artifact_reference_authorization.py`,
   `tests/test_artifact_reference_evidence.py`,
@@ -2995,7 +3010,10 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - Writing-artifact directive parsing is a pure package-local boundary:
   `writing_artifacts.directives` scans only one supplied current input and
-  constructs the `writing_artifacts.references`-owned frozen batch. The batch
+  constructs the `writing_artifacts.references`-owned frozen batch. That value
+  module owns the reference-source predicate independently from the strict
+  publication predicate in `writing_artifacts.catalog`; both consume only the
+  catalog module's package-internal lexical POSIX-path validation. The batch
   retains exact source text, exposes only the one-backslash escaped-dollar
   provider projection plus ordered canonical path/range identities, and never
   carries artifact bytes. Parsing performs no repository read or runtime,
@@ -3007,9 +3025,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   and the captured authorization bytes; `writing_artifacts.read_actions` owns
   the provider-neutral request/action/result/coordinator boundary;
   `writing_artifacts._reference_evidence` owns canonical create-only lifecycle
-  records; `writing_artifacts.filesystem_sources` owns catalog-independent
-  source eligibility and identity; and `writing_artifacts.repository` alone
-  owns secure reads, exact current-source revalidation, repository leases,
+  records; `writing_artifacts.references` owns catalog-independent source
+  eligibility and identity; `writing_artifacts.filesystem_sources` applies that
+  policy to secure discovery and capture; and
+  `writing_artifacts.repository` alone owns secure reads, exact current-source
+  revalidation, repository leases,
   durable sequencing, and each concrete one-use coordinator/capability.
   `backend` imports only the
   read-action boundary: it validates the addressed agent/phase/round, requires
