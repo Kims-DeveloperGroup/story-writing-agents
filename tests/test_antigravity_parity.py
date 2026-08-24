@@ -63,7 +63,10 @@ from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
 
-from tests.helpers import initialized_workspace
+from tests.helpers import (
+    SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE,
+    initialized_workspace,
+)
 
 
 _PROCESS_EXIT_HANDSHAKE_SECONDS = 2.0
@@ -72,7 +75,8 @@ _PROCESS_KILL_GRACE_SECONDS = 1.0
 _PROCESS_POLL_INTERVAL_SECONDS = 0.01
 
 
-_FAKE_AGY = r"""#!/usr/bin/env python3
+_FAKE_AGY = (
+    r"""#!/usr/bin/env python3
 import json
 import os
 from pathlib import Path
@@ -102,33 +106,9 @@ def append(value):
 def emit(value):
     print(json.dumps(value, ensure_ascii=False, separators=(",", ":")), flush=True)
 
-def schema_uses_supported_array_items(specification):
-    if isinstance(specification, bool):
-        return True
-    if not isinstance(specification, dict):
-        return False
-    if specification.get("type") == "array":
-        items = specification.get("items")
-        if not isinstance(items, (dict, bool)):
-            return False
-        if "additionalItems" in specification or "prefixItems" in specification:
-            return False
-    for key, value in specification.items():
-        if key == "properties":
-            if not isinstance(value, dict) or not all(
-                schema_uses_supported_array_items(child)
-                for child in value.values()
-            ):
-                return False
-        elif key == "items" and not schema_uses_supported_array_items(value):
-            return False
-        elif key == "anyOf":
-            if not isinstance(value, list) or not value or not all(
-                schema_uses_supported_array_items(child) for child in value
-            ):
-                return False
-    return True
-
+"""
+    + SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE
+    + r"""
 def matches_schema(value, specification):
     if isinstance(specification, bool):
         return specification
@@ -380,6 +360,7 @@ else:
     emit({"event": "step_update", "step_update": {}})
 emit({"event": "result", "result": terminal})
 """
+)
 
 
 _WINDOWS_FAKE_AGY_LAUNCHER = r"""import ctypes
