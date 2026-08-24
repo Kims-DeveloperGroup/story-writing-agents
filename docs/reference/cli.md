@@ -191,8 +191,8 @@ Every installed command that constructs an `AgentBackend` validates and
 snapshots both the workspace system defaults and per-agent configuration. The
 repeatable `--backend AGENT=BACKEND` accepts canonical
 agent IDs and exactly `codex` or `antigravity`; it changes only that backend
-instance. Duplicate agents are rejected. Unsupported legacy provider names are
-rejected with fixed migration guidance to use `antigravity`.
+instance. Duplicate agents are rejected. Legacy `gemini` is rejected with
+fixed migration guidance to use `antigravity`.
 
 For Codex, a non-null `--codex-model` on `story chat` or `story run` overrides
 all persisted Codex model values; otherwise each agent inherits its
