@@ -106,6 +106,13 @@ generic picker, and cancellable-line seams.
 semantic `Picker` remains a `Component`. None of these additions changes public
 `__all__`, root exports, or supported signatures.
 
+The package-internal `StartupWelcomeStage` and frozen/slotted `StartupWelcome`
+values are a separate purpose-bound startup vocabulary, not `Component`
+members. `StartupWelcome` carries only one validated stage; it has no width,
+color, ANSI, glyph, copy, callback, stream, provider, authentication, or
+terminal-lifecycle state. It is consumed only by the canonical startup
+sequence, its core adapter, and the dedicated startup renderer.
+
 The facade also binds unlisted `InteractiveStartupPresentation`,
 `InteractiveAdvisoryProgress`, and `InteractiveDebateProgress` for startup
 presentation and advisory/consensus awaitable lifecycles.
@@ -183,6 +190,24 @@ operation to the terminal's indicator without changing the supported public API.
 <a id="startup-welcome-and-authentication"></a>
 
 ## Startup welcome and authentication
+
+The startup presentation uses the private frozen/slotted `StartupWelcome`
+value and its `StartupWelcomeStage` vocabulary. `_core` owns one canonical
+four-value sequence—`STORY`, `WRITING`, `AGENTS`, `HANDOFF`—and adapts the
+driver's integer stage index to the corresponding validated purpose-bound
+`StartupWelcome` value before calling the renderer. The renderer
+receives that validated value, current capabilities, and physical width; it
+never interprets a raw index.
+The driver remains stage-unaware and owns only the index cadence, geometry,
+terminal controls, cleanup, and restoration.
+
+The stages are cumulative: `STORY` establishes the title identity, `WRITING`
+adds the writing identity, `AGENTS` reveals the full team/wordmark identity,
+and `HANDOFF` adds the completed shared-story orientation and says that Codex +
+Antigravity access checking follows. `HANDOFF` is a handoff marker, not an
+authentication-success state. These meanings remain stable across wide,
+compact, narrow, plain, and ANSI projections; each responsive tier uses its
+own fixed bounded copy.
 
 The real stream terminal uses four fixed semantic welcome frames with a
 physical-width projection. At 48 columns and wider, the frames progressively

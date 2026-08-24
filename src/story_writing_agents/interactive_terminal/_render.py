@@ -25,6 +25,8 @@ from ._model import (
     RenderedInputFrame,
     Section,
     SemanticRole,
+    StartupWelcome,
+    StartupWelcomeStage,
     SuggestionPalette,
     TerminalCapabilities,
     ViewState,
@@ -108,16 +110,14 @@ def render_advisory_progress_frame(frame: int) -> str:
 
 
 def render_startup_welcome_frame(
-    frame: int,
+    welcome: StartupWelcome,
     capabilities: TerminalCapabilities,
     physical_width: int,
 ) -> RenderedFrame:
     """Render one fixed, prefix-free startup frame for a physical viewport."""
 
-    if type(frame) is not int:
-        raise TypeError("frame must be an integer")
-    if frame < 0 or frame >= 4:
-        raise ValueError("frame must identify one startup welcome frame")
+    if type(welcome) is not StartupWelcome:
+        raise TypeError("welcome must be a StartupWelcome")
     if type(capabilities) is not TerminalCapabilities:
         raise TypeError("capabilities must be TerminalCapabilities")
     if type(physical_width) is not int:
@@ -126,11 +126,11 @@ def render_startup_welcome_frame(
         raise ValueError("physical_width must be positive")
 
     if physical_width >= 48:
-        lines = _wide_startup_lines(frame)
+        lines = _wide_startup_lines(welcome.stage)
     elif physical_width >= 32:
-        lines = _compact_startup_lines(frame)
+        lines = _compact_startup_lines(welcome.stage)
     else:
-        lines = _narrow_startup_lines(frame)
+        lines = _narrow_startup_lines(welcome.stage)
 
     line_widths = tuple(_startup_line_width(line) for line in lines)
     if physical_width >= 20:
@@ -152,14 +152,14 @@ def render_startup_welcome_frame(
     return RenderedFrame(text, capabilities.width, len(fitted_lines))
 
 
-def _wide_startup_lines(frame: int) -> tuple[_StartupLine, ...]:
+def _wide_startup_lines(stage: StartupWelcomeStage) -> tuple[_StartupLine, ...]:
     """Project one wide reveal while keeping the final logo at five rows."""
 
     title = _startup_title_line("   ")
     writing = _styled_startup_line("W R I T I N G", _STARTUP_IDENTITY_SGR)
-    if frame == 0:
+    if stage is StartupWelcomeStage.STORY:
         return (title,)
-    if frame == 1:
+    if stage is StartupWelcomeStage.WRITING:
         return (title, writing)
 
     logo = _startup_logo_lines()
@@ -167,18 +167,20 @@ def _wide_startup_lines(frame: int) -> tuple[_StartupLine, ...]:
         ("        ", ""),
         (_STARTUP_WIDE_IDENTITY, _STARTUP_IDENTITY_SGR),
     )
-    if frame == 2:
+    if stage is StartupWelcomeStage.AGENTS:
         return (*logo, identity)
-    return (
-        *logo,
-        identity,
-        (),
-        _plain_startup_text("Four roles. One shared story workspace."),
-        _plain_startup_text("Next: checking Codex + Antigravity access."),
-    )
+    if stage is StartupWelcomeStage.HANDOFF:
+        return (
+            *logo,
+            identity,
+            (),
+            _plain_startup_text("Four roles. One shared story workspace."),
+            _plain_startup_text("Next: checking Codex + Antigravity access."),
+        )
+    raise RuntimeError("startup welcome has an unsupported stage")
 
 
-def _compact_startup_lines(frame: int) -> tuple[_StartupLine, ...]:
+def _compact_startup_lines(stage: StartupWelcomeStage) -> tuple[_StartupLine, ...]:
     """Project one compact reveal without panel or semantic-label chrome."""
 
     title = _startup_title_line(" ")
@@ -187,40 +189,44 @@ def _compact_startup_lines(frame: int) -> tuple[_StartupLine, ...]:
         _STARTUP_WIDE_IDENTITY,
         _STARTUP_IDENTITY_SGR,
     )
-    if frame == 0:
+    if stage is StartupWelcomeStage.STORY:
         return (title,)
-    if frame == 1:
+    if stage is StartupWelcomeStage.WRITING:
         return (title, writing)
-    if frame == 2:
+    if stage is StartupWelcomeStage.AGENTS:
         return (title, identity)
-    return (
-        title,
-        identity,
-        (),
-        _plain_startup_text("Four roles. One shared story."),
-        _plain_startup_text("Next: Codex + Antigravity."),
-    )
+    if stage is StartupWelcomeStage.HANDOFF:
+        return (
+            title,
+            identity,
+            (),
+            _plain_startup_text("Four roles. One shared story."),
+            _plain_startup_text("Next: Codex + Antigravity."),
+        )
+    raise RuntimeError("startup welcome has an unsupported stage")
 
 
-def _narrow_startup_lines(frame: int) -> tuple[_StartupLine, ...]:
+def _narrow_startup_lines(stage: StartupWelcomeStage) -> tuple[_StartupLine, ...]:
     """Project one shortest safe reveal for narrow and tiny viewports."""
 
     title = _startup_title_line("")
     writing = _styled_startup_line("WRITING", _STARTUP_IDENTITY_SGR)
     identity = _styled_startup_line("WRITING AGENTS", _STARTUP_IDENTITY_SGR)
-    if frame == 0:
+    if stage is StartupWelcomeStage.STORY:
         return (title,)
-    if frame == 1:
+    if stage is StartupWelcomeStage.WRITING:
         return (title, writing)
-    if frame == 2:
+    if stage is StartupWelcomeStage.AGENTS:
         return (title, identity)
-    return (
-        title,
-        identity,
-        _plain_startup_text("Four roles."),
-        _plain_startup_text("One shared story."),
-        _plain_startup_text("Next: access check."),
-    )
+    if stage is StartupWelcomeStage.HANDOFF:
+        return (
+            title,
+            identity,
+            _plain_startup_text("Four roles."),
+            _plain_startup_text("One shared story."),
+            _plain_startup_text("Next: access check."),
+        )
+    raise RuntimeError("startup welcome has an unsupported stage")
 
 
 def _startup_logo_lines() -> tuple[_StartupLine, ...]:

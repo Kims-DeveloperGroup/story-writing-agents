@@ -111,12 +111,15 @@ capability-gated, not a general animation mechanism. Rendering outside the
 viewer must not assume that earlier terminal rows can be revisited after an
 interaction is committed.
 
-## Closed semantic vocabulary
+## Closed general semantic vocabulary
 
-These are the only semantic view components. #82 implements their immutable,
-package-private models and deterministic rendering. Delivery slices may compose
-them into public views but must not introduce an additional component kind
-without first revising this contract.
+These are the only general-purpose semantic view components. #82 implements
+their immutable, package-private models and deterministic rendering. Delivery
+slices may compose them into public views but must not introduce another member
+of the general `Component` union without first revising this contract. A
+purpose-bound design component with its own fixed projection and lifecycle is
+documented separately below; it is not a general component kind or a reason to
+make the union nestable.
 
 | Component | Contract |
 | --- | --- |
@@ -147,6 +150,40 @@ a `Panel` appears between its splitters without gaining another frame.
 Semantic models contain trusted roles and untrusted text, never ANSI, cursor
 sequences, padding calculated for a specific width, callbacks, streams,
 runtime services, or storage handles.
+
+### Purpose-bound `StartupWelcome`
+
+`StartupWelcome` is the private, frozen/slotted semantic value for the startup
+ceremony. It carries exactly one validated `StartupWelcomeStage` value and no
+other state: no width, color choice, ANSI sequence, glyph, rendered copy,
+callback, stream, provider, authentication result, or terminal lifecycle
+fact. Its four cumulative stages are fixed:
+
+| Stage | Meaning |
+| --- | --- |
+| `STORY` | The title identity is opening; projections show the `STORY` identity. |
+| `WRITING` | The writing identity is being revealed; projections add `WRITING`. |
+| `AGENTS` | The full team/wordmark identity is present, including `WRITING AGENTS`. |
+| `HANDOFF` | The completed identity is oriented for the shared story workspace and says that Codex + Antigravity access checking is next. This is a handoff to access checking, never authentication success. |
+
+`_core` owns the canonical immutable sequence in this order and is the sole
+adapter from the driver's stage indices to validated `StartupWelcome` values.
+`_render` owns the dedicated wide/compact/narrow projections, fixed glyphs,
+bounded tier-specific copy, and five-letter foreground decoration. The
+projections preserve each stage's meaning across physical widths and preserve
+the selected tier's fixed content across plain/ANSI output; color is redundant
+decoration, never the only status signal. `_driver` owns
+only the index-based cadence, physical-width observation, right-margin safety,
+transient row cleanup, input discard, and terminal restoration, so it remains
+stage-unaware.
+
+`StartupWelcome` is intentionally outside the general `Component` union,
+generic component renderers, composition/input unions, `InteractiveSemanticOutput`,
+the model `__all__`, and public facades. It is not nestable, configurable, or a
+general banner/theme API. `InteractiveStartupPresentation` is the sole
+purpose-bound lifecycle adapter: capable streams animate the four stages, while
+reduced-motion and incapable/static paths select the final stage under their
+documented safety rules.
 
 ## State and focus model
 
@@ -1415,7 +1452,7 @@ The current 56-unit inventory and 216 edges remain canonical in the module index
 | Artifact-reference activation | Private marker projection plus existing palette/picker/viewer controls | Provider-span-only `$` completion, direct `$${path}` viewer, `$$` picker/viewer, exact origin restoration, multiple ordered indicators, fixed content-free errors, and fallback second confirmation | #164 (implemented) |
 | Live omitted-resume choices | `SuggestionPalette`, `Picker`, `Prompt`, `Field` | Exact capable command only; controller-owned ordered rows/highlight/fresh validation; Up/Down preview; one-Enter explicit commit; Escape dismissal; Tab no-op; submitted omitted command uses a live capable or numbered fallback picker only after a successful fresh read returns eligible rows; empty/error short-circuit | #142 (implemented) |
 | Settings field and action navigation | `Panel`, `Prompt`, `Picker`, `Field`, `Notice` | Single focus; nested agent/provider and value pickers; transient text/numeric editors; explicit Save/Cancel; no write before guarded Save; universal capable cleanup and honest fallback visibility | #93, #106, #115, and #142 (implemented) |
-| Authentication and startup gate | `Picker`, `Choice`, `Notice` | Fresh probes; native-login handoff; initial/effective-route loops; absent-only default; `/auth`; settings assignment/Save; capable cleanup and no-delay static fallback | #209 (implemented) |
+| Authentication and startup gate | Private `StartupWelcome`, `Picker`, `Choice`, `Notice` | Four stage-only startup values and dedicated projection; fresh probes; native-login handoff; initial/effective-route loops; absent-only default; `/auth`; settings assignment/Save; capable cleanup and no-delay static fallback | #209, #241 (implemented) |
 
 Contextual non-main-prompt suggestions from completed issue #73 use the same
 unified driver without moving parser, runtime, or storage authority into the
@@ -1490,7 +1527,7 @@ privacy, and the bounded/static startup presentation matrix.
 | --- | --- |
 | Capability profiles | Representative plain, fixed-ANSI, `NO_COLOR`, narrow, non-TTY, `TERM=dumb`, missing/uncertain and independent input/output capability combinations, 80-column fallback, and 120-column cap cases. |
 | Rendering safety | Hostile ESC/OSC/control/bidi-format content is visibly sanitized before ANSI; local resets prevent bleed; removing decorative SGR exactly recovers the plain structure; ANSI is zero-width; wide/combining content and cursor positions use physical columns. |
-| Semantic output | Every view group uses only the closed vocabulary; status remains understandable without color; one semantic record uses one callback write unless an explicit live-control exception is tested. |
+| Semantic output | Every general view group uses only the closed vocabulary; documented purpose-bound components such as `StartupWelcome` and the ranged viewer retain their dedicated projections and lifecycles; status remains understandable without color; one semantic record uses one callback write unless an explicit live-control exception is tested. |
 | Panel framing | Every semantic `Panel` entry path uses the ASCII top-title and bottom splitters in plain, ANSI, and `NO_COLOR` output; wide, narrow, wrapped-title/state, and physical-cell widths preserve content and omit side borders; non-Panel components remain unframed; one Panel remains one callback write. |
 | Agent reply presentation | Complete strict JSON object/array formatting only; two-space indentation; preserved key order and Unicode; unchanged fallback for malformed, embedded-prose, scalar, duplicate-key, non-finite, or unserializable content; direct/retrieval/transcript/history presentation only; stored/provider bytes unchanged; bold terminal-default `AGENT` styling with no background detection. |
 | State transitions | Pure tests cover idle/focused/open/highlighted/selected/disabled/loading/empty/error/cancelled/completed states and invalid or boundary transitions. |

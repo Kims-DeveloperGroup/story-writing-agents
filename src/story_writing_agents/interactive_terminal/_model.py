@@ -38,6 +38,15 @@ class ViewState(StrEnum):
     COMPLETED = "completed"
 
 
+class StartupWelcomeStage(StrEnum):
+    """Identify one cumulative meaning in the fixed startup welcome."""
+
+    STORY = "story"
+    WRITING = "writing"
+    AGENTS = "agents"
+    HANDOFF = "handoff"
+
+
 class CapabilityProfile(StrEnum):
     """Observable terminal rendering and input capability profile."""
 
@@ -437,6 +446,19 @@ class ControlOutcome:
                 raise TypeError("commit outcomes require text")
         elif self.text is not None:
             raise ValueError(f"{self.kind.value} outcomes do not carry text")
+
+
+@dataclass(frozen=True, slots=True)
+class StartupWelcome:
+    """Select one stage of the purpose-bound startup welcome component."""
+
+    stage: StartupWelcomeStage
+
+    def __post_init__(self) -> None:
+        """Require one exact semantic startup stage."""
+
+        if not isinstance(self.stage, StartupWelcomeStage):
+            raise TypeError("stage must be a StartupWelcomeStage")
 
 
 @dataclass(frozen=True, slots=True)

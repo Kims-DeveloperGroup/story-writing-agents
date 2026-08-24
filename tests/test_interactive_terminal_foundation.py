@@ -13,7 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from dataclasses import FrozenInstanceError, fields
+from dataclasses import FrozenInstanceError, fields, is_dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import get_args
@@ -50,6 +50,9 @@ from story_writing_agents.interactive_terminal._controls import (
     transition_main_input,
     transition_prompt_input,
 )
+from story_writing_agents.interactive_terminal._core import (
+    _STARTUP_WELCOME_SEQUENCE,
+)
 from story_writing_agents.interactive_terminal._driver import (
     AdvisoryProgressError,
     RawTerminalDriver,
@@ -78,6 +81,8 @@ from story_writing_agents.interactive_terminal._model import (
     RenderedInputFrame,
     Section,
     SemanticRole,
+    StartupWelcome,
+    StartupWelcomeStage,
     SuggestionPalette,
     TerminalCapabilities,
     ViewState,
@@ -1962,14 +1967,16 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
 class StartupPresentationFoundationTests(unittest.TestCase):
     """Lock welcome/auth presentation timing, profiles, and restoration."""
 
-    WIDE_FINAL = (
+    WIDE_AGENTS = (
         "  ____     _____     ___     ____    __   __\n"
         " / ___|   |_   _|   / _ \\   |  _ \\   \\ \\ / /\n"
         " \\___ \\     | |    | | | |  | |_) |   \\ V /\n"
         "  ___) |    | |    | |_| |  |  _ <     | |\n"
         " |____/     |_|     \\___/   |_| \\_\\    |_|\n"
-        "        W R I T I N G   A G E N T S\n"
-        "\n"
+        "        W R I T I N G   A G E N T S"
+    )
+    WIDE_FINAL = (
+        WIDE_AGENTS + "\n\n"
         "Four roles. One shared story workspace.\n"
         "Next: checking Codex + Antigravity access."
     )
@@ -1987,6 +1994,37 @@ class StartupPresentationFoundationTests(unittest.TestCase):
         "[identity]",
         "[completed]",
     )
+    PLAIN_STAGE_SNAPSHOTS = {
+        48: (
+            "S   T   O   R   Y",
+            "S   T   O   R   Y\nW R I T I N G",
+            WIDE_AGENTS,
+            WIDE_FINAL,
+        ),
+        32: (
+            "S T O R Y",
+            "S T O R Y\nW R I T I N G",
+            "S T O R Y\nW R I T I N G   A G E N T S",
+            (
+                "S T O R Y\n"
+                "W R I T I N G   A G E N T S\n\n"
+                "Four roles. One shared story.\n"
+                "Next: Codex + Antigravity."
+            ),
+        ),
+        20: (
+            "STORY",
+            "STORY\nWRITING",
+            "STORY\nWRITING AGENTS",
+            (
+                "STORY\n"
+                "WRITING AGENTS\n"
+                "Four roles.\n"
+                "One shared story.\n"
+                "Next: access check."
+            ),
+        ),
+    }
 
     @staticmethod
     def render_startup_frame(
@@ -1997,7 +2035,7 @@ class StartupPresentationFoundationTests(unittest.TestCase):
         """Render one production startup frame for visual contract tests."""
 
         return render_startup_welcome_frame(
-            index,
+            _STARTUP_WELCOME_SEQUENCE[index],
             capabilities,
             physical_width,
         )
@@ -2060,8 +2098,116 @@ class StartupPresentationFoundationTests(unittest.TestCase):
             1,
         )
 
-    def test_wide_final_snapshot_is_prefix_free_legible_and_nine_rows(self) -> None:
-        """Lock the exact completed logo and its explicit non-color meaning."""
+    def test_startup_welcome_model_is_private_closed_and_canonical(self) -> None:
+        """Keep the purpose-bound stage model exact and outside Components."""
+
+        stages = (
+            StartupWelcomeStage.STORY,
+            StartupWelcomeStage.WRITING,
+            StartupWelcomeStage.AGENTS,
+            StartupWelcomeStage.HANDOFF,
+        )
+        self.assertEqual(
+            tuple(StartupWelcomeStage.__members__),
+            ("STORY", "WRITING", "AGENTS", "HANDOFF"),
+        )
+        self.assertEqual(
+            tuple(stage.value for stage in StartupWelcomeStage),
+            ("story", "writing", "agents", "handoff"),
+        )
+        self.assertEqual(tuple(StartupWelcomeStage), stages)
+
+        self.assertIs(type(_STARTUP_WELCOME_SEQUENCE), tuple)
+        self.assertEqual(len(_STARTUP_WELCOME_SEQUENCE), 4)
+        self.assertEqual(
+            _STARTUP_WELCOME_SEQUENCE,
+            tuple(StartupWelcome(stage) for stage in stages),
+        )
+        self.assertEqual(
+            tuple(welcome.stage for welcome in _STARTUP_WELCOME_SEQUENCE),
+            stages,
+        )
+
+        welcome = StartupWelcome(StartupWelcomeStage.STORY)
+        self.assertTrue(is_dataclass(StartupWelcome))
+        self.assertEqual(
+            tuple(field.name for field in fields(StartupWelcome)), ("stage",)
+        )
+        self.assertEqual(StartupWelcome.__slots__, ("stage",))
+        self.assertFalse(hasattr(welcome, "__dict__"))
+        with self.assertRaises(FrozenInstanceError):
+            welcome.stage = StartupWelcomeStage.HANDOFF
+
+        for invalid_stage in (
+            "story",
+            0,
+            None,
+            ViewState.IDLE,
+            object(),
+        ):
+            with self.subTest(invalid_stage=invalid_stage):
+                with self.assertRaisesRegex(
+                    TypeError,
+                    r"^stage must be a StartupWelcomeStage$",
+                ):
+                    StartupWelcome(invalid_stage)  # type: ignore[arg-type]
+
+        component_types = get_args(_model.Component)
+        self.assertNotIn(StartupWelcome, component_types)
+        self.assertNotIn(StartupWelcomeStage, component_types)
+        plain_capabilities = capability(CapabilityProfile.LINE)
+        for generic_renderer in (
+            lambda: render_component(welcome, plain_capabilities),
+            lambda: render_plain(welcome),
+        ):
+            with self.subTest(renderer=generic_renderer):
+                with self.assertRaisesRegex(
+                    TypeError,
+                    r"^component is not part of the closed semantic vocabulary$",
+                ):
+                    generic_renderer()
+
+        for name in ("StartupWelcomeStage", "StartupWelcome"):
+            with self.subTest(private_name=name):
+                self.assertNotIn(name, _model.__all__)
+                self.assertNotIn(name, terminal_facade.__all__)
+                self.assertNotIn(name, story_writing_agents.__all__)
+                self.assertFalse(hasattr(terminal_facade, name))
+                self.assertFalse(hasattr(story_writing_agents, name))
+
+        for raw_welcome in (0, 1, 2, 3, StartupWelcomeStage.STORY, "story", None):
+            with self.subTest(raw_welcome=raw_welcome):
+                with self.assertRaisesRegex(
+                    TypeError,
+                    r"^welcome must be a StartupWelcome$",
+                ):
+                    render_startup_welcome_frame(
+                        raw_welcome,  # type: ignore[arg-type]
+                        plain_capabilities,
+                        80,
+                    )
+
+    def test_plain_stage_snapshots_are_exact_prefix_free_and_legible(self) -> None:
+        """Lock every cumulative meaning in every responsive plain tier."""
+
+        for physical, expected_snapshots in self.PLAIN_STAGE_SNAPSHOTS.items():
+            capabilities = capability(CapabilityProfile.LINE, width=physical)
+            actual_snapshots: list[str] = []
+            for index, welcome in enumerate(_STARTUP_WELCOME_SEQUENCE):
+                with self.subTest(physical=physical, stage=welcome.stage.value):
+                    frame = self.render_startup_frame(
+                        index,
+                        capabilities,
+                        physical,
+                    )
+                    expected = expected_snapshots[index]
+                    self.assertEqual(frame.text, expected)
+                    self.assertEqual(frame.line_count, len(expected.split("\n")))
+                    actual_snapshots.append(frame.text)
+                    for label in self.FORBIDDEN_WELCOME_CHROME:
+                        self.assertNotIn(label, frame.text)
+                    self.assertNotRegex(frame.text, r"[-=]{20,}")
+            self.assertEqual(tuple(actual_snapshots), expected_snapshots)
 
         final = self.render_startup_frame(
             3,
@@ -2078,19 +2224,6 @@ class StartupPresentationFoundationTests(unittest.TestCase):
                 for character in final.text
             )
         )
-
-        for physical in (20, 32, 48):
-            capabilities = capability(CapabilityProfile.LINE, width=physical)
-            for index in range(4):
-                with self.subTest(physical=physical, index=index):
-                    text = self.render_startup_frame(
-                        index,
-                        capabilities,
-                        physical,
-                    ).text
-                    for label in self.FORBIDDEN_WELCOME_CHROME:
-                        self.assertNotIn(label, text)
-                    self.assertNotRegex(text, r"[-=]{20,}")
 
     def test_every_frame_and_tier_uses_fixed_colors_without_text_changes(
         self,

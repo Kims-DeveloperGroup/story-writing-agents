@@ -70,6 +70,8 @@ from ._model import (
     Section,
     SemanticRole,
     SlashCommandSuggestion,
+    StartupWelcome,
+    StartupWelcomeStage,
     SuggestionPalette,
     TerminalCapabilities,
     ViewState,
@@ -475,6 +477,12 @@ _ARTIFACT_REFERENCE_GUIDANCE = (
     "Artifact references require an attached session and focused conversation. "
     "In provider-bound prompts, $ chooses a whole-file reference; $$ then "
     "Enter/Tab opens ranged selection."
+)
+_STARTUP_WELCOME_SEQUENCE = (
+    StartupWelcome(StartupWelcomeStage.STORY),
+    StartupWelcome(StartupWelcomeStage.WRITING),
+    StartupWelcome(StartupWelcomeStage.AGENTS),
+    StartupWelcome(StartupWelcomeStage.HANDOFF),
 )
 
 
@@ -1322,7 +1330,7 @@ class InteractiveTerminal:
 
         capabilities = self._capability_provider()
         frame = render_startup_welcome_frame(
-            3,
+            _STARTUP_WELCOME_SEQUENCE[-1],
             capabilities,
             capabilities.width,
         )
@@ -2305,7 +2313,7 @@ def build_stream_terminal(
     terminal._prompt_read = read_prompt
     terminal._startup_welcome = lambda sleeper: driver.run_startup_welcome(
         lambda index, current, physical_width: render_startup_welcome_frame(
-            index,
+            _STARTUP_WELCOME_SEQUENCE[index],
             current,
             physical_width,
         ),
