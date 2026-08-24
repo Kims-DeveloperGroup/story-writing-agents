@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 56.
+Importable production units indexed: 57.
 
-Direct internal dependency edges indexed: 216.
+Direct internal dependency edges indexed: 218.
 
 ## Current Dependency Direction
 
@@ -31,6 +31,7 @@ __main__ -> cli -> interactive_controller -> interactive_controller._core
                  -> interactive_auth -> interactive_terminal/provider_auth
                  -> interactive_settings -> agents/config/errors/workspace
                  -> provider_auth -> (standard library only)
+                 -> provider_catalog -> (standard library only)
                  -> run_inputs -> errors
                  -> debug_log -> agents/workspace
                  -> orchestrator -> conversation_retrieval -> agents/conversation_search
@@ -59,7 +60,7 @@ interactive_controller._core -> interactive_controller._session_policy
                              -> conversation_retrieval/conversation_search
                              -> conversations/errors/interactive_commands
                              -> interactive_auth/interactive_settings/interactive_terminal
-                             -> models/orchestrator/provider_auth/run_inputs
+                             -> models/orchestrator/provider_auth/provider_catalog/run_inputs
                              -> session_lifecycle/workspace/writing_artifacts
 interactive_controller._session_policy -> errors/interactive_terminal/session_lifecycle
 interactive_controller._conversation_policy -> conversation_search/conversations
@@ -105,6 +106,7 @@ story_writing_agents facade -> interactive_commands
 models -> conversations/agents/errors
 provider_adapter -> models
 provider_auth -> (standard library only)
+provider_catalog -> (standard library only)
 provider_process -> (standard library only)
 session_lifecycle -> (standard library only)
 workspace -> conversations -> agents/errors
@@ -476,6 +478,38 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/reference/backend-and-sessions.md`, and
   `docs/operations/privacy-and-provider.md`.
 
+### `story_writing_agents.provider_catalog`
+
+- **Source:** `src/story_writing_agents/provider_catalog.py`
+- **Responsibility:** Discover sanitized native-provider model and effort
+  catalogs within bounded synchronous subprocess lifecycles.
+- **Supported surface:** No package-supported API. Package-internal frozen,
+  slotted `ProviderEffort`, `ProviderModel`, `ProviderCatalog`, and
+  `ProviderCatalogDiscovery` projections; the exact `ProviderCatalogState`
+  vocabulary `ready`, `unavailable`, `timed_out`, `command_failed`,
+  `malformed`, `empty`, `oversized`, and `failed`; and
+  `ProviderCatalogService` support CLI/controller composition without entering
+  the project-root facade.
+- **Direct internal dependencies:** None.
+- **State, resources, and side effects:** Construction validates and retains
+  one existing workspace-root directory, exact Codex and Antigravity executable
+  commands, and an injectable process factory without starting a process.
+  Every explicit discovery is fresh and launches exact `codex debug models
+  --bundled` or `agy models` arguments in that workspace root with inherited
+  environment and PATH, `shell=False`, discarded stdin/stderr, and piped stdout.
+  The module alone owns the discovery child, bounded reader thread, five-second
+  deadline, one-MiB retained-byte ceiling, and terminate/wait/kill/wait plus
+  close/join cleanup. It strictly decodes and projects provider output into
+  ordered validated immutable values, then discards the raw bytes. Fixed states
+  replace command diagnostics; no output, stderr, return code, cache, retry,
+  persistence, credential, provider turn, or import-time resource crosses the
+  boundary. Python process-control exceptions are re-raised after cleanup.
+- **Primary verification/documentation:** No focused test or documentation
+  reference currently covers this new private boundary;
+  `tests/test_public_api_and_cli.py` covers the unchanged package facade and
+  `tests/test_interactive_controller.py` covers the existing consumer
+  construction boundary.
+
 ### `story_writing_agents.provider_auth`
 
 - **Source:** `src/story_writing_agents/provider_auth.py`
@@ -533,11 +567,15 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`, `config`,
   `debug_log`, `errors`, `interactive_auth`, `interactive_controller`,
   `interactive_settings`, `interactive_terminal`, `models`, `orchestrator`,
-  `provider_auth`, `run_inputs`, `session_lifecycle`, and `workspace`; imports
-  `smoke` lazily for the diagnostic command.
-- **State, resources, and side effects:** Reads terminal input and delegates
-  caller-selected draft-file reads to `run_inputs`; writes JSON, plain-text
-  interaction, or errors to standard streams; creates backends; constructs one
+  `provider_auth`, `provider_catalog`, `run_inputs`, `session_lifecycle`, and
+  `workspace`; imports `smoke` lazily for the diagnostic command.
+- **State, resources, and side effects:** Interactive construction creates one
+  command-free provider catalog service with the exact validated Antigravity
+  executable and injects it into the controller; discovery remains selection-
+  triggered and resource-owned by `provider_catalog`. Reads terminal input and
+  delegates caller-selected draft-file reads to `run_inputs`; writes JSON,
+  plain-text interaction, or errors to standard streams; creates backends;
+  constructs one
   unified stream-backed terminal through its package-internal factory after a
   stdin/stdout TTY guard; constructs the interactive controller; and runs the
   async event loop. The factory binds main and composition previews plus
@@ -627,9 +665,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   It adds the trailing optional nullable workspace `default_backend` field.
   `AgentConfig` retains its seven-field order while allowing its leading
   backend route to be null. `ConfigManager` owns both complete persisted schemas
-  plus provider-specific safe-model and fixed-effort validators. Missing legacy
-  default and agent backend keys are interpreted as null without rewriting
-  their documents. Package-internal
+  plus provider-specific safe-model validators, an additive forward-compatible
+  lowercase Codex effort-token validator, and the exact Antigravity
+  low/medium/high effort validator. Catalog membership is not a persisted-
+  schema requirement. Missing legacy default and agent backend keys are
+  interpreted as null without rewriting their documents. Package-internal
   `validate_configuration` validates both persisted documents as one complete
   candidate, `load_configuration_snapshot` reads and publishes one immutable
   pair, and `resolve_from_snapshot` applies live runtime values while resolving
@@ -1049,9 +1089,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   `write_status` or specialized dense-row call.
   The settings editor exposes the exact six-row top level Language, Persona,
   Maximum debate rounds, Providers, Save, and Cancel; Providers selects one
-  roster agent, enables Codex or Antigravity selection, and edits only the
-  active provider's model and effort vocabulary without discarding the inactive
-  provider's values. The summary projection names both providers' model/effort
+  roster agent, enables Codex or Antigravity selection, and exposes the exact
+  provider-neutral Provider, Model, and Effort fields. Model and Effort discover
+  one fresh pending-effective-provider catalog only when selected; use opaque
+  control identities; retain inherit, custom-model, and compatibility escape
+  paths; and edit only the active provider's values without discarding inactive
+  provider values or auto-persisting model defaults. Codex effort choices come
+  from the exact pending effective model, while Antigravity effort choices stay
+  globally low, medium, and high without slug inference. The summary projection
+  names both providers' model/effort
   rows, so changed-only confirmations can identify changes to either without
   changing the active backend or runtime snapshot. Editors contain no repeated
   Current/Pending context panel. Explicit Save and Cancel actions each use one
@@ -1079,11 +1125,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   `interactive_controller._runtime_policy`,
   `interactive_controller._session_policy`, `interactive_settings`,
   `interactive_terminal`, `models`, `orchestrator`, `run_inputs`,
-  `provider_auth`, `session_lifecycle`, `workspace`, and `writing_artifacts`.
+  `provider_auth`, `provider_catalog`, `session_lifecycle`, `workspace`, and
+  `writing_artifacts`.
 - **State, resources, and side effects:** Instances retain borrowed workspace,
-  CLI-context, backend, terminal, and optional authentication-coordinator
-  collaborators plus either a borrowed injected catalog or a controller-
-  constructed default filesystem catalog. It
+  CLI-context, backend, terminal, optional authentication-coordinator, and
+  provider-catalog collaborators plus either a borrowed injected conversation
+  catalog or a controller-constructed default filesystem catalog. An omitted
+  provider catalog creates a command-free workspace-bound service; selecting
+  Model or Effort invokes one fresh discovery, while `provider_catalog` alone
+  owns every resulting child, output buffer, and reader lifecycle. It
   constructs and retains one `StoryRuntime` and one
   `FilesystemConversationEventStore` bound to the resolved catalog. It shares
   that exact event-store instance with the runtime and the attachment-scoped
@@ -1133,8 +1183,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   indeterminate remediation. Auth/default effects completed during an open
   settings flow remain durable independently of its pending candidate; this
   module owns only interaction state and sequencing. `provider_auth` retains
-  subprocess ownership, while `interactive_settings`, `config`, and
-  `Workspace` retain persistence and route-resolution ownership.
+  authentication subprocess ownership, `provider_catalog` retains catalog
+  discovery subprocess/output ownership, and `interactive_settings`, `config`,
+  and `Workspace` retain persistence and route-resolution ownership.
   `AgentBackend` retains the actual access claim, manifest, and provider-thread
   coordination, while provider adapters retain binding, staging, and provider-
   native state and `provider_process` owns subprocess resources. The settings flow
@@ -1361,8 +1412,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   persistence.
 - **Supported surface:** Package-internal frozen/slotted `PersonaCatalogEntry`,
   `SettingsBaseline`, and `SettingsState`; fixed `SettingsErrorKind` and
-  redacted `SettingsError`; the exact ordered `SETTINGS_LANGUAGES`,
-  `SETTINGS_REASONING_EFFORTS`, and `SETTINGS_ANTIGRAVITY_EFFORTS`;
+  redacted `SettingsError`; the exact ordered `SETTINGS_LANGUAGES`;
   `load_settings_state`, `update_language`, `update_persona`,
   `update_max_debate_rounds`, `update_agent_backend`,
   `establish_default_backend`, `establish_settings_default_backend`,
@@ -3257,6 +3307,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   owns focus and semantic interaction only and reaches this unit directly; the
   settings unit has no controller, terminal, backend, runtime, auth, or parser
   edge.
+- `provider_catalog` is the sole model/effort discovery subprocess boundary: it
+  owns exact native command launch, the bounded stdout reader and retained-byte
+  ceiling, deadline and child cleanup, strict provider parsing, and sanitized
+  immutable projections. `cli` resolves executable composition and
+  `interactive_controller._core` requests fresh discovery only for selected
+  settings fields; neither retains raw output or owns discovery resources.
 - `provider_auth` is the sole authentication subprocess boundary: it probes
   only the exact native commands at the resolved workspace root, gives login
   the inherited real terminal, reaps its children, and exposes only immutable
