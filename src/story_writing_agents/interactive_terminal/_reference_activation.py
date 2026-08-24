@@ -14,6 +14,7 @@ from ..writing_artifacts import (
 from ._model import (
     ARTIFACT_REFERENCE_POSITION_PREFIX,
     EMPTY_ARTIFACT_REFERENCE_POSITION_PREFIX,
+    RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX,
     CommandCompletionCandidate,
     CommandCompletionProjection,
     LineInputState,
@@ -22,9 +23,7 @@ from ._model import (
 )
 
 
-_REFERENCE_FRAGMENT_CHARACTERS = frozenset(
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./-{}"
-)
+_REFERENCE_FRAGMENT_CHARACTERS = frozenset("_./-{}")
 
 
 class ReferenceActivationKind(StrEnum):
@@ -148,7 +147,28 @@ class ReferenceInputProjection:
             )
             and not self.completion.candidates
         )
-        if outcome_count != 1 and not deferred_empty_preview:
+        ranged_picker_preview = (
+            outcome_count == 2
+            and self.completion is not None
+            and self.request is not None
+            and self.failure is None
+            and self.request.kind is ReferenceActivationKind.PICK
+            and self.completion.position.startswith(
+                RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX
+            )
+            and (self.completion.start, self.completion.end)
+            == (self.request.start, self.request.end)
+            and tuple(
+                candidate.replacement
+                for candidate in self.completion.candidates
+            )
+            == self.request.paths
+        )
+        if (
+            outcome_count != 1
+            and not deferred_empty_preview
+            and not ranged_picker_preview
+        ):
             raise ValueError("a reference projection requires exactly one outcome")
 
 
@@ -204,13 +224,23 @@ def project_reference_input(
                 return ReferenceInputProjection(
                     failure=ReferenceInputFailureKind.EMPTY_SOURCES
                 )
+            position = f"{RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX}{start}"
             return ReferenceInputProjection(
+                completion=CommandCompletionProjection(
+                    position,
+                    start,
+                    end,
+                    tuple(
+                        CommandCompletionCandidate(position, path)
+                        for path in canonical_paths
+                    ),
+                ),
                 request=ReferenceActivationRequest(
                     ReferenceActivationKind.PICK,
                     start,
                     end,
                     canonical_paths,
-                )
+                ),
             )
         path = _direct_view_path(expression)
         if path is None:
@@ -391,8 +421,6 @@ def _active_marker(
     search = cursor - 1
     while search >= scope.start:
         character = buffer[search]
-        if character in " \t\r\n":
-            return None
         if character == "$" and not _dollar_is_escaped(buffer, search):
             start = search
             if search > scope.start and buffer[search - 1] == "$" and not _dollar_is_escaped(
@@ -417,7 +445,11 @@ def _marker_end(buffer: str, start: int, scope_end: int) -> int:
     end = start + 1
     if end < scope_end and buffer[end] == "$":
         end += 1
-    while end < scope_end and buffer[end] in _REFERENCE_FRAGMENT_CHARACTERS:
+    while end < scope_end and (
+        buffer[end] in _REFERENCE_FRAGMENT_CHARACTERS
+        or buffer[end].isalnum()
+        or f"a{buffer[end]}".isidentifier()
+    ):
         end += 1
     return end
 

@@ -23,6 +23,7 @@ from story_writing_agents.interactive_terminal._controls import (
     project_main_choice_palette,
     project_picker_viewport,
     project_main_suggestion_palette,
+    ranged_artifact_picker_selection,
     transition_line_input,
     transition_main_command_input,
     transition_picker,
@@ -38,6 +39,7 @@ from story_writing_agents.interactive_terminal._reference_activation import (
     ReferenceInputScope,
 )
 from story_writing_agents.interactive_terminal._model import (
+    RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX,
     CapabilityProfile,
     Choice,
     CommandCompletionCandidate,
@@ -503,11 +505,165 @@ class CompletionControlTests(unittest.TestCase):
                 ),
                 empty_text=(
                     "No writing artifacts. Add a supported canonical core "
-                    "document or part-scoped Markdown manuscript. Consensus "
-                    "can also publish one."
+                    "document or Markdown file with a lowercase .md suffix "
+                    "under manuscript/. Consensus can also publish one."
                 ),
             ),
         )
+
+        ranged_position = f"{RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX}0"
+        ranged_paths = (
+            "manuscript/older drafts/{世界$ 章#1.md",
+            "manuscript/root.md",
+        )
+        ranged_candidates = tuple(
+            CommandCompletionCandidate(ranged_position, path)
+            for path in ranged_paths
+        )
+        ranged_state = MainCommandControlState(
+            MainInputControlState(LineInputState("$$", 2), overlay_open=True),
+            MainCommandPaletteState(
+                CommandCompletionProjection(
+                    ranged_position,
+                    0,
+                    2,
+                    ranged_candidates,
+                ),
+                ranged_candidates[0],
+            ),
+        )
+        self.assertEqual(
+            project_main_suggestion_palette(ranged_state),
+            SuggestionPalette(
+                "$$",
+                tuple(
+                    Choice(f"{ranged_position}:{path}", path)
+                    for path in ranged_paths
+                ),
+                highlighted_id=f"{ranged_position}:{ranged_paths[0]}",
+                title="Writing artifact selection",
+                instruction="Up/Down selects; Enter/Tab opens the ranged viewer.",
+                empty_text=(
+                    "No matching writing artifacts. Change the path fragment."
+                ),
+            ),
+        )
+
+    def test_ranged_picker_opens_on_second_dollar_navigates_and_reopens(
+        self,
+    ) -> None:
+        paths = (
+            "manuscript/older drafts/{世界$ 章#1.md",
+            "manuscript/root.md",
+        )
+        projection_provider = _core._reference_projection_provider(
+            lambda buffer, _cursor: ReferenceInputScope(0, len(buffer)),
+            lambda: paths,
+        )
+
+        def completion_provider(
+            buffer: str,
+            cursor: int,
+        ) -> CommandCompletionProjection | None:
+            projected = projection_provider(buffer, cursor)
+            return None if projected is None else projected.completion
+
+        state = MainCommandControlState()
+        for character in "$$":
+            state, outcome = transition_main_command_input(
+                state,
+                KeyEvent(KeyKind.TEXT, text=character),
+                MainInputHistoryState(),
+                completion_provider,
+            )
+            self.assertIsNone(outcome)
+        assert state.palette is not None
+        self.assertEqual(state.main_input.line_state, LineInputState("$$", 2))
+        self.assertTrue(
+            state.palette.projection.position.startswith(
+                RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX
+            )
+        )
+        self.assertEqual(state.palette.highlighted.replacement, paths[0])
+
+        moved, outcome = transition_main_command_input(
+            state,
+            KeyEvent(KeyKind.DOWN),
+            MainInputHistoryState(),
+            completion_provider,
+        )
+        self.assertIsNone(outcome)
+        assert moved.palette is not None
+        self.assertEqual(moved.palette.highlighted.replacement, paths[1])
+        projected = projection_provider("$$", 2)
+        assert projected is not None and projected.completion is not None
+        self.assertEqual(
+            ranged_artifact_picker_selection(moved, projected.completion),
+            (True, paths[1]),
+        )
+        for key in (KeyKind.ENTER, KeyKind.TAB):
+            with self.subTest(key=key):
+                unchanged, outcome = transition_main_command_input(
+                    moved,
+                    KeyEvent(key),
+                    MainInputHistoryState(),
+                    completion_provider,
+                )
+                self.assertIs(unchanged, moved)
+                self.assertIsNone(outcome)
+
+        dismissed, outcome = transition_main_command_input(
+            moved,
+            KeyEvent(KeyKind.ESCAPE),
+            MainInputHistoryState(),
+            completion_provider,
+        )
+        self.assertIsNone(outcome)
+        self.assertEqual(dismissed.main_input.line_state, LineInputState("$$", 2))
+        self.assertIsNone(dismissed.palette)
+        reopened, outcome = transition_main_command_input(
+            dismissed,
+            KeyEvent(KeyKind.ENTER),
+            MainInputHistoryState(),
+            completion_provider,
+        )
+        self.assertIsNone(outcome)
+        self.assertIsNotNone(reopened.palette)
+        self.assertEqual(reopened.main_input.line_state, LineInputState("$$", 2))
+
+        direct, outcome = transition_main_command_input(
+            moved,
+            KeyEvent(KeyKind.TEXT, text="{"),
+            MainInputHistoryState(),
+            completion_provider,
+        )
+        self.assertIsNone(outcome)
+        self.assertEqual(direct.main_input.line_state, LineInputState("$${", 3))
+        self.assertIsNone(direct.palette)
+
+        for event, expected_line, keeps_ranged in (
+            (KeyEvent(KeyKind.BACKSPACE), LineInputState("$", 1), False),
+            (KeyEvent(KeyKind.LEFT), LineInputState("$$", 1), True),
+            (KeyEvent(KeyKind.TEXT, text="x"), LineInputState("$$x", 3), False),
+        ):
+            with self.subTest(invalidation=event):
+                edited, outcome = transition_main_command_input(
+                    state,
+                    event,
+                    MainInputHistoryState(),
+                    completion_provider,
+                )
+                self.assertIsNone(outcome)
+                self.assertEqual(edited.main_input.line_state, expected_line)
+                if edited.palette is not None:
+                    self.assertEqual(
+                        edited.palette.projection.position.startswith(
+                            RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX
+                        ),
+                        keeps_ranged,
+                    )
+                else:
+                    self.assertFalse(keeps_ranged)
 
     def test_dynamic_choices_replace_static_focus_and_commit_exact_identity(
         self,
@@ -966,8 +1122,8 @@ class CompletionRenderingTests(unittest.TestCase):
             highlighted_id=None,
             empty_text=(
                 "No writing artifacts. Add a supported canonical core document "
-                "or part-scoped Markdown manuscript. Consensus can also publish "
-                "one."
+                "or Markdown file with a lowercase .md suffix under manuscript/. "
+                "Consensus can also publish one."
             ),
         )
         empty_frame = render_component(
@@ -981,15 +1137,36 @@ class CompletionRenderingTests(unittest.TestCase):
                 "  [controls] Up/Down selects; Enter/Tab inserts a whole-file "
                 "reference.\n"
                 "  [empty] No writing artifacts. Add a supported canonical core "
-                "document or part-\n"
-                "  scoped Markdown manuscript. Consensus can also publish one.",
+                "document or Markd\n"
+                "  own file with a lowercase .md suffix under manuscript/. "
+                "Consensus can also pub\n"
+                "  lish one.",
                 80,
-                4,
+                5,
             ),
         )
         for line in empty_frame.text.splitlines():
             with self.subTest(rendered_line=line):
                 self.assertEqual(line, line.rstrip())
+
+        ranged_path = "manuscript/older drafts/{世界$ 章#1.md"
+        ranged = replace(
+            palette,
+            buffer="$$",
+            candidates=(Choice("ranged", ranged_path),),
+            highlighted_id="ranged",
+            instruction="Up/Down selects; Enter/Tab opens the ranged viewer.",
+        )
+        self.assertEqual(
+            render_component(ranged, capabilities(CapabilityProfile.PLAIN)),
+            RenderedFrame(
+                "Writing artifact selection [open]\n"
+                "  [controls] Up/Down selects; Enter/Tab opens the ranged viewer.\n"
+                f"  > [highlighted] {ranged_path}",
+                80,
+                3,
+            ),
+        )
 
     def test_untrusted_labels_are_sanitized_before_style_and_width(self) -> None:
         hostile = SuggestionPalette(
@@ -1113,6 +1290,17 @@ class CompletionDriverTests(unittest.TestCase):
                 (path,),
                 None,
                 ReferenceInputProjection(
+                    completion=CommandCompletionProjection(
+                        f"{RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX}0",
+                        0,
+                        2,
+                        (
+                            CommandCompletionCandidate(
+                                f"{RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX}0",
+                                path,
+                            ),
+                        ),
+                    ),
                     request=ReferenceActivationRequest(
                         ReferenceActivationKind.PICK,
                         0,
@@ -1215,34 +1403,66 @@ class CompletionDriverTests(unittest.TestCase):
     def test_reference_completion_and_nested_viewers_share_one_latch_and_history(
         self,
     ) -> None:
+        character = "core_documents/character_sheets.md"
+        outline = "core_documents/global_outline.md"
+        complex_path = "manuscript/older drafts/{世界$ 章#1.md"
+        root_path = "manuscript/root.md"
         paths = (
-            "core_documents/character_sheets.md",
-            "core_documents/global_outline.md",
+            character,
+            outline,
+            complex_path,
+            root_path,
         )
         cases = (
             (
                 "$\t\n",
-                f"${{{paths[0]}}} ",
+                f"${{{character}}} ",
                 0,
                 0,
                 (),
+                False,
             ),
             (
-                f"use $${{{paths[0]}}}\n\x1b[1;2B\n\n",
-                f"use ${{{paths[0]}}}#L1-L2",
+                f"use $${{{character}}}\n\x1b[1;2B\n\n",
+                f"use ${{{character}}}#L1-L2",
                 1,
                 1,
-                (paths[0],),
+                (character,),
+                False,
             ),
             (
-                "use $$\n\x1b[B\n\x1b[1;2B\n\n",
-                f"use ${{{paths[1]}}}#L1-L2",
+                "use $$\x1b[B\n\x1b[1;2B\n\n",
+                f"use ${{{outline}}}#L1-L2",
                 1,
                 1,
-                (paths[1],),
+                (outline,),
+                True,
+            ),
+            (
+                "use $$\t\x1b[1;2B\n\n",
+                f"use ${{{character}}}#L1-L2",
+                1,
+                1,
+                (character,),
+                True,
+            ),
+            (
+                "use $$\x1b\n\n\x1b[1;2B\n\n",
+                f"use ${{{character}}}#L1-L2",
+                1,
+                1,
+                (character,),
+                True,
             ),
         )
-        for script, expected, screen_enters, screen_exits, reads in cases:
+        for (
+            script,
+            expected,
+            screen_enters,
+            screen_exits,
+            reads,
+            uses_ranged_picker,
+        ) in cases:
             with self.subTest(expected=expected):
                 driver, _input, output, fallback, termios, os_module = make_driver(
                     script
@@ -1285,6 +1505,16 @@ class CompletionDriverTests(unittest.TestCase):
                     tuple(call.args[0] for call in text_reader.call_args_list),
                     reads,
                 )
+                if uses_ranged_picker:
+                    self.assertIn(
+                        "Up/Downselects;Enter/Tabopenstherangedviewer.",
+                        "".join(strip_decorative_sgr(rendered).split()),
+                    )
+                    for path in paths:
+                        self.assertIn(
+                            "".join(path.split()),
+                            "".join(strip_decorative_sgr(rendered).split()),
+                        )
                 failure_writer.assert_not_called()
                 fallback.assert_not_called()
                 self.assertEqual(os_module.observed_widths[:2], [8, 8])

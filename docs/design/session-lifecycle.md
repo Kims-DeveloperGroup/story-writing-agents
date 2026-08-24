@@ -140,14 +140,15 @@ cursor's text provider-bound.
 | Internal stage | User-visible meaning |
 | --- | --- |
 | Outer editing with immutable origin | The current draft, cursor, focus, and terminal mode are the restoration point. Nothing has been submitted. |
-| Filesystem-source completion | `$` shows current safe canonical paths; Enter or Tab inserts `${path}` and stays in editing. |
-| Picker/viewer | `$${path}` or `$$` opens the independent viewer; Shift+Up/Down selects lines. The outer draft is unchanged until commit. |
+| Filesystem-source completion | `$` shows current safe reference paths; Enter or Tab inserts `${path}` and stays in editing. |
+| Ranged-source selection | The second `$` immediately shows the same eligible sources before a third key or newline. Up/Down changes the highlight; Escape closes the panel while preserving `$$`. |
+| Independent viewer | Enter/Tab on the `$$` highlight, or on a complete `$${path}` marker, opens verified text. Shift+Up/Down adjusts inclusive lines while the outer draft remains unchanged. |
 | Editing with amended draft | Viewer Enter inserts `${path}#Lx-Ly`; several indicators remain ordered. A later normal submit is still required. |
 | Restored origin | Escape, Ctrl-C, EOF, handled error, or invalid/stale selection returns the exact draft/cursor with no dispatch or history append. |
 | Runtime `requested` → `captured` → `accepted` | Only after normal submission: references are parsed once, captured, independently read by every addressed provider invocation, and finally revalidated. |
 | Runtime `terminated` | Capture, drift, read-action, provider, cancellation, or acceptance failure yields no accepted reply/publication. Retry starts a new operation. |
 
-Capable picker/viewer input shares the driver's irreversible `LIVE` latch;
+Capable source-panel/viewer input shares the driver's irreversible `LIVE` latch;
 ordinary fallback shares its irreversible `FALLBACK` route and requires a
 second Enter after displaying the amended draft. Neither route creates a
 session transition. Source-list/viewer activity is not durable work history; only

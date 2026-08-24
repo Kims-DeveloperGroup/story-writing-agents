@@ -228,26 +228,39 @@ settings remain inert.
 While editing an eligible span, type `$` to open
 `Writing artifact selection [open]`. It shows
 `[controls] Up/Down selects; Enter/Tab inserts a whole-file reference.`, and
-lists current safe canonical filesystem sources in lexical order. Type a case-sensitive path fragment
-after `$` to filter the list; no match shows
+lists current safe reference sources in lexical order: the four supported core
+documents and every eligible lowercase-`.md` descendant anywhere under
+`manuscript/`, including root files, arbitrary nesting, spaces, Unicode, `{`,
+`$`, and `#`. This read boundary is broader than the part-scoped publication
+grammar. Type a case-sensitive path fragment after `$` to filter the list; no
+match shows
 `[empty] No matching writing artifacts. Change the path fragment.` Up/Down and
 Enter or Tab insert `${path}` on a capable terminal without sending the prompt.
 If no source exists, the panel says `No writing artifacts. Add a supported
-canonical core document or part-scoped Markdown manuscript. Consensus can also
-publish one.` Enter or Tab emits the established `empty_sources` error and
-restores the draft.
+canonical core document or Markdown file with a lowercase .md suffix under
+manuscript/. Consensus can also publish one.` Enter or Tab emits the established
+`empty_sources` error and restores the draft.
 
-Type `$${path}` then Enter or Tab to open that artifact directly, or `$$` then
-Enter or Tab to choose it first; Shift+Up/Down selects an inclusive range and
-Enter inserts `${path}#Lx-Ly`. Escape, Ctrl-C, EOF, or a handled read error
-restores the exact draft and cursor with no dispatch or history entry. Type
-`\$` for a literal dollar.
+Type `$$` to see ranged-source choices immediately after the second dollar,
+without Enter, Tab, or newline. Up/Down changes the highlight; Enter or Tab
+opens that source in the independent viewer. Shift+Up/Down adjusts an inclusive
+range while the viewer remains open, and Enter closes the viewer, returns to
+the same composer, and replaces only `$$` with `${path}#Lx-Ly`. Escape closes
+the source panel but preserves `$$`; a later Enter or Tab reopens it in place.
+
+For a direct source, type a complete `$${path}` marker and press Enter or Tab.
+Typing `{` immediately after `$$` changes from the source panel to literal
+direct-marker entry, so paths with spaces, Unicode, `{`, `$`, and `#` remain
+usable. Escape, Ctrl-C, EOF, or a handled read error restores the exact draft
+and cursor with no dispatch or history entry. Type `\$` for a literal dollar.
 
 Ordinary-line fallback uses numbered source choices and exact `START-END`
 viewer input, then displays the amended draft for a second Enter confirmation.
 It never submits a selection implicitly. Multiple completed indicators remain
-in order; every later agent or debate phase still performs its own enforced
-read after normal prompt submission.
+in order. An indicator contains only a path or a path with one-based inclusive
+line numbers, never the file body. Every later addressed agent or debate phase
+performs its own enforced read of the complete ordered batch after normal
+prompt submission.
 
 ## Choose the right memory operation
 

@@ -13,6 +13,8 @@ from story_writing_agents.interactive_terminal import (
     _reference_activation as activation,
 )
 from story_writing_agents.interactive_terminal._model import (
+    RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX,
+    CommandCompletionCandidate,
     CommandCompletionProjection,
     LineInputState,
     MainCommandControlState,
@@ -25,7 +27,8 @@ _PATHS = (
     "core_documents/character_sheets.md",
     "core_documents/global_outline.md",
     "core_documents/narrative_rules.md",
-    "manuscript/part-01/chapter.md",
+    "manuscript/older drafts/{世界$ 章#1.md",
+    "manuscript/root.md",
 )
 
 
@@ -195,35 +198,86 @@ class ReferenceProjectionTests(unittest.TestCase):
         )
 
     def test_picker_and_direct_view_are_explicit_and_catalog_correlated(self) -> None:
+        position = f"{RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX}4"
         pick = activation.project_reference_input(
             "use $$", 6, activation.ReferenceInputScope(0, 6), _PATHS
         )
         self.assertEqual(
             pick,
             activation.ReferenceInputProjection(
+                completion=CommandCompletionProjection(
+                    position,
+                    4,
+                    6,
+                    tuple(
+                        CommandCompletionCandidate(position, path)
+                        for path in _PATHS
+                    ),
+                ),
                 request=activation.ReferenceActivationRequest(
                     activation.ReferenceActivationKind.PICK, 4, 6, _PATHS
                 )
             ),
         )
-        expression = f"use $${{{_PATHS[1]}}}"
-        view = activation.project_reference_input(
-            expression,
-            len(expression),
-            activation.ReferenceInputScope(0, len(expression)),
+        for path in (_PATHS[1], _PATHS[3], _PATHS[4]):
+            with self.subTest(path=path):
+                expression = f"use $${{{path}}}"
+                view = activation.project_reference_input(
+                    expression,
+                    len(expression),
+                    activation.ReferenceInputScope(0, len(expression)),
+                    _PATHS,
+                )
+                self.assertEqual(
+                    view,
+                    activation.ReferenceInputProjection(
+                        request=activation.ReferenceActivationRequest(
+                            activation.ReferenceActivationKind.VIEW,
+                            4,
+                            len(expression),
+                            path=path,
+                        )
+                    ),
+                )
+
+    def test_direct_marker_construction_with_space_unicode_and_delimiters_is_exact(
+        self,
+    ) -> None:
+        path = _PATHS[3]
+        marker = f"$${{{path}}}"
+        scope = activation.ReferenceInputScope(0, len(marker))
+
+        picker = activation.project_reference_input(
+            "$$",
+            2,
+            activation.ReferenceInputScope(0, 2),
             _PATHS,
         )
+        assert picker is not None and picker.completion is not None
+        self.assertTrue(
+            picker.completion.position.startswith(
+                RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX
+            )
+        )
         self.assertEqual(
-            view,
+            activation.project_reference_input(
+                "$${",
+                3,
+                activation.ReferenceInputScope(0, 3),
+                _PATHS,
+            ),
             activation.ReferenceInputProjection(
-                request=activation.ReferenceActivationRequest(
-                    activation.ReferenceActivationKind.VIEW,
-                    4,
-                    len(expression),
-                    path=_PATHS[1],
-                )
+                failure=activation.ReferenceInputFailureKind.INVALID
             ),
         )
+        completed = activation.project_reference_input(
+            marker,
+            len(marker),
+            scope,
+            _PATHS,
+        )
+        assert completed is not None and completed.request is not None
+        self.assertEqual(completed.request.path, path)
 
     def test_completed_direct_view_excludes_every_suffix_and_later_cursor(self) -> None:
         path = _PATHS[1]
