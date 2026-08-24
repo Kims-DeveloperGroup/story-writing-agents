@@ -1856,8 +1856,7 @@ class AgentBackend:
                 "correlation": correlation,
                 "references": {
                     "type": "array",
-                    "items": references,
-                    "additionalItems": False,
+                    "items": {"anyOf": references},
                     "minItems": len(references),
                     "maxItems": len(references),
                 },
