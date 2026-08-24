@@ -95,8 +95,13 @@ Save freshly gates every distinct effective provider outside the configuration
 transaction. Any absent-default write performed during authentication is
 durable even if pending settings are cancelled.
 
-Codex reasoning accepts `minimal`, `low`, `medium`, `high`, and `xhigh`.
-Antigravity effort accepts `low`, `medium`, and `high`. See
+Persisted Codex reasoning accepts any forward-compatible lowercase token
+matching `[a-z][a-z0-9_-]{0,31}`. Interactive Effort choices come from the
+pending effective Codex model's fresh catalog, while an unreported existing
+token remains preservable as Current compatibility. Antigravity effort accepts
+only `low`, `medium`, and `high`. Catalog membership is not an additional
+precedence or persistence gate, and discovery data is never a runtime
+override. See
 [Use Antigravity agents](../../guides/antigravity.md) for mixed routing and
 provider-boundary details.
 

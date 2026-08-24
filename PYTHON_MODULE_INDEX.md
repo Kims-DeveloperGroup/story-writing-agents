@@ -504,11 +504,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   replace command diagnostics; no output, stderr, return code, cache, retry,
   persistence, credential, provider turn, or import-time resource crosses the
   boundary. Python process-control exceptions are re-raised after cleanup.
-- **Primary verification/documentation:** No focused test or documentation
-  reference currently covers this new private boundary;
-  `tests/test_public_api_and_cli.py` covers the unchanged package facade and
-  `tests/test_interactive_controller.py` covers the existing consumer
-  construction boundary.
+- **Primary verification/documentation:** `tests/test_provider_catalog.py`,
+  `tests/test_interactive_controller.py`, `tests/test_public_api_and_cli.py`,
+  `docs/design/interactive-cli-design-system.md`,
+  `docs/reference/interactive-terminal.md`,
+  `docs/operations/privacy-and-provider.md`, and
+  `docs/guides/antigravity.md`.
 
 ### `story_writing_agents.provider_auth`
 

@@ -33,8 +33,8 @@ initialized with:
 | `language` | Required string satisfying the language identifier rule. |
 | `persona` | Required safe template identifier that resolves to an existing template. |
 | `max_debate_rounds` | Optional; absent means `1`. A present value is a nonnegative integer and not a boolean. |
-| `codex_model` | Optional workspace fallback; absent or `null` means no workspace model fallback. A string must be nonempty, must not begin with `-`, and must contain no Unicode `Cc`, `Cf`, or `Cs` character. The exact string is preserved: it is not trimmed, normalized, or checked against a model catalog. |
-| `codex_reasoning_effort` | Optional workspace fallback; absent or `null` means no workspace reasoning fallback. The only string values are exactly `minimal`, `low`, `medium`, `high`, and `xhigh`. Whether `xhigh` is supported depends on the selected model/provider. |
+| `codex_model` | Optional workspace fallback; absent or `null` means no workspace model fallback. A string must be nonempty, must not begin with `-`, and must contain no Unicode `Cc`, `Cf`, or `Cs` character. The exact string is preserved without trimming or normalization. Persistence does not require catalog membership, so custom models remain supported. |
+| `codex_reasoning_effort` | Optional workspace fallback; absent or `null` means no workspace reasoning fallback. A string must match the forward-compatible token rule `[a-z][a-z0-9_-]{0,31}`. Interactive discovery can show the pending effective model's reported choices without making catalog membership a persistence rule. |
 | `antigravity_model` | Optional Antigravity workspace fallback with the same safe-text rule as `codex_model`; absent or `null` inherits the Antigravity provider default. |
 | `antigravity_effort` | Optional Antigravity workspace fallback; absent or `null` inherits the provider default. The only string values are exactly `low`, `medium`, and `high`. |
 | `default_backend` | Optional workspace provider fallback; absent or `null` falls through to Codex. A value is exactly `codex` or `antigravity`. Interactive authentication fills a missing value once and does not replace an existing value. |
@@ -122,15 +122,29 @@ Codex. Allowed backend names are exactly `codex` and `antigravity`. A legacy
 fields, or backend names are errors.
 
 The `/settings` Providers editor follows canonical roster order. It first
-selects an agent, then offers Provider, Model, and Reasoning effort. Both Codex
+selects an agent, then offers Provider, Model, and Effort. Both Codex
 and Antigravity are selectable. Provider assignment freshly checks status and,
 when needed, completes native authentication before mutating the candidate.
-Failed or cancelled authentication leaves that route unchanged. Model accepts exact safe text or blank to
-inherit the selected provider's system value. Codex reasoning offers Inherit,
-`minimal`, `low`, `medium`, `high`, and `xhigh`; Antigravity effort offers
-Inherit, `low`, `medium`, and `high`. Edits update only the selected agent's
+Failed or cancelled authentication leaves that route unchanged.
+
+Only entering Model or Effort performs one fresh bounded discovery for the
+pending effective provider; Effort also uses the pending effective model.
+Model order is Inherit, provider-order discovered models, Current custom when
+needed, and Custom model. Effort order is Inherit, exact selected-model Codex
+efforts or Antigravity's global `low`, `medium`, `high`, then Current
+compatibility when needed. OpenAI's
+[current model guidance](https://developers.openai.com/api/docs/guides/latest-model)
+is intentionally not frozen into this schema. Google's
+[Antigravity headless/CLI guide](https://antigravity.google/docs/cli/headless/)
+documents `agy models` and the `low`, `medium`, `high` effort vocabulary.
+
+Edits update only the selected agent's
 active-provider pending fields and preserve that agent's inactive-provider
-values.
+values. Editor labels remain Provider, Model, and Effort; Current/Pending
+confirmation stays provider-qualified so inactive values remain clear.
+Discovery writes no catalog data. Save persists only the selected opaque
+model/effort token or null, and the active backend keeps its snapshot until the
+next shell/backend construction.
 
 Opening `/settings` captures exact bytes for both configuration documents, a
 fully validated immutable pair, and the safe persona catalog. Save revalidates
