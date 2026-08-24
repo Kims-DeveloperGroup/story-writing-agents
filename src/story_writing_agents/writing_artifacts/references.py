@@ -68,7 +68,10 @@ class ArtifactSourceIdentity:
 
     def __post_init__(self) -> None:
         if reference_source_kind(self.path) is not self.kind:
-            raise ValueError("artifact source path and kind must be canonical")
+            raise ValueError(
+                "artifact source path and kind must identify an eligible "
+                "reference source"
+            )
         if (
             type(self.source_sha256) is not str
             or len(self.source_sha256) != 64
@@ -151,7 +154,9 @@ class ArtifactReference:
 
     def __post_init__(self) -> None:
         if reference_source_kind(self.path) is None:
-            raise ValueError("reference path is not a canonical writing artifact")
+            raise ValueError(
+                "reference path is not an eligible writing-artifact source"
+            )
         if self.line_range is not None and type(self.line_range) is not ArtifactLineRange:
             raise TypeError("line_range must be an ArtifactLineRange or None")
 

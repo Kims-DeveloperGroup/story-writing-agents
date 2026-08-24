@@ -248,7 +248,7 @@ class ArtifactReferenceDirectiveValidationTests(unittest.TestCase):
                     parse_artifact_references(_token(path))
                 self.assertEqual(
                     str(raised.exception),
-                    "reference path is not a canonical writing artifact",
+                    "reference path is not an eligible writing-artifact source",
                 )
                 self.assertNotIn(path, str(raised.exception))
 
@@ -434,7 +434,7 @@ class ArtifactReferenceValueContractTests(unittest.TestCase):
             ArtifactLineRange(3, 2)
         with self.assertRaisesRegex(
             ValueError,
-            "reference path is not a canonical writing artifact",
+            "reference path is not an eligible writing-artifact source",
         ):
             ArtifactReference("discussion_logs/private.md")
         with self.assertRaisesRegex(
@@ -559,7 +559,7 @@ class ArtifactReferenceValueContractTests(unittest.TestCase):
         self.assertIsInstance(raised.exception, ValueError)
         self.assertEqual(
             str(raised.exception),
-            "reference path is not a canonical writing artifact",
+            "reference path is not an eligible writing-artifact source",
         )
         self.assertNotIn(secret, str(raised.exception))
 

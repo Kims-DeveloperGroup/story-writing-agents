@@ -74,11 +74,11 @@ class CanonicalArtifactFilesystem:
             kind = reference_source_kind(path)
         except (TypeError, ValueError) as exc:
             raise WorkspaceSecurityError(
-                "path is not a canonical writing artifact"
+                "path is not an eligible writing-artifact source"
             ) from exc
         if kind is None:
             raise WorkspaceSecurityError(
-                "path is not a canonical writing artifact"
+                "path is not an eligible writing-artifact source"
             )
         if max_bytes is not None and (
             type(max_bytes) is not int or max_bytes <= 0
@@ -131,11 +131,11 @@ class CanonicalArtifactFilesystem:
                 kind = reference_source_kind(path)
             except (TypeError, ValueError) as exc:
                 raise WorkspaceSecurityError(
-                    "path is not a canonical writing artifact"
+                    "path is not an eligible writing-artifact source"
                 ) from exc
             if kind is None:
                 raise WorkspaceSecurityError(
-                    "path is not a canonical writing artifact"
+                    "path is not an eligible writing-artifact source"
                 )
         snapshots: list[ArtifactContentSnapshot] = []
         for path in paths:

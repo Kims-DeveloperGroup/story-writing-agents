@@ -76,7 +76,7 @@ def _artifact_reference(
         return ArtifactReference(path, line_range), end
     except (TypeError, ValueError):
         raise ArtifactReferenceDirectiveError(
-            "reference path is not a canonical writing artifact"
+            "reference path is not an eligible writing-artifact source"
         ) from None
 
 
