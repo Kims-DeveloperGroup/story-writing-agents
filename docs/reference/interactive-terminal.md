@@ -284,12 +284,14 @@ picker's cancellation, interrupt, EOF, capable cleanup, and numbered fallback
 contracts apply.
 
 Before native sign-in, one fixed sanitized loading notice is shown for at most
-0.8 seconds on the capable path and cleared. After the provider process returns,
-the driver first establishes a fresh output-line boundary, then shows one fixed
-success or recovery result for at most 0.8 seconds and clears it. Static paths
-emit each meaningful notice once with LF and no delay. Provider output, account
-facts, URLs, return codes, tokens, and credentials are never interpolated into
-these components.
+0.8 seconds on the capable path and cleared. Login completes either when the
+child exits or when fresh authenticated status causes Story to boundedly stop
+and reap that exact child. Story then resumes without extra input. The driver
+first establishes a fresh output-line boundary, then shows one fixed success or
+recovery result for at most 0.8 seconds and clears it. Static paths emit each
+meaningful notice once with LF and no delay. Provider output, account facts,
+URLs, return codes, tokens, and credentials are never interpolated into these
+components.
 
 | Enum | Exact values |
 | --- | --- |

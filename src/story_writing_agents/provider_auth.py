@@ -11,6 +11,7 @@ from pathlib import Path
 
 AUTH_PROVIDERS = ("codex", "antigravity")
 AUTH_STATUS_TIMEOUT_SECONDS = 5.0
+AUTH_LOGIN_STATUS_POLL_SECONDS = 1.0
 AUTH_PROCESS_STOP_TIMEOUT_SECONDS = 2.0
 
 
@@ -211,7 +212,7 @@ class ProviderAuthService:
         )
 
     def login(self, provider: str) -> ProviderLoginResult:
-        """Run one native login, then require a fresh authenticated probe.
+        """Run one native login until exit or fresh authentication succeeds.
 
         The login child inherits stdin, stdout, stderr, the environment, and
         the caller's process group. Python-side control exceptions are re-raised
@@ -239,7 +240,19 @@ class ProviderAuthService:
             )
 
         try:
-            returncode = process.wait()
+            while True:
+                try:
+                    returncode = process.wait(timeout=AUTH_LOGIN_STATUS_POLL_SECONDS)
+                    break
+                except subprocess.TimeoutExpired:
+                    status = self.probe(provider)
+                    if not status.authenticated:
+                        continue
+                    return ProviderLoginResult(
+                        provider=provider,
+                        returncode=_stop_process(process),
+                        status=status,
+                    )
         except Exception:
             _stop_process(process)
             return ProviderLoginResult(
@@ -272,12 +285,13 @@ def _require_executable(executable: str) -> None:
         raise ValueError("provider executable must be a non-empty command path")
 
 
-def _stop_process(process: subprocess.Popen[bytes]) -> None:
-    """Best-effort terminate, kill, and reap one exact child within bounds."""
+def _stop_process(process: subprocess.Popen[bytes]) -> int | None:
+    """Boundedly stop one exact child and return its code when observable."""
 
     try:
-        if process.poll() is not None:
-            return
+        returncode = process.poll()
+        if returncode is not None:
+            return returncode
     except BaseException:
         pass
 
@@ -286,16 +300,16 @@ def _stop_process(process: subprocess.Popen[bytes]) -> None:
     except BaseException:
         pass
     try:
-        process.wait(timeout=AUTH_PROCESS_STOP_TIMEOUT_SECONDS)
-        return
+        return process.wait(timeout=AUTH_PROCESS_STOP_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         pass
     except BaseException:
         pass
 
     try:
-        if process.poll() is not None:
-            return
+        returncode = process.poll()
+        if returncode is not None:
+            return returncode
     except BaseException:
         pass
     try:
@@ -303,6 +317,6 @@ def _stop_process(process: subprocess.Popen[bytes]) -> None:
     except BaseException:
         pass
     try:
-        process.wait(timeout=AUTH_PROCESS_STOP_TIMEOUT_SECONDS)
+        return process.wait(timeout=AUTH_PROCESS_STOP_TIMEOUT_SECONDS)
     except BaseException:
-        pass
+        return None

@@ -35,9 +35,25 @@ The native sign-in inherits stdin, stdout, stderr, and the process environment
 and runs at the resolved story workspace root. It may open a
 provider-controlled browser. The runtime does not synthesize or inspect a URL,
 read provider output or account facts, capture tokens or credentials, or manage
-Antigravity's native credential persistence. After the native process ends,
-only a fresh `models` probe from that resolved executable can authorize
-Antigravity; the sign-in exit code and prior status are not authorization.
+Antigravity's native credential persistence. While native sign-in remains
+open, Story runs individually bounded `models` probes with null input and
+output. Those probes cannot consume terminal input or capture provider output.
+Only a fresh authenticated result from that resolved executable can authorize
+Antigravity; an authorization code, sign-in exit code, or prior status cannot.
+
+On a local machine, Antigravity uses a saved keyring session when available and
+otherwise opens the default browser; that normal flow does not require Story to
+show or accept an authorization code. Over remote SSH, Antigravity itself
+prints a URL and requires its provider-controlled copy/paste flow, including
+one authorization-code paste back into its prompt. Story cannot remove that
+remote provider requirement, but it never asks for the code again. Once the
+silent probe reports authenticated, Story boundedly stops and reaps that exact
+bare-`agy` login child if it is still interactive and automatically resumes the
+startup, `/auth`, or Settings flow. Do not enter `/exit`, Ctrl-C, EOF, another
+Enter, or a second code to return to Story. If status is not authenticated,
+native interaction continues with no overall Story login deadline. See
+Antigravity's official
+[Installation & auth guide](https://antigravity.google/docs/cli/install/).
 
 Keep credentials out of story configuration, prompts, drafts, filenames, and
 logs. Provider subprocesses inherit the story process environment, so treat

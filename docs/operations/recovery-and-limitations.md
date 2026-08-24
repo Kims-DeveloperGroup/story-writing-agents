@@ -53,15 +53,19 @@ into V2. Copy editable story/configuration files only after review; keep backup.
 ## Authentication recovery
 
 Only a fresh native status probe authorizes a provider. Never infer success
-from a completed login process, a previous picker row, a configured route, or a
-provider session manifest.
+from an authorization code, completed login process, previous picker row,
+configured route, or provider session manifest. While native login remains
+open, individually bounded status probes use null input and output and cannot
+consume pasted input or capture provider output. They have no overall login
+deadline.
 
 | State or outcome | Meaning | Recovery |
 | --- | --- | --- |
 | `unavailable` | The provider executable could not be launched and its picker choice is disabled. | Install the Codex CLI or Antigravity `agy`, or correct the supported executable override or `PATH` in the environment that launches `story`, then retry startup or `/auth`. |
-| `unauthenticated` | The exact probe returned the native unauthenticated code. | Select the provider to run `codex login` or the resolved Antigravity executable with no arguments (bare `agy` by default), complete the native prompt, and wait for a fresh probe. |
+| `unauthenticated` | The exact probe returned the native unauthenticated code. | Select the provider to run `codex login` or the resolved Antigravity executable with no arguments (bare `agy` by default), then complete the provider-owned flow. A successful remote flow needs at most its one authorization-code paste; Story asks for no second paste or exit step. |
 | `indeterminate` | Launch, wait, timeout, or return status did not prove either supported state. | Check `codex login status` or `<resolved Antigravity executable> models` (`agy models` by default) outside the runtime, repair the native CLI or environment, then retry. Selection itself performs another probe and never authorizes optimistically. |
-| Login fails or returns without authentication | The following fresh probe still is not authenticated. | Read the native CLI's own terminal guidance, repair outside the runtime, and select it again. The runtime has no captured provider output or URL to recover. |
+| Native login remains open after authentication | A fresh status probe reports authenticated while the provider CLI still owns an interactive screen. | Wait for Story to boundedly stop and reap that exact login child and return automatically. Do not enter `/exit`, Ctrl-C, EOF, extra Enter, confirmation, or another authorization code. |
+| Login fails or exits without authentication | The selected-provider probes, including the fresh probe after child exit, still do not report authenticated. | Read the native CLI's own terminal guidance, repair outside the runtime, and select it again. The runtime has no captured provider output, code, or URL to recover. |
 | Startup picker Cancel | No provider was chosen. | The hard gate remains open; choose an enabled provider. Ctrl-C or EOF exits normally before context/backend/controller/session construction. |
 | `/auth` picker Cancel, interrupt, or EOF | The picker ended without a new authorization. | The shell continues, explicit routes stay unchanged, and any already persisted default remains. Run `/auth` again when ready. |
 | Ctrl-C during native login | The inherited provider process and runtime received the interrupt. | The runtime best-effort stops and reaps that child. Startup exits normally; an already running shell follows its fatal interruption cleanup. Retry after checking native state. |

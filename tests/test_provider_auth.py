@@ -13,6 +13,7 @@ from pathlib import Path
 import story_writing_agents
 from story_writing_agents import provider_auth
 from story_writing_agents.provider_auth import (
+    AUTH_LOGIN_STATUS_POLL_SECONDS,
     AUTH_PROCESS_STOP_TIMEOUT_SECONDS,
     AUTH_PROVIDERS,
     AUTH_STATUS_TIMEOUT_SECONDS,
@@ -308,8 +309,14 @@ class ProviderAuthProcessContractTests(unittest.TestCase):
                     )
         self.assertEqual(codex_probe.wait_calls, [AUTH_STATUS_TIMEOUT_SECONDS])
         self.assertEqual(antigravity_probe.wait_calls, [AUTH_STATUS_TIMEOUT_SECONDS])
-        self.assertEqual(codex_login.wait_calls, [_MISSING])
-        self.assertEqual(antigravity_login.wait_calls, [_MISSING])
+        self.assertEqual(
+            codex_login.wait_calls,
+            [AUTH_LOGIN_STATUS_POLL_SECONDS],
+        )
+        self.assertEqual(
+            antigravity_login.wait_calls,
+            [AUTH_LOGIN_STATUS_POLL_SECONDS],
+        )
 
     def test_probe_state_timeout_and_cleanup_matrix_is_bounded(self) -> None:
         scenarios = (
@@ -395,7 +402,10 @@ class ProviderAuthProcessContractTests(unittest.TestCase):
                 ).login("codex")
                 self.assertEqual(result.returncode, login_code)
                 self.assertIs(result.authenticated, authenticated)
-                self.assertEqual(login.wait_calls, [_MISSING])
+                self.assertEqual(
+                    login.wait_calls,
+                    [AUTH_LOGIN_STATUS_POLL_SECONDS],
+                )
                 self.assertEqual(probe.wait_calls, [AUTH_STATUS_TIMEOUT_SECONDS])
 
         for failure, state in (
@@ -424,7 +434,10 @@ class ProviderAuthProcessContractTests(unittest.TestCase):
                 self.assertEqual(process.kill_calls, 0)
                 self.assertEqual(
                     process.wait_calls,
-                    [_MISSING, AUTH_PROCESS_STOP_TIMEOUT_SECONDS],
+                    [
+                        AUTH_LOGIN_STATUS_POLL_SECONDS,
+                        AUTH_PROCESS_STOP_TIMEOUT_SECONDS,
+                    ],
                 )
 
         ordinary = ScriptedProcess(
@@ -437,6 +450,152 @@ class ProviderAuthProcessContractTests(unittest.TestCase):
         self.assertEqual(result.status.state, ProviderAuthState.INDETERMINATE)
         self.assertNotIn("provider account", repr(result))
         self.assertEqual(ordinary.terminate_calls, 1)
+
+    def test_live_login_returns_after_fresh_authentication_for_both_providers(
+        self,
+    ) -> None:
+        """Reclaim the terminal without waiting for a native CLI to exit itself."""
+
+        for provider in AUTH_PROVIDERS:
+            with self.subTest(provider=provider):
+                timeout = subprocess.TimeoutExpired((provider,), 1.0)
+                login = ScriptedProcess(
+                    timeout,
+                    143,
+                    poll_results=(None,),
+                )
+                probe = ScriptedProcess(0)
+                factory = ScriptedProcessFactory(login, probe)
+
+                result = self.service(factory).login(provider)
+
+                self.assertTrue(result.authenticated)
+                self.assertEqual(result.returncode, 143)
+                self.assertEqual(login.terminate_calls, 1)
+                self.assertEqual(login.kill_calls, 0)
+                self.assertEqual(
+                    login.wait_calls,
+                    [
+                        AUTH_LOGIN_STATUS_POLL_SECONDS,
+                        AUTH_PROCESS_STOP_TIMEOUT_SECONDS,
+                    ],
+                )
+                self.assertEqual(
+                    probe.wait_calls,
+                    [AUTH_STATUS_TIMEOUT_SECONDS],
+                )
+                self.assertEqual(
+                    factory.calls[0][1],
+                    {"cwd": str(self.workspace_root), "shell": False},
+                )
+                self.assertEqual(
+                    factory.calls[1][1],
+                    {
+                        "cwd": str(self.workspace_root),
+                        "stdin": subprocess.DEVNULL,
+                        "stdout": subprocess.DEVNULL,
+                        "stderr": subprocess.DEVNULL,
+                        "shell": False,
+                    },
+                )
+
+    def test_live_login_continues_through_every_nonauthenticated_probe_state(
+        self,
+    ) -> None:
+        """Keep native control until authentication or native exit is authoritative."""
+
+        timeout = subprocess.TimeoutExpired(("agy",), 1.0)
+        login = ScriptedProcess(timeout, timeout, timeout, 7)
+        unauthenticated = ScriptedProcess(1)
+        indeterminate = ScriptedProcess(2)
+        final_authenticated = ScriptedProcess(0)
+        factory = ScriptedProcessFactory(
+            login,
+            unauthenticated,
+            indeterminate,
+            FileNotFoundError("private executable path"),
+            final_authenticated,
+        )
+
+        result = self.service(factory).login("antigravity")
+
+        self.assertTrue(result.authenticated)
+        self.assertEqual(result.returncode, 7)
+        self.assertEqual(
+            login.wait_calls,
+            [AUTH_LOGIN_STATUS_POLL_SECONDS] * 4,
+        )
+        self.assertEqual(login.terminate_calls, 0)
+        self.assertEqual(login.kill_calls, 0)
+        self.assertEqual(unauthenticated.wait_calls, [AUTH_STATUS_TIMEOUT_SECONDS])
+        self.assertEqual(indeterminate.wait_calls, [AUTH_STATUS_TIMEOUT_SECONDS])
+        self.assertEqual(final_authenticated.wait_calls, [AUTH_STATUS_TIMEOUT_SECONDS])
+        self.assertNotIn("private", repr(result))
+
+    def test_authenticated_monitor_probe_escalates_and_reaps_stubborn_login(
+        self,
+    ) -> None:
+        """Kill only after bounded graceful cleanup cannot stop the live child."""
+
+        login_timeout = subprocess.TimeoutExpired(("codex", "login"), 1.0)
+        stop_timeout = subprocess.TimeoutExpired(("codex", "login"), 2.0)
+        login = ScriptedProcess(
+            login_timeout,
+            stop_timeout,
+            -9,
+            poll_results=(None, None),
+        )
+        probe = ScriptedProcess(0)
+
+        result = self.service(ScriptedProcessFactory(login, probe)).login("codex")
+
+        self.assertTrue(result.authenticated)
+        self.assertEqual(result.returncode, -9)
+        self.assertEqual(login.terminate_calls, 1)
+        self.assertEqual(login.kill_calls, 1)
+        self.assertEqual(
+            login.wait_calls,
+            [
+                AUTH_LOGIN_STATUS_POLL_SECONDS,
+                AUTH_PROCESS_STOP_TIMEOUT_SECONDS,
+                AUTH_PROCESS_STOP_TIMEOUT_SECONDS,
+            ],
+        )
+
+    def test_monitor_probe_timeout_is_silent_sanitized_and_does_not_stop_login(
+        self,
+    ) -> None:
+        """Isolate status failures from the inherited native-login terminal."""
+
+        login_timeout = subprocess.TimeoutExpired(("codex", "login"), 1.0)
+        status_timeout = subprocess.TimeoutExpired(
+            ("codex", "login", "status", "token=private"),
+            5.0,
+        )
+        login = ScriptedProcess(login_timeout, 0)
+        timed_out_probe = ScriptedProcess(
+            status_timeout,
+            0,
+            poll_results=(None,),
+        )
+        final_probe = ScriptedProcess(1)
+        factory = ScriptedProcessFactory(login, timed_out_probe, final_probe)
+
+        result = self.service(factory).login("codex")
+
+        self.assertFalse(result.authenticated)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(login.terminate_calls, 0)
+        self.assertEqual(
+            login.wait_calls,
+            [AUTH_LOGIN_STATUS_POLL_SECONDS, AUTH_LOGIN_STATUS_POLL_SECONDS],
+        )
+        self.assertEqual(timed_out_probe.terminate_calls, 1)
+        self.assertNotIn("private", repr(result))
+        for _, kwargs in factory.calls[1:]:
+            self.assertIs(kwargs["stdin"], subprocess.DEVNULL)
+            self.assertIs(kwargs["stdout"], subprocess.DEVNULL)
+            self.assertIs(kwargs["stderr"], subprocess.DEVNULL)
 
     def test_constructor_and_provider_validation_are_pre_process(self) -> None:
         factory = ScriptedProcessFactory()
