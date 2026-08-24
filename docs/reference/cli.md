@@ -155,9 +155,19 @@ Exit `0` is authenticated, exit `1` is unauthenticated, a missing executable is
 unavailable, and timeout or any other result is indeterminate. Unavailable
 choices are disabled; authenticated choices need no sign-in; unauthenticated
 choices start native sign-in; indeterminate choices trigger another status
-check. After sign-in, both providers are refreshed. Only a fresh exact
-authenticated result authorizes use—neither prior state nor the sign-in exit
-code does.
+check. While a login child remains open, Story waits in one-second bounded
+intervals and runs the selected provider's existing silent, bounded status
+probe after each interval. The probe's null streams keep it unable to consume
+pasted input or capture provider output. A non-authenticated probe leaves the
+native interaction in control; there is no overall login deadline.
+
+A fresh exact authenticated result is the sole authority. When it arrives,
+Story boundedly terminates and reaps only that exact login child if still open,
+then refreshes both providers and returns automatically to the calling startup,
+`/auth`, or Settings flow. The user does not need an exit command, Ctrl-C, EOF,
+extra Enter, confirmation, or second code paste. If the login child exits
+first, Story still requires a fresh probe. Prior state, code text, child exit,
+and return code never authorize use.
 
 If neither provider is authenticated, the startup picker remains the hard gate.
 Cancel returns to that gate; Ctrl-C or EOF exits normally without constructing
@@ -181,7 +191,10 @@ explicit route.
 Native sign-in inherits stdin, stdout, stderr, environment, process group, and
 the resolved workspace root and may open a provider-controlled browser. The
 runtime neither synthesizes nor captures URLs, provider output, account facts,
-tokens, credentials, or native credential persistence. See
+tokens, credentials, authorization codes, or native credential persistence.
+Story never supplies its own code prompt: a successful flow has at most one
+provider-controlled authorization-code paste, and local browser-capable flows
+may need none. A remote provider can still require its own copy/paste step. See
 [privacy](../operations/privacy-and-provider.md#native-authentication-boundary)
 and [recovery](../operations/recovery-and-limitations.md#authentication-recovery).
 

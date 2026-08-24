@@ -75,13 +75,30 @@ capture a browser URL; parse provider output or account facts; read tokens or
 credentials; or inspect, copy, replace, or log the provider's native credential
 persistence. The provider and terminal may retain their own data independently.
 
+While that exact login child remains open, Story waits in bounded intervals and
+uses the same selected-provider status command with null stdin/stdout/stderr.
+Each probe is bounded and silent, cannot consume pasted terminal input, and
+cannot capture provider output. Non-authenticated results leave native sign-in
+in control with no overall Story login deadline. A fresh authenticated result
+is the sole completion authority. Story then boundedly stops and reaps only the
+exact login child if it remains open and returns to the calling startup,
+`/auth`, or Settings flow; it does not require provider `/exit`, Ctrl-C, EOF,
+extra Enter, confirmation, or a second paste.
+
+Story never copies, parses, synthesizes, displays, persists, or logs an
+authorization code. Local browser-capable provider flows may need no code.
+When a remote provider requires its own code copy/paste flow, the code is pasted
+once into the provider-owned prompt and Story adds no code prompt of its own.
+The code text, login return code, and child lifecycle are not authorization.
+
 The workspace stores only a provider name when fresh authentication fills a
 missing `default_backend`; it stores no status, account, login return code,
 token, credential, or OAuth URL. Authentication guidance and results use fixed,
 sanitized copy. Debug logs may contain ordinary fixed CLI operation facts but
-have no authentication-state or provider-output field. A sign-in exit code and
-prior state are never treated as authorization; the runtime freshly probes
-after login and again at each effective-route gate.
+have no authentication-state or provider-output field. A sign-in exit code,
+authorization-code text, and prior state are never treated as authorization;
+the runtime uses fresh status during login completion and again at each
+effective-route gate.
 
 ## Explicit-reference data boundary
 

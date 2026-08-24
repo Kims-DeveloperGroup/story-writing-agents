@@ -496,15 +496,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   discarded standard streams, and a fixed five-second bound; output is never
   captured, parsed, retained, returned, or logged. Native login runs exact
   `codex login` or bare `agy` in the same CWD with inherited real terminal
-  streams and environment. The service waits and reaps its exact child,
-  performs bounded terminate/kill/reap cleanup after Python-side failure or
-  interruption, and runs a fresh status probe after each normally completed
-  login; only that probe's exact authenticated state reports success. It owns
-  no credential, token, account, URL, browser, keyring, configuration,
-  workspace persistence, provider turn, or import-time resource.
+  streams and environment. While that exact child remains open, the service
+  waits in bounded intervals and runs the same silent selected-provider status
+  probe; a fresh authenticated state boundedly stops and reaps the still-open
+  child before returning control. If the child exits first, the service runs
+  one final fresh probe. It also performs bounded terminate/kill/reap cleanup
+  after Python-side failure or interruption, and only a probe's exact
+  authenticated state reports success. It owns no credential, token, account,
+  URL, browser, keyring, configuration, workspace persistence, provider turn,
+  or import-time resource.
 - **Primary verification/documentation:** `tests/test_provider_auth.py` verifies
-  the native authentication contract, and `tests/test_public_api_and_cli.py`
-  verifies the unchanged package facade.
+  the native authentication contract, `tests/test_interactive_pty.py` verifies
+  exact-child and terminal reclamation for both providers, and
+  `tests/test_public_api_and_cli.py` verifies the unchanged package facade.
   `docs/operations/privacy-and-provider.md` documents the native authentication
   process and credential boundary.
 

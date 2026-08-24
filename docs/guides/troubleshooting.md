@@ -55,13 +55,23 @@ Indeterminate means the probe timed out, failed to launch cleanly, or returned
 an unrecognized status; verify the native CLI outside the runtime, then rerun
 `/auth` or restart `story` to probe again.
 
-The native login may open a provider-controlled browser. Complete its own
-prompt and return to the terminal. A successful login exit is not enough: the
-next fresh status probe must report authenticated. Startup Cancel leaves the
-gate open; Ctrl-C or EOF exits without starting the story runtime. `/auth`
-cancellation returns to the existing shell. In `/settings`, failed or cancelled
-provider authentication preserves the pending route, and stale authentication
-at Save prevents the file update. See
+The native login may open a provider-controlled browser. On a successful local
+flow, no authorization-code paste may be needed. A remote provider flow may
+require one provider-controlled code paste; Story does not add a second paste,
+exit command, confirmation, extra Enter, Ctrl-C, or EOF step. Once a fresh
+silent status probe reports authenticated, Story stops and reaps that exact
+login child if it is still open and automatically returns to startup, `/auth`,
+or Settings. You do not need to exit the Codex or Antigravity interface.
+
+The status probes are individually bounded and use null input and output, so
+they cannot consume pasted input or capture provider output while native login
+owns the real terminal. If a fresh probe does not report authenticated, native
+interaction continues without an overall Story login deadline. A login exit or
+authorization-code text is never proof by itself; fresh status is the sole
+authority. Startup Cancel leaves the gate open; Ctrl-C or EOF exits without
+starting the story runtime. `/auth` cancellation returns to the existing shell.
+In `/settings`, failed or cancelled provider authentication preserves the
+pending route, and stale authentication at Save prevents the file update. See
 [authentication recovery](../operations/recovery-and-limitations.md#authentication-recovery).
 
 ## Interactive mode requires a terminal

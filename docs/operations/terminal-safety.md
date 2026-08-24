@@ -136,6 +136,22 @@ failure or process control still attempts frame cleanup and restoration;
 uncertain restoration remains fatal rather than handing a damaged terminal to
 the provider.
 
+While the provider owns that inherited terminal, Story waits for the exact
+login child in bounded intervals. After each interval it may launch the
+existing selected-provider status command with stdin, stdout, and stderr bound
+to null. Each status probe is bounded, cannot read a pasted authorization code,
+and cannot capture or interleave provider output. A non-authenticated result
+leaves the native child in control, with no overall Story login deadline and no
+change to its command, environment, workspace root, or process group.
+
+When fresh status reports authenticated, Story boundedly stops and reaps only
+that exact login child if it is still open. The surrounding Story process keeps
+the foreground process group and restored terminal attributes, then returns to
+startup, `/auth`, or Settings without an exit command, Ctrl-C, EOF, extra Enter,
+confirmation, or second code paste. The child need not exit normally. Code
+text, child exit, and return code are never authorization; fresh status is the
+sole authority.
+
 All welcome and authentication copy is closed, semantic, and sanitized. The
 wordmark uses fixed bold 16-color foreground spans—cyan `S`, magenta `T`,
 yellow `O`, blue `R`, and green `Y`—with local resets only. Color is

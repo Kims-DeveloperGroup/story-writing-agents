@@ -105,6 +105,16 @@ def terminate(_signum, _frame):
     raise SystemExit(143)
 
 
+def terminate_auth(_signum, _frame):
+    """Record story reclaiming the terminal after native authentication."""
+
+    append_record(
+        {"provider": "codex", "operation": "terminated", "pid": os.getpid()},
+        path=AUTH_LOG_PATH,
+    )
+    raise SystemExit(143)
+
+
 signal.signal(signal.SIGINT, signal.SIG_IGN)
 signal.signal(signal.SIGTERM, terminate)
 
@@ -122,6 +132,7 @@ if argv in (["login", "status"], ["login"]):
             "stdout_tty": sys.stdout.isatty(),
             "stderr_tty": sys.stderr.isatty(),
             "environment_marker": os.environ.get("STORY_PTY_AUTH_ENV_MARKER"),
+            "pid": os.getpid(),
         },
         path=AUTH_LOG_PATH,
     )
@@ -133,13 +144,23 @@ if argv in (["login", "status"], ["login"]):
             if state["codex"] == "unauthenticated"
             else 7
         )
-    if state.get("codex_login") == "authenticate":
+    if state.get("codex_login") in {"authenticate", "code_then_stay"}:
+        if state.get("codex_login") == "code_then_stay":
+            signal.signal(signal.SIGTERM, terminate_auth)
+            sys.stdout.write("FAKE_CODEX_AUTH_CODE> ")
+            sys.stdout.flush()
+            if not sys.stdin.readline():
+                raise SystemExit(2)
         state["codex"] = "authenticated"
         AUTH_STATE_PATH.write_text(
             json.dumps(state, separators=(",", ":")),
             encoding="utf-8",
         )
     sys.stdout.write("FAKE_CODEX_NATIVE_LOGIN\n")
+    sys.stdout.flush()
+    if state.get("codex_login") == "code_then_stay":
+        while True:
+            signal.pause()
     raise SystemExit(int(state.get("codex_login_returncode", 0)))
 
 payload = json.loads(sys.stdin.read())
@@ -260,6 +281,7 @@ _FAKE_AGY = r'''#!/usr/bin/env python3
 import fcntl
 import json
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -287,6 +309,15 @@ def append_record(value):
         os.close(descriptor)
 
 
+def terminate_auth(_signum, _frame):
+    """Record story reclaiming the terminal after native authentication."""
+
+    append_record(
+        {"provider": "antigravity", "operation": "terminated", "pid": os.getpid()}
+    )
+    raise SystemExit(143)
+
+
 argv = sys.argv[1:]
 if argv not in ([], ["models"]):
     raise SystemExit(64)
@@ -302,6 +333,7 @@ append_record(
         "stdout_tty": sys.stdout.isatty(),
         "stderr_tty": sys.stderr.isatty(),
         "environment_marker": os.environ.get("STORY_PTY_AUTH_ENV_MARKER"),
+        "pid": os.getpid(),
     }
 )
 if operation == "probe":
@@ -312,13 +344,23 @@ if operation == "probe":
         if state["antigravity"] == "unauthenticated"
         else 7
     )
-if state.get("antigravity_login") == "authenticate":
+if state.get("antigravity_login") in {"authenticate", "code_then_stay"}:
+    if state.get("antigravity_login") == "code_then_stay":
+        signal.signal(signal.SIGTERM, terminate_auth)
+        sys.stdout.write("FAKE_AGY_AUTH_CODE> ")
+        sys.stdout.flush()
+        if not sys.stdin.readline():
+            raise SystemExit(2)
     state["antigravity"] = "authenticated"
     AUTH_STATE_PATH.write_text(
         json.dumps(state, separators=(",", ":")),
         encoding="utf-8",
     )
 sys.stdout.write("FAKE_AGY_NATIVE_LOGIN\n")
+sys.stdout.flush()
+if state.get("antigravity_login") == "code_then_stay":
+    while True:
+        signal.pause()
 raise SystemExit(int(state.get("antigravity_login_returncode", 0)))
 '''
 
@@ -852,6 +894,78 @@ class InteractiveCliPtyTests(unittest.TestCase):
                     "CLI exited before fake-auth readiness; "
                     f"captured={process.normalized_text!r}"
                 )
+
+    def _assert_auth_code_returns_to_story(self, provider: str) -> None:
+        """Accept one opaque native code, then prove story owns input again."""
+
+        if provider == "codex":
+            selection = "1"
+            code_prompt = "FAKE_CODEX_AUTH_CODE> "
+            self._set_auth_state(
+                codex="unauthenticated",
+                antigravity="indeterminate",
+                codex_login="code_then_stay",
+            )
+        elif provider == "antigravity":
+            selection = "2"
+            code_prompt = "FAKE_AGY_AUTH_CODE> "
+            agent_configs = self.workspace.read_json("config/agent_configs.json")
+            agent_configs["plot_architect"]["backend"] = "antigravity"
+            self.workspace.write_json("config/agent_configs.json", agent_configs)
+            self._set_auth_state(
+                codex="authenticated",
+                antigravity="unauthenticated",
+                antigravity_login="code_then_stay",
+            )
+        else:
+            raise AssertionError(f"unsupported fake auth provider: {provider}")
+
+        process = self._spawn_cli(())
+        process.wait_for_text("Provider authentication")
+        auth_record_count = len(self._auth_records())
+        process.send_line(selection)
+        process.wait_for_text(code_prompt)
+        login = self._wait_for_auth_record(
+            process,
+            lambda record: (
+                record["provider"] == provider
+                and record["operation"] == "login"
+            ),
+            after_count=auth_record_count,
+        )
+        opaque_code = f"opaque-{provider}-authorization-code"
+        lobby_mark = process.output_mark()
+        process.send_line(opaque_code)
+        process.wait_for_text("story[lobby]> ", after=lobby_mark)
+        terminated = self._wait_for_auth_record(
+            process,
+            lambda record: (
+                record["provider"] == provider
+                and record["operation"] == "terminated"
+            ),
+            after_count=auth_record_count,
+        )
+
+        login_pid = login["pid"]
+        self.assertIs(type(login_pid), int)
+        self.assertGreater(login_pid, 1)
+        self.assertEqual(terminated["pid"], login_pid)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(login_pid, 0)
+        self.assertEqual(os.tcgetpgrp(process.master_fd), process.process.pid)
+        self.assertNotIn(opaque_code, json.dumps(self._auth_records()))
+        self.assertFalse(self.provider_log.exists())
+
+        process.send_line("/quit")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertNotIn(
+            "PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR",
+            process.normalized_text,
+        )
 
     def _seed_default_session(
         self,
@@ -2199,6 +2313,13 @@ print(
             process.original_terminal_attributes,
         )
 
+    def test_codex_auth_code_returns_to_story_while_native_cli_stays_alive(
+        self,
+    ) -> None:
+        """Need no native exit command after one Codex authorization-code paste."""
+
+        self._assert_auth_code_returns_to_story("codex")
+
     def test_mixed_effective_routes_require_bare_antigravity_login(
         self,
     ) -> None:
@@ -2261,6 +2382,13 @@ print(
             process.final_terminal_attributes,
             process.original_terminal_attributes,
         )
+
+    def test_antigravity_auth_code_returns_to_story_while_cli_stays_alive(
+        self,
+    ) -> None:
+        """Need no native exit command after one bare-Agy authorization code."""
+
+        self._assert_auth_code_returns_to_story("antigravity")
 
     def test_auth_command_and_settings_save_use_fresh_native_status(
         self,
