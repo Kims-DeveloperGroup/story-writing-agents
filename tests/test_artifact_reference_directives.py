@@ -1,4 +1,4 @@
-"""Pure contracts for canonical writing-artifact reference directives."""
+"""Pure contracts for eligible writing-artifact reference-source directives."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Pure parsing for canonical writing-artifact reference directives."""
+"""Pure parsing for eligible writing-artifact reference-source directives."""
 
 from __future__ import annotations
 
