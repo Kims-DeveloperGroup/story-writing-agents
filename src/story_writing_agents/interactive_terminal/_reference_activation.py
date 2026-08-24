@@ -78,6 +78,7 @@ class ReferenceActivationRequest:
     kind: ReferenceActivationKind
     start: int
     end: int
+    scope: ReferenceInputScope
     paths: tuple[str, ...] = ()
     path: str | None = None
 
@@ -89,8 +90,12 @@ class ReferenceActivationRequest:
                 raise TypeError(f"{name} must be an integer")
             if value < 0:
                 raise ValueError(f"{name} must not be negative")
+        if type(self.scope) is not ReferenceInputScope:
+            raise TypeError("scope must be a ReferenceInputScope")
         if self.end <= self.start:
             raise ValueError("activation span must be nonempty")
+        if not self.scope.start <= self.start < self.end <= self.scope.end:
+            raise ValueError("activation span must fit inside its reference scope")
         if type(self.paths) is not tuple or any(
             type(path) is not str for path in self.paths
         ):
@@ -117,6 +122,7 @@ class ReferenceInputProjection:
     completion: CommandCompletionProjection | None = None
     request: ReferenceActivationRequest | None = None
     failure: ReferenceInputFailureKind | None = None
+    scope: ReferenceInputScope | None = None
 
     def __post_init__(self) -> None:
         if self.completion is not None and type(
@@ -134,6 +140,22 @@ class ReferenceInputProjection:
             ReferenceInputFailureKind,
         ):
             raise TypeError("failure must be a ReferenceInputFailureKind or None")
+        if self.scope is not None and type(self.scope) is not ReferenceInputScope:
+            raise TypeError("scope must be a ReferenceInputScope or None")
+        if self.completion is not None or self.request is not None:
+            if self.scope is None:
+                raise ValueError("completion and request outcomes require a scope")
+        if self.completion is not None:
+            assert self.scope is not None
+            if not (
+                self.scope.start
+                <= self.completion.start
+                < self.completion.end
+                <= self.scope.end
+            ):
+                raise ValueError("completion span must fit inside its reference scope")
+        if self.request is not None and self.request.scope != self.scope:
+            raise ValueError("request and projection scopes must match")
         outcome_count = sum(
             value is not None
             for value in (self.completion, self.request, self.failure)
@@ -174,6 +196,20 @@ class ReferenceInputProjection:
             and not ranged_picker_preview
         ):
             raise ValueError("a reference projection requires exactly one outcome")
+
+    @property
+    def defers_empty_ranged_failure(self) -> bool:
+        """Whether an open empty ranged panel must precede its fixed failure."""
+
+        return (
+            self.completion is not None
+            and self.request is None
+            and self.failure is ReferenceInputFailureKind.EMPTY_SOURCES
+            and self.completion.position.startswith(
+                EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX
+            )
+            and not self.completion.candidates
+        )
 
 
 def project_reference_input(
@@ -223,7 +259,7 @@ def project_reference_input(
     if expression.startswith("$$"):
         if expression == "$$":
             if failure is not None:
-                return ReferenceInputProjection(failure=failure)
+                return ReferenceInputProjection(failure=failure, scope=scope)
             if not canonical_paths:
                 return ReferenceInputProjection(
                     completion=CommandCompletionProjection(
@@ -233,6 +269,7 @@ def project_reference_input(
                         (),
                     ),
                     failure=ReferenceInputFailureKind.EMPTY_SOURCES,
+                    scope=scope,
                 )
             position = f"{RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX}{start}"
             return ReferenceInputProjection(
@@ -249,35 +286,44 @@ def project_reference_input(
                     ReferenceActivationKind.PICK,
                     start,
                     end,
+                    scope,
                     canonical_paths,
                 ),
+                scope=scope,
             )
         path = _direct_view_path(expression)
         if path is None:
             return ReferenceInputProjection(
-                failure=ReferenceInputFailureKind.INVALID
+                failure=ReferenceInputFailureKind.INVALID,
+                scope=scope,
             )
         try:
             canonical = ArtifactReference(path).path
         except (TypeError, ValueError):
             return ReferenceInputProjection(
-                failure=ReferenceInputFailureKind.INVALID
+                failure=ReferenceInputFailureKind.INVALID,
+                scope=scope,
             )
         if failure is not None:
-            return ReferenceInputProjection(failure=failure)
+            return ReferenceInputProjection(failure=failure, scope=scope)
         if canonical not in canonical_paths:
-            return ReferenceInputProjection(failure=ReferenceInputFailureKind.STALE)
+            return ReferenceInputProjection(
+                failure=ReferenceInputFailureKind.STALE,
+                scope=scope,
+            )
         return ReferenceInputProjection(
             request=ReferenceActivationRequest(
                 ReferenceActivationKind.VIEW,
                 start,
                 end,
+                scope,
                 path=canonical,
-            )
+            ),
+            scope=scope,
         )
 
     if failure is not None:
-        return ReferenceInputProjection(failure=failure)
+        return ReferenceInputProjection(failure=failure, scope=scope)
     position = f"{ARTIFACT_REFERENCE_POSITION_PREFIX}{start}"
     if not canonical_paths:
         return ReferenceInputProjection(
@@ -288,6 +334,7 @@ def project_reference_input(
                 (),
             ),
             failure=ReferenceInputFailureKind.EMPTY_SOURCES,
+            scope=scope,
         )
     candidates: list[CommandCompletionCandidate] = []
     for path in canonical_paths:
@@ -305,14 +352,18 @@ def project_reference_input(
             continue
         candidates.append(CommandCompletionCandidate(position, token))
     if not candidates:
-        return ReferenceInputProjection(failure=ReferenceInputFailureKind.INVALID)
+        return ReferenceInputProjection(
+            failure=ReferenceInputFailureKind.INVALID,
+            scope=scope,
+        )
     return ReferenceInputProjection(
         completion=CommandCompletionProjection(
             position,
             start,
             end,
             tuple(candidates),
-        )
+        ),
+        scope=scope,
     )
 
 
@@ -343,68 +394,45 @@ def replace_reference_range(
         ).token
     except (TypeError, ValueError):
         raise ReferenceInputFailure(ReferenceInputFailureKind.INVALID) from None
-    line = state.main_input.line_state
-    if not 0 <= request.start < request.end <= len(line.buffer):
-        raise ReferenceInputFailure(ReferenceInputFailureKind.INVALID)
-    updated_buffer = _replace_span(
-        line.buffer,
+    return _replace_reference_span(
+        state,
+        request.scope,
         request.start,
         request.end,
         token,
     )
-    try:
-        parse_artifact_references(updated_buffer[request.start :])
-    except ArtifactReferenceDirectiveError:
-        raise ReferenceInputFailure(ReferenceInputFailureKind.INVALID) from None
-    updated_line = LineInputState(updated_buffer, request.start + len(token))
-    updated_main = MainInputControlState(
-        updated_line,
-        state.main_input.history_index,
-        state.main_input.saved_draft,
-        overlay_open=False,
-    )
-    return MainCommandControlState(updated_main)
 
 
 def replace_reference_completion(
     state: MainCommandControlState,
-    projection: CommandCompletionProjection,
+    projection: ReferenceInputProjection,
     replacement: str,
 ) -> MainCommandControlState:
     """Apply one catalog completion without submitting the surrounding line."""
 
     if type(state) is not MainCommandControlState:
         raise TypeError("state must be a MainCommandControlState")
-    if type(projection) is not CommandCompletionProjection:
-        raise TypeError("projection must be a CommandCompletionProjection")
-    if type(replacement) is not str or replacement not in tuple(
-        candidate.replacement for candidate in projection.candidates
+    if type(projection) is not ReferenceInputProjection:
+        raise TypeError("projection must be a ReferenceInputProjection")
+    completion = projection.completion
+    if (
+        completion is None
+        or projection.request is not None
+        or projection.failure is not None
+        or projection.scope is None
     ):
         raise ReferenceInputFailure(ReferenceInputFailureKind.INVALID)
-    line = state.main_input.line_state
-    if not 0 <= projection.start < projection.end <= len(line.buffer):
+    if type(replacement) is not str or replacement not in tuple(
+        candidate.replacement for candidate in completion.candidates
+    ):
         raise ReferenceInputFailure(ReferenceInputFailureKind.INVALID)
-    updated_buffer = _replace_span(
-        line.buffer,
-        projection.start,
-        projection.end,
+    return _replace_reference_span(
+        state,
+        projection.scope,
+        completion.start,
+        completion.end,
         replacement,
     )
-    try:
-        parse_artifact_references(updated_buffer[projection.start :])
-    except ArtifactReferenceDirectiveError:
-        raise ReferenceInputFailure(ReferenceInputFailureKind.INVALID) from None
-    updated_line = LineInputState(
-        updated_buffer,
-        projection.start + len(replacement),
-    )
-    updated_main = MainInputControlState(
-        updated_line,
-        state.main_input.history_index,
-        state.main_input.saved_draft,
-        overlay_open=False,
-    )
-    return MainCommandControlState(updated_main)
 
 
 def selected_reference_request(
@@ -423,6 +451,7 @@ def selected_reference_request(
         ReferenceActivationKind.VIEW,
         request.start,
         request.end,
+        request.scope,
         path=path,
     )
 
@@ -450,7 +479,7 @@ def _active_marker(
             ):
                 start = search - 1
             end = _marker_end(buffer, start, scope.end)
-            if start <= cursor <= end:
+            if start < cursor <= end:
                 return start, end
         search -= 1
     return None
@@ -477,10 +506,10 @@ def _containing_braced_marker(
                 search = start + 1
                 continue
             search = end
-            if start <= cursor <= end:
+            if start < cursor <= end:
                 return start, end, False
             continue
-        if start <= cursor <= end:
+        if start < cursor <= end:
             return start, end, True
         search = end
     return None
@@ -545,6 +574,39 @@ def _replace_span(buffer: str, start: int, end: int, replacement: str) -> str:
     """Replace one validated buffer span without normalizing adjacent text."""
 
     return f"{buffer[:start]}{replacement}{buffer[end:]}"
+
+
+def _replace_reference_span(
+    state: MainCommandControlState,
+    scope: ReferenceInputScope,
+    start: int,
+    end: int,
+    replacement: str,
+) -> MainCommandControlState:
+    """Atomically replace and validate one complete provider-visible scope."""
+
+    line = state.main_input.line_state
+    if (
+        scope.end > len(line.buffer)
+        or not scope.start <= start < end <= scope.end
+    ):
+        raise ReferenceInputFailure(ReferenceInputFailureKind.INVALID)
+    updated_buffer = _replace_span(line.buffer, start, end, replacement)
+    adjusted_scope_end = scope.end + len(replacement) - (end - start)
+    try:
+        parse_artifact_references(
+            updated_buffer[scope.start : adjusted_scope_end]
+        )
+    except ArtifactReferenceDirectiveError:
+        raise ReferenceInputFailure(ReferenceInputFailureKind.INVALID) from None
+    updated_line = LineInputState(updated_buffer, start + len(replacement))
+    updated_main = MainInputControlState(
+        updated_line,
+        state.main_input.history_index,
+        state.main_input.saved_draft,
+        overlay_open=False,
+    )
+    return MainCommandControlState(updated_main)
 
 
 __all__ = [

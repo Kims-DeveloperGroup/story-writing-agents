@@ -3568,6 +3568,32 @@ print("RESULT=" + json.dumps({
                 "Enter/Tabopenstherangedviewer.",
                 "".join(preview.split()),
             )
+
+            dismiss_mark = process.output_mark()
+            process.send_text("\x1b")
+            dismissed = process.wait_for_text(
+                f"{prompt} $$",
+                after=dismiss_mark,
+            )
+            self.assertNotIn("Writing artifact selection [open]", dismissed)
+            self.assertNotIn(
+                "No current writing artifacts are available.",
+                dismissed,
+            )
+
+            reopen_mark = process.output_mark()
+            process.send_text(activation_key)
+            reopened = process.wait_for_text(
+                "[controls] Up/Down selects; Enter/Tab opens the ranged viewer.",
+                after=reopen_mark,
+            )
+            self.assertIn("No writing artifacts.", reopened)
+            self.assertIn(f"{prompt} $$", reopened)
+            self.assertNotIn(
+                "No current writing artifacts are available.",
+                reopened,
+            )
+
             activation_mark = process.output_mark()
             process.send_text(activation_key)
             process.wait_for_text(
@@ -3589,6 +3615,12 @@ print("RESULT=" + json.dumps({
         self.assertEqual(result["chat"], "interrupt")
         self.assertGreater(result["empty_calls"], 0)
         self.assertEqual(result["read_calls"], [])
+        self.assertEqual(
+            process.normalized_text.count(
+                "[error command_invalid] No current writing artifacts are available."
+            ),
+            2,
+        )
         self.assertFalse(self.provider_log.exists())
         self.assertEqual(
             process.final_terminal_attributes,

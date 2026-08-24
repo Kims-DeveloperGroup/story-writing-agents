@@ -269,6 +269,14 @@ def _live_reference_key_outcome(
     if projection is None:
         return None
     if projection.failure is not None:
+        if projection.defers_empty_ranged_failure:
+            assert projection.completion is not None
+            picker_open, _selected_path = bindings.ranged_picker_selection(
+                state,
+                projection.completion,
+            )
+            if not picker_open:
+                return None
         return ReferenceInputFailure(projection.failure)
     request = projection.request
     if request is None:
@@ -1477,7 +1485,7 @@ class RawTerminalDriver:
                         try:
                             state = replace_reference_completion(
                                 state,
-                                completion,
+                                projection,
                                 outcome.text,
                             )
                         except ReferenceInputFailure as failure:

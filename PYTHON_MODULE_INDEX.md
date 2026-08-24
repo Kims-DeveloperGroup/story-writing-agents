@@ -1811,7 +1811,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   nonmodal ranged-source overlay. Up/Down remains controls-owned; Enter or Tab
   consumes only a freshly correlated highlighted path and opens the supplied-
   text viewer without inserting a completion, submitting the line, or mutating
-  history. Exact `$${path}` opens that viewer directly, including eligible
+  history. For an empty ranged projection, the driver consumes the reference-
+  owned deferred-failure semantic: Enter or Tab reports `EMPTY_SOURCES` only
+  while the empty panel is open, while a dismissed panel yields to the
+  controls-owned palette reprojection. Exact `$${path}` opens that viewer
+  directly, including eligible
   paths with ordinary spaces or Unicode. A single `$` remains ordinary whole-
   file completion. Ordinary fallback activates only after a submitted line:
   its raw probes become actionable only when the scope-aware reference
@@ -1989,9 +1993,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ReferenceInputProjection`; content-free `ReferenceInputFailureKind` and
   `ReferenceInputFailure`; plus pure `project_reference_input`, reference-source
   completion, selected-path correlation, whole-span insertion, and inclusive
-  range-replacement helpers. Projection scans only the supplied cursor-active
-  provider scope, follows the directive parser's odd-backslash escape parity,
-  and recognizes `$`, `$$`, and exact `$${path}` markers. Nonempty exact `$$`
+  range-replacement helpers. Each actionable completion or request carries its
+  immutable exact provider scope through selection and replacement. Projection
+  scans only that supplied cursor-active provider scope, follows the directive
+  parser's odd-backslash escape parity, and recognizes `$`, `$$`, and exact
+  `$${path}` markers only when the cursor is strictly after the marker start.
+  Nonempty exact `$$`
   produces one span-correlated ranged-source completion/`PICK` pair for the
   live overlay and ordinary fallback; empty exact `$$` instead pairs an empty
   ranged completion with deferred `EMPTY_SOURCES`, keeping actionable capable-
@@ -2000,8 +2007,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   parser parity: an odd-escaped `$${...}` can rescan from its second dollar,
   whereas other protected nested dollars do not activate. Fallback delegates
   each raw probe to that same scope-aware projection. Marker discovery remains
-  correct for batched or bracketed paste. Completion and replacement validation
-  applies only to the supplied provider span rather than unrelated command text.
+  correct for batched or bracketed paste. Replacement validates the complete
+  adjusted provider span atomically before constructing new editor state, so
+  earlier provider-visible references participate while unrelated command text
+  remains excluded.
   Every emitted `${path}` or `${path}#Lx-Ly` token is validated through
   the existing writing-artifact facade. It performs no catalog discovery, text
   read, display,
@@ -3329,7 +3338,9 @@ every intermediate arrow. The current runtime graph is acyclic.
 - `interactive_terminal._reference_activation` owns only pure active-marker,
   completion, request, and replacement values, including the paired ranged-
   source completion/PICK projection, paired empty completion/failure, and
-  provider-scope and directive-parity correlation. `_core`
+  immutable provider-scope and directive-parity correlation. It validates each
+  complete adjusted provider-visible span atomically, including earlier
+  references while excluding command options outside that scope. `_core`
   combines them with controller-supplied provider scopes, sorted eligible
   source paths, bounded text reads, fixed errors, and the controls-owned
   selection callback. `_controls` owns pure overlay projection, highlighting,

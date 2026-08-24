@@ -700,6 +700,69 @@ class CompletionControlTests(unittest.TestCase):
                 else:
                     self.assertFalse(keeps_ranged)
 
+    def test_empty_ranged_picker_escape_reopens_without_control_outcome(self) -> None:
+        projection_provider = _core._reference_projection_provider(
+            lambda buffer, _cursor: ReferenceInputScope(0, len(buffer)),
+            lambda: (),
+        )
+
+        def completion_provider(
+            buffer: str,
+            cursor: int,
+        ) -> CommandCompletionProjection | None:
+            projected = projection_provider(buffer, cursor)
+            return None if projected is None else projected.completion
+
+        for key in (KeyKind.ENTER, KeyKind.TAB):
+            with self.subTest(key=key):
+                state = MainCommandControlState()
+                for character in "$$":
+                    state, outcome = transition_main_command_input(
+                        state,
+                        KeyEvent(KeyKind.TEXT, text=character),
+                        MainInputHistoryState(),
+                        completion_provider,
+                    )
+                    self.assertIsNone(outcome)
+                assert state.palette is not None
+                self.assertTrue(
+                    state.palette.projection.position.startswith(
+                        EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX
+                    )
+                )
+                self.assertIsNone(state.palette.highlighted)
+
+                dismissed, outcome = transition_main_command_input(
+                    state,
+                    KeyEvent(KeyKind.ESCAPE),
+                    MainInputHistoryState(),
+                    completion_provider,
+                )
+                self.assertIsNone(outcome)
+                self.assertIsNone(dismissed.palette)
+                self.assertEqual(
+                    dismissed.dismissal_latch,
+                    LineInputState("$$", 2),
+                )
+
+                reopened, outcome = transition_main_command_input(
+                    dismissed,
+                    KeyEvent(key),
+                    MainInputHistoryState(),
+                    completion_provider,
+                )
+                self.assertIsNone(outcome)
+                assert reopened.palette is not None
+                self.assertTrue(
+                    reopened.palette.projection.position.startswith(
+                        EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX
+                    )
+                )
+                self.assertEqual(
+                    reopened.main_input.line_state,
+                    LineInputState("$$", 2),
+                )
+
     def test_dynamic_choices_replace_static_focus_and_commit_exact_identity(
         self,
     ) -> None:
@@ -1256,7 +1319,6 @@ class CompletionDriverTests(unittest.TestCase):
             replace(bindings, completion_candidate_matches=None)
 
     def test_reference_projection_invalid_probe_skips_catalog_io(self) -> None:
-        invalid = ReferenceInputProjection(failure=ReferenceInputFailureKind.INVALID)
         for buffer in (
             "$${core_documents/global_outline.md",
             "$${../escape.md}",
@@ -1273,7 +1335,13 @@ class CompletionDriverTests(unittest.TestCase):
                     paths_provider,
                 )
 
-                self.assertEqual(provider(buffer, len(buffer)), invalid)
+                self.assertEqual(
+                    provider(buffer, len(buffer)),
+                    ReferenceInputProjection(
+                        failure=ReferenceInputFailureKind.INVALID,
+                        scope=ReferenceInputScope(0, len(buffer)),
+                    ),
+                )
                 scope_provider.assert_called_once_with(buffer, len(buffer))
                 paths_provider.assert_not_called()
 
@@ -1317,7 +1385,8 @@ class CompletionDriverTests(unittest.TestCase):
                         0,
                         1,
                         (CommandCompletionCandidate(position, token),),
-                    )
+                    ),
+                    scope=ReferenceInputScope(0, 1),
                 ),
             ),
             (
@@ -1340,8 +1409,10 @@ class CompletionDriverTests(unittest.TestCase):
                         ReferenceActivationKind.PICK,
                         0,
                         2,
+                        ReferenceInputScope(0, 2),
                         (path,),
-                    )
+                    ),
+                    scope=ReferenceInputScope(0, 2),
                 ),
             ),
             (
@@ -1353,8 +1424,10 @@ class CompletionDriverTests(unittest.TestCase):
                         ReferenceActivationKind.VIEW,
                         0,
                         len(f"$${{{path}}}"),
+                        ReferenceInputScope(0, len(f"$${{{path}}}")),
                         path=path,
-                    )
+                    ),
+                    scope=ReferenceInputScope(0, len(f"$${{{path}}}")),
                 ),
             ),
             (
@@ -1369,6 +1442,7 @@ class CompletionDriverTests(unittest.TestCase):
                         (),
                     ),
                     failure=ReferenceInputFailureKind.EMPTY_SOURCES,
+                    scope=ReferenceInputScope(0, 1),
                 ),
             ),
             (
@@ -1383,6 +1457,7 @@ class CompletionDriverTests(unittest.TestCase):
                         (),
                     ),
                     failure=ReferenceInputFailureKind.EMPTY_SOURCES,
+                    scope=ReferenceInputScope(0, 2),
                 ),
             ),
             (
@@ -1390,14 +1465,18 @@ class CompletionDriverTests(unittest.TestCase):
                 (),
                 ReferenceInputFailure(ReferenceInputFailureKind.UNAVAILABLE),
                 ReferenceInputProjection(
-                    failure=ReferenceInputFailureKind.UNAVAILABLE
+                    failure=ReferenceInputFailureKind.UNAVAILABLE,
+                    scope=ReferenceInputScope(0, 1),
                 ),
             ),
             (
                 f"$${{{path}}}",
                 (other_path,),
                 None,
-                ReferenceInputProjection(failure=ReferenceInputFailureKind.STALE),
+                ReferenceInputProjection(
+                    failure=ReferenceInputFailureKind.STALE,
+                    scope=ReferenceInputScope(0, len(f"$${{{path}}}")),
+                ),
             ),
         )
         for buffer, paths, failure, expected in cases:
@@ -1466,7 +1545,7 @@ class CompletionDriverTests(unittest.TestCase):
                         replacement = projected.completion.candidates[0].replacement
                         updated = replace_reference_completion(
                             state,
-                            projected.completion,
+                            projected,
                             replacement,
                         )
                     else:
@@ -1487,9 +1566,14 @@ class CompletionDriverTests(unittest.TestCase):
             side_effect=AssertionError("invalid eligible marker read catalog")
         )
         invalid_provider = _core._reference_projection_provider(scope, invalid_paths)
+        invalid_scope = scope(invalid, len(invalid))
+        assert invalid_scope is not None
         self.assertEqual(
             invalid_provider(invalid, len(invalid)),
-            ReferenceInputProjection(failure=ReferenceInputFailureKind.INVALID),
+            ReferenceInputProjection(
+                failure=ReferenceInputFailureKind.INVALID,
+                scope=invalid_scope,
+            ),
         )
         invalid_paths.assert_not_called()
 
@@ -1858,7 +1942,7 @@ class CompletionDriverTests(unittest.TestCase):
         for activation_key in ("\n", "\t"):
             with self.subTest(activation_key=repr(activation_key)):
                 driver, _input, output, fallback, termios, os_module = make_driver(
-                    "$$" + activation_key + "\x03"
+                    "$$\x1b" + activation_key + activation_key + "\x03"
                 )
                 reader = mock.Mock(
                     side_effect=AssertionError("empty sources must not read text")
@@ -1897,12 +1981,33 @@ class CompletionDriverTests(unittest.TestCase):
                     and "Writing artifact selection [open]" in frame
                     and "No writing artifacts." in frame
                 )
+                dismissed_index = next(
+                    index
+                    for index, frame in enumerate(
+                        frames[picker_index + 1 :],
+                        picker_index + 1,
+                    )
+                    if "main> $$" in frame
+                    and "Writing artifact selection [open]" not in frame
+                )
+                reopened_index = next(
+                    index
+                    for index, frame in enumerate(
+                        frames[dismissed_index + 1 :],
+                        dismissed_index + 1,
+                    )
+                    if "main> $$" in frame
+                    and "Writing artifact selection [open]" in frame
+                    and "No writing artifacts." in frame
+                )
                 self.assertEqual(len(failure_records), 1)
                 self.assertIs(
                     failure_records[0][0],
                     ReferenceInputFailureKind.EMPTY_SOURCES,
                 )
-                self.assertLess(picker_index, failure_records[0][1])
+                self.assertLess(picker_index, dismissed_index)
+                self.assertLess(dismissed_index, reopened_index)
+                self.assertLess(reopened_index, failure_records[0][1])
                 self.assertIn(
                     "Enter/Tabopenstherangedviewer.",
                     "".join(frames[picker_index].split()),
@@ -2115,7 +2220,10 @@ class CompletionDriverTests(unittest.TestCase):
         )
         fallback.side_effect = (original, "1", "")
         projection_provider = mock.Mock(
-            return_value=ReferenceInputProjection(completion=projection)
+            return_value=ReferenceInputProjection(
+                completion=projection,
+                scope=ReferenceInputScope(0, len(original)),
+            )
         )
         failure_writer = mock.Mock()
         bindings = _core._reference_input_bindings(
@@ -2459,7 +2567,8 @@ class CompletionDriverTests(unittest.TestCase):
                     self.assertEqual(
                         projected,
                         ReferenceInputProjection(
-                            failure=ReferenceInputFailureKind.INVALID
+                            failure=ReferenceInputFailureKind.INVALID,
+                            scope=ReferenceInputScope(0, len(line)),
                         ),
                     )
                 self.assertEqual(
@@ -2563,7 +2672,13 @@ class CompletionDriverTests(unittest.TestCase):
         )
         fallback.side_effect = (original, replacement)
         projection_provider = mock.Mock(
-            side_effect=(ReferenceInputProjection(completion=projection), None)
+            side_effect=(
+                ReferenceInputProjection(
+                    completion=projection,
+                    scope=ReferenceInputScope(0, len(original)),
+                ),
+                None,
+            )
         )
         failure_writer = mock.Mock()
         bindings = _core._reference_input_bindings(

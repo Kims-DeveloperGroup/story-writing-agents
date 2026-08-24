@@ -53,12 +53,14 @@ class ReferenceActivationContractTests(unittest.TestCase):
     """Lock private immutable values without growing either public facade."""
 
     def test_models_are_exact_frozen_slotted_picklable_and_private(self) -> None:
+        scope = activation.ReferenceInputScope(1, 3)
         values = (
-            activation.ReferenceInputScope(1, 3),
+            scope,
             activation.ReferenceActivationRequest(
                 activation.ReferenceActivationKind.PICK,
                 1,
                 3,
+                scope,
                 _PATHS,
             ),
             activation.ReferenceInputProjection(
@@ -67,8 +69,8 @@ class ReferenceActivationContractTests(unittest.TestCase):
         )
         expected_fields = (
             ("start", "end"),
-            ("kind", "start", "end", "paths", "path"),
-            ("completion", "request", "failure"),
+            ("kind", "start", "end", "scope", "paths", "path"),
+            ("completion", "request", "failure", "scope"),
         )
         for value, names in zip(values, expected_fields):
             with self.subTest(value=type(value).__name__):
@@ -96,6 +98,7 @@ class ReferenceActivationContractTests(unittest.TestCase):
         self.assertFalse(hasattr(terminal_facade, "ReferenceActivationRequest"))
 
     def test_invalid_relations_fail_before_any_projection(self) -> None:
+        scope = activation.ReferenceInputScope(0, 1)
         empty_position = "artifact-reference:empty:0"
         empty_completion = CommandCompletionProjection(
             empty_position,
@@ -111,6 +114,7 @@ class ReferenceActivationContractTests(unittest.TestCase):
                     activation.ReferenceActivationKind.PICK,
                     0,
                     1,
+                    scope,
                     tuple(reversed(_PATHS)),
                 ),
                 ValueError,
@@ -120,6 +124,7 @@ class ReferenceActivationContractTests(unittest.TestCase):
                     activation.ReferenceActivationKind.PICK,
                     0,
                     1,
+                    scope,
                     _PATHS,
                     path=_PATHS[0],
                 ),
@@ -130,6 +135,27 @@ class ReferenceActivationContractTests(unittest.TestCase):
                     activation.ReferenceActivationKind.VIEW,
                     0,
                     1,
+                    scope,
+                ),
+                ValueError,
+            ),
+            (
+                lambda: activation.ReferenceActivationRequest(
+                    activation.ReferenceActivationKind.PICK,
+                    0,
+                    1,
+                    object(),  # type: ignore[arg-type]
+                    _PATHS,
+                ),
+                TypeError,
+            ),
+            (
+                lambda: activation.ReferenceActivationRequest(
+                    activation.ReferenceActivationKind.PICK,
+                    0,
+                    2,
+                    scope,
+                    _PATHS,
                 ),
                 ValueError,
             ),
@@ -141,8 +167,23 @@ class ReferenceActivationContractTests(unittest.TestCase):
                         activation.ReferenceActivationKind.VIEW,
                         0,
                         1,
+                        scope,
                         path=_PATHS[0],
                     ),
+                    scope=scope,
+                ),
+                ValueError,
+            ),
+            (
+                lambda: activation.ReferenceInputProjection(
+                    request=activation.ReferenceActivationRequest(
+                        activation.ReferenceActivationKind.VIEW,
+                        0,
+                        1,
+                        scope,
+                        path=_PATHS[0],
+                    ),
+                    scope=activation.ReferenceInputScope(0, 2),
                 ),
                 ValueError,
             ),
@@ -150,6 +191,13 @@ class ReferenceActivationContractTests(unittest.TestCase):
                 lambda: activation.ReferenceInputProjection(
                     completion=empty_completion,
                     failure=activation.ReferenceInputFailureKind.STALE,
+                    scope=scope,
+                ),
+                ValueError,
+            ),
+            (
+                lambda: activation.ReferenceInputProjection(
+                    completion=empty_completion,
                 ),
                 ValueError,
             ),
@@ -162,6 +210,7 @@ class ReferenceActivationContractTests(unittest.TestCase):
                         (),
                     ),
                     failure=activation.ReferenceInputFailureKind.EMPTY_SOURCES,
+                    scope=scope,
                 ),
                 ValueError,
             ),
@@ -174,6 +223,7 @@ class ReferenceActivationContractTests(unittest.TestCase):
             activation.ReferenceInputProjection(
                 completion=empty_completion,
                 failure=activation.ReferenceInputFailureKind.EMPTY_SOURCES,
+                scope=scope,
             ).completion,
             empty_completion,
         )
@@ -203,8 +253,9 @@ class ReferenceProjectionTests(unittest.TestCase):
 
     def test_picker_and_direct_view_are_explicit_and_catalog_correlated(self) -> None:
         position = f"{RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX}4"
+        pick_scope = activation.ReferenceInputScope(0, 6)
         pick = activation.project_reference_input(
-            "use $$", 6, activation.ReferenceInputScope(0, 6), _PATHS
+            "use $$", 6, pick_scope, _PATHS
         )
         self.assertEqual(
             pick,
@@ -219,17 +270,23 @@ class ReferenceProjectionTests(unittest.TestCase):
                     ),
                 ),
                 request=activation.ReferenceActivationRequest(
-                    activation.ReferenceActivationKind.PICK, 4, 6, _PATHS
-                )
+                    activation.ReferenceActivationKind.PICK,
+                    4,
+                    6,
+                    pick_scope,
+                    _PATHS,
+                ),
+                scope=pick_scope,
             ),
         )
         for path in (_PATHS[1], _PATHS[3], _PATHS[4]):
             with self.subTest(path=path):
                 expression = f"use $${{{path}}}"
+                scope = activation.ReferenceInputScope(0, len(expression))
                 view = activation.project_reference_input(
                     expression,
                     len(expression),
-                    activation.ReferenceInputScope(0, len(expression)),
+                    scope,
                     _PATHS,
                 )
                 self.assertEqual(
@@ -239,8 +296,10 @@ class ReferenceProjectionTests(unittest.TestCase):
                             activation.ReferenceActivationKind.VIEW,
                             4,
                             len(expression),
+                            scope,
                             path=path,
-                        )
+                        ),
+                        scope=scope,
                     ),
                 )
 
@@ -271,7 +330,8 @@ class ReferenceProjectionTests(unittest.TestCase):
                 _PATHS,
             ),
             activation.ReferenceInputProjection(
-                failure=activation.ReferenceInputFailureKind.INVALID
+                failure=activation.ReferenceInputFailureKind.INVALID,
+                scope=activation.ReferenceInputScope(0, 3),
             ),
         )
         completed = activation.project_reference_input(
@@ -288,18 +348,40 @@ class ReferenceProjectionTests(unittest.TestCase):
         marker = f"$${{{path}}}"
         marker_start = 4
         marker_end = marker_start + len(marker)
-        expected = activation.ReferenceInputProjection(
-            request=activation.ReferenceActivationRequest(
-                activation.ReferenceActivationKind.VIEW,
-                marker_start,
-                marker_end,
-                path=path,
-            )
-        )
         for suffix in (".", ",", ")", "word"):
             with self.subTest(suffix=suffix):
                 buffer = f"use {marker}{suffix}"
                 scope = activation.ReferenceInputScope(0, len(buffer))
+                expected = activation.ReferenceInputProjection(
+                    request=activation.ReferenceActivationRequest(
+                        activation.ReferenceActivationKind.VIEW,
+                        marker_start,
+                        marker_end,
+                        scope,
+                        path=path,
+                    ),
+                    scope=scope,
+                )
+
+                self.assertIsNone(
+                    activation.project_reference_input(
+                        buffer,
+                        marker_start,
+                        scope,
+                        _PATHS,
+                    )
+                )
+                for cursor in range(marker_start + 1, marker_end + 1):
+                    with self.subTest(suffix=suffix, cursor=cursor):
+                        self.assertEqual(
+                            activation.project_reference_input(
+                                buffer,
+                                cursor,
+                                scope,
+                                _PATHS,
+                            ),
+                            expected,
+                        )
 
                 projected = activation.project_reference_input(
                     buffer,
@@ -409,7 +491,8 @@ class ReferenceProjectionTests(unittest.TestCase):
                         self.assertEqual(
                             projected,
                             activation.ReferenceInputProjection(
-                                failure=activation.ReferenceInputFailureKind.INVALID
+                                failure=activation.ReferenceInputFailureKind.INVALID,
+                                scope=activation.ReferenceInputScope(0, len(buffer)),
                             ),
                         )
 
@@ -480,6 +563,31 @@ class ReferenceProjectionTests(unittest.TestCase):
         assert later_projection.completion is not None
         self.assertEqual(later_projection.completion.start, later_start)
 
+        boundary_cases = (
+            (complete_direct, 0),
+            (f"\\{unfinished_direct}", 2),
+            (f"\\\\{complete_direct}", 2),
+        )
+        for buffer, start in boundary_cases:
+            with self.subTest(boundary=buffer):
+                scope = activation.ReferenceInputScope(0, len(buffer))
+                self.assertIsNone(
+                    activation.project_reference_input(
+                        buffer,
+                        start,
+                        scope,
+                        _PATHS,
+                    )
+                )
+                self.assertIsNotNone(
+                    activation.project_reference_input(
+                        buffer,
+                        start + 1,
+                        scope,
+                        _PATHS,
+                    )
+                )
+
     def test_scope_cursor_escape_and_fragment_boundaries_do_not_overreach(self) -> None:
         cases = (
             ("prefix $", 8, None, None),
@@ -528,6 +636,7 @@ class ReferenceProjectionTests(unittest.TestCase):
                         (),
                     ),
                     failure=activation.ReferenceInputFailureKind.EMPTY_SOURCES,
+                    scope=activation.ReferenceInputScope(0, 1),
                 ),
             ),
             (
@@ -542,6 +651,7 @@ class ReferenceProjectionTests(unittest.TestCase):
                         (),
                     ),
                     failure=activation.ReferenceInputFailureKind.EMPTY_SOURCES,
+                    scope=activation.ReferenceInputScope(0, 2),
                 ),
             ),
             (
@@ -600,7 +710,15 @@ class ReferenceProjectionTests(unittest.TestCase):
                     result,
                     expected
                     if isinstance(expected, activation.ReferenceInputProjection)
-                    else activation.ReferenceInputProjection(failure=expected),
+                    else activation.ReferenceInputProjection(
+                        failure=expected,
+                        scope=activation.ReferenceInputScope(0, len(buffer)),
+                    ),
+                )
+                assert result is not None
+                self.assertEqual(
+                    result.defers_empty_ranged_failure,
+                    buffer == "$$" and not paths and failure is None,
                 )
 
 
@@ -652,7 +770,7 @@ class ReferenceEditTests(unittest.TestCase):
         assert projection is not None and projection.completion is not None
         replacement = projection.completion.candidates[1].replacement
         updated = activation.replace_reference_completion(
-            original, projection.completion, replacement
+            original, projection, replacement
         )
         self.assertEqual(
             updated.main_input.line_state.buffer,
@@ -674,6 +792,7 @@ class ReferenceEditTests(unittest.TestCase):
             activation.ReferenceActivationKind.PICK,
             second_start,
             second_start + 2,
+            activation.ReferenceInputScope(0, len(buffer)),
             _PATHS,
         )
         selected = activation.selected_reference_request(picker_request, _PATHS[3])
@@ -689,7 +808,7 @@ class ReferenceEditTests(unittest.TestCase):
         assert first is not None and first.completion is not None
         first_token = first.completion.candidates[0].replacement
         updated = activation.replace_reference_completion(
-            once, first.completion, first_token
+            once, first, first_token
         )
         parsed = parse_artifact_references(updated.main_input.line_state.buffer)
         self.assertEqual(
@@ -698,9 +817,94 @@ class ReferenceEditTests(unittest.TestCase):
         )
         self.assertTrue(updated.main_input.line_state.buffer.endswith(" end"))
 
+    def test_complete_scope_validation_rejects_conflicts_atomically(self) -> None:
+        path = _PATHS[1]
+        token = f"${{{path}}}"
+        ranged = f"{token}#L2-L3"
+        for existing in (token, ranged):
+            with self.subTest(existing=existing):
+                buffer = f"keep {existing} then $$"
+                origin = _state(buffer)
+                scope = activation.ReferenceInputScope(0, len(buffer))
+                projected = activation.project_reference_input(
+                    buffer,
+                    len(buffer),
+                    scope,
+                    _PATHS,
+                )
+                assert projected is not None and projected.request is not None
+                selected = activation.selected_reference_request(
+                    projected.request,
+                    path,
+                )
+
+                with self.assertRaises(activation.ReferenceInputFailure) as raised:
+                    activation.replace_reference_range(origin, selected, 2, 3)
+
+                self.assertIs(
+                    raised.exception.kind,
+                    activation.ReferenceInputFailureKind.INVALID,
+                )
+                self.assertEqual(origin, _state(buffer))
+
+        buffer = f"keep {token} then $"
+        start = buffer.rfind("$")
+        position = f"artifact-reference:{start}"
+        completion = CommandCompletionProjection(
+            position,
+            start,
+            start + 1,
+            (CommandCompletionCandidate(position, token),),
+        )
+        projection = activation.ReferenceInputProjection(
+            completion=completion,
+            scope=activation.ReferenceInputScope(0, len(buffer)),
+        )
+        origin = _state(buffer)
+        with self.assertRaises(activation.ReferenceInputFailure) as raised:
+            activation.replace_reference_completion(origin, projection, token)
+        self.assertIs(
+            raised.exception.kind,
+            activation.ReferenceInputFailureKind.INVALID,
+        )
+        self.assertEqual(origin, _state(buffer))
+
+    def test_disjoint_same_source_ranges_remain_valid_and_ordered(self) -> None:
+        path = _PATHS[3]
+        existing = f"${{{path}}}#L2-L3"
+        buffer = f"keep {existing} then $$ end"
+        marker_start = buffer.index("$$")
+        scope = activation.ReferenceInputScope(0, len(buffer))
+        projected = activation.project_reference_input(
+            buffer,
+            marker_start + 2,
+            scope,
+            _PATHS,
+        )
+        assert projected is not None and projected.request is not None
+        selected = activation.selected_reference_request(projected.request, path)
+
+        updated = activation.replace_reference_range(
+            _state(buffer, marker_start + 2),
+            selected,
+            5,
+            6,
+        )
+
+        parsed = parse_artifact_references(updated.main_input.line_state.buffer)
+        self.assertEqual(
+            tuple(reference.token for reference in parsed.references),
+            (existing, f"${{{path}}}#L5-L6"),
+        )
+        self.assertTrue(updated.main_input.line_state.buffer.endswith(" end"))
+
     def test_stale_selection_and_conflicting_edits_leave_origin_unchanged(self) -> None:
         request = activation.ReferenceActivationRequest(
-            activation.ReferenceActivationKind.PICK, 0, 2, _PATHS
+            activation.ReferenceActivationKind.PICK,
+            0,
+            2,
+            activation.ReferenceInputScope(0, 2),
+            _PATHS,
         )
         for call in (
             lambda: activation.selected_reference_request(request, "missing.md"),
@@ -710,6 +914,7 @@ class ReferenceEditTests(unittest.TestCase):
                     activation.ReferenceActivationKind.VIEW,
                     0,
                     2,
+                    activation.ReferenceInputScope(0, 8),
                     path=_PATHS[0],
                 ),
                 1,
