@@ -1951,10 +1951,23 @@ class StartupPresentationFoundationTests(unittest.TestCase):
     """Lock welcome/auth presentation timing, profiles, and restoration."""
 
     @staticmethod
+    def render_startup_frame(
+        index: int,
+        capabilities: TerminalCapabilities,
+    ) -> RenderedFrame:
+        """Render one production startup frame for visual contract tests."""
+
+        return render_component(
+            _core._startup_welcome_component(index, capabilities),
+            capabilities,
+        )
+
+    @staticmethod
     def make_driver(
         *,
         environment: dict[str, str] | None = None,
         termios_value: object | None = None,
+        terminal_width: int = 80,
     ) -> tuple[RawTerminalDriver, StartupStream, StartupStream, object]:
         """Build one capable deterministic startup driver and its collaborators."""
 
@@ -1966,7 +1979,9 @@ class StartupPresentationFoundationTests(unittest.TestCase):
             environ={"TERM": "xterm-256color"}
             if environment is None
             else environment,
-            get_terminal_size=lambda descriptor: os.terminal_size((80, 24)),
+            get_terminal_size=lambda descriptor: os.terminal_size(
+                (terminal_width, 24)
+            ),
             fpathconf=lambda descriptor, name: 0,
         )
         driver = RawTerminalDriver(
@@ -2015,6 +2030,187 @@ class StartupPresentationFoundationTests(unittest.TestCase):
             0,
         )
         self.assertEqual(selected_termios.calls[-1][2], selected_termios.original)
+
+    def test_welcome_selector_uses_width_aware_frames_and_safe_physical_widths(
+        self,
+    ) -> None:
+        """Keep each real welcome layout legible at its selection boundary."""
+
+        cases = (
+            (80, _core._STARTUP_WELCOME_FRAMES, "WRITING AGENTS"),
+            (48, _core._STARTUP_WELCOME_FRAMES, "WRITING AGENTS"),
+            (47, _core._COMPACT_STARTUP_WELCOME_FRAMES, "STORY WRITING AGENTS"),
+            (32, _core._COMPACT_STARTUP_WELCOME_FRAMES, "STORY WRITING AGENTS"),
+            (31, _core._NARROW_STARTUP_WELCOME_FRAMES, "provider check"),
+            (20, _core._NARROW_STARTUP_WELCOME_FRAMES, "provider check"),
+        )
+        for width, expected_frames, final_marker in cases:
+            with self.subTest(width=width):
+                capabilities = capability(CapabilityProfile.LINE, width=width)
+                selected = tuple(
+                    _core._startup_welcome_component(index, capabilities)
+                    for index in range(4)
+                )
+                self.assertEqual(selected, expected_frames)
+                final = render_component(selected[-1], capabilities)
+                self.assertIn(final_marker, final.text)
+                for index, component in enumerate(selected):
+                    with self.subTest(index=index):
+                        frame = render_component(component, capabilities)
+                        self.assertEqual(frame.width, width)
+                        self.assertTrue(
+                            all(
+                                physical_width(line) <= width
+                                for line in frame.text.splitlines()
+                            )
+                        )
+
+    def test_welcome_ansi_colors_preserve_plain_semantics(self) -> None:
+        """Use multiple decorative roles without changing startup text."""
+
+        plain_capabilities = capability(CapabilityProfile.LINE, width=80)
+        ansi_capabilities = capability(CapabilityProfile.ANSI, width=80)
+        for index in range(4):
+            with self.subTest(index=index):
+                plain = self.render_startup_frame(index, plain_capabilities)
+                ansi = self.render_startup_frame(index, ansi_capabilities)
+                self.assertEqual(strip_decorative_sgr(ansi.text), plain.text)
+
+        final = self.render_startup_frame(3, ansi_capabilities)
+        for sgr in ("\x1b[1m", "\x1b[36m", "\x1b[33m", "\x1b[35m"):
+            with self.subTest(sgr=repr(sgr)):
+                self.assertIn(sgr, final.text)
+
+    def test_static_welcome_renders_actual_final_layout_once_per_width(self) -> None:
+        """Keep static, reduced-motion, and limited terminals visibly useful."""
+
+        cases = (
+            (
+                "reduced-wide",
+                80,
+                {"TERM": "xterm", "STORY_REDUCED_MOTION": "1"},
+                StartupTermios(),
+                "WRITING AGENTS",
+            ),
+            (
+                "dumb-compact",
+                40,
+                {"TERM": "dumb"},
+                StartupTermios(),
+                "STORY WRITING AGENTS",
+            ),
+            (
+                "no-color-narrow",
+                20,
+                {"TERM": "xterm", "NO_COLOR": "1"},
+                StartupTermios(),
+                "provider check",
+            ),
+            (
+                "termios-unavailable",
+                80,
+                {"TERM": "xterm"},
+                CompleteTermios,
+                "WRITING AGENTS",
+            ),
+        )
+        for label, width, environment, termios_value, final_marker in cases:
+            with self.subTest(label=label):
+                driver, input_stream, output_stream, selected_termios = self.make_driver(
+                    environment=environment,
+                    termios_value=termios_value,
+                    terminal_width=width,
+                )
+                sleeps: list[float] = []
+                driver.run_startup_welcome(self.render_startup_frame, sleeps.append)
+
+                capabilities = capability(CapabilityProfile.LINE, width=width)
+                expected = self.render_startup_frame(3, capabilities)
+                rendered = output_stream.getvalue()
+                self.assertEqual(rendered, f"{expected.text}\n")
+                self.assertIn(final_marker, rendered)
+                self.assertNotIn("\x1b[", rendered)
+                self.assertEqual(sleeps, [])
+                self.assertEqual(input_stream.read_calls, 0)
+                if isinstance(selected_termios, StartupTermios):
+                    self.assertEqual(selected_termios.calls, [])
+
+    def test_callback_welcome_uses_width_aware_final_layout_without_sleep(
+        self,
+    ) -> None:
+        """Keep callback presentation static and useful at every layout width."""
+
+        for width, marker in (
+            (80, "WRITING AGENTS"),
+            (40, "STORY WRITING AGENTS"),
+            (20, "provider check"),
+        ):
+            with self.subTest(width=width):
+                records: list[str] = []
+                sleeper = mock.Mock(
+                    side_effect=AssertionError("callback presentation slept")
+                )
+                terminal = InteractiveTerminal(
+                    lambda _prompt: "",
+                    records.append,
+                    width=width,
+                )
+                presentation = InteractiveStartupPresentation(
+                    terminal,
+                    sleeper=sleeper,
+                )
+                presentation.show_welcome()
+
+                capabilities = capability(CapabilityProfile.LINE, width=width)
+                expected = self.render_startup_frame(3, capabilities)
+                self.assertEqual(records, [f"{expected.text}\n"])
+                self.assertIn(marker, records[0])
+                self.assertNotIn("\x1b[", records[0])
+                sleeper.assert_not_called()
+
+    def test_startup_resize_reselects_layouts_and_clears_variable_heights(self) -> None:
+        """Re-render changing layouts against fresh widths without leaking state."""
+
+        driver, input_stream, output_stream, selected_termios = self.make_driver()
+        base = capability(CapabilityProfile.ANSI, width=80)
+        observed = [
+            base,
+            capability(CapabilityProfile.ANSI, width=80),
+            capability(CapabilityProfile.ANSI, width=40),
+            capability(CapabilityProfile.ANSI, width=20),
+            capability(CapabilityProfile.ANSI, width=80),
+        ]
+        rendered_widths: list[int] = []
+
+        def render(index: int, capabilities: TerminalCapabilities) -> RenderedFrame:
+            rendered_widths.append(capabilities.width)
+            frame = self.render_startup_frame(index, capabilities)
+            self.assertTrue(
+                all(
+                    physical_width(line) <= capabilities.width
+                    for line in strip_decorative_sgr(frame.text).splitlines()
+                )
+            )
+            return frame
+
+        with mock.patch.object(
+            RawTerminalDriver,
+            "capabilities",
+            autospec=True,
+            side_effect=observed,
+        ):
+            sleeps: list[float] = []
+            driver.run_startup_welcome(render, sleeps.append)
+
+        self.assertEqual(rendered_widths, [79, 39, 19, 79])
+        self.assertEqual(sleeps, [0.4, 0.4, 0.4])
+        self.assertTrue(output_stream.getvalue().endswith("\n"))
+        self.assertNotIn("\x1b[?1049", output_stream.getvalue())
+        self.assertEqual(input_stream.read_calls, 0)
+        self.assertEqual(
+            [call[1] for call in selected_termios.calls],
+            [selected_termios.TCSANOW, selected_termios.TCSAFLUSH],
+        )
 
     def test_notices_are_bounded_cleared_and_result_owns_a_fresh_boundary(
         self,

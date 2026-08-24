@@ -250,11 +250,15 @@ orientation, validation, cancellation, discard, error, and result records are
 written after that boundary and remain visible. Conversation-subject input is
 always an ordinary read.
 
-After workspace resolution, a capable POSIX terminal shows a bounded four-frame
-welcome at 0.4-second intervals, then the authentication gate. Sign-in guidance
-and its sanitized result are each transient for 0.8 seconds. `NO_COLOR`,
-`STORY_REDUCED_MOTION`, non-POSIX, `TERM=dumb`, callback, or uncertain
-capability uses one static meaningful record with no delay, ANSI, or flashing.
+After workspace resolution, a capable POSIX terminal shows a bounded,
+width-aware four-frame welcome at 0.4-second intervals, then the authentication
+gate. At 48 columns and wider it progressively reveals the colored `STORY`
+masthead; 32–47 columns use a compact identity, and narrower terminals use
+stacked fields. Sign-in guidance and its sanitized result are each transient
+for 0.8 seconds. `NO_COLOR`, `STORY_REDUCED_MOTION`, non-POSIX, `TERM=dumb`,
+callback, or uncertain capability renders the width-appropriate completed
+welcome once with no delay, ANSI, or flashing. The welcome does not use the
+alternate screen or hide the cursor, and it never includes provider output.
 See the exact [terminal startup contract](interactive-terminal.md#startup-welcome-and-authentication).
 
 Main prompts project canonical root, subcommand, and finite fixed-option
