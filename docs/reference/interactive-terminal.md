@@ -32,6 +32,9 @@
 > does not wait for Enter, Tab, or newline. The viewer remains an
 > unlisted supplied-text component rather than a public command or selection
 > API; downstream agent-read enforcement remains runtime-owned.
+> The Settings editor exposes provider-neutral Provider, Model, and Effort
+> fields; entering Model or Effort performs one fresh bounded discovery for the
+> pending effective provider.
 
 ## Public API
 
@@ -445,7 +448,7 @@ or a first input call that cannot safely preflight live mode, renders the
 complete numbered list through the ordinary line callback. Opaque choice
 identities are control state and are never rendered.
 
-Settings free-text and numeric values use a separate context-free semantic
+Settings custom-model and numeric values use a separate context-free semantic
 `Prompt`. That route is history- and completion-free. Enter commits the exact
 line, Escape cancels only the nested editor, and Ctrl-C or EOF cancels the whole
 settings workflow. In fallback an exact ESC line cancels, while `/cancel`
@@ -502,6 +505,55 @@ without empty Current or Pending sections. Selecting `YES` commits the
 requested action, while `NO` or nested Escape returns to the settings picker.
 Top-level Escape, Ctrl-C, and EOF cancel without writing and do not imply a
 snapshot was rendered.
+
+<a id="provider-model-and-effort-pickers"></a>
+
+## Provider Model and Effort pickers
+
+Within `/settings`, the visible per-agent fields and editor titles are exactly
+Provider, Model, and Effort. Current/Pending confirmations remain
+provider-qualified—Codex model/reasoning and Antigravity model/effort rows—so
+inactive persisted values remain unambiguous.
+
+Only entering Model or Effort starts discovery. Opening Settings or Providers,
+selecting an agent, navigating providers, and editing Provider launch no
+catalog command. Each entry runs one fresh command for the pending effective
+provider; Effort additionally resolves the pending effective model from the
+agent value and then workspace fallback.
+
+Model choices are ordered Inherit, discovered models in provider order,
+Current custom when the pending value is not in that projection, and Custom
+model. Effort choices are ordered Inherit, the exact effort rows for the
+selected Codex model or Antigravity's global `low`, `medium`, `high`, and
+Current compatibility when a non-null pending effort is unreported. Inherit
+stores null, Current custom/compatibility preserve exact pending values, and
+Custom model retains the safe text prompt. Persisted Codex efforts accept
+`[a-z][a-z0-9_-]{0,31}`; Antigravity persists only `low`, `medium`, or `high`.
+
+Codex runs exact `codex debug models --bundled`, keeps only
+`visibility="list"` rows, and projects exact per-model
+`supported_reasoning_levels` and `default_reasoning_level`. It does not
+hard-code names from OpenAI's
+[current model guidance](https://developers.openai.com/api/docs/guides/latest-model).
+Antigravity runs exact `agy models` (or the resolved executable with `models`),
+projects aligned opaque slug/display rows in provider order, and never infers
+effort from model text. Its effort vocabulary follows Google's
+[Antigravity headless/CLI guide](https://antigravity.google/docs/cli/headless/).
+
+One attempt has a five-second deadline and a one-MiB retained-stdout ceiling.
+It discards stdin and stderr, drops raw bytes after strict projection, and has
+no automatic retry, cache, persistence, or raw diagnostic. Fixed failure
+guidance leaves Inherit and applicable Current custom/compatibility or Custom
+model paths available; re-entering the editor retries later. Save persists
+only the selected opaque model/effort value or null and activates it on the
+next shell/backend construction.
+
+Every capable picker and input component follows the universal transient
+lifecycle: commit, cancellation, interrupt, EOF, and failure erase or replace
+the submitted control instead of leaving its snapshot in terminal display
+history. Durable result/event components are separate. Numbered fallback
+cannot erase bytes already printed, but adds no duplicate or synthetic final
+control frame.
 
 ## Current semantic plain shapes
 

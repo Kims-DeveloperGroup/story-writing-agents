@@ -5,6 +5,8 @@
 > conversations. Interactive onboarding invokes the resolved Antigravity
 > executable without arguments for native sign-in; it defaults to `agy`. Codex
 > remains the final route fallback.
+> Settings Model/Effort editors also use bounded `agy models` discovery for a
+> pending Antigravity route without persisting the catalog.
 
 Key terms: **backend name**—the configuration value `antigravity`;
 **executable**—the resolved Antigravity command, `agy` by default; **provider
@@ -96,6 +98,23 @@ plot architect and leaves omitted agents to inherit the workspace default:
 }
 ```
 
+Entering Model or Effort runs one fresh `agy models` discovery for the pending
+effective provider. This is separate from the startup status probe even though
+both use the same command: Settings open, Providers open, agent/provider
+navigation, and Provider editing launch no discovery process. Model choices are
+Inherit, aligned opaque slug/display rows in provider order, Current custom
+when needed, and Custom model. The picker does not freeze the example list in
+Google's
+[Antigravity headless/CLI guide](https://antigravity.google/docs/cli/headless/).
+
+Effort choices are Inherit, global `low`, `medium`, `high`, and Current
+compatibility when needed. Story does not infer effort from a model slug or
+display name. Each attempt is bounded to five seconds and one MiB retained
+stdout, discards stderr/raw diagnostics, and has no automatic retry or cache.
+Fixed failure guidance preserves inherit/current/custom paths; re-entering
+retries later. Save writes only the selected opaque value or null and affects
+the next shell/backend construction; no catalog row is persisted.
+
 The complete persistent schemas are in
 [Agent configuration](../reference/configuration/agent-configuration.md).
 
@@ -134,10 +153,12 @@ backend, not one already running.
 | Antigravity model | `--antigravity-model` or constructor value; per-agent `antigravity_model`; system `antigravity_model`; provider default. |
 | Antigravity effort | `--antigravity-effort` or constructor value; per-agent `antigravity_effort`; system `antigravity_effort`; provider default. |
 
-Codex reasoning accepts `minimal`, `low`, `medium`, `high`, or `xhigh`.
-Antigravity effort accepts only `low`, `medium`, or `high`. Model strings are
-passed through after flag-safety validation; the runtime does not query a model
-catalog or prove provider support.
+Codex reasoning accepts any lowercase forward-compatible token matching
+`[a-z][a-z0-9_-]{0,31}`. Antigravity effort accepts only `low`, `medium`, or
+`high`. Model strings are passed through after flag-safety validation; backend
+construction does not query a catalog or prove provider support. Interactive
+discovery is advisory and does not make membership a persistence requirement,
+so safe custom models remain supported.
 
 ## Capability preflight and fixed errors
 

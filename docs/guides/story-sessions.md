@@ -121,16 +121,18 @@ any default already established.
 shows separate Current and Pending values for Language,
 Persona, Maximum debate rounds, and Providers. The top-level choices are those
 four rows followed by Save and Cancel. Choose Providers to select an agent in
-canonical roster order, then choose Provider, Model, or Reasoning effort for
+canonical roster order, then choose Provider, Model, or Effort for
 that agent. Provider choices are Codex and Antigravity. Changing the route does
 not erase the inactive provider's saved model or effort.
+Editor labels are provider-neutral; Current/Pending confirmation remains
+provider-qualified so both providers' inactive values stay identifiable.
 
 On a capable terminal, Up/Down moves the current picker highlight and Enter
 opens or commits it. Escape from a nested picker or prompt restores that
 field's prior pending value and returns to its parent. Escape at the top level,
 Cancel, Ctrl-C, or EOF cancels the whole workflow without saving. Plain
 fallback uses the picker's numbered grammar. In the per-agent active-provider
-model text prompt, blank means inherit that provider's workspace system model
+Custom model prompt, blank means inherit that provider's workspace system model
 and `/cancel` is literal model text rather than a command.
 
 Language offers `KO`, `EN`, `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, and `RU`.
@@ -138,12 +140,31 @@ Persona uses the safe lexical template catalog. Debate rounds accept a
 nonnegative ASCII integer, including audit-only `0`. Providers are edited per
 agent in roster order: Codex and Antigravity are available, with the workspace
 default and final Codex fallback used by nullable agent routes.
-Model accepts exact safe text or blank to inherit the active provider's
-workspace system model. Codex effort offers Inherit, `minimal`, `low`,
-`medium`, `high`, and `xhigh`; Antigravity effort offers Inherit, `low`,
-`medium`, and `high`. Inherit uses the active provider's workspace system
-value, then its provider default. The legacy backend name `gemini` is rejected;
-use `antigravity`.
+
+Only entering Model or Effort discovers a catalog; opening Settings or
+Providers and navigating Provider do not launch provider commands. Each editor
+entry discovers the pending effective provider afresh. Model choices are
+ordered Inherit, provider-order discovered models, Current custom when the
+pending model is absent, and Custom model. Effort choices are ordered Inherit,
+the pending effective Codex model's exact efforts or Antigravity's global
+`low`, `medium`, `high`, and Current compatibility when a pending effort is
+unreported.
+
+Codex uses `codex debug models --bundled` and exact list-visible model effort
+rows instead of freezing OpenAI's
+[current model guidance](https://developers.openai.com/api/docs/guides/latest-model).
+Antigravity uses `agy models`, preserves aligned opaque slug/display order, and
+does not infer effort from names; Google's
+[headless/CLI guide](https://antigravity.google/docs/cli/headless/) documents
+the command and global effort values. Each attempt is limited to five seconds
+and one MiB retained stdout, with no automatic retry, cache, persistence,
+stderr, or raw diagnostic. Fixed failures preserve inherit/current/custom
+paths; leave and re-enter to retry.
+
+Save writes only the chosen opaque value or null. Custom models remain valid,
+Codex effort tokens match `[a-z][a-z0-9_-]{0,31}`, and Antigravity effort
+remains exactly `low`, `medium`, or `high`. The legacy backend name `gemini` is
+rejected; use `antigravity`.
 
 Selecting a provider freshly authenticates it before changing that pending
 route. Save freshly gates every distinct effective provider before the guarded
