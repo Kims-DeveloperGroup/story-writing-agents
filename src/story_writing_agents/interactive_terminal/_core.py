@@ -70,6 +70,8 @@ from ._model import (
     Section,
     SemanticRole,
     SlashCommandSuggestion,
+    StartupWelcome,
+    StartupWelcomeStage,
     SuggestionPalette,
     TerminalCapabilities,
     ViewState,
@@ -82,6 +84,7 @@ from ._render import (
     render_input_prompt,
     render_picker_fallback,
     render_picker_viewport,
+    render_startup_welcome_frame,
 )
 from ._reference_activation import (
     ReferenceInputFailure,
@@ -468,209 +471,18 @@ _SUMMARY_LIMIT = 512
 _HINT_LIMIT = 256
 _REDACTION = "<redacted>"
 _MAIN_PROMPT_EXCLUSIONS = frozenset({"/compose", "/send", "/cancel"})
-_STARTUP_MASTHEAD = (
-    " SSSS  TTTTT  OOO  RRRR  Y   Y",
-    "S        T   O   O R   R  Y Y ",
-    " SSS     T   O   O RRRR    Y  ",
-    "    S    T   O   O R R     Y  ",
-    "SSSS     T    OOO  R  RR   Y  ",
-)
-_STARTUP_WELCOME_FRAMES: tuple[Component, ...] = (
-    Panel(
-        "Story.",
-        (
-            Record(
-                "welcome",
-                content=_STARTUP_MASTHEAD[0],
-                role=SemanticRole.INFO,
-                state=ViewState.LOADING,
-            ),
-        ),
-        state=ViewState.LOADING,
-    ),
-    Panel(
-        "Story Writing",
-        (
-            Record(
-                "masthead",
-                content="\n".join(_STARTUP_MASTHEAD[:3]),
-                role=SemanticRole.INFO,
-                state=ViewState.LOADING,
-            ),
-            Notice(
-                "A shared creative workspace is opening.",
-                role=SemanticRole.WARNING,
-                state=ViewState.LOADING,
-            ),
-        ),
-        state=ViewState.LOADING,
-    ),
-    Panel(
-        "Story Writing Agents",
-        (
-            Record(
-                "masthead",
-                content="\n".join(_STARTUP_MASTHEAD),
-                role=SemanticRole.INFO,
-                state=ViewState.LOADING,
-            ),
-            Notice(
-                "WRITING AGENTS",
-                label="identity",
-                role=SemanticRole.COMMAND,
-            ),
-            Notice(
-                "Four roles. One shared story workspace.",
-                role=SemanticRole.WARNING,
-            ),
-        ),
-        state=ViewState.LOADING,
-    ),
-    Panel(
-        "Story Writing Agents",
-        (
-            Record(
-                "masthead",
-                content="\n".join(_STARTUP_MASTHEAD),
-                role=SemanticRole.INFO,
-            ),
-            Notice(
-                "WRITING AGENTS",
-                label="identity",
-                role=SemanticRole.COMMAND,
-            ),
-            Notice(
-                "Four roles. One shared story workspace.",
-                role=SemanticRole.WARNING,
-            ),
-            Notice(
-                "Provider access will be checked before the story session starts.",
-                role=SemanticRole.INFO,
-            ),
-        ),
-        state=ViewState.COMPLETED,
-    ),
-)
-_COMPACT_STARTUP_WELCOME_FRAMES: tuple[Component, ...] = (
-    Panel(
-        "Story.",
-        (
-            Notice("STORY", label="identity", role=SemanticRole.INFO),
-        ),
-        state=ViewState.LOADING,
-    ),
-    Panel(
-        "Story Writing",
-        (
-            Notice("STORY WRITING", label="identity", role=SemanticRole.INFO),
-            Notice(
-                "A shared creative workspace is opening.",
-                role=SemanticRole.WARNING,
-                state=ViewState.LOADING,
-            ),
-        ),
-        state=ViewState.LOADING,
-    ),
-    Panel(
-        "Story Writing Agents",
-        (
-            Notice(
-                "STORY WRITING AGENTS",
-                label="identity",
-                role=SemanticRole.COMMAND,
-            ),
-            Notice(
-                "Four roles. One shared story workspace.",
-                role=SemanticRole.WARNING,
-                state=ViewState.LOADING,
-            ),
-        ),
-        state=ViewState.LOADING,
-    ),
-    Panel(
-        "Story Writing Agents",
-        (
-            Notice(
-                "STORY WRITING AGENTS",
-                label="identity",
-                role=SemanticRole.COMMAND,
-            ),
-            Notice(
-                "Four roles. One shared story workspace.",
-                role=SemanticRole.WARNING,
-            ),
-            Notice(
-                "Provider access will be checked before the story session starts.",
-                role=SemanticRole.INFO,
-            ),
-        ),
-        state=ViewState.COMPLETED,
-    ),
-)
-_NARROW_STARTUP_WELCOME_FRAMES: tuple[Component, ...] = (
-    Panel(
-        "Story.",
-        (
-            Field("stage", "opening", role=SemanticRole.INFO),
-        ),
-        state=ViewState.LOADING,
-    ),
-    Panel(
-        "Writing",
-        (
-            Field("stage", "opening workspace", role=SemanticRole.WARNING),
-        ),
-        state=ViewState.LOADING,
-    ),
-    Panel(
-        "Agents",
-        (
-            Field("team", "four roles", role=SemanticRole.COMMAND),
-            Field("space", "one shared story", role=SemanticRole.WARNING),
-        ),
-        state=ViewState.LOADING,
-    ),
-    Panel(
-        "Agents",
-        (
-            Field("team", "four roles", role=SemanticRole.COMMAND),
-            Field("space", "one shared story", role=SemanticRole.WARNING),
-            Field(
-                "next",
-                "provider check",
-                role=SemanticRole.INFO,
-            ),
-        ),
-        state=ViewState.COMPLETED,
-    ),
-)
-
-
-def _startup_welcome_component(
-    index: int,
-    capabilities: TerminalCapabilities,
-) -> Component:
-    """Select one fixed semantic welcome frame for the observed width."""
-
-    if type(index) is not int:
-        raise TypeError("index must be an integer")
-    if index < 0 or index >= len(_STARTUP_WELCOME_FRAMES):
-        raise ValueError("index must identify one startup welcome frame")
-    if type(capabilities) is not TerminalCapabilities:
-        raise TypeError("capabilities must be TerminalCapabilities")
-    if capabilities.width >= 48:
-        frames = _STARTUP_WELCOME_FRAMES
-    elif capabilities.width >= 32:
-        frames = _COMPACT_STARTUP_WELCOME_FRAMES
-    else:
-        frames = _NARROW_STARTUP_WELCOME_FRAMES
-    return frames[index]
 
 
 _ARTIFACT_REFERENCE_GUIDANCE = (
     "Artifact references require an attached session and focused conversation. "
     "In provider-bound prompts, $ chooses a whole-file reference; $$ then "
     "Enter/Tab opens ranged selection."
+)
+_STARTUP_WELCOME_SEQUENCE = (
+    StartupWelcome(StartupWelcomeStage.STORY),
+    StartupWelcome(StartupWelcomeStage.WRITING),
+    StartupWelcome(StartupWelcomeStage.AGENTS),
+    StartupWelcome(StartupWelcomeStage.HANDOFF),
 )
 
 
@@ -742,9 +554,7 @@ class InteractiveTerminal:
         self._confirmation_read_line = _plain_input_reader(read_line, width)
         self._picker_read = _plain_picker_reader(read_line, write_text, width)
         self._prompt_read = _plain_prompt_reader(read_line, width)
-        self._startup_welcome = lambda _sleeper: self._write_component(
-            _startup_welcome_component(3, self._capability_provider())
-        )
+        self._startup_welcome = lambda _sleeper: self._write_startup_welcome()
         self._startup_notice = lambda notice, _sleeper: self._write_component(notice)
         self._startup_result_notice = (
             lambda notice, _sleeper: self._write_startup_result_notice(notice)
@@ -1513,6 +1323,17 @@ class InteractiveTerminal:
         """Render and write one semantic component through the bound callback."""
 
         frame = render_component(component, self._capability_provider())
+        self._write_text(f"{frame.text}\n")
+
+    def _write_startup_welcome(self) -> None:
+        """Write one prefix-free final welcome through the callback boundary."""
+
+        capabilities = self._capability_provider()
+        frame = render_startup_welcome_frame(
+            _STARTUP_WELCOME_SEQUENCE[-1],
+            capabilities,
+            capabilities.width,
+        )
         self._write_text(f"{frame.text}\n")
 
     def _write_startup_result_notice(self, notice: Notice) -> None:
@@ -2491,9 +2312,10 @@ def build_stream_terminal(
     terminal._picker_read = read_picker
     terminal._prompt_read = read_prompt
     terminal._startup_welcome = lambda sleeper: driver.run_startup_welcome(
-        lambda index, current: render_component(
-            _startup_welcome_component(index, current),
+        lambda index, current, physical_width: render_startup_welcome_frame(
+            _STARTUP_WELCOME_SEQUENCE[index],
             current,
+            physical_width,
         ),
         sleeper,
     )

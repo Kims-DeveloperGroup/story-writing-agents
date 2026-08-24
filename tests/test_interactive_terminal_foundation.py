@@ -13,7 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from dataclasses import FrozenInstanceError, fields
+from dataclasses import FrozenInstanceError, fields, is_dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import get_args
@@ -50,6 +50,9 @@ from story_writing_agents.interactive_terminal._controls import (
     transition_main_input,
     transition_prompt_input,
 )
+from story_writing_agents.interactive_terminal._core import (
+    _STARTUP_WELCOME_SEQUENCE,
+)
 from story_writing_agents.interactive_terminal._driver import (
     AdvisoryProgressError,
     RawTerminalDriver,
@@ -78,6 +81,8 @@ from story_writing_agents.interactive_terminal._model import (
     RenderedInputFrame,
     Section,
     SemanticRole,
+    StartupWelcome,
+    StartupWelcomeStage,
     SuggestionPalette,
     TerminalCapabilities,
     ViewState,
@@ -88,6 +93,7 @@ from story_writing_agents.interactive_terminal._render import (
     render_component,
     render_input_prompt,
     render_plain,
+    render_startup_welcome_frame,
     strip_decorative_sgr,
 )
 
@@ -206,9 +212,18 @@ class CompleteTermios:
 class StartupStream(io.StringIO):
     """Provide a real string buffer with deterministic TTY identity."""
 
-    def __init__(self, value: str = "", *, descriptor: int) -> None:
+    def __init__(
+        self,
+        value: str = "",
+        *,
+        descriptor: int,
+        is_terminal: bool = True,
+        tty_failure: BaseException | None = None,
+    ) -> None:
         super().__init__(value)
         self.descriptor = descriptor
+        self.is_terminal = is_terminal
+        self.tty_failure = tty_failure
         self.read_calls = 0
         self.buffer = self
 
@@ -221,7 +236,9 @@ class StartupStream(io.StringIO):
         return "strict"
 
     def isatty(self) -> bool:
-        return True
+        if self.tty_failure is not None:
+            raise self.tty_failure
+        return self.is_terminal
 
     def fileno(self) -> int:
         return self.descriptor
@@ -282,7 +299,7 @@ def fake_os(
 
     environment = {"TERM": terminal_name}
     if no_color:
-        environment["NO_COLOR"] = ""
+        environment["NO_COLOR"] = "1"
 
     def get_terminal_size(descriptor: int) -> os.terminal_size:
         if isinstance(width, BaseException):
@@ -1950,32 +1967,105 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
 class StartupPresentationFoundationTests(unittest.TestCase):
     """Lock welcome/auth presentation timing, profiles, and restoration."""
 
+    WIDE_AGENTS = (
+        "  ____     _____     ___     ____    __   __\n"
+        " / ___|   |_   _|   / _ \\   |  _ \\   \\ \\ / /\n"
+        " \\___ \\     | |    | | | |  | |_) |   \\ V /\n"
+        "  ___) |    | |    | |_| |  |  _ <     | |\n"
+        " |____/     |_|     \\___/   |_| \\_\\    |_|\n"
+        "        W R I T I N G   A G E N T S"
+    )
+    WIDE_FINAL = (
+        WIDE_AGENTS + "\n\n"
+        "Four roles. One shared story workspace.\n"
+        "Next: checking Codex + Antigravity access."
+    )
+    LETTER_SGR = (
+        "\x1b[1;36m",
+        "\x1b[1;35m",
+        "\x1b[1;33m",
+        "\x1b[1;34m",
+        "\x1b[1;32m",
+    )
+    FORBIDDEN_WELCOME_CHROME = (
+        "[masthead]",
+        "[info]",
+        "[warning]",
+        "[identity]",
+        "[completed]",
+    )
+    PLAIN_STAGE_SNAPSHOTS = {
+        48: (
+            "S   T   O   R   Y",
+            "S   T   O   R   Y\nW R I T I N G",
+            WIDE_AGENTS,
+            WIDE_FINAL,
+        ),
+        32: (
+            "S T O R Y",
+            "S T O R Y\nW R I T I N G",
+            "S T O R Y\nW R I T I N G   A G E N T S",
+            (
+                "S T O R Y\n"
+                "W R I T I N G   A G E N T S\n\n"
+                "Four roles. One shared story.\n"
+                "Next: Codex + Antigravity."
+            ),
+        ),
+        20: (
+            "STORY",
+            "STORY\nWRITING",
+            "STORY\nWRITING AGENTS",
+            (
+                "STORY\n"
+                "WRITING AGENTS\n"
+                "Four roles.\n"
+                "One shared story.\n"
+                "Next: access check."
+            ),
+        ),
+    }
+
     @staticmethod
     def render_startup_frame(
         index: int,
         capabilities: TerminalCapabilities,
+        physical_width: int,
     ) -> RenderedFrame:
         """Render one production startup frame for visual contract tests."""
 
-        return render_component(
-            _core._startup_welcome_component(index, capabilities),
+        return render_startup_welcome_frame(
+            _STARTUP_WELCOME_SEQUENCE[index],
             capabilities,
+            physical_width,
         )
 
     @staticmethod
     def make_driver(
         *,
-        environment: dict[str, str] | None = None,
+        environment: object | None = None,
         termios_value: object | None = None,
         terminal_width: int = 80,
+        os_name: str = "posix",
+        input_is_terminal: bool = True,
+        output_is_terminal: bool = True,
+        output_tty_failure: BaseException | None = None,
     ) -> tuple[RawTerminalDriver, StartupStream, StartupStream, object]:
         """Build one capable deterministic startup driver and its collaborators."""
 
-        input_stream = StartupStream("queued-type-ahead", descriptor=7)
-        output_stream = StartupStream(descriptor=8)
+        input_stream = StartupStream(
+            "queued-type-ahead",
+            descriptor=7,
+            is_terminal=input_is_terminal,
+        )
+        output_stream = StartupStream(
+            descriptor=8,
+            is_terminal=output_is_terminal,
+            tty_failure=output_tty_failure,
+        )
         selected_termios = termios_value or StartupTermios()
         os_module = SimpleNamespace(
-            name="posix",
+            name=os_name,
             environ={"TERM": "xterm-256color"}
             if environment is None
             else environment,
@@ -1997,26 +2087,253 @@ class StartupPresentationFoundationTests(unittest.TestCase):
         return driver, input_stream, output_stream, selected_termios
 
     @staticmethod
-    def frame(index: int, current: TerminalCapabilities) -> RenderedFrame:
+    def frame(
+        index: int,
+        current: TerminalCapabilities,
+        _physical_width: int,
+    ) -> RenderedFrame:
         return RenderedFrame(
             f"welcome-{index}-{current.profile.value}",
             current.width,
             1,
         )
 
+    def test_startup_welcome_model_is_private_closed_and_canonical(self) -> None:
+        """Keep the purpose-bound stage model exact and outside Components."""
+
+        stages = (
+            StartupWelcomeStage.STORY,
+            StartupWelcomeStage.WRITING,
+            StartupWelcomeStage.AGENTS,
+            StartupWelcomeStage.HANDOFF,
+        )
+        self.assertEqual(
+            tuple(StartupWelcomeStage.__members__),
+            ("STORY", "WRITING", "AGENTS", "HANDOFF"),
+        )
+        self.assertEqual(
+            tuple(stage.value for stage in StartupWelcomeStage),
+            ("story", "writing", "agents", "handoff"),
+        )
+        self.assertEqual(tuple(StartupWelcomeStage), stages)
+
+        self.assertIs(type(_STARTUP_WELCOME_SEQUENCE), tuple)
+        self.assertEqual(len(_STARTUP_WELCOME_SEQUENCE), 4)
+        self.assertEqual(
+            _STARTUP_WELCOME_SEQUENCE,
+            tuple(StartupWelcome(stage) for stage in stages),
+        )
+        self.assertEqual(
+            tuple(welcome.stage for welcome in _STARTUP_WELCOME_SEQUENCE),
+            stages,
+        )
+
+        welcome = StartupWelcome(StartupWelcomeStage.STORY)
+        self.assertTrue(is_dataclass(StartupWelcome))
+        self.assertEqual(
+            tuple(field.name for field in fields(StartupWelcome)), ("stage",)
+        )
+        self.assertEqual(StartupWelcome.__slots__, ("stage",))
+        self.assertFalse(hasattr(welcome, "__dict__"))
+        with self.assertRaises(FrozenInstanceError):
+            welcome.stage = StartupWelcomeStage.HANDOFF
+
+        for invalid_stage in (
+            "story",
+            0,
+            None,
+            ViewState.IDLE,
+            object(),
+        ):
+            with self.subTest(invalid_stage=invalid_stage):
+                with self.assertRaisesRegex(
+                    TypeError,
+                    r"^stage must be a StartupWelcomeStage$",
+                ):
+                    StartupWelcome(invalid_stage)  # type: ignore[arg-type]
+
+        component_types = get_args(_model.Component)
+        self.assertNotIn(StartupWelcome, component_types)
+        self.assertNotIn(StartupWelcomeStage, component_types)
+        plain_capabilities = capability(CapabilityProfile.LINE)
+        for generic_renderer in (
+            lambda: render_component(welcome, plain_capabilities),
+            lambda: render_plain(welcome),
+        ):
+            with self.subTest(renderer=generic_renderer):
+                with self.assertRaisesRegex(
+                    TypeError,
+                    r"^component is not part of the closed semantic vocabulary$",
+                ):
+                    generic_renderer()
+
+        for name in ("StartupWelcomeStage", "StartupWelcome"):
+            with self.subTest(private_name=name):
+                self.assertNotIn(name, _model.__all__)
+                self.assertNotIn(name, terminal_facade.__all__)
+                self.assertNotIn(name, story_writing_agents.__all__)
+                self.assertFalse(hasattr(terminal_facade, name))
+                self.assertFalse(hasattr(story_writing_agents, name))
+
+        for raw_welcome in (0, 1, 2, 3, StartupWelcomeStage.STORY, "story", None):
+            with self.subTest(raw_welcome=raw_welcome):
+                with self.assertRaisesRegex(
+                    TypeError,
+                    r"^welcome must be a StartupWelcome$",
+                ):
+                    render_startup_welcome_frame(
+                        raw_welcome,  # type: ignore[arg-type]
+                        plain_capabilities,
+                        80,
+                    )
+
+    def test_plain_stage_snapshots_are_exact_prefix_free_and_legible(self) -> None:
+        """Lock every cumulative meaning in every responsive plain tier."""
+
+        for physical, expected_snapshots in self.PLAIN_STAGE_SNAPSHOTS.items():
+            capabilities = capability(CapabilityProfile.LINE, width=physical)
+            actual_snapshots: list[str] = []
+            for index, welcome in enumerate(_STARTUP_WELCOME_SEQUENCE):
+                with self.subTest(physical=physical, stage=welcome.stage.value):
+                    frame = self.render_startup_frame(
+                        index,
+                        capabilities,
+                        physical,
+                    )
+                    expected = expected_snapshots[index]
+                    self.assertEqual(frame.text, expected)
+                    self.assertEqual(frame.line_count, len(expected.split("\n")))
+                    actual_snapshots.append(frame.text)
+                    for label in self.FORBIDDEN_WELCOME_CHROME:
+                        self.assertNotIn(label, frame.text)
+                    self.assertNotRegex(frame.text, r"[-=]{20,}")
+            self.assertEqual(tuple(actual_snapshots), expected_snapshots)
+
+        final = self.render_startup_frame(
+            3,
+            capability(CapabilityProfile.LINE, width=80),
+            80,
+        )
+        self.assertEqual(final.text, self.WIDE_FINAL)
+        self.assertEqual(final.line_count, 9)
+        self.assertEqual(len(final.text.split("\n")), 9)
+        self.assertEqual(max(map(physical_width, final.text.split("\n"))), 44)
+        self.assertTrue(
+            all(
+                character == "\n" or 32 <= ord(character) <= 126
+                for character in final.text
+            )
+        )
+
+    def test_every_frame_and_tier_uses_fixed_colors_without_text_changes(
+        self,
+    ) -> None:
+        """Keep the five-letter palette fixed and plain topology authoritative."""
+
+        for physical in (20, 32, 48):
+            safe_width = physical - 1
+            plain_capabilities = capability(
+                CapabilityProfile.LINE,
+                width=safe_width,
+            )
+            ansi_capabilities = capability(
+                CapabilityProfile.ANSI,
+                width=safe_width,
+            )
+            for index in range(4):
+                with self.subTest(physical=physical, index=index):
+                    plain = self.render_startup_frame(
+                        index,
+                        plain_capabilities,
+                        physical,
+                    )
+                    ansi = self.render_startup_frame(
+                        index,
+                        ansi_capabilities,
+                        physical,
+                    )
+                    self.assertEqual(strip_decorative_sgr(ansi.text), plain.text)
+                    for sgr in self.LETTER_SGR:
+                        self.assertIn(sgr, ansi.text)
+                    self.assertGreaterEqual(ansi.text.count("\x1b[0m"), 5)
+
+    def test_live_welcome_fits_every_physical_width_and_tier_boundary(self) -> None:
+        """Reserve the real terminal's rightmost cell at every approved width."""
+
+        expected_final_width = {
+            1: 1,
+            19: 18,
+            20: 19,
+            31: 19,
+            32: 29,
+            47: 29,
+            48: 44,
+            80: 44,
+            120: 44,
+        }
+        for physical, expected_maximum in expected_final_width.items():
+            safe_width = max(1, physical - 1)
+            capabilities = capability(
+                CapabilityProfile.ANSI,
+                width=safe_width,
+            )
+            for index in range(4):
+                with self.subTest(physical=physical, index=index):
+                    frame = self.render_startup_frame(
+                        index,
+                        capabilities,
+                        physical,
+                    )
+                    plain_lines = strip_decorative_sgr(frame.text).split("\n")
+                    self.assertEqual(frame.width, safe_width)
+                    self.assertEqual(frame.line_count, len(plain_lines))
+                    self.assertTrue(
+                        all(
+                            physical_width(line) <= safe_width
+                            for line in plain_lines
+                        )
+                    )
+                    if index == 3:
+                        self.assertEqual(
+                            max(map(physical_width, plain_lines)),
+                            expected_maximum,
+                        )
+
     def test_capable_welcome_has_four_frames_point_four_cadence_and_discard(
         self,
     ) -> None:
-        driver, input_stream, output_stream, selected_termios = self.make_driver()
+        driver, input_stream, output_stream, selected_termios = self.make_driver(
+            terminal_width=19,
+        )
         sleeps: list[float] = []
-        driver.run_startup_welcome(self.frame, sleeps.append)
+        contexts: list[tuple[int, int, int, CapabilityProfile]] = []
+
+        def render(
+            index: int,
+            current: TerminalCapabilities,
+            physical: int,
+        ) -> RenderedFrame:
+            contexts.append((index, current.width, physical, current.profile))
+            return self.frame(index, current, physical)
+
+        driver.run_startup_welcome(render, sleeps.append)
 
         rendered = output_stream.getvalue()
         self.assertEqual(sleeps, [0.4, 0.4, 0.4])
+        self.assertEqual(
+            contexts,
+            [
+                (0, 18, 19, CapabilityProfile.ANSI),
+                (1, 18, 19, CapabilityProfile.ANSI),
+                (2, 18, 19, CapabilityProfile.ANSI),
+                (3, 18, 19, CapabilityProfile.ANSI),
+            ],
+        )
         positions = tuple(rendered.index(f"welcome-{index}-ansi") for index in range(4))
         self.assertEqual(positions, tuple(sorted(positions)))
         self.assertTrue(rendered.endswith("\n"))
         self.assertNotIn("\x1b[?1049", rendered)
+        self.assertNotIn("\x1b[?25", rendered)
         self.assertEqual(input_stream.read_calls, 0)
         self.assertEqual(input_stream.getvalue(), "queued-type-ahead")
         self.assertIsInstance(selected_termios, StartupTermios)
@@ -2031,108 +2348,304 @@ class StartupPresentationFoundationTests(unittest.TestCase):
         )
         self.assertEqual(selected_termios.calls[-1][2], selected_termios.original)
 
-    def test_welcome_selector_uses_width_aware_frames_and_safe_physical_widths(
-        self,
-    ) -> None:
-        """Keep each real welcome layout legible at its selection boundary."""
+    def test_physical_tiers_match_across_animated_and_static_paths(self) -> None:
+        """Select 48/32/20 layouts while reserving only capable live output."""
 
-        cases = (
-            (80, _core._STARTUP_WELCOME_FRAMES, "WRITING AGENTS"),
-            (48, _core._STARTUP_WELCOME_FRAMES, "WRITING AGENTS"),
-            (47, _core._COMPACT_STARTUP_WELCOME_FRAMES, "STORY WRITING AGENTS"),
-            (32, _core._COMPACT_STARTUP_WELCOME_FRAMES, "STORY WRITING AGENTS"),
-            (31, _core._NARROW_STARTUP_WELCOME_FRAMES, "provider check"),
-            (20, _core._NARROW_STARTUP_WELCOME_FRAMES, "provider check"),
+        paths = (
+            ("animated", {"TERM": "xterm"}, 4, [0.4, 0.4, 0.4], True, True),
+            ("static", {"TERM": "dumb"}, 1, [], False, False),
+            (
+                "reduced",
+                {
+                    "TERM": "xterm",
+                    "NO_COLOR": "0",
+                    "STORY_REDUCED_MOTION": "1",
+                },
+                1,
+                [],
+                True,
+                False,
+            ),
+            (
+                "no-color",
+                {"TERM": "xterm", "NO_COLOR": "1"},
+                1,
+                [],
+                False,
+                False,
+            ),
         )
-        for width, expected_frames, final_marker in cases:
-            with self.subTest(width=width):
-                capabilities = capability(CapabilityProfile.LINE, width=width)
-                selected = tuple(
-                    _core._startup_welcome_component(index, capabilities)
-                    for index in range(4)
-                )
-                self.assertEqual(selected, expected_frames)
-                final = render_component(selected[-1], capabilities)
-                self.assertIn(final_marker, final.text)
-                for index, component in enumerate(selected):
-                    with self.subTest(index=index):
-                        frame = render_component(component, capabilities)
-                        self.assertEqual(frame.width, width)
-                        self.assertTrue(
-                            all(
-                                physical_width(line) <= width
-                                for line in frame.text.splitlines()
+        for physical in (48, 32, 20):
+            expected = self.render_startup_frame(
+                3,
+                capability(CapabilityProfile.LINE, width=physical),
+                physical,
+            ).text
+            for (
+                label,
+                environment,
+                call_count,
+                expected_sleeps,
+                decorated,
+                live,
+            ) in paths:
+                with self.subTest(physical=physical, path=label):
+                    driver, _input, _output, selected_termios = self.make_driver(
+                        environment=environment,
+                        terminal_width=physical,
+                    )
+                    contexts: list[tuple[int, int, int, str, bool]] = []
+
+                    def render(
+                        index: int,
+                        current: TerminalCapabilities,
+                        observed_physical: int,
+                    ) -> RenderedFrame:
+                        frame = self.render_startup_frame(
+                            index,
+                            current,
+                            observed_physical,
+                        )
+                        contexts.append(
+                            (
+                                index,
+                                current.width,
+                                observed_physical,
+                                strip_decorative_sgr(frame.text),
+                                current.decorative_sgr,
                             )
                         )
+                        return frame
 
-    def test_welcome_ansi_colors_preserve_plain_semantics(self) -> None:
-        """Use multiple decorative roles without changing startup text."""
+                    sleeps: list[float] = []
+                    driver.run_startup_welcome(render, sleeps.append)
+                    self.assertEqual(len(contexts), call_count)
+                    self.assertEqual(sleeps, expected_sleeps)
+                    expected_width = physical - 1 if live else physical
+                    self.assertEqual(
+                        contexts[-1][0:3],
+                        (3, expected_width, physical),
+                    )
+                    self.assertEqual(contexts[-1][3], expected)
+                    self.assertEqual(contexts[-1][4], decorated)
+                    if isinstance(selected_termios, StartupTermios):
+                        self.assertEqual(
+                            len(selected_termios.calls),
+                            2 if label == "animated" else 0,
+                        )
 
-        plain_capabilities = capability(CapabilityProfile.LINE, width=80)
-        ansi_capabilities = capability(CapabilityProfile.ANSI, width=80)
-        for index in range(4):
-            with self.subTest(index=index):
-                plain = self.render_startup_frame(index, plain_capabilities)
-                ansi = self.render_startup_frame(index, ansi_capabilities)
-                self.assertEqual(strip_decorative_sgr(ansi.text), plain.text)
+            records: list[str] = []
+            callback = InteractiveTerminal(
+                lambda _prompt: "",
+                records.append,
+                width=physical,
+            )
+            InteractiveStartupPresentation(
+                callback,
+                sleeper=lambda _seconds: None,
+            ).show_welcome()
+            self.assertEqual(records, [f"{expected}\n"])
 
-        final = self.render_startup_frame(3, ansi_capabilities)
-        for sgr in ("\x1b[1m", "\x1b[36m", "\x1b[33m", "\x1b[35m"):
-            with self.subTest(sgr=repr(sgr)):
-                self.assertIn(sgr, final.text)
+    def test_no_color_zero_empty_and_missing_keep_color_eligible(self) -> None:
+        """Treat only trimmed nonzero text or uncertainty as a color opt-out."""
 
-    def test_static_welcome_renders_actual_final_layout_once_per_width(self) -> None:
-        """Keep static, reduced-motion, and limited terminals visibly useful."""
+        missing = object()
+
+        class UncertainEnvironment:
+            def __contains__(self, _key: object) -> bool:
+                return False
+
+            def get(self, key: str, default: object = None) -> object:
+                if key == "TERM":
+                    return "xterm"
+                if key == "NO_COLOR":
+                    raise RuntimeError("uncertain environment")
+                return default
 
         cases = (
+            ("missing", missing, True),
+            ("empty", "", True),
+            ("whitespace", " \t ", True),
+            ("zero", "0", True),
+            ("trimmed-zero", " \t0  ", True),
+            ("one", "1", False),
+            ("word", "disabled", False),
+            ("non-string", 0, False),
+            ("none", None, False),
+            ("uncertain", UncertainEnvironment(), False),
+        )
+        for label, value, color_eligible in cases:
+            with self.subTest(label=label):
+                if isinstance(value, UncertainEnvironment):
+                    environment: object = value
+                else:
+                    mapped_environment: dict[str, object] = {"TERM": "xterm"}
+                    if value is not missing:
+                        mapped_environment["NO_COLOR"] = value
+                    environment = mapped_environment
+                driver, _input, _output, selected_termios = self.make_driver(
+                    environment=environment,
+                )
+                contexts: list[TerminalCapabilities] = []
+
+                def render(
+                    index: int,
+                    current: TerminalCapabilities,
+                    physical: int,
+                ) -> RenderedFrame:
+                    contexts.append(current)
+                    return self.frame(index, current, physical)
+
+                sleeps: list[float] = []
+                driver.run_startup_welcome(render, sleeps.append)
+                self.assertEqual(len(contexts), 4 if color_eligible else 1)
+                self.assertEqual(
+                    sleeps,
+                    [0.4, 0.4, 0.4] if color_eligible else [],
+                )
+                self.assertEqual(contexts[-1].decorative_sgr, color_eligible)
+                self.assertEqual(
+                    contexts[-1].profile,
+                    CapabilityProfile.ANSI
+                    if color_eligible
+                    else CapabilityProfile.LINE,
+                )
+                if isinstance(selected_termios, StartupTermios):
+                    self.assertEqual(
+                        len(selected_termios.calls),
+                        2 if color_eligible else 0,
+                    )
+
+    def test_reduced_motion_renders_one_colored_final_without_controls(self) -> None:
+        """Preserve decoration while eliminating animation and raw mutation."""
+
+        driver, input_stream, output_stream, selected_termios = self.make_driver(
+            environment={
+                "TERM": "xterm",
+                "NO_COLOR": "0",
+                "STORY_REDUCED_MOTION": "",
+            },
+        )
+        sleeps: list[float] = []
+        driver.run_startup_welcome(self.render_startup_frame, sleeps.append)
+
+        expected = self.render_startup_frame(
+            3,
+            capability(CapabilityProfile.ANSI, width=80),
+            80,
+        )
+        rendered = output_stream.getvalue()
+        self.assertEqual(rendered, f"{expected.text}\n")
+        self.assertEqual(strip_decorative_sgr(rendered), f"{self.WIDE_FINAL}\n")
+        for sgr in self.LETTER_SGR:
+            self.assertIn(sgr, rendered)
+        self.assertEqual(sleeps, [])
+        self.assertEqual(input_stream.read_calls, 0)
+        self.assertIsInstance(selected_termios, StartupTermios)
+        self.assertEqual(selected_termios.calls, [])
+        for control in (
+            "\x1b[J",
+            "\x1b[A",
+            "\x1b[?25",
+            "\x1b[?1049",
+            "\r",
+        ):
+            self.assertNotIn(control, rendered)
+
+    def test_static_fallback_destinations_use_full_available_width(
+        self,
+    ) -> None:
+        """Keep static output useful, width-accurate, ANSI-free, and restored."""
+
+        class ActivationFailingTermios(StartupTermios):
+            def tcsetattr(
+                self,
+                descriptor: int,
+                when: int,
+                attributes: list[object],
+            ) -> None:
+                super().tcsetattr(descriptor, when, attributes)
+                if when == self.TCSANOW:
+                    raise OSError("startup activation failed")
+
+        activation_termios = ActivationFailingTermios()
+
+        cases = (
+            ("input-non-tty", {"input_is_terminal": False}, 19, True),
+            ("output-non-tty", {"output_is_terminal": False}, 80, False),
+            ("dumb", {"environment": {"TERM": "dumb"}}, 19, True),
+            ("non-posix", {"os_name": "nt"}, 19, True),
             (
-                "reduced-wide",
+                "no-color",
+                {"environment": {"TERM": "xterm", "NO_COLOR": "1"}},
+                19,
+                True,
+            ),
+            ("termios-unavailable", {"termios_value": object()}, 19, True),
+            (
+                "input-discard-unavailable",
+                {"termios_value": CompleteTermios},
+                19,
+                True,
+            ),
+            (
+                "activation-failure",
+                {"termios_value": activation_termios},
+                19,
+                True,
+            ),
+            (
+                "uncertain-output",
+                {"output_tty_failure": RuntimeError("uncertain output")},
                 80,
-                {"TERM": "xterm", "STORY_REDUCED_MOTION": "1"},
-                StartupTermios(),
-                "WRITING AGENTS",
-            ),
-            (
-                "dumb-compact",
-                40,
-                {"TERM": "dumb"},
-                StartupTermios(),
-                "STORY WRITING AGENTS",
-            ),
-            (
-                "no-color-narrow",
-                20,
-                {"TERM": "xterm", "NO_COLOR": "1"},
-                StartupTermios(),
-                "provider check",
-            ),
-            (
-                "termios-unavailable",
-                80,
-                {"TERM": "xterm"},
-                CompleteTermios,
-                "WRITING AGENTS",
+                False,
             ),
         )
-        for label, width, environment, termios_value, final_marker in cases:
+        for label, arguments, expected_width, expected_output_tty in cases:
             with self.subTest(label=label):
-                driver, input_stream, output_stream, selected_termios = self.make_driver(
-                    environment=environment,
-                    termios_value=termios_value,
-                    terminal_width=width,
+                driver, input_stream, output_stream, selected_termios = (
+                    self.make_driver(terminal_width=19, **arguments)
                 )
-                sleeps: list[float] = []
-                driver.run_startup_welcome(self.render_startup_frame, sleeps.append)
+                contexts: list[tuple[int, TerminalCapabilities, int]] = []
 
-                capabilities = capability(CapabilityProfile.LINE, width=width)
-                expected = self.render_startup_frame(3, capabilities)
-                rendered = output_stream.getvalue()
-                self.assertEqual(rendered, f"{expected.text}\n")
-                self.assertIn(final_marker, rendered)
-                self.assertNotIn("\x1b[", rendered)
+                def render(
+                    index: int,
+                    current: TerminalCapabilities,
+                    physical: int,
+                ) -> RenderedFrame:
+                    contexts.append((index, current, physical))
+                    return self.render_startup_frame(index, current, physical)
+
+                sleeps: list[float] = []
+                driver.run_startup_welcome(render, sleeps.append)
+                self.assertEqual(len(contexts), 1)
+                index, current, physical = contexts[0]
+                self.assertEqual(index, 3)
+                self.assertEqual(current.profile, CapabilityProfile.LINE)
+                self.assertFalse(current.decorative_sgr)
+                self.assertEqual(current.output_tty, expected_output_tty)
+                self.assertEqual((current.width, physical), (expected_width,) * 2)
+                self.assertEqual(
+                    output_stream.getvalue(),
+                    f"{self.render_startup_frame(index, current, physical).text}\n",
+                )
+                if expected_output_tty:
+                    self.assertTrue(
+                        output_stream.getvalue().endswith("Next: access check.\n")
+                    )
                 self.assertEqual(sleeps, [])
                 self.assertEqual(input_stream.read_calls, 0)
-                if isinstance(selected_termios, StartupTermios):
+                self.assertNotIn("\x1b", output_stream.getvalue())
+                if selected_termios is activation_termios:
+                    self.assertEqual(
+                        [call[1] for call in selected_termios.calls],
+                        [selected_termios.TCSANOW, selected_termios.TCSADRAIN],
+                    )
+                    self.assertEqual(
+                        selected_termios.calls[-1][2],
+                        selected_termios.original,
+                    )
+                elif isinstance(selected_termios, StartupTermios):
                     self.assertEqual(selected_termios.calls, [])
 
     def test_callback_welcome_uses_width_aware_final_layout_without_sleep(
@@ -2141,9 +2654,9 @@ class StartupPresentationFoundationTests(unittest.TestCase):
         """Keep callback presentation static and useful at every layout width."""
 
         for width, marker in (
-            (80, "WRITING AGENTS"),
-            (40, "STORY WRITING AGENTS"),
-            (20, "provider check"),
+            (48, "W R I T I N G   A G E N T S"),
+            (32, "W R I T I N G   A G E N T S"),
+            (20, "Next: access check."),
         ):
             with self.subTest(width=width):
                 records: list[str] = []
@@ -2162,7 +2675,7 @@ class StartupPresentationFoundationTests(unittest.TestCase):
                 presentation.show_welcome()
 
                 capabilities = capability(CapabilityProfile.LINE, width=width)
-                expected = self.render_startup_frame(3, capabilities)
+                expected = self.render_startup_frame(3, capabilities, width)
                 self.assertEqual(records, [f"{expected.text}\n"])
                 self.assertIn(marker, records[0])
                 self.assertNotIn("\x1b[", records[0])
@@ -2180,11 +2693,17 @@ class StartupPresentationFoundationTests(unittest.TestCase):
             capability(CapabilityProfile.ANSI, width=20),
             capability(CapabilityProfile.ANSI, width=80),
         ]
-        rendered_widths: list[int] = []
+        render_contexts: list[tuple[int, int, int, int]] = []
 
-        def render(index: int, capabilities: TerminalCapabilities) -> RenderedFrame:
-            rendered_widths.append(capabilities.width)
-            frame = self.render_startup_frame(index, capabilities)
+        def render(
+            index: int,
+            capabilities: TerminalCapabilities,
+            physical: int,
+        ) -> RenderedFrame:
+            frame = self.render_startup_frame(index, capabilities, physical)
+            render_contexts.append(
+                (index, capabilities.width, physical, frame.line_count)
+            )
             self.assertTrue(
                 all(
                     physical_width(line) <= capabilities.width
@@ -2202,10 +2721,23 @@ class StartupPresentationFoundationTests(unittest.TestCase):
             sleeps: list[float] = []
             driver.run_startup_welcome(render, sleeps.append)
 
-        self.assertEqual(rendered_widths, [79, 39, 19, 79])
+        self.assertEqual(
+            render_contexts,
+            [
+                (0, 79, 80, 1),
+                (1, 39, 40, 2),
+                (2, 19, 20, 2),
+                (3, 79, 80, 9),
+            ],
+        )
         self.assertEqual(sleeps, [0.4, 0.4, 0.4])
-        self.assertTrue(output_stream.getvalue().endswith("\n"))
-        self.assertNotIn("\x1b[?1049", output_stream.getvalue())
+        rendered = output_stream.getvalue()
+        self.assertTrue(rendered.endswith("\n"))
+        self.assertEqual(rendered.count("\x1b[J"), 3)
+        self.assertEqual(rendered.count("\x1b[A"), 2)
+        self.assertIn("W R I T I N G   A G E N T S", rendered)
+        self.assertNotIn("\x1b[?1049", rendered)
+        self.assertNotIn("\x1b[?25", rendered)
         self.assertEqual(input_stream.read_calls, 0)
         self.assertEqual(
             [call[1] for call in selected_termios.calls],
@@ -2292,7 +2824,7 @@ class StartupPresentationFoundationTests(unittest.TestCase):
         )
         sleeper.assert_not_called()
         rendered = "".join(records)
-        self.assertIn("Story Writing Agents", rendered)
+        self.assertIn("W R I T I N G   A G E N T S", rendered)
         self.assertIn("Opening native sign-in.", rendered)
         self.assertIn("Authentication succeeded.", rendered)
         self.assertIn("\n\n", rendered)
