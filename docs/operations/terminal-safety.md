@@ -101,8 +101,10 @@ this component fallback can be used.
 Startup uses a separate bounded policy from the advisory indicator. Only a
 capable POSIX ANSI terminal with decorative SGR and no
 `STORY_REDUCED_MOTION` entry receives the four animated welcome frames. Physical
-width selects the projection: 48+ columns use the clean five-row ASCII logo,
-32–47 use the compact spaced identity, and below 32 use the short identity.
+width selects the projection: at 48+ columns, `STORY` and `WRITING` use spaced
+title/writing reveals, while `AGENTS` and `HANDOFF` switch to the clean five-row
+ASCII logo; 32–47 use the compact spaced identity, and below 32 use the short
+identity.
 The completed wide projection is nine rows with a 44-cell maximum logo width;
 it has no bracketed semantic labels or wall-to-wall rules. The three changes
 are exactly 0.4 seconds apart. The final frame remains in scrollback before
