@@ -24,9 +24,7 @@ from story_writing_agents.errors import (
 )
 from story_writing_agents import interactive_settings as settings_module
 from story_writing_agents.interactive_settings import (
-    SETTINGS_ANTIGRAVITY_EFFORTS,
     SETTINGS_LANGUAGES,
-    SETTINGS_REASONING_EFFORTS,
     PersonaCatalogEntry,
     SettingsBaseline,
     SettingsError,
@@ -90,18 +88,14 @@ class SettingsTestCase(unittest.TestCase):
 class SettingsModelContractTests(SettingsTestCase):
     """Lock internal value schemas, vocabulary, identity, and validation."""
 
-    def test_models_vocabulary_signatures_and_internal_boundary_are_exact(self) -> None:
+    def test_models_languages_signatures_and_internal_boundary_are_exact(self) -> None:
         self.assertEqual(
             SETTINGS_LANGUAGES,
             ("KO", "EN", "JA", "ZH", "ES", "FR", "DE", "PT", "IT", "RU"),
         )
-        self.assertEqual(
-            SETTINGS_REASONING_EFFORTS,
-            ("minimal", "low", "medium", "high", "xhigh"),
-        )
-        self.assertEqual(
-            SETTINGS_ANTIGRAVITY_EFFORTS,
-            ("low", "medium", "high"),
+        self.assertFalse(hasattr(settings_module, "SETTINGS_REASONING_EFFORTS"))
+        self.assertFalse(
+            hasattr(settings_module, "SETTINGS_ANTIGRAVITY_EFFORTS")
         )
         self.assertEqual(
             tuple((member.name, member.value) for member in SettingsErrorKind),
@@ -392,9 +386,13 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
                 " GPT-e\u0301 한🙂 ",
             ),
             (
-                update_agent_codex_reasoning_effort(state, PLOT_ARCHITECT, "xhigh"),
+                update_agent_codex_reasoning_effort(
+                    state,
+                    PLOT_ARCHITECT,
+                    "future_2",
+                ),
                 lambda value: value.agent_configs[PLOT_ARCHITECT].codex_reasoning_effort,
-                "xhigh",
+                "future_2",
             ),
             (
                 update_agent_antigravity_model(
@@ -469,7 +467,11 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
             (lambda: update_agent_codex_model(state, PLOT_ARCHITECT, "-unsafe"), ConfigurationError),
             (lambda: update_agent_codex_model(state, PLOT_ARCHITECT, "bad\x1b"), ConfigurationError),
             (
-                lambda: update_agent_codex_reasoning_effort(state, PLOT_ARCHITECT, "default"),
+                lambda: update_agent_codex_reasoning_effort(
+                    state,
+                    PLOT_ARCHITECT,
+                    "unsafe.value",
+                ),
                 ConfigurationError,
             ),
             (
