@@ -44,8 +44,9 @@ from story_writing_agents.interactive_terminal._render import (
 
 _ARTIFACT_REFERENCE_GUIDANCE = (
     "Artifact references require an attached session and focused conversation. "
-    "In provider-bound prompts, $ chooses a whole-file reference; $$ then "
-    "Enter/Tab opens ranged selection."
+    "In provider-bound prompts, $ opens whole-file selection and completion; "
+    "exact $$ immediately opens ranged selection, where Enter/Tab opens the "
+    "highlighted source in the viewer."
 )
 
 

@@ -221,8 +221,9 @@ ERROR_DEFAULTS = {
 
 _ARTIFACT_REFERENCE_GUIDANCE = (
     "Artifact references require an attached session and focused conversation. "
-    "In provider-bound prompts, $ chooses a whole-file reference; $$ then "
-    "Enter/Tab opens ranged selection."
+    "In provider-bound prompts, $ opens whole-file selection and completion; "
+    "exact $$ immediately opens ranged selection, where Enter/Tab opens the "
+    "highlighted source in the viewer."
 )
 
 AGENT_CASES = (
@@ -335,9 +336,11 @@ def expected_session_orientation(
         "  [info] Room messages are saved locally and shared with addressed agents.\n"
         "  [info] Artifact references require an attached session and focused "
         "conversatio\n"
-        "         n. In provider-bound prompts, $ chooses a whole-file reference; "
-        "$$ then\n"
-        "          Enter/Tab opens ranged selection.\n"
+        "         n. In provider-bound prompts, $ opens whole-file selection and "
+        "completi\n"
+        "         on; exact $$ immediately opens ranged selection, where Enter/Tab "
+        "opens \n"
+        "         the highlighted source in the viewer.\n"
         "  [info] Type /help for commands; /quit releases access without pausing.\n"
         f"{'-' * 80}\n"
     )
@@ -1340,9 +1343,11 @@ class PromptAndRenderingTests(unittest.TestCase):
                 "            E, /session resume [NAME], or /session list.\n"
                 "  [info] Artifact references require an attached session and focused "
                 "conversatio\n"
-                "         n. In provider-bound prompts, $ chooses a whole-file "
-                "reference; $$ then\n"
-                "          Enter/Tab opens ranged selection.\n"
+                "         n. In provider-bound prompts, $ opens whole-file selection "
+                "and completi\n"
+                "         on; exact $$ immediately opens ranged selection, where "
+                "Enter/Tab opens \n"
+                "         the highlighted source in the viewer.\n"
                 "  [info] Type /help for commands; /quit exits.\n"
                 f"{'-' * 80}\n"
             ],
@@ -1414,9 +1419,11 @@ class PromptAndRenderingTests(unittest.TestCase):
                 "  Target: Lead Orchestrator\n"
                 "  [info] Artifact references require an attached session and focused "
                 "conversatio\n"
-                "         n. In provider-bound prompts, $ chooses a whole-file "
-                "reference; $$ then\n"
-                "          Enter/Tab opens ranged selection.\n"
+                "         n. In provider-bound prompts, $ opens whole-file selection "
+                "and completi\n"
+                "         on; exact $$ immediately opens ranged selection, where "
+                "Enter/Tab opens \n"
+                "         the highlighted source in the viewer.\n"
                 "  [info] Type /help for commands; /quit releases access without pausing.\n"
                 f"{'-' * 80}\n"
             ],

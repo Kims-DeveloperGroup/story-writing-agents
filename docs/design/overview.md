@@ -56,10 +56,10 @@ manufacture artifact provenance. See
 | --- | --- |
 | `writing_artifacts.__init__` | Side-effect-free facade for immutable artifact values; no repository construction or root-package export. |
 | `writing_artifacts.catalog` | Four exact core identities, part-scoped manuscript grammar, kinds, immutable provenance entries, and catalog schema. |
-| `writing_artifacts.references` | Immutable path/range, directive-batch, verified-snapshot, and resource-limit values only; parsing belongs to `writing_artifacts.directives`, authorization and provider enforcement belong to the authorization/read-action/backend path, and viewing belongs to the independent `interactive_terminal` supplied-text viewer. |
+| `writing_artifacts.references` | Immutable path/range, directive-batch, verified-snapshot, and resource-limit values plus the reference-source eligibility predicate; parsing belongs to `writing_artifacts.directives`, authorization and provider enforcement belong to the authorization/read-action/backend path, and viewing belongs to the independent `interactive_terminal` supplied-text viewer. |
 | `writing_artifacts.read_actions` | Provider-neutral, content-free exact request/action contracts; private synchronous coordinator protocol and closeable content-bearing result contract. |
 | `writing_artifacts._storage` | Descriptor-relative, no-follow, unique-regular-file I/O, compare-before-publish replacement, root-identity verification, and artifact advisory locking. |
-| `writing_artifacts.filesystem_sources` | Catalog-independent deterministic canonical discovery, bounded current-source capture, strict UTF-8/NUL validation, and full physical/hash identity matching. |
+| `writing_artifacts.filesystem_sources` | Catalog-independent deterministic discovery of the four supported core paths and every eligible lowercase-`.md` descendant under `manuscript/`; bounded current-source capture; strict UTF-8/NUL validation; and full physical/hash identity matching. |
 | `writing_artifacts.repository` | Facade over filesystem sources plus provenance validation, current catalog projection, create-only manuscript commits, journal roll-forward, catalog-last visibility, fail-closed recovery, and concrete one-use reference coordinators/capabilities. |
 
 The package has no controller, terminal, backend, orchestrator, or generic
@@ -119,13 +119,13 @@ revision; all must approve. Blackboard and owner-isolated history stay separate.
 | `cli_context`, catalog, memory service, event store | Defaults, identity, scoped reads, and authoritative events |
 | `interactive_terminal` | Stable package-supported facade, package-internal real-CLI factory, and unlisted internal semantic output, controller-main-input, picker, cancellable-prompt, and supplied-text viewer adapters and identities |
 | `interactive_terminal._core` | Established terminal API behavior, explicit ordinary/main/composition/confirmation routing, canonical static/dynamic main-choice adaptation, semantic input-view and lifecycle-event construction, call-local reference scope/source-list/text binding, resource-free semantic output/main/picker/prompt/viewer adapters, and terminal-leaf coordination |
-| `interactive_terminal._model`, `_controls`, `_render` | Immutable semantic/history/completion/dynamic-choice/composer/picker foundation; normalized keys including Shift+Arrow; pure line, palette, history, composer, confirmation, prompt, and picker transitions; bounded picker viewport; and pure safe responsive output/input rendering |
-| `interactive_terminal._reference_activation` | Private pure provider-span-bounded `$` marker projection, filesystem-source completion, nested picker/viewer requests, exact marker replacement, and content-free fixed failure contracts; no I/O or retained state. |
+| `interactive_terminal._model`, `_controls`, `_render` | Immutable semantic/history/completion/dynamic-choice/composer/picker foundation with a distinct ranged-reference palette position; normalized keys including Shift+Arrow; pure line, palette, history, composer, confirmation, prompt, and picker transitions; immediate second-dollar projection and highlight ownership; bounded picker viewport; and pure safe responsive output/input rendering |
+| `interactive_terminal._reference_activation` | Private pure provider-span-bounded `$` marker projection, whole-file completion, correlated completion plus picker request for exact `$$`, selected-path correlation, exact marker replacement, and content-free fixed failure contracts; no I/O or retained state. |
 | `interactive_terminal._viewer_model` | Private immutable strict-UTF-8 supplied document, active/anchor state, bounded viewport, notice, exit-kind, and content-free inclusive-range result contracts; LF-only line derivation with terminal-local 8 MiB source, 65,536-line, and complete 16 MiB fallback-projection limits |
 | `interactive_terminal._viewer_controls` | Pure fresh initialization, ordinary and anchored navigation, normalized commit and noncommit exits, exact ASCII fallback grammar, and bounded contiguous viewport projection |
 | `interactive_terminal._viewer_render` | Pure bounded-prefix one-row-per-source-line live and complete numbered fallback projections with visible escaping, line numbers, plain/ANSI state cues, cell-aware live ellipsis clipping, and no fallback clipping |
 | `interactive_terminal._input_lifecycle` | Irreversible per-driver `UNDECIDED` to `LIVE`/`FALLBACK` selection, exact source/decoder identity, admitted codec/error policy, persistent one-byte incremental decoding, bounded pending suffix, stable EOF, poison/interrupt behavior, and synchronous input exclusion |
-| `interactive_terminal._driver` | Sole real-CLI raw streams, capabilities, width/height, byte/key decoding integration, configured-control validation, pending-suffix-first fixed Escape readiness wait, complete-live-frame cleanup, viewer alternate screen, cursor controls, writes, flushes, restoration, one bounded process-local main-history store, and same-latch reference picker/viewer plus dedicated history-free picker/prompt/viewer lifecycles |
+| `interactive_terminal._driver` | Sole real-CLI raw streams, capabilities, width/height, byte/key decoding integration, configured-control validation, pending-suffix-first fixed Escape readiness wait, complete-live-frame cleanup, viewer alternate screen, cursor controls, writes, flushes, restoration, one bounded process-local main-history store, nonmodal ranged-source selection-to-viewer correlation, and dedicated history-free picker/prompt/viewer lifecycles |
 | `interactive_line_editor` | Standalone compatibility facade over the same supported main-command reader and one unified per-editor driver/history store |
 | `StoryRuntime`, `AgentBackend` | Orchestration/retrieval authority and provider resources |
 
@@ -206,13 +206,16 @@ source, display, anchor, selection, and viewport state on return or failure.
 
 The installed controller now supplies that caller boundary. It projects only
 the cursor-active provider-text span, lists and securely reads current safe
-canonical files through the writing-artifact repository, enforces its separate
-limit, calls the stateless viewer once per ordered selection, attaches the path
-to returned line numbers, and restores the immutable originating draft/cursor.
-The private activation leaf owns only pure `$` marker interpretation and edit
-results. Normal submission still crosses the parser/runtime boundary exactly
-once, where mandatory per-agent reads apply. The viewer itself continues to
-discover no file and construct no reference.
+reference sources through the writing-artifact repository, enforces its
+separate limit, calls the stateless viewer once per ordered selection, attaches
+the path to returned line numbers, and restores the immutable originating
+draft/cursor. Exact `$$` projects ranged-source choices on the second dollar;
+the input controls own the nonmodal highlight and the driver converts
+Enter/Tab into viewer entry. The private activation leaf owns only pure marker
+interpretation, correlation, and edit results. Normal submission still crosses
+the parser/runtime boundary exactly once, where mandatory per-agent reads
+apply. The viewer itself continues to discover no file and construct no
+reference.
 
 Every capable main, subject, composition, confirmation, picker, or prompt read
 clears its complete live frame before returning on submit, commit, cancel, interrupt,

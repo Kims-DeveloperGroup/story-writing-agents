@@ -26,9 +26,10 @@
 > `[routing]` or `[waiting]` record. The same driver owns a private bounded
 > startup welcome and transient authentication guidance lifecycle.
 > In provider-bound prompt spans the installed
-> shell now uses `$`, `$${path}`, and `$$` to discover current safe canonical
-> filesystem sources and
-> invoke the independent package-internal ranged viewer. The viewer remains an
+> shell now uses `$`, `$${path}`, and `$$` to discover current safe reference
+> sources and invoke the independent package-internal ranged viewer. Exact `$$`
+> opens ranged-source selection as soon as the second dollar is entered; it
+> does not wait for Enter, Tab, or newline. The viewer remains an
 > unlisted supplied-text component rather than a public command or selection
 > API; downstream agent-read enforcement remains runtime-owned.
 
@@ -842,8 +843,8 @@ parser, provider, runtime, filesystem, storage, or network state.
 ## Artifact-reference activation
 
 The controller binds three call-local collaborators to the terminal's main or
-composition input: a provider-text-span projection, a sorted current canonical
-filesystem-path reader, and a bounded verified text reader. Nothing activates when the
+composition input: a provider-text-span projection, a sorted eligible
+reference-path reader, and a bounded verified text reader. Nothing activates when the
 cursor is outside that span. Ordinary text, valid `@agent` and `/say` tails,
 and `/run` prompt remainders are eligible; command, option, identity, output,
 and every non-provider field are inert. `\$` is literal.
@@ -851,18 +852,35 @@ and every non-provider field are inert. `\$` is literal.
 The private pure activation layer recognizes only the cursor-active marker.
 `$` projects `Writing artifact selection [open]`, followed by
 `[controls] Up/Down selects; Enter/Tab inserts a whole-file reference.` Exact
-`$${path}` requests a direct viewer, and exact `$$` requests the source picker
-followed by a viewer. A case-sensitive path fragment after `$` filters the
-completion rows. No match projects the artifact-specific empty text; a truly
+`$$` projects the same sorted paths in a distinct ranged-source position and a
+correlated picker request. The input controls therefore open the nonmodal panel
+on the second dollar and own Up/Down highlight movement. Enter or Tab correlates
+that highlight with the unchanged request and emits a direct viewer request;
+the terminal driver then owns viewer entry, input, alternate-screen cleanup,
+and return. Escape closes the panel, retains `$$`, and latches that dismissal;
+later Enter or Tab reprojects the same panel in place.
+
+Typing `{` after `$$` leaves ranged-source selection and preserves direct
+`$${path}` construction. Once its closing `}` is present, Enter or Tab requests
+that viewer directly. One-character input, a batched write, and bracketed paste
+retain complex safe paths rather than treating their internal `{`, `$`, or `#`
+as another selection. A case-sensitive path fragment after one `$` filters the
+whole-file rows. No match projects the artifact-specific empty text; a truly
 empty source list projects `No writing artifacts. Add a supported canonical
-core document or part-scoped Markdown manuscript. Consensus can also publish
-one.` plus a deferred `ReferenceInputFailureKind.EMPTY_SOURCES`
-(`empty_sources`) failure that Enter or Tab surfaces through the established
-error writer. Enter or Tab on a source candidate replaces the marker with
-`${path}` without
+core document or Markdown file with a lowercase .md suffix under manuscript/.
+Consensus can also publish one.` plus a deferred
+`ReferenceInputFailureKind.EMPTY_SOURCES` (`empty_sources`) failure that Enter
+or Tab surfaces through the established error writer. Enter or Tab on a
+whole-file source candidate replaces the marker with `${path}` without
 submitting. Range selection replaces it with `${path}#Lx-Ly`. Several completed
-references remain ordered; each later activation receives a fresh source list and
-text read.
+references remain ordered; each later activation receives a fresh source list
+and text read.
+
+The source callback returns the four exact supported core paths and every safe
+lowercase-`.md` descendant anywhere under `manuscript/`. Direct
+`manuscript/*.md` files, arbitrary nesting, spaces, Unicode, `{`, `$`, and `#`
+are eligible; publication grammar remains independently stricter. The terminal
+neither scans directories nor loads publication state itself.
 
 The immutable buffer/cursor at activation is the origin. A successful edit
 changes only the marker span and places the cursor after the indicator.
@@ -870,12 +888,22 @@ Cancellation, interrupt, EOF, stale/unreadable/unavailable repository state,
 or invalid replacement restores the origin and performs no parser, runtime,
 history, or provider action. The driver runs nested picker/viewer input under
 the same irreversible input latch and releases every call-local collaborator
-on return. In line fallback, completion/viewing is followed by a second exact
-submission prompt; a blank answer commits the amended draft and a replacement
-draft is reevaluated.
+on return. In line fallback, activation starts after the marker line is
+submitted; completion/viewing is followed by a second exact submission prompt.
+A blank answer commits the amended draft and a replacement draft is reevaluated.
 
 See [Canonical artifact references](../guides/artifact-references.md) for the
 user controls, fixed errors, limits, and provider-read sequence.
+
+| Internal control state | User-visible state | Side effects |
+| --- | --- | --- |
+| Eligible outer editor | The prompt and cursor are editable; no reference control is open. | None. This immutable origin is retained for restoration. |
+| Whole-file palette | One `$` shows filtered `${path}` choices. | Fresh metadata listing only. |
+| Ranged-source palette | The second `$` immediately shows paths; Up/Down moves the highlight. | No viewer read, history append, parser call, or provider call. |
+| Direct marker | `{` after `$$` closes the panel and leaves literal `$${path}` text under construction. | No source read until Enter/Tab activates a complete marker. |
+| Independent viewer | The correlated source is freshly read and displayed; Shift+Up/Down adjusts an inclusive range. | Call-local bounded read and terminal lifecycle only. |
+| Restored or amended editor | Cancel/error restores the origin; Viewer Enter replaces only the marker with `${path}#Lx-Ly`. | Still no submit, history append, or provider call. |
+| Normal committed line | The completed prompt leaves editing through the ordinary submit path. | History/parser/runtime proceed; each addressed agent must read every indicator through its authorization. |
 
 <a id="independent-ranged-text-viewer"></a>
 
@@ -883,8 +911,8 @@ user controls, fixed errors, limits, and provider-read sequence.
 
 > **Availability:** the viewer remains an unlisted package-internal component
 > for exact caller-supplied text. The installed controller now calls it after an
-> explicit `$${path}` activation or a `$$` picker selection in provider-bound
-> prompt spans. The caller—not the viewer—discovers and reads the artifact,
+> explicit `$${path}` activation or an immediate `$$` ranged-source selection
+> in provider-bound prompt spans. The caller—not the viewer—discovers and reads the artifact,
 > restores the draft, attaches its path to returned line numbers, and later
 > submits the prompt through the established runtime path.
 
@@ -992,7 +1020,8 @@ correlation are immutable and call-local, then dropped on every return or
 raise. This is lifecycle disposal, not secure erasure from Python, terminal,
 or emulator memory. Reopening always starts from caller-supplied text and
 optional initial line. Selecting a range or cancelling closes the independent
-viewer after cleanup; it never leaves the caller trapped in viewer mode. The
+viewer after cleanup and returns to the exact originating composer; it never
+leaves the caller trapped in viewer mode. The
 return is content-free and contains only the typed exit and optional line
 numbers. The installed caller invokes this stateless component repeatedly for
 multiple ordered references. It reads current canonical files, retains and

@@ -213,6 +213,10 @@ class ReferenceInputBindings:
 
     projection_provider: Callable[[str, int], ReferenceInputProjection | None]
     completion_candidate_matches: Callable[[str, str], bool]
+    ranged_picker_selection: Callable[
+        [MainCommandControlState, CommandCompletionProjection],
+        tuple[bool, str | None],
+    ]
     read_text: Callable[[str], str]
     write_failure: Callable[[ReferenceInputFailureKind], None]
     initialize_picker: Callable[[tuple[str, ...], str], PickerControlState]
@@ -249,6 +253,51 @@ def _fallback_reference_projection(
         if projection is not None:
             return projection
         search_end = marker
+
+
+def _live_reference_key_outcome(
+    state: MainCommandControlState,
+    event: KeyEvent,
+    bindings: ReferenceInputBindings | None,
+) -> ReferenceActivationRequest | ReferenceInputFailure | None:
+    """Project Enter/Tab into a correlated viewer request without modal pick."""
+
+    if bindings is None or event.kind not in {KeyKind.ENTER, KeyKind.TAB}:
+        return None
+    line = state.main_input.line_state
+    projection = bindings.projection_provider(line.buffer, line.cursor)
+    if projection is None:
+        return None
+    if projection.failure is not None:
+        if projection.defers_empty_ranged_failure:
+            assert projection.completion is not None
+            picker_open, _selected_path = bindings.ranged_picker_selection(
+                state,
+                projection.completion,
+            )
+            if not picker_open:
+                return None
+        return ReferenceInputFailure(projection.failure)
+    request = projection.request
+    if request is None:
+        return None
+    if request.kind is ReferenceActivationKind.VIEW:
+        return request
+    completion = projection.completion
+    if completion is None:
+        return ReferenceInputFailure(ReferenceInputFailureKind.INVALID)
+    picker_open, selected_path = bindings.ranged_picker_selection(
+        state,
+        completion,
+    )
+    if not picker_open:
+        return None
+    if selected_path is None:
+        return ReferenceInputFailure(ReferenceInputFailureKind.STALE)
+    try:
+        return selected_reference_request(request, selected_path)
+    except ReferenceInputFailure as failure:
+        return failure
 
 
 class RawTerminalDriver:
@@ -1246,20 +1295,13 @@ class RawTerminalDriver:
                 raise TypeError(
                     "main command transition requires MainCommandControlState"
                 )
-            if reference_bindings is not None and event.kind in {
-                KeyKind.ENTER,
-                KeyKind.TAB,
-            }:
-                line = state.main_input.line_state
-                projection = reference_bindings.projection_provider(
-                    line.buffer,
-                    line.cursor,
-                )
-                if projection is not None:
-                    if projection.request is not None:
-                        return state, projection.request
-                    if projection.failure is not None:
-                        return state, ReferenceInputFailure(projection.failure)
+            reference_outcome = _live_reference_key_outcome(
+                state,
+                event,
+                reference_bindings,
+            )
+            if reference_outcome is not None:
+                return state, reference_outcome
             return self._main_transition(
                 state,
                 event,
@@ -1335,17 +1377,13 @@ class RawTerminalDriver:
                 raise TypeError(
                     "reference input transition requires MainCommandControlState"
                 )
-            if event.kind in {KeyKind.ENTER, KeyKind.TAB}:
-                line = state.main_input.line_state
-                projection = reference_bindings.projection_provider(
-                    line.buffer,
-                    line.cursor,
-                )
-                if projection is not None:
-                    if projection.request is not None:
-                        return state, projection.request
-                    if projection.failure is not None:
-                        return state, ReferenceInputFailure(projection.failure)
+            reference_outcome = _live_reference_key_outcome(
+                state,
+                event,
+                reference_bindings,
+            )
+            if reference_outcome is not None:
+                return state, reference_outcome
             return self._main_transition(
                 state,
                 event,
@@ -1406,6 +1444,17 @@ class RawTerminalDriver:
             amended = False
             if projection.failure is not None:
                 bindings.write_failure(projection.failure)
+            elif projection.request is not None:
+                updated = self._run_fallback_reference_activation(
+                    state,
+                    projection.request,
+                    capabilities,
+                    bindings,
+                )
+                if updated != state:
+                    state = updated
+                    line = state.main_input.line_state.buffer
+                    amended = True
             elif projection.completion is not None:
                 completion = projection.completion
                 prefix = line[completion.start : completion.end]
@@ -1436,7 +1485,7 @@ class RawTerminalDriver:
                         try:
                             state = replace_reference_completion(
                                 state,
-                                completion,
+                                projection,
                                 outcome.text,
                             )
                         except ReferenceInputFailure as failure:
@@ -1444,18 +1493,6 @@ class RawTerminalDriver:
                         else:
                             line = state.main_input.line_state.buffer
                             amended = True
-            else:
-                assert projection.request is not None
-                updated = self._run_fallback_reference_activation(
-                    state,
-                    projection.request,
-                    capabilities,
-                    bindings,
-                )
-                if updated != state:
-                    state = updated
-                    line = state.main_input.line_state.buffer
-                    amended = True
 
             safe = sanitize_terminal_text(line)
             if len(safe) > 240:
@@ -2268,31 +2305,8 @@ class RawTerminalDriver:
 
         active_request = request
         if request.kind is ReferenceActivationKind.PICK:
-            picker = bindings.initialize_picker(
-                request.paths,
-                "Select a writing artifact to view",
-            )
-            _picker_state, picker_outcome = self._read_live_picker(
-                picker,
-                configuration,
-                display_state,
-                capabilities,
-                bindings.picker_transition,
-                bindings.picker_viewport_projector,
-                bindings.picker_viewport_renderer,
-            )
-            self._clear_live_display(display_state, line_break=False)
-            if picker_outcome.kind is not ControlOutcomeKind.COMMIT:
-                return origin
-            assert picker_outcome.text is not None
-            try:
-                active_request = selected_reference_request(
-                    request,
-                    picker_outcome.text,
-                )
-            except ReferenceInputFailure as failure:
-                bindings.write_failure(failure.kind)
-                return origin
+            bindings.write_failure(ReferenceInputFailureKind.INVALID)
+            return origin
 
         assert active_request.path is not None
         try:
