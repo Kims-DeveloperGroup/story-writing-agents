@@ -147,18 +147,49 @@ def append(value):
     with log_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(value, ensure_ascii=False) + "\\n")
 
+def schema_uses_supported_array_items(specification):
+    if isinstance(specification, bool):
+        return True
+    if not isinstance(specification, dict):
+        return False
+    if specification.get("type") == "array":
+        items = specification.get("items")
+        if not isinstance(items, (dict, bool)):
+            return False
+        if "additionalItems" in specification or "prefixItems" in specification:
+            return False
+    for key, value in specification.items():
+        if key == "properties":
+            if not isinstance(value, dict) or not all(
+                schema_uses_supported_array_items(child)
+                for child in value.values()
+            ):
+                return False
+        elif key == "items" and not schema_uses_supported_array_items(value):
+            return False
+        elif key == "anyOf":
+            if not isinstance(value, list) or not value or not all(
+                schema_uses_supported_array_items(child) for child in value
+            ):
+                return False
+    return True
+
 raw_payload = sys.stdin.read()
 payload = json.loads(raw_payload)
 reference_prelude = payload.get("operation") == "writing_artifact_reference_read"
 agent_directory = Path(argv[argv.index("--cd") + 1])
 schema_path = Path(argv[argv.index("--output-schema") + 1])
+schema = json.loads(schema_path.read_text(encoding="utf-8"))
 append({
     "argv": argv,
     "payload": payload,
     "raw_payload": raw_payload,
     "agents": (agent_directory / "AGENTS.md").read_text(encoding="utf-8"),
-    "schema": json.loads(schema_path.read_text(encoding="utf-8")),
+    "schema": schema,
 })
+
+if not schema_uses_supported_array_items(schema):
+    raise SystemExit(86)
 
 if mode == "sleep" or (substantive_sleep and not reference_prelude):
     time.sleep(30)
@@ -540,6 +571,56 @@ def _reference_action_json(request: ReferenceReadRequest) -> str:
         ensure_ascii=False,
         separators=(",", ":"),
     )
+
+
+def _assert_provider_supported_schema(
+    test: unittest.TestCase,
+    specification: object,
+) -> None:
+    """Assert the strict response-schema subset used by reference reads."""
+
+    test.assertIs(type(specification), dict)
+    assert type(specification) is dict
+    allowed = {
+        "type",
+        "properties",
+        "required",
+        "additionalProperties",
+        "items",
+        "minItems",
+        "maxItems",
+        "anyOf",
+        "enum",
+    }
+    test.assertTrue(set(specification) <= allowed)
+    if "properties" in specification:
+        properties = specification["properties"]
+        test.assertIs(type(properties), dict)
+        assert type(properties) is dict
+        required = specification.get("required")
+        test.assertIs(type(required), list)
+        test.assertEqual(set(required), set(properties))
+        test.assertIs(specification.get("additionalProperties"), False)
+        for child in properties.values():
+            _assert_provider_supported_schema(test, child)
+    if "items" in specification:
+        items = specification["items"]
+        test.assertIn(type(items), {dict, bool})
+        test.assertIsNot(items, False)
+        if type(items) is dict:
+            _assert_provider_supported_schema(test, items)
+    if "anyOf" in specification:
+        branches = specification["anyOf"]
+        test.assertIs(type(branches), list)
+        assert type(branches) is list
+        test.assertTrue(branches)
+        for branch in branches:
+            _assert_provider_supported_schema(test, branch)
+    if specification.get("type") == "array":
+        test.assertIn("items", specification)
+        for bound in ("minItems", "maxItems"):
+            if bound in specification:
+                test.assertIs(type(specification[bound]), int)
 
 
 class ConversationModelContractTests(unittest.TestCase):
@@ -1547,8 +1628,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         agent_id: str = PLOT_ARCHITECT,
         phase: str = "draft",
         round_number: int | None = 0,
+        references: tuple[ArtifactReference, ...] | None = None,
     ):
-        """Create one real repository coordinator over a synthetic marker."""
+        """Create one real coordinator over whole and ranged source markers."""
 
         repository = getattr(self, "_reference_repository", None)
         if repository is None:
@@ -1562,17 +1644,23 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 revision_id="r0",
                 candidate_author_agent_id=EXECUTION_SPECIALIST,
             )
+            self.workspace.root.joinpath(
+                "manuscript/part-01/provider-range.md"
+            ).write_text(
+                "REFERENCE-RANGE-OMITTED\n"
+                "REFERENCE-PROVIDER-RANGE-MARKER\n"
+                "REFERENCE-RANGE-OMITTED\n",
+                encoding="utf-8",
+            )
             self._reference_repository = repository
+        if references is None:
+            references = self.reference_cases()["whole"]
         authorization = repository.capture_reference_authorization(
             operation_id=operation_id,
             batch=ArtifactReferenceBatch(
                 "reference request",
                 "reference request",
-                (
-                    ArtifactReference(
-                        "manuscript/part-01/provider-reference.md"
-                    ),
-                ),
+                references,
             ),
         )
         assert authorization is not None
@@ -1590,6 +1678,23 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             ),
         )
         return repository, authorization, invocation
+
+    @staticmethod
+    def reference_cases() -> dict[str, tuple[ArtifactReference, ...]]:
+        """Return whole, one-line range, and ordered mixed request shapes."""
+
+        whole = ArtifactReference(
+            "manuscript/part-01/provider-reference.md"
+        )
+        ranged = ArtifactReference(
+            "manuscript/part-01/provider-range.md",
+            ArtifactLineRange(2, 2),
+        )
+        return {
+            "whole": (whole,),
+            "range": (ranged,),
+            "mixed": (whole, ranged),
+        }
 
     def reference_environment(self, invocation) -> dict[str, str]:
         """Return the exact fake-provider response for one coordinator."""
@@ -1629,65 +1734,140 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-    def test_reference_read_schema_uses_draft_07_ordered_tuple_and_exact_decode(
+    def test_reference_read_schema_uses_supported_items_and_exact_decode(
         self,
     ) -> None:
-        references = (
-            ArtifactReference("core_documents/global_outline.md"),
-            ArtifactReference(
-                "core_documents/character_sheets.md",
-                ArtifactLineRange(2, 4),
-            ),
-        )
-        request = ReferenceReadRequest(
-            ReferenceInvocationCorrelation(
-                operation_id="schema_operation",
-                invocation_id="schema_invocation",
-                invocation_ordinal=2,
-                agent_id=PLOT_ARCHITECT,
-                phase="draft",
-                round_number=0,
-                attempt=1,
-            ),
-            references,
-        )
+        requests: dict[str, ReferenceReadRequest] = {}
+        for index, (case, references) in enumerate(
+            self.reference_cases().items(),
+            1,
+        ):
+            with self.subTest(case=case):
+                request = ReferenceReadRequest(
+                    ReferenceInvocationCorrelation(
+                        operation_id=f"schema_operation_{case}",
+                        invocation_id=f"schema_invocation_{case}",
+                        invocation_ordinal=index,
+                        agent_id=PLOT_ARCHITECT,
+                        phase="draft",
+                        round_number=0,
+                        attempt=1,
+                    ),
+                    references,
+                )
+                requests[case] = request
+                schema = AgentBackend._reference_read_action_schema(request)
+                _assert_provider_supported_schema(self, schema)
+                reference_schema = schema["properties"]["action"][
+                    "properties"
+                ]["references"]
+                self.assertEqual(
+                    set(reference_schema),
+                    {"type", "items", "minItems", "maxItems"},
+                )
+                self.assertIn(type(reference_schema["items"]), {dict, bool})
+                self.assertNotIn("additionalItems", json.dumps(schema))
+                self.assertNotIn("prefixItems", json.dumps(schema))
+                self.assertEqual(reference_schema["minItems"], len(references))
+                self.assertEqual(reference_schema["maxItems"], len(references))
 
-        schema = AgentBackend._reference_read_action_schema(request)
-        reference_schema = schema["properties"]["action"]["properties"][
-            "references"
-        ]
-        self.assertEqual(
-            set(reference_schema),
-            {"type", "items", "additionalItems", "minItems", "maxItems"},
-        )
-        self.assertIsInstance(reference_schema["items"], list)
-        self.assertEqual(
-            [
-                item["properties"]["path"]["enum"]
-                for item in reference_schema["items"]
-            ],
-            [[reference.path] for reference in references],
-        )
-        self.assertIs(reference_schema["additionalItems"], False)
-        self.assertEqual(reference_schema["minItems"], len(references))
-        self.assertEqual(reference_schema["maxItems"], len(references))
-        self.assertNotIn("prefixItems", json.dumps(schema))
+                expected = ReferenceReadAction(
+                    ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
+                    request.correlation,
+                    request.references,
+                )
+                decoded = AgentBackend._decode_reference_read_action(
+                    _reference_action_json(request)
+                )
+                self.assertEqual(decoded, expected)
 
-        expected = ReferenceReadAction(
-            ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
-            request.correlation,
-            request.references,
-        )
-        decoded = AgentBackend._decode_reference_read_action(
-            _reference_action_json(request)
-        )
-        self.assertEqual(decoded, expected)
-        reversed_payload = json.loads(_reference_action_json(request))
+        mixed = requests["mixed"]
+        reversed_payload = json.loads(_reference_action_json(mixed))
         reversed_payload["action"]["references"].reverse()
         reversed_action = AgentBackend._decode_reference_read_action(
             json.dumps(reversed_payload)
         )
-        self.assertNotEqual(reversed_action, expected)
+        self.assertNotEqual(
+            reversed_action,
+            ReferenceReadAction(
+                ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
+                mixed.correlation,
+                mixed.references,
+            ),
+        )
+
+    async def test_fake_codex_rejects_list_valued_array_items(self) -> None:
+        session_id = "unsupported_reference_schema"
+        operation_id = "unsupported_schema_operation"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        repository, authorization, invocation = self.reference_invocation(
+            operation_id=operation_id,
+            invocation_id="unsupported_schema_invocation",
+            references=self.reference_cases()["mixed"],
+        )
+        invalid_schema = AgentBackend._reference_read_action_schema(
+            invocation.request
+        )
+        reference_schema = invalid_schema["properties"]["action"][
+            "properties"
+        ]["references"]
+        branches = reference_schema["items"]["anyOf"]
+        reference_schema["items"] = branches
+        reference_schema["additionalItems"] = False
+
+        with (
+            mock.patch.object(
+                AgentBackend,
+                "_reference_read_action_schema",
+                return_value=invalid_schema,
+            ),
+            mock.patch.dict(os.environ, self.reference_environment(invocation)),
+            self.assertRaises(BackendProtocolError) as raised,
+        ):
+            await bound.invoke(
+                self.request(session_id=session_id),
+                reference_read=invocation,
+            )
+
+        self.assertEqual(str(raised.exception), "Codex CLI exited with status 86")
+        calls = self.provider_invocations()
+        self.assertEqual(len(calls), 1)
+        submitted_items = calls[0]["schema"]["properties"]["action"][
+            "properties"
+        ]["references"]["items"]
+        self.assertIsInstance(submitted_items, list)
+        history = repository.inspect_reference_operation(operation_id)
+        assert history is not None
+        terminal_events = tuple(
+            event
+            for event in history.invocation_events[0]
+            if event.invocation_state is ReferenceInvocationState.TERMINATED
+        )
+        self.assertEqual(len(terminal_events), 1)
+        self.assertIs(
+            terminal_events[0].outcome,
+            ReferenceAuthorizationErrorCode.PROVIDER_FAILURE,
+        )
+        protected = (
+            "REFERENCE-PROVIDER-MARKER",
+            "REFERENCE-PROVIDER-RANGE-MARKER",
+        )
+        projections = (
+            str(raised.exception),
+            json.dumps(calls[0]["schema"], ensure_ascii=False),
+            calls[0]["raw_payload"],
+            repr(history),
+            json.dumps(
+                _workspace_debug_records(self.workspace),
+                ensure_ascii=False,
+            ),
+        )
+        for marker in protected:
+            self.assertTrue(all(marker not in value for value in projections))
+        authorization.close()
 
     async def wait_for_provider_invocations(self, count: int) -> None:
         for _ in range(200):
@@ -5554,6 +5734,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             invocation_id="conversation_invocation",
             phase="conversation",
             round_number=None,
+            references=self.reference_cases()["range"],
         )
         with mock.patch.dict(
             os.environ,
@@ -5575,10 +5756,10 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             [
                 {
                     "reference": {
-                        "path": "manuscript/part-01/provider-reference.md",
-                        "line_range": None,
+                        "path": "manuscript/part-01/provider-range.md",
+                        "line_range": {"start": 2, "end": 2},
                     },
-                    "content": "REFERENCE-PROVIDER-MARKER\n",
+                    "content": "REFERENCE-PROVIDER-RANGE-MARKER\n",
                 }
             ],
         )
@@ -5606,6 +5787,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     invocation_id=f"retrieval_invocation_{case}",
                     phase="conversation_retrieval",
                     round_number=None,
+                    references=self.reference_cases()["mixed"],
                 )
                 if case == "search_read":
                     outputs = [
@@ -5670,6 +5852,30 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     "untrusted_writing_artifact_context",
                     retrieval_calls[0]["payload"],
                 )
+                self.assertEqual(
+                    retrieval_calls[0]["payload"][
+                        "untrusted_writing_artifact_context"
+                    ],
+                    [
+                        {
+                            "reference": {
+                                "path": (
+                                    "manuscript/part-01/"
+                                    "provider-reference.md"
+                                ),
+                                "line_range": None,
+                            },
+                            "content": "REFERENCE-PROVIDER-MARKER\n",
+                        },
+                        {
+                            "reference": {
+                                "path": "manuscript/part-01/provider-range.md",
+                                "line_range": {"start": 2, "end": 2},
+                            },
+                            "content": "REFERENCE-PROVIDER-RANGE-MARKER\n",
+                        },
+                    ],
+                )
                 self.assertTrue(
                     all(
                         "untrusted_writing_artifact_context" not in call["payload"]
@@ -5682,6 +5888,12 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     ),
                     2,
                 )
+                self.assertEqual(
+                    json.dumps(calls, ensure_ascii=False).count(
+                        "REFERENCE-PROVIDER-RANGE-MARKER"
+                    ),
+                    2,
+                )
                 self.assert_reference_accepted(
                     repository,
                     authorization,
@@ -5691,7 +5903,19 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_reference_read_failures_stop_before_substantive_call_and_taint(
         self,
     ) -> None:
-        cases = ("nonzero", "malformed", "result_first", "wrong_batch", "drift")
+        cases = (
+            "nonzero",
+            "malformed",
+            "result_first",
+            "missing",
+            "partial",
+            "reordered",
+            "duplicate",
+            "broadened",
+            "foreign_path",
+            "foreign_correlation",
+            "drift",
+        )
         for case in cases:
             with self.subTest(case=case):
                 self.log_path.unlink(missing_ok=True)
@@ -5707,6 +5931,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 repository, authorization, invocation = self.reference_invocation(
                     operation_id=operation_id,
                     invocation_id=f"failure_invocation_{case}",
+                    references=self.reference_cases()["mixed"],
                 )
                 environment = self.reference_environment(invocation)
                 expected_error: type[BaseException]
@@ -5726,24 +5951,57 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     )
                     expected_error = BackendProtocolError
                     expected_outcome = ReferenceAuthorizationErrorCode.PROVIDER_FAILURE
-                elif case == "wrong_batch":
+                elif case in {
+                    "missing",
+                    "partial",
+                    "reordered",
+                    "duplicate",
+                    "broadened",
+                    "foreign_path",
+                    "foreign_correlation",
+                }:
                     envelope = json.loads(
                         environment["STORY_FAKE_CODEX_REFERENCE_ACTION"]
                     )
-                    envelope["action"]["references"] = [
-                        {
-                            "path": "core_documents/global_outline.md",
-                            "line_range": None,
+                    action = envelope["action"]
+                    if case == "missing":
+                        del action["references"]
+                    elif case == "partial":
+                        action["references"] = action["references"][:1]
+                    elif case == "reordered":
+                        action["references"].reverse()
+                    elif case == "duplicate":
+                        action["references"] = [
+                            action["references"][0],
+                            action["references"][0],
+                        ]
+                    elif case == "broadened":
+                        action["references"][1]["line_range"] = {
+                            "start": 1,
+                            "end": 3,
                         }
-                    ]
+                    elif case == "foreign_path":
+                        action["references"][0]["path"] = (
+                            "core_documents/global_outline.md"
+                        )
+                    else:
+                        action["correlation"]["invocation_id"] = (
+                            "foreign_invocation"
+                        )
                     environment["STORY_FAKE_CODEX_REFERENCE_ACTION"] = json.dumps(
                         envelope
                     )
-                    expected_error = ReferenceAuthorizationError
-                    expected_outcome = (
-                        ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
-                    )
-                    persisted_thread = True
+                    if case in {"missing", "duplicate"}:
+                        expected_error = BackendProtocolError
+                        expected_outcome = (
+                            ReferenceAuthorizationErrorCode.PROVIDER_FAILURE
+                        )
+                    else:
+                        expected_error = ReferenceAuthorizationError
+                        expected_outcome = (
+                            ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
+                        )
+                        persisted_thread = True
                 else:
                     self.workspace.root.joinpath(
                         "manuscript/part-01/provider-reference.md"
@@ -5763,19 +6021,18 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         str(raised.exception),
                         "Codex CLI exited with status 7",
                     )
-                    self.assertNotIn(
-                        "REFERENCE-PROVIDER-MARKER",
-                        str(raised.exception),
-                    )
                 self.assertEqual(len(self.provider_invocations()), 1)
                 history = repository.inspect_reference_operation(operation_id)
                 assert history is not None
-                self.assertEqual(
-                    history.invocation_events[0][-1].invocation_state,
-                    ReferenceInvocationState.TERMINATED,
+                terminal_events = tuple(
+                    event
+                    for event in history.invocation_events[0]
+                    if event.invocation_state
+                    is ReferenceInvocationState.TERMINATED
                 )
+                self.assertEqual(len(terminal_events), 1)
                 self.assertIs(
-                    history.invocation_events[0][-1].outcome,
+                    terminal_events[0].outcome,
                     expected_outcome,
                 )
                 if not persisted_thread and case != "drift":
@@ -5786,6 +6043,26 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(manifest["provider_threads"], {})
                 else:
                     self.assertIs(self.thread(session_id)["tainted"], True)
+                projections = (
+                    str(raised.exception),
+                    self.provider_invocations()[0]["raw_payload"],
+                    json.dumps(
+                        self.provider_invocations()[0]["schema"],
+                        ensure_ascii=False,
+                    ),
+                    repr(history),
+                    json.dumps(
+                        _workspace_debug_records(self.workspace),
+                        ensure_ascii=False,
+                    ),
+                )
+                for marker in (
+                    "REFERENCE-PROVIDER-MARKER",
+                    "REFERENCE-PROVIDER-RANGE-MARKER",
+                ):
+                    self.assertTrue(
+                        all(marker not in projection for projection in projections)
+                    )
                 authorization.close()
 
     async def test_reference_read_substantive_failure_and_cancellation_terminate(
