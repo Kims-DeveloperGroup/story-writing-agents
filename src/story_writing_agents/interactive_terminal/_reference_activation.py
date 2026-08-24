@@ -292,7 +292,13 @@ def project_reference_input(
     candidates: list[CommandCompletionCandidate] = []
     for path in canonical_paths:
         token = ArtifactReference(path).token
-        updated = _replace_span(buffer, start, end, token)
+        scoped_buffer = buffer[scope.start : scope.end]
+        updated = _replace_span(
+            scoped_buffer,
+            start - scope.start,
+            end - scope.start,
+            token,
+        )
         try:
             parse_artifact_references(updated)
         except ArtifactReferenceDirectiveError:
@@ -347,7 +353,7 @@ def replace_reference_range(
         token,
     )
     try:
-        parse_artifact_references(updated_buffer)
+        parse_artifact_references(updated_buffer[request.start :])
     except ArtifactReferenceDirectiveError:
         raise ReferenceInputFailure(ReferenceInputFailureKind.INVALID) from None
     updated_line = LineInputState(updated_buffer, request.start + len(token))
@@ -385,7 +391,7 @@ def replace_reference_completion(
         replacement,
     )
     try:
-        parse_artifact_references(updated_buffer)
+        parse_artifact_references(updated_buffer[projection.start :])
     except ArtifactReferenceDirectiveError:
         raise ReferenceInputFailure(ReferenceInputFailureKind.INVALID) from None
     updated_line = LineInputState(
@@ -467,6 +473,9 @@ def _containing_braced_marker(
             search = start + 1
             continue
         if _dollar_is_escaped(buffer, start):
+            if buffer.startswith("$${", start, scope.end):
+                search = start + 1
+                continue
             search = end
             if start <= cursor <= end:
                 return start, end, False
@@ -475,32 +484,6 @@ def _containing_braced_marker(
             return start, end, True
         search = end
     return None
-
-
-def previous_reference_marker_start(buffer: str, search_end: int) -> int | None:
-    """Return the rightmost top-level marker start before one search boundary."""
-
-    search = 0
-    previous: int | None = None
-    while search < search_end:
-        start = buffer.find("$", search, search_end)
-        if start < 0:
-            break
-        braced_end = _braced_marker_end(buffer, start, len(buffer))
-        if braced_end is not None:
-            if _dollar_is_escaped(buffer, start):
-                search = braced_end
-                continue
-            previous = start
-            search = braced_end
-            continue
-        doubled = buffer.startswith("$$", start, len(buffer))
-        if _dollar_is_escaped(buffer, start):
-            search = start + 1
-            continue
-        previous = start
-        search = start + (2 if doubled else 1)
-    return previous
 
 
 def _braced_marker_end(

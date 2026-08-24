@@ -1801,21 +1801,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   while `read_reference_main_command_line` and `read_reference_input_line`
   accept private call-local activation bindings for main and RUN/CHAT input
   without changing that established method signature. Those bindings carry the
-  controls-owned completion predicate and ranged-palette selection callback,
-  plus reference-activation-owned top-level marker traversal for fallback; the
-  driver interprets no artifact-reference prefix grammar and retains none of
-  those collaborators. On a capable live editor, the second character of
+  controls-owned completion predicate and ranged-palette selection callback.
+  Fallback raw-probes dollar positions right to left and delegates provider-
+  scope, escape-parity, and marker correlation decisions to the supplied
+  reference projection; the driver interprets no artifact-reference grammar
+  and retains none of those collaborators. On a capable live editor, the
+  second character of
   exact `$$` immediately projects the existing main-command palette as a
   nonmodal ranged-source overlay. Up/Down remains controls-owned; Enter or Tab
   consumes only a freshly correlated highlighted path and opens the supplied-
   text viewer without inserting a completion, submitting the line, or mutating
   history. Exact `$${path}` opens that viewer directly, including eligible
   paths with ordinary spaces or Unicode. A single `$` remains ordinary whole-
-  file completion. Ordinary fallback activates only after a submitted line and
-  traverses only top-level markers, so nested dollars within braced paths are
-  not redispatched: `$$` uses the existing numbered picker before the supplied-
-  text viewer and `$${path}` opens that viewer directly. Neither path uses a
-  timer heuristic.
+  file completion. Ordinary fallback activates only after a submitted line:
+  its raw probes become actionable only when the scope-aware reference
+  projection accepts them, `$$` uses the existing numbered picker before the
+  supplied-text viewer, and `$${path}` opens that viewer directly. Neither path
+  uses a timer heuristic.
   `read_live_line` remains the history-free contextual compatibility route,
   `read_input_line` accepts an injected trusted semantic renderer for
   history-free composition and confirmation, and `read_line` uses the same
@@ -1993,10 +1995,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   produces one span-correlated ranged-source completion/`PICK` pair for the
   live overlay and ordinary fallback; empty exact `$$` instead pairs an empty
   ranged completion with deferred `EMPTY_SOURCES`, keeping actionable capable-
-  terminal guidance visible before activation. Outer braced spans shield
-  nested dollars and preserve spaces, `#`, and Unicode; package-internal
-  `previous_reference_marker_start` provides the same top-level traversal to
-  fallback. Marker discovery remains correct for batched or bracketed paste.
+  terminal guidance visible before activation. Active-marker containment
+  preserves outer braced spaces, `#`, and Unicode while applying directive-
+  parser parity: an odd-escaped `$${...}` can rescan from its second dollar,
+  whereas other protected nested dollars do not activate. Fallback delegates
+  each raw probe to that same scope-aware projection. Marker discovery remains
+  correct for batched or bracketed paste. Completion and replacement validation
+  applies only to the supplied provider span rather than unrelated command text.
   Every emitted `${path}` or `${path}#Lx-Ly` token is validated through
   the existing writing-artifact facade. It performs no catalog discovery, text
   read, display,
@@ -3324,7 +3329,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - `interactive_terminal._reference_activation` owns only pure active-marker,
   completion, request, and replacement values, including the paired ranged-
   source completion/PICK projection, paired empty completion/failure, and
-  top-level braced-marker scanning shared with fallback. `_core`
+  provider-scope and directive-parity correlation. `_core`
   combines them with controller-supplied provider scopes, sorted eligible
   source paths, bounded text reads, fixed errors, and the controls-owned
   selection callback. `_controls` owns pure overlay projection, highlighting,

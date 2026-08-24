@@ -13,6 +13,7 @@ from unittest import mock
 
 import story_writing_agents
 from story_writing_agents import interactive_terminal as terminal_facade
+from story_writing_agents.interactive_commands import project_provider_text_span
 from story_writing_agents.interactive_terminal import _controls, _core, _driver, _model
 from story_writing_agents.interactive_terminal._controls import (
     append_main_input_history,
@@ -37,6 +38,9 @@ from story_writing_agents.interactive_terminal._reference_activation import (
     ReferenceInputFailureKind,
     ReferenceInputProjection,
     ReferenceInputScope,
+    replace_reference_completion,
+    replace_reference_range,
+    selected_reference_request,
 )
 from story_writing_agents.interactive_terminal._model import (
     EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX,
@@ -1414,6 +1418,81 @@ class CompletionDriverTests(unittest.TestCase):
                 scope_provider.assert_called_once_with(buffer, len(buffer))
                 paths_provider.assert_called_once_with()
 
+    def test_run_output_prefix_is_excluded_from_prompt_reference_validation(
+        self,
+    ) -> None:
+        path = "core_documents/global_outline.md"
+        prefix = "/run --output ${draft "
+
+        def scope(buffer: str, cursor: int) -> ReferenceInputScope | None:
+            span = project_provider_text_span(buffer, cursor)
+            if span is None:
+                return None
+            return ReferenceInputScope(span.start, span.end)
+
+        for marker, kind in (("$", "completion"), ("$$", "range")):
+            line = f"{prefix}{marker}"
+            for fallback in (False, True):
+                with self.subTest(marker=marker, fallback=fallback):
+                    scope_provider = mock.Mock(side_effect=scope)
+                    paths_provider = mock.Mock(return_value=(path,))
+                    provider = _core._reference_projection_provider(
+                        scope_provider,
+                        paths_provider,
+                    )
+                    if fallback:
+                        projected = _driver._fallback_reference_projection(
+                            line,
+                            _core._reference_input_bindings(
+                                provider,
+                                mock.Mock(),
+                                mock.Mock(),
+                            ),
+                        )
+                    else:
+                        projected = provider(line, len(line))
+
+                    assert projected is not None
+                    self.assertEqual(
+                        scope_provider.call_args_list,
+                        [mock.call(line, len(line))],
+                    )
+                    paths_provider.assert_called_once_with()
+                    state = MainCommandControlState(
+                        MainInputControlState(LineInputState(line, len(line)))
+                    )
+                    if kind == "completion":
+                        assert projected.completion is not None
+                        replacement = projected.completion.candidates[0].replacement
+                        updated = replace_reference_completion(
+                            state,
+                            projected.completion,
+                            replacement,
+                        )
+                    else:
+                        assert projected.request is not None
+                        selected = selected_reference_request(
+                            projected.request,
+                            path,
+                        )
+                        updated = replace_reference_range(state, selected, 2, 3)
+                        replacement = f"${{{path}}}#L2-L3"
+                    self.assertEqual(
+                        updated.main_input.line_state.buffer,
+                        f"{prefix}{replacement}",
+                    )
+
+        invalid = f"{prefix}$${{{path}"
+        invalid_paths = mock.Mock(
+            side_effect=AssertionError("invalid eligible marker read catalog")
+        )
+        invalid_provider = _core._reference_projection_provider(scope, invalid_paths)
+        self.assertEqual(
+            invalid_provider(invalid, len(invalid)),
+            ReferenceInputProjection(failure=ReferenceInputFailureKind.INVALID),
+        )
+        invalid_paths.assert_not_called()
+
     def test_supported_live_read_selects_commits_appends_and_restores_once(
         self,
     ) -> None:
@@ -1710,6 +1789,71 @@ class CompletionDriverTests(unittest.TestCase):
         self.assertEqual(driver._history_state, MainInputHistoryState())
         fallback.assert_not_called()
 
+    def test_reference_live_editor_matches_directive_escape_parity(self) -> None:
+        path = "manuscript/older drafts/{世界$ 章#1.md"
+        other = "manuscript/root.md"
+        complete = f"${{{path}}}"
+        cases = (
+            (f"\\${{{path}", False),
+            (f"\\$${{{path}", True),
+            (f"\\\\${{{path}", True),
+            (f"literal {complete} then $", True),
+        )
+        for original, active in cases:
+            with self.subTest(original=original):
+                driver, _input, output, fallback, termios, os_module = make_driver(
+                    original + "\x03"
+                )
+                os_module.get_terminal_size = lambda _descriptor: SimpleNamespace(
+                    columns=160,
+                    lines=24,
+                )
+                paths_provider = mock.Mock(return_value=(path, other))
+                with mock.patch.object(
+                    _driver._select,
+                    "select",
+                    side_effect=lambda readable, writable, exceptional, _timeout: (
+                        readable,
+                        writable,
+                        exceptional,
+                    ),
+                ):
+                    with self.assertRaises(KeyboardInterrupt):
+                        _core.read_main_command_line(
+                            driver,
+                            "main> ",
+                            reference_scope_provider=lambda buffer, _cursor: (
+                                ReferenceInputScope(0, len(buffer))
+                            ),
+                            reference_paths_provider=paths_provider,
+                            reference_text_reader=mock.Mock(),
+                            reference_failure_writer=mock.Mock(),
+                        )
+
+                exact_frames = tuple(
+                    strip_decorative_sgr(record)
+                    for record in output.records
+                    if f"main> {original}" in strip_decorative_sgr(record)
+                )
+                self.assertTrue(exact_frames)
+                self.assertEqual(
+                    any(
+                        "Writing artifact selection [open]" in frame
+                        for frame in exact_frames
+                    ),
+                    active,
+                )
+                if active:
+                    paths_provider.assert_called()
+                else:
+                    paths_provider.assert_not_called()
+                self.assertEqual(driver._history_state, MainInputHistoryState())
+                fallback.assert_not_called()
+                self.assertEqual(
+                    tuple(call[1] for call in termios.set_calls),
+                    (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
+                )
+
     def test_empty_ranged_picker_renders_before_deferred_live_failure(self) -> None:
         for activation_key in ("\n", "\t"):
             with self.subTest(activation_key=repr(activation_key)):
@@ -1863,8 +2007,8 @@ class CompletionDriverTests(unittest.TestCase):
         self.assertEqual(
             scope_provider.call_args_list,
             [
-                mock.call(marker, marker.index("$") + 1),
-                mock.call(marker, marker.index("$") + 1),
+                mock.call(marker, marker.rfind("$") + 1),
+                mock.call(marker, marker.rfind("$") + 1),
             ],
         )
         self.assertEqual(paths_provider.call_count, 2)
@@ -1927,7 +2071,7 @@ class CompletionDriverTests(unittest.TestCase):
         self.assertEqual(
             scope_provider.call_args_list,
             [
-                mock.call(marker, marker.index("$") + 1),
+                mock.call(marker, marker.rfind("$") + 1),
             ],
         )
         paths_provider.assert_called_once_with()
@@ -2073,7 +2217,7 @@ class CompletionDriverTests(unittest.TestCase):
                 )
                 scope_provider.assert_called_once_with(
                     original,
-                    original.index("$") + 1,
+                    original.rfind("$") + 1,
                 )
                 paths_provider.assert_called_once_with()
                 self.assertEqual(
@@ -2140,7 +2284,7 @@ class CompletionDriverTests(unittest.TestCase):
         self,
     ) -> None:
         cases = (
-            ("prefix \\$ suffix", None, 0),
+            ("prefix \\$ suffix", None, 1),
             ("prefix $ suffix", ReferenceInputScope(0, 6), 1),
             ("plain text", None, 0),
         )
@@ -2201,19 +2345,81 @@ class CompletionDriverTests(unittest.TestCase):
         complete_direct = f"$${{{path}}}"
         unfinished_direct = complete_direct[:-1]
         later = f"literal {complete_whole} then $"
+
+        def raw_cursors(line: str) -> tuple[int, ...]:
+            return tuple(
+                position + 1
+                for position, character in reversed(tuple(enumerate(line)))
+                if character == "$"
+            )
+
         cases = (
-            (complete_whole, None, 0, False),
-            (unfinished_whole, "completion", 0, True),
-            (complete_direct, "view", 0, True),
-            (unfinished_direct, "invalid", 0, False),
-            (f"\\{complete_whole}", None, None, False),
-            (f"\\{unfinished_whole}", None, None, False),
-            (f"\\{complete_direct}", None, None, False),
-            (f"\\{unfinished_direct}", None, None, False),
-            (f"\\\\{unfinished_whole}", "completion", 2, True),
-            (later, "completion", later.rfind("$"), True),
+            (
+                complete_whole,
+                None,
+                None,
+                raw_cursors(complete_whole),
+                False,
+            ),
+            (
+                unfinished_whole,
+                "completion",
+                0,
+                (unfinished_whole.rfind("$") + 1,),
+                True,
+            ),
+            (
+                complete_direct,
+                "view",
+                0,
+                (complete_direct.rfind("$") + 1,),
+                True,
+            ),
+            (
+                unfinished_direct,
+                "invalid",
+                None,
+                (unfinished_direct.rfind("$") + 1,),
+                False,
+            ),
+            (
+                f"\\{complete_whole}",
+                None,
+                None,
+                raw_cursors(f"\\{complete_whole}"),
+                False,
+            ),
+            (
+                f"\\{unfinished_whole}",
+                None,
+                None,
+                raw_cursors(f"\\{unfinished_whole}"),
+                False,
+            ),
+            (
+                f"\\{complete_direct}",
+                None,
+                None,
+                raw_cursors(f"\\{complete_direct}"),
+                False,
+            ),
+            (
+                f"\\{unfinished_direct}",
+                "completion",
+                2,
+                (f"\\{unfinished_direct}".rfind("$") + 1,),
+                True,
+            ),
+            (
+                f"\\\\{unfinished_whole}",
+                "completion",
+                2,
+                (f"\\\\{unfinished_whole}".rfind("$") + 1,),
+                True,
+            ),
+            (later, "completion", later.rfind("$"), (len(later),), True),
         )
-        for line, outcome, expected_start, reads_paths in cases:
+        for line, outcome, expected_start, expected_cursors, reads_paths in cases:
             with self.subTest(line=line):
                 scope_provider = mock.Mock(
                     side_effect=lambda buffer, _cursor: ReferenceInputScope(
@@ -2256,13 +2462,10 @@ class CompletionDriverTests(unittest.TestCase):
                             failure=ReferenceInputFailureKind.INVALID
                         ),
                     )
-                if expected_start is None:
-                    scope_provider.assert_not_called()
-                else:
-                    scope_provider.assert_called_once_with(
-                        line,
-                        expected_start + 1,
-                    )
+                self.assertEqual(
+                    scope_provider.call_args_list,
+                    [mock.call(line, cursor) for cursor in expected_cursors],
+                )
                 if reads_paths:
                     paths_provider.assert_called_once_with()
                 else:

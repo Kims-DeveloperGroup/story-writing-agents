@@ -21,7 +21,10 @@ from story_writing_agents.interactive_terminal._model import (
     MainCommandControlState,
     MainInputControlState,
 )
-from story_writing_agents.writing_artifacts import parse_artifact_references
+from story_writing_agents.writing_artifacts import (
+    ArtifactReferenceDirectiveError,
+    parse_artifact_references,
+)
 
 
 _PATHS = (
@@ -409,33 +412,50 @@ class ReferenceProjectionTests(unittest.TestCase):
                                 failure=activation.ReferenceInputFailureKind.INVALID
                             ),
                         )
-            self.assertEqual(
-                activation.previous_reference_marker_start(buffer, len(buffer)),
-                0,
-            )
 
-        for marker in (
-            complete_whole,
-            unfinished_whole,
-            complete_direct,
-            unfinished_direct,
-        ):
-            escaped = f"\\{marker}"
+        escaped_cases = (
+            (f"\\{complete_whole}", None, None),
+            (f"\\{unfinished_whole}", None, None),
+            (f"\\{complete_direct}", None, None),
+            (f"\\{unfinished_direct}", "completion", 2),
+        )
+        for escaped, outcome, start in escaped_cases:
             with self.subTest(escaped=escaped):
                 for cursor in (escaped.rfind("$") + 1, len(escaped)):
-                    self.assertIsNone(
-                        activation.project_reference_input(
-                            escaped,
-                            cursor,
-                            activation.ReferenceInputScope(0, len(escaped)),
-                            _PATHS,
-                        )
-                    )
-                self.assertIsNone(
-                    activation.previous_reference_marker_start(
+                    projected = activation.project_reference_input(
                         escaped,
-                        len(escaped),
+                        cursor,
+                        activation.ReferenceInputScope(0, len(escaped)),
+                        _PATHS,
                     )
+                    if outcome is None:
+                        self.assertIsNone(projected)
+                    else:
+                        assert projected is not None
+                        assert projected.completion is not None
+                        self.assertEqual(
+                            (projected.completion.start, projected.completion.end),
+                            (start, len(escaped)),
+                        )
+
+        parsed_escaped_direct = parse_artifact_references(
+            f"\\{complete_direct}"
+        )
+        self.assertEqual(
+            tuple(reference.token for reference in parsed_escaped_direct.references),
+            (complete_whole,),
+        )
+        with self.assertRaisesRegex(
+            ArtifactReferenceDirectiveError,
+            "reference directive is malformed",
+        ):
+            parse_artifact_references(f"\\{unfinished_direct}")
+
+        for escaped_single in (f"\\{complete_whole}", f"\\{unfinished_whole}"):
+            with self.subTest(parsed=escaped_single):
+                self.assertEqual(
+                    parse_artifact_references(escaped_single).references,
+                    (),
                 )
 
         even_escape = f"\\\\{unfinished_whole}"
@@ -447,13 +467,6 @@ class ReferenceProjectionTests(unittest.TestCase):
         )
         assert even_projection is not None and even_projection.completion is not None
         self.assertEqual(even_projection.completion.start, 2)
-        self.assertEqual(
-            activation.previous_reference_marker_start(
-                even_escape,
-                len(even_escape),
-            ),
-            2,
-        )
 
         later = f"literal {complete_whole} then $"
         later_start = later.rfind("$")
@@ -466,10 +479,6 @@ class ReferenceProjectionTests(unittest.TestCase):
         assert later_projection is not None
         assert later_projection.completion is not None
         self.assertEqual(later_projection.completion.start, later_start)
-        self.assertEqual(
-            activation.previous_reference_marker_start(later, len(later)),
-            later_start,
-        )
 
     def test_scope_cursor_escape_and_fragment_boundaries_do_not_overreach(self) -> None:
         cases = (
