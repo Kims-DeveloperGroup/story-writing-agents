@@ -71,6 +71,8 @@ from ._model import (
     Section,
     SemanticRole,
     SlashCommandSuggestion,
+    StartupWelcome,
+    StartupWelcomeStage,
     SuggestionPalette,
     TerminalCapabilities,
     ViewState,
@@ -83,6 +85,7 @@ from ._render import (
     render_input_prompt,
     render_picker_fallback,
     render_picker_viewport,
+    render_startup_welcome_frame,
 )
 from ._reference_activation import (
     ReferenceInputFailure,
@@ -469,55 +472,19 @@ _SUMMARY_LIMIT = 512
 _HINT_LIMIT = 256
 _REDACTION = "<redacted>"
 _MAIN_PROMPT_EXCLUSIONS = frozenset({"/compose", "/send", "/cancel"})
-_STARTUP_WELCOME_FRAMES: tuple[Component, ...] = (
-    Notice(
-        "Story.",
-        label="welcome",
-        role=SemanticRole.INFO,
-        state=ViewState.LOADING,
-    ),
-    Panel(
-        "Story Writing",
-        (
-            Notice(
-                "A shared creative workspace is opening.",
-                role=SemanticRole.INFO,
-                state=ViewState.LOADING,
-            ),
-        ),
-        state=ViewState.LOADING,
-    ),
-    Panel(
-        "Story Writing Agents",
-        (
-            Notice(
-                "Four roles. One shared story workspace.",
-                role=SemanticRole.EMPHASIS,
-                state=ViewState.LOADING,
-            ),
-        ),
-        state=ViewState.LOADING,
-    ),
-    Panel(
-        "Story Writing Agents",
-        (
-            Notice(
-                "Four roles. One shared story workspace.",
-                role=SemanticRole.EMPHASIS,
-            ),
-            Notice(
-                "Provider access will be checked before the story session starts.",
-                role=SemanticRole.INFO,
-            ),
-        ),
-        state=ViewState.COMPLETED,
-    ),
-)
+
+
 _ARTIFACT_REFERENCE_GUIDANCE = (
     "Artifact references require an attached session and focused conversation. "
     "In provider-bound prompts, $ opens whole-file selection and completion; "
     "exact $$ immediately opens ranged selection, where Enter/Tab opens the "
     "highlighted source in the viewer."
+)
+_STARTUP_WELCOME_SEQUENCE = (
+    StartupWelcome(StartupWelcomeStage.STORY),
+    StartupWelcome(StartupWelcomeStage.WRITING),
+    StartupWelcome(StartupWelcomeStage.AGENTS),
+    StartupWelcome(StartupWelcomeStage.HANDOFF),
 )
 
 
@@ -589,9 +556,7 @@ class InteractiveTerminal:
         self._confirmation_read_line = _plain_input_reader(read_line, width)
         self._picker_read = _plain_picker_reader(read_line, write_text, width)
         self._prompt_read = _plain_prompt_reader(read_line, width)
-        self._startup_welcome = lambda _sleeper: self._write_component(
-            _STARTUP_WELCOME_FRAMES[-1]
-        )
+        self._startup_welcome = lambda _sleeper: self._write_startup_welcome()
         self._startup_notice = lambda notice, _sleeper: self._write_component(notice)
         self._startup_result_notice = (
             lambda notice, _sleeper: self._write_startup_result_notice(notice)
@@ -1360,6 +1325,17 @@ class InteractiveTerminal:
         """Render and write one semantic component through the bound callback."""
 
         frame = render_component(component, self._capability_provider())
+        self._write_text(f"{frame.text}\n")
+
+    def _write_startup_welcome(self) -> None:
+        """Write one prefix-free final welcome through the callback boundary."""
+
+        capabilities = self._capability_provider()
+        frame = render_startup_welcome_frame(
+            _STARTUP_WELCOME_SEQUENCE[-1],
+            capabilities,
+            capabilities.width,
+        )
         self._write_text(f"{frame.text}\n")
 
     def _write_startup_result_notice(self, notice: Notice) -> None:
@@ -2340,9 +2316,10 @@ def build_stream_terminal(
     terminal._picker_read = read_picker
     terminal._prompt_read = read_prompt
     terminal._startup_welcome = lambda sleeper: driver.run_startup_welcome(
-        lambda index, current: render_component(
-            _STARTUP_WELCOME_FRAMES[index],
+        lambda index, current, physical_width: render_startup_welcome_frame(
+            _STARTUP_WELCOME_SEQUENCE[index],
             current,
+            physical_width,
         ),
         sleeper,
     )

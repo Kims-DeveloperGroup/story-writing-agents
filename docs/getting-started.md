@@ -84,8 +84,22 @@ Bare `story` is the primary interactive entry:
 story
 ```
 
-The welcome is followed by the first interactive gate. The runtime silently
-checks Codex with `codex login status` and the resolved Antigravity executable
+The welcome is followed by the first interactive gate. Physical widths of 48
+columns and wider progressively reveal the original five-letter ASCII `STORY`
+wordmark; 32–47 columns use a compact spaced identity, and narrower terminals
+use the short identity. The capable path has four frames and exactly three
+0.4-second waits; the wide completed projection is nine rows. When color is
+eligible, `S`, `T`, `O`, `R`, and `Y` are bold cyan, magenta, yellow, blue, and
+green respectively, using local foreground resets only. `NO_COLOR` remains
+color-eligible when unset, empty/whitespace, or trimmed exact `0` (including
+`NO_COLOR=0`); any other value disables decoration without changing the
+environment. Presence of `STORY_REDUCED_MOTION` independently renders one
+final colored frame with no animation or terminal mutation. Truthy/nonzero
+`NO_COLOR`, non-TTY, `TERM=dumb`, non-POSIX, callback, and uncertain-output
+paths render one plain final frame without delay. The welcome does not enter
+the alternate screen, hide the cursor, or include provider output. The runtime
+then silently checks Codex with `codex login status` and the resolved
+Antigravity executable
 with `models` (`agy models` by default). Select an unauthenticated provider to
 hand the real terminal to its native sign-in: `codex login` for Codex or the
 resolved Antigravity executable with no arguments (bare `agy` by default). The
