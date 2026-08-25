@@ -139,6 +139,12 @@ The only supported backend names are `codex` and `antigravity`; legacy
 
 For Python integrations, start with the [runtime API](docs/reference/runtime-api.md), [agent contracts](docs/reference/agent-contracts.md), and [bounded retrieval](docs/reference/conversation-retrieval.md).
 
+Conversation catalog, transcript, and reference-search ports also have an
+optional SQLite implementation for direct Python composition. It is not
+selected by the installed shell or `StoryRuntime`; start with the
+[package API](docs/reference/package-api.md#optional-sqlite-conversation-storage)
+before provisioning its separate database.
+
 <a id="current-limitations"></a>
 
 ## Important limits
@@ -149,6 +155,12 @@ For Python integrations, start with the [runtime API](docs/reference/runtime-api
 - Writing-artifact publication is journaled and catalog-last, and rolls forward
   on the next catalog or publication access after an interruption. It is not
   one transaction with debate logs, lifecycle state, or result files.
+- The installed shell and runtime continue to use filesystem conversation
+  storage. SQLite is an explicit, optional Python API: there is no `/settings`
+  selection, installation, automatic provisioning, default switch, migration,
+  FTS, RAG, or MySQL adapter. Issue #261 owns integrating detection,
+  installation, and selection into the user-facing settings/runtime flow;
+  direct preflight here only reports capability.
 - Smoke's explicit workspace is not read-only and retains bounded plaintext
   diagnostics when they can be written; abrupt termination can interrupt
   cleanup. A pass does not validate provider/model, terminal behavior,

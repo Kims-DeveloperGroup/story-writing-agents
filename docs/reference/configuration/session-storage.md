@@ -16,7 +16,9 @@ Key terms: **default**—a persisted command or conversation fallback;
 
 ```text
 workspace/
-├── config/{system_defaults.json,agent_configs.json,agents/,persona_templates/}
+├── config/
+│   ├── {system_defaults.json,agent_configs.json,agents/,persona_templates/}
+│   └── .conversation_storage.lock                             [lazy conversation-storage mutation guard]
 ├── core_documents/{global_outline.md,part_outlines.md,character_sheets.md,narrative_rules.md} [lazy agent publications]
 ├── agent_states/
 │   ├── orchestrator_state/
@@ -50,10 +52,12 @@ workspace/
 │   ├── .runtime.lock                                           [lazy guard]
 │   ├── runtime.jsonl                                           [lazy active log]
 │   └── runtime.jsonl.{1..5}                                    [lazy backups]
-├── discussion_logs/<session_id>/
-│   ├── <debate_id>.{state.json,jsonl,result.json}
-│   ├── <debate_id>.context.json                                [lazy debate context]
-│   └── interactive/conversations/<conversation_id>/{metadata.json,transcript.jsonl}
+├── discussion_logs/
+│   ├── conversation_storage.sqlite3                            [lazy explicit optional SQLite provision]
+│   └── <session_id>/
+│       ├── <debate_id>.{state.json,jsonl,result.json}
+│       ├── <debate_id>.context.json                            [lazy debate context]
+│       └── interactive/conversations/<conversation_id>/{metadata.json,transcript.jsonl}
 └── manuscript/<part-id>/<safe-relative-markdown-path>           [lazy create-only output]
 ```
 
@@ -69,6 +73,33 @@ under `transactions/` are recovery journals. The three permanent lock names are
 hard links to one regular inode with link count three; partial or old two-link
 state is invalid and is not migrated or reconstructed. See
 [Canonical writing artifacts](../writing-artifacts.md).
+
+<a id="optional-sqlite-conversation-storage"></a>
+
+## Optional SQLite conversation storage
+
+The fixed `discussion_logs/conversation_storage.sqlite3` file belongs only to
+the optional direct Python adapter. `story init`, the installed shell,
+`StoryRuntime`, and `/settings` neither create nor select it. Importing the
+adapter also creates nothing and does not load `sqlite3`; the standard-library
+module is loaded and checked only when preflight, provisioning, composition, or
+an adapter operation requests it.
+
+Provisioning is an explicit create-only operation under an active
+workspace-matched conversation-storage lease. Supported mutations use the
+lazy `config/.conversation_storage.lock` coordinator guard; the guard is not a
+database, selection record, or settings file. The filesystem conversation
+paths remain the shell/runtime storage and can coexist with the SQLite file.
+There is no synchronization, import, migration, or authority relationship
+between those two stores.
+
+Issue #261 owns integrating detection, installation, and provider selection
+into the user-facing settings/runtime flow; the direct preflight here only
+reports capability. This release has no automatic installation or
+provisioning, default backend change, `/settings` storage field, migration,
+MySQL adapter, FTS, or RAG integration. See the
+[direct package API](../package-api.md#optional-sqlite-conversation-storage)
+and [recovery guidance](../../operations/recovery-and-limitations.md#sqlite-conversation-storage-recovery).
 
 `input_snapshots/` is lazy, internal authorization evidence for nonempty
 explicit-reference operations. Its operation and invocation manifests and

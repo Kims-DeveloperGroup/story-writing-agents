@@ -3,15 +3,19 @@
 > **Availability:** filesystem persistence covers configuration, sessions,
 > conversations, debates, optional debate-context sidecars, canonical writing
 > artifacts, content-free explicit-reference authorization evidence, and
-> bounded runtime debug-log infrastructure. `StoryRuntime` creates and
-> finalizes reference evidence for inline referenced operations; Python callers
-> can inspect it by operation ID.
+> bounded runtime debug-log infrastructure. A separate optional SQLite
+> conversation store is available only through a direct Python module.
+> `StoryRuntime` creates and finalizes reference evidence for inline referenced
+> operations; Python callers can inspect it by operation ID.
 
 Key terms: **blackboard**—public debate JSONL; **sidecar**—context stored apart
 from established debate records; **create-only**—never replaces an existing
 path; **context-omitted run**—a debate created without a context request.
 
-The workspace uses separate inspectable files rather than a database:
+The installed runtime uses separate inspectable files by default. An explicitly
+provisioned SQLite database can instead serve direct Python conversation
+catalog, event-store, and reference-search composition; it does not replace or
+select the runtime files automatically.
 
 | Channel | Owner |
 | --- | --- |
@@ -20,13 +24,67 @@ The workspace uses separate inspectable files rather than a database:
 | Per-agent history | Its owning agent |
 | Provider manifest and access claim | `AgentBackend` |
 | Session/conversation defaults | CLI context helpers |
-| Conversation metadata and transcript | Catalog and event-store adapters |
+| Conversation metadata and transcript | Filesystem catalog/event-store adapters by default; optional SQLite adapters by direct composition |
 | Bounded runtime diagnostics | Internal `debug_log` writer |
 | Retrieval actions, observations, progress, sources | Process/terminal only |
 | Current conversation and agent focus | Controller memory only |
 | Canonical writing artifacts and provenance | `WritingArtifactRepository` |
 | Explicit-reference operation and invocation evidence | `WritingArtifactRepository`; content-free create-only records |
 | Explicit-reference selected content | Transient repository/backend carriers and one immediate provider payload; no workspace evidence field |
+
+<a id="optional-sqlite-conversation-persistence"></a>
+
+## Optional SQLite conversation persistence
+
+The optional adapter owns one fixed contained file:
+`discussion_logs/conversation_storage.sqlite3`. Its database identity is schema
+version `1`, SQLite application ID `0x53574143` (`SWAC`), UTF-8 encoding, and a
+fixed schema cookie and schema-manifest fingerprint. Each operation against an
+existing file verifies the exact table, index, and trigger manifest,
+`PRAGMA integrity_check`, foreign keys, and all reconstructed domain values
+before trusting the database snapshot.
+
+The normalized schema has three authoritative tables: one singleton storage
+identity, catalog rows keyed by `(session_id, conversation_id)`, and ordered
+event rows keyed by `(session_id, conversation_id, sequence)`. Catalog rows
+retain the exact public metadata and a private derived `normalized_subject`.
+Event rows retain the exact public event and a private `turn_slot` used with
+constraints and triggers to enforce contiguous history, one user/outcome slot,
+addressed replies, and catalog ownership. These private columns do not change
+the public catalog, transcript, context, search, or citation contracts. There
+is no full-text or other persisted search index; composition uses the existing
+provider-free `ReferenceConversationSearch`.
+
+Every ordinary adapter read owns a read-only `mode=ro` connection and explicit
+`BEGIN`/`COMMIT` transaction. Verification and the requested operation observe
+one stable snapshot; the connection is then closed. That boundary is one
+catalog or event-store operation. A search can perform multiple operations and
+is not one database-global snapshot.
+
+Every supported mutation acquires the workspace conversation-storage
+coordinator before opening its `mode=rw` connection. It verifies the database
+and active workspace/owner-thread lease, uses `BEGIN IMMEDIATE`, performs the
+operation, reverifies schema and domain state plus the lease, commits, checks
+the named database identity, and closes. The connection policy is DELETE
+journal mode, `synchronous=FULL`, foreign keys enabled, a fixed five-second
+SQLite busy timeout, and UTF-8. This serializes supported writers through the
+workspace guard but is not a transaction with filesystem conversations,
+defaults, sessions, debates, artifacts, provider state, or other workspace
+channels.
+
+Provisioning builds and verifies one private temporary database, installs it
+create-only, and synchronizes the installed file and containing directory. It
+does not ingest the filesystem store. The privileged archive adapter can
+round-trip exact SQLite catalog/event rows under explicit leases, but its
+payload and record types are private and are not a public format or migration
+contract.
+
+`story init`, `/settings`, the installed shell, and `StoryRuntime` do not
+provision or select this database. There is no automatic installation,
+migration, activation, FTS, RAG, or MySQL behavior in this adapter. See the
+[direct API](../reference/package-api.md#optional-sqlite-conversation-storage),
+[filesystem boundary](../operations/filesystem-safety.md#sqlite-conversation-storage-safety),
+and [recovery table](../operations/recovery-and-limitations.md#sqlite-conversation-storage-recovery).
 
 <a id="workspace-runtime-debug-log"></a>
 

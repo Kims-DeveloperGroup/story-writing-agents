@@ -9,7 +9,8 @@
 > attachment use the catalog-independent reference-source boundary
 > and add no artifact
 > write path. Bounded fail-open debug logging uses a separate identity-bound
-> storage path.
+> storage path. Optional direct Python SQLite conversation storage has its own
+> fixed database, transaction, sidecar, and coordinator boundary.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -337,6 +338,80 @@ An existing empty file, malformed JSONL, invalid sequence or pairing, or
 path-mismatched record raises `WorkspaceFormatError`. Symlinks raise
 `WorkspaceSecurityError`. Exact event rules are in
 [Conversation transcripts](../reference/conversation-transcripts.md).
+
+<a id="sqlite-conversation-storage-safety"></a>
+
+## SQLite conversation-storage safety
+
+The optional adapter resolves only the fixed contained path
+`discussion_logs/conversation_storage.sqlite3`. It requires the named database
+and opened descriptor to identify the same regular, singly linked file and
+rechecks that identity after each operation. Connections use non-creating SQLite
+URI modes: `mode=ro` for reads and `mode=rw` for writes. Module import performs
+no I/O. Adapter construction never opens or creates the database and does not
+load `sqlite3`; resolving a string or path-like workspace still follows the
+ordinary `Workspace` construction contract. `sqlite3` is loaded and probed only
+when an operation is requested, and SQLite 3.7.16 or later is required.
+
+Header verification requires the SQLite format header, DELETE rollback-journal
+read/write versions, UTF-8 encoding, application ID `0x53574143` (`SWAC`), and
+schema version `1`. Transaction verification also requires the exact schema
+manifest and fingerprint, fixed schema cookie, `integrity_check` result,
+foreign-key integrity, and valid catalog/event domain rows. In particular, the
+stored normalized subject must equal the public normalization function and the
+private event turn slot must agree with event kind and pairing. Validation is
+read-only and never repairs a value.
+
+Sidecar handling deliberately differs by operation:
+
+- strict preflight, composition readiness, provisioning, and the boundaries of
+  supported writes require `-journal`, `-wal`, and `-shm` to be absent;
+- an ordinary adapter read may tolerate only a regular, singly linked
+  `-journal`, the shape needed while a concurrent supported DELETE-mode writer
+  is live; and
+- WAL and shared-memory sidecars are never accepted. No operation opens,
+  rewrites, removes, or treats an authoritative-path sidecar as recovery input;
+  provisioning cleanup is limited to sidecars of its own private temporary.
+
+An ordinary read opens one read-only connection, verifies connection policy,
+executes `BEGIN`, verifies the complete database snapshot, performs one adapter
+operation, commits, closes, then rechecks the sidecar and database identity.
+This gives one stable snapshot for that operation. It does not combine the
+several catalog/event-store reads made by `ReferenceConversationSearch` into a
+single database-global snapshot.
+
+Every supported mutation acquires an active workspace conversation-storage
+lease before database work. The coordinator uses a weakly shared in-process
+lock and the fixed `config/.conversation_storage.lock` POSIX advisory guard;
+same-thread nesting reuses the same owner-thread/workspace-bound lease without
+extending its expiry. After acquisition the adapter opens `mode=rw`, verifies
+the database and lease, starts `BEGIN IMMEDIATE`, mutates, reverifies database
+and lease, commits, and checks named identity again. The connection uses
+`journal_mode=DELETE`, `synchronous=FULL`, foreign keys on, UTF-8, and a
+five-second SQLite busy timeout. The separately configurable mutation timeout
+bounds coordinator acquisition.
+
+An uncommitted failure attempts rollback and every opened connection is closed.
+Rollback or close cleanup cannot suppress the primary body failure. A failure
+reported during post-commit close or synchronization can nevertheless leave
+one complete committed write or provisioned database; inspect before retrying.
+Busy or locked resources map to the public unavailable failure and are not
+retried automatically.
+
+Provisioning requires an explicit active lease. It creates the schema in one
+adapter-owned temporary file beside the target, commits and verifies it, writes
+and synchronizes its application ID, then installs it create-only with a hard
+link and synchronizes the installed file and parent directory. A competing
+complete installation is verified rather than overwritten. Cleanup removes
+only the provisioning call's own temporary path and its temporary sidecars;
+the authoritative target and foreign sidecars are preserved.
+
+The guard serializes supported writers but does not authenticate a caller,
+acquire a story-session claim, or protect against an actively hostile same-user
+process changing live filesystem names between checks and native calls. Stop
+all workspace processes before external edits. See
+[Recovery](recovery-and-limitations.md#sqlite-conversation-storage-recovery)
+for fail-closed responses.
 
 ## Mutation guarantees
 

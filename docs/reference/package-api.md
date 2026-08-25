@@ -1,8 +1,10 @@
 # Package API and exports
 
-> **Availability:** every name below is exported from the implemented
-> `story_writing_agents` package facade. Context and progress types are Python
-> APIs; an export does not imply a CLI command.
+> **Availability:** the 120-name inventory below is exported from the
+> implemented `story_writing_agents` package facade. The optional SQLite API has
+> a separate owning module and is explicitly documented after that inventory;
+> it is not a facade export. Context and progress types are Python APIs; an
+> export does not imply a CLI command.
 
 Key terms: **package facade**—the names re-exported at the package root;
 **public import**—a supported symbol imported from that facade; **alias**—a
@@ -98,6 +100,154 @@ from the package root. See [Runtime API](runtime-api.md#runtime-diagnostic-side-
 [Backend and sessions](backend-and-sessions.md#backend-diagnostic-side-effect),
 and [Privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy).
 
+<a id="optional-sqlite-conversation-storage"></a>
+
+## Optional SQLite conversation storage
+
+SQLite conversation storage is an explicit direct-module Python API. Importing
+the module performs no I/O and does not load `sqlite3`; the standard-library
+module is loaded and probed only when an operation is requested. SQLite 3.7.16
+or later is required.
+
+The owning module exports exactly:
+
+```python
+from story_writing_agents.conversation_storage.sqlite import (
+    SQLITE_CONVERSATION_STORAGE_APPLICATION_ID,
+    SQLITE_CONVERSATION_STORAGE_BUSY_TIMEOUT_SECONDS,
+    SQLITE_CONVERSATION_STORAGE_DATABASE_PATH,
+    SQLITE_CONVERSATION_STORAGE_MINIMUM_VERSION,
+    SQLITE_CONVERSATION_STORAGE_SCHEMA_VERSION,
+    SQLiteConversationArchiveAdapter,
+    SQLiteConversationCatalog,
+    SQLiteConversationEventStore,
+    compose_sqlite_conversation_archive,
+    compose_sqlite_conversation_storage,
+    preflight_sqlite_conversation_storage,
+    provision_sqlite_conversation_storage,
+)
+```
+
+The constants are exact:
+
+| Constant | Value |
+| --- | --- |
+| `SQLITE_CONVERSATION_STORAGE_APPLICATION_ID` | `0x53574143` (`SWAC`) |
+| `SQLITE_CONVERSATION_STORAGE_BUSY_TIMEOUT_SECONDS` | `5.0` |
+| `SQLITE_CONVERSATION_STORAGE_DATABASE_PATH` | `"discussion_logs/conversation_storage.sqlite3"` |
+| `SQLITE_CONVERSATION_STORAGE_MINIMUM_VERSION` | `(3, 7, 16)` |
+| `SQLITE_CONVERSATION_STORAGE_SCHEMA_VERSION` | `1` |
+
+The public call signatures are:
+
+```python
+SQLiteConversationCatalog(
+    workspace: Workspace | str | os.PathLike[str],
+    *,
+    mutation_coordinator: ConversationStorageMutationCoordinator | None = None,
+    mutation_timeout_seconds: float = 5.0,
+)
+SQLiteConversationEventStore(
+    workspace: Workspace | str | os.PathLike[str],
+    *,
+    mutation_coordinator: ConversationStorageMutationCoordinator | None = None,
+    mutation_timeout_seconds: float = 5.0,
+)
+SQLiteConversationArchiveAdapter(
+    workspace: Workspace | str | os.PathLike[str],
+    *,
+    mutation_coordinator: ConversationStorageMutationCoordinator | None = None,
+    mutation_timeout_seconds: float = 5.0,
+)
+preflight_sqlite_conversation_storage(
+    workspace: Workspace | str | os.PathLike[str],
+    /,
+) -> ConversationStoragePreflight
+provision_sqlite_conversation_storage(
+    workspace: Workspace | str | os.PathLike[str],
+    /,
+    *,
+    lease: ConversationStorageMutationLease,
+) -> ConversationStoragePreflight
+compose_sqlite_conversation_storage(
+    workspace: Workspace | str | os.PathLike[str],
+    /,
+    *,
+    mutation_timeout_seconds: float = 5.0,
+) -> ConversationStorageServices
+compose_sqlite_conversation_archive(
+    workspace: Workspace | str | os.PathLike[str],
+    /,
+    *,
+    mutation_timeout_seconds: float = 5.0,
+) -> SQLiteConversationArchiveAdapter
+```
+
+Preflight is observational: it never creates or repairs storage. On a capable
+host a missing database reports `provisioning_needed`; an unavailable or
+too-old `sqlite3` runtime reports `unavailable`; a valid database reports
+`ready`. Unsupported schema versions, malformed storage, and unsafe paths raise
+`WorkspaceVersionUnsupportedError`, `WorkspaceFormatError`, and
+`WorkspaceSecurityError`. Calling `require_ready()` on a non-ready result
+raises the corresponding conversation-storage readiness error. Every returned
+preflight has `backend == ConversationStorageBackend.SQLITE`, and successful
+provisioning returns `ready`.
+
+Provision only when the application deliberately wants a new empty SQLite
+destination. It does not copy or migrate filesystem conversations:
+
+```python
+from story_writing_agents import Workspace
+from story_writing_agents.conversation_storage import (
+    ConversationStorageCapability,
+    WorkspaceConversationStorageMutationCoordinator,
+)
+from story_writing_agents.conversation_storage.sqlite import (
+    compose_sqlite_conversation_storage,
+    preflight_sqlite_conversation_storage,
+    provision_sqlite_conversation_storage,
+)
+
+workspace = Workspace("/path/to/initialized-story")
+
+# Observe capability without creating the database.
+status = preflight_sqlite_conversation_storage(workspace)
+
+# This branch is an explicit application decision for an empty SQLite target.
+if status.capability is ConversationStorageCapability.PROVISIONING_NEEDED:
+    coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)
+    with coordinator.borrow(timeout_seconds=5.0) as lease:
+        status = provision_sqlite_conversation_storage(workspace, lease=lease)
+
+status.require_ready()
+services = compose_sqlite_conversation_storage(workspace)
+catalog = services.catalog
+event_store = services.event_store
+search = services.search  # ReferenceConversationSearch
+```
+
+Composition verifies readiness but never provisions. It returns one
+same-provenance catalog, event store, `ReferenceConversationSearch`, and shared
+mutation coordinator. Direct adapters implement the catalog and transcript
+contracts documented on their reference pages. A caller may explicitly pass
+`services.event_store` to the existing `StoryRuntime` constructor for its
+transcript/context port; that does not select SQLite for the shell or wire the
+catalog and search services into the runtime.
+
+`SQLiteConversationArchiveAdapter` is a privileged integration boundary. Its
+payload and record types are private, adapter-owned implementation details, so
+it is not a supported serialization format or migration API. There is no
+public archive-payload constructor to document or persist independently.
+
+None of these names is re-exported by `story_writing_agents` or
+`story_writing_agents.conversation_storage`. The installed shell and runtime
+continue to use filesystem conversation storage. This module adds no
+`/settings` selection, automatic install or provisioning, default activation,
+migration, FTS, RAG, MySQL, or new citation behavior. Issue #261 owns later
+integration of detection, installation, and provider selection into the
+user-facing settings/runtime flow; direct preflight here only reports
+capability.
+
 ## Enum values
 
 | Enum | Exact values |
@@ -138,5 +288,7 @@ aliases. See [Backend and sessions](backend-and-sessions.md#lifecycle-value-cont
 - [Interactive command parser](interactive-command-parser.md)
 - [Identifiers and errors](configuration/identifiers-and-errors.md)
 
-Lower-level modules may contain implementation helpers, but the package facade
-above is the supported public import surface and matches `__all__`.
+Lower-level modules may contain implementation helpers. The package facade and
+the explicitly documented SQLite owning module are the supported public import
+surfaces; both match their own `__all__` values and neither re-exports the
+other.
