@@ -12,7 +12,8 @@
 > storage path. Privileged filesystem conversation archive transfer is
 > available only through a direct Python adapter under a caller-held mutation
 > lease. Optional direct Python SQLite conversation storage has its own
-> fixed database, transaction, sidecar, and coordinator boundary.
+> fixed database, derived search companion, transaction, sidecar, and
+> coordinator boundary.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -509,9 +510,40 @@ An ordinary read opens one read-only connection, verifies connection policy,
 executes `BEGIN`, verifies bounded database/schema identity, validates the rows
 requested by one adapter operation, commits, closes, then rechecks the sidecar
 and database identity. This gives one stable snapshot for that operation. It
-does not run the exhaustive preflight scan or combine the several
-catalog/event-store reads made by `ReferenceConversationSearch` into a single
-database-global snapshot.
+does not run the exhaustive preflight scan. `SQLiteConversationSearch` uses one
+such main-database transaction for its complete bounded search rather than
+composing several catalog and event-store operations.
+
+### Derived FTS companion
+
+The direct SQLite search adapter may consult the fixed private
+`discussion_logs/.conversation_storage_fts5.sqlite3` companion while its main
+snapshot is open. The companion is a derived candidate source, not authority:
+all subject matches come from authoritative normalized subjects, and every
+scanned event is checked by exact normalized literal comparison against the
+main database regardless of its hint. False, missing, or reordered hints
+therefore cannot change hits, citations, snippets, counts, truncation, or
+result order.
+
+The companion owner derives its path from the main database's already-pinned
+workspace key. A usable companion is an owner-only, singly linked regular file
+with no journal, WAL, or shared-memory sidecar and exact schema, source
+generation, normalization, tokenizer, and SQLite-runtime identities. It is
+opened with a noncreating URI. Missing, stale, busy, malformed, unsafe,
+capability-mismatched, replaced, or otherwise unusable state becomes exact
+main-database fallback. Search never creates, removes, rewrites, repairs, or
+follows that state, and companion failure does not make the authoritative
+database unready.
+
+An effective supported mutation updates required searchable content and the
+main lexical generation inside its authoritative transaction. Failure there
+rolls back the mutation. Only after that commit, while the same workspace lease
+remains valid, may the owner create an absent companion or atomically refresh a
+recognized safe one. A companion publication or refresh failure leaves the
+main commit intact and exact fallback available. No-op archive/unarchive calls
+leave the generation and companion stable. Owner cleanup is limited to its own
+unchanged temporary resources and one exactly recognized interrupted
+create-only publication alias; unsafe or ambiguous names are preserved.
 
 Every supported mutation acquires an active workspace conversation-storage
 lease before database work. The coordinator uses a weakly shared in-process
@@ -531,6 +563,13 @@ sequence for the addressed conversation and reads at most the addressed turn's
 user/outcome pair through the unique turn-slot index. It validates that pair and
 the proposed event under the transaction and database triggers; it does not
 read or reconstruct the complete transcript.
+
+Context selection is also history-bounded. It obtains the exact total of
+complete outcomes, then uses the recent-outcome and turn-slot indexes to
+materialize at most the newest 25 complete pairs—50 events. That is sufficient
+to retain the fixed newest 24 pairs and detect the turn boundary without a
+full-history read. The complete `read()` operation remains a complete
+transcript validation.
 
 The privileged archive boundary is deliberately global. Export reconstructs
 and validates every metadata/event row and rejects any orphan event. Import

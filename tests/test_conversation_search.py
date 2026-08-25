@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import inspect
 import os
 import subprocess
@@ -39,6 +40,15 @@ from story_writing_agents import (
 )
 from story_writing_agents.agents import PLOT_ARCHITECT
 from story_writing_agents import conversation_search as search_module
+from story_writing_agents import conversation_literal_search as literal_module
+from story_writing_agents.conversation_literal_search import (
+    CONVERSATION_LITERAL_NORMALIZATION_VERSION,
+    build_conversation_literal_snippet,
+    classify_conversation_literal_subject,
+    conversation_literal_sort_key,
+    normalize_conversation_literal_query,
+    normalize_conversation_literal_text,
+)
 
 from tests.conversation_search_contract import (
     BASE_TIME,
@@ -127,6 +137,79 @@ class FilesystemConversationSearchContractTests(
 
 
 class ConversationSearchValueContractTests(unittest.TestCase):
+    def test_literal_search_helpers_are_exact_pure_and_deterministic(self) -> None:
+        expected_exports = (
+            "CONVERSATION_LITERAL_NORMALIZATION_VERSION",
+            "build_conversation_literal_snippet",
+            "classify_conversation_literal_subject",
+            "conversation_literal_sort_key",
+            "normalize_conversation_literal_query",
+            "normalize_conversation_literal_text",
+        )
+        self.assertEqual(tuple(literal_module.__all__), expected_exports)
+        self.assertEqual(CONVERSATION_LITERAL_NORMALIZATION_VERSION, 1)
+        self.assertEqual(
+            normalize_conversation_literal_text(
+                "  ＳＴＲＡＳＳＥ\u200b\tStraße\x00한🙂  "
+            ),
+            "strasse strasse 한🙂",
+        )
+        self.assertEqual(
+            normalize_conversation_literal_query(
+                "  Straße   VESSEL ", max_characters=20
+            ),
+            "strasse vessel",
+        )
+        for subject, query, expected in (
+            ("needle", "needle", "exact_subject"),
+            ("needle notes", "needle", "subject_prefix"),
+            ("opening needle notes", "needle", "subject_substring"),
+            ("unrelated", "needle", None),
+        ):
+            with self.subTest(subject=subject):
+                self.assertEqual(
+                    classify_conversation_literal_subject(subject, query),
+                    expected,
+                )
+        self.assertEqual(
+            conversation_literal_sort_key(
+                "transcript",
+                "normalized subject",
+                "conversation_a",
+            ),
+            (3, "normalized subject", "conversation_a"),
+        )
+        snippet = build_conversation_literal_snippet(
+            normalize_conversation_literal_text(
+                "p" * 100 + "straße target" + "s" * 300
+            ),
+            "strasse target",
+            max_characters=100,
+            max_utf8_bytes=200,
+        )
+        self.assertIn("strasse target", snippet)
+        self.assertLessEqual(len(snippet), 100)
+        self.assertLessEqual(len(snippet.encode("utf-8")), 200)
+
+        for value in ("x\x00y", "x\u200by", "   ", "x" * 21, "\ud800"):
+            with self.subTest(value=repr(value)):
+                with self.assertRaises((TypeError, ValueError)):
+                    normalize_conversation_literal_query(value, max_characters=20)
+        for call in (
+            lambda: normalize_conversation_literal_text(None),  # type: ignore[arg-type]
+            lambda: classify_conversation_literal_subject("subject", "\ud800"),
+            lambda: conversation_literal_sort_key("unknown", "subject", "id"),
+            lambda: build_conversation_literal_snippet(
+                "haystack",
+                "needle",
+                max_characters=10,
+                max_utf8_bytes=10,
+            ),
+        ):
+            with self.subTest(call=call):
+                with self.assertRaises((TypeError, ValueError)):
+                    call()
+
     def test_exact_enums_policy_fields_and_defaults(self) -> None:
         self.assertEqual(
             tuple(ConversationSearchMatchKind),
@@ -917,6 +1000,29 @@ class ConversationSearchFilesystemSafetyTests(unittest.TestCase):
 
 
 class ConversationSearchPackageBoundaryTests(unittest.TestCase):
+    def test_literal_search_dependency_is_one_way_and_leaf_owned(self) -> None:
+        search_tree = ast.parse(
+            Path(search_module.__file__).read_text(encoding="utf-8")
+        )
+        literal_tree = ast.parse(
+            Path(literal_module.__file__).read_text(encoding="utf-8")
+        )
+
+        def dependencies(tree: ast.AST) -> set[str]:
+            return {
+                node.module
+                for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom)
+                and node.level > 0
+                and node.module is not None
+            }
+
+        self.assertEqual(
+            dependencies(search_tree),
+            {"conversation_literal_search", "conversations", "errors"},
+        )
+        self.assertEqual(dependencies(literal_tree), set())
+
     def test_module_and_facade_exports_are_identical(self) -> None:
         expected = {
             "CONVERSATION_MEMORY_POLICY",
@@ -955,7 +1061,9 @@ class ConversationSearchPackageBoundaryTests(unittest.TestCase):
                     "import sys; sys.path.insert(0, r'"
                     + str(root / "src")
                     + "'); import story_writing_agents.conversation_search as m; "
-                    "assert len(m.__all__) == 13"
+                    "import story_writing_agents.conversation_literal_search as l; "
+                    "assert len(m.__all__) == 13; assert len(l.__all__) == 6; "
+                    "assert 'sqlite3' not in sys.modules"
                 ),
             ],
             cwd=root,

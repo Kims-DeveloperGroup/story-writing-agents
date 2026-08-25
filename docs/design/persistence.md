@@ -97,37 +97,50 @@ composition still performs its documented readiness preflight.
 Strict preflight and composition readiness, plus new, existing, recovered, and
 race-winner provisioning paths, verify the exact table, index, and trigger
 manifest, run `PRAGMA integrity_check` and a global foreign-key check, reject
-orphan events, and reconstruct every domain row. Routine adapter calls instead
-verify bounded database/schema identity and validate only the rows involved in
-the requested operation; they do not scan unrelated database contents.
+orphan events, and reconstruct every domain row. That authoritative readiness
+boundary does not require, inspect, or repair the derived FTS companion.
+Routine adapter calls instead verify bounded database/schema identity and
+validate only the rows involved in the requested operation; they do not scan
+unrelated database contents.
 
-Schema v1 has nine explicit application-owned objects: three authoritative
-tables, three indexes, and three insert triggers. The tables hold one singleton
-storage identity, catalog rows keyed by `(session_id, conversation_id)`, and
-ordered event rows keyed by `(session_id, conversation_id, sequence)`. The two
-catalog indexes serve active/all creation ordering; the unique turn-slot index
-serves addressed turn lookup and uniqueness. Event ordering uses SQLite's
-composite-primary-key autoindex, so there is no redundant explicit event-order
-index. Catalog rows retain the exact public metadata and a private derived
-`normalized_subject`. Event rows retain the exact public event and a private
-`turn_slot` used with constraints and triggers to enforce contiguous history,
-one user/outcome slot, addressed replies, and catalog ownership. These private
-columns do not change the public catalog, transcript, context, search, or
-citation contracts. There is no full-text or other persisted search index;
-composition uses the existing provider-free `ReferenceConversationSearch`.
+Schema v1 has ten explicit application-owned objects: three authoritative
+tables, four indexes, and three insert triggers. The tables hold one singleton
+storage identity with a nonnegative lexical generation, catalog rows keyed by
+`(session_id, conversation_id)`, and ordered event rows keyed by
+`(session_id, conversation_id, sequence)`. The two catalog indexes serve
+active/all creation ordering, the unique turn-slot index serves addressed turn
+lookup and uniqueness, and the recent-outcome index serves bounded context
+selection. Event ordering still uses SQLite's composite-primary-key autoindex,
+so there is no redundant explicit event-order index.
+
+Catalog rows retain exact public metadata plus required canonical
+`normalized_subject`; event rows retain the exact public event plus required
+canonical `searchable_content` and `turn_slot`. Verification rejects divergence
+between source text and either lexical projection. The slot, constraints, and
+triggers enforce contiguous history, one user/outcome slot, addressed replies,
+and catalog ownership. These database-only values do not change the public
+catalog, transcript, context, search, or citation contracts. FTS and its shadow
+objects never enter this authoritative database.
 
 Every ordinary adapter read owns a read-only `mode=ro` connection and explicit
 `BEGIN`/`COMMIT` transaction. Bounded identity verification and the requested
 row validation observe one stable snapshot; the connection is then closed.
-That boundary is one catalog or event-store operation. A search can perform
-multiple operations and is not one database-global snapshot.
+That boundary is one catalog, event-store, or search operation.
+`SQLiteConversationSearch` performs its complete bounded literal search in one
+main-database read transaction. It preserves the public normalization, ranking,
+citations, snippets, counters, limits, and result order of
+`ReferenceConversationSearch` while reading authoritative rows directly.
 
 Every supported mutation acquires the workspace conversation-storage
 coordinator before opening its `mode=rw` connection. It verifies the database
 and active workspace/owner-thread lease, uses `BEGIN IMMEDIATE`, performs the
-operation with operation-local row validation and database constraints,
+operation with operation-local row validation and database constraints, and
+advances the required lexical generation for an effective change. It then
 reverifies schema identity plus the lease, commits, checks the named database
-identity, and closes. The connection policy is DELETE journal mode,
+identity, and closes. A required lexical-state failure rolls back the
+authoritative mutation; an already-effective archive or unarchive is a no-op
+and leaves the generation unchanged. The connection policy is DELETE journal
+mode,
 `synchronous=FULL`, foreign keys enabled and enforced, a fixed five-second
 SQLite busy timeout, and strict UTF-8 decoding for database `TEXT`. Malformed
 stored text encountered by verification or the requested operation fails
@@ -135,16 +148,37 @@ closed through a content-free storage-format error; a
 caller-originated `UnicodeDecodeError` is not silently reclassified as stored
 corruption.
 
+The fixed private `discussion_logs/.conversation_storage_fts5.sqlite3`
+companion is derived and disposable. It stores normalized non-runtime visible
+event text and stable event coordinates, and records the committed source
+generation plus exact normalization, schema, tokenizer, and SQLite-runtime
+identities. Authoritative normalized subjects remain in the main database and
+retain subject-match precedence.
+
+After an effective main mutation commits, the adapter may refresh the
+companion under the same workspace lease. A refresh failure cannot roll back
+the already committed main transaction. Search treats every FTS candidate as a
+hint and still applies exact literal comparison over the full bounded
+main-database scan. Missing, stale, busy, malformed, unsafe,
+capability-mismatched, or otherwise failed companion state is preserved and
+falls back without changing results; search performs no repair.
+
 This serializes supported writers through the workspace guard but is not a
 transaction with filesystem conversations, defaults, sessions, debates,
 artifacts, provider state, or other workspace channels. Routine writes do not
 run the exhaustive preflight scan over unrelated rows. In particular, append
 uses the indexed maximum sequence and reads at most the addressed turn's one
 user row and one outcome row; it does not reconstruct the full transcript.
+`read_context()` obtains an exact complete-turn count and materializes at most
+the newest 25 addressed complete pairs—50 events—to retain the fixed 24-turn
+window and detect its boundary. A full `read()` still validates and returns the
+complete history.
 
 Provisioning builds and verifies one private temporary database, installs it
 create-only, and synchronizes the installed file and containing directory. It
-does not install SQLite or ingest the filesystem store. The privileged archive
+does not install SQLite or ingest the filesystem store. It may initialize the
+derived FTS companion after the main database is ready, but FTS absence or
+failure is not a provisioning or readiness failure. The privileged archive
 adapter can round-trip exact SQLite catalog/event rows under explicit leases,
 but its payload and record types are private and are not a public format or
 migration contract. Export globally reconstructs all metadata and event rows
@@ -161,7 +195,8 @@ to Issue #261.
 
 `story init`, `/settings`, the installed shell, and `StoryRuntime` do not
 provision or select this database. There is no automatic installation,
-migration, activation, FTS, RAG, or MySQL behavior in this adapter. See the
+migration, activation, RAG, MySQL, or FTS-dependent search behavior in this
+adapter. See the
 [direct API](../reference/package-api.md#optional-sqlite-conversation-storage),
 [filesystem boundary](../operations/filesystem-safety.md#sqlite-conversation-storage-safety),
 and [recovery table](../operations/recovery-and-limitations.md#sqlite-conversation-storage-recovery).

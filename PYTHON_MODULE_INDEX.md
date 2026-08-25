@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 63.
+Importable production units indexed: 65.
 
-Direct internal dependency edges indexed: 241.
+Direct internal dependency edges indexed: 244.
 
 ## Current Dependency Direction
 
@@ -35,7 +35,8 @@ __main__ -> cli -> interactive_controller -> interactive_controller._core
                  -> debug_log -> agents/workspace
                  -> orchestrator -> conversation_retrieval -> agents/conversation_search
                  |               |                           -> conversations/errors
-                 |               -> conversation_search -> conversations/errors
+                 |               -> conversation_search -> conversation_literal_search
+                 |                                      -> conversations/errors
                  |               -> prompts -> agents/config/conversations/models
                  |               |          -> workspace/writing_artifacts
                  |               |          -> writing_artifacts.repository
@@ -97,10 +98,12 @@ interactive_terminal._viewer_controls -> interactive_terminal._model
                                       -> interactive_terminal._viewer_model
 interactive_terminal._viewer_render -> interactive_terminal._model
                                     -> interactive_terminal._viewer_model
+conversation_literal_search -> (standard library only)
 story_writing_agents facade -> interactive_commands
                             -> conversation_retrieval -> agents/conversation_search
                             |                          -> conversations/errors
-                            -> conversation_search -> conversations/errors
+                            -> conversation_search -> conversation_literal_search
+                            |                      -> conversations/errors
                             -> session_lifecycle
 conversation_storage -> conversation_storage.archive/composition/contracts
                      -> conversation_storage.filesystem_archive
@@ -112,8 +115,11 @@ conversation_storage.contracts -> conversation_search/conversations/errors
 conversation_storage.filesystem_archive -> conversation_storage.archive/contracts
                                         -> conversations/errors/workspace
 conversation_storage.sqlite_database -> workspace
-conversation_storage.sqlite -> conversation_search/conversations/errors/workspace
+conversation_storage.sqlite_search_index -> (standard library only)
+conversation_storage.sqlite -> conversation_literal_search/conversation_search
+                            -> conversations/errors/workspace
                             -> conversation_storage.sqlite_database
+                            -> conversation_storage.sqlite_search_index
                             -> conversation_storage.composition/contracts
 models -> conversations/agents/errors
 provider_adapter -> models
@@ -691,6 +697,33 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_conversation_retrieval.py`, `tests/test_public_api_and_cli.py`,
   and `docs/reference/conversation-retrieval.md`.
 
+### `story_writing_agents.conversation_literal_search`
+
+- **Source:** `src/story_writing_agents/conversation_literal_search.py`
+- **Responsibility:** Own the pure deterministic literal-search mechanics
+  shared by provider-neutral and storage-specific conversation-search adapters.
+- **Supported surface:** Exactly six names in `__all__`:
+  `CONVERSATION_LITERAL_NORMALIZATION_VERSION`,
+  `build_conversation_literal_snippet`,
+  `classify_conversation_literal_subject`,
+  `conversation_literal_sort_key`,
+  `normalize_conversation_literal_query`, and
+  `normalize_conversation_literal_text`. This direct-module surface is absent
+  from both the package-root and conversation-storage facades.
+- **Direct internal dependencies:** None.
+- **State, resources, and side effects:** Owns immutable version and match-rank
+  metadata plus pure strict-UTF-8 validation, version-1 NFKC/casefold/category-C
+  replacement/whitespace-collapse normalization, bounded query validation,
+  subject-tier classification, bounded normalized snippet construction, and
+  stable rank/subject/identity sorting. It owns no mutable state, filesystem,
+  database, provider, process, or network resource; performs no I/O; and has no
+  operational import side effect.
+- **Primary verification/documentation:**
+  `tests/test_conversation_search.py`, supported by
+  `tests/conversation_search_contract.py`,
+  `docs/reference/package-api.md`, and
+  `docs/reference/conversation-search.md`.
+
 ### `story_writing_agents.conversation_search`
 
 - **Source:** `src/story_writing_agents/conversation_search.py`
@@ -704,14 +737,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ConversationTranscriptCursor`, `ConversationTranscriptPage`, and
   `ReferenceConversationSearch`. `ConversationMemoryService.scope` is an
   additive read-only projection of its immutable authorized session scope.
-- **Direct internal dependencies:** `conversations` and `errors`.
+- **Direct internal dependencies:** `conversation_literal_search`,
+  `conversations`, and `errors`.
 - **State, resources, and side effects:** Immutable value contracts and fixed
-  policy metadata own no mutable state or external resource. Service and
-  reference-search instances retain explicitly supplied `ConversationCatalog`
-  and `ConversationEventStore` collaborators, plus their validated scope and
-  optional search adapter; the scope property performs no catalog, store, or
-  search access. Instances perform reads only and have no import-time
-  operational side effects.
+  policy metadata own no mutable state or external resource. The reference
+  adapter delegates normalization, subject classification, snippet
+  construction, and result sorting to the supported pure literal module while
+  retaining its established bounded catalog/event-store scan semantics.
+  Service and reference-search instances retain explicitly supplied
+  `ConversationCatalog` and `ConversationEventStore` collaborators, plus their
+  validated scope and optional search adapter; the scope property performs no
+  catalog, store, or search access. Instances perform reads only and have no
+  import-time operational side effects.
 - **Primary verification/documentation:**
   `tests/conversation_search_contract.py`,
   `tests/test_conversation_search.py`, and
@@ -770,18 +807,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   `compose_filesystem_conversation_archive`. None are re-exported by the
   project-root `story_writing_agents` facade. The separately imported optional
   `story_writing_agents.conversation_storage.sqlite` and
-  `story_writing_agents.conversation_storage.sqlite_database` modules have
-  their own supported surfaces; neither is re-exported by this package or the
-  root facade.
+  `story_writing_agents.conversation_storage.sqlite_database` modules, plus the
+  direct integration surface in
+  `story_writing_agents.conversation_storage.sqlite_search_index`, have their
+  own supported surfaces; none is re-exported by this package or the root
+  facade.
 - **Direct internal dependencies:** `conversation_storage.archive`,
   `conversation_storage.composition`, `conversation_storage.contracts`, and
   `conversation_storage.filesystem_archive`.
 - **State, resources, and side effects:** Owns no state or resource; importing
   the package loads exactly its archive, composition, contracts, and filesystem
-  archive modules, but does not import either optional SQLite module or load
-  the standard-library `sqlite3` module. Import performs no filesystem access,
-  lock-file open, thread creation, archive scan, database access, or adapter
-  construction.
+  archive modules, but does not import any SQLite adapter, database-owner, or
+  search-index module or load the standard-library `sqlite3` module. Import
+  performs no filesystem access, lock-file open, thread creation, archive scan,
+  database access, or adapter construction.
 - **Primary verification/documentation:**
   `tests/test_conversation_archive.py`,
   `tests/test_filesystem_conversation_archive.py`,
@@ -1014,10 +1053,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   canonical root once and retains only its exact key and the fixed contained
   `discussion_logs/conversation_storage.sqlite3` path, so later mutation of the
   supplied `Workspace.root` cannot retarget database I/O. Construction performs
-  only path arithmetic and creates nothing. Schema version 1 has nine explicit
-  application-owned objects: three tables, three indexes, and three insert
-  triggers. The event composite-primary-key autoindex serves ordered/MAX
-  sequence access, so no redundant explicit event-order index is owned.
+  only path arithmetic and creates nothing. Schema version 1 has ten explicit
+  application-owned objects: three tables, four indexes, and three insert
+  triggers. Its singleton identity owns the exact nonnegative lexical
+  generation; event rows own required canonical `searchable_content` beside
+  their public source. The added recent-outcome index serves bounded context,
+  while the event composite-primary-key autoindex serves ordered/MAX sequence
+  access, so no redundant explicit event-order index is owned. FTS and its
+  shadow objects are absent from this authoritative database manifest. This
+  amended exact version-1 fingerprint is the supported schema; an older
+  unpublished development fingerprint is rejected rather than migrated, and
+  this owner exposes no v2 or migration operation.
   Each ordinary read or write, and each standalone explicit verification, owns
   and closes one non-creating URI connection. Provisioning and recovery from
   interrupted publication may instead use a bounded sequence of individually
@@ -1039,10 +1085,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   validation. Explicit `verify_existing`/preflight and new, existing, or
   race-winner provisioning validation additionally check database integrity,
   an empty `foreign_key_check`, composite ownership, every contiguous
-  event/correlation invariant supplied by the adapter, and every derived
-  normalized subject. Verification rejects unsafe or multiply linked named
-  files; a named-database symlink or a nonmeaningful device/inode identity
-  fails closed as a security error. Strict verification/preflight,
+  event/correlation invariant supplied by the adapter, every derived normalized
+  subject, and every canonical searchable event value. Verification rejects
+  unsafe or multiply linked named files; a named-database symlink or a
+  nonmeaningful device/inode identity fails closed as a security error. Strict
+  verification/preflight,
   provisioning, and writes reject every
   rollback/WAL sidecar without repairing or removing it; ordinary reads alone
   tolerate a concurrent DELETE-mode `-journal` at their initial and final
@@ -1087,58 +1134,85 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:** `src/story_writing_agents/conversation_storage/sqlite.py`
 - **Responsibility:** Provide the explicitly selected optional standard-library
-  SQLite catalog, event-store, archive, preflight, provisioning, and composition
-  adapter boundary without changing filesystem defaults or activation.
-- **Supported surface:** Exactly 12 names in `__all__`: fixed
+  SQLite catalog, event-store, exact literal-search, archive, preflight,
+  provisioning, and composition adapter boundary without changing filesystem
+  defaults or activation.
+- **Supported surface:** Exactly 13 names in `__all__`: fixed
   `SQLITE_CONVERSATION_STORAGE_APPLICATION_ID`,
   `SQLITE_CONVERSATION_STORAGE_BUSY_TIMEOUT_SECONDS`,
   `SQLITE_CONVERSATION_STORAGE_DATABASE_PATH`,
   `SQLITE_CONVERSATION_STORAGE_MINIMUM_VERSION`, and
   `SQLITE_CONVERSATION_STORAGE_SCHEMA_VERSION` constants;
-  `SQLiteConversationArchiveAdapter`, `SQLiteConversationCatalog`, and
-  `SQLiteConversationEventStore`; and
+  `SQLiteConversationArchiveAdapter`, `SQLiteConversationCatalog`,
+  `SQLiteConversationEventStore`, and `SQLiteConversationSearch`; and
   `compose_sqlite_conversation_archive`,
   `compose_sqlite_conversation_storage`,
   `preflight_sqlite_conversation_storage`, and
   `provision_sqlite_conversation_storage`. The adapter-private archive payload
   and record values remain deliberately unsupported and separate from the
   canonical archive values owned by the sibling `archive` module.
-- **Direct internal dependencies:** `conversation_search`,
+- **Direct internal dependencies:** `conversation_literal_search`,
+  `conversation_search`,
   `conversation_storage.sqlite_database`,
+  `conversation_storage.sqlite_search_index`,
   `conversation_storage.composition`, `conversation_storage.contracts`,
   `conversations`, `errors`, and `workspace`.
 - **State, resources, and side effects:** Import defines immutable constants,
   frozen private archive values, and adapter classes only; it performs no I/O,
   constructs no adapter, and does not load `sqlite3`. Each adapter retains one
-  database owner, exact-workspace mutation coordinator, and finite
-  mutation timeout. Ordinary reads never provision, migrate, repair, or write;
-  preflight verifies existing storage and returns content-free capability while
-  mapping unsupported, malformed, unsafe, and unavailable states to established
-  storage/workspace failures. Provisioning requires an explicit active
-  correct-workspace lease. Catalog and event mutations borrow the workspace
-  coordinator before opening the SQLite write transaction, so database
-  revision, sequence, turn-slot, and reply-correlation changes are atomic;
-  normalized subjects are stored as nonunique derived data and checked during
-  every metadata reconstruction. Fresh ID allocation performs one bounded
-  exact-identity event probe and rejects orphan rows before inserting metadata.
-  Append obtains one plus the indexed maximum sequence and reads at most the
-  addressed turn's user/outcome pair; constraints and triggers retain contiguous
-  ordering and turn correlation without scanning unrelated transcript history.
-  Transcript-context reads materialize the addressed transcript once and return
-  context from that same validation and selection pass. Privileged archive
-  export/import validates a caller-supplied outer lease and the complete database
-  snapshot: export rejects orphan events rather than omitting them, while import
-  validates all destination rows before mutation and the resulting rows afterward
-  in the same transaction, preserving exact create-or-identical semantics and
-  rejecting divergence.
+  construction-pinned database owner, exact-workspace mutation coordinator,
+  finite mutation timeout, and path-pinned disposable search-index owner.
+  Construction of those owners performs path arithmetic only. Ordinary reads
+  never provision, migrate, repair, or write; preflight verifies only the
+  authoritative main database and returns content-free capability while mapping
+  unsupported, malformed, unsafe, and unavailable states to established
+  storage/workspace failures. The optional companion is not a preflight or
+  readiness dependency. Provisioning requires an explicit active correct-
+  workspace lease.
+
+  Catalog and event mutations borrow the workspace coordinator before opening
+  the SQLite write transaction, so database revision, sequence, turn-slot,
+  reply-correlation, required normalized-subject/searchable-content values, and
+  one lexical-generation advance are atomic for each effective change. An
+  already-effective status change or exact archive reimport does not advance
+  the generation. Fresh ID allocation performs one bounded exact-identity event
+  probe and rejects orphan rows before inserting metadata. Append obtains one
+  plus the indexed maximum sequence and reads at most the addressed turn's
+  user/outcome pair; constraints and triggers retain contiguous ordering and
+  turn correlation without scanning unrelated transcript history. After an
+  effective authoritative commit, while the same lease remains valid, the
+  adapter best-effort rebuilds the derived companion from committed visible
+  non-runtime event projections. Companion failure cannot roll back main state
+  and leaves exact fallback available.
+
+  `SQLiteConversationSearch` owns one main-database read transaction for its
+  complete scan: it selects at most 257 metadata rows to bound a 256-
+  conversation scan, validates at most 10,000 ordered event rows, preserves
+  subject precedence, counts runtime errors without matching them, and derives
+  the exact public citations, snippets, counters, truncation flags, and result
+  order from authoritative rows. Same-generation FTS coordinates are optional
+  non-authoritative hints; missing, stale, malformed, unsafe, unavailable, or
+  capability-mismatched companion state becomes the same full bounded literal
+  fallback, and search never repairs it. Transcript-context reads use an
+  indexed aggregate plus addressed recent-outcome/user queries and materialize
+  at most 25 complete pairs to retain 24 and detect the boundary, while
+  reporting the exact total and excluding an unmatched newest user.
+
+  Privileged archive export/import validates a caller-supplied outer lease and
+  the complete database snapshot: export rejects orphan events rather than
+  omitting them, while import validates all destination rows before mutation
+  and the resulting rows afterward in the same transaction, preserving exact
+  create-or-identical semantics and rejecting divergence. Effective import also
+  participates in the required generation and post-commit companion lifecycle.
   Valid existing storage remains available to observational preflight and reads
   when POSIX `fcntl` is unavailable, while provisioning and supported mutations
   fail closed through the coordinator; full activation readiness remains owned
   by Issue #261. Service composition preflights once and returns same-provenance
   catalog/event-store bindings plus a provider-free
-  `ReferenceConversationSearch` binding and the shared coordinator; archive
-  composition returns the separate privileged adapter. Neither composition
-  changes the selected default, root facade, or activation state.
+  `SQLiteConversationSearch` binding, one shared pinned companion owner, and
+  the shared coordinator; archive composition returns the separate privileged
+  adapter. Neither composition changes the selected default, either facade, or
+  activation state.
 - **Primary verification/documentation:**
   `tests/test_sqlite_conversation_storage.py`,
   `tests/test_conversation_storage.py`,
@@ -1156,6 +1230,59 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/operations/filesystem-safety.md`,
   `docs/operations/privacy-and-provider.md`, and
   `docs/operations/recovery-and-limitations.md`.
+
+### `story_writing_agents.conversation_storage.sqlite_search_index`
+
+- **Source:**
+  `src/story_writing_agents/conversation_storage/sqlite_search_index.py`
+- **Responsibility:** Own the fixed disposable, capability-probed SQLite FTS5
+  conversation-search companion and its contained publication lifecycle.
+- **Supported surface:** Exactly five names in `__all__`: fixed
+  `SQLITE_CONVERSATION_SEARCH_INDEX_PATH` and
+  `SQLITE_CONVERSATION_SEARCH_INDEX_SCHEMA_VERSION` constants;
+  `SQLiteConversationSearchIndex`, whose supported operations are
+  `candidates` and `rebuild`; immutable
+  `SQLiteConversationSearchIndexDocument`; and content-free
+  `SQLiteConversationSearchIndexError`. This direct integration surface is
+  absent from the package-root and conversation-storage facades.
+- **Direct internal dependencies:** None.
+- **State, resources, and side effects:** Import defines immutable SQL/policy
+  metadata, validators, and owner classes only; it performs no I/O, does not
+  load `sqlite3`, and imports no other story module. Construction accepts and
+  pins one already-canonical absolute workspace key, derives only the fixed
+  `discussion_logs/.conversation_storage_fts5.sqlite3` path, and performs path
+  arithmetic only. Each operation lazily imports the standard-library SQLite
+  module and runs a live in-memory create/insert/query/drop FTS5 capability
+  probe. A usable owner-only, singly linked regular companion binds exact schema,
+  source generation, literal-normalization version, tokenizer, and runtime
+  identities; candidate rows contain only caller-supplied session,
+  conversation, sequence, and searchable-content projections, never
+  authoritative subjects. The SQLite adapter supplies canonical visible
+  non-runtime event projections. Missing, stale, busy, malformed, unsafe,
+  replaced, capability-mismatched, or unavailable state maps to the one
+  content-free owner error for adapter fallback; the owner never treats FTS
+  rank or content as search truth.
+
+  `candidates` is read-only and never creates or repairs. Caller-validated
+  `rebuild` can populate an absent companion through a private owner-only file
+  and create-only hard-link publication, or refresh a recognized existing
+  companion in one rollback-journal transaction. Publication repeatedly
+  validates the caller callback, contained namespace, file identity, link
+  count, and sidecar absence; cleanup is confined to an unchanged call-owned
+  temporary or one exact interrupted two-link publication alias. Unsafe and
+  ambiguous shapes are preserved. Interruption exposes only the old stale
+  generation or a complete new generation; this resource owns no main-database
+  readiness, migration, archive, authorization, configuration, network, or
+  diagnostic lifecycle.
+- **Primary verification/documentation:**
+  `tests/test_sqlite_conversation_storage.py`,
+  `docs/reference/package-api.md`,
+  `docs/reference/conversation-search.md`,
+  `docs/design/persistence.md`,
+  `docs/operations/filesystem-safety.md`,
+  `docs/operations/privacy-and-provider.md`,
+  `docs/operations/recovery-and-limitations.md`, and
+  `docs/reference/configuration/session-storage.md`.
 
 ### `story_writing_agents.conversations`
 
@@ -3580,10 +3707,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   while SQLite provisioning and its adapter-private archive operations validate
   a caller-supplied outer lease; migration and parity remain future consumers.
   Activation CAS likewise validates its supplied lease rather than acquiring
-  one behind its caller. The optional SQLite module depends inward on the
-  existing contracts and composition boundary plus the database owner; neither
-  package facade imports it, and no runtime, controller, config, workspace, or
-  root-facade module selects it by default.
+  one behind its caller. The pure `conversation_literal_search` module owns the
+  shared versioned normalization/classification/snippet/order mechanics;
+  `conversation_search` and the optional SQLite adapter depend inward on that
+  surface without either facade re-exporting it. The SQLite adapter also depends
+  inward on the existing contracts and composition boundary, the authoritative
+  `sqlite_database` owner, and the story-independent disposable
+  `sqlite_search_index` owner. Required searchable values and their generation
+  commit in the main database; only afterward can an adapter rebuild the
+  generation-bound FTS companion under the same lease. Companion failure or
+  capability absence cannot affect main readiness or exact one-snapshot search,
+  and search never repairs it. The SQLite modules remain direct-only surfaces:
+  neither facade imports or re-exports them, and no runtime, controller, config,
+  workspace, or root-facade module selects SQLite by default.
 
 - Writing-artifact directive parsing is a pure package-local boundary:
   `writing_artifacts.directives` scans only one supplied current input and

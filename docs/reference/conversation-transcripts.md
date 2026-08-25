@@ -95,12 +95,14 @@ their own values; `StoryRuntime` applies the
 [runtime diagnostic policy](../operations/privacy-and-provider.md#runtime-error-diagnostics).
 
 The SQLite adapter stores those same ten public values as normalized event
-rows. A private `turn_slot` column and database constraints enforce one user
-event and at most one outcome for a turn, contiguous sequence, addressed reply
-ownership, and the catalog foreign key. `turn_slot` is not a public event
-field. Reads reconstruct the exact `ConversationEvent` values and ordering.
-Stored `TEXT` is decoded as strict UTF-8; malformed bytes fail closed through a
-content-free `WorkspaceFormatError`.
+rows. Required canonical `searchable_content` supports exact literal search;
+private `turn_slot` and database constraints enforce one user event and at most
+one outcome for a turn, contiguous sequence, addressed reply ownership, and the
+catalog foreign key. Neither derived value is a public event field. Reads
+reconstruct the exact `ConversationEvent` values and ordering and reject a
+stored lexical projection that differs from the public content. Stored `TEXT`
+is decoded as strict UTF-8; malformed bytes fail closed through a content-free
+`WorkspaceFormatError`.
 
 ## Interactive read bridge
 
@@ -125,10 +127,15 @@ second read or write. See
 ## Context-window derivation and failure evidence
 
 A complete turn is one `user_message` plus one `agent_reply` or
-`runtime_error`. The store and pure selector walk complete turns newest to
-oldest and retain at most 24 turns and 32,768 combined content bytes. Derivation
-stops at the first turn that would exceed either cap, never splits a turn, and
-restores retained events to storage order.
+`runtime_error`. The pure selector and filesystem store walk complete turns
+newest to oldest and retain at most 24 turns and 32,768 combined content bytes.
+The SQLite store returns the identical projection from one read transaction:
+it obtains the exact complete-turn total, materializes at most the newest 25
+indexed outcomes and their addressed users—50 events—and uses the extra pair
+to detect the 24-turn boundary. Derivation stops at the first turn that would
+exceed either cap, never splits a turn, and restores retained events to storage
+order. Its count, ordered-limit, and addressed lookup queries remain compatible
+with the documented SQLite 3.7.16 minimum and require no window functions.
 
 After an advisory user append, `asyncio` cancellation best-effort adds
 `runtime_error` content `CancelledError: conversation turn was cancelled`;
@@ -158,15 +165,17 @@ read-only transaction; each append uses one coordinator-first write
 transaction. These guarantees cover one adapter operation, not multiple service
 calls as one database-wide snapshot.
 
-Both adapters validate the addressed complete history before a full read or
-context derivation. Filesystem append validates and replaces its complete
-transcript file. SQLite append instead remains history-bounded inside its write
-transaction: it obtains one plus the indexed maximum sequence and reads at most
-the addressed turn's user/outcome pair through the unique turn-slot index.
-Constraints and triggers enforce the stored sequence, pairing, addressed reply,
-and catalog ownership without a full-transcript scan. Explicit SQLite preflight
-and archive boundaries retain their documented global validation. Neither
-adapter invokes a provider, changes defaults/focus, searches, migrates old data,
-or deletes events. See
+Both adapters validate the addressed complete history for a full `read()`.
+Filesystem context derivation also validates that complete tuple. SQLite
+`read_context()` instead uses its exact aggregate count and addressed indexed
+queries described above; it never materializes more than 25 complete pairs.
+SQLite append likewise remains history-bounded inside its write transaction: it
+obtains one plus the indexed maximum sequence and reads at most the addressed
+turn's user/outcome pair through the unique turn-slot index. Constraints and
+triggers enforce the stored sequence, pairing, addressed reply, and catalog
+ownership without a full-transcript scan. Explicit SQLite preflight and archive
+boundaries retain their documented global validation. Neither adapter invokes
+a provider, changes defaults/focus, searches, migrates old data, or deletes
+events. See
 [Filesystem safety](../operations/filesystem-safety.md) for mutation and
 locking and [Privacy](../operations/privacy-and-provider.md) for exposure.
