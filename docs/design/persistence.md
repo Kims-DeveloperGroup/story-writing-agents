@@ -39,24 +39,36 @@ select the runtime files automatically.
 The optional adapter owns one fixed contained file:
 `discussion_logs/conversation_storage.sqlite3`. Its database identity is schema
 version `1`, SQLite application ID `0x53574143` (`SWAC`), UTF-8 encoding, and a
-fixed schema cookie and schema-manifest fingerprint. Strict preflight,
-composition readiness, and existing-target or temporary-database provisioning
-verify the exact table, index, and trigger manifest, run
-`PRAGMA integrity_check` and a global foreign-key check, reject orphan events,
-and reconstruct every domain row. Routine adapter calls instead verify the
-database and schema identity, then validate the rows involved in the requested
-operation; they do not scan unrelated database contents.
+fixed schema cookie and schema-manifest fingerprint. The internal database
+owner reads the canonical `Workspace.root` once at construction and pins both
+its workspace key and database path. Later mutation of the supplied
+`Workspace.root` cannot retarget database I/O. That capture is path arithmetic
+only: the SQLite layer performs no database I/O and does not load `sqlite3`
+during direct adapter/database construction. Resolving a string or path-like
+argument still follows ordinary `Workspace` construction, and public
+composition still performs its documented readiness preflight.
 
-The normalized schema has three authoritative tables: one singleton storage
-identity, catalog rows keyed by `(session_id, conversation_id)`, and ordered
-event rows keyed by `(session_id, conversation_id, sequence)`. Catalog rows
-retain the exact public metadata and a private derived `normalized_subject`.
-Event rows retain the exact public event and a private `turn_slot` used with
-constraints and triggers to enforce contiguous history, one user/outcome slot,
-addressed replies, and catalog ownership. These private columns do not change
-the public catalog, transcript, context, search, or citation contracts. There
-is no full-text or other persisted search index; composition uses the existing
-provider-free `ReferenceConversationSearch`.
+Strict preflight and composition readiness, plus new, existing, recovered, and
+race-winner provisioning paths, verify the exact table, index, and trigger
+manifest, run `PRAGMA integrity_check` and a global foreign-key check, reject
+orphan events, and reconstruct every domain row. Routine adapter calls instead
+verify bounded database/schema identity and validate only the rows involved in
+the requested operation; they do not scan unrelated database contents.
+
+Schema v1 has nine explicit application-owned objects: three authoritative
+tables, three indexes, and three insert triggers. The tables hold one singleton
+storage identity, catalog rows keyed by `(session_id, conversation_id)`, and
+ordered event rows keyed by `(session_id, conversation_id, sequence)`. The two
+catalog indexes serve active/all creation ordering; the unique turn-slot index
+serves addressed turn lookup and uniqueness. Event ordering uses SQLite's
+composite-primary-key autoindex, so there is no redundant explicit event-order
+index. Catalog rows retain the exact public metadata and a private derived
+`normalized_subject`. Event rows retain the exact public event and a private
+`turn_slot` used with constraints and triggers to enforce contiguous history,
+one user/outcome slot, addressed replies, and catalog ownership. These private
+columns do not change the public catalog, transcript, context, search, or
+citation contracts. There is no full-text or other persisted search index;
+composition uses the existing provider-free `ReferenceConversationSearch`.
 
 Every ordinary adapter read owns a read-only `mode=ro` connection and explicit
 `BEGIN`/`COMMIT` transaction. Bounded identity verification and the requested
@@ -71,18 +83,35 @@ operation with operation-local row validation and database constraints,
 reverifies schema identity plus the lease, commits, checks the named database
 identity, and closes. The connection policy is DELETE journal mode,
 `synchronous=FULL`, foreign keys enabled and enforced, a fixed five-second
-SQLite busy timeout, and UTF-8. This serializes supported writers through the
-workspace guard but is not a transaction with filesystem conversations,
-defaults, sessions, debates, artifacts, provider state, or other workspace
-channels. Routine writes do not run the exhaustive preflight scan over
-unrelated rows.
+SQLite busy timeout, and strict UTF-8 decoding for database `TEXT`. Malformed
+stored text encountered by verification or the requested operation fails
+closed through a content-free storage-format error; a
+caller-originated `UnicodeDecodeError` is not silently reclassified as stored
+corruption.
+
+This serializes supported writers through the workspace guard but is not a
+transaction with filesystem conversations, defaults, sessions, debates,
+artifacts, provider state, or other workspace channels. Routine writes do not
+run the exhaustive preflight scan over unrelated rows. In particular, append
+uses the indexed maximum sequence and reads at most the addressed turn's one
+user row and one outcome row; it does not reconstruct the full transcript.
 
 Provisioning builds and verifies one private temporary database, installs it
 create-only, and synchronizes the installed file and containing directory. It
-does not ingest the filesystem store. The privileged archive adapter can
-round-trip exact SQLite catalog/event rows under explicit leases, but its
-payload and record types are private and are not a public format or migration
-contract.
+does not install SQLite or ingest the filesystem store. The privileged archive
+adapter can round-trip exact SQLite catalog/event rows under explicit leases,
+but its payload and record types are private and are not a public format or
+migration contract. Export globally reconstructs all metadata and event rows
+and rejects every orphan event. Import validates the complete destination
+before mutation and again after mutation in the same transaction, so an orphan,
+malformed row, or divergent existing identity cannot be silently adopted or
+dropped; failure rolls back the whole import.
+
+Without POSIX `fcntl`, a valid existing database can still be preflighted and
+read observationally. Supported coordinator acquisition, provisioning, and
+mutations fail closed without changing the SQLite database or conversation
+domain state. Full non-POSIX coordinator and activation readiness is deferred
+to Issue #261.
 
 `story init`, `/settings`, the installed shell, and `StoryRuntime` do not
 provision or select this database. There is no automatic installation,

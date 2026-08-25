@@ -99,6 +99,8 @@ rows. A private `turn_slot` column and database constraints enforce one user
 event and at most one outcome for a turn, contiguous sequence, addressed reply
 ownership, and the catalog foreign key. `turn_slot` is not a public event
 field. Reads reconstruct the exact `ConversationEvent` values and ordering.
+Stored `TEXT` is decoded as strict UTF-8; malformed bytes fail closed through a
+content-free `WorkspaceFormatError`.
 
 ## Interactive read bridge
 
@@ -156,8 +158,15 @@ read-only transaction; each append uses one coordinator-first write
 transaction. These guarantees cover one adapter operation, not multiple service
 calls as one database-wide snapshot.
 
-Both adapters validate complete history before read, context derivation, or
-append. Neither invokes a provider, changes defaults/focus, searches, migrates
-old data, or deletes events. See
+Both adapters validate the addressed complete history before a full read or
+context derivation. Filesystem append validates and replaces its complete
+transcript file. SQLite append instead remains history-bounded inside its write
+transaction: it obtains one plus the indexed maximum sequence and reads at most
+the addressed turn's user/outcome pair through the unique turn-slot index.
+Constraints and triggers enforce the stored sequence, pairing, addressed reply,
+and catalog ownership without a full-transcript scan. Explicit SQLite preflight
+and archive boundaries retain their documented global validation. Neither
+adapter invokes a provider, changes defaults/focus, searches, migrates old data,
+or deletes events. See
 [Filesystem safety](../operations/filesystem-safety.md) for mutation and
 locking and [Privacy](../operations/privacy-and-provider.md) for exposure.

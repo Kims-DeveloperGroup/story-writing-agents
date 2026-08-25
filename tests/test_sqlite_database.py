@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import tempfile
 import threading
 import unittest
 from contextlib import ExitStack
@@ -12,10 +13,14 @@ from typing import Callable
 from unittest import mock
 
 from story_writing_agents import (
+    ConversationEventAppend,
+    ConversationEventKind,
+    Workspace,
     WorkspaceFormatError,
     WorkspaceSecurityError,
     WorkspaceVersionUnsupportedError,
 )
+from story_writing_agents.agents import LEAD_ORCHESTRATOR
 from story_writing_agents.conversation_storage import (
     ConversationStorageCapability,
     ConversationStorageCoordinationError,
@@ -24,6 +29,9 @@ from story_writing_agents.conversation_storage import (
 )
 from story_writing_agents.conversation_storage import (
     sqlite_database as database_module,
+)
+from story_writing_agents.conversation_storage import (
+    composition as composition_module,
 )
 from story_writing_agents.conversation_storage import sqlite as sqlite_module
 from story_writing_agents.conversation_storage.sqlite import (
@@ -35,6 +43,7 @@ from story_writing_agents.conversation_storage.sqlite import (
 from tests.sqlite_conversation_storage_fixture import (
     database_path,
     initialized_workspace,
+    make_append,
     provision,
     provisioned_services,
     raw_connection,
@@ -288,6 +297,263 @@ class SQLiteDatabaseVerificationTests(unittest.TestCase):
                     preflight_sqlite_conversation_storage(workspace)
                 self.assertEqual(storage_snapshot(workspace), before)
 
+    def test_schema_objects_fingerprint_and_query_plans_are_exact(self) -> None:
+        workspace = initialized_workspace(self)
+        provision(workspace)
+        expected_objects = (
+            ("index", "conversation_events_turn_slots"),
+            ("index", "conversations_creation_order"),
+            ("index", "conversations_status_creation_order"),
+            ("table", "conversation_events"),
+            ("table", "conversation_storage_identity"),
+            ("table", "conversations"),
+            ("trigger", "conversation_events_addressed_reply_insert"),
+            ("trigger", "conversation_events_contiguous_insert"),
+            ("trigger", "conversation_events_user_before_outcome_insert"),
+        )
+        expected_fingerprint = (
+            "68e35ee64c6a11f851faf3b470686ebe048501aae8b3301dae65dd4f679520ef"
+        )
+
+        with raw_connection(workspace) as connection:
+            objects = tuple(
+                connection.execute(
+                    "SELECT type, name FROM sqlite_master "
+                    "WHERE substr(name, 1, 7) != 'sqlite_' "
+                    "ORDER BY type, name"
+                ).fetchall()
+            )
+            fingerprint = connection.execute(
+                "SELECT schema_fingerprint FROM conversation_storage_identity"
+            ).fetchone()
+            event_order_plan = tuple(
+                row[3]
+                for row in connection.execute(
+                    "EXPLAIN QUERY PLAN "
+                    + sqlite_module._EVENT_SELECT
+                    + " WHERE session_id = ? AND conversation_id = ? "
+                    "ORDER BY sequence",
+                    ("session_a", "conversation_a"),
+                ).fetchall()
+            )
+            turn_plan = tuple(
+                row[3]
+                for row in connection.execute(
+                    "EXPLAIN QUERY PLAN "
+                    + sqlite_module._EVENT_SELECT
+                    + " WHERE session_id = ? AND conversation_id = ? "
+                    "AND turn_id = ? ORDER BY turn_slot",
+                    ("session_a", "conversation_a", "turn_a"),
+                ).fetchall()
+            )
+
+        self.assertEqual(objects, expected_objects)
+        self.assertEqual(len(objects), 9)
+        self.assertNotIn(
+            ("index", "conversation_events_sequence_order"),
+            objects,
+        )
+        self.assertEqual(fingerprint, (expected_fingerprint,))
+        self.assertEqual(database_module._SCHEMA_FINGERPRINT, expected_fingerprint)
+        self.assertTrue(
+            any(
+                "sqlite_autoindex_conversation_events_1" in row
+                for row in event_order_plan
+            )
+        )
+        self.assertTrue(
+            any("conversation_events_turn_slots" in row for row in turn_plan)
+        )
+        self.assertFalse(
+            any("TEMP B-TREE" in row.upper() for row in (*event_order_plan, *turn_plan))
+        )
+        self.assertFalse(
+            any(
+                "conversation_events_sequence_order" in row
+                for row in (*event_order_plan, *turn_plan)
+            )
+        )
+
+    def test_manifest_filter_is_literal_and_only_ignores_sqlite_owned_names(
+        self,
+    ) -> None:
+        baseline = initialized_workspace(self)
+        provision(baseline)
+        with raw_connection(baseline) as connection:
+            owned_names = tuple(
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE substr(name, 1, 7) = 'sqlite_' ORDER BY name"
+                ).fetchall()
+            )
+        self.assertTrue(owned_names)
+        self.assertTrue(all(name.startswith("sqlite_") for name in owned_names))
+        self.assertIs(
+            preflight_sqlite_conversation_storage(baseline).capability,
+            ConversationStorageCapability.READY,
+        )
+
+        for name in ("sqliteX", "sqlite%", "sqlite7"):
+            with self.subTest(name=name):
+                workspace = initialized_workspace(self)
+                provision(workspace)
+                quoted_name = '"' + name.replace('"', '""') + '"'
+                with raw_connection(workspace) as connection:
+                    connection.execute(f"CREATE TABLE {quoted_name} (value TEXT)")
+                    connection.execute("PRAGMA schema_version = 1")
+                    included_names = tuple(
+                        row[0]
+                        for row in connection.execute(
+                            "SELECT name FROM sqlite_master "
+                            "WHERE substr(name, 1, 7) != 'sqlite_' ORDER BY name"
+                        ).fetchall()
+                    )
+                self.assertIn(name, included_names)
+                before = storage_snapshot(workspace)
+                with self.assertRaises(WorkspaceFormatError):
+                    preflight_sqlite_conversation_storage(workspace)
+                self.assertEqual(storage_snapshot(workspace), before)
+
+    def test_invalid_utf8_text_is_content_free_for_preflight_and_adapters(
+        self,
+    ) -> None:
+        for column in ("subject", "content"):
+            with self.subTest(column=column):
+                workspace, services = provisioned_services(self)
+                metadata = services.catalog.create("session_a", "Subject")
+                if column == "content":
+                    services.event_store.append(
+                        make_append(
+                            session_id="session_a",
+                            conversation_id=metadata.conversation_id,
+                            turn_id="turn_a",
+                        )
+                    )
+                with raw_connection(workspace) as connection:
+                    if column == "subject":
+                        connection.execute(
+                            "UPDATE conversations "
+                            "SET subject = CAST(X'73656E74696E656C2D80' AS TEXT) "
+                            "WHERE session_id = ? AND conversation_id = ?",
+                            ("session_a", metadata.conversation_id),
+                        )
+                    else:
+                        connection.execute(
+                            "UPDATE conversation_events "
+                            "SET content = CAST(X'73656E74696E656C2D80' AS TEXT) "
+                            "WHERE session_id = ? AND conversation_id = ?",
+                            ("session_a", metadata.conversation_id),
+                        )
+                before = storage_snapshot(workspace)
+
+                def adapter_operation() -> object:
+                    if column == "subject":
+                        return services.catalog.get(
+                            "session_a", metadata.conversation_id
+                        )
+                    return services.event_store.read(
+                        "session_a", metadata.conversation_id
+                    )
+
+                operations = (
+                    lambda: preflight_sqlite_conversation_storage(workspace),
+                    adapter_operation,
+                )
+                for operation in operations:
+                    with self.assertRaises(WorkspaceFormatError) as caught:
+                        operation()
+                    self.assertEqual(
+                        str(caught.exception),
+                        "invalid SQLite conversation storage",
+                    )
+                    self.assertNotIn("sentinel", str(caught.exception).casefold())
+                    self.assertIsNone(caught.exception.__cause__)
+                self.assertEqual(storage_snapshot(workspace), before)
+
+    def test_database_pins_one_root_read_for_every_later_operation(self) -> None:
+        class RootProbeWorkspace(Workspace):
+            def __init__(self, root: str | os.PathLike[str]) -> None:
+                self._root_reads = 0
+                self._root_value = Path(root)
+                super().__init__(root)
+
+            @property
+            def root(self) -> Path:
+                self._root_reads += 1
+                return self._root_value
+
+            @root.setter
+            def root(self, value: Path) -> None:
+                self._root_value = value
+
+        temporary = tempfile.TemporaryDirectory(prefix="sqlite-root-probe-")
+        self.addCleanup(temporary.cleanup)
+        workspace = RootProbeWorkspace(temporary.name).initialize()
+        pinned_root = workspace.root
+        alternate = initialized_workspace(self)
+        alternate_before = storage_snapshot(alternate)
+        workspace._root_reads = 0
+
+        database = database_module.SQLiteDatabase(workspace)
+        self.assertEqual(workspace._root_reads, 1)
+        self.assertEqual(database.workspace_key, os.fspath(pinned_root))
+        self.assertEqual(
+            database._path,
+            pinned_root.joinpath(database_module.SQLITE_DATABASE_PATH),
+        )
+
+        workspace.root = alternate.root
+        database.provision(
+            sqlite_module._validate_database_snapshot,
+            validate_lease=lambda: None,
+        )
+        self.assertTrue(database._path.is_file())
+        self.assertFalse(
+            alternate.root.joinpath(database_module.SQLITE_DATABASE_PATH).exists()
+        )
+        self.assertIs(
+            sqlite_module._preflight_database(database).capability,
+            ConversationStorageCapability.READY,
+        )
+
+        def insert_one(connection: object) -> None:
+            connection.execute(  # type: ignore[attr-defined]
+                "INSERT INTO conversations "
+                "(session_id, conversation_id, schema_version, subject, "
+                "normalized_subject, subject_revision, status, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "session_a",
+                    "conversation_a",
+                    1,
+                    "Pinned subject",
+                    "pinned subject",
+                    1,
+                    "active",
+                    "2026-08-25T00:00:00+00:00",
+                    "2026-08-25T00:00:00+00:00",
+                ),
+            )
+
+        database.write(
+            insert_one,
+            validate_snapshot=sqlite_module._validate_database_snapshot,
+            validate_lease=lambda: None,
+        )
+        self.assertEqual(
+            database.read(
+                lambda connection: connection.execute(  # type: ignore[attr-defined]
+                    "SELECT COUNT(*) FROM conversations"
+                ).fetchone()[0],
+                validate_snapshot=sqlite_module._validate_database_snapshot,
+            ),
+            1,
+        )
+        database.verify_existing(sqlite_module._validate_database_snapshot)
+        self.assertEqual(workspace._root_reads, 1)
+        self.assertEqual(storage_snapshot(alternate), alternate_before)
+
     def test_integrity_check_failure_is_mapped_without_repair(self) -> None:
         workspace = initialized_workspace(self)
         provision(workspace)
@@ -355,6 +621,182 @@ class SQLiteDatabaseVerificationTests(unittest.TestCase):
                     trace,
                     expected_count=1,
                 )
+
+
+class SQLiteBoundedAppendTests(unittest.TestCase):
+    def test_append_statement_and_turn_row_shape_do_not_grow_with_history(
+        self,
+    ) -> None:
+        traces: list[tuple[str, ...]] = []
+        for complete_turns in (0, 24):
+            with self.subTest(complete_turns=complete_turns):
+                workspace, services = provisioned_services(self)
+                metadata = services.catalog.create("session_a", "Bounded append")
+                for index in range(complete_turns):
+                    turn_id = f"history_{index:02d}"
+                    services.event_store.append(
+                        make_append(
+                            session_id="session_a",
+                            conversation_id=metadata.conversation_id,
+                            turn_id=turn_id,
+                        )
+                    )
+                    services.event_store.append(
+                        make_append(
+                            session_id="session_a",
+                            conversation_id=metadata.conversation_id,
+                            turn_id=turn_id,
+                            kind=ConversationEventKind.AGENT_REPLY,
+                        )
+                    )
+
+                trace: list[str] = []
+                selected_sizes: list[int] = []
+                connect, _ = _tracking_connect(trace)
+                real_select_turn = sqlite_module._select_turn_events
+
+                def tracked_select_turn(
+                    connection: object,
+                    session_id: str,
+                    conversation_id: str,
+                    turn_id: str,
+                ) -> tuple[object, ...]:
+                    events = real_select_turn(
+                        connection,
+                        session_id,
+                        conversation_id,
+                        turn_id,
+                    )
+                    selected_sizes.append(len(events))
+                    return events
+
+                with (
+                    mock.patch.object(database_module, "_connect", connect),
+                    mock.patch.object(
+                        sqlite_module,
+                        "_select_turn_events",
+                        tracked_select_turn,
+                    ),
+                    mock.patch.object(
+                        sqlite_module,
+                        "_select_events",
+                        side_effect=AssertionError(
+                            "append scanned a complete transcript"
+                        ),
+                    ),
+                ):
+                    user = services.event_store.append(
+                        make_append(
+                            session_id="session_a",
+                            conversation_id=metadata.conversation_id,
+                            turn_id="new_turn",
+                        )
+                    )
+                    reply = services.event_store.append(
+                        make_append(
+                            session_id="session_a",
+                            conversation_id=metadata.conversation_id,
+                            turn_id="new_turn",
+                            kind=ConversationEventKind.AGENT_REPLY,
+                        )
+                    )
+
+                self.assertEqual(
+                    (user.sequence, reply.sequence),
+                    (complete_turns * 2 + 1, complete_turns * 2 + 2),
+                )
+                self.assertEqual(selected_sizes, [0, 1])
+                self.assertEqual(
+                    sum(
+                        statement.startswith(
+                            "SELECT COALESCE(MAX(sequence), 0) FROM conversation_events"
+                        )
+                        for statement in trace
+                    ),
+                    2,
+                )
+                turn_selects = tuple(
+                    statement
+                    for statement in trace
+                    if statement.startswith(
+                        "SELECT schema_version, session_id, conversation_id, "
+                        "turn_id, sequence, timestamp, sender, recipient, kind, "
+                        "content, turn_slot FROM conversation_events"
+                    )
+                )
+                self.assertEqual(len(turn_selects), 2)
+                self.assertTrue(
+                    all(
+                        "AND turn_id = ? ORDER BY turn_slot" in statement
+                        for statement in turn_selects
+                    )
+                )
+                self.assertFalse(
+                    any("ORDER BY sequence" in statement for statement in trace)
+                )
+                _assert_exhaustive_statements(self, trace, expected_count=0)
+                traces.append(tuple(trace))
+
+        self.assertEqual(traces[0], traces[1])
+
+    def test_bounded_append_preserves_pairing_and_rejects_malformed_turns(
+        self,
+    ) -> None:
+        workspace, services = provisioned_services(self)
+        metadata = services.catalog.create("session_a", "Turn rules")
+        identity = {
+            "session_id": "session_a",
+            "conversation_id": metadata.conversation_id,
+            "turn_id": "turn_a",
+        }
+
+        with self.assertRaises(ValueError):
+            services.event_store.append(
+                make_append(**identity, kind=ConversationEventKind.AGENT_REPLY)
+            )
+        user = services.event_store.append(make_append(**identity))
+        with self.assertRaises(ValueError):
+            services.event_store.append(make_append(**identity))
+        mismatched_reply = ConversationEventAppend(
+            **identity,
+            sender=LEAD_ORCHESTRATOR,
+            recipient="user",
+            kind=ConversationEventKind.AGENT_REPLY,
+            content="mismatched",
+        )
+        with self.assertRaises(ValueError):
+            services.event_store.append(mismatched_reply)
+        reply = services.event_store.append(
+            make_append(**identity, kind=ConversationEventKind.AGENT_REPLY)
+        )
+        with self.assertRaises(ValueError):
+            services.event_store.append(
+                make_append(
+                    **identity,
+                    kind=ConversationEventKind.RUNTIME_ERROR,
+                )
+            )
+        self.assertEqual((user.sequence, reply.sequence), (1, 2))
+
+        with raw_connection(workspace) as connection:
+            connection.execute(
+                "UPDATE conversation_events SET sender = ? "
+                "WHERE session_id = ? AND conversation_id = ? AND sequence = 2",
+                (
+                    LEAD_ORCHESTRATOR,
+                    "session_a",
+                    metadata.conversation_id,
+                ),
+            )
+        before = storage_snapshot(workspace)
+        with self.assertRaises(WorkspaceFormatError):
+            services.event_store.append(
+                make_append(
+                    **identity,
+                    kind=ConversationEventKind.RUNTIME_ERROR,
+                )
+            )
+        self.assertEqual(storage_snapshot(workspace), before)
 
 
 class SQLiteDatabaseTransactionTests(unittest.TestCase):
@@ -436,6 +878,26 @@ class SQLiteDatabaseTransactionTests(unittest.TestCase):
         )
         self.assertIn("BEGIN IMMEDIATE", write_trace)
         self.assertIn("COMMIT", write_trace)
+
+    def test_caller_unicode_decode_error_is_not_misclassified(self) -> None:
+        workspace = initialized_workspace(self)
+        provision(workspace)
+        database = database_module.SQLiteDatabase(workspace)
+        failure = UnicodeDecodeError(
+            "utf-8",
+            b"caller-sentinel-\x80",
+            16,
+            17,
+            "caller-owned failure",
+        )
+
+        with self.assertRaises(UnicodeDecodeError) as caught:
+            database.read(
+                lambda _connection: _raise(failure),
+                validate_snapshot=sqlite_module._validate_database_snapshot,
+            )
+        self.assertIs(caught.exception, failure)
+        self.assertIn("caller-owned failure", str(caught.exception))
 
     def test_read_uses_begin_snapshot_operation_commit_and_close_order(self) -> None:
         workspace = initialized_workspace(self)
@@ -771,6 +1233,209 @@ class SQLiteDatabaseProvisioningTests(unittest.TestCase):
                     expected_count=expected_count,
                 )
                 self.assertTrue(database_path(workspace).is_file())
+
+    @unittest.skipUnless(os.name == "posix", "hard-link recovery is POSIX-only")
+    def test_interrupted_hard_link_is_observationally_rejected_then_recovered(
+        self,
+    ) -> None:
+        workspace, services = provisioned_services(self)
+        metadata = services.catalog.create("session_a", "Recovery witness")
+        target = database_path(workspace)
+        alias = target.with_name(".conversation_storage.sqlite3.interrupted.tmp")
+        unrelated = target.with_name("unrelated.bin")
+        unrelated.write_bytes(b"unrelated exact bytes")
+        try:
+            os.link(target, alias, follow_symlinks=False)
+        except OSError as exc:
+            self.skipTest(f"hard links are unsupported: {exc}")
+
+        before = storage_snapshot(workspace)
+        with self.assertRaises(WorkspaceSecurityError):
+            preflight_sqlite_conversation_storage(workspace)
+        with self.assertRaises(WorkspaceSecurityError):
+            services.catalog.get("session_a", metadata.conversation_id)
+        self.assertEqual(storage_snapshot(workspace), before)
+
+        coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)
+        with coordinator.borrow(timeout_seconds=2.0) as lease:
+            recovered = provision_sqlite_conversation_storage(
+                workspace,
+                lease=lease,
+            )
+        self.assertIs(recovered.capability, ConversationStorageCapability.READY)
+        self.assertTrue(target.is_file())
+        self.assertEqual(target.stat().st_nlink, 1)
+        self.assertFalse(alias.exists())
+        self.assertEqual(unrelated.read_bytes(), b"unrelated exact bytes")
+        self.assertEqual(
+            services.catalog.get("session_a", metadata.conversation_id),
+            metadata,
+        )
+
+        recovered_snapshot = storage_snapshot(workspace)
+        with coordinator.borrow(timeout_seconds=2.0) as lease:
+            repeated = provision_sqlite_conversation_storage(
+                workspace,
+                lease=lease,
+            )
+        self.assertIs(repeated.capability, ConversationStorageCapability.READY)
+        self.assertEqual(storage_snapshot(workspace), recovered_snapshot)
+
+    @unittest.skipUnless(os.name == "posix", "hard-link recovery is POSIX-only")
+    def test_interrupted_hard_link_recovery_rejects_every_ambiguous_shape(
+        self,
+    ) -> None:
+        def new_case() -> tuple[Workspace, Path, Path]:
+            workspace = initialized_workspace(self)
+            provision(workspace)
+            target = database_path(workspace)
+            unrelated = target.with_name("unrelated.bin")
+            unrelated.write_bytes(b"preserve unrelated")
+            return workspace, target, unrelated
+
+        def exact_alias(target: Path, label: str) -> Path:
+            return target.with_name(f".conversation_storage.sqlite3.{label}.tmp")
+
+        cases: list[tuple[str, type[Exception], Callable[[Path], None]]] = []
+
+        def no_candidate(target: Path) -> None:
+            os.link(target, target.with_name("wrong-pattern-link"))
+
+        cases.append(("no matching owned name", WorkspaceSecurityError, no_candidate))
+
+        def symlink_candidate(target: Path) -> None:
+            os.link(target, target.with_name("wrong-pattern-link"))
+            os.symlink(target.name, exact_alias(target, "symlink"))
+
+        cases.append(("symlink candidate", WorkspaceSecurityError, symlink_candidate))
+
+        def nonregular_candidate(target: Path) -> None:
+            os.link(target, target.with_name("wrong-pattern-link"))
+            exact_alias(target, "directory").mkdir()
+
+        cases.append(
+            ("nonregular candidate", WorkspaceSecurityError, nonregular_candidate)
+        )
+
+        def different_inode(target: Path) -> None:
+            os.link(target, target.with_name("wrong-pattern-link"))
+            candidate = exact_alias(target, "different")
+            candidate.write_bytes(target.read_bytes())
+            os.link(candidate, target.with_name("different-inode-companion"))
+
+        cases.append(("different inode", WorkspaceSecurityError, different_inode))
+
+        def multiple_candidates(target: Path) -> None:
+            os.link(target, target.with_name("wrong-pattern-link"))
+            exact_alias(target, "first").write_bytes(b"first")
+            exact_alias(target, "second").write_bytes(b"second")
+
+        cases.append(
+            ("multiple candidates", WorkspaceSecurityError, multiple_candidates)
+        )
+
+        def third_link(target: Path) -> None:
+            os.link(target, exact_alias(target, "candidate"))
+            os.link(target, target.with_name("unexpected-third-link"))
+
+        cases.append(("third link", WorkspaceSecurityError, third_link))
+
+        for owner in ("target", "alias"):
+            for suffix in ("-journal", "-wal", "-shm"):
+
+                def sidecar(
+                    target: Path,
+                    *,
+                    owner: str = owner,
+                    suffix: str = suffix,
+                ) -> None:
+                    alias = exact_alias(target, "candidate")
+                    os.link(target, alias)
+                    sidecar_owner = target if owner == "target" else alias
+                    Path(f"{sidecar_owner}{suffix}").write_bytes(b"sidecar")
+
+                cases.append(
+                    (
+                        f"{owner} {suffix} sidecar",
+                        WorkspaceFormatError,
+                        sidecar,
+                    )
+                )
+
+        unsupported: OSError | None = None
+        for label, expected_error, configure in cases:
+            with self.subTest(case=label):
+                workspace, target, unrelated = new_case()
+                try:
+                    configure(target)
+                except OSError as exc:
+                    unsupported = exc
+                    break
+                before = storage_snapshot(workspace)
+                coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)
+                with coordinator.borrow(timeout_seconds=2.0) as lease:
+                    with self.assertRaises(expected_error):
+                        provision_sqlite_conversation_storage(
+                            workspace,
+                            lease=lease,
+                        )
+                self.assertEqual(storage_snapshot(workspace), before)
+                self.assertEqual(unrelated.read_bytes(), b"preserve unrelated")
+        if unsupported is not None:
+            self.skipTest(
+                f"required filesystem primitives are unsupported: {unsupported}"
+            )
+
+    def test_missing_fcnt_keeps_observation_available_and_mutation_closed(
+        self,
+    ) -> None:
+        workspace, services = provisioned_services(self)
+        metadata = services.catalog.create("session_a", "Read-only witness")
+        target = database_path(workspace)
+        before = storage_snapshot(workspace)
+        before_database = target.read_bytes()
+        coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)
+        provision_reached = False
+
+        with mock.patch.object(composition_module, "_fcntl", None):
+            self.assertIs(
+                preflight_sqlite_conversation_storage(workspace).capability,
+                ConversationStorageCapability.READY,
+            )
+            self.assertEqual(
+                services.catalog.get("session_a", metadata.conversation_id),
+                metadata,
+            )
+            with self.assertRaises(ConversationStorageCoordinationError) as caught:
+                services.catalog.create("session_a", "Blocked mutation")
+            mutation_failure = caught.exception
+            with self.assertRaises(
+                ConversationStorageCoordinationError
+            ) as provision_caught:
+                with coordinator.borrow(timeout_seconds=2.0) as lease:
+                    provision_reached = True
+                    provision_sqlite_conversation_storage(workspace, lease=lease)
+        self.assertFalse(provision_reached)
+        self.assertEqual(
+            str(mutation_failure),
+            "conversation storage failure: coordination_failed",
+        )
+        self.assertEqual(str(provision_caught.exception), str(mutation_failure))
+        self.assertEqual(target.read_bytes(), before_database)
+        self.assertEqual(storage_snapshot(workspace), before)
+
+        missing = initialized_workspace(self)
+        missing_target = database_path(missing)
+        coordinator = WorkspaceConversationStorageMutationCoordinator(missing)
+        with mock.patch.object(composition_module, "_fcntl", None):
+            with self.assertRaises(ConversationStorageCoordinationError) as caught:
+                with coordinator.borrow(timeout_seconds=2.0) as lease:
+                    provision_sqlite_conversation_storage(missing, lease=lease)
+        self.assertEqual(
+            str(caught.exception),
+            "conversation storage failure: coordination_failed",
+        )
+        self.assertFalse(missing_target.exists())
 
     def test_link_failure_cleans_only_owned_temporary_artifacts(self) -> None:
         workspace = initialized_workspace(self)

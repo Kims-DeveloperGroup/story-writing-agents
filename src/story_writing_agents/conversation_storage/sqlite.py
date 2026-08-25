@@ -415,18 +415,24 @@ class SQLiteConversationEventStore(_SQLiteAdapter):
                 canonical.session_id,
                 canonical.conversation_id,
             )
-            events = _select_events(
+            next_sequence = _next_event_sequence(
                 connection,
                 canonical.session_id,
                 canonical.conversation_id,
             )
-            _validate_append(events, canonical)
+            turn_events = _select_turn_events(
+                connection,
+                canonical.session_id,
+                canonical.conversation_id,
+                canonical.turn_id,
+            )
+            _validate_append(turn_events, canonical)
             stored = ConversationEvent(
                 schema_version=CONVERSATION_EVENT_SCHEMA_VERSION,
                 session_id=canonical.session_id,
                 conversation_id=canonical.conversation_id,
                 turn_id=canonical.turn_id,
-                sequence=len(events) + 1,
+                sequence=next_sequence,
                 timestamp=datetime.now(UTC).isoformat(),
                 sender=canonical.sender,
                 recipient=canonical.recipient,
@@ -513,6 +519,7 @@ class SQLiteConversationArchiveAdapter(_SQLiteAdapter):
         def import_in_transaction(
             connection: object,
         ) -> ConversationArchiveImportReceipt:
+            _validate_database_snapshot(connection)
             imported = False
             for record, normalized_subject in zip(
                 canonical.records,
@@ -544,11 +551,13 @@ class SQLiteConversationArchiveAdapter(_SQLiteAdapter):
                 for event in record.events:
                     _insert_event(connection, event)
                 imported = True
-            return ConversationArchiveImportReceipt(
+            receipt = ConversationArchiveImportReceipt(
                 ConversationArchiveImportStatus.IMPORTED
                 if imported
                 else ConversationArchiveImportStatus.UNCHANGED
             )
+            _validate_database_snapshot(connection)
+            return receipt
 
         return _database_call(
             lambda: self._database.write(
@@ -833,20 +842,27 @@ def _event_from_row(row: object) -> ConversationEvent:
 def _validate_database_snapshot(connection: object) -> None:
     """Reconstruct and validate every authoritative metadata/event row."""
 
+    _read_validated_database_snapshot(connection)
+
+
+def _read_validated_database_snapshot(
+    connection: object,
+) -> tuple[
+    tuple[ConversationMetadata, ...],
+    dict[tuple[str, str], tuple[ConversationEvent, ...]],
+]:
+    """Return every validated row grouped under an exact catalog identity."""
+
     try:
         metadata_rows = connection.execute(  # type: ignore[attr-defined]
-            _METADATA_SELECT
-            + " ORDER BY session_id, created_at, conversation_id"
+            _METADATA_SELECT + " ORDER BY session_id, created_at, conversation_id"
         ).fetchall()
         event_rows = connection.execute(  # type: ignore[attr-defined]
-            _EVENT_SELECT
-            + " ORDER BY session_id, conversation_id, sequence"
+            _EVENT_SELECT + " ORDER BY session_id, conversation_id, sequence"
         ).fetchall()
         metadata = tuple(_metadata_from_row(row) for row in metadata_rows)
         events = tuple(_event_from_row(row) for row in event_rows)
-        identities = {
-            (item.session_id, item.conversation_id) for item in metadata
-        }
+        identities = {(item.session_id, item.conversation_id) for item in metadata}
         if len(identities) != len(metadata):
             raise SQLiteDatabaseFormatError()
         grouped: dict[tuple[str, str], list[ConversationEvent]] = {}
@@ -855,12 +871,16 @@ def _validate_database_snapshot(connection: object) -> None:
             if identity not in identities:
                 raise SQLiteDatabaseFormatError()
             grouped.setdefault(identity, []).append(event)
+        validated_groups: dict[tuple[str, str], tuple[ConversationEvent, ...]] = {}
         for identity in identities:
+            identity_events = tuple(grouped.get(identity, ()))
             _validate_event_collection(
-                tuple(grouped.get(identity, ())),
+                identity_events,
                 session_id=identity[0],
                 conversation_id=identity[1],
             )
+            validated_groups[identity] = identity_events
+        return metadata, validated_groups
     except _SQLiteDatabaseErrorTypes:
         raise
     except (AttributeError, SessionIdError, TypeError, ValueError):
@@ -955,6 +975,47 @@ def _select_events(
     return events
 
 
+def _next_event_sequence(
+    connection: object,
+    session_id: str,
+    conversation_id: str,
+) -> int:
+    """Return one plus the indexed maximum sequence for an addressed transcript."""
+
+    row = connection.execute(  # type: ignore[attr-defined]
+        "SELECT COALESCE(MAX(sequence), 0) FROM conversation_events "
+        "WHERE session_id = ? AND conversation_id = ?",
+        (session_id, conversation_id),
+    ).fetchone()
+    if (
+        type(row) is not tuple
+        or len(row) != 1
+        or type(row[0]) is not int
+        or row[0] < 0
+        or row[0] >= 9_223_372_036_854_775_807
+    ):
+        raise SQLiteDatabaseFormatError()
+    return row[0] + 1
+
+
+def _select_turn_events(
+    connection: object,
+    session_id: str,
+    conversation_id: str,
+    turn_id: str,
+) -> tuple[ConversationEvent, ...]:
+    """Read at most one indexed user/outcome pair for an addressed turn."""
+
+    rows = connection.execute(  # type: ignore[attr-defined]
+        _EVENT_SELECT + " WHERE session_id = ? AND conversation_id = ? AND turn_id = ? "
+        "ORDER BY turn_slot",
+        (session_id, conversation_id, turn_id),
+    ).fetchall()
+    if len(rows) > 2:
+        raise SQLiteDatabaseFormatError()
+    return tuple(_event_from_row(row) for row in rows)
+
+
 def _insert_metadata(
     connection: object,
     metadata: ConversationMetadata,
@@ -1011,33 +1072,48 @@ def _validate_append(
     events: tuple[ConversationEvent, ...],
     event: ConversationEventAppend,
 ) -> None:
-    """Apply the existing one-user/one-outcome/correlation rules."""
+    """Validate one indexed stored turn and the proposed append."""
 
-    users = {
-        stored.turn_id: stored
-        for stored in events
-        if stored.kind is ConversationEventKind.USER_MESSAGE
-    }
-    outcomes = {
-        stored.turn_id
-        for stored in events
-        if stored.kind is not ConversationEventKind.USER_MESSAGE
-    }
+    if type(events) is not tuple or len(events) > 2:
+        raise SQLiteDatabaseFormatError()
+    user: ConversationEvent | None = None
+    outcome: ConversationEvent | None = None
+    for stored in events:
+        if (
+            type(stored) is not ConversationEvent
+            or stored.session_id != event.session_id
+            or stored.conversation_id != event.conversation_id
+            or stored.turn_id != event.turn_id
+        ):
+            raise SQLiteDatabaseFormatError()
+        if stored.kind is ConversationEventKind.USER_MESSAGE:
+            if user is not None or outcome is not None:
+                raise SQLiteDatabaseFormatError()
+            user = stored
+        else:
+            if outcome is not None:
+                raise SQLiteDatabaseFormatError()
+            outcome = stored
+
+    if outcome is not None:
+        if user is None or outcome.sequence <= user.sequence:
+            raise SQLiteDatabaseFormatError()
+        if (
+            outcome.kind is ConversationEventKind.AGENT_REPLY
+            and outcome.sender != user.recipient
+        ):
+            raise SQLiteDatabaseFormatError()
+
     if event.kind is ConversationEventKind.USER_MESSAGE:
-        if event.turn_id in users:
+        if user is not None:
             raise ValueError(
                 f"conversation turn already has a user event: {event.turn_id}"
             )
         return
-    user = users.get(event.turn_id)
     if user is None:
-        raise ValueError(
-            f"conversation outcome has no user event: {event.turn_id}"
-        )
-    if event.turn_id in outcomes:
-        raise ValueError(
-            f"conversation turn already has an outcome: {event.turn_id}"
-        )
+        raise ValueError(f"conversation outcome has no user event: {event.turn_id}")
+    if outcome is not None:
+        raise ValueError(f"conversation turn already has an outcome: {event.turn_id}")
     if (
         event.kind is ConversationEventKind.AGENT_REPLY
         and event.sender != user.recipient
@@ -1051,20 +1127,13 @@ def _validate_append(
 def _read_archive_payload(connection: object) -> _SQLiteConversationArchivePayload:
     """Return the deterministic private archive from one verified snapshot."""
 
-    rows = connection.execute(  # type: ignore[attr-defined]
-        _METADATA_SELECT
-        + " ORDER BY session_id, created_at, conversation_id"
-    ).fetchall()
+    metadata, grouped = _read_validated_database_snapshot(connection)
     records = tuple(
         _SQLiteConversationArchiveRecord(
-            metadata=metadata,
-            events=_select_events(
-                connection,
-                metadata.session_id,
-                metadata.conversation_id,
-            ),
+            metadata=item,
+            events=grouped[(item.session_id, item.conversation_id)],
         )
-        for metadata in (_metadata_from_row(row) for row in rows)
+        for item in metadata
     )
     return _SQLiteConversationArchivePayload(records=records)
 

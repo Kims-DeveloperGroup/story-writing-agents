@@ -107,7 +107,13 @@ and [Privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy)
 SQLite conversation storage is an explicit direct-module Python API. Importing
 the module performs no I/O and does not load `sqlite3`; the standard-library
 module is loaded and probed only when an operation is requested. SQLite 3.7.16
-or later is required.
+or later is required. Each adapter's database owner reads the canonical
+`Workspace.root` once at construction and pins its workspace key and fixed
+database path. Later mutation of the supplied `Workspace.root` does not
+retarget database operations. Direct adapter construction performs no database
+I/O and keeps `sqlite3` lazy; resolving a string or path-like argument still
+follows ordinary `Workspace` construction. The `compose_*` functions perform
+their documented readiness preflight.
 
 The owning module exports exactly:
 
@@ -137,6 +143,11 @@ The constants are exact:
 | `SQLITE_CONVERSATION_STORAGE_DATABASE_PATH` | `"discussion_logs/conversation_storage.sqlite3"` |
 | `SQLITE_CONVERSATION_STORAGE_MINIMUM_VERSION` | `(3, 7, 16)` |
 | `SQLITE_CONVERSATION_STORAGE_SCHEMA_VERSION` | `1` |
+
+Schema v1 owns exactly nine explicit objects: three tables, three indexes, and
+three insert triggers. Ordered event reads use the event table's composite
+primary-key autoindex, not a redundant explicit event-order index. Addressed
+turn lookup uses the unique turn-slot index.
 
 The public call signatures are:
 
@@ -193,8 +204,21 @@ raises the corresponding conversation-storage readiness error. Every returned
 preflight has `backend == ConversationStorageBackend.SQLITE`, and successful
 provisioning returns `ready`.
 
-Provision only when the application deliberately wants a new empty SQLite
-destination. It does not copy or migrate filesystem conversations:
+Existing-database preflight is exhaustive: it verifies database/schema
+identity, runs SQLite integrity and global foreign-key checks, rejects orphan
+events, and reconstructs every metadata and event row. Ordinary catalog and
+event-store calls use bounded identity verification plus operation-local row
+validation instead. They do not certify unrelated database contents. In
+particular, append reads the indexed maximum sequence and at most the addressed
+turn's one user row and one outcome row rather than reconstructing the complete
+transcript. Database `TEXT` is strict UTF-8; malformed stored text encountered
+by verification or the requested operation maps to a content-free
+`WorkspaceFormatError`, while a caller-owned
+`UnicodeDecodeError` is not reclassified as storage corruption.
+
+For initial creation, provision only when the application deliberately wants a
+new empty SQLite destination. Provisioning never installs SQLite and does not
+copy or migrate filesystem conversations:
 
 ```python
 from story_writing_agents import Workspace
@@ -226,6 +250,16 @@ event_store = services.event_store
 search = services.search  # ReferenceConversationSearch
 ```
 
+Provisioning also verifies a valid existing target and a complete competing
+race winner exhaustively. Its only recovery behavior is cleanup of one provable
+interrupted no-overwrite publication: under the supplied active lease, the
+target and exactly one provisioning-pattern sibling must be the same regular
+two-link inode with no sidecars or ambiguity. Provisioning then removes only
+that sibling alias, synchronizes, and exhaustively verifies the target.
+Preflight and reads remain observational. Symlinks, wrong or multiple
+candidates, unrelated inodes, extra links, sidecars, and invalid target content
+fail closed; this is not a general repair facility.
+
 Composition verifies readiness but never provisions. It returns one
 same-provenance catalog, event store, `ReferenceConversationSearch`, and shared
 mutation coordinator. Direct adapters implement the catalog and transcript
@@ -238,6 +272,19 @@ catalog and search services into the runtime.
 payload and record types are private, adapter-owned implementation details, so
 it is not a supported serialization format or migration API. There is no
 public archive-payload constructor to document or persist independently.
+Export validates every metadata and event row globally and rejects orphan
+events. Import validates the complete destination before mutation and again
+after mutation in the same transaction; orphan or malformed rows and divergent
+existing identities fail without a partial import.
+
+On platforms without POSIX `fcntl`, valid existing storage can still be
+preflighted and read observationally. The supported mutation coordinator cannot
+acquire a lease, so provisioning and supported writes fail with
+`ConversationStorageCoordinationError` before changing the database or
+conversation domain state. The lazy coordinator guard keeps its separate
+documented lifecycle. Issue #261 owns full non-POSIX coordinator/activation
+readiness and the future confirmed detection, installation, and
+settings-selection flow.
 
 None of these names is re-exported by `story_writing_agents` or
 `story_writing_agents.conversation_storage`. The installed shell and runtime

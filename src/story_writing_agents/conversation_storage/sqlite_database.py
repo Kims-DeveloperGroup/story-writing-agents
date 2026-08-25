@@ -39,6 +39,8 @@ _SQLITE_UTF8_ENCODING = 1
 _SQLITE_ROLLBACK_JOURNAL_VERSION = 1
 _SQLITE_SCHEMA_COOKIE = 1
 _SIDECAR_SUFFIXES = ("-journal", "-wal", "-shm")
+_TEMPORARY_PREFIX = ".conversation_storage.sqlite3."
+_TEMPORARY_SUFFIX = ".tmp"
 
 
 class _SQLiteDatabaseError(Exception):
@@ -147,11 +149,6 @@ CREATE INDEX conversations_status_creation_order
 ON conversations (session_id, status, created_at, conversation_id)
 """.strip()
 
-_CREATE_EVENT_ORDER_INDEX_SQL = """
-CREATE INDEX conversation_events_sequence_order
-ON conversation_events (session_id, conversation_id, sequence)
-""".strip()
-
 _CREATE_TURN_SLOT_INDEX_SQL = """
 CREATE UNIQUE INDEX conversation_events_turn_slots
 ON conversation_events (session_id, conversation_id, turn_id, turn_slot)
@@ -219,7 +216,6 @@ _SCHEMA_STATEMENTS = (
     _CREATE_EVENTS_SQL,
     _CREATE_CONVERSATION_ORDER_INDEX_SQL,
     _CREATE_CONVERSATION_STATUS_INDEX_SQL,
-    _CREATE_EVENT_ORDER_INDEX_SQL,
     _CREATE_TURN_SLOT_INDEX_SQL,
     _CREATE_CONTIGUOUS_TRIGGER_SQL,
     _CREATE_USER_BEFORE_OUTCOME_TRIGGER_SQL,
@@ -249,13 +245,14 @@ _LeaseValidator = Callable[[], None]
 class SQLiteDatabase:
     """Own the fixed contained SQLite database and bounded connection lifecycle."""
 
-    __slots__ = ("_workspace", "_workspace_key")
+    __slots__ = ("_database_path", "_workspace_key")
 
     def __init__(self, workspace: Workspace) -> None:
         if not isinstance(workspace, Workspace):
             raise TypeError("workspace must be a Workspace")
-        self._workspace = workspace
-        self._workspace_key = os.fspath(workspace.root)
+        root = workspace.root
+        self._workspace_key = os.fspath(root)
+        self._database_path = root.joinpath(SQLITE_DATABASE_PATH)
 
     @property
     def workspace_key(self) -> str:
@@ -265,9 +262,9 @@ class SQLiteDatabase:
 
     @property
     def _path(self) -> Path:
-        """Resolve the fixed contained database path without creating it."""
+        """Return the construction-pinned contained path without I/O."""
 
-        return self._workspace.path(SQLITE_DATABASE_PATH)
+        return self._database_path
 
     def verify_existing(self, validate_snapshot: _SnapshotValidator) -> None:
         """Strictly verify existing storage through a read-only connection."""
@@ -343,9 +340,24 @@ class SQLiteDatabase:
             return
         except SQLiteDatabaseMissingError:
             pass
+        except SQLiteDatabaseSecurityError:
+            _recover_interrupted_provisioning_alias(
+                self._path,
+                validate_lease=validate_lease,
+            )
+            self._run_connection(
+                module,
+                self._path,
+                read_only=True,
+                exhaustive_verification=True,
+                validate_snapshot=validate_snapshot,
+                operation=lambda _connection: None,
+            )
+            validate_lease()
+            return
 
         target = self._path
-        parent = self._workspace.path(Path(SQLITE_DATABASE_PATH).parent)
+        parent = target.parent
         if not parent.exists() or not parent.is_dir():
             raise SQLiteDatabaseUnavailableError()
         _reject_sidecars(target)
@@ -356,8 +368,8 @@ class SQLiteDatabase:
         try:
             try:
                 descriptor, raw_temporary = tempfile.mkstemp(
-                    prefix=".conversation_storage.sqlite3.",
-                    suffix=".tmp",
+                    prefix=_TEMPORARY_PREFIX,
+                    suffix=_TEMPORARY_SUFFIX,
                     dir=parent,
                 )
                 temporary_path = Path(raw_temporary)
@@ -504,6 +516,7 @@ class SQLiteDatabase:
     ) -> _ResultT:
         """Own one connection, optional transaction, verification, and cleanup."""
 
+        _reject_symlinked_database_parent(path)
         _validate_sidecars(
             path,
             allow_live_rollback_journal=allow_live_rollback_journal,
@@ -642,7 +655,7 @@ class SQLiteDatabase:
                 module,
                 connection,
                 "SELECT sql FROM sqlite_master "
-                "WHERE name NOT LIKE 'sqlite_%' "
+                "WHERE substr(name, 1, 7) != 'sqlite_' "
                 "ORDER BY type, name",
                 verification=True,
             )
@@ -778,11 +791,22 @@ def _connect(module: Any, path: Path, *, read_only: bool) -> Any:
             timeout=SQLITE_BUSY_TIMEOUT_SECONDS,
             isolation_level=None,
         )
-        connection.text_factory = str
+        connection.text_factory = _strict_text_factory
         return connection
     except Exception as exc:
         _raise_mapped_sqlite_exception(module, exc)
         raise AssertionError("unreachable")
+
+
+def _strict_text_factory(value: bytes) -> str:
+    """Decode one SQLite TEXT value as strict UTF-8 without leaking content."""
+
+    if type(value) is not bytes:
+        raise SQLiteDatabaseFormatError()
+    try:
+        return value.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        raise SQLiteDatabaseFormatError() from None
 
 
 def _configure_connection(
@@ -1053,6 +1077,98 @@ def _reject_sidecars(path: Path) -> None:
     """Reject every rollback/WAL sidecar without opening or removing it."""
 
     _validate_sidecars(path, allow_live_rollback_journal=False)
+
+
+def _recover_interrupted_provisioning_alias(
+    target: Path,
+    *,
+    validate_lease: _LeaseValidator,
+) -> None:
+    """Remove only one exact owned hard-link alias left by provisioning."""
+
+    validate_lease()
+    _reject_symlinked_database_parent(target)
+    target_identity = _recovery_file_identity(target)
+    parent = target.parent
+    try:
+        with os.scandir(parent) as entries:
+            candidates = tuple(
+                Path(entry.path)
+                for entry in entries
+                if _is_provisioning_temporary_name(entry.name)
+            )
+    except OSError:
+        raise SQLiteDatabaseUnavailableError() from None
+    if len(candidates) != 1:
+        raise SQLiteDatabaseSecurityError()
+    alias = candidates[0]
+    if _recovery_file_identity(alias) != target_identity:
+        raise SQLiteDatabaseSecurityError()
+    _reject_sidecars(target)
+    _reject_sidecars(alias)
+
+    validate_lease()
+    if (
+        _recovery_file_identity(target) != target_identity
+        or _recovery_file_identity(alias) != target_identity
+    ):
+        raise SQLiteDatabaseSecurityError()
+    try:
+        alias.unlink()
+    except FileNotFoundError:
+        raise SQLiteDatabaseSecurityError() from None
+    except OSError:
+        raise SQLiteDatabaseUnavailableError() from None
+
+    _verify_named_file(target, expected_identity=target_identity)
+    try:
+        os.stat(alias, follow_symlinks=False)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        raise SQLiteDatabaseUnavailableError() from None
+    else:
+        raise SQLiteDatabaseSecurityError()
+    validate_lease()
+    _synchronize_file(target)
+    _synchronize_directory(parent)
+
+
+def _is_provisioning_temporary_name(name: str) -> bool:
+    """Report whether one sibling name has the exact owned mkstemp shape."""
+
+    return (
+        name.startswith(_TEMPORARY_PREFIX)
+        and name.endswith(_TEMPORARY_SUFFIX)
+        and len(name) > len(_TEMPORARY_PREFIX) + len(_TEMPORARY_SUFFIX)
+    )
+
+
+def _recovery_file_identity(path: Path) -> tuple[int, int]:
+    """Return one exact regular two-link identity or reject recovery."""
+
+    try:
+        value = os.stat(path, follow_symlinks=False)
+    except FileNotFoundError:
+        raise SQLiteDatabaseSecurityError() from None
+    except OSError:
+        raise SQLiteDatabaseUnavailableError() from None
+    if not stat.S_ISREG(value.st_mode) or value.st_nlink != 2:
+        raise SQLiteDatabaseSecurityError()
+    return (value.st_dev, value.st_ino)
+
+
+def _reject_symlinked_database_parent(path: Path) -> None:
+    """Reject a symlink at the fixed workspace-relative database directory."""
+
+    try:
+        value = os.stat(path.parent, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    except OSError:
+        raise SQLiteDatabaseUnavailableError() from None
+    if stat.S_ISLNK(value.st_mode):
+        raise SQLiteDatabaseSecurityError()
 
 
 def _validate_sidecars(

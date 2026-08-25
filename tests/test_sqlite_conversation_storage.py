@@ -12,6 +12,7 @@ import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest import mock
 
 import story_writing_agents
 import story_writing_agents.conversation_storage as storage_package
@@ -420,6 +421,35 @@ class SQLitePreflightAndProvisionTests(unittest.TestCase):
 
 
 class SQLiteArchiveTests(unittest.TestCase):
+    @staticmethod
+    def _insert_orphan(
+        workspace: Workspace,
+        *,
+        session_id: str,
+        conversation_id: str,
+    ) -> None:
+        with raw_connection(workspace) as connection:
+            connection.execute("PRAGMA foreign_keys = OFF")
+            connection.execute(
+                "INSERT INTO conversation_events "
+                "(session_id, conversation_id, sequence, schema_version, turn_id, "
+                "turn_slot, timestamp, sender, recipient, kind, content) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    session_id,
+                    conversation_id,
+                    1,
+                    1,
+                    "orphan_turn",
+                    0,
+                    "2026-08-25T00:00:00+00:00",
+                    "user",
+                    "plot_architect",
+                    "user_message",
+                    "orphan event",
+                ),
+            )
+
     def _populated_archive(
         self,
     ) -> tuple[
@@ -546,6 +576,166 @@ class SQLiteArchiveTests(unittest.TestCase):
             ),
             1,
         )
+
+    def test_archive_export_rejects_any_global_orphan_without_change(self) -> None:
+        workspace, _, archive = self._populated_archive()
+        self._insert_orphan(
+            workspace,
+            session_id="unrelated_session",
+            conversation_id="unrelated_conversation",
+        )
+        before = storage_snapshot(workspace)
+        coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)
+        with coordinator.borrow(timeout_seconds=2.0) as lease:
+            with self.assertRaises(WorkspaceFormatError) as caught:
+                archive.export_archive(lease)
+        self.assertEqual(
+            str(caught.exception),
+            "invalid SQLite conversation storage",
+        )
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertEqual(storage_snapshot(workspace), before)
+
+    def test_archive_import_preflight_rejects_same_and_unrelated_orphans(
+        self,
+    ) -> None:
+        source, _, source_archive = self._populated_archive()
+        source_coordinator = WorkspaceConversationStorageMutationCoordinator(source)
+        with source_coordinator.borrow(timeout_seconds=2.0) as lease:
+            payload = source_archive.export_archive(lease)
+        same_identity = next(
+            (
+                record.metadata.session_id,
+                record.metadata.conversation_id,
+            )
+            for record in payload.records
+            if record.events
+        )
+
+        for label, identity in (
+            ("same identity", same_identity),
+            ("unrelated identity", ("orphan_session", "orphan_conversation")),
+        ):
+            with self.subTest(case=label):
+                target = initialized_workspace(self)
+                provision(target)
+                target_archive = compose_sqlite_conversation_archive(target)
+                self._insert_orphan(
+                    target,
+                    session_id=identity[0],
+                    conversation_id=identity[1],
+                )
+                before = storage_snapshot(target)
+                with raw_connection(target) as connection:
+                    logical_before = tuple(
+                        connection.execute(
+                            "SELECT * FROM conversation_events "
+                            "ORDER BY session_id, conversation_id, sequence"
+                        ).fetchall()
+                    )
+                coordinator = WorkspaceConversationStorageMutationCoordinator(target)
+                with (
+                    mock.patch.object(
+                        sqlite_module,
+                        "_insert_metadata",
+                        wraps=sqlite_module._insert_metadata,
+                    ) as insert_metadata,
+                    coordinator.borrow(timeout_seconds=2.0) as lease,
+                ):
+                    with self.assertRaises(WorkspaceFormatError):
+                        target_archive.import_archive(lease, payload)
+                insert_metadata.assert_not_called()
+                self.assertEqual(storage_snapshot(target), before)
+                with raw_connection(target) as connection:
+                    logical_after = tuple(
+                        connection.execute(
+                            "SELECT * FROM conversation_events "
+                            "ORDER BY session_id, conversation_id, sequence"
+                        ).fetchall()
+                    )
+                self.assertEqual(logical_after, logical_before)
+
+    def test_archive_postvalidation_corruption_rolls_back_every_import(self) -> None:
+        source, _, source_archive = self._populated_archive()
+        source_coordinator = WorkspaceConversationStorageMutationCoordinator(source)
+        with source_coordinator.borrow(timeout_seconds=2.0) as lease:
+            payload = source_archive.export_archive(lease)
+
+        target = initialized_workspace(self)
+        provision(target)
+        target_archive = compose_sqlite_conversation_archive(target)
+        coordinator = WorkspaceConversationStorageMutationCoordinator(target)
+        before = storage_snapshot(target)
+        real_validator = sqlite_module._validate_database_snapshot
+        validation_calls = 0
+
+        def corrupt_before_second_validation(connection: object) -> None:
+            nonlocal validation_calls
+            validation_calls += 1
+            if validation_calls == 2:
+                connection.execute(  # type: ignore[attr-defined]
+                    "UPDATE conversations "
+                    "SET normalized_subject = 'post-validation-corruption' "
+                    "WHERE rowid = (SELECT MIN(rowid) FROM conversations)"
+                )
+            real_validator(connection)
+
+        with (
+            mock.patch.object(
+                sqlite_module,
+                "_validate_database_snapshot",
+                corrupt_before_second_validation,
+            ),
+            coordinator.borrow(timeout_seconds=2.0) as lease,
+        ):
+            with self.assertRaises(WorkspaceFormatError):
+                target_archive.import_archive(lease, payload)
+        self.assertEqual(validation_calls, 2)
+        self.assertEqual(storage_snapshot(target), before)
+        services = compose_sqlite_conversation_storage(target)
+        self.assertEqual(services.catalog.list("session_a", include_archived=True), ())
+        self.assertEqual(services.catalog.list("session_b", include_archived=True), ())
+
+    def test_archive_import_preserves_unrelated_exact_destination_records(
+        self,
+    ) -> None:
+        source, _, source_archive = self._populated_archive()
+        source_coordinator = WorkspaceConversationStorageMutationCoordinator(source)
+        with source_coordinator.borrow(timeout_seconds=2.0) as lease:
+            payload = source_archive.export_archive(lease)
+
+        target, services = provisioned_services(self)
+        extra_metadata = services.catalog.create("extra_session", "Extra subject")
+        extra_event = services.event_store.append(
+            make_append(
+                session_id="extra_session",
+                conversation_id=extra_metadata.conversation_id,
+                turn_id="extra_turn",
+                content="preserve exact extra event",
+            )
+        )
+        target_archive = compose_sqlite_conversation_archive(target)
+        coordinator = WorkspaceConversationStorageMutationCoordinator(target)
+        with coordinator.borrow(timeout_seconds=2.0) as lease:
+            imported = target_archive.import_archive(lease, payload)
+            combined = target_archive.export_archive(lease)
+        self.assertIs(imported.status, ConversationArchiveImportStatus.IMPORTED)
+        self.assertEqual(
+            services.catalog.get("extra_session", extra_metadata.conversation_id),
+            extra_metadata,
+        )
+        self.assertEqual(
+            services.event_store.read("extra_session", extra_metadata.conversation_id),
+            (extra_event,),
+        )
+        self.assertTrue(all(record in combined.records for record in payload.records))
+        self.assertEqual(len(combined.records), len(payload.records) + 1)
+
+        before = storage_snapshot(target)
+        with coordinator.borrow(timeout_seconds=2.0) as lease:
+            unchanged = target_archive.import_archive(lease, payload)
+        self.assertIs(unchanged.status, ConversationArchiveImportStatus.UNCHANGED)
+        self.assertEqual(storage_snapshot(target), before)
 
     def test_archive_rejects_wrong_released_and_malformed_evidence_without_change(
         self,

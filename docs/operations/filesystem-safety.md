@@ -346,24 +346,36 @@ path-mismatched record raises `WorkspaceFormatError`. Symlinks raise
 The optional adapter resolves only the fixed contained path
 `discussion_logs/conversation_storage.sqlite3`. It requires the named database
 and opened descriptor to identify the same regular, singly linked file and
-rechecks that identity after each operation. Connections use non-creating SQLite
-URI modes: `mode=ro` for reads and `mode=rw` for writes. Module import performs
-no I/O. Adapter construction never opens or creates the database and does not
-load `sqlite3`; resolving a string or path-like workspace still follows the
-ordinary `Workspace` construction contract. `sqlite3` is loaded and probed only
-when an operation is requested, and SQLite 3.7.16 or later is required.
+rechecks that identity after each operation. Its database owner reads the
+canonical workspace root once at construction and retains the resulting
+workspace key and database path; later mutation of the supplied
+`Workspace.root` cannot retarget the database. Connections use non-creating
+SQLite URI modes: `mode=ro` for reads and `mode=rw` for writes. Module import
+performs no I/O. Adapter construction never opens or creates the database and
+does not load `sqlite3`; resolving a string or path-like workspace still
+follows the ordinary `Workspace` construction contract. `sqlite3` is loaded and
+probed only when an operation is requested, and SQLite 3.7.16 or later is
+required.
 
 Header verification requires the SQLite format header, DELETE rollback-journal
 read/write versions, UTF-8 encoding, application ID `0x53574143` (`SWAC`), and
 schema version `1`. Every connection against an existing database also verifies
 the exact schema manifest and fingerprint and fixed schema cookie. Strict
-preflight and composition readiness, along with both existing-target and new
-temporary-database validation during provisioning, additionally run
+preflight and composition readiness, along with new-temporary, existing-target,
+race-winner, and recovered-target provisioning validation, additionally run
 `integrity_check`, a global foreign-key check, an orphan scan, and full
 catalog/event reconstruction. Routine reads and writes validate the rows
 involved in their requested operation; database constraints, triggers, and
 enabled foreign-key enforcement protect supported mutations. They do not scan
-unrelated database contents. Validation never repairs a value.
+unrelated database contents. Preflight and ordinary reads are observational;
+validation never repairs a value.
+
+Database `TEXT` is decoded as strict UTF-8 on every connection. Malformed
+stored text encountered by verification or the requested operation fails
+closed as content-free `WorkspaceFormatError`, without
+leaking the undecodable value or a cause. A `UnicodeDecodeError` raised by
+caller-owned operation code remains that caller exception instead of being
+misclassified as stored corruption.
 
 Sidecar handling deliberately differs by operation:
 
@@ -397,6 +409,19 @@ uses `journal_mode=DELETE`, `synchronous=FULL`, foreign keys on, UTF-8, and a
 five-second SQLite busy timeout. The separately configurable mutation timeout
 bounds coordinator acquisition.
 
+Append is specifically history-bounded: it obtains one plus the indexed maximum
+sequence for the addressed conversation and reads at most the addressed turn's
+user/outcome pair through the unique turn-slot index. It validates that pair and
+the proposed event under the transaction and database triggers; it does not
+read or reconstruct the complete transcript.
+
+The privileged archive boundary is deliberately global. Export reconstructs
+and validates every metadata/event row and rejects any orphan event. Import
+validates the complete destination before mutation and again after mutation in
+the same transaction. Orphan or malformed destination rows therefore fail
+before insertion, and post-mutation invalidity rolls back every import rather
+than silently adopting or dropping rows.
+
 An uncommitted failure attempts rollback and every opened connection is closed.
 Rollback or close cleanup cannot suppress the primary body failure. A failure
 reported during post-commit close or synchronization can nevertheless leave
@@ -409,8 +434,27 @@ adapter-owned temporary file beside the target, commits and verifies it, writes
 and synchronizes its application ID, then installs it create-only with a hard
 link and synchronizes the installed file and parent directory. A competing
 complete installation is verified rather than overwritten. Cleanup removes
-only the provisioning call's own temporary path and its temporary sidecars;
-the authoritative target and foreign sidecars are preserved.
+only the provisioning call's own temporary path and its temporary sidecars in
+ordinary failure paths; the authoritative target and foreign sidecars are
+preserved.
+
+Explicit leased provisioning has one additional, narrow interrupted-publication
+cleanup. If and only if the target and exactly one provisioning-pattern sibling
+are regular names for the same two-link inode, with no sidecars or other link
+ambiguity, provisioning removes that sibling alias, synchronizes the target and
+directory, and exhaustively verifies the target. Preflight and ordinary reads
+never perform this cleanup. Symlinks, wrong or multiple candidates, a different
+inode, an extra link, any sidecar, and corrupt or unsupported target content
+remain fail-closed conditions; suspicious names and target content are not
+rewritten. This recognizes residue from the adapter's interrupted hard-link
+publication, not a general database-repair mechanism.
+
+On a host without POSIX `fcntl`, existing valid storage remains available to
+observational preflight and reads. The supported coordinator cannot acquire a
+mutation lease, so provisioning and supported writes fail with
+`ConversationStorageCoordinationError` before any database or conversation
+domain change. The lazy guard file retains its separately documented lifecycle.
+Non-POSIX coordinator and activation readiness remain deferred to Issue #261.
 
 The guard serializes supported writers but does not authenticate a caller,
 acquire a story-session claim, or protect against an actively hostile same-user

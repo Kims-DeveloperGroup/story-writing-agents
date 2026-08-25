@@ -889,13 +889,21 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** Import defines immutable schema and
   policy metadata only and deliberately does not load `sqlite3`; each requested
   operation lazily loads and probes the standard-library module for SQLite
-  3.7.16 or newer. One `SQLiteDatabase` retains a supplied `Workspace` and its
-  canonical key, resolving the fixed contained
-  `discussion_logs/conversation_storage.sqlite3` path without creating it.
+  3.7.16 or newer. One `SQLiteDatabase` captures the supplied `Workspace`'s
+  canonical root once and retains only its exact key and the fixed contained
+  `discussion_logs/conversation_storage.sqlite3` path, so later mutation of the
+  supplied `Workspace.root` cannot retarget database I/O. Construction performs
+  only path arithmetic and creates nothing. Schema version 1 has nine explicit
+  application-owned objects: three tables, three indexes, and three insert
+  triggers. The event composite-primary-key autoindex serves ordered/MAX
+  sequence access, so no redundant explicit event-order index is owned.
   Every operation owns and closes one non-creating URI connection with a finite
   five-second busy timeout, verified foreign keys, `DELETE` journaling, `FULL`
-  synchronization, and UTF-8 encoding. Reads use an explicit transaction on a
-  read-only connection so verification and the operation share one snapshot;
+  synchronization, UTF-8 encoding, and strict UTF-8 decoding for stored `TEXT`.
+  Malformed stored text raises the content-free database-format failure, while
+  a caller-operation `UnicodeDecodeError` is not reclassified. Reads use an
+  explicit transaction on a read-only connection so verification and the
+  operation share one snapshot;
   writes validate an already-held lease before a `BEGIN IMMEDIATE` transaction
   and again before commit. Both paths commit explicitly, roll back an
   uncommitted transaction, and always close their connection. Routine reads
@@ -915,7 +923,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   rejecting unsafe journal forms and every `-wal` or `-shm` sidecar. Explicit
   provisioning builds and verifies a private temporary database,
   installs it create-only by hard link under caller lease validation, syncs the
-  file and directory, and cleans only its own temporary artifacts.
+  file and directory, and cleans only its own temporary artifacts. Under a
+  valid provisioning lease only, it may recover the single exact interrupted
+  publication shape where the target and exactly one fixed-pattern temporary
+  sibling are regular names for the same two-link inode with no sidecar or link
+  ambiguity; it revalidates, removes only that alias, synchronizes, and then
+  exhaustively verifies the target. Preflight and ordinary reads remain
+  observational, and every ambiguous or unsafe shape is preserved and rejected.
 - **Primary verification/documentation:**
   `tests/test_sqlite_database.py`,
   `tests/test_conversation_storage.py`,
@@ -967,10 +981,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   coordinator before opening the SQLite write transaction, so database
   revision, sequence, turn-slot, and reply-correlation changes are atomic;
   normalized subjects are stored as nonunique derived data and checked during
-  every metadata reconstruction. Privileged archive export/import validates a
-  caller-supplied outer lease, preserves exact metadata and event content, and
-  imports create-or-identical records in one transaction while rejecting
-  divergence. Service composition preflights once and returns same-provenance
+  every metadata reconstruction. Append obtains one plus the indexed maximum
+  sequence and reads at most the addressed turn's user/outcome pair; constraints
+  and triggers retain contiguous ordering and turn correlation without scanning
+  unrelated transcript history. Privileged archive export/import validates a
+  caller-supplied outer lease and the complete database snapshot: export rejects
+  orphan events rather than omitting them, while import validates all destination
+  rows before mutation and the resulting rows afterward in the same transaction,
+  preserving exact create-or-identical semantics and rejecting divergence.
+  Valid existing storage remains available to observational preflight and reads
+  when POSIX `fcntl` is unavailable, while provisioning and supported mutations
+  fail closed through the coordinator; full activation readiness remains owned
+  by Issue #261. Service composition preflights once and returns same-provenance
   catalog/event-store bindings plus a provider-free
   `ReferenceConversationSearch` binding and the shared coordinator; archive
   composition returns the separate privileged adapter. Neither composition
