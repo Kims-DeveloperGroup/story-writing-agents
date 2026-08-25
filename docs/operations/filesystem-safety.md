@@ -9,7 +9,9 @@
 > attachment use the catalog-independent reference-source boundary
 > and add no artifact
 > write path. Bounded fail-open debug logging uses a separate identity-bound
-> storage path.
+> storage path. Privileged filesystem conversation archive transfer is
+> available only through a direct Python adapter under a caller-held mutation
+> lease.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -337,6 +339,86 @@ An existing empty file, malformed JSONL, invalid sequence or pairing, or
 path-mismatched record raises `WorkspaceFormatError`. Symlinks raise
 `WorkspaceSecurityError`. Exact event rules are in
 [Conversation transcripts](../reference/conversation-transcripts.md).
+
+<a id="conversation-archive-filesystem-safety"></a>
+
+## Conversation archive filesystem safety
+
+`compose_filesystem_conversation_archive()` captures one canonical absolute
+root and workspace key in a private immutable topology. It retains no caller
+`Workspace` or public mutable catalog/event-store collaborator and performs no
+archive scan or mutation. After pure import-payload canonicalization where
+applicable, every export and import validates an active, unexpired,
+owner-thread-bound lease for that key before constructing its one private
+operation-local `Workspace`, catalog, and event-store set. A wrong-root lease
+therefore fails before collaborator materialization or filesystem I/O, and
+later caller-root mutation cannot redirect root A transfer into root B.
+
+This archive-owned topology is independent of composed-service provenance and
+SQLite's pinned database owner. The caller must stop or otherwise coordinate
+ordinary catalog and transcript writers for the complete operation: those
+ordinary adapters do not acquire the archive lease, and the lease is not an
+authorization decision.
+
+Export strictly enumerates only the authoritative
+`discussion_logs/<session_id>/interactive/conversations/<conversation_id>/`
+namespace. Metadata is required; a transcript is absent for empty history and
+must be a nonempty canonical JSONL file when present. IDs, metadata, complete
+event history, pairing, and path correlation are revalidated through addressed
+`FilesystemConversationCatalog.get()` and
+`FilesystemConversationEventStore.read()` calls. No catalog-wide list is used.
+
+Every scanned directory must remain a real directory. Every included file must
+be regular and singly linked. Symlinks, hard links, nonregular files, malformed
+or empty present transcripts, orphan/unknown conversation artifacts, invalid
+identifiers, and unexpected interactive layout fail closed. Safe regular
+non-session root files and safe regular noninteractive session siblings are
+excluded without reading their content, but each consumes the one-million-entry
+inventory budget; a safe session without `interactive` is skipped. An unsafe
+excluded entry fails rather than being followed or silently ignored. The normal
+`discussion_logs/.gitkeep` sentinel must be a singly linked regular file whose
+zero size is verified from metadata; its bytes are not read.
+
+Export performs two complete scans and compares their canonical archive bytes
+under the same lease. A difference or second-scan archive failure becomes
+`ConversationArchiveSourceChangedError`. This is change detection, not a lock
+or filesystem snapshot: do not copy a live, ordinarily mutating source and
+rely on the second scan for consistency. A valid excluded-only change does not
+alter the compared bytes, although it remains bounded and validated in its
+scan.
+
+Import first canonicalizes and fully validates the bounded archive in memory.
+It then scans the complete destination namespace, classifies the full
+destination-plus-payload union, builds exact planned metadata/transcript bytes,
+projects paths, descendant entries, included bytes, logical text, and canonical
+wire, and checks every planned target and ancestor path before writing
+anything. A late divergent identity or projected bound failure therefore
+prevents an earlier absent identity from being installed. Missing state uses
+the existing create-only atomic workspace writers, metadata first and a
+transcript only for nonempty history. Exact domain-value collisions are
+accepted; divergent or unsafe collisions are preserved and rejected.
+
+The lease and containing path are revalidated around each installation. A
+complete destination rescan must then match the preflight inventory plus the
+requested archive. Import never overwrites, replaces, or deletes conversation
+or excluded state. It can add to a nonempty destination and preserves unrelated
+complete records byte-for-byte. A post-preflight exact target collision is
+accepted only after an addressed domain reread; a divergent collision or
+unrelated post-write mutation is preserved and reported without rollback.
+
+Operational failure may leave canonical directories, exact metadata, or
+complete exact earlier conversations. The same canonical payload can resume
+recognized metadata-first state under a fresh correct lease after the
+destination is quiescent. Unknown artifacts, divergence, unsafe topology, or a
+post-preflight change instead fail closed; the adapter performs no cleanup or
+automatic retry. Path revalidation narrows but cannot eliminate a hostile
+same-user race between the last check and a native filesystem call.
+
+Archive errors are content-free and never expose the rejected path or bytes.
+Exact values, bounds, exclusions, statuses, and error types are in
+[Canonical conversation archives](../reference/conversation-archives.md),
+including the exact
+[scan and projected-union limits](../reference/conversation-archives.md#filesystem-archive-bounds).
 
 ## Mutation guarantees
 

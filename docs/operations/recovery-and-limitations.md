@@ -3,8 +3,10 @@
 > **Available:** guarded access recovery, shell workflows, and process-level
 > POSIX PTY verification, including the package-internal ranged viewer.
 > Interactive `$`/`$$` artifact discovery and selection are available in
-> provider-bound prompt spans. Automatic retry, destructive cleanup, event
-> repair, automation picker UI, and Windows console emulation are not available.
+> provider-bound prompt spans. Direct Python conversation archive operations
+> have content-free failures and recognized additive-import recovery. Automatic
+> retry, destructive cleanup, event repair, automation picker UI, and Windows
+> console emulation are not available.
 
 Key terms: **fail closed** means preserve uncertain state; **taint** means stop
 continuing incomplete provider history; **external backup** is outside the workspace.
@@ -25,6 +27,41 @@ preserves foreign/changed ownership. No remote probe occurs.
 A same-host missing PID needs no deletion: acquisition replaces its unchanged
 claim under the guard. If ownership is unknown, back up and investigate before
 retrying. Never manufacture `claimable` by removing files.
+
+<a id="conversation-archive-recovery"></a>
+
+## Conversation archive recovery
+
+Stop or coordinate all ordinary conversation mutation before export or import.
+The required workspace mutation lease validates the caller, thread, workspace,
+and bounded lifetime, but ordinary catalog/event-store writers do not
+automatically acquire it. Archive operations have no automatic retry, rollback
+of already created exact files, cleanup, overwrite, or deletion.
+
+| Result or failure | Meaning | Safe response |
+| --- | --- | --- |
+| `ConversationArchiveImportStatus.UNCHANGED` | The complete requested archive state already existed, or the archive was empty. | Treat the destination as unchanged. An empty archive does not prove that the destination is empty. |
+| `ConversationArchiveImportStatus.IMPORTED` | At least one exact metadata or transcript file was created and the complete post-import scan matched. | Continue only after the calling workflow accepts that additive result. This is not proof of complete workspace parity. |
+| `ConversationArchiveFormatError`, `ConversationArchiveVersionError`, `ConversationArchiveBoundsError`, or `ConversationArchiveDigestError` | The logical value or bytes are invalid, unsupported, oversized, modified, or noncanonical. | Reject the payload. Preserve untrusted input only according to caller policy; do not repair fields, recompute a digest to force acceptance, or import it. |
+| `ConversationArchiveSourceError` | The authoritative source layout or values are malformed or unsafe. | Keep the source unchanged, quiesce all writers, and inspect the fixed conversation subtree offline. Do not copy around the rejected entry. |
+| `ConversationArchiveSourceChangedError` | The two canonical export scans differed or the second scan became invalid. | Discard the attempted export, keep the source quiescent, investigate the change, and start a completely new export only after stability is established. |
+| `ConversationArchiveConflictError` | An addressed destination identity has different metadata or transcript values. | Preserve both inputs and investigate. The adapter does not merge, replace, or delete the destination. |
+| `ConversationArchiveDestinationError` | Destination preflight found malformed/unsafe state, or a write could not complete safely. | Preserve the destination. Inspect before deciding whether it is unchanged or contains an exact metadata-first prefix; never remove an unknown artifact to force import. |
+| `ConversationArchiveDestinationChangedError` | A target collision, path change, or complete post-import rescan differed from the preflight plan. | Stop all destination mutation and inspect every addressed identity. Some exact create-only files may already exist; do not assume rollback. |
+| `ConversationStorageCoordinationError` | The lease is invalid, released, expired, wrong-thread, wrong-workspace, or failed during the operation. | End the old lease, quiesce the workspace, and acquire a fresh exact-workspace lease. Inspect possible exact prefixes before reapplying a payload. |
+
+Import deliberately supports resuming only its recognized canonical empty
+directory prefixes or exact metadata awaiting a nonempty transcript. Reapply
+only the identical canonical payload, under a fresh valid lease, after the
+destination is quiescent and inspection shows no divergence. Exact complete
+records are accepted; unrelated complete conversations are preserved. Unknown,
+unsafe, or divergent state is not resumable.
+
+The archive contains only conversation metadata and transcripts, not debates,
+defaults, providers, prompts, manuscripts, artifacts, configuration, logs, or
+other workspace state. It is transport infrastructure rather than a complete
+backup, arbitrary restore, migration/checkpoint/parity workflow, or backend
+switch. See the exact [archive contract](../reference/conversation-archives.md).
 
 <a id="unsupported-v1-session-data"></a>
 

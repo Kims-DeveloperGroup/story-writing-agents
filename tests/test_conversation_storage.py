@@ -69,9 +69,15 @@ from story_writing_agents.conversation_storage import (
     validate_conversation_storage_mutation_timeout,
 )
 from story_writing_agents.conversation_storage import (
+    archive as archive_module,
+)
+from story_writing_agents.conversation_storage import (
     composition as composition_module,
 )
 from story_writing_agents.conversation_storage import contracts as contracts_module
+from story_writing_agents.conversation_storage import (
+    filesystem_archive as filesystem_archive_module,
+)
 
 from tests.conversation_event_store_contract import make_append
 
@@ -1242,14 +1248,19 @@ print("released", flush=True)
 
 class ConversationStorageBoundaryTests(unittest.TestCase):
     def test_package_exports_owning_modules_and_root_facade_are_exact(self) -> None:
-        expected = set(contracts_module.__all__) | set(composition_module.__all__)
+        owning_modules = (
+            archive_module,
+            contracts_module,
+            composition_module,
+            filesystem_archive_module,
+        )
+        expected = set().union(*(module.__all__ for module in owning_modules))
         self.assertEqual(set(storage.__all__), expected)
-        for name in contracts_module.__all__:
-            with self.subTest(module="contracts", name=name):
-                self.assertIs(getattr(storage, name), getattr(contracts_module, name))
-        for name in composition_module.__all__:
-            with self.subTest(module="composition", name=name):
-                self.assertIs(getattr(storage, name), getattr(composition_module, name))
+        self.assertEqual(len(storage.__all__), 64)
+        for module in owning_modules:
+            for name in module.__all__:
+                with self.subTest(module=module.__name__, name=name):
+                    self.assertIs(getattr(storage, name), getattr(module, name))
         self.assertEqual(len(story_writing_agents.__all__), 120)
         for name in expected:
             with self.subTest(root_name=name):
@@ -1258,8 +1269,16 @@ class ConversationStorageBoundaryTests(unittest.TestCase):
 
     def test_internal_dependency_direction_is_minimal_and_acyclic(self) -> None:
         expected_dependencies = {
+            archive_module: {"conversations", "errors"},
             contracts_module: {"conversation_search", "conversations", "errors"},
             composition_module: {"conversation_search", "workspace", "contracts"},
+            filesystem_archive_module: {
+                "archive",
+                "contracts",
+                "conversations",
+                "errors",
+                "workspace",
+            },
         }
         for module, expected in expected_dependencies.items():
             source = Path(module.__file__).read_text(encoding="utf-8")
@@ -1292,11 +1311,19 @@ class ConversationStorageBoundaryTests(unittest.TestCase):
             "from pathlib import Path; "
             "import story_writing_agents as root; "
             "import story_writing_agents.conversation_storage as package; "
+            "import story_writing_agents.conversation_storage.archive as archive; "
             "import story_writing_agents.conversation_storage.contracts as contracts; "
             "import story_writing_agents.conversation_storage.composition "
             "as composition; "
-            "expected=set(contracts.__all__) | set(composition.__all__); "
+            "import story_writing_agents.conversation_storage.filesystem_archive "
+            "as filesystem_archive; "
+            "expected=(set(archive.__all__) | set(contracts.__all__) | "
+            "set(composition.__all__) | set(filesystem_archive.__all__)); "
             "assert set(package.__all__) == expected; "
+            "assert len(archive.__all__) == 22; "
+            "assert len(filesystem_archive.__all__) == 2; "
+            "assert len(package.__all__) == 64; "
+            "assert len(root.__all__) == 120; "
             "assert all(name not in root.__all__ for name in expected); "
             "assert all(not hasattr(root, name) for name in expected); "
             "assert 'sqlite3' not in sys.modules; "
