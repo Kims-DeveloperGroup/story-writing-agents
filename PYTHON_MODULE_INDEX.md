@@ -777,7 +777,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:**
   `src/story_writing_agents/conversation_storage/composition.py`
-- **Responsibility:** Own workspace-facing conversation-storage composition.
+- **Responsibility:** Own workspace-pinned conversation-storage composition.
 - **Supported surface:** Package-supported
   `CONVERSATION_STORAGE_ACTIVATION_STATE_PATH`,
   `CONVERSATION_STORAGE_MUTATION_GUARD_PATH`,
@@ -785,41 +785,57 @@ every intermediate arrow. The current runtime graph is acyclic.
   `compose_filesystem_conversation_storage`,
   `load_conversation_storage_activation_state`, and
   `compare_and_set_conversation_storage_activation`.
-  `compose_filesystem_conversation_storage` returns the raw established
-  `FilesystemConversationCatalog`, `FilesystemConversationEventStore`, and
-  `ReferenceConversationSearch` instances under three explicit same-provenance
-  `ConversationStorageComponentBinding` values; it does not change their
-  established paths, root exports, or default behavior. The compare-and-set
-  operation requires an active correct-workspace owner-thread lease and an exact expected
-  generation; it never acquires coordination internally.
+  `compose_filesystem_conversation_storage` captures one private frozen
+  canonical-root topology and returns concrete-`isinstance`-compatible pinned
+  subclasses of `FilesystemConversationCatalog`,
+  `FilesystemConversationEventStore`, and `ReferenceConversationSearch` under
+  three explicit same-provenance `ConversationStorageComponentBinding` values.
+  The subclasses materialize operation-local `Workspace` instances from that
+  topology and retain their construction-pinned collaborators, so later caller
+  root mutation or inherited collaborator rebinding cannot redirect composed
+  I/O. Direct standalone filesystem adapters retain their established borrowed-
+  `Workspace` behavior. The coordinator retains no caller `Workspace`; its
+  canonical key, fixed guard, and every issued lease derive from its
+  construction-pinned topology. Activation load and compare-and-set capture one
+  canonical root per whole call. Compare-and-set rejects a wrong-root lease
+  before operation-local workspace materialization or filesystem I/O, then
+  requires an active owner-thread lease and exact expected generation and
+  revalidates that lease before publication; it never acquires coordination
+  internally. These guarantees do not change established paths, root exports,
+  or the default backend.
 - **Direct internal dependencies:** `conversation_search`,
   `conversation_storage.contracts`, and `workspace`.
 - **State, resources, and side effects:** Import initializes only a synchronized
   weak in-process registry and immutable constants; it performs no filesystem
-  access and opens no resource. Coordinator construction is I/O-free. Its one
-  exclusive borrow validates a finite caller-supplied timeout, shares an
-  in-process reentrant lock per canonical workspace, and on POSIX opens,
-  validates, advisory-locks, unlocks, and closes the contained
-  `config/.conversation_storage.lock` guard. Same-thread reentry returns the
-  same owner-thread/workspace-bound lease without extending its monotonic
-  expiry; exit deactivates it, and unsupported or unsafe coordination fails
-  closed. Callers acquire this lease before all backend-specific mutation locks
-  and acquire multiple workspace leases in canonical-key order. The weak
-  registry has an inactive-state reset seam and retains no external resource.
-  Activation reads exactly the version-1 `schema_version`, `backend`, and
-  nonnegative `generation` fields at
+  access and opens no resource. The frozen topology owns only one canonical
+  absolute `Path`; composed pinned subclasses materialize fresh workspaces from
+  it for operations and retain no caller-mutable workspace. Coordinator
+  construction is I/O-free. Its one exclusive borrow validates a finite
+  caller-supplied timeout, shares an in-process reentrant lock per canonical
+  workspace, and on POSIX opens, validates, advisory-locks, unlocks, and closes
+  the contained `config/.conversation_storage.lock` guard at the pinned root.
+  Same-thread reentry returns the same owner-thread/workspace-bound lease
+  without extending its monotonic expiry; exit deactivates it, and unsupported
+  or unsafe coordination fails closed. Callers acquire this lease before all
+  backend-specific mutation locks and acquire multiple workspace leases in
+  canonical-key order. The weak registry has an inactive-state reset seam and
+  retains no external resource. Each activation call owns one temporary frozen
+  topology. Activation reads exactly the version-1 `schema_version`, `backend`,
+  and nonnegative `generation` fields at
   `config/conversation_storage_state.json`; a missing marker returns filesystem
   generation zero without writing, malformed or unsupported state fails
-  closed, same-backend CAS is unwritten, and successful backend change uses the
-  workspace's contained atomic JSON replacement before returning the next
-  generation.
+  closed, same-backend CAS is unwritten, and successful backend change uses a
+  pinned operation-local workspace's contained atomic JSON replacement before
+  returning the next generation.
 - **Primary verification/documentation:**
   `tests/test_conversation_storage.py`,
   `tests/test_conversation_catalog.py`,
   `tests/test_conversation_event_store.py`,
   `tests/test_conversation_search.py`,
-  `docs/reference/conversation-catalog.md`, and
-  `docs/reference/conversation-transcripts.md`.
+  `docs/operations/filesystem-safety.md`,
+  `docs/reference/conversation-catalog.md`,
+  `docs/reference/conversation-transcripts.md`, and
+  `docs/reference/package-api.md`.
 
 ### `story_writing_agents.conversation_storage.contracts`
 
