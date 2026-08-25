@@ -927,19 +927,26 @@ every intermediate arrow. The current runtime graph is acyclic.
   tolerate a concurrent DELETE-mode `-journal` at their initial and final
   boundary checks only when it is a singly linked regular file, while still
   rejecting unsafe journal forms and every `-wal` or `-shm` sidecar. Explicit
-  provisioning builds and verifies a private temporary database,
-  installs it create-only by hard link under caller lease validation, syncs the
-  file and directory, and cleans only its own temporary artifacts. Under a
-  valid provisioning lease only, it may recover the single exact interrupted
+  fresh provisioning exhaustively validates its private temporary inode before
+  installation. Under repeated caller-lease and exact candidate checks it
+  creates the target hard link, revalidates before removing the temporary alias,
+  verifies the singly linked named target, and synchronizes the file and
+  directory; it does not repeat exhaustive domain verification through the
+  freshly installed name. Candidate checks include exact owned-pattern
+  temporary base names and the corresponding `-journal`, `-wal`, and `-shm`
+  suffixed name shapes; ambiguity is preserved and rejected. A lease or
+  candidate-validation failure after linking but before alias removal preserves
+  both names, and lease expiry never authorizes that alias cleanup. Under a valid
+  provisioning lease only, it may recover the single exact interrupted
   publication shape where the target and exactly one fixed-pattern temporary
   sibling are regular names for the same two-link inode with no sidecar or link
   ambiguity. It first exhaustively validates the intact target through a
   read-only connection that requires the exact two-link identity, then
   revalidates the lease, namespace, sidecars, identities, and link counts before
-  removing only that alias and synchronizing. Provisioning finally exhaustively
-  verifies the resulting singly linked target. Preflight and ordinary reads
-  remain observational, and every ambiguous or unsafe shape is preserved and
-  rejected.
+  removing only that alias and synchronizing. The outer provision path then
+  exhaustively verifies the resulting singly linked target. Preflight and
+  ordinary reads remain observational, and every ambiguous or unsafe shape is
+  preserved and rejected.
 - **Primary verification/documentation:**
   `tests/test_sqlite_database.py`,
   `tests/test_conversation_storage.py`,
