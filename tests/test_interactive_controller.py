@@ -2226,10 +2226,27 @@ class ControllerConversationStartupTests(ControllerTestCase):
             events.index("detach:source"),
         )
         rendered = "".join(callbacks.records)
-        self.assertIn("Subject: Source subject", rendered)
-        self.assertIn("Subject:", rendered)
-        self.assertIn("Destination subject", rendered)
-        self.assertGreaterEqual(rendered.count("Agent: lead"), 2)
+        self.assertEqual(
+            [
+                record
+                for record in callbacks.records
+                if record.startswith("--- Conversation scope")
+            ],
+            [
+                _conversation_scope_record(
+                    "source",
+                    source.conversation_id[:12],
+                    "Source subject",
+                    width=80,
+                ),
+                _conversation_scope_record(
+                    "destination",
+                    destination.conversation_id[:12],
+                    "Destination subject",
+                    width=80,
+                ),
+            ],
+        )
         self.assertEqual(
             load_cli_context(workspace).default_session_id,
             "destination",
@@ -2297,7 +2314,17 @@ class ControllerConversationStartupTests(ControllerTestCase):
             _error_record(InteractiveErrorCode.WORKSPACE_INVALID),
             rendered,
         )
-        self.assertEqual(rendered.count("Subject: Source subject"), 2)
+        self.assertEqual(
+            callbacks.records.count(
+                _conversation_scope_record(
+                    "source",
+                    source.conversation_id[:12],
+                    "Source subject",
+                    width=80,
+                )
+            ),
+            1,
+        )
 
     def test_archived_destination_selection_switches_to_lobby_without_rewrite(
         self,
@@ -6851,6 +6878,26 @@ class ControllerConversationCommandTests(ControllerTestCase):
             load_default_conversation(workspace, "session"),
             catalog.entries[1].conversation_id,
         )
+        self.assertEqual(
+            [
+                record
+                for record in callbacks.records
+                if record.startswith("--- Conversation scope")
+            ],
+            [
+                _conversation_scope_record("session", None, None),
+                _conversation_scope_record(
+                    "session",
+                    catalog.entries[0].conversation_id[:12],
+                    "Opening scene",
+                ),
+                _conversation_scope_record(
+                    "session",
+                    catalog.entries[1].conversation_id,
+                    "Opening scene",
+                ),
+            ],
+        )
         rendered = "".join(callbacks.records)
         self.assertEqual(rendered.count("Created and focused"), 2)
         self.assertIn(
@@ -7035,6 +7082,16 @@ class ControllerConversationCommandTests(ControllerTestCase):
                     state=terminal_module.ViewState.COMPLETED,
                 ),
             ],
+        )
+        self.assertEqual(
+            callbacks.records.count(
+                _conversation_scope_record(
+                    "session",
+                    _COLLIDING_A,
+                    "Ｍara   Motivation",
+                )
+            ),
+            1,
         )
 
         def conversation_view(
@@ -7781,7 +7838,16 @@ class ControllerConversationCommandTests(ControllerTestCase):
                         _error_record(expected_error, width=200),
                         rendered,
                     )
-                    self.assertGreaterEqual(rendered.count("Subject: Prior"), 2)
+                    self.assertEqual(
+                        callbacks.records.count(
+                            _conversation_scope_record(
+                                "session",
+                                prior.conversation_id[:12],
+                                "Prior",
+                            )
+                        ),
+                        1,
+                    )
 
     def test_omitted_use_selection_write_failure_preserves_prior_choice(
         self,
@@ -7818,7 +7884,16 @@ class ControllerConversationCommandTests(ControllerTestCase):
             _error_record(InteractiveErrorCode.WORKSPACE_INVALID, width=200),
             rendered,
         )
-        self.assertGreaterEqual(rendered.count("Subject: Prior"), 2)
+        self.assertEqual(
+            callbacks.records.count(
+                _conversation_scope_record(
+                    "session",
+                    prior.conversation_id[:12],
+                    "Prior",
+                )
+            ),
+            1,
+        )
         self.assertNotIn("selection-secret", rendered)
 
     def test_use_selection_write_failure_preserves_prior_effective_choice(
@@ -7856,15 +7931,25 @@ class ControllerConversationCommandTests(ControllerTestCase):
             _error_record(InteractiveErrorCode.WORKSPACE_INVALID, width=200),
             rendered,
         )
-        self.assertGreaterEqual(rendered.count("Subject: Prior"), 2)
+        self.assertEqual(
+            callbacks.records.count(
+                _conversation_scope_record(
+                    "session",
+                    prior.conversation_id[:12],
+                    "Prior",
+                )
+            ),
+            1,
+        )
         self.assertNotIn("selection-secret", rendered)
 
-    def test_external_missing_or_archived_selection_enters_lobby_in_memory_only(
+    def test_external_rename_archive_or_delete_is_detected_at_next_prompt(
         self,
     ) -> None:
         cases = (
-            ("missing", InteractiveErrorCode.CONVERSATION_NOT_FOUND),
+            ("renamed", None),
             ("archived", InteractiveErrorCode.CONVERSATION_ARCHIVED),
+            ("deleted", InteractiveErrorCode.CONVERSATION_NOT_FOUND),
         )
         for change, expected_code in cases:
             with self.subTest(change=change):
@@ -7872,14 +7957,19 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 catalog = MemoryConversationCatalog((selected,))
 
                 def change_catalog(_prompt: str) -> str:
-                    if change == "missing":
+                    if change == "deleted":
                         catalog.entries.clear()
+                    elif change == "renamed":
+                        catalog.entries[0] = replace(
+                            catalog.entries[0],
+                            subject="Externally revised",
+                        )
                     else:
                         catalog.entries[0] = replace(
                             catalog.entries[0],
                             status=ConversationStatus.ARCHIVED,
                         )
-                    return "/conversation subject Revised"
+                    return "/help"
 
                 workspace, _backend, _catalog, controller, callbacks = (
                     self.prepared_controller(
@@ -7908,10 +7998,37 @@ class ControllerConversationCommandTests(ControllerTestCase):
                     any(event.startswith("rename:") for event in catalog.events)
                 )
                 rendered = "".join(callbacks.records)
-                self.assertIn(_error_record(expected_code, width=200), rendered)
-                self.assertIn(
-                    _conversation_scope_record("session", None, None),
-                    rendered,
+                expected_scopes = [
+                    _conversation_scope_record(
+                        "session",
+                        selected.conversation_id[:12],
+                        "Selected",
+                    )
+                ]
+                if expected_code is None:
+                    expected_scopes.append(
+                        _conversation_scope_record(
+                            "session",
+                            selected.conversation_id[:12],
+                            "Externally revised",
+                        )
+                    )
+                    self.assertNotIn("[error conversation_", rendered)
+                else:
+                    expected_scopes.append(
+                        _conversation_scope_record("session", None, None)
+                    )
+                    self.assertIn(
+                        _error_record(expected_code, width=200),
+                        rendered,
+                    )
+                self.assertEqual(
+                    [
+                        record
+                        for record in callbacks.records
+                        if record.startswith("--- Conversation scope")
+                    ],
+                    expected_scopes,
                 )
 
     def test_selected_archive_selection_failure_is_compensated_or_fatal(
@@ -8284,6 +8401,72 @@ class ControllerConversationCommandTests(ControllerTestCase):
             rendered,
         )
         self.assertIn("Renamed c_fedcba9876 | Subject: Revised subject", rendered)
+        self.assertEqual(
+            [
+                record
+                for record in callbacks.records
+                if record.startswith("--- Conversation scope")
+            ],
+            [
+                _conversation_scope_record(
+                    "session",
+                    entry.conversation_id[:12],
+                    "Original",
+                ),
+                _conversation_scope_record(
+                    "session",
+                    entry.conversation_id[:12],
+                    "Revised subject",
+                ),
+            ],
+        )
+
+    def test_failed_scope_write_is_not_cached_then_success_is_cached(self) -> None:
+        entry = _conversation_metadata(_UNIQUE_C, "Selected")
+        _workspace, _backend, _catalog, controller, callbacks = (
+            self.prepared_controller(
+                entries=(entry,),
+                selected_id=entry.conversation_id,
+            )
+        )
+        controller._attached_session_id = "session"
+        controller._focused_conversation = entry
+        attempts = 0
+        real_write_scope = InteractiveTerminal.write_conversation_scope
+
+        def fail_once(output: object, **kwargs: object) -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise OSError("scope writer unavailable")
+            real_write_scope(output, **kwargs)
+
+        unpresented = object()
+        with mock.patch.object(
+            InteractiveTerminal,
+            "write_conversation_scope",
+            autospec=True,
+            side_effect=fail_once,
+        ):
+            with self.assertRaisesRegex(OSError, "scope writer unavailable"):
+                controller._write_attached_conversation_scope(unpresented)
+            presented = controller._write_attached_conversation_scope(
+                unpresented
+            )
+            repeated = controller._write_attached_conversation_scope(presented)
+
+        self.assertEqual(repeated, presented)
+        self.assertEqual(attempts, 2)
+        self.assertEqual(
+            callbacks.records,
+            [
+                _conversation_scope_record(
+                    "session",
+                    entry.conversation_id[:12],
+                    "Selected",
+                )
+            ],
+        )
 
     def test_selected_archive_chooses_first_active_successor_or_persists_null(
         self,
@@ -8549,7 +8732,16 @@ class ControllerConversationCommandTests(ControllerTestCase):
             "ready",
         )
         rendered = "".join(callbacks.records)
-        self.assertEqual(rendered.count("Subject: Persistent subject"), 2)
+        self.assertEqual(
+            callbacks.records.count(
+                _conversation_scope_record(
+                    "session",
+                    selected.conversation_id[:12],
+                    "Persistent subject",
+                )
+            ),
+            2,
+        )
         self.assertIn("Paused session; default retained", rendered)
         self.assertIn("Session: session (reopened)", rendered)
         self.assertTrue(

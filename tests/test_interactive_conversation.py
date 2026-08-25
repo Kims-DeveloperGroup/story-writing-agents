@@ -704,10 +704,23 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
         assert store is not None
         real_run = asyncio.run
         accepted_components: list[object] = []
+        scope_calls: list[dict[str, object]] = []
+        real_write_scope = terminal_module.InteractiveTerminal.write_conversation_scope
+
+        def capture_scope(output: object, **kwargs: object) -> None:
+            scope_calls.append(dict(kwargs))
+            real_write_scope(output, **kwargs)
+
         with (
             _capture_semantic_method(
                 "write_accepted_input",
                 accepted_components,
+            ),
+            mock.patch.object(
+                terminal_module.InteractiveTerminal,
+                "write_conversation_scope",
+                autospec=True,
+                side_effect=capture_scope,
             ),
             mock.patch.object(store, "read_context") as read_context,
             mock.patch.object(store, "append") as append,
@@ -730,6 +743,19 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             self.assertEqual(controller.run_session_lobby(), 0)
 
         conversation_id = entries[0].conversation_id
+        scope = {
+            "session_id": "session",
+            "conversation_handle": conversation_id[:12],
+            "conversation_subject": "Selected subject",
+        }
+        self.assertEqual(
+            scope_calls,
+            [
+                {**scope, "agent_id": LEAD_ORCHESTRATOR},
+                {**scope, "agent_id": CHARACTER_CUSTODIAN},
+                {**scope, "agent_id": LEAD_ORCHESTRATOR},
+            ],
+        )
         self.assertEqual(
             runtime.calls,
             [
