@@ -442,6 +442,12 @@ value editors, and Save/Cancel confirmations. Capable, narrow, `NO_COLOR`, and
 fallback views expose the complete text. Fallback cannot erase historical
 scrollback, but the current prompt reflects the current comparison.
 
+That same comparison labels the top-level choice exact plain `Save` while clean
+and exact plain `Save (*Required)` while dirty. When ANSI decoration is
+eligible, only `(*Required)` receives warning styling; the preceding separator
+space remains unstyled. The existing `[save required]` notice remains present,
+including in plain, `NO_COLOR`, narrow, and fallback views.
+
 Only entering Model or Effort runs discovery. Each entry uses the pending
 effective provider; Effort also uses the pending effective model. Model order
 is Inherit, provider-order discovered models, Current custom when the pending
@@ -462,12 +468,23 @@ Settings pickers and prompts follow the same transient input
 lifecycle as all capable input; fallback readers retain printed input and add no
 synthetic final picker frame. Nested Escape returns to
 the parent silently without a Current/Pending snapshot or cancellation record.
-Save and Cancel each open a transient yes/no confirmation with a changed-only
-Current/Pending context: only differing fields appear in both sections, each
-with a `(Changed)` cue, while no differences show `No pending settings changes.`
-YES commits the requested action; NO or nested Escape returns to the settings
-picker, and invalid fallback input retries. Top-
-level Escape, Ctrl-C, or EOF cancels the whole workflow without writing. The
+In Language, Persona, Maximum debate rounds, Provider, Model, Custom model, and
+Effort, the first valid commit applies the normalized pending value and keeps
+the editor active. The next valid commit of that same normalized value returns
+one level silently; a different valid value applies, stays active, and re-arms
+the comparison. Invalid input, authentication failure, Custom model navigation,
+and editor re-entry reset it. This is consecutive semantic commit policy in the
+`/settings` controller, not raw-key timing or generic Picker/Prompt behavior.
+
+Save always opens its transient yes/no confirmation. Explicit Cancel and root
+Settings Escape share one action: clean settings exit immediately without a
+confirmation, while dirty settings open the existing Cancel confirmation. Each
+confirmation has changed-only Current/Pending context: only differing fields
+appear in both sections, each with a `(Changed)` cue, while no differences in
+Save confirmation show `No pending settings changes.` YES commits the requested
+action; NO or confirmation Escape returns to the root Settings picker, and
+invalid fallback input retries. Ctrl-C or EOF still cancels the whole workflow
+without writing. The
 submitted `/settings` line has already been cleared with the capable main frame;
 its history entry remains. Ordinary-line fallback leaves its printed input
 visible, with the same history semantics. `/cancel` is literal model text in the

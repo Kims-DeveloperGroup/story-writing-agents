@@ -1119,20 +1119,24 @@ every intermediate arrow. The current runtime graph is acyclic.
   from the exact pending effective model, while Antigravity effort choices stay
   globally low, medium, and high without slug inference. The summary projection
   gives every settings value editor pending, not-saved, and top-level Save
-  guidance. The top-level Settings projection uses the existing notice semantics
-  to expose a save-required warning only when the pending configuration differs
-  from its opening baseline; the warning is absent initially, after a complete
-  revert, and from nested editors and Save/Cancel confirmations. The projection
+  guidance. On every top-level read, structural inequality between the pending
+  configuration and opening baseline adds `(*Required)` to the Save label and
+  retains the existing save-required warning notice; both are absent initially
+  and after a complete revert, while the notice remains absent from nested
+  editors and Save/Cancel confirmations. The projection
   names both providers' model/effort
   rows, so changed-only confirmations can identify changes to either without
   changing the active backend or runtime snapshot. Editors contain no repeated
-  Current/Pending context panel. Explicit Save and Cancel actions each use one
-  selectable YES/NO confirmation whose preceding context contains only changed
-  Current/Pending properties in stable settings and roster order; each changed
-  value has an explicit text cue and warning role, and an unchanged candidate
-  contains only an explicit no-changes notice without empty sections. NO or
-  nested Escape returns to the settings menu, while interrupt or EOF preserves
-  whole-flow cancellation. Provider-bound routes pass the submitted text
+  Current/Pending context panel. Explicit Save uses one selectable YES/NO
+  confirmation whose preceding context contains only changed Current/Pending
+  properties in stable settings and roster order; each changed value has an
+  explicit text cue and warning role, and an unchanged candidate contains only
+  an explicit no-changes notice without empty sections. Explicit Cancel and
+  root Settings Escape share one action: an unchanged candidate exits
+  immediately, while a structurally changed candidate uses the same selectable
+  confirmation context. Confirmation NO or nested Escape returns to the
+  settings menu, while Ctrl-C or EOF preserves whole-flow cancellation.
+  Provider-bound routes pass the submitted text
   unchanged to `StoryRuntime`; reference UI therefore emits only ordinary
   `${path}` or `${path}#Lx-Ly` tokens for the existing runtime parser and never
   authorizes a read. The controller borrows the filesystem-authoritative
@@ -1215,8 +1219,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   `AgentBackend` retains the actual access claim, manifest, and provider-thread
   coordination, while provider adapters retain binding, staging, and provider-
   native state and `provider_process` owns subprocess resources. The settings flow
-  retains only one call-local immutable baseline and pending candidate,
-  constructs its changed-only
+  retains only one call-local immutable baseline and pending candidate. Each
+  retained Language, Persona, Maximum debate rounds, Provider, Model, Custom
+  model, and Effort editor owns one entry-local normalized last-successful
+  semantic commit: the first success arms it, a different success replaces it,
+  and a second consecutive success of the same value returns silently to the
+  parent. Invalid input, authentication failure, Custom-model navigation, and
+  editor re-entry reset or recreate that state. The flow constructs its changed-only
   confirmation context, and delegates exact-byte conflict detection and guarded
   persistence to `interactive_settings`; cancellation or failed saves do not
   mutate the active backend or runtime snapshot. Accepted user-message and
@@ -1546,7 +1555,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `InteractivePickerInput`, `Choice`, `Picker`, `Prompt`, `ControlOutcome`, and
   `ControlOutcomeKind` bindings provide one resource-free generic picker input
   boundary without exposing opaque choice identities, terminal leaves, or a
-  new package-supported API. Unlisted `InteractivePromptInput` binds one
+  new package-supported API. Existing `Choice` values may carry one optional
+  validated plain warning suffix; capable ANSI decorates only that suffix when
+  no disabled, selected, or highlighted role supersedes it, while plain,
+  `NO_COLOR`, and fallback projections retain the exact same text. This adds no
+  facade export. Unlisted `InteractivePromptInput` binds one
   resource-free semantic cancellable-line capability for nested settings input;
   callback and stream factories respectively provide deterministic plain and
   sole-driver-backed implementations without changing the exact public
@@ -1619,7 +1632,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   design-component contract outside the general `Component` union, the closed
   `Prompt`, `Panel`, `Section`, `Field`, `Notice`, `Message`, `Record`,
   `ListView`, `SuggestionPalette`, and `Picker` component vocabulary, shared
-  `Choice`, `RenderedFrame`, internal `InputPromptView` and
+  `Choice` with its optional keyword-only validated plain `warning_suffix`,
+  `RenderedFrame`, internal `InputPromptView` and
   `RenderedInputFrame` transfer contracts outside the closed component
   vocabulary, terminal-text sanitization, and deterministic physical-cell
   measurement.
@@ -1635,7 +1649,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   validated semantic picker and its
   call-local window origin, while viewport values carry one contiguous
   at-most-seven-choice slice; stable choice identities remain internal
-  correlation keys. Composer values retain exact accepted lines
+  correlation keys. A choice owns its immutable warning-suffix semantics but
+  no styling or control precedence. Composer values retain exact accepted lines
   and derive joined content and code-point counts without mutation. Startup
   welcome values carry only one validated semantic stage and no terminal,
   presentation, provider, or authentication data. Models create no ANSI and own
@@ -1738,7 +1753,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   and an ordinal/label-only selected-outside-window summary;
   `render_picker_fallback` renders the complete numbered list and semantic input
   prompt. Both keep opaque identities internal and preserve equivalent
-  sanitized plain and fixed-ANSI meaning. `format_agent_reply_content`
+  sanitized plain and fixed-ANSI meaning. Their segment-aware physical-cell
+  wrapping preserves an optional choice warning suffix across narrow lines;
+  fixed ANSI decorates only suffix characters on otherwise available rows,
+  while disabled, selected, and highlighted roles retain precedence and every
+  rich projection strips to the exact plain, `NO_COLOR`, and fallback text.
+  `format_agent_reply_content`
   recognizes only a complete strict JSON object or array, rejects duplicate
   object keys and non-finite constants, and preserves key order and Unicode in
   a two-space-indented projection; malformed JSON, scalars, embedded prose, and

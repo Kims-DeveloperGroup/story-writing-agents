@@ -652,6 +652,7 @@ class Choice:
     identity: str
     label: str
     _: KW_ONLY
+    warning_suffix: str | None = None
     description: str | None = None
     enabled: bool = True
     disabled_reason: str | None = None
@@ -659,6 +660,7 @@ class Choice:
     def __post_init__(self) -> None:
         _require_text("identity", self.identity)
         _require_text("label", self.label)
+        _require_optional_text("warning_suffix", self.warning_suffix)
         _require_optional_text("description", self.description)
         if type(self.enabled) is not bool:
             raise TypeError("enabled must be a bool")

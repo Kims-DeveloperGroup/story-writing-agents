@@ -554,14 +554,15 @@ from the nested editor; Ctrl-C and EOF cancel the whole workflow. Nested
 settings input does not navigate or mutate main history and receives no command
 completion. These reads follow the same universal capable cleanup and
 honest fallback visibility as every other input route; nested Escape returns
-silently without a snapshot or cancellation record. Save and Cancel each open a
-transient yes/no confirmation. Its context shows only changed Current/Pending
-fields and marks
-each displayed value `(Changed)`, and shows `No pending settings changes.` when
-there is no diff. Committed YES proceeds; committed NO or nested Escape returns
-to the settings picker; invalid fallback input retries with a
-trusted notice. Top-level cancellation does not claim a snapshot that was not
-rendered.
+silently without a snapshot or cancellation record. Save opens a transient
+yes/no confirmation. Cancel and root Settings Escape share a controller-owned
+action: they exit directly when Current and Pending are equal and open that
+transient confirmation only when they differ. Confirmation context shows only
+changed Current/Pending fields and marks each displayed value `(Changed)`;
+unchanged Save confirmation shows `No pending settings changes.` Committed YES
+proceeds; committed NO or confirmation Escape returns to the root settings
+picker; invalid fallback input retries with a trusted notice. Top-level
+cancellation does not claim a snapshot that was not rendered.
 
 Capable main reads render the existing semantic `SuggestionPalette` in plain or
 fixed ANSI at the active width. `NO_COLOR` removes only decoration. Opening

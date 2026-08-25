@@ -42,8 +42,10 @@
 > fields; entering Model or Effort performs one fresh bounded discovery for the
 > pending effective provider. Within `/settings` only, valid value commits keep
 > the active editor open with updated selection/default and one replacing inline
-> completed success result; resume pickers and Save/Cancel confirmations remain
-> one-shot.
+> completed success result; a second consecutive commit of the same normalized
+> value returns one level. The controller also marks dirty Save labels and
+> unifies explicit Cancel with root Settings Escape. Generic picker/prompt reads,
+> resume pickers, and Save/Cancel confirmations remain one-shot.
 
 ## Public API
 
@@ -500,11 +502,13 @@ Settings custom-model and numeric values use a separate context-free semantic
 line for validation. A valid commit applies the pending value and immediately
 reopens the same prompt with its default updated and one inline `Notice` using
 `SemanticRole.SUCCESS` and `ViewState.COMPLETED`; a later valid commit replaces
-that result. The prompt remains `ViewState.FOCUSED`. Escape returns one settings
-level without undoing applied pending values, while Ctrl-C or EOF cancels the
-whole settings transaction. In fallback an exact ESC line returns one level,
-while `/cancel` remains literal input. The same sole driver owns raw input,
-redraw, cleanup, and restoration.
+that result. The prompt remains `ViewState.FOCUSED`. The `/settings` controller
+may consume the next commit of that same normalized value as a silent return to
+the parent; the Prompt itself still completes once per read and has no key-timing
+policy. Escape returns one settings level without undoing applied pending
+values, while Ctrl-C or EOF cancels the whole settings transaction. In fallback
+an exact ESC line returns one level, while `/cancel` remains literal input. The
+same sole driver owns raw input, redraw, cleanup, and restoration.
 
 One permanent input latch now serves every input route on a stream-backed
 terminal. Construction is resource-free; the first actual input read makes the
@@ -563,15 +567,17 @@ semantic reads. Under `FALLBACK` it keeps the ordinary callback appearance.
 The submitted subject text and its controller meaning are unchanged. The
 normative lifecycle is in the [design contract](../design/interactive-cli-design-system.md#submitted-input-lifecycle).
 
-Save and Cancel each show a transient selectable confirmation with highlighted
-`YES` and `NO` choices. Its preceding context contains only fields whose
-Current and Pending values differ, and both displayed values carry the
-`(Changed)` cue; an unchanged state shows only `No pending settings changes.`
-without empty Current or Pending sections. These confirmations are one-shot:
-selecting `YES` commits and closes the requested action, while `NO` or nested
-Escape closes the confirmation and returns to the settings picker.
-Top-level Escape, Ctrl-C, and EOF cancel without writing and do not imply a
-snapshot was rendered.
+Save shows a transient selectable confirmation with highlighted `YES` and `NO`
+choices. Explicit Cancel and root Settings Escape invoke the same controller
+action: clean state exits immediately without a confirmation, while dirty state
+shows the existing transient Cancel confirmation. Its preceding context
+contains only fields whose Current and Pending values differ, and both
+displayed values carry the `(Changed)` cue; unchanged Save confirmation shows
+only `No pending settings changes.` without empty Current or Pending sections.
+These confirmations are one-shot: selecting `YES` commits and closes the
+requested action, while `NO` or confirmation Escape returns to the root
+Settings picker. Ctrl-C and EOF still cancel the whole flow without writing and
+do not imply a snapshot was rendered.
 
 <a id="provider-model-and-effort-pickers"></a>
 
@@ -594,15 +600,19 @@ discovery again; leaving and re-entering does. Effort additionally resolves the
 pending effective model from the agent value and then workspace fallback.
 
 Language, Persona, Maximum debate rounds, Provider, Model, Custom model, and
-Effort remain active after a valid Enter. A picker reopens in `ViewState.OPEN`
-with its prompt focused and selection updated; a prompt reopens in
-`ViewState.FOCUSED` with its default updated. The latest applied value appears
+Effort remain active after a first valid Enter. A picker reopens in
+`ViewState.OPEN` with its prompt focused and selection updated; a prompt reopens
+in `ViewState.FOCUSED` with its default updated. The latest applied value appears
 as the only visible inline `SemanticRole.SUCCESS`/`ViewState.COMPLETED` notice,
-replacing the previous result. Escape returns one level through Custom model >
-Model > Agent settings > Agents > Settings; Provider and Effort return directly
-to Agent settings. Authentication launched while choosing Provider is a
-subordinate action and returns to Provider after its result. Ctrl-C or EOF at
-any level cancels the whole settings transaction.
+replacing the previous result. The next valid commit returns one level silently
+when it has the same normalized value; a different valid value applies, remains
+active, and re-arms that comparison. Invalid input, authentication failure,
+Custom model navigation, and editor re-entry reset it. This controller state is
+semantic and consecutive, with no raw-key timing window. Escape returns one
+level through Custom model > Model > Agent settings > Agents > Settings;
+Provider and Effort return directly to Agent settings. Authentication launched
+while choosing Provider is a subordinate action and returns to Provider after
+its result. Ctrl-C or EOF at any level cancels the whole settings transaction.
 
 Every one of those retained value editors also always renders the instruction
 `Entered changes remain pending in memory and are not saved; choose Save in
@@ -621,6 +631,13 @@ settings, every value editor, and Save/Cancel confirmations. Capable, narrow,
 an older prompt in historical scrollback, but the current top-level prompt is
 recomputed and truthful. Existing instruction and `Notice` semantics are used;
 there is no new terminal primitive or global picker policy.
+
+The same comparison projects the Save label as exact plain `Save` when clean
+and exact plain `Save (*Required)` when dirty. Fixed ANSI warning decoration,
+when eligible, is limited to `(*Required)`; the preceding separator space and
+`Save` prefix stay ordinary. Plain, `NO_COLOR`, narrow, and fallback projections
+preserve the exact plain label. The label does not replace the existing warning
+`Notice`.
 
 Model choices are ordered Inherit, discovered models in provider order,
 Current custom when the pending value is not in that projection, and Custom
@@ -1015,9 +1032,11 @@ caller supplies one semantic prompt and immutable choices whose opaque
 identities are returned on commit but never rendered as picker identities.
 
 The generic picker remains commit-once. `/settings` alone may consume that
-commit and immediately open a new value-editor read with updated state and an
-inline success notice. This is not global navigation policy. Save/Cancel
-confirmations and context-changing consumers remain one-shot, especially
+commit, immediately open a new value-editor read with updated state and an
+inline success notice, then interpret a consecutive commit of the same
+normalized value as a silent parent return. The generic Picker has no retained
+state, second-Enter rule, or raw-key timing window. Save/Cancel confirmations
+and context-changing consumers remain one-shot, especially
 `/session resume` and `/conversation resume`: after selection the picker is no
 longer active, its capable frame is cleared, and fallback text may remain only
 as inactive scrollback.
