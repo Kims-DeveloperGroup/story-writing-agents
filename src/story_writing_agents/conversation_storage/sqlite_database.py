@@ -240,6 +240,7 @@ _ResultT = TypeVar("_ResultT")
 _ConnectionOperation = Callable[[Any], _ResultT]
 _SnapshotValidator = Callable[[Any], None]
 _LeaseValidator = Callable[[], None]
+_TargetValidator = Callable[[], None]
 
 
 class SQLiteDatabase:
@@ -341,9 +342,22 @@ class SQLiteDatabase:
         except SQLiteDatabaseMissingError:
             pass
         except SQLiteDatabaseSecurityError:
+
+            def validate_interrupted_target() -> None:
+                self._run_connection(
+                    module,
+                    self._path,
+                    read_only=True,
+                    expected_link_count=2,
+                    exhaustive_verification=True,
+                    validate_snapshot=validate_snapshot,
+                    operation=lambda _connection: None,
+                )
+
             _recover_interrupted_provisioning_alias(
                 self._path,
                 validate_lease=validate_lease,
+                validate_target=validate_interrupted_target,
             )
             self._run_connection(
                 module,
@@ -509,6 +523,7 @@ class SQLiteDatabase:
         *,
         read_only: bool,
         allow_live_rollback_journal: bool = False,
+        expected_link_count: int = 1,
         exhaustive_verification: bool = False,
         validate_snapshot: _SnapshotValidator,
         operation: _ConnectionOperation[_ResultT],
@@ -521,7 +536,10 @@ class SQLiteDatabase:
             path,
             allow_live_rollback_journal=allow_live_rollback_journal,
         )
-        identity = _verify_database_header(path)
+        identity = _verify_database_header(
+            path,
+            expected_link_count=expected_link_count,
+        )
         connection: Any | None = None
         transaction_started = False
         committed = False
@@ -530,7 +548,11 @@ class SQLiteDatabase:
         cleanup_failure: tuple[BaseException, TracebackType | None] | None = None
         try:
             connection = _connect(module, path, read_only=read_only)
-            _verify_named_file(path, expected_identity=identity)
+            _verify_named_file(
+                path,
+                expected_identity=identity,
+                expected_link_count=expected_link_count,
+            )
             _configure_connection(module, connection, verification=True)
             if read_only:
                 _execute(module, connection, "BEGIN")
@@ -565,7 +587,11 @@ class SQLiteDatabase:
                 validate_lease()
                 _execute(module, connection, "COMMIT")
                 committed = True
-            _verify_named_file(path, expected_identity=identity)
+            _verify_named_file(
+                path,
+                expected_identity=identity,
+                expected_link_count=expected_link_count,
+            )
         except BaseException as exc:
             body_failure = exc
             if isinstance(exc, Exception):
@@ -596,8 +622,11 @@ class SQLiteDatabase:
             path,
             allow_live_rollback_journal=allow_live_rollback_journal,
         )
-        final_identity = _verify_database_header(path)
-        if any((*identity, *final_identity)) and final_identity != identity:
+        final_identity = _verify_database_header(
+            path,
+            expected_link_count=expected_link_count,
+        )
+        if final_identity != identity:
             raise SQLiteDatabaseSecurityError()
         return result
 
@@ -984,7 +1013,11 @@ def _raise_mapped_sqlite_exception(
     raise SQLiteDatabaseUnavailableError() from None
 
 
-def _verify_database_header(path: Path) -> tuple[int, int]:
+def _verify_database_header(
+    path: Path,
+    *,
+    expected_link_count: int = 1,
+) -> tuple[int, int]:
     """Verify the exact named file and immutable header identity read-only."""
 
     try:
@@ -993,10 +1026,13 @@ def _verify_database_header(path: Path) -> tuple[int, int]:
         raise SQLiteDatabaseMissingError() from None
     except OSError:
         raise SQLiteDatabaseUnavailableError() from None
-    if not stat.S_ISREG(named.st_mode):
-        raise SQLiteDatabaseFormatError()
-    if named.st_nlink != 1:
+    if stat.S_ISLNK(named.st_mode):
         raise SQLiteDatabaseSecurityError()
+    named_identity = _meaningful_regular_file_identity(
+        named,
+        expected_link_count=expected_link_count,
+        nonregular_is_security=False,
+    )
 
     flags = os.O_RDONLY
     for name in ("O_CLOEXEC", "O_NOINHERIT", "O_BINARY", "O_NOFOLLOW", "O_NONBLOCK"):
@@ -1009,11 +1045,12 @@ def _verify_database_header(path: Path) -> tuple[int, int]:
         except (AttributeError, OSError):
             pass
         opened = os.fstat(descriptor)
-        if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
-            raise SQLiteDatabaseSecurityError()
-        opened_identity = (opened.st_dev, opened.st_ino)
-        named_identity = (named.st_dev, named.st_ino)
-        if any((*opened_identity, *named_identity)) and opened_identity != named_identity:
+        opened_identity = _meaningful_regular_file_identity(
+            opened,
+            expected_link_count=expected_link_count,
+            nonregular_is_security=True,
+        )
+        if opened_identity != named_identity:
             raise SQLiteDatabaseSecurityError()
         header = os.read(descriptor, _DATABASE_HEADER_SIZE)
     except _SQLiteDatabaseError:
@@ -1043,15 +1080,16 @@ def _verify_database_header(path: Path) -> tuple[int, int]:
         raise SQLiteDatabaseVersionError()
     if encoding != _SQLITE_UTF8_ENCODING:
         raise SQLiteDatabaseFormatError()
-    return (named.st_dev, named.st_ino)
+    return named_identity
 
 
 def _verify_named_file(
     path: Path,
     *,
     expected_identity: tuple[int, int] | None,
+    expected_link_count: int = 1,
 ) -> tuple[int, int]:
-    """Require a safe singly-linked regular named database file."""
+    """Require a safe regular named database with the expected link count."""
 
     try:
         value = os.stat(path, follow_symlinks=False)
@@ -1059,16 +1097,14 @@ def _verify_named_file(
         raise SQLiteDatabaseMissingError() from None
     except OSError:
         raise SQLiteDatabaseUnavailableError() from None
-    if not stat.S_ISREG(value.st_mode):
-        raise SQLiteDatabaseFormatError()
-    if value.st_nlink != 1:
+    if stat.S_ISLNK(value.st_mode):
         raise SQLiteDatabaseSecurityError()
-    identity = (value.st_dev, value.st_ino)
-    if (
-        expected_identity is not None
-        and any((*identity, *expected_identity))
-        and identity != expected_identity
-    ):
+    identity = _meaningful_regular_file_identity(
+        value,
+        expected_link_count=expected_link_count,
+        nonregular_is_security=False,
+    )
+    if expected_identity is not None and identity != expected_identity:
         raise SQLiteDatabaseSecurityError()
     return identity
 
@@ -1083,6 +1119,7 @@ def _recover_interrupted_provisioning_alias(
     target: Path,
     *,
     validate_lease: _LeaseValidator,
+    validate_target: _TargetValidator,
 ) -> None:
     """Remove only one exact owned hard-link alias left by provisioning."""
 
@@ -1090,15 +1127,7 @@ def _recover_interrupted_provisioning_alias(
     _reject_symlinked_database_parent(target)
     target_identity = _recovery_file_identity(target)
     parent = target.parent
-    try:
-        with os.scandir(parent) as entries:
-            candidates = tuple(
-                Path(entry.path)
-                for entry in entries
-                if _is_provisioning_temporary_name(entry.name)
-            )
-    except OSError:
-        raise SQLiteDatabaseUnavailableError() from None
+    candidates = _provisioning_alias_candidates(parent)
     if len(candidates) != 1:
         raise SQLiteDatabaseSecurityError()
     alias = candidates[0]
@@ -1107,12 +1136,19 @@ def _recover_interrupted_provisioning_alias(
     _reject_sidecars(target)
     _reject_sidecars(alias)
 
+    validate_target()
     validate_lease()
+    _reject_symlinked_database_parent(target)
+    if _provisioning_alias_candidates(parent) != (alias,):
+        raise SQLiteDatabaseSecurityError()
+    _reject_sidecars(target)
+    _reject_sidecars(alias)
     if (
         _recovery_file_identity(target) != target_identity
         or _recovery_file_identity(alias) != target_identity
     ):
         raise SQLiteDatabaseSecurityError()
+    validate_lease()
     try:
         alias.unlink()
     except FileNotFoundError:
@@ -1134,6 +1170,25 @@ def _recover_interrupted_provisioning_alias(
     _synchronize_directory(parent)
 
 
+def _provisioning_alias_candidates(parent: Path) -> tuple[Path, ...]:
+    """Return every contained sibling with the owned temporary-name shape."""
+
+    try:
+        with os.scandir(parent) as entries:
+            return tuple(
+                sorted(
+                    (
+                        Path(entry.path)
+                        for entry in entries
+                        if _is_provisioning_temporary_name(entry.name)
+                    ),
+                    key=os.fspath,
+                )
+            )
+    except OSError:
+        raise SQLiteDatabaseUnavailableError() from None
+
+
 def _is_provisioning_temporary_name(name: str) -> bool:
     """Report whether one sibling name has the exact owned mkstemp shape."""
 
@@ -1153,9 +1208,32 @@ def _recovery_file_identity(path: Path) -> tuple[int, int]:
         raise SQLiteDatabaseSecurityError() from None
     except OSError:
         raise SQLiteDatabaseUnavailableError() from None
-    if not stat.S_ISREG(value.st_mode) or value.st_nlink != 2:
+    return _meaningful_regular_file_identity(
+        value,
+        expected_link_count=2,
+        nonregular_is_security=True,
+    )
+
+
+def _meaningful_regular_file_identity(
+    value: os.stat_result,
+    *,
+    expected_link_count: int,
+    nonregular_is_security: bool,
+) -> tuple[int, int]:
+    """Return one meaningful regular-file identity with an exact link count."""
+
+    if not stat.S_ISREG(value.st_mode):
+        if nonregular_is_security:
+            raise SQLiteDatabaseSecurityError()
+        raise SQLiteDatabaseFormatError()
+    if value.st_nlink != expected_link_count:
         raise SQLiteDatabaseSecurityError()
-    return (value.st_dev, value.st_ino)
+    device = value.st_dev
+    inode = value.st_ino
+    if type(device) is not int or device <= 0 or type(inode) is not int or inode <= 0:
+        raise SQLiteDatabaseSecurityError()
+    return device, inode
 
 
 def _reject_symlinked_database_parent(path: Path) -> None:

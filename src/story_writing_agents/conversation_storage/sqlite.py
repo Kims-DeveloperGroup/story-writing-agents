@@ -218,6 +218,12 @@ class SQLiteConversationCatalog(_SQLiteAdapter):
                 )
                 if existing is not None:
                     continue
+                if _event_identity_exists(
+                    connection,
+                    session,
+                    conversation_id,
+                ):
+                    raise SQLiteDatabaseFormatError()
                 timestamp = datetime.now(UTC).isoformat()
                 metadata = ConversationMetadata(
                     schema_version=CONVERSATION_METADATA_SCHEMA_VERSION,
@@ -468,8 +474,20 @@ class SQLiteConversationEventStore(_SQLiteAdapter):
     ) -> ConversationContextWindow:
         """Select the fixed-policy newest suffix of complete turns."""
 
-        events = self.read(session_id, conversation_id)
-        return select_bounded_conversation_context(events)
+        session, conversation = _validate_identity(session_id, conversation_id)
+
+        def read_context_from_connection(
+            connection: object,
+        ) -> ConversationContextWindow:
+            _require_metadata(connection, session, conversation)
+            _, context = _select_events_and_context(
+                connection,
+                session,
+                conversation,
+            )
+            return context
+
+        return self._read(read_context_from_connection)
 
 
 class SQLiteConversationArchiveAdapter(_SQLiteAdapter):
@@ -901,7 +919,7 @@ def _validate_event_collection(
     *,
     session_id: str,
     conversation_id: str,
-) -> None:
+) -> ConversationContextWindow:
     """Verify one exact identity-bound contiguous transcript and turn slots."""
 
     if type(events) is not tuple:
@@ -915,7 +933,7 @@ def _validate_event_collection(
             or event.sequence != expected_sequence
         ):
             raise ValueError("conversation transcript identity or order is invalid")
-    select_bounded_conversation_context(events)
+    return select_bounded_conversation_context(events)
 
 
 def _select_metadata(
@@ -958,6 +976,21 @@ def _select_events(
 ) -> tuple[ConversationEvent, ...]:
     """Read and validate one authoritative event sequence."""
 
+    events, _ = _select_events_and_context(
+        connection,
+        session_id,
+        conversation_id,
+    )
+    return events
+
+
+def _select_events_and_context(
+    connection: object,
+    session_id: str,
+    conversation_id: str,
+) -> tuple[tuple[ConversationEvent, ...], ConversationContextWindow]:
+    """Read one transcript and return its single validated context selection."""
+
     rows = connection.execute(  # type: ignore[attr-defined]
         _EVENT_SELECT
         + " WHERE session_id = ? AND conversation_id = ? ORDER BY sequence",
@@ -965,14 +998,33 @@ def _select_events(
     ).fetchall()
     events = tuple(_event_from_row(row) for row in rows)
     try:
-        _validate_event_collection(
+        context = _validate_event_collection(
             events,
             session_id=session_id,
             conversation_id=conversation_id,
         )
     except (TypeError, ValueError):
         raise SQLiteDatabaseFormatError() from None
-    return events
+    return events, context
+
+
+def _event_identity_exists(
+    connection: object,
+    session_id: str,
+    conversation_id: str,
+) -> bool:
+    """Report bounded event presence for one metadata allocation identity."""
+
+    row = connection.execute(  # type: ignore[attr-defined]
+        "SELECT 1 FROM conversation_events "
+        "WHERE session_id = ? AND conversation_id = ? LIMIT 1",
+        (session_id, conversation_id),
+    ).fetchone()
+    if row is None:
+        return False
+    if type(row) is not tuple or row != (1,):
+        raise SQLiteDatabaseFormatError()
+    return True
 
 
 def _next_event_sequence(

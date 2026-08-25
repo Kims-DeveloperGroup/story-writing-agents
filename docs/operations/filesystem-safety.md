@@ -344,18 +344,22 @@ path-mismatched record raises `WorkspaceFormatError`. Symlinks raise
 ## SQLite conversation-storage safety
 
 The optional adapter resolves only the fixed contained path
-`discussion_logs/conversation_storage.sqlite3`. It requires the named database
-and opened descriptor to identify the same regular, singly linked file and
-rechecks that identity after each operation. Its database owner reads the
-canonical workspace root once at construction and retains the resulting
-workspace key and database path; later mutation of the supplied
-`Workspace.root` cannot retarget the database. Connections use non-creating
-SQLite URI modes: `mode=ro` for reads and `mode=rw` for writes. Module import
-performs no I/O. Adapter construction never opens or creates the database and
-does not load `sqlite3`; resolving a string or path-like workspace still
-follows the ordinary `Workspace` construction contract. `sqlite3` is loaded and
-probed only when an operation is requested, and SQLite 3.7.16 or later is
-required.
+`discussion_logs/conversation_storage.sqlite3`. The named and opened database
+must have the same meaningful regular-file identity with the exact link count
+required by the operation. A symlink at the database name raises
+`WorkspaceSecurityError`; a stable named entry that is nonregular but not a
+symlink raises `WorkspaceFormatError`. A nonmeaningful or mismatched identity,
+an unsafe opened type, replacement, or unexpected link count fails closed as
+`WorkspaceSecurityError`. The adapter rechecks identity after each operation.
+Its database owner reads the canonical workspace root once at construction and
+retains the resulting workspace key and database path; later mutation of the
+supplied `Workspace.root` cannot retarget the database. Connections use
+non-creating SQLite URI modes: `mode=ro` for reads and `mode=rw` for writes.
+Module import performs no I/O. Adapter construction never opens or creates the
+database and does not load `sqlite3`; resolving a string or path-like workspace
+still follows the ordinary `Workspace` construction contract. `sqlite3` is
+loaded and probed only when an operation is requested, and SQLite 3.7.16 or
+later is required.
 
 Header verification requires the SQLite format header, DELETE rollback-journal
 read/write versions, UTF-8 encoding, application ID `0x53574143` (`SWAC`), and
@@ -441,9 +445,12 @@ preserved.
 Explicit leased provisioning has one additional, narrow interrupted-publication
 cleanup. If and only if the target and exactly one provisioning-pattern sibling
 are regular names for the same two-link inode, with no sidecars or other link
-ambiguity, provisioning removes that sibling alias, synchronizes the target and
-directory, and exhaustively verifies the target. Preflight and ordinary reads
-never perform this cleanup. Symlinks, wrong or multiple candidates, a different
+ambiguity, provisioning exhaustively validates the intact two-link target
+before any unlink. It then rechecks the lease, exact candidate set, sidecar
+absence, and target/alias identity. Only then does it remove that sibling alias
+and synchronize the target and directory; the recovered single-link target is
+exhaustively validated again before success. Preflight and ordinary reads never
+perform this cleanup. Symlinks, wrong or multiple candidates, a different
 inode, an extra link, any sidecar, and corrupt or unsupported target content
 remain fail-closed conditions; suspicious names and target content are not
 rewritten. This recognizes residue from the adapter's interrupted hard-link

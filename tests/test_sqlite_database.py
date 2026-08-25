@@ -9,7 +9,7 @@ import threading
 import unittest
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Callable
+from typing import Callable, cast
 from unittest import mock
 
 from story_writing_agents import (
@@ -153,6 +153,26 @@ def _assert_exhaustive_statements(
     )
 
 
+def _stat_identity_witness(
+    value: os.stat_result,
+    *,
+    device: object,
+    inode: object,
+    link_count: int | None = None,
+) -> os.stat_result:
+    """Return a controlled no-follow stat value with an exact identity."""
+
+    return cast(
+        os.stat_result,
+        mock.Mock(
+            st_mode=value.st_mode,
+            st_nlink=value.st_nlink if link_count is None else link_count,
+            st_dev=device,
+            st_ino=inode,
+        ),
+    )
+
+
 class SQLiteDatabaseVerificationTests(unittest.TestCase):
     def test_runtime_minimum_is_3716_and_older_or_missing_sqlite_is_unavailable(
         self,
@@ -260,6 +280,201 @@ class SQLiteDatabaseVerificationTests(unittest.TestCase):
         with self.assertRaises(WorkspaceSecurityError):
             preflight_sqlite_conversation_storage(linked_workspace)
         self.assertEqual(storage_snapshot(linked_workspace), before)
+
+    def test_database_name_symlink_is_security_and_preserves_both_workspaces(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        outside = initialized_workspace(self)
+        provision(outside)
+        target = database_path(workspace)
+        outside_target = database_path(outside)
+        try:
+            os.symlink(outside_target, target)
+        except OSError as exc:
+            self.skipTest(f"symbolic links are unsupported: {exc}")
+
+        before = storage_snapshot(workspace)
+        outside_before = storage_snapshot(outside)
+        with self.assertRaises(WorkspaceSecurityError) as caught:
+            preflight_sqlite_conversation_storage(workspace)
+        self.assertEqual(
+            str(caught.exception),
+            "unsafe SQLite conversation storage path",
+        )
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertEqual(storage_snapshot(workspace), before)
+        self.assertEqual(storage_snapshot(outside), outside_before)
+
+    def test_nonmeaningful_file_identities_fail_closed_at_every_boundary(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        provision(workspace)
+        target = database_path(workspace)
+        actual = os.stat(target, follow_symlinks=False)
+        identity = (actual.st_dev, actual.st_ino)
+
+        invalid_identities = (
+            ("zero device", 0, actual.st_ino),
+            ("zero inode", actual.st_dev, 0),
+            ("boolean device", False, actual.st_ino),
+            ("boolean inode", actual.st_dev, True),
+            ("negative device", -1, actual.st_ino),
+            ("negative inode", actual.st_dev, -1),
+            ("noninteger device", "device", actual.st_ino),
+            ("noninteger inode", actual.st_dev, None),
+        )
+        for label, device, inode in invalid_identities:
+            with self.subTest(identity=label):
+                witness = _stat_identity_witness(
+                    actual,
+                    device=device,
+                    inode=inode,
+                )
+                with self.assertRaises(
+                    database_module.SQLiteDatabaseSecurityError
+                ) as caught:
+                    database_module._meaningful_regular_file_identity(
+                        witness,
+                        expected_link_count=1,
+                        nonregular_is_security=False,
+                    )
+                self.assertEqual(str(caught.exception), "")
+                self.assertIsNone(caught.exception.__cause__)
+
+        before = storage_snapshot(workspace)
+        header_witness = _stat_identity_witness(
+            actual,
+            device=0,
+            inode=actual.st_ino,
+        )
+        real_stat = database_module.os.stat
+
+        def stat_with_invalid_header(
+            path: Path,
+            *,
+            follow_symlinks: bool = True,
+        ) -> os.stat_result:
+            if path == target:
+                return header_witness
+            return real_stat(path, follow_symlinks=follow_symlinks)
+
+        with mock.patch.object(
+            database_module.os,
+            "stat",
+            stat_with_invalid_header,
+        ):
+            with self.assertRaises(WorkspaceSecurityError) as caught:
+                preflight_sqlite_conversation_storage(workspace)
+        self.assertEqual(
+            str(caught.exception),
+            "unsafe SQLite conversation storage path",
+        )
+        self.assertIsNone(caught.exception.__cause__)
+
+        opened_witness = _stat_identity_witness(
+            actual,
+            device=actual.st_dev,
+            inode=True,
+        )
+        with mock.patch.object(
+            database_module.os,
+            "fstat",
+            return_value=opened_witness,
+        ):
+            with self.assertRaises(
+                database_module.SQLiteDatabaseSecurityError
+            ) as caught:
+                database_module._verify_database_header(target)
+        self.assertEqual(str(caught.exception), "")
+        self.assertIsNone(caught.exception.__cause__)
+
+        named_witness = _stat_identity_witness(
+            actual,
+            device=False,
+            inode=actual.st_ino,
+        )
+        with mock.patch.object(
+            database_module.os,
+            "stat",
+            return_value=named_witness,
+        ):
+            with self.assertRaises(
+                database_module.SQLiteDatabaseSecurityError
+            ) as caught:
+                database_module._verify_named_file(
+                    target,
+                    expected_identity=identity,
+                )
+        self.assertEqual(str(caught.exception), "")
+        self.assertIsNone(caught.exception.__cause__)
+
+        recovery_witness = _stat_identity_witness(
+            actual,
+            device=actual.st_dev,
+            inode=-1,
+            link_count=2,
+        )
+        with mock.patch.object(
+            database_module.os,
+            "stat",
+            return_value=recovery_witness,
+        ):
+            with self.assertRaises(
+                database_module.SQLiteDatabaseSecurityError
+            ) as caught:
+                database_module._recovery_file_identity(target)
+        self.assertEqual(str(caught.exception), "")
+        self.assertIsNone(caught.exception.__cause__)
+
+        database = database_module.SQLiteDatabase(workspace)
+        real_header_verifier = database_module._verify_database_header
+        final_witness = _stat_identity_witness(
+            actual,
+            device=actual.st_dev,
+            inode="inode",
+        )
+        header_calls = 0
+
+        def verify_header(
+            path: Path,
+            *,
+            expected_link_count: int = 1,
+        ) -> tuple[int, int]:
+            nonlocal header_calls
+            header_calls += 1
+            if header_calls == 2:
+                with mock.patch.object(
+                    database_module.os,
+                    "fstat",
+                    return_value=final_witness,
+                ):
+                    return real_header_verifier(
+                        path,
+                        expected_link_count=expected_link_count,
+                    )
+            return real_header_verifier(
+                path,
+                expected_link_count=expected_link_count,
+            )
+
+        with mock.patch.object(
+            database_module,
+            "_verify_database_header",
+            verify_header,
+        ):
+            with self.assertRaises(
+                database_module.SQLiteDatabaseSecurityError
+            ) as caught:
+                database.read(
+                    lambda _connection: None,
+                    validate_snapshot=sqlite_module._validate_database_snapshot,
+                )
+        self.assertEqual(header_calls, 2)
+        self.assertEqual(str(caught.exception), "")
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertEqual(storage_snapshot(workspace), before)
 
     def test_every_sidecar_is_rejected_and_preserved_exactly(self) -> None:
         for suffix in ("-journal", "-wal", "-shm"):
@@ -1280,6 +1495,108 @@ class SQLiteDatabaseProvisioningTests(unittest.TestCase):
             )
         self.assertIs(repeated.capability, ConversationStorageCapability.READY)
         self.assertEqual(storage_snapshot(workspace), recovered_snapshot)
+
+    @unittest.skipUnless(os.name == "posix", "hard-link recovery is POSIX-only")
+    def test_interrupted_hard_link_validates_target_before_alias_removal(
+        self,
+    ) -> None:
+        def corrupt_header(_workspace: Workspace, target: Path) -> None:
+            target.write_bytes(b"corrupt target bytes")
+
+        def unsupported_version(_workspace: Workspace, target: Path) -> None:
+            raw = bytearray(target.read_bytes())
+            raw[60:64] = (2).to_bytes(4, "big")
+            target.write_bytes(raw)
+
+        def invalid_manifest(workspace: Workspace, _target: Path) -> None:
+            with raw_connection(workspace) as connection:
+                connection.execute(
+                    "CREATE TABLE unexpected_recovery_object (value TEXT)"
+                )
+                connection.execute("PRAGMA schema_version = 1")
+
+        def global_orphan(workspace: Workspace, _target: Path) -> None:
+            with raw_connection(workspace) as connection:
+                connection.execute("PRAGMA foreign_keys = OFF")
+                connection.execute(
+                    "INSERT INTO conversation_events "
+                    "(session_id, conversation_id, sequence, schema_version, "
+                    "turn_id, turn_slot, timestamp, sender, recipient, kind, "
+                    "content) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        "orphan_session",
+                        "orphan_conversation",
+                        1,
+                        1,
+                        "orphan_turn",
+                        0,
+                        "2026-08-25T00:00:00+00:00",
+                        "user",
+                        "plot_architect",
+                        "user_message",
+                        "orphan content",
+                    ),
+                )
+
+        cases: tuple[
+            tuple[str, type[Exception], Callable[[Workspace, Path], None]],
+            ...,
+        ] = (
+            ("corrupt header", WorkspaceFormatError, corrupt_header),
+            (
+                "unsupported version",
+                WorkspaceVersionUnsupportedError,
+                unsupported_version,
+            ),
+            ("invalid manifest", WorkspaceFormatError, invalid_manifest),
+            ("global orphan", WorkspaceFormatError, global_orphan),
+        )
+        messages = {
+            WorkspaceFormatError: "invalid SQLite conversation storage",
+            WorkspaceVersionUnsupportedError: (
+                "unsupported SQLite conversation storage schema version"
+            ),
+        }
+
+        for label, expected_error, configure in cases:
+            with self.subTest(case=label):
+                workspace = initialized_workspace(self)
+                provision(workspace)
+                target = database_path(workspace)
+                configure(workspace, target)
+                target_bytes = target.read_bytes()
+                alias = target.with_name(
+                    ".conversation_storage.sqlite3.interrupted-validation.tmp"
+                )
+                try:
+                    os.link(target, alias, follow_symlinks=False)
+                except OSError as exc:
+                    self.skipTest(f"hard links are unsupported: {exc}")
+                before = storage_snapshot(workspace)
+                identity = os.stat(target, follow_symlinks=False)
+                self.assertTrue(os.path.samefile(target, alias))
+                self.assertEqual(identity.st_nlink, 2)
+
+                coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)
+                with coordinator.borrow(timeout_seconds=2.0) as lease:
+                    with self.assertRaises(expected_error) as caught:
+                        provision_sqlite_conversation_storage(
+                            workspace,
+                            lease=lease,
+                        )
+
+                self.assertEqual(str(caught.exception), messages[expected_error])
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertEqual(storage_snapshot(workspace), before)
+                self.assertTrue(target.exists())
+                self.assertTrue(alias.exists())
+                self.assertTrue(os.path.samefile(target, alias))
+                self.assertEqual(
+                    os.stat(target, follow_symlinks=False).st_nlink,
+                    2,
+                )
+                self.assertEqual(target.read_bytes(), target_bytes)
+                self.assertEqual(alias.read_bytes(), target_bytes)
 
     @unittest.skipUnless(os.name == "posix", "hard-link recovery is POSIX-only")
     def test_interrupted_hard_link_recovery_rejects_every_ambiguous_shape(

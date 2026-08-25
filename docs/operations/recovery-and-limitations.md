@@ -43,8 +43,8 @@ does not create, repair, migrate, rewrite, or remove storage.
 | `unavailable` or `ConversationStorageUnavailableError` | `sqlite3` is missing, older than 3.7.16, fails its runtime probe, the database is busy/locked, or an operational resource is unavailable. | Inspect the host/runtime and competing processes outside this API, then retry explicitly. Issue #261 owns integrating detection/installation into the user-facing flow; direct preflight only reports capability, this release installs nothing, and there is no automatic retry. |
 | `ConversationStorageProvisioningNeededError` | Composition or an adapter operation requires a database that has not been provisioned. | Run observational preflight and, only for an intended empty target, the explicit leased provisioning flow. |
 | `WorkspaceVersionUnsupportedError` | The file has the recognized application identity but an unsupported schema version. | Stop workspace processes, preserve and verify a complete backup, then use a compatible runtime or a separately approved migration. This adapter supplies no migration. |
-| `WorkspaceFormatError` | Header, schema manifest/fingerprint/cookie, encoding, integrity, foreign keys, normalized subject, event structure, or strict sidecar state is invalid. | Preserve the database and sidecars unchanged. Restore a known-good complete database or investigate offline; do not hand-edit or ask preflight to repair it. |
-| `WorkspaceSecurityError` | The database path is unsafe, replaced, or multiply linked. | Stop all processes, back up the complete workspace, and restore safe exact path identities. Do not manually follow, unlink, or replace suspicious names. Explicit leased provisioning can recognize only the exact interrupted-publication case described below. |
+| `WorkspaceFormatError` | Header, schema manifest/fingerprint/cookie, encoding, integrity, foreign keys, normalized subject, event structure, or strict sidecar state is invalid, or the stable database-name entry is nonregular without being a symlink. | Preserve the database and sidecars unchanged. Restore a known-good complete database or investigate offline; do not hand-edit or ask preflight to repair it. |
+| `WorkspaceSecurityError` | The database name is a symlink, or its named/opened path identity is unsafe, nonmeaningful, replaced, mismatched, or has an unexpected link count. | Stop all processes, back up the complete workspace, and restore safe exact path identities. Do not manually follow, unlink, or replace suspicious names. Explicit leased provisioning can recognize only the exact interrupted-publication case described below. |
 | `ConversationStorageCoordinationError` | A lease is wrong-workspace, wrong-thread, expired, released, or cannot be acquired safely; the POSIX advisory guard may also be unavailable or unsafe. | Let the supported owner finish or close it, then acquire a fresh exact-workspace lease. Never reuse or manufacture lease evidence. Without `fcntl`, keep use observational; supported provisioning and mutations remain unavailable. |
 | `ConversationExistsError` during private archive import | An existing identity differs from the incoming exact metadata or transcript. | Keep both sources and investigate. The whole import transaction rolls back; there is no merge or overwrite mode. |
 
@@ -52,11 +52,14 @@ Preflight and ordinary reads never repair or remove storage. Explicit leased
 provisioning has one narrow cleanup for an interrupted no-overwrite
 publication: the target and exactly one provisioning-pattern sibling must be
 the same regular inode with link count two, with no sidecars, extra link, or
-candidate ambiguity. Only then does provisioning remove the temporary alias,
-synchronize the target and parent directory, and exhaustively verify the
-target. Symlinks, wrong or multiple candidates, unrelated inodes, extra links,
-sidecars, and malformed, corrupt, or unsupported target content are preserved
-and fail closed. This is not a general database repair path.
+candidate ambiguity. Provisioning exhaustively validates that intact two-link
+target before any unlink, then rechecks the lease, exact candidate set,
+sidecars, and both identities. Only then does it remove the temporary alias and
+synchronize the target and parent directory; it exhaustively validates the
+recovered single-link target again before success. Symlinks, wrong or multiple
+candidates, unrelated inodes, extra links, sidecars, and malformed, corrupt, or
+unsupported target content are preserved and fail closed. This is not a
+general database repair path.
 
 Routine catalog and event-store calls verify bounded database/schema identity
 and only the rows addressed by the operation. Append obtains the indexed

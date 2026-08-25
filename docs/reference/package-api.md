@@ -254,11 +254,15 @@ Provisioning also verifies a valid existing target and a complete competing
 race winner exhaustively. Its only recovery behavior is cleanup of one provable
 interrupted no-overwrite publication: under the supplied active lease, the
 target and exactly one provisioning-pattern sibling must be the same regular
-two-link inode with no sidecars or ambiguity. Provisioning then removes only
-that sibling alias, synchronizes, and exhaustively verifies the target.
-Preflight and reads remain observational. Symlinks, wrong or multiple
-candidates, unrelated inodes, extra links, sidecars, and invalid target content
-fail closed; this is not a general repair facility.
+two-link inode with no sidecars or ambiguity. The intact two-link database is
+exhaustively validated before provisioning removes only that sibling alias.
+Provisioning synchronizes and then exhaustively validates the recovered
+single-link target again. Preflight and reads remain observational. Symlinks,
+wrong or multiple candidates, unrelated inodes, extra links, sidecars, and
+invalid target content fail closed; this is not a general repair facility. See
+the
+[recovery guidance](../operations/recovery-and-limitations.md#sqlite-conversation-storage-recovery)
+for the operator response.
 
 Composition verifies readiness but never provisions. It returns one
 same-provenance catalog, event store, `ReferenceConversationSearch`, and shared

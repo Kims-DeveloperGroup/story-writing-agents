@@ -897,9 +897,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   application-owned objects: three tables, three indexes, and three insert
   triggers. The event composite-primary-key autoindex serves ordered/MAX
   sequence access, so no redundant explicit event-order index is owned.
-  Every operation owns and closes one non-creating URI connection with a finite
-  five-second busy timeout, verified foreign keys, `DELETE` journaling, `FULL`
-  synchronization, UTF-8 encoding, and strict UTF-8 decoding for stored `TEXT`.
+  Each ordinary read or write, and each standalone explicit verification, owns
+  and closes one non-creating URI connection. Provisioning and recovery from
+  interrupted publication may instead use a bounded sequence of individually
+  owned and closed creation or verification connections. Every opened storage
+  connection uses a finite five-second busy timeout, verified foreign keys,
+  `DELETE` journaling, `FULL` synchronization, UTF-8 encoding, and strict UTF-8
+  decoding for stored `TEXT`.
   Malformed stored text raises the content-free database-format failure, while
   a caller-operation `UnicodeDecodeError` is not reclassified. Reads use an
   explicit transaction on a read-only connection so verification and the
@@ -916,7 +920,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   an empty `foreign_key_check`, composite ownership, every contiguous
   event/correlation invariant supplied by the adapter, and every derived
   normalized subject. Verification rejects unsafe or multiply linked named
-  files. Strict verification/preflight, provisioning, and writes reject every
+  files; a named-database symlink or a nonmeaningful device/inode identity
+  fails closed as a security error. Strict verification/preflight,
+  provisioning, and writes reject every
   rollback/WAL sidecar without repairing or removing it; ordinary reads alone
   tolerate a concurrent DELETE-mode `-journal` at their initial and final
   boundary checks only when it is a singly linked regular file, while still
@@ -927,9 +933,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   valid provisioning lease only, it may recover the single exact interrupted
   publication shape where the target and exactly one fixed-pattern temporary
   sibling are regular names for the same two-link inode with no sidecar or link
-  ambiguity; it revalidates, removes only that alias, synchronizes, and then
-  exhaustively verifies the target. Preflight and ordinary reads remain
-  observational, and every ambiguous or unsafe shape is preserved and rejected.
+  ambiguity. It first exhaustively validates the intact target through a
+  read-only connection that requires the exact two-link identity, then
+  revalidates the lease, namespace, sidecars, identities, and link counts before
+  removing only that alias and synchronizing. Provisioning finally exhaustively
+  verifies the resulting singly linked target. Preflight and ordinary reads
+  remain observational, and every ambiguous or unsafe shape is preserved and
+  rejected.
 - **Primary verification/documentation:**
   `tests/test_sqlite_database.py`,
   `tests/test_conversation_storage.py`,
@@ -981,14 +991,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   coordinator before opening the SQLite write transaction, so database
   revision, sequence, turn-slot, and reply-correlation changes are atomic;
   normalized subjects are stored as nonunique derived data and checked during
-  every metadata reconstruction. Append obtains one plus the indexed maximum
-  sequence and reads at most the addressed turn's user/outcome pair; constraints
-  and triggers retain contiguous ordering and turn correlation without scanning
-  unrelated transcript history. Privileged archive export/import validates a
-  caller-supplied outer lease and the complete database snapshot: export rejects
-  orphan events rather than omitting them, while import validates all destination
-  rows before mutation and the resulting rows afterward in the same transaction,
-  preserving exact create-or-identical semantics and rejecting divergence.
+  every metadata reconstruction. Fresh ID allocation performs one bounded
+  exact-identity event probe and rejects orphan rows before inserting metadata.
+  Append obtains one plus the indexed maximum sequence and reads at most the
+  addressed turn's user/outcome pair; constraints and triggers retain contiguous
+  ordering and turn correlation without scanning unrelated transcript history.
+  Transcript-context reads materialize the addressed transcript once and return
+  context from that same validation and selection pass. Privileged archive
+  export/import validates a caller-supplied outer lease and the complete database
+  snapshot: export rejects orphan events rather than omitting them, while import
+  validates all destination rows before mutation and the resulting rows afterward
+  in the same transaction, preserving exact create-or-identical semantics and
+  rejecting divergence.
   Valid existing storage remains available to observational preflight and reads
   when POSIX `fcntl` is unavailable, while provisioning and supported mutations
   fail closed through the coordinator; full activation readiness remains owned

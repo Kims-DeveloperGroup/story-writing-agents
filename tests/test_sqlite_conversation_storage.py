@@ -93,6 +93,75 @@ class SQLiteConversationEventStoreContractTests(
     def create_conversation(self, session_id: str, subject: str) -> str:
         return self.catalog.create(session_id, subject).conversation_id
 
+    def test_read_context_materializes_and_selects_once_for_valid_and_corrupt(
+        self,
+    ) -> None:
+        self.store.append(self.request("interrupted", content="saved unmatched"))
+        self.append_turn(
+            "complete",
+            user_content="complete user",
+            reply_content="complete reply",
+        )
+        transcript = self.store.read(self.session_id, self.conversation_id)
+        expected = self.store.read_context(self.session_id, self.conversation_id)
+
+        with (
+            mock.patch.object(
+                sqlite_module,
+                "_event_from_row",
+                wraps=sqlite_module._event_from_row,
+            ) as materialize,
+            mock.patch.object(
+                sqlite_module,
+                "select_bounded_conversation_context",
+                wraps=sqlite_module.select_bounded_conversation_context,
+            ) as select_context,
+        ):
+            actual = self.store.read_context(
+                self.session_id,
+                self.conversation_id,
+            )
+
+        self.assertEqual(actual, expected)
+        self.assertEqual(materialize.call_count, len(transcript))
+        select_context.assert_called_once_with(transcript)
+
+        with raw_connection(self.workspace) as connection:
+            connection.execute(
+                "UPDATE conversation_events SET sender = ? "
+                "WHERE session_id = ? AND conversation_id = ? AND sequence = 3",
+                ("plot_architect", self.session_id, self.conversation_id),
+            )
+        before = storage_snapshot(self.workspace)
+        with (
+            mock.patch.object(
+                sqlite_module,
+                "_event_from_row",
+                wraps=sqlite_module._event_from_row,
+            ) as corrupt_materialize,
+            mock.patch.object(
+                sqlite_module,
+                "select_bounded_conversation_context",
+                wraps=sqlite_module.select_bounded_conversation_context,
+            ) as corrupt_select_context,
+        ):
+            with self.assertRaises(WorkspaceFormatError) as caught:
+                self.store.read_context(
+                    self.session_id,
+                    self.conversation_id,
+                )
+
+        self.assertEqual(
+            str(caught.exception),
+            "invalid SQLite conversation storage",
+        )
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertEqual(corrupt_materialize.call_count, len(transcript))
+        self.assertEqual(corrupt_select_context.call_count, 1)
+        corrupt_events = corrupt_select_context.call_args.args[0]
+        self.assertEqual(len(corrupt_events), len(transcript))
+        self.assertEqual(storage_snapshot(self.workspace), before)
+
 
 class SQLiteConversationSearchContractTests(
     ConversationSearchContractMixin,
@@ -418,6 +487,76 @@ class SQLitePreflightAndProvisionTests(unittest.TestCase):
         with self.assertRaises(WorkspaceFormatError):
             preflight_sqlite_conversation_storage(workspace)
         self.assertEqual(storage_snapshot(workspace), before)
+
+    def test_catalog_create_rejects_orphan_id_collision_before_metadata_insert(
+        self,
+    ) -> None:
+        workspace, services = provisioned_services(self)
+        allocated_hex = "0123456789abcdef0123456789abcdef"
+        conversation_id = f"c_{allocated_hex}"
+        with raw_connection(workspace) as connection:
+            connection.execute("PRAGMA foreign_keys = OFF")
+            connection.execute(
+                "INSERT INTO conversation_events "
+                "(session_id, conversation_id, sequence, schema_version, turn_id, "
+                "turn_slot, timestamp, sender, recipient, kind, content) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "session_a",
+                    conversation_id,
+                    1,
+                    1,
+                    "orphan_turn",
+                    0,
+                    "2026-08-25T00:00:00+00:00",
+                    "user",
+                    "plot_architect",
+                    "user_message",
+                    "orphan event",
+                ),
+            )
+        before = storage_snapshot(workspace)
+        allocated_uuid = mock.Mock(hex=allocated_hex)
+
+        with (
+            mock.patch.object(
+                sqlite_module,
+                "uuid4",
+                return_value=allocated_uuid,
+            ) as uuid4,
+            mock.patch.object(
+                sqlite_module,
+                "_insert_metadata",
+                wraps=sqlite_module._insert_metadata,
+            ) as insert_metadata,
+        ):
+            with self.assertRaises(WorkspaceFormatError) as caught:
+                services.catalog.create("session_a", "Collision witness")
+
+        uuid4.assert_called_once_with()
+        insert_metadata.assert_not_called()
+        self.assertEqual(
+            str(caught.exception),
+            "invalid SQLite conversation storage",
+        )
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertEqual(storage_snapshot(workspace), before)
+        with raw_connection(workspace) as connection:
+            self.assertIsNone(
+                connection.execute(
+                    "SELECT 1 FROM conversations "
+                    "WHERE session_id = ? AND conversation_id = ?",
+                    ("session_a", conversation_id),
+                ).fetchone()
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT content FROM conversation_events "
+                    "WHERE session_id = ? AND conversation_id = ?",
+                    ("session_a", conversation_id),
+                ).fetchall(),
+                [("orphan event",)],
+            )
 
 
 class SQLiteArchiveTests(unittest.TestCase):
