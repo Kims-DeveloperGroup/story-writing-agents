@@ -78,6 +78,76 @@ class SQLiteConversationCatalogContractTests(
         provision(self.workspace)
         return compose_sqlite_conversation_storage(self.workspace).catalog
 
+    def test_rename_reaches_sqlite_maximum_then_fails_closed_at_limit(
+        self,
+    ) -> None:
+        maximum = (1 << 63) - 1
+        original = self.catalog.create("session_a", "Original subject")
+        identity = (original.session_id, original.conversation_id)
+        with raw_connection(self.workspace) as connection:
+            connection.execute(
+                "UPDATE conversations SET subject_revision = ? "
+                "WHERE session_id = ? AND conversation_id = ?",
+                (maximum - 1, *identity),
+            )
+
+        successful_subject = "  Maximum Café revision  "
+        maximum_revision = self.catalog.rename(
+            original.session_id,
+            original.conversation_id,
+            successful_subject,
+        )
+        self.assertEqual(maximum_revision.subject_revision, maximum)
+        self.assertEqual(maximum_revision.subject, successful_subject)
+        self.assertEqual(
+            self.catalog.get(*identity),
+            maximum_revision,
+        )
+        self.assertIs(
+            preflight_sqlite_conversation_storage(self.workspace).capability,
+            ConversationStorageCapability.READY,
+        )
+
+        metadata_sql = (
+            "SELECT schema_version, session_id, conversation_id, subject, "
+            "normalized_subject, subject_revision, status, created_at, updated_at "
+            "FROM conversations WHERE session_id = ? AND conversation_id = ?"
+        )
+        with raw_connection(self.workspace) as connection:
+            logical_before = connection.execute(metadata_sql, identity).fetchone()
+        self.assertIsNotNone(logical_before)
+        assert logical_before is not None
+        self.assertEqual(
+            logical_before[3:6],
+            (
+                successful_subject,
+                normalize_conversation_subject(successful_subject),
+                maximum,
+            ),
+        )
+        before = storage_snapshot(self.workspace)
+
+        attempted_subject = "overflow sentinel must not persist"
+        with self.assertRaises(WorkspaceFormatError) as caught:
+            self.catalog.rename(
+                original.session_id,
+                original.conversation_id,
+                attempted_subject,
+            )
+
+        self.assertEqual(
+            str(caught.exception),
+            "invalid SQLite conversation storage",
+        )
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertNotIn("sentinel", str(caught.exception).casefold())
+        self.assertNotIn("too large", str(caught.exception).casefold())
+        self.assertEqual(storage_snapshot(self.workspace), before)
+        with raw_connection(self.workspace) as connection:
+            logical_after = connection.execute(metadata_sql, identity).fetchone()
+        self.assertEqual(logical_after, logical_before)
+        self.assertEqual(self.catalog.get(*identity), maximum_revision)
+
 
 class SQLiteConversationEventStoreContractTests(
     ConversationEventStoreContractMixin,

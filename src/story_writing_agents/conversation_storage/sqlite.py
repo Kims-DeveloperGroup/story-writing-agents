@@ -68,6 +68,7 @@ SQLITE_CONVERSATION_STORAGE_MINIMUM_VERSION = SQLITE_MINIMUM_VERSION
 SQLITE_CONVERSATION_STORAGE_SCHEMA_VERSION = SQLITE_SCHEMA_VERSION
 
 _CONVERSATION_ID_ALLOCATION_ATTEMPTS = 16
+_SQLITE_SIGNED_INTEGER_MAX = 9_223_372_036_854_775_807
 
 _METADATA_SELECT = (
     "SELECT schema_version, session_id, conversation_id, subject, "
@@ -307,6 +308,8 @@ class SQLiteConversationCatalog(_SQLiteAdapter):
 
         def rename_in_transaction(connection: object) -> ConversationMetadata:
             current = _require_metadata(connection, session, conversation)
+            if current.subject_revision == _SQLITE_SIGNED_INTEGER_MAX:
+                raise SQLiteDatabaseFormatError()
             updated = ConversationMetadata(
                 schema_version=current.schema_version,
                 session_id=current.session_id,
@@ -1044,7 +1047,7 @@ def _next_event_sequence(
         or len(row) != 1
         or type(row[0]) is not int
         or row[0] < 0
-        or row[0] >= 9_223_372_036_854_775_807
+        or row[0] >= _SQLITE_SIGNED_INTEGER_MAX
     ):
         raise SQLiteDatabaseFormatError()
     return row[0] + 1
