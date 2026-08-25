@@ -42,6 +42,7 @@ from story_writing_agents.cli_context import (
 from story_writing_agents.conversations import ConversationMetadata
 from story_writing_agents.interactive_controller import _core as controller_core_module
 from story_writing_agents.interactive_terminal import InteractiveErrorCode
+from story_writing_agents import interactive_terminal as terminal_module
 from story_writing_agents.workspace import (
     FilesystemConversationCatalog,
     FilesystemConversationEventStore,
@@ -52,6 +53,7 @@ from tests.helpers import all_manuscripts
 from tests.test_interactive_conversation import (
     InteractiveConversationTestCase,
     _REAL_RUNTIME,
+    _capture_semantic_method,
     _error_record,
     _transcript_relative,
 )
@@ -308,8 +310,13 @@ class InteractiveConsensusGateTests(InteractiveConversationTestCase):
             "/quit",
             runtime=runtime,  # type: ignore[arg-type]
         )
+        accepted_components: list[object] = []
         real_run = asyncio.run
         with (
+            _capture_semantic_method(
+                "write_accepted_input",
+                accepted_components,
+            ),
             mock.patch.object(controller_core_module, "read_draft_file") as loader,
             mock.patch.object(
                 controller_core_module.asyncio,
@@ -320,6 +327,7 @@ class InteractiveConsensusGateTests(InteractiveConversationTestCase):
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
         self.assertEqual(runtime.calls, [])
+        self.assertEqual(accepted_components, [])
         run_boundary.assert_not_called()
         loader.assert_not_called()
         bind.assert_not_called()
@@ -342,9 +350,17 @@ class InteractiveConsensusGateTests(InteractiveConversationTestCase):
             catalog=catalog,
             runtime=runtime,  # type: ignore[arg-type]
         )
-        with mock.patch.object(controller_core_module, "read_draft_file") as loader:
+        accepted_components = []
+        with (
+            _capture_semantic_method(
+                "write_accepted_input",
+                accepted_components,
+            ),
+            mock.patch.object(controller_core_module, "read_draft_file") as loader,
+        ):
             self.assertEqual(controller.run_session_lobby(), 0)
         self.assertEqual(runtime.calls, [])
+        self.assertEqual(accepted_components, [])
         loader.assert_not_called()
         self.assertEqual(
             "".join(callbacks.records).count("[error conversation_required]"),
@@ -378,8 +394,14 @@ class InteractiveConsensusGateTests(InteractiveConversationTestCase):
             catalog=catalog,
             runtime=runtime,  # type: ignore[arg-type]
         )
-        self.assertEqual(controller.run_session_lobby(), 0)
+        accepted_components = []
+        with _capture_semantic_method(
+            "write_accepted_input",
+            accepted_components,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
         self.assertEqual(runtime.calls, [])
+        self.assertEqual(accepted_components, [])
         self.assertEqual(selection_path.read_bytes(), selection_before)
         self.assertIn("[error conversation_archived]", "".join(callbacks.records))
 
@@ -412,15 +434,17 @@ class InteractiveConsensusDispatchTests(InteractiveConversationTestCase):
         )
         before = file_bytes(workspace)
         attachment_facts: list[tuple[object, object, object, object]] = []
-        runtime.on_call = lambda: attachment_facts.append(
-            (
-                controller._attached_session_id,
-                controller._focused_conversation,
-                controller._target_agent_id,
-                controller._conversation_memory_service,
-            )
-        )
+        accepted_components: list[object] = []
+        semantic_components: list[object] = []
         with (
+            _capture_semantic_method(
+                "write_accepted_input",
+                accepted_components,
+            ),
+            _capture_semantic_method(
+                "write_component",
+                semantic_components,
+            ),
             mock.patch.object(
                 controller_core_module,
                 "read_draft_file",
@@ -431,6 +455,29 @@ class InteractiveConsensusDispatchTests(InteractiveConversationTestCase):
                 "run",
             ) as run_boundary,
         ):
+            projection_counts_at_runtime: list[tuple[int, int]] = []
+
+            def observe_runtime_entry() -> None:
+                attachment_facts.append(
+                    (
+                        controller._attached_session_id,
+                        controller._focused_conversation,
+                        controller._target_agent_id,
+                        controller._conversation_memory_service,
+                    )
+                )
+                projection_counts_at_runtime.append(
+                    (
+                        len(accepted_components),
+                        sum(
+                            type(component) is terminal_module.Record
+                            and component.title == "Consensus request"
+                            for component in semantic_components
+                        ),
+                    )
+                )
+
+            runtime.on_call = observe_runtime_entry
             self.assertEqual(controller.run_session_lobby(), 0)
 
         run_boundary.assert_not_called()
@@ -447,6 +494,67 @@ class InteractiveConsensusDispatchTests(InteractiveConversationTestCase):
         self.assertEqual(
             [call["input_kind"] for call in runtime.calls],
             [InputKind.PROMPT, InputKind.PROMPT, InputKind.DRAFT, InputKind.PROMPT],
+        )
+        self.assertEqual(
+            projection_counts_at_runtime,
+            [(1, 1), (2, 2), (2, 3), (3, 4)],
+        )
+        self.assertEqual(
+            accepted_components,
+            [
+                terminal_module.Message(
+                    "you → consensus",
+                    "inline ${core_documents/global_outline.md}",
+                    state=terminal_module.ViewState.COMPLETED,
+                ),
+                terminal_module.Message(
+                    "you → consensus",
+                    "isolated ${core_documents/character_sheets.md}",
+                    state=terminal_module.ViewState.COMPLETED,
+                ),
+                terminal_module.Message(
+                    "you → consensus",
+                    "composed line one\n/send",
+                    state=terminal_module.ViewState.COMPLETED,
+                ),
+            ],
+        )
+        request_contexts = [
+            component
+            for component in semantic_components
+            if type(component) is terminal_module.Record
+            and component.title == "Consensus request"
+        ]
+        self.assertEqual(
+            request_contexts,
+            [
+                terminal_module.Record(
+                    "context",
+                    title="Consensus request",
+                    fields=(terminal_module.Field("Output", output_path),),
+                    state=terminal_module.ViewState.COMPLETED,
+                )
+                for output_path in runtime.output_paths[:2]
+            ]
+            + [
+                terminal_module.Record(
+                    "context",
+                    title="Consensus request",
+                    fields=(
+                        terminal_module.Field("Output", runtime.output_paths[2]),
+                        terminal_module.Field("Source", "literal.md"),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                ),
+                terminal_module.Record(
+                    "context",
+                    title="Consensus request",
+                    fields=(
+                        terminal_module.Field("Output", runtime.output_paths[3]),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                ),
+            ],
         )
         self.assertEqual(
             [call["conversation_context"].mode for call in runtime.calls],
@@ -487,6 +595,8 @@ class InteractiveConsensusDispatchTests(InteractiveConversationTestCase):
         self.assertEqual(len({id(facts[3]) for facts in attachment_facts}), 1)
         rendered = "".join(callbacks.records)
         self.assertIn("[compose] Consensus run", rendered)
+        self.assertNotIn("you → consensus", rendered)
+        self.assertNotIn("exact loaded draft", rendered)
         self.assertNotIn("RAW_RESULT_SECRET", rendered)
 
     def test_bare_run_cancel_interrupt_and_eof_never_dispatch(self) -> None:
@@ -511,8 +621,31 @@ class InteractiveConsensusDispatchTests(InteractiveConversationTestCase):
                     runtime=runtime,  # type: ignore[arg-type]
                 )
                 before = file_bytes(workspace)
-                self.assertEqual(controller.run_session_lobby(), expected_exit)
+                accepted_components: list[object] = []
+                semantic_components: list[object] = []
+                with (
+                    _capture_semantic_method(
+                        "write_accepted_input",
+                        accepted_components,
+                    ),
+                    _capture_semantic_method(
+                        "write_component",
+                        semantic_components,
+                    ),
+                ):
+                    self.assertEqual(
+                        controller.run_session_lobby(),
+                        expected_exit,
+                    )
                 self.assertEqual(runtime.calls, [])
+                self.assertEqual(accepted_components, [])
+                self.assertFalse(
+                    any(
+                        component.title == "Consensus request"
+                        for component in semantic_components
+                        if type(component) is terminal_module.Record
+                    )
+                )
                 self.assertEqual(file_bytes(workspace), before)
                 self.assertEqual(
                     load_default_conversation(workspace, "session"),

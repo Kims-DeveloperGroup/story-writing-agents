@@ -3897,6 +3897,19 @@ class InteractiveController:
             raise _ControllerAbort(
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
             )
+        runner = self._runner
+        if runner is None:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        self._semantic_output.write_accepted_input(
+            Message(
+                f"you → {_AGENT_PROMPT_ALIASES[agent_id]}",
+                action.text,
+                role=SemanticRole.DEFAULT,
+                state=ViewState.COMPLETED,
+            )
+        )
         progress_events: list[ConversationRetrievalProgressEvent] = []
         progress_callback_failure: BaseException | None = None
 
@@ -3944,11 +3957,6 @@ class InteractiveController:
             finally:
                 operation_joined = True
 
-        runner = self._runner
-        if runner is None:
-            raise _ControllerAbort(
-                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-            )
         operation_coroutine = run_joined_advisory_operation()
         progress_coroutine = self._advisory_progress.run(operation_coroutine)
         try:
@@ -4250,6 +4258,7 @@ class InteractiveController:
                 output_path = None
                 continue
             break
+        assert output_path is not None
 
         if action.kind is ActionKind.RUN:
             prompt = action.text
@@ -4300,6 +4309,32 @@ class InteractiveController:
         request = DebateContextRequest(
             conversation_id=focused.conversation_id,
             mode=context_mode,
+        )
+        runner = self._runner
+        if runner is None:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        if input_kind is InputKind.PROMPT:
+            self._semantic_output.write_accepted_input(
+                Message(
+                    "you → consensus",
+                    payload,
+                    role=SemanticRole.DEFAULT,
+                    state=ViewState.COMPLETED,
+                )
+            )
+        context_fields = [Field("Output", output_path)]
+        if input_kind is InputKind.DRAFT:
+            assert action.argument is not None
+            context_fields.append(Field("Source", action.argument))
+        self._semantic_output.write_component(
+            Record(
+                "context",
+                title="Consensus request",
+                fields=tuple(context_fields),
+                state=ViewState.COMPLETED,
+            )
         )
         progress_events: list[DebateProgressEvent] = []
         progress_callback_failure: BaseException | None = None
@@ -4353,11 +4388,6 @@ class InteractiveController:
             finally:
                 operation_joined = True
 
-        runner = self._runner
-        if runner is None:
-            raise _ControllerAbort(
-                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-            )
         operation_coroutine = run_joined_consensus_operation()
         progress_coroutine = self._debate_progress.run(operation_coroutine)
         try:
@@ -4796,9 +4826,10 @@ class InteractiveController:
     ) -> None:
         """Search the attached session and render ordered active-only hits.
 
-        The parsed action supplies one query. Catalog and service validation
-        precede primitive rendering; expected failures retain attachment and
-        routing state, while Ctrl-C acknowledges cancellation without cleanup.
+        The parsed action supplies one query. Its validated normalized context
+        is rendered before catalog and service work; expected failures retain
+        attachment and routing state, while Ctrl-C acknowledges cancellation
+        without cleanup.
         """
 
         assert action.kind is ActionKind.SEARCH
@@ -4814,6 +4845,18 @@ class InteractiveController:
                     InteractiveError(InteractiveErrorCode.COMMAND_INVALID)
                 )
                 return
+            normalized_query = normalize_conversation_subject(query.text)
+            self._semantic_output.write_component(
+                Record(
+                    "context",
+                    title="Search request",
+                    fields=(
+                        Field("Query", normalized_query),
+                        Field("Scope", "active"),
+                    ),
+                    state=ViewState.COMPLETED,
+                )
+            )
 
             try:
                 entries = self._catalog_entries(session_id)
@@ -4955,6 +4998,19 @@ class InteractiveController:
                 action.count
                 or CONVERSATION_MEMORY_POLICY.default_page_events
             )
+            handle = visible_conversation_handle(metadata, entries)
+            self._semantic_output.write_component(
+                Record(
+                    "context",
+                    title="Transcript request",
+                    fields=(
+                        Field("Conversation", handle),
+                        Field("Start", str(start_sequence)),
+                        Field("Count", str(page_limit)),
+                    ),
+                    state=ViewState.COMPLETED,
+                )
+            )
             try:
                 page = memory_service.read_transcript(
                     metadata.conversation_id,
@@ -4972,7 +5028,6 @@ class InteractiveController:
                 self._present_transcript_service_failure(exc)
                 return
 
-            handle = visible_conversation_handle(metadata, entries)
             total_count = len(page.events)
             for position, event in enumerate(page.events, start=1):
                 self._write_counted_list_row(
@@ -5264,6 +5319,25 @@ class InteractiveController:
                 if query is None
                 else normalize_conversation_input(query)
             )
+        except Exception as exc:
+            self._present_conversation_failure(exc)
+            return
+        if normalized_query is not None:
+            self._semantic_output.write_component(
+                Record(
+                    "context",
+                    title="Conversation list request",
+                    fields=(
+                        Field("Query", normalized_query),
+                        Field(
+                            "Scope",
+                            "all" if include_archived else "active",
+                        ),
+                    ),
+                    state=ViewState.COMPLETED,
+                )
+            )
+        try:
             entries = self._catalog_entries(session_id)
         except Exception as exc:
             self._present_conversation_failure(exc)

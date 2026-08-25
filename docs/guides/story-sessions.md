@@ -5,7 +5,9 @@
 > focus on an active conversation. Inline canonical artifact references work in
 > provider-bound routed, sticky, ordinary, retrieval, and `/run` prompt text.
 > After session attachment and conversation focus, `$`, `$${path}`, and `$$`
-> discover or select them without submitting.
+> discover or select them without submitting. Accepted advisory and consensus
+> prompt content remains readable in terminal scrollback, with live capable
+> input reprojected after cleanup and ordinary-line fallback left unduplicated.
 
 Key terms: **defaults** are persisted fallbacks; **current attachment** is the
 session held by this shell; **current focus** and **agent focus** select the
@@ -106,7 +108,10 @@ completion adds one ASCII trailing space at the end of a token and does not
 submit, so a later Enter is required. Dynamic resume Enter commits immediately.
 Plain fallback has no pre-Enter palette. All capable submitted input clears its
 complete live frame before persistent results are written; fallback prompts and
-echoed input remain visible. See the
+echoed input remain visible. For accepted provider-bound content, capable
+streams then render one attributed exact-body message before progress, while
+fallback adds no duplicate of its already visible submission. Control-only
+commands and editor values are not automatically echoed. See the
 [terminal contract](../reference/interactive-terminal.md#main-prompt-live-suggestions).
 
 ## Edit persistent settings
@@ -261,6 +266,14 @@ the sticky character focus. Every provider-bound turn captures its own ordered
 batch; a previous agent's read cannot satisfy the next turn. See
 [Canonical artifact references](artifact-references.md).
 
+After attachment, focus, target, and runner validation, an accepted ordinary,
+`/say`, or `@agent` turn appears as `you → ALIAS [completed]> BODY` before
+retrieval progress or the reply. `ALIAS` is the resolved preferred prompt
+alias, and `BODY` is the exact semantic message text without `/say` or route
+syntax. The record remains visible through later success, handled provider
+failure, cancellation, or post-acceptance interrupt. It is terminal context;
+the conversation runtime remains the authority for durable user/outcome events.
+
 Artifact controls require all three of: an attached session, a focused active
 conversation, and a cursor in provider-bound prompt text. Shell orientation and
 full `/help` summarize this prerequisite. Lobby input, attached input without
@@ -313,6 +326,13 @@ prompt submission.
 | `/transcript ID [COUNT] [--from N]` | Fresh bounded page from active or archived identity; focus unchanged. |
 | One advisory question | Agent may answer or request bounded active same-session search/read actions. |
 
+Accepted local reads identify the request before their result. `/search` shows
+its normalized query and active scope. A filtered `/conversation list` shows
+its normalized query and active/all scope; an unfiltered list adds no request
+record. `/transcript` shows the resolved visible handle and effective start and
+count after identity resolution but before the page read. These records remain
+if later work is empty, fails safely, or is cancelled.
+
 Agent retrieval is conditional. The shell shows `[context]` progress, reply,
 and sources. Only user and outcome enter the transcript; local reads never call
 a provider or alter defaults/focus.
@@ -338,7 +358,15 @@ control lines, and ordinary fallback input shows no panel.
 The runtime supplies every debate phase one bounded focus snapshot.
 `/run --fresh --output PART/PATH.md PROMPT` records its identity without
 transcript; `/draft-file PATH` reads strict UTF-8, includes the snapshot, and
-prompts for the required output path. Runs do not change conversations.
+prompts for the required output path. After validation, inline, fresh, and
+committed composer prompts appear once as
+`you → consensus [completed]> PROMPT`, followed by `Consensus request` with the
+safe output path, before debate progress. `/draft-file` emits no message copy of
+its bytes; its request record names only the validated source and output paths.
+Capable streams use the post-cleanup message, while fallback keeps its already
+visible prompt without a duplicate. These terminal records survive later
+success, deadlock, handled failure, cancellation, or post-acceptance interrupt
+but add no separate storage guarantee. Runs do not change conversations.
 
 ## Inspect outcomes and recover
 

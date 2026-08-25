@@ -5484,6 +5484,24 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
         self.assertEqual(query.limit, 10)
         self.assertFalse(query.include_archived)
         rendered = "".join(callbacks.records)
+        request = terminal_module.Record(
+            "context",
+            title="Search request",
+            fields=(
+                terminal_module.Field("Query", "council"),
+                terminal_module.Field("Scope", "active"),
+            ),
+            state=terminal_module.ViewState.COMPLETED,
+        )
+        self.assertEqual(
+            [
+                component
+                for component in components
+                if type(component) is terminal_module.Record
+                and component.title == "Search request"
+            ],
+            [request],
+        )
         search_views = [
             component
             for component in components
@@ -5537,6 +5555,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
             ),
         ]
         self.assertEqual(search_views, expected_views)
+        self.assertLess(components.index(request), components.index(search_views[0]))
         self.assertEqual(
             [
                 record
@@ -5641,6 +5660,25 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
 
         self.assertEqual(memory.search_calls, [query])
         self.assertEqual(_tree_snapshot(workspace.root), before)
+        self.assertEqual(
+            [
+                component
+                for component in components
+                if type(component) is terminal_module.Record
+                and component.title == "Search request"
+            ],
+            [
+                terminal_module.Record(
+                    "context",
+                    title="Search request",
+                    fields=(
+                        terminal_module.Field("Query", "missing"),
+                        terminal_module.Field("Scope", "active"),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                )
+            ],
+        )
         self.assertFalse(
             any(
                 type(component) is terminal_module.ListView
@@ -5690,6 +5728,12 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
             )
         )
         context_before = workspace.path(_CONTEXT_PATH).read_bytes()
+        components: list[object] = []
+        real_write_component = terminal_module.InteractiveSemanticOutput.write_component
+
+        def capture_component(output, component):
+            components.append(component)
+            return real_write_component(output, component)
 
         with (
             mock.patch.object(
@@ -5698,6 +5742,12 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                 return_value=memory,
             ),
             mock.patch.object(controller_core_module.asyncio, "run") as async_run,
+            mock.patch.object(
+                terminal_module.InteractiveSemanticOutput,
+                "write_component",
+                autospec=True,
+                side_effect=capture_component,
+            ),
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
 
@@ -5709,6 +5759,47 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
         self.assertEqual(
             memory.transcript_calls,
             [(entry.conversation_id, 1, 24)],
+        )
+        self.assertEqual(
+            [
+                component
+                for component in components
+                if type(component) is terminal_module.Record
+                and component.title in {"Search request", "Transcript request"}
+            ],
+            [
+                terminal_module.Record(
+                    "context",
+                    title="Search request",
+                    fields=(
+                        terminal_module.Field("Query", "council"),
+                        terminal_module.Field("Scope", "active"),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                ),
+                terminal_module.Record(
+                    "context",
+                    title="Search request",
+                    fields=(
+                        terminal_module.Field("Query", "valid"),
+                        terminal_module.Field("Scope", "active"),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                ),
+                terminal_module.Record(
+                    "context",
+                    title="Transcript request",
+                    fields=(
+                        terminal_module.Field(
+                            "Conversation",
+                            entry.conversation_id[:12],
+                        ),
+                        terminal_module.Field("Start", "1"),
+                        terminal_module.Field("Count", "24"),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                ),
+            ],
         )
         rendered = "".join(callbacks.records)
         self.assertIn(
@@ -5980,6 +6071,33 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                 (entry.conversation_id, 1, 1),
                 (entry.conversation_id, 1, 24),
                 (entry.conversation_id, 1, 24),
+            ],
+        )
+        self.assertEqual(
+            [
+                component
+                for component in components
+                if type(component) is terminal_module.Record
+                and component.title == "Transcript request"
+            ],
+            [
+                terminal_module.Record(
+                    "context",
+                    title="Transcript request",
+                    fields=(
+                        terminal_module.Field("Conversation", handle),
+                        terminal_module.Field("Start", start),
+                        terminal_module.Field("Count", count),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                )
+                for start, count in (
+                    ("1", "24"),
+                    ("3", "24"),
+                    ("1", "1"),
+                    ("1", "24"),
+                    ("1", "24"),
+                )
             ],
         )
         rendered = "".join(callbacks.records)
@@ -6293,9 +6411,20 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                 ):
                     self.assertEqual(controller.run_session_lobby(), 0)
                 rendered = "".join(callbacks.records)
+                request_context = (
+                    "[context] Transcript request [completed]\n"
+                    f"  Conversation: {conversation_id[:12]}\n"
+                    "  Start: 1\n"
+                    "  Count: 24\n"
+                )
+                self.assertEqual(rendered.count(request_context), 1)
                 self.assertEqual(
                     rendered.count("[error transcript_invalid]"),
                     1,
+                )
+                self.assertLess(
+                    rendered.index(request_context),
+                    rendered.index("[error transcript_invalid]"),
                 )
                 self.assertNotIn("private transcript detail", rendered)
                 self.assertIsNone(controller._conversation_memory_service)
@@ -6749,6 +6878,35 @@ class ControllerConversationCommandTests(ControllerTestCase):
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
 
+        self.assertEqual(
+            [
+                component
+                for component in components
+                if type(component) is terminal_module.Record
+                and component.title == "Conversation list request"
+            ],
+            [
+                terminal_module.Record(
+                    "context",
+                    title="Conversation list request",
+                    fields=(
+                        terminal_module.Field("Query", "motivation"),
+                        terminal_module.Field("Scope", "all"),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                ),
+                terminal_module.Record(
+                    "context",
+                    title="Conversation list request",
+                    fields=(
+                        terminal_module.Field("Query", "opening"),
+                        terminal_module.Field("Scope", "active"),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                ),
+            ],
+        )
+
         def conversation_view(
             handle: str,
             subject: str,
@@ -6921,6 +7079,84 @@ class ControllerConversationCommandTests(ControllerTestCase):
             ],
             [f"{render_plain(expected, width=200).text}\n"],
         )
+
+    def test_filtered_conversation_list_context_precedes_empty_and_error(
+        self,
+    ) -> None:
+        cases = (
+            ("empty", None, False),
+            ("catalog error", OSError("catalog-secret"), True),
+        )
+        for label, failure, expects_error in cases:
+            with self.subTest(case=label):
+                workspace, _backend, catalog, controller, callbacks = (
+                    self.prepared_controller(
+                        "/conversation list --all  MISSING  ",
+                        "/quit",
+                    )
+                )
+                components: list[object] = []
+                real_write_component = (
+                    terminal_module.InteractiveSemanticOutput.write_component
+                )
+
+                def capture_component(output, component):
+                    components.append(component)
+                    return real_write_component(output, component)
+
+                list_patch = (
+                    mock.patch.object(catalog, "list", side_effect=failure)
+                    if failure is not None
+                    else mock.patch.object(catalog, "list", wraps=catalog.list)
+                )
+                with (
+                    list_patch,
+                    mock.patch.object(
+                        terminal_module.InteractiveSemanticOutput,
+                        "write_component",
+                        autospec=True,
+                        side_effect=capture_component,
+                    ),
+                ):
+                    self.assertEqual(controller.run_session_lobby(), 0)
+
+                expected_context = terminal_module.Record(
+                    "context",
+                    title="Conversation list request",
+                    fields=(
+                        terminal_module.Field("Query", "missing"),
+                        terminal_module.Field("Scope", "all"),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                )
+                self.assertEqual(
+                    [
+                        component
+                        for component in components
+                        if type(component) is terminal_module.Record
+                        and component.title == "Conversation list request"
+                    ],
+                    [expected_context],
+                )
+                rendered = "".join(callbacks.records)
+                context_text = render_plain(expected_context, width=200).text
+                self.assertIn(context_text, rendered)
+                if expects_error:
+                    self.assertNotIn("catalog-secret", rendered)
+                    self.assertNotIn("No conversations found.", rendered)
+                    self.assertLess(
+                        rendered.index(context_text),
+                        rendered.index("[error workspace_invalid]"),
+                    )
+                else:
+                    self.assertIn("No conversations found.", rendered)
+                    self.assertLess(
+                        rendered.index(context_text),
+                        rendered.index("No conversations found."),
+                    )
+                self.assertFalse(
+                    workspace.path(_default_relative("session")).exists()
+                )
 
     def test_main_conversation_resume_provider_is_live_and_freshly_validated(
         self,
