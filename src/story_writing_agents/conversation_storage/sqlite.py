@@ -5,11 +5,28 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Callable, Self, TypeVar
+from typing import Callable, Iterator, Self, TypeVar
 from uuid import uuid4
 
-from ..conversation_search import ReferenceConversationSearch
+from ..conversation_literal_search import (
+    CONVERSATION_LITERAL_NORMALIZATION_VERSION,
+    build_conversation_literal_snippet,
+    classify_conversation_literal_subject,
+    conversation_literal_sort_key,
+    normalize_conversation_literal_query,
+    normalize_conversation_literal_text,
+)
+from ..conversation_search import (
+    CONVERSATION_MEMORY_POLICY,
+    ConversationCitation,
+    ConversationSearchHit,
+    ConversationSearchMatchKind,
+    ConversationSearchQuery,
+    ConversationSearchResult,
+    ConversationSearchScope,
+)
 from ..conversations import (
+    CONVERSATION_CONTEXT_POLICY,
     CONVERSATION_EVENT_SCHEMA_VERSION,
     CONVERSATION_METADATA_SCHEMA_VERSION,
     ConversationContextWindow,
@@ -42,6 +59,11 @@ from .sqlite_database import (
     SQLiteDatabaseSecurityError,
     SQLiteDatabaseUnavailableError,
     SQLiteDatabaseVersionError,
+)
+from .sqlite_search_index import (
+    SQLiteConversationSearchIndex,
+    SQLiteConversationSearchIndexDocument,
+    SQLiteConversationSearchIndexError,
 )
 from .composition import WorkspaceConversationStorageMutationCoordinator
 from .contracts import (
@@ -77,9 +99,19 @@ _METADATA_SELECT = (
 )
 _EVENT_SELECT = (
     "SELECT schema_version, session_id, conversation_id, turn_id, sequence, "
-    "timestamp, sender, recipient, kind, content, turn_slot "
+    "timestamp, sender, recipient, kind, content, searchable_content, turn_slot "
     "FROM conversation_events"
 )
+_EVENT_SELECT_BY_TURN = _EVENT_SELECT.replace(
+    "FROM conversation_events",
+    "FROM conversation_events INDEXED BY conversation_events_turn_slots",
+)
+_EVENT_SELECT_RECENT = _EVENT_SELECT.replace(
+    "FROM conversation_events",
+    "FROM conversation_events INDEXED BY conversation_events_recent_outcomes",
+)
+
+_RECENT_CONTEXT_CANDIDATE_TURNS = CONVERSATION_CONTEXT_POLICY.max_complete_turns + 1
 
 ResultT = TypeVar("ResultT")
 
@@ -140,7 +172,12 @@ class _SQLiteConversationArchivePayload:
 class _SQLiteAdapter:
     """Shared construction and coordinator ownership for public SQLite ports."""
 
-    __slots__ = ("_database", "_mutation_coordinator", "_mutation_timeout")
+    __slots__ = (
+        "_database",
+        "_mutation_coordinator",
+        "_mutation_timeout",
+        "_search_index",
+    )
 
     def __init__(
         self,
@@ -159,6 +196,10 @@ class _SQLiteAdapter:
         self._database = SQLiteDatabase(resolved)
         self._mutation_coordinator = coordinator
         self._mutation_timeout = timeout
+        self._search_index = SQLiteConversationSearchIndex(
+            self._database.workspace_key,
+            normalization_version=CONVERSATION_LITERAL_NORMALIZATION_VERSION,
+        )
 
     @classmethod
     def _from_components(
@@ -166,11 +207,13 @@ class _SQLiteAdapter:
         database: SQLiteDatabase,
         coordinator: ConversationStorageMutationCoordinator,
         timeout: float,
+        search_index: SQLiteConversationSearchIndex,
     ) -> Self:
         instance = cls.__new__(cls)
         instance._database = database
         instance._mutation_coordinator = coordinator
         instance._mutation_timeout = timeout
+        instance._search_index = search_index
         return instance
 
     def _read(self, operation: Callable[[object], ResultT]) -> ResultT:
@@ -181,23 +224,60 @@ class _SQLiteAdapter:
             )
         )
 
-    def _write(self, operation: Callable[[object], ResultT]) -> ResultT:
+    def _write(
+        self,
+        operation: Callable[[object], ResultT],
+        *,
+        changed: Callable[[ResultT], bool] | None = None,
+    ) -> ResultT:
         with self._mutation_coordinator.borrow(
             timeout_seconds=self._mutation_timeout
         ) as lease:
+
             def validator() -> None:
                 _validate_lease(
                     lease,
                     workspace_key=self._database.workspace_key,
                 )
 
-            return _database_call(
-                lambda: self._database.write(
-                    operation,
-                    validate_snapshot=_validate_database_snapshot,
-                    validate_lease=validator,
-                )
+            return self._write_under_lease(
+                operation,
+                validate_lease=validator,
+                changed=changed,
             )
+
+    def _write_under_lease(
+        self,
+        operation: Callable[[object], ResultT],
+        *,
+        validate_lease: Callable[[], None],
+        changed: Callable[[ResultT], bool] | None = None,
+    ) -> ResultT:
+        """Commit required lexical state, then best-effort refresh derived FTS."""
+
+        def mutate(connection: object) -> tuple[ResultT, int | None]:
+            result = operation(connection)
+            effective = True if changed is None else changed(result)
+            if type(effective) is not bool:
+                raise TypeError("SQLite mutation changed predicate must be boolean")
+            generation = _advance_lexical_generation(connection) if effective else None
+            return result, generation
+
+        result, generation = _database_call(
+            lambda: self._database.write(
+                mutate,
+                validate_snapshot=_validate_database_snapshot,
+                validate_lease=validate_lease,
+            )
+        )
+        if generation is not None:
+            _refresh_search_index_after_commit(
+                self._database,
+                self._search_index,
+                source_generation=generation,
+                validate_lease=validate_lease,
+            )
+        return result
 
 
 class SQLiteConversationCatalog(_SQLiteAdapter):
@@ -370,8 +450,10 @@ class SQLiteConversationCatalog(_SQLiteAdapter):
         status: ConversationStatus,
     ) -> ConversationMetadata:
         session, conversation = _validate_identity(session_id, conversation_id)
+        effective = False
 
         def set_in_transaction(connection: object) -> ConversationMetadata:
+            nonlocal effective
             current = _require_metadata(connection, session, conversation)
             if current.status is status:
                 return current
@@ -395,9 +477,13 @@ class SQLiteConversationCatalog(_SQLiteAdapter):
                     updated.conversation_id,
                 ),
             )
+            effective = True
             return updated
 
-        return self._write(set_in_transaction)
+        return self._write(
+            set_in_transaction,
+            changed=lambda _result: effective,
+        )
 
 
 class SQLiteConversationEventStore(_SQLiteAdapter):
@@ -483,14 +569,48 @@ class SQLiteConversationEventStore(_SQLiteAdapter):
             connection: object,
         ) -> ConversationContextWindow:
             _require_metadata(connection, session, conversation)
-            _, context = _select_events_and_context(
+            return _select_recent_context(
                 connection,
                 session,
                 conversation,
             )
-            return context
 
         return self._read(read_context_from_connection)
+
+
+class SQLiteConversationSearch(_SQLiteAdapter):
+    """One-snapshot exact SQLite implementation of conversation search."""
+
+    def search(
+        self,
+        scope: ConversationSearchScope,
+        query: ConversationSearchQuery,
+    ) -> ConversationSearchResult:
+        """Search one authorized session with optional non-authoritative FTS."""
+
+        if type(scope) is not ConversationSearchScope:
+            raise TypeError(
+                "conversation search scope must be a ConversationSearchScope"
+            )
+        if type(query) is not ConversationSearchQuery:
+            raise TypeError(
+                "conversation search query must be a ConversationSearchQuery"
+            )
+        normalized_query = normalize_conversation_literal_query(
+            query.text,
+            max_characters=CONVERSATION_MEMORY_POLICY.max_query_characters,
+        )
+
+        def search_snapshot(connection: object) -> ConversationSearchResult:
+            return _search_sqlite_snapshot(
+                connection,
+                search_index=self._search_index,
+                scope=scope,
+                query=query,
+                normalized_query=normalized_query,
+            )
+
+        return self._read(search_snapshot)
 
 
 class SQLiteConversationArchiveAdapter(_SQLiteAdapter):
@@ -536,10 +656,12 @@ class SQLiteConversationArchiveAdapter(_SQLiteAdapter):
             _validate_lease(lease, workspace_key=self._database.workspace_key)
 
         validate()
+        effective = False
 
         def import_in_transaction(
             connection: object,
         ) -> ConversationArchiveImportReceipt:
+            nonlocal effective
             _validate_database_snapshot(connection)
             imported = False
             for record, normalized_subject in zip(
@@ -572,6 +694,7 @@ class SQLiteConversationArchiveAdapter(_SQLiteAdapter):
                 for event in record.events:
                     _insert_event(connection, event)
                 imported = True
+                effective = True
             receipt = ConversationArchiveImportReceipt(
                 ConversationArchiveImportStatus.IMPORTED
                 if imported
@@ -580,12 +703,10 @@ class SQLiteConversationArchiveAdapter(_SQLiteAdapter):
             _validate_database_snapshot(connection)
             return receipt
 
-        return _database_call(
-            lambda: self._database.write(
-                import_in_transaction,
-                validate_snapshot=_validate_database_snapshot,
-                validate_lease=validate,
-            )
+        return self._write_under_lease(
+            import_in_transaction,
+            validate_lease=validate,
+            changed=lambda _result: effective,
         )
 
 
@@ -622,6 +743,21 @@ def provision_sqlite_conversation_storage(
             validate_lease=validator,
         )
     )
+    generation = _database_call(
+        lambda: database.read(
+            _lexical_generation,
+            validate_snapshot=_validate_database_snapshot,
+        )
+    )
+    _refresh_search_index_after_commit(
+        database,
+        SQLiteConversationSearchIndex(
+            database.workspace_key,
+            normalization_version=CONVERSATION_LITERAL_NORMALIZATION_VERSION,
+        ),
+        source_generation=generation,
+        validate_lease=validator,
+    )
     validator()
     return ConversationStoragePreflight(
         backend=ConversationStorageBackend.SQLITE,
@@ -640,23 +776,32 @@ def compose_sqlite_conversation_storage(
     """Preflight and bind one same-provenance SQLite service bundle."""
 
     resolved = _resolve_workspace(workspace)
-    timeout = validate_conversation_storage_mutation_timeout(
-        mutation_timeout_seconds
-    )
+    timeout = validate_conversation_storage_mutation_timeout(mutation_timeout_seconds)
     database = SQLiteDatabase(resolved)
     _preflight_database(database).require_ready()
     coordinator = WorkspaceConversationStorageMutationCoordinator(resolved)
+    search_index = SQLiteConversationSearchIndex(
+        database.workspace_key,
+        normalization_version=CONVERSATION_LITERAL_NORMALIZATION_VERSION,
+    )
     catalog = SQLiteConversationCatalog._from_components(
         database,
         coordinator,
         timeout,
+        search_index,
     )
     event_store = SQLiteConversationEventStore._from_components(
         database,
         coordinator,
         timeout,
+        search_index,
     )
-    search = ReferenceConversationSearch(catalog, event_store)
+    search = SQLiteConversationSearch._from_components(
+        database,
+        coordinator,
+        timeout,
+        search_index,
+    )
     provenance = ConversationStorageProvenance(
         backend=ConversationStorageBackend.SQLITE,
         workspace_key=database.workspace_key,
@@ -689,16 +834,19 @@ def compose_sqlite_conversation_archive(
     """Preflight and compose the privileged SQLite archive adapter."""
 
     resolved = _resolve_workspace(workspace)
-    timeout = validate_conversation_storage_mutation_timeout(
-        mutation_timeout_seconds
-    )
+    timeout = validate_conversation_storage_mutation_timeout(mutation_timeout_seconds)
     database = SQLiteDatabase(resolved)
     _preflight_database(database).require_ready()
     coordinator = WorkspaceConversationStorageMutationCoordinator(resolved)
+    search_index = SQLiteConversationSearchIndex(
+        database.workspace_key,
+        normalization_version=CONVERSATION_LITERAL_NORMALIZATION_VERSION,
+    )
     return SQLiteConversationArchiveAdapter._from_components(
         database,
         coordinator,
         timeout,
+        search_index,
     )
 
 
@@ -718,7 +866,9 @@ def _preflight_database(database: SQLiteDatabase) -> ConversationStoragePrefligh
     except SQLiteDatabaseFormatError:
         raise WorkspaceFormatError("invalid SQLite conversation storage") from None
     except SQLiteDatabaseSecurityError:
-        raise WorkspaceSecurityError("unsafe SQLite conversation storage path") from None
+        raise WorkspaceSecurityError(
+            "unsafe SQLite conversation storage path"
+        ) from None
     else:
         capability = ConversationStorageCapability.READY
     return ConversationStoragePreflight(
@@ -746,10 +896,9 @@ def _resolve_coordinator(
         if coordinator is None
         else coordinator
     )
-    if (
-        not callable(getattr(resolved, "borrow", None))
-        or getattr(resolved, "workspace_key", None) != os.fspath(workspace.root)
-    ):
+    if not callable(getattr(resolved, "borrow", None)) or getattr(
+        resolved, "workspace_key", None
+    ) != os.fspath(workspace.root):
         raise ConversationStorageCoordinationError()
     return resolved
 
@@ -787,7 +936,9 @@ def _database_call(operation: Callable[[], ResultT]) -> ResultT:
     except SQLiteDatabaseFormatError:
         raise WorkspaceFormatError("invalid SQLite conversation storage") from None
     except SQLiteDatabaseSecurityError:
-        raise WorkspaceSecurityError("unsafe SQLite conversation storage path") from None
+        raise WorkspaceSecurityError(
+            "unsafe SQLite conversation storage path"
+        ) from None
 
 
 def _validate_identity(session_id: str, conversation_id: str) -> tuple[str, str]:
@@ -819,9 +970,7 @@ def _metadata_from_row(row: object) -> ConversationMetadata:
             created_at=row[7],
             updated_at=row[8],
         )
-        expected_normalized_subject = normalize_conversation_subject(
-            metadata.subject
-        )
+        expected_normalized_subject = normalize_conversation_subject(metadata.subject)
     except (SessionIdError, TypeError, ValueError):
         raise SQLiteDatabaseFormatError() from None
     if normalized_subject != expected_normalized_subject:
@@ -829,14 +978,21 @@ def _metadata_from_row(row: object) -> ConversationMetadata:
     return metadata
 
 
-def _event_from_row(row: object) -> ConversationEvent:
-    """Construct one exact domain event and verify its persisted turn slot."""
+def _event_and_searchable_from_row(
+    row: object,
+) -> tuple[ConversationEvent, str]:
+    """Construct one event and verify its required derived lexical values."""
 
-    if type(row) is not tuple or len(row) != 11:
+    if type(row) is not tuple or len(row) != 12:
         raise SQLiteDatabaseFormatError()
     raw_kind = row[8]
-    raw_slot = row[10]
-    if type(raw_kind) is not str or type(raw_slot) is not int:
+    raw_searchable = row[10]
+    raw_slot = row[11]
+    if (
+        type(raw_kind) is not str
+        or type(raw_searchable) is not str
+        or type(raw_slot) is not int
+    ):
         raise SQLiteDatabaseFormatError()
     try:
         kind = ConversationEventKind(raw_kind)
@@ -855,8 +1011,16 @@ def _event_from_row(row: object) -> ConversationEvent:
     except (SessionIdError, TypeError, ValueError):
         raise SQLiteDatabaseFormatError() from None
     expected_slot = 0 if kind is ConversationEventKind.USER_MESSAGE else 1
-    if raw_slot != expected_slot:
+    expected_searchable = normalize_conversation_literal_text(event.content)
+    if raw_slot != expected_slot or raw_searchable != expected_searchable:
         raise SQLiteDatabaseFormatError()
+    return event, raw_searchable
+
+
+def _event_from_row(row: object) -> ConversationEvent:
+    """Construct one exact domain event from a persisted row."""
+
+    event, _searchable = _event_and_searchable_from_row(row)
     return event
 
 
@@ -864,6 +1028,98 @@ def _validate_database_snapshot(connection: object) -> None:
     """Reconstruct and validate every authoritative metadata/event row."""
 
     _read_validated_database_snapshot(connection)
+
+
+def _lexical_generation(connection: object) -> int:
+    """Return the exact required lexical-state generation."""
+
+    row = connection.execute(  # type: ignore[attr-defined]
+        "SELECT lexical_generation FROM conversation_storage_identity "
+        "WHERE singleton = 1"
+    ).fetchone()
+    if (
+        type(row) is not tuple
+        or len(row) != 1
+        or type(row[0]) is not int
+        or row[0] < 0
+        or row[0] > _SQLITE_SIGNED_INTEGER_MAX
+    ):
+        raise SQLiteDatabaseFormatError()
+    return row[0]
+
+
+def _advance_lexical_generation(connection: object) -> int:
+    """Advance required lexical state once inside its authoritative transaction."""
+
+    current = _lexical_generation(connection)
+    if current == _SQLITE_SIGNED_INTEGER_MAX:
+        raise SQLiteDatabaseFormatError()
+    generation = current + 1
+    cursor = connection.execute(  # type: ignore[attr-defined]
+        "UPDATE conversation_storage_identity SET lexical_generation = ? "
+        "WHERE singleton = 1 AND lexical_generation = ?",
+        (generation, current),
+    )
+    if getattr(cursor, "rowcount", None) != 1:
+        raise SQLiteDatabaseFormatError()
+    return generation
+
+
+def _refresh_search_index_after_commit(
+    database: SQLiteDatabase,
+    search_index: SQLiteConversationSearchIndex,
+    *,
+    source_generation: int,
+    validate_lease: Callable[[], None],
+) -> None:
+    """Best-effort rebuild disposable FTS from one committed main snapshot."""
+
+    def rebuild(connection: object) -> None:
+        if _lexical_generation(connection) != source_generation:
+            return
+        rows = connection.execute(  # type: ignore[attr-defined]
+            _EVENT_SELECT
+            + " WHERE kind != ? ORDER BY session_id, conversation_id, sequence",
+            (ConversationEventKind.RUNTIME_ERROR.value,),
+        )
+
+        def documents() -> Iterator[SQLiteConversationSearchIndexDocument]:
+            for row in rows:
+                event, searchable = _event_and_searchable_from_row(row)
+                yield SQLiteConversationSearchIndexDocument(
+                    session_id=event.session_id,
+                    conversation_id=event.conversation_id,
+                    sequence=event.sequence,
+                    searchable_content=searchable,
+                )
+
+        search_index.rebuild(
+            source_generation=source_generation,
+            documents=documents(),
+            validate_publication=validate_lease,
+        )
+
+    try:
+        validate_lease()
+        database.read(
+            rebuild,
+            validate_snapshot=_validate_database_snapshot,
+        )
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except (
+        ConversationStorageCoordinationError,
+        SQLiteConversationSearchIndexError,
+        SQLiteDatabaseFormatError,
+        SQLiteDatabaseMissingError,
+        SQLiteDatabaseSecurityError,
+        SQLiteDatabaseUnavailableError,
+        SQLiteDatabaseVersionError,
+        SessionIdError,
+        TypeError,
+        ValueError,
+    ):
+        return
 
 
 def _read_validated_database_snapshot(
@@ -1011,6 +1267,328 @@ def _select_events_and_context(
     return events, context
 
 
+def _select_recent_context(
+    connection: object,
+    session_id: str,
+    conversation_id: str,
+) -> ConversationContextWindow:
+    """Select context from at most 25 indexed complete-turn pairs."""
+
+    total_row = connection.execute(  # type: ignore[attr-defined]
+        "SELECT COUNT(*) FROM conversation_events "
+        "WHERE session_id = ? AND conversation_id = ? AND turn_slot = 1",
+        (session_id, conversation_id),
+    ).fetchone()
+    if (
+        type(total_row) is not tuple
+        or len(total_row) != 1
+        or type(total_row[0]) is not int
+        or total_row[0] < 0
+    ):
+        raise SQLiteDatabaseFormatError()
+    total_complete_turns = total_row[0]
+
+    user_rows = connection.execute(  # type: ignore[attr-defined]
+        _EVENT_SELECT_RECENT
+        + " WHERE session_id = ? AND conversation_id = ? AND turn_slot = 0 "
+        "AND EXISTS ("
+        "SELECT 1 FROM conversation_events AS outcome_event "
+        "INDEXED BY conversation_events_turn_slots "
+        "WHERE outcome_event.session_id = conversation_events.session_id "
+        "AND outcome_event.conversation_id = conversation_events.conversation_id "
+        "AND outcome_event.turn_id = conversation_events.turn_id "
+        "AND outcome_event.turn_slot = 1"
+        ") ORDER BY sequence DESC LIMIT ?",
+        (
+            session_id,
+            conversation_id,
+            _RECENT_CONTEXT_CANDIDATE_TURNS,
+        ),
+    ).fetchall()
+    users = tuple(_event_from_row(row) for row in user_rows)
+    if len(users) > total_complete_turns:
+        raise SQLiteDatabaseFormatError()
+    if not users:
+        if total_complete_turns != 0:
+            raise SQLiteDatabaseFormatError()
+        return ConversationContextWindow(
+            events=(),
+            total_complete_turns=0,
+            retained_turns=0,
+            omitted_turns=0,
+            retained_utf8_bytes=0,
+            truncated=False,
+        )
+
+    turn_ids = tuple(user.turn_id for user in users)
+    if len(set(turn_ids)) != len(turn_ids):
+        raise SQLiteDatabaseFormatError()
+    placeholders = ", ".join("?" for _ in turn_ids)
+    outcome_rows = connection.execute(  # type: ignore[attr-defined]
+        _EVENT_SELECT_BY_TURN
+        + " WHERE session_id = ? AND conversation_id = ? AND turn_slot = 1 "
+        f"AND turn_id IN ({placeholders}) ORDER BY sequence",
+        (session_id, conversation_id, *turn_ids),
+    ).fetchall()
+    outcomes = tuple(_event_from_row(row) for row in outcome_rows)
+    outcome_by_turn = {event.turn_id: event for event in outcomes}
+    if len(users) != len(outcomes) or len(outcome_by_turn) != len(outcomes):
+        raise SQLiteDatabaseFormatError()
+
+    recent_reversed: list[tuple[ConversationEvent, ConversationEvent]] = []
+    for user in users:
+        outcome = outcome_by_turn.get(user.turn_id)
+        if (
+            outcome is None
+            or user.kind is not ConversationEventKind.USER_MESSAGE
+            or outcome.kind is ConversationEventKind.USER_MESSAGE
+            or user.session_id != session_id
+            or user.conversation_id != conversation_id
+            or outcome.session_id != session_id
+            or outcome.conversation_id != conversation_id
+            or user.sequence >= outcome.sequence
+            or (
+                outcome.kind is ConversationEventKind.AGENT_REPLY
+                and outcome.sender != user.recipient
+            )
+        ):
+            raise SQLiteDatabaseFormatError()
+        recent_reversed.append((user, outcome))
+
+    retained_reversed: list[tuple[ConversationEvent, ConversationEvent]] = []
+    retained_utf8_bytes = 0
+    for turn in recent_reversed:
+        if len(retained_reversed) >= CONVERSATION_CONTEXT_POLICY.max_complete_turns:
+            break
+        turn_utf8_bytes = sum(
+            len(event.content.encode("utf-8", errors="strict")) for event in turn
+        )
+        if (
+            retained_utf8_bytes + turn_utf8_bytes
+            > CONVERSATION_CONTEXT_POLICY.max_utf8_bytes
+        ):
+            break
+        retained_reversed.append(turn)
+        retained_utf8_bytes += turn_utf8_bytes
+
+    retained = tuple(reversed(retained_reversed))
+    events = tuple(
+        sorted(
+            (event for turn in retained for event in turn),
+            key=lambda event: event.sequence,
+        )
+    )
+    retained_turns = len(retained)
+    omitted_turns = total_complete_turns - retained_turns
+    if omitted_turns < 0:
+        raise SQLiteDatabaseFormatError()
+    return ConversationContextWindow(
+        events=events,
+        total_complete_turns=total_complete_turns,
+        retained_turns=retained_turns,
+        omitted_turns=omitted_turns,
+        retained_utf8_bytes=retained_utf8_bytes,
+        truncated=omitted_turns > 0,
+    )
+
+
+def _search_sqlite_snapshot(
+    connection: object,
+    *,
+    search_index: SQLiteConversationSearchIndex,
+    scope: ConversationSearchScope,
+    query: ConversationSearchQuery,
+    normalized_query: str,
+) -> ConversationSearchResult:
+    """Construct one exact bounded result from a single main-database snapshot."""
+
+    metadata_sql = _METADATA_SELECT + " WHERE session_id = ?"
+    parameters: tuple[object, ...] = (scope.session_id,)
+    if not query.include_archived:
+        metadata_sql += " AND status = ?"
+        parameters += (ConversationStatus.ACTIVE.value,)
+    metadata_sql += " ORDER BY created_at, conversation_id LIMIT ?"
+    parameters += (CONVERSATION_MEMORY_POLICY.max_scan_conversations + 1,)
+    metadata_rows = connection.execute(  # type: ignore[attr-defined]
+        metadata_sql,
+        parameters,
+    ).fetchall()
+    metadata = tuple(_metadata_from_row(row) for row in metadata_rows)
+    identities = {item.conversation_id for item in metadata}
+    if len(identities) != len(metadata) or any(
+        item.session_id != scope.session_id for item in metadata
+    ):
+        raise SQLiteDatabaseFormatError()
+    if not query.include_archived and any(
+        item.status is ConversationStatus.ARCHIVED for item in metadata
+    ):
+        raise SQLiteDatabaseFormatError()
+
+    scan_truncated = len(metadata) > CONVERSATION_MEMORY_POLICY.max_scan_conversations
+    selected_metadata = metadata[: CONVERSATION_MEMORY_POLICY.max_scan_conversations]
+    generation = _lexical_generation(connection)
+    try:
+        candidate_hints = search_index.candidates(
+            source_generation=generation,
+            session_id=scope.session_id,
+            conversation_ids=tuple(item.conversation_id for item in selected_metadata),
+            normalized_query=normalized_query,
+            maximum=CONVERSATION_MEMORY_POLICY.max_scan_events,
+        )
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except SQLiteConversationSearchIndexError:
+        candidate_hints = frozenset()
+
+    hits: list[ConversationSearchHit] = []
+    scanned_events = 0
+    event_budget_exhausted = False
+    remaining_candidate_hints = set(candidate_hints or ())
+    for item in selected_metadata:
+        normalized_subject = normalize_conversation_subject(item.subject)
+        raw_match_kind = classify_conversation_literal_subject(
+            normalized_subject,
+            normalized_query,
+        )
+        if raw_match_kind is not None:
+            hits.append(
+                ConversationSearchHit(
+                    citation=ConversationCitation(
+                        item.session_id,
+                        item.conversation_id,
+                        None,
+                        None,
+                        None,
+                    ),
+                    subject=item.subject,
+                    subject_revision=item.subject_revision,
+                    status=item.status,
+                    updated_at=item.updated_at,
+                    match_kind=ConversationSearchMatchKind(raw_match_kind),
+                    snippet=build_conversation_literal_snippet(
+                        normalize_conversation_literal_text(item.subject),
+                        normalized_query,
+                        max_characters=(
+                            CONVERSATION_MEMORY_POLICY.max_snippet_characters
+                        ),
+                        max_utf8_bytes=(
+                            CONVERSATION_MEMORY_POLICY.max_snippet_utf8_bytes
+                        ),
+                    ),
+                )
+            )
+            continue
+
+        if event_budget_exhausted:
+            scan_truncated = True
+            continue
+        remaining = CONVERSATION_MEMORY_POLICY.max_scan_events - scanned_events
+        event_rows = connection.execute(  # type: ignore[attr-defined]
+            _EVENT_SELECT + " WHERE session_id = ? AND conversation_id = ? "
+            "ORDER BY sequence LIMIT ?",
+            (item.session_id, item.conversation_id, remaining),
+        ).fetchall()
+        user_events: dict[str, ConversationEvent] = {}
+        completed_turns: set[str] = set()
+        matched_event: ConversationEvent | None = None
+        matched_text = ""
+        for expected_sequence, row in enumerate(event_rows, start=1):
+            event, searchable = _event_and_searchable_from_row(row)
+            if (
+                event.session_id != item.session_id
+                or event.conversation_id != item.conversation_id
+                or event.sequence != expected_sequence
+            ):
+                raise SQLiteDatabaseFormatError()
+            if event.kind is ConversationEventKind.USER_MESSAGE:
+                if event.turn_id in user_events:
+                    raise SQLiteDatabaseFormatError()
+                user_events[event.turn_id] = event
+            else:
+                user = user_events.get(event.turn_id)
+                if (
+                    user is None
+                    or event.turn_id in completed_turns
+                    or (
+                        event.kind is ConversationEventKind.AGENT_REPLY
+                        and event.sender != user.recipient
+                    )
+                ):
+                    raise SQLiteDatabaseFormatError()
+                completed_turns.add(event.turn_id)
+            scanned_events += 1
+            coordinate = (event.conversation_id, event.sequence)
+            remaining_candidate_hints.discard(coordinate)
+            if event.kind is ConversationEventKind.RUNTIME_ERROR:
+                continue
+            if normalized_query in searchable:
+                matched_event = event
+                matched_text = searchable
+                break
+
+        if matched_event is None and len(event_rows) == remaining:
+            later = connection.execute(  # type: ignore[attr-defined]
+                "SELECT 1 FROM conversation_events WHERE session_id = ? "
+                "AND conversation_id = ? AND sequence > ? LIMIT 1",
+                (item.session_id, item.conversation_id, len(event_rows)),
+            ).fetchone()
+            if later is not None:
+                if type(later) is not tuple or later != (1,):
+                    raise SQLiteDatabaseFormatError()
+                scan_truncated = True
+        if scanned_events == CONVERSATION_MEMORY_POLICY.max_scan_events:
+            event_budget_exhausted = True
+        if matched_event is not None:
+            hits.append(
+                ConversationSearchHit(
+                    citation=ConversationCitation(
+                        matched_event.session_id,
+                        matched_event.conversation_id,
+                        matched_event.turn_id,
+                        matched_event.sequence,
+                        matched_event.kind,
+                    ),
+                    subject=item.subject,
+                    subject_revision=item.subject_revision,
+                    status=item.status,
+                    updated_at=item.updated_at,
+                    match_kind=ConversationSearchMatchKind.TRANSCRIPT,
+                    snippet=build_conversation_literal_snippet(
+                        matched_text,
+                        normalized_query,
+                        max_characters=(
+                            CONVERSATION_MEMORY_POLICY.max_snippet_characters
+                        ),
+                        max_utf8_bytes=(
+                            CONVERSATION_MEMORY_POLICY.max_snippet_utf8_bytes
+                        ),
+                    ),
+                )
+            )
+
+    ordered_hits = tuple(
+        sorted(
+            hits,
+            key=lambda hit: conversation_literal_sort_key(
+                hit.match_kind.value,
+                normalize_conversation_subject(hit.subject),
+                hit.citation.conversation_id,
+            ),
+        )
+    )
+    returned_hits = ordered_hits[: query.limit]
+    return ConversationSearchResult(
+        query=query,
+        normalized_query=normalized_query,
+        hits=returned_hits,
+        matched_conversations=len(ordered_hits),
+        scanned_conversations=len(selected_metadata),
+        scanned_events=scanned_events,
+        scan_truncated=scan_truncated,
+        truncated=scan_truncated or len(ordered_hits) > len(returned_hits),
+    )
+
+
 def _event_identity_exists(
     connection: object,
     session_id: str,
@@ -1118,11 +1696,13 @@ def _insert_event(connection: object, event: ConversationEvent) -> None:
     ):
         raise SQLiteDatabaseFormatError()
     turn_slot = 0 if event.kind is ConversationEventKind.USER_MESSAGE else 1
+    searchable_content = normalize_conversation_literal_text(event.content)
     connection.execute(  # type: ignore[attr-defined]
         "INSERT INTO conversation_events "
         "(session_id, conversation_id, sequence, schema_version, turn_id, "
-        "turn_slot, timestamp, sender, recipient, kind, content) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "turn_slot, timestamp, sender, recipient, kind, content, "
+        "searchable_content) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             event.session_id,
             event.conversation_id,
@@ -1135,6 +1715,7 @@ def _insert_event(connection: object, event: ConversationEvent) -> None:
             event.recipient,
             event.kind.value,
             event.content,
+            searchable_content,
         ),
     )
 
@@ -1273,6 +1854,7 @@ __all__ = [
     "SQLiteConversationArchiveAdapter",
     "SQLiteConversationCatalog",
     "SQLiteConversationEventStore",
+    "SQLiteConversationSearch",
     "compose_sqlite_conversation_archive",
     "compose_sqlite_conversation_storage",
     "preflight_sqlite_conversation_storage",

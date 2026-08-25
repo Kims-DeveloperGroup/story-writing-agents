@@ -53,7 +53,8 @@ workspace/
 │   ├── runtime.jsonl                                           [lazy active log]
 │   └── runtime.jsonl.{1..5}                                    [lazy backups]
 ├── discussion_logs/
-│   ├── conversation_storage.sqlite3                            [lazy explicit optional SQLite provision]
+│   ├── conversation_storage.sqlite3                            [lazy explicit authoritative SQLite provision]
+│   ├── .conversation_storage_fts5.sqlite3                      [lazy derived SQLite search companion]
 │   └── <session_id>/
 │       ├── <debate_id>.{state.json,jsonl,result.json}
 │       ├── <debate_id>.context.json                            [lazy debate context]
@@ -93,11 +94,32 @@ paths remain the shell/runtime storage and can coexist with the SQLite file.
 There is no synchronization, import, migration, or authority relationship
 between those two stores.
 
+The main database is authoritative. It includes required normalized subject
+and transcript-search values plus a lexical generation. The fixed private
+`discussion_logs/.conversation_storage_fts5.sqlite3` companion is a derived,
+owner-only FTS5 hint resource. It can appear after provisioning or an effective
+SQLite mutation, but absence, staleness, an unavailable FTS5 capability, or an
+unusable companion never changes main-database readiness or exact search
+results. Search falls back to the authoritative literal scan and performs no
+repair. A later effective mutation may create an absent companion or refresh a
+recognized safe one only after committing the main transaction under the same
+workspace mutation lease.
+
+Back up the main database as authoritative plaintext. The companion repeats
+normalized searchable transcript text and must receive the same filesystem,
+backup, and retention protection whenever it is retained; it may be omitted
+from an authoritative backup because exact fallback does not depend on it.
+There is no delete API or general repair operation. The supported direct index
+owner can create an absent resource or rebuild only a recognized safe one
+through its validated publication API; ordinary application search should not
+manage hints. Do not hand-edit or remove an unsafe or malformed companion to
+force search behavior; the adapter preserves and ignores it.
+
 Issue #261 owns integrating detection, installation, and provider selection
 into the user-facing settings/runtime flow; the direct preflight here only
 reports capability. This release has no automatic installation or
 provisioning, default backend change, `/settings` storage field, migration,
-MySQL adapter, FTS, or RAG integration. See the
+MySQL adapter, RAG integration, or FTS-dependent result behavior. See the
 [direct package API](../package-api.md#optional-sqlite-conversation-storage)
 and [recovery guidance](../../operations/recovery-and-limitations.md#sqlite-conversation-storage-recovery).
 

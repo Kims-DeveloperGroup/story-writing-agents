@@ -2,7 +2,9 @@
 
 > **Availability:** the installed shell exposes active-only `/search` and fresh
 > `/transcript` pages after story-session attachment. The same provider-free
-> capabilities are package-supported Python APIs.
+> capabilities are package-supported Python APIs. An optional direct-module
+> `SQLiteConversationSearch` implements the same exact contract without
+> changing shell or default-runtime selection.
 
 Key terms: **scope**—one authorized story session; **hit**—the strongest match
 from one conversation; **citation**—stable identity plus an optional exact
@@ -51,7 +53,7 @@ The service retains its collaborators and authorized scope but owns no
 persistence or provider resource.
 
 For an already provisioned optional SQLite database, direct Python code can
-compose the same reference implementation with one shared provenance and
+compose the direct SQLite implementation with one shared provenance and
 mutation coordinator:
 
 ```python
@@ -71,7 +73,7 @@ memory = swa.ConversationMemoryService(
 result = memory.search(swa.ConversationSearchQuery("council vessel"))
 ```
 
-The composed bundle exposes a raw `ReferenceConversationSearch`, whose
+The composed bundle exposes a raw `SQLiteConversationSearch`, whose
 `search(scope, query)` port requires an explicit scope. Wrapping that raw port
 with its same-provenance catalog and event store creates the authorized
 one-argument memory service used above. This does not select SQLite for the
@@ -87,6 +89,14 @@ characters before and after normalization, and contains no Unicode category-C
 characters. Comparison applies NFKC, case folding, trim, and whitespace
 collapse. Python callers may explicitly include archived records; the shell
 does not expose that option.
+
+These pure literal mechanics are shared rather than adapter-specific. The
+supported direct module `story_writing_agents.conversation_literal_search`
+owns versioned normalization, bounded query normalization, subject-tier
+classification, deterministic snippet construction, and result sorting. Its
+six-name surface is neither a package-root nor conversation-storage facade
+export and performs no I/O. See the exact
+[direct imports](package-api.md#conversation-literal-search-mechanics).
 
 Each conversation contributes at most one hit, using its first strongest
 source:
@@ -143,10 +153,19 @@ Wrong types raise `TypeError`; invalid values and stale pages raise
 `WorkspaceFormatError` or `WorkspaceSecurityError`. Shell mappings belong to
 [Recovery](../operations/recovery-and-limitations.md).
 
-Operations are read-only, provider-free, and index-free: no RAG or persisted
-search index. The SQLite composition uses the same `ReferenceConversationSearch`
-algorithm and adds no FTS or SQLite-specific citation behavior. Each SQLite
-catalog or event-store call has its own stable read transaction, but one search
-can make several such calls and is not a single database-global snapshot. The
+Operations are read-only and provider-free. The reference adapter is
+provider-neutral and index-free; neither implementation adds RAG or changes
+citations. `SQLiteConversationSearch` owns one main-database read transaction
+for its complete search. It examines the same bounded 256-conversation,
+10,000-event domain and derives exact normalization, subject precedence,
+first-visible-event matches, snippets, counters, flags, and ordering from
+authoritative rows.
+
+SQLite may consult a private disposable FTS5 companion for event candidate
+hints while that main snapshot is open. Hints never establish or exclude a
+match, affect scan counters, or change order. Missing, stale, false, busy,
+malformed, unsafe, runtime-incompatible, or unavailable hints fall back to the
+same complete authoritative literal scan. Search performs no companion repair,
+and FTS availability is not SQLite storage readiness. The
 [catalog](conversation-catalog.md) owns identity;
 [transcripts](conversation-transcripts.md) own event meaning.

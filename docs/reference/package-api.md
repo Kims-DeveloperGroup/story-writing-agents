@@ -3,9 +3,9 @@
 > **Availability:** the 120-name inventory below is exported from the
 > implemented `story_writing_agents` package facade. Separate sections document
 > archive additions to the supported `story_writing_agents.conversation_storage`
-> subpackage and the optional SQLite owning module; neither is a facade export.
-> Context and progress types are Python APIs; an export does not imply a CLI
-> command.
+> subpackage, pure literal-search mechanics, and the optional SQLite owning
+> modules; none is a package-root facade export. Context and progress types are
+> Python APIs; an export does not imply a CLI command.
 
 Key terms: **package facade**—the names re-exported at the package root;
 **public import**—a supported symbol imported from its documented owning
@@ -92,6 +92,61 @@ interactive activation values remain internal. The installed controller uses
 that private UI boundary for `$`/`$$` prompt editing without adding a public
 selection API or standalone artifact command. See
 [Canonical writing artifacts](writing-artifacts.md).
+
+<a id="conversation-literal-search-mechanics"></a>
+
+## Conversation literal-search mechanics
+
+Provider-neutral literal-search mechanics are a supported direct-module API,
+not part of the 120-name package-root or 64-name conversation-storage facades.
+The module is pure, owns no resource, performs no I/O, and exports exactly:
+
+```python
+from story_writing_agents.conversation_literal_search import (
+    CONVERSATION_LITERAL_NORMALIZATION_VERSION,
+    build_conversation_literal_snippet,
+    classify_conversation_literal_subject,
+    conversation_literal_sort_key,
+    normalize_conversation_literal_query,
+    normalize_conversation_literal_text,
+)
+```
+
+The normalization version is exactly `1`. Public call signatures are:
+
+```python
+normalize_conversation_literal_text(value: str) -> str
+normalize_conversation_literal_query(
+    value: str,
+    *,
+    max_characters: int,
+) -> str
+classify_conversation_literal_subject(
+    normalized_subject: str,
+    normalized_query: str,
+) -> str | None
+build_conversation_literal_snippet(
+    searchable: str,
+    normalized_query: str,
+    *,
+    max_characters: int,
+    max_utf8_bytes: int,
+) -> str
+conversation_literal_sort_key(
+    match_kind: str,
+    normalized_subject: str,
+    conversation_id: str,
+) -> tuple[int, str, str]
+```
+
+Normalization is strict-UTF-8 NFKC plus case folding, replacement of every
+Unicode category-C character with a space, and whitespace collapse. Query
+normalization additionally rejects raw category-C characters and enforces
+the caller's exact positive character bound before and after normalization.
+Subject classification returns `exact_subject`, `subject_prefix`,
+`subject_substring`, or `None`; the snippet and sort helpers implement the
+same deterministic public behavior used by both reference and SQLite search.
+See [Conversation search](conversation-search.md#search-contract).
 
 <a id="conversation-storage-subpackage"></a>
 
@@ -197,7 +252,7 @@ I/O and keeps `sqlite3` lazy; resolving a string or path-like argument still
 follows ordinary `Workspace` construction. The `compose_*` functions perform
 their documented readiness preflight.
 
-The owning module exports exactly:
+The owning module exports exactly 13 names:
 
 ```python
 from story_writing_agents.conversation_storage.sqlite import (
@@ -209,6 +264,7 @@ from story_writing_agents.conversation_storage.sqlite import (
     SQLiteConversationArchiveAdapter,
     SQLiteConversationCatalog,
     SQLiteConversationEventStore,
+    SQLiteConversationSearch,
     compose_sqlite_conversation_archive,
     compose_sqlite_conversation_storage,
     preflight_sqlite_conversation_storage,
@@ -226,10 +282,14 @@ The constants are exact:
 | `SQLITE_CONVERSATION_STORAGE_MINIMUM_VERSION` | `(3, 7, 16)` |
 | `SQLITE_CONVERSATION_STORAGE_SCHEMA_VERSION` | `1` |
 
-Schema v1 owns exactly nine explicit objects: three tables, three indexes, and
+Schema v1 owns exactly ten explicit objects: three tables, four indexes, and
 three insert triggers. Ordered event reads use the event table's composite
 primary-key autoindex, not a redundant explicit event-order index. Addressed
-turn lookup uses the unique turn-slot index.
+turn lookup uses the unique turn-slot index; bounded context uses the
+recent-outcome index. Required authoritative lexical state consists of
+canonical normalized subjects, canonical searchable event content, and one
+nonnegative generation. FTS and its shadow objects never enter the main
+database.
 
 The public call signatures are:
 
@@ -246,6 +306,16 @@ SQLiteConversationEventStore(
     mutation_coordinator: ConversationStorageMutationCoordinator | None = None,
     mutation_timeout_seconds: float = 5.0,
 )
+SQLiteConversationSearch(
+    workspace: Workspace | str | os.PathLike[str],
+    *,
+    mutation_coordinator: ConversationStorageMutationCoordinator | None = None,
+    mutation_timeout_seconds: float = 5.0,
+)
+SQLiteConversationSearch.search(
+    scope: ConversationSearchScope,
+    query: ConversationSearchQuery,
+) -> ConversationSearchResult
 SQLiteConversationArchiveAdapter(
     workspace: Workspace | str | os.PathLike[str],
     *,
@@ -284,19 +354,30 @@ too-old `sqlite3` runtime reports `unavailable`; a valid database reports
 `WorkspaceSecurityError`. Calling `require_ready()` on a non-ready result
 raises the corresponding conversation-storage readiness error. Every returned
 preflight has `backend == ConversationStorageBackend.SQLITE`, and successful
-provisioning returns `ready`.
+provisioning returns `ready`. The private FTS companion is neither inspected nor
+required for main-database readiness; provisioning may attempt its initialization
+only after the authoritative database is ready.
 
 Existing-database preflight is exhaustive: it verifies database/schema
 identity, runs SQLite integrity and global foreign-key checks, rejects orphan
 events, and reconstructs every metadata and event row. Ordinary catalog and
 event-store calls use bounded identity verification plus operation-local row
-validation instead. They do not certify unrelated database contents. In
-particular, append reads the indexed maximum sequence and at most the addressed
-turn's one user row and one outcome row rather than reconstructing the complete
-transcript. Database `TEXT` is strict UTF-8; malformed stored text encountered
-by verification or the requested operation maps to a content-free
-`WorkspaceFormatError`, while a caller-owned
-`UnicodeDecodeError` is not reclassified as storage corruption.
+validation instead. They do not certify unrelated database contents. Append
+reads the indexed maximum sequence and at most the addressed turn's one user
+row and one outcome row. `read_context()` obtains the exact complete-turn total
+and materializes at most the newest 25 addressed pairs—50 events—to retain 24
+and detect the boundary. Full `read()` still reconstructs the complete
+transcript. Database `TEXT` is strict UTF-8; malformed stored text or a required
+lexical projection that differs from its public source maps to a content-free
+`WorkspaceFormatError`, while a caller-owned `UnicodeDecodeError` is not
+reclassified as storage corruption.
+
+Every effective catalog/event mutation and archive import updates the required
+main-database lexical values and advances its generation atomically. Failure
+rolls back both domain and lexical state; an already-in-target-state status
+call or an exact archive reimport is generation-stable. A best-effort companion
+refresh runs only after the main commit under the still-valid lease, so its
+failure cannot roll back authoritative work and exact search remains available.
 
 For initial creation, provision only when the application deliberately wants a
 new empty SQLite destination. Provisioning never installs SQLite and does not
@@ -329,7 +410,7 @@ status.require_ready()
 services = compose_sqlite_conversation_storage(workspace)
 catalog = services.catalog
 event_store = services.event_store
-search = services.search  # ReferenceConversationSearch
+search = services.search  # SQLiteConversationSearch
 ```
 
 Provisioning also verifies a valid existing target and a complete competing
@@ -347,12 +428,76 @@ the
 for the operator response.
 
 Composition verifies readiness but never provisions. It returns one
-same-provenance catalog, event store, `ReferenceConversationSearch`, and shared
+same-provenance catalog, event store, `SQLiteConversationSearch`, and shared
 mutation coordinator. Direct adapters implement the catalog and transcript
 contracts documented on their reference pages. A caller may explicitly pass
 `services.event_store` to the existing `StoryRuntime` constructor for its
 transcript/context port; that does not select SQLite for the shell or wire the
 catalog and search services into the runtime.
+
+`SQLiteConversationSearch.search(scope, query)` owns one stable main-database
+read transaction for the complete public 256-conversation/10,000-event scan.
+It derives exact normalization, ranking, citations, snippets, counters,
+truncation, and ordering from authoritative rows. Optional FTS5 candidates are
+hints only: false positives, false negatives, score/order differences, absence,
+staleness, corruption, unsafe shape, runtime mismatch, or operational failure
+cannot change the result because exact fallback covers the full bounded scan.
+Search performs no repair.
+
+The sole companion owner is another supported direct-module integration
+surface, absent from both facades. Importing it performs no I/O and does not
+load `sqlite3`; its exact five-name export inventory is:
+
+```python
+from story_writing_agents.conversation_storage.sqlite_search_index import (
+    SQLITE_CONVERSATION_SEARCH_INDEX_PATH,
+    SQLITE_CONVERSATION_SEARCH_INDEX_SCHEMA_VERSION,
+    SQLiteConversationSearchIndex,
+    SQLiteConversationSearchIndexDocument,
+    SQLiteConversationSearchIndexError,
+)
+```
+
+The path is exactly
+`"discussion_logs/.conversation_storage_fts5.sqlite3"` and the companion
+schema version is exactly `1`. Integration signatures are:
+
+```python
+SQLiteConversationSearchIndex(
+    workspace_key: str,
+    *,
+    normalization_version: int,
+)
+SQLiteConversationSearchIndexDocument(
+    session_id: str,
+    conversation_id: str,
+    sequence: int,
+    searchable_content: str,
+)
+SQLiteConversationSearchIndex.candidates(
+    *,
+    source_generation: int,
+    session_id: str,
+    conversation_ids: tuple[str, ...],
+    normalized_query: str,
+    maximum: int,
+) -> frozenset[tuple[str, int]]
+SQLiteConversationSearchIndex.rebuild(
+    *,
+    source_generation: int,
+    documents: Iterable[SQLiteConversationSearchIndexDocument],
+    validate_publication: Callable[[], None],
+) -> None
+```
+
+Construction accepts only an already-canonical absolute workspace key, pins
+the fixed path, and performs path arithmetic only. `candidates()` and
+`rebuild()` live-probe FTS5 and map companion-specific failures to the
+content-free `SQLiteConversationSearchIndexError`. Rebuild can create an absent
+resource or update only a recognized safe one through the owner's contained
+publication checks; it is not a delete, main-database migration, readiness, or
+search-authority API. Ordinary application search should use
+`SQLiteConversationSearch` or SQLite composition rather than managing hints.
 
 `SQLiteConversationArchiveAdapter` is a privileged integration boundary. Its
 payload and record types are private, adapter-owned implementation details, so
@@ -362,6 +507,12 @@ Export validates every metadata and event row globally and rejects orphan
 events. Import validates the complete destination before mutation and again
 after mutation in the same transaction; orphan or malformed rows and divergent
 existing identities fail without a partial import.
+
+The amended exact schema remains version `1`; it is the first published
+contract for this adapter. A database created by older unpublished pre-Issue-257
+development code can fail the new exact fingerprint. This API defines neither
+a v2 schema nor migration or compatibility behavior for that development
+artifact.
 
 On platforms without POSIX `fcntl`, valid existing storage can still be
 preflighted and read observationally. The supported mutation coordinator cannot
@@ -376,10 +527,11 @@ None of these names is re-exported by `story_writing_agents` or
 `story_writing_agents.conversation_storage`. The installed shell and runtime
 continue to use filesystem conversation storage. This module adds no
 `/settings` selection, automatic install or provisioning, default activation,
-migration, FTS, RAG, MySQL, or new citation behavior. Issue #261 owns later
-integration of detection, installation, and provider selection into the
-user-facing settings/runtime flow; direct preflight here only reports
-capability.
+migration, RAG, MySQL, or new citation behavior. The private local FTS5
+companion supplies non-authoritative hints only and is not a backend, readiness
+requirement, or FTS-only search mode. Issue #261 owns later integration of
+detection, installation, and provider selection into the user-facing
+settings/runtime flow; direct preflight here only reports capability.
 
 ## Enum values
 
@@ -425,6 +577,11 @@ aliases. See [Backend and sessions](backend-and-sessions.md#lifecycle-value-cont
 Lower-level modules may contain implementation helpers. The package-root facade
 matches its `__all__`; archive names are supported only through the explicitly
 documented conversation-storage subpackage and its owning-module surfaces.
-The explicitly documented SQLite owning module is also a supported public
-surface, matches its own `__all__`, and neither it nor the package facade
-re-exports the other.
+The explicitly documented literal-search, SQLite adapter, and SQLite companion
+owner modules are also supported direct-module surfaces and match their own
+`__all__` values. None is re-exported by the package-root or
+conversation-storage facade.
+
+The exact current inventories are package root `120`, conversation storage
+`64`, conversation search `13`, SQLite database owner `11`, SQLite adapter
+`13`, literal-search mechanics `6`, and SQLite companion owner `5`.

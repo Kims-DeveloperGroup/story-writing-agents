@@ -528,6 +528,7 @@ class SQLiteDatabaseVerificationTests(unittest.TestCase):
         workspace = initialized_workspace(self)
         provision(workspace)
         expected_objects = (
+            ("index", "conversation_events_recent_outcomes"),
             ("index", "conversation_events_turn_slots"),
             ("index", "conversations_creation_order"),
             ("index", "conversations_status_creation_order"),
@@ -539,7 +540,7 @@ class SQLiteDatabaseVerificationTests(unittest.TestCase):
             ("trigger", "conversation_events_user_before_outcome_insert"),
         )
         expected_fingerprint = (
-            "68e35ee64c6a11f851faf3b470686ebe048501aae8b3301dae65dd4f679520ef"
+            "07249791c4c515db4c2b9ee7b5dc208e462ab48d3f9fde82cfbcf3bc768e26ce"
         )
 
         with raw_connection(workspace) as connection:
@@ -573,9 +574,18 @@ class SQLiteDatabaseVerificationTests(unittest.TestCase):
                     ("session_a", "conversation_a", "turn_a"),
                 ).fetchall()
             )
+            recent_outcome_plan = tuple(
+                row[3]
+                for row in connection.execute(
+                    "EXPLAIN QUERY PLAN SELECT sequence FROM conversation_events "
+                    "WHERE session_id = ? AND conversation_id = ? "
+                    "AND turn_slot = 1 ORDER BY sequence DESC LIMIT ?",
+                    ("session_a", "conversation_a", 25),
+                ).fetchall()
+            )
 
         self.assertEqual(objects, expected_objects)
-        self.assertEqual(len(objects), 9)
+        self.assertEqual(len(objects), 10)
         self.assertNotIn(
             ("index", "conversation_events_sequence_order"),
             objects,
@@ -591,13 +601,22 @@ class SQLiteDatabaseVerificationTests(unittest.TestCase):
         self.assertTrue(
             any("conversation_events_turn_slots" in row for row in turn_plan)
         )
+        self.assertTrue(
+            any(
+                "conversation_events_recent_outcomes" in row
+                for row in recent_outcome_plan
+            )
+        )
         self.assertFalse(
-            any("TEMP B-TREE" in row.upper() for row in (*event_order_plan, *turn_plan))
+            any(
+                "TEMP B-TREE" in row.upper()
+                for row in (*event_order_plan, *turn_plan, *recent_outcome_plan)
+            )
         )
         self.assertFalse(
             any(
                 "conversation_events_sequence_order" in row
-                for row in (*event_order_plan, *turn_plan)
+                for row in (*event_order_plan, *turn_plan, *recent_outcome_plan)
             )
         )
 
@@ -948,8 +967,10 @@ class SQLiteBoundedAppendTests(unittest.TestCase):
                     if statement.startswith(
                         "SELECT schema_version, session_id, conversation_id, "
                         "turn_id, sequence, timestamp, sender, recipient, kind, "
-                        "content, turn_slot FROM conversation_events"
+                        "content, searchable_content, turn_slot "
+                        "FROM conversation_events"
                     )
+                    and "AND turn_id = ? ORDER BY turn_slot" in statement
                 )
                 self.assertEqual(len(turn_selects), 2)
                 self.assertTrue(
@@ -1742,7 +1763,8 @@ class SQLiteDatabaseProvisioningTests(unittest.TestCase):
                     "INSERT INTO conversation_events "
                     "(session_id, conversation_id, sequence, schema_version, "
                     "turn_id, turn_slot, timestamp, sender, recipient, kind, "
-                    "content) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "content, searchable_content) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         "orphan_session",
                         "orphan_conversation",
@@ -1754,6 +1776,7 @@ class SQLiteDatabaseProvisioningTests(unittest.TestCase):
                         "user",
                         "plot_architect",
                         "user_message",
+                        "orphan content",
                         "orphan content",
                     ),
                 )

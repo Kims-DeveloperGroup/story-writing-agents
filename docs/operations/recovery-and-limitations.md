@@ -73,7 +73,9 @@ switch. See the exact [archive contract](../reference/conversation-archives.md).
 
 SQLite preflight is strict, observational, and byte-preserving. It may load and
 probe the host `sqlite3` runtime and open an existing database read-only, but it
-does not create, repair, migrate, rewrite, or remove storage.
+does not create, repair, migrate, rewrite, or remove storage. Readiness applies
+to the authoritative main database; the derived FTS companion is not required
+for preflight, provisioning, composition, reads, or exact search.
 
 | Result or failure | Meaning | Safe response |
 | --- | --- | --- |
@@ -81,10 +83,44 @@ does not create, repair, migrate, rewrite, or remove storage.
 | `unavailable` or `ConversationStorageUnavailableError` | `sqlite3` is missing, older than 3.7.16, fails its runtime probe, the database is busy/locked, or an operational resource is unavailable. | Inspect the host/runtime and competing processes outside this API, then retry explicitly. Issue #261 owns integrating detection/installation into the user-facing flow; direct preflight only reports capability, this release installs nothing, and there is no automatic retry. |
 | `ConversationStorageProvisioningNeededError` | Composition or an adapter operation requires a database that has not been provisioned. | Run observational preflight and, only for an intended empty target, the explicit leased provisioning flow. |
 | `WorkspaceVersionUnsupportedError` | The file has the recognized application identity but an unsupported schema version. | Stop workspace processes, preserve and verify a complete backup, then use a compatible runtime or a separately approved migration. This adapter supplies no migration. |
-| `WorkspaceFormatError` | Header, schema manifest/fingerprint/cookie, encoding, integrity, foreign keys, normalized subject, event structure, or strict sidecar state is invalid, or the stable database-name entry is nonregular without being a symlink. | Preserve the database and sidecars unchanged. Restore a known-good complete database or investigate offline; do not hand-edit or ask preflight to repair it. |
+| `WorkspaceFormatError` | Header, schema manifest/fingerprint/cookie, encoding, integrity, foreign keys, required lexical generation/searchable values, event structure, or strict sidecar state is invalid, or the stable database-name entry is nonregular without being a symlink. | Preserve the database and sidecars unchanged. Restore a known-good complete database or investigate offline; do not hand-edit or ask preflight to repair it. |
 | `WorkspaceSecurityError` | The database name is a symlink, or its named/opened path identity is unsafe, nonmeaningful, replaced, mismatched, or has an unexpected link count. | Stop all processes, back up the complete workspace, and restore safe exact path identities. Do not manually follow, unlink, or replace suspicious names. Explicit leased provisioning can recognize only the exact interrupted-publication case described below. |
 | `ConversationStorageCoordinationError` | A lease is wrong-workspace, wrong-thread, expired, released, or cannot be acquired safely; the POSIX advisory guard may also be unavailable or unsafe. | Let the supported owner finish or close it, then acquire a fresh exact-workspace lease. Never reuse or manufacture lease evidence. Without `fcntl`, keep use observational; supported provisioning and mutations remain unavailable. |
 | `ConversationExistsError` during private archive import | An existing identity differs from the incoming exact metadata or transcript. | Keep both sources and investigate. The whole import transaction rolls back; there is no merge or overwrite mode. |
+
+### Derived search companion recovery
+
+The fixed `discussion_logs/.conversation_storage_fts5.sqlite3` file is a
+private disposable hint resource, not a second authority. Missing, stale,
+busy, malformed, unsafe, generation-mismatched, runtime-incompatible, or
+FTS5-unavailable companion state always yields the same exact bounded
+main-database search. Search does not create, repair, remove, replace, or follow
+the rejected state, and these conditions do not change SQLite readiness.
+
+After an effective authoritative mutation commits, the adapter may create an
+absent companion or refresh a recognized safe one under the still-active
+workspace lease. Failure in that post-commit refresh is contained: the main
+mutation stays committed and subsequent searches use exact fallback. Do not
+replay an append or other logical mutation merely to refresh hints. A required
+main-database lexical-value or generation failure occurs before commit and
+rolls back the mutation instead.
+
+There is no delete API or general repair operation. The supported direct index
+owner can create an absent resource or rebuild only a recognized safe one
+through its validated publication API; it does not authorize manual path
+changes. Do not hand-edit, unlink, or replace an unsafe or malformed companion
+to force recovery; preserve it for offline investigation and rely on exact
+fallback.
+Owner cleanup is limited to its own unchanged temporary resources and one exact
+interrupted create-only alias shape. A backup may omit the companion but must
+retain the authoritative main database; if the companion is retained, protect
+it as plaintext transcript data and keep it with its matching main-database
+generation.
+
+The amended exact schema remains version `1`. A database produced by older
+unpublished pre-Issue-257 development code has the old fingerprint and can be
+rejected as malformed. There is no released-user migration promise, v2 schema,
+or automatic conversion for that development artifact.
 
 Preflight and ordinary reads never repair or remove storage. Explicit leased
 provisioning has one narrow cleanup for an interrupted no-overwrite
@@ -131,8 +167,10 @@ can succeed before a later close failure is reported, and provisioning can
 install one complete database before file/directory synchronization reports a
 failure. After either case, stop competing work and run fresh preflight plus a
 domain read before deciding whether to retry; blindly replaying a logical
-append could duplicate intended work. Beyond the exact leased alias cleanup
-above, the API performs no repair, compensation, retry,
+append could duplicate intended work. A failed best-effort companion refresh
+does not change that committed main state and needs no mutation replay. Beyond
+the exact leased alias cleanup above, the API performs no repair, compensation,
+retry,
 filesystem-to-SQLite migration, or SQLite-to-filesystem migration.
 
 <a id="unsupported-v1-session-data"></a>
@@ -535,7 +573,8 @@ work; the newest desired definition is selected instead.
 - Filesystem conversation storage remains selected by the installed shell and
   runtime. SQLite is a direct optional Python API only; there is no `/settings`
   storage choice, installer, automatic provisioning, default switch,
-  migration, FTS, RAG, or MySQL implementation. Issue #261 owns later
+  migration, RAG, MySQL, or FTS-dependent search behavior. Its private local
+  FTS5 companion supplies non-authoritative hints only. Issue #261 owns later
   user-facing integration of detection, installation, and selection; direct
   preflight here only reports capability.
 - Parsing, repository authorization/evidence, top-level `StoryRuntime`

@@ -72,9 +72,11 @@ CREATE TABLE conversation_storage_identity (
     singleton INTEGER NOT NULL PRIMARY KEY,
     schema_version INTEGER NOT NULL,
     schema_fingerprint TEXT NOT NULL,
+    lexical_generation INTEGER NOT NULL,
     CHECK (typeof(singleton) = 'integer' AND singleton = 1),
     CHECK (typeof(schema_version) = 'integer' AND schema_version = 1),
-    CHECK (typeof(schema_fingerprint) = 'text' AND length(schema_fingerprint) = 64)
+    CHECK (typeof(schema_fingerprint) = 'text' AND length(schema_fingerprint) = 64),
+    CHECK (typeof(lexical_generation) = 'integer' AND lexical_generation >= 0)
 )
 """.strip()
 
@@ -115,6 +117,7 @@ CREATE TABLE conversation_events (
     recipient TEXT NOT NULL,
     kind TEXT NOT NULL,
     content TEXT NOT NULL,
+    searchable_content TEXT NOT NULL,
     PRIMARY KEY (session_id, conversation_id, sequence),
     FOREIGN KEY (session_id, conversation_id)
         REFERENCES conversations (session_id, conversation_id)
@@ -133,6 +136,7 @@ CREATE TABLE conversation_events (
         AND kind IN ('user_message', 'agent_reply', 'runtime_error')
     ),
     CHECK (typeof(content) = 'text' AND length(CAST(content AS BLOB)) > 0),
+    CHECK (typeof(searchable_content) = 'text'),
     CHECK (
         turn_slot = CASE WHEN kind = 'user_message' THEN 0 ELSE 1 END
     )
@@ -152,6 +156,11 @@ ON conversations (session_id, status, created_at, conversation_id)
 _CREATE_TURN_SLOT_INDEX_SQL = """
 CREATE UNIQUE INDEX conversation_events_turn_slots
 ON conversation_events (session_id, conversation_id, turn_id, turn_slot)
+""".strip()
+
+_CREATE_RECENT_OUTCOME_INDEX_SQL = """
+CREATE INDEX conversation_events_recent_outcomes
+ON conversation_events (session_id, conversation_id, turn_slot, sequence DESC)
 """.strip()
 
 _CREATE_CONTIGUOUS_TRIGGER_SQL = """
@@ -217,6 +226,7 @@ _SCHEMA_STATEMENTS = (
     _CREATE_CONVERSATION_ORDER_INDEX_SQL,
     _CREATE_CONVERSATION_STATUS_INDEX_SQL,
     _CREATE_TURN_SLOT_INDEX_SQL,
+    _CREATE_RECENT_OUTCOME_INDEX_SQL,
     _CREATE_CONTIGUOUS_TRIGGER_SQL,
     _CREATE_USER_BEFORE_OUTCOME_TRIGGER_SQL,
     _CREATE_ADDRESSED_REPLY_TRIGGER_SQL,
@@ -514,11 +524,16 @@ class SQLiteDatabase:
                 module,
                 connection,
                 "INSERT INTO conversation_storage_identity "
-                "(singleton, schema_version, schema_fingerprint) VALUES (?, ?, ?)",
-                (1, SQLITE_SCHEMA_VERSION, _SCHEMA_FINGERPRINT),
+                "(singleton, schema_version, schema_fingerprint, lexical_generation) "
+                "VALUES (?, ?, ?, ?)",
+                (1, SQLITE_SCHEMA_VERSION, _SCHEMA_FINGERPRINT, 0),
             )
-            _execute(module, connection, f"PRAGMA user_version = {SQLITE_SCHEMA_VERSION}")
-            _execute(module, connection, f"PRAGMA schema_version = {_SQLITE_SCHEMA_COOKIE}")
+            _execute(
+                module, connection, f"PRAGMA user_version = {SQLITE_SCHEMA_VERSION}"
+            )
+            _execute(
+                module, connection, f"PRAGMA schema_version = {_SQLITE_SCHEMA_COOKIE}"
+            )
             _execute(module, connection, "COMMIT")
         except BaseException as exc:
             body_failure = exc
@@ -701,13 +716,16 @@ class SQLiteDatabase:
             identity_rows = _fetchall(
                 module,
                 connection,
-                "SELECT singleton, schema_version, schema_fingerprint "
+                "SELECT singleton, schema_version, schema_fingerprint, "
+                "lexical_generation "
                 "FROM conversation_storage_identity",
                 verification=True,
             )
-            if len(identity_rows) != 1 or len(identity_rows[0]) != 3:
+            if len(identity_rows) != 1 or len(identity_rows[0]) != 4:
                 raise SQLiteDatabaseFormatError()
-            singleton, schema_version, fingerprint = identity_rows[0]
+            singleton, schema_version, fingerprint, lexical_generation = identity_rows[
+                0
+            ]
             if type(schema_version) is not int:
                 raise SQLiteDatabaseFormatError()
             if schema_version != SQLITE_SCHEMA_VERSION:
@@ -717,6 +735,8 @@ class SQLiteDatabase:
                 or singleton != 1
                 or type(fingerprint) is not str
                 or fingerprint != _SCHEMA_FINGERPRINT
+                or type(lexical_generation) is not int
+                or lexical_generation < 0
             ):
                 raise SQLiteDatabaseFormatError()
 
@@ -730,9 +750,7 @@ class SQLiteDatabase:
             )
             if any(len(row) != 1 or type(row[0]) is not str for row in manifest_rows):
                 raise SQLiteDatabaseFormatError()
-            manifest = frozenset(
-                _normalize_schema_sql(row[0]) for row in manifest_rows
-            )
+            manifest = frozenset(_normalize_schema_sql(row[0]) for row in manifest_rows)
             if len(manifest_rows) != len(_EXPECTED_SCHEMA_MANIFEST) or (
                 manifest != _EXPECTED_SCHEMA_MANIFEST
             ):
@@ -823,11 +841,7 @@ def _load_and_probe_sqlite() -> Any:
         if foreign_keys != (1,):
             raise SQLiteDatabaseUnavailableError()
         row = connection.execute("SELECT sqlite_version()").fetchone()
-        if (
-            not isinstance(row, tuple)
-            or len(row) != 1
-            or type(row[0]) is not str
-        ):
+        if not isinstance(row, tuple) or len(row) != 1 or type(row[0]) is not str:
             raise SQLiteDatabaseUnavailableError()
     except BaseException as exc:
         body_failure = exc
@@ -1111,9 +1125,15 @@ def _verify_database_header(
         or header[_HEADER_READ_VERSION_OFFSET] != _SQLITE_ROLLBACK_JOURNAL_VERSION
     ):
         raise SQLiteDatabaseFormatError()
-    encoding = struct.unpack(">I", header[_HEADER_ENCODING_OFFSET:_HEADER_ENCODING_OFFSET + 4])[0]
-    user_version = struct.unpack(">I", header[_HEADER_USER_VERSION_OFFSET:_HEADER_USER_VERSION_OFFSET + 4])[0]
-    application_id = struct.unpack(">I", header[_HEADER_APPLICATION_ID_OFFSET:_HEADER_APPLICATION_ID_OFFSET + 4])[0]
+    encoding = struct.unpack(
+        ">I", header[_HEADER_ENCODING_OFFSET : _HEADER_ENCODING_OFFSET + 4]
+    )[0]
+    user_version = struct.unpack(
+        ">I", header[_HEADER_USER_VERSION_OFFSET : _HEADER_USER_VERSION_OFFSET + 4]
+    )[0]
+    application_id = struct.unpack(
+        ">I", header[_HEADER_APPLICATION_ID_OFFSET : _HEADER_APPLICATION_ID_OFFSET + 4]
+    )[0]
     if application_id != SQLITE_APPLICATION_ID:
         raise SQLiteDatabaseFormatError()
     if user_version != SQLITE_SCHEMA_VERSION:

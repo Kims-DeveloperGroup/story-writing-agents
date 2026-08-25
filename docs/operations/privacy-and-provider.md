@@ -3,7 +3,8 @@
 > **Availability:** these controls cover local reads, advisory turns, and
 > retrieval-enabled turns, management commands, focused-context consensus, and
 > runtime explicit-reference authorization and backend enforcement, plus direct
-> Python conversation archive values and filesystem transfer.
+> Python conversation archive values, filesystem transfer, and optional SQLite
+> conversation/search storage.
 > They do not make either provider, its executable, the workspace, or the
 > terminal trusted.
 > Inline canonical references in provider-bound prompt text are active.
@@ -55,8 +56,20 @@ The optional `discussion_logs/conversation_storage.sqlite3` database is also
 plaintext and can coexist with the filesystem catalog and transcripts, leaving
 two independent copies under caller control. It contains exact subjects,
 identities, timestamps, status, and transcript content plus derived normalized
-subjects and private turn slots. Protect the database, any live rollback
-journal, external backups, and process memory with the rest of the workspace.
+subjects, normalized transcript-search text, lexical generation, and private
+turn slots. Protect the database, any live rollback journal, external backups,
+and process memory with the rest of the workspace.
+
+The private derived
+`discussion_logs/.conversation_storage_fts5.sqlite3` companion repeats
+normalized non-runtime visible event text and stable conversation/event
+coordinates. Owner-only permissions and its disposable status do not encrypt,
+redact, securely erase, or make that material safe to disclose. Protect it and
+any retained backup as transcript data. An authoritative backup must preserve
+the main database; it may omit the companion because exact search falls back
+to the main snapshot. Search preserves and ignores an unsafe companion rather
+than reading or repairing it.
+
 Provisioning is creation, not migration or deletion; archive export/import is
 copying, not secure erase or a retention policy. The private archive payload
 contains exact metadata and events in memory, and any persistence or
@@ -88,11 +101,12 @@ absolute diagnostic path. Terminal escaping is not redaction. See
 [Conversation search](../reference/conversation-search.md) and
 [Terminal safety](terminal-safety.md).
 
-Direct SQLite catalog, transcript, context, and reference-search operations are
-provider-free and add no network call, authentication, or new citation
-mechanism. They can still expose plaintext through returned Python values,
-application logs, process memory, and caller-created backups. The installed
-runtime does not select this store automatically.
+Direct SQLite catalog, transcript, context, and exact literal-search operations
+are provider-free and add no network call, authentication, RAG, or new citation
+mechanism. Optional FTS5 hint lookup adds no network path and never becomes
+search truth. Returned Python values, application logs, process memory, and
+caller-created backups can still move or expose plaintext beyond the
+workspace. The installed runtime does not select this store automatically.
 
 <a id="native-authentication-boundary"></a>
 
