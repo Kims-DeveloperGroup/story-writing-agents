@@ -52,6 +52,10 @@
 > carries persistent Save guidance, and the top-level Settings picker shows a
 > structurally derived save-required warning only while pending values differ
 > from the opening baseline.
+> #287 adds the same dirty-state cue to the Save label, unifies explicit Cancel
+> and root Settings Escape, and lets a second consecutive commit of the same
+> normalized value leave a retained editor. These are `/settings` controller
+> policies, not generic picker or prompt behavior.
 > #273 defines the informative-content-retention policy, #274 supplies its
 > package-internal mode-gated accepted-input projection, and #275 installs the
 > controller consumers for attributed advisory and consensus messages plus
@@ -69,7 +73,7 @@ The words **must**, **must not**, and **may** below constrain the delivery
 issues. Requirements beyond the implemented #82, #83, #84, #85, #86, #79,
 #87, #94, #93, #105, #106, #111, #115, #119, #123, #126, #127, #142,
 #160, #162, #164, #209 provider OAuth initiative, #237, #241, #249, #252,
-#270, #271, and #73 slices do not describe
+#270, #271, #287, and #73 slices do not describe
 current production behavior.
 
 ## Delivery status
@@ -89,6 +93,7 @@ current production behavior.
 | #252 provider-discovered settings | Implemented: the per-agent editor exposes provider-neutral Provider, Model, and Effort fields. Entering Model or Effort performs one fresh, bounded discovery for the pending effective provider; model choices preserve provider order and custom/inherit compatibility, while effort choices use the pending effective model for Codex and the fixed Antigravity vocabulary. Raw catalogs and diagnostics are never persisted. |
 | #270 retained settings value editors | Implemented: the top-level and roster path use Settings > Agents > Agent settings, while Provider remains the field-level configuration concept. Valid Enter in Language, Persona, Maximum debate rounds, Provider, Model, Custom model, or Effort applies the pending value and reopens that editor with updated selection/default plus one replacing inline completed success result. Escape returns one settings level; Ctrl-C/EOF cancel the whole settings transaction. This policy is local to `/settings`; resume pickers and Save/Cancel confirmations remain one-shot. |
 | #271 settings Save guidance | Implemented: every retained value editor always states that entered changes remain pending in memory until Save, including initial entry, a valid-commit reopen, and validation. Each top-level Settings read independently compares the complete pending configuration with the opening baseline and shows the exact `save required` warning only when they differ. Complete guidance remains available in capable, narrow, `NO_COLOR`, and fallback presentation without changing persistence or picker policy. |
+| #287 settings pending actions | Implemented: while pending differs from the opening baseline, top-level Save is exactly `Save (*Required)` in plain content and only the suffix receives warning ANSI when eligible; the existing `[save required]` notice remains. Explicit Cancel and root Settings Escape exit immediately when clean or open the existing one-shot Cancel confirmation when dirty. Within retained value editors, a first valid commit applies and stays, while the next consecutive commit of the same normalized value returns one level silently; different valid values apply, stay, and re-arm. Invalid input, authentication failure, Custom model navigation, and editor re-entry reset that controller state. Save remains the only persistence boundary, and generic Picker/Prompt plus universal transient-after-submit behavior are unchanged. |
 | #105 agent reply presentation | Implemented: direct, retrieval, transcript, and focused-history agent replies use a presentation-only strict JSON object/array projection with exact unchanged fallback cases and two-space Unicode-preserving output; stored/provider content remains unchanged, and the `AGENT` role uses bold terminal-default foreground styling without background detection. |
 | #106 transient settings UI | Implemented: settings picker and prompt reads clear capable transient rows, suppress duplicate fallback finals, and keep nested Escape silent. #142 later makes this lifecycle universal for capable submitted input. |
 | #111 advisory progress indicator | Implemented: one advisory and consensus waiting four-glyph rolling indicator runs only on capable raw streams, including `NO_COLOR`; callback, non-TTY, `TERM=dumb`, and uncertain-capability paths remain silent, and no general animation or `[routing]`/`[waiting]` record is introduced. |
@@ -888,15 +893,20 @@ The presentation uses one `Panel` with `Section`, `Field`, and `Notice` values,
 plus one focused `Picker` or `Prompt`. It is not a new component or a
 general-purpose form abstraction. One section shows validated current values;
 another shows independent pending values. Controls render without the snapshot
-panel. Save and Cancel open transient selectable confirmations with highlighted
-YES and NO choices; their context shows only changed fields in both Current and
-Pending, with each displayed value marked `(Changed)`. When nothing differs,
-only a `No pending settings changes.` notice is shown, without empty sections.
+panel. Save opens its transient selectable confirmation with highlighted YES
+and NO choices. Explicit Cancel and Escape at the root Settings picker invoke
+one controller action: when clean it exits immediately without confirmation;
+when dirty it opens the existing transient Cancel confirmation. Confirmation
+context shows only changed fields in both Current and Pending, with each
+displayed value marked `(Changed)`. When nothing differs, Save confirmation
+shows only a `No pending settings changes.` notice, without empty sections.
 The controller keeps snapshots
 call-local and does not emit the diff while opening, navigating, or editing;
 top-level cancellation does not claim a panel that was not rendered.
-Nested Escape returns silently to its parent without a snapshot or cancellation
-record. Settings follows the universal submitted-input lifecycle: capable
+NO or Escape in a Cancel confirmation returns to the root Settings picker;
+nested Escape elsewhere returns silently to its parent without a snapshot or
+cancellation record. Ctrl-C and EOF still cancel the whole settings flow.
+Settings follows the universal submitted-input lifecycle: capable
 pickers, prompts, and confirmations clear their complete live frames before
 return, while fallback readers retain printed input and add no synthetic final
 control frame. Any implementation need for a new semantic
@@ -914,6 +924,17 @@ It is present on initial entry, after a valid commit reopens the editor, and
 while validation is shown. The exact entered-value success result is unchanged,
 replaces the previous result, and remains the only inline completed result; the
 instruction is not a completed result.
+
+For each retained editor, the first valid commit applies the normalized pending
+value, keeps that editor active, and arms that normalized value. The next valid
+commit in the same editor returns one level silently only when its normalized
+value equals the armed value. A different valid value applies, keeps the editor
+active, and replaces the armed value. Invalid input, provider-authentication
+failure, navigation through Custom model, and leaving and re-entering an editor
+reset the armed value. This is semantic commit sequencing with no raw-key timing
+window. It is implemented by the `/settings` controller consuming consecutive
+results; the generic Picker and Prompt controls remain commit-once and the
+universal transient-after-submit policy remains unchanged.
 
 At every top-level Settings picker read, the controller structurally compares
 the complete pending configuration with the opening baseline. If and only if
@@ -934,6 +955,14 @@ inactive and the current prompt reflects the recomputed state. This uses the
 existing `Notice`, picker, and prompt vocabulary; it adds no terminal primitive
 or global picker policy.
 
+The same comparison controls the Save choice label. It is exact plain `Save`
+when pending equals the opening baseline and exact plain `Save (*Required)`
+when they differ. In eligible ANSI output, warning styling applies only to
+`(*Required)`; the preceding separator space and `Save` prefix remain unstyled,
+and every plain, `NO_COLOR`, narrow, and fallback projection retains its
+ordinary treatment. This label augments rather than replaces the existing
+`[save required]` notice.
+
 The nested edit controls and titles are exactly Provider, Model, and Effort.
 Current/Pending confirmation remains intentionally provider-qualified—each
 agent can show Codex model, Codex reasoning, Antigravity model, and Antigravity
@@ -947,7 +976,7 @@ Language
 Persona
 Maximum debate rounds
 Agents
-Save
+Save or Save (*Required), according to the opening-baseline comparison
 Cancel
 ```
 
