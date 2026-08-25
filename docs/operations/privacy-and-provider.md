@@ -51,6 +51,17 @@ transmits, logs, or otherwise retains the returned bytes owns protection and
 cleanup for every copy. See
 [Canonical conversation archives](../reference/conversation-archives.md#archive-non-goals).
 
+The optional `discussion_logs/conversation_storage.sqlite3` database is also
+plaintext and can coexist with the filesystem catalog and transcripts, leaving
+two independent copies under caller control. It contains exact subjects,
+identities, timestamps, status, and transcript content plus derived normalized
+subjects and private turn slots. Protect the database, any live rollback
+journal, external backups, and process memory with the rest of the workspace.
+Provisioning is creation, not migration or deletion; archive export/import is
+copying, not secure erase or a retention policy. The private archive payload
+contains exact metadata and events in memory, and any persistence or
+transmission performed by its caller is outside this adapter's controls.
+
 ## Local management, search, and reads
 
 `/search` shows active subjects/user/replies; `/transcript` shows active or
@@ -76,6 +87,12 @@ fixed relative path `debug_logs/runtime.jsonl`, not a dynamically discovered or
 absolute diagnostic path. Terminal escaping is not redaction. See
 [Conversation search](../reference/conversation-search.md) and
 [Terminal safety](terminal-safety.md).
+
+Direct SQLite catalog, transcript, context, and reference-search operations are
+provider-free and add no network call, authentication, or new citation
+mechanism. They can still expose plaintext through returned Python values,
+application logs, process memory, and caller-created backups. The installed
+runtime does not select this store automatically.
 
 <a id="native-authentication-boundary"></a>
 

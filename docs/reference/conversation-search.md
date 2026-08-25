@@ -50,6 +50,35 @@ if result.hits:
 The service retains its collaborators and authorized scope but owns no
 persistence or provider resource.
 
+For an already provisioned optional SQLite database, direct Python code can
+compose the same reference implementation with one shared provenance and
+mutation coordinator:
+
+```python
+import story_writing_agents as swa
+from story_writing_agents.conversation_storage.sqlite import (
+    compose_sqlite_conversation_storage,
+)
+
+workspace = swa.Workspace("/path/to/initialized-story")
+services = compose_sqlite_conversation_storage(workspace)
+memory = swa.ConversationMemoryService(
+    swa.ConversationSearchScope("novel"),
+    services.catalog,
+    services.event_store,
+    search=services.search,
+)
+result = memory.search(swa.ConversationSearchQuery("council vessel"))
+```
+
+The composed bundle exposes a raw `ReferenceConversationSearch`, whose
+`search(scope, query)` port requires an explicit scope. Wrapping that raw port
+with its same-provenance catalog and event store creates the authorized
+one-argument memory service used above. This does not select SQLite for the
+shell or `StoryRuntime`. See the
+[preflight and provisioning example](package-api.md#optional-sqlite-conversation-storage)
+before composition.
+
 ## Search contract
 
 `ConversationSearchQuery(text, limit=10, include_archived=False)` is literal,
@@ -115,5 +144,9 @@ Wrong types raise `TypeError`; invalid values and stale pages raise
 [Recovery](../operations/recovery-and-limitations.md).
 
 Operations are read-only, provider-free, and index-free: no RAG or persisted
-search index. The [catalog](conversation-catalog.md) owns identity;
+search index. The SQLite composition uses the same `ReferenceConversationSearch`
+algorithm and adds no FTS or SQLite-specific citation behavior. Each SQLite
+catalog or event-store call has its own stable read transaction, but one search
+can make several such calls and is not a single database-global snapshot. The
+[catalog](conversation-catalog.md) owns identity;
 [transcripts](conversation-transcripts.md) own event meaning.

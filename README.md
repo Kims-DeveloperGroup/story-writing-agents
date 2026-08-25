@@ -146,6 +146,12 @@ They are application-controlled transport infrastructure, not a shell command,
 complete workspace backup, restore workflow, or storage migration. See
 [Conversation archives](docs/reference/conversation-archives.md).
 
+Conversation catalog, transcript, and reference-search ports also have an
+optional SQLite implementation for direct Python composition. It is not
+selected by the installed shell or `StoryRuntime`; start with the
+[package API](docs/reference/package-api.md#optional-sqlite-conversation-storage)
+before provisioning its separate database.
+
 <a id="current-limitations"></a>
 
 ## Important limits
@@ -156,6 +162,12 @@ complete workspace backup, restore workflow, or storage migration. See
 - Writing-artifact publication is journaled and catalog-last, and rolls forward
   on the next catalog or publication access after an interruption. It is not
   one transaction with debate logs, lifecycle state, or result files.
+- The installed shell and runtime continue to use filesystem conversation
+  storage. SQLite is an explicit, optional Python API: there is no `/settings`
+  selection, installation, automatic provisioning, default switch, migration,
+  FTS, RAG, or MySQL adapter. Issue #261 owns integrating detection,
+  installation, and selection into the user-facing settings/runtime flow;
+  direct preflight here only reports capability.
 - Smoke's explicit workspace is not read-only and retains bounded plaintext
   diagnostics when they can be written; abrupt termination can interrupt
   cleanup. A pass does not validate provider/model, terminal behavior,
