@@ -1151,6 +1151,65 @@ class PickerRenderingTests(unittest.TestCase):
         )
         self.assertNotIn("\x1b[33m", combined_ansi.text)
 
+    def test_warning_suffix_sanitizes_controls_and_excludes_description_style(
+        self,
+    ) -> None:
+        choices = (
+            Choice(
+                "save",
+                "Save",
+                warning_suffix="(*Required)",
+                description="Writes settings.",
+            ),
+            Choice(
+                "hostile",
+                "Hostile",
+                warning_suffix="(*Required)\x1b[31m\x00",
+            ),
+            Choice("continue", "Continue"),
+        )
+        state = initialize_picker(
+            Picker(
+                Prompt("Choose"),
+                choices,
+                highlighted_id="continue",
+            )
+        )
+        viewport = project_picker_viewport(state)
+        plain = render_picker_viewport(
+            viewport,
+            _capabilities(CapabilityProfile.PLAIN),
+        )
+        ansi = render_picker_viewport(
+            viewport,
+            _capabilities(CapabilityProfile.ANSI),
+        )
+
+        description_line = (
+            "  1. [available] Save (*Required) \u2014 Writes settings."
+        )
+        hostile_line = (
+            "  2. [available] Hostile (*Required)\\x1b[31m\\x00"
+        )
+        self.assertIn(description_line, plain.text.splitlines())
+        self.assertIn(hostile_line, plain.text.splitlines())
+        self.assertNotIn("\x1b", plain.text)
+        self.assertNotIn("\x00", plain.text)
+        self.assertEqual(strip_decorative_sgr(ansi.text), plain.text)
+        self.assertIn(
+            "  1. [available] Save \x1b[33m(*Required)\x1b[0m "
+            "\u2014 Writes settings.",
+            ansi.text.splitlines(),
+        )
+        self.assertIn(
+            "  2. [available] Hostile "
+            "\x1b[33m(*Required)\\x1b[31m\\x00\x1b[0m",
+            ansi.text.splitlines(),
+        )
+        self.assertEqual(ansi.text.count("\x1b[33m"), 2)
+        self.assertNotIn("\x1b[31m", ansi.text)
+        self.assertNotIn("\x00", ansi.text)
+
     def test_warning_suffix_component_palette_and_selected_outside_projection(
         self,
     ) -> None:
