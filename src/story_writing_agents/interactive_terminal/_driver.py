@@ -408,6 +408,20 @@ class RawTerminalDriver:
             return
         self._write_raw_text(text)
 
+    def write_accepted_input(self, text: str) -> None:
+        """Write one rendered accepted input only after live-mode selection."""
+
+        if type(text) is not str:
+            raise TypeError("accepted input output must be a string")
+        mode = self._input_latch.mode
+        if mode is TerminalInputMode.UNDECIDED:
+            raise RuntimeError(
+                "accepted input projection requires a selected input mode"
+            )
+        if mode is TerminalInputMode.FALLBACK:
+            return
+        self.write_text(text)
+
     def _write_raw_text(self, text: str) -> None:
         """Write one payload without progress interception."""
 

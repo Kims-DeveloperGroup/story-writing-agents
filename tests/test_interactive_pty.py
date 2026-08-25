@@ -1916,6 +1916,57 @@ print("RESULT=" + outcome.kind.value)
                     process.original_terminal_attributes,
                 )
 
+    def test_live_accepted_input_follows_cleanup_once_and_restores(self) -> None:
+        """Project one accepted message only after the capable frame is gone."""
+
+        source = r'''
+import sys
+
+from story_writing_agents.interactive_terminal import (
+    InteractivePromptInput,
+    InteractiveSemanticOutput,
+    Message,
+    Prompt,
+    build_stream_terminal,
+)
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+outcome = InteractivePromptInput(terminal).read_prompt(
+    Prompt("Accepted-input prelude", instruction="Enter one value."),
+    transient=True,
+)
+assert outcome.text == "value"
+InteractiveSemanticOutput(terminal).write_accepted_input(
+    Message("user", "accepted marker 🌊")
+)
+print("RESULT=" + outcome.kind.value)
+'''
+        before = _durable_tree(self.workspace.root)
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=40,
+            decorative_color=True,
+        )
+        process.wait_for_text("Accepted-input prelude >")
+        submit_mark = process.output_mark()
+        process.send_line("value")
+        submitted = process.wait_for_text("RESULT=commit", after=submit_mark)
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+
+        record = "user [completed]> accepted marker 🌊"
+        self.assertEqual(submitted.count(record), 1)
+        record_offset = submitted.index(record)
+        cleanup_offset = submitted.rfind("\x1b[J", 0, record_offset)
+        self.assertNotEqual(cleanup_offset, -1)
+        self.assertLess(cleanup_offset, record_offset)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+
     def test_internal_main_dynamic_choices_focus_commit_clear_and_restore(self) -> None:
         """Exercise call-local live choices without exposing opaque identities."""
 

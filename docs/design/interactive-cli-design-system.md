@@ -84,6 +84,8 @@ current production behavior.
 | #126 Enter completion and spacing | Implemented: at capable main prompts, Enter applies a highlighted suggestion without submitting and dismisses the palette so a second Enter submits; Enter and Tab add one ASCII trailing space only when the replaced token ends at the buffer end. |
 | #127 leading routed-agent suggestions | Implemented: the capable main prompt projects `@lead`, `@plot`, `@character`, and `@execution` for a cursor-active first leading token, using canonical preferred route aliases and the existing completion controls. |
 | #142 live resume choices and transient input | Implemented: interactive session and conversation selection use only `/session resume [NAME]` and `/conversation resume [ID]`; exact omitted commands show controller-owned choices before submission on capable streams when a disposable read yields eligible rows. A submitted omitted command uses the generic picker—live on a capable stream and numbered in fallback—only after its fresh read succeeds with eligible rows; empty and failed reads report without a picker. Dynamic-choice Enter submits an explicit identity directly. Every capable input read clears its complete live frame before returning and attempts the same cleanup on failure, while persistent semantic results remain in scrollback. |
+| #274 mode-gated accepted-input projection | Implemented package-internally: the unlisted semantic-output adapter renders one accepted-input component and delegates it to a terminal-owned projection sink. Stream construction binds that sink to the sole driver's already selected input mode: `LIVE` writes once through the existing persistent/progress-safe path, `FALLBACK` writes nothing because ordinary input remains visible, and `UNDECIDED` rejects the call. Callback construction also remains silent. The seam retains no submitted payload or commit token and changes no supported public API. |
+| Informative-content retention policy | Specified and partially enabled: control presentation remains transient, while accepted advisory/routed messages, consensus prompts, and result-defining domain values require one informative scrollback representation. #274 supplies only the terminal mode-gated projection seam; controller advisory, consensus, and query/filter consumers and end-to-end acceptance coverage remain pending #275. |
 | #209 provider OAuth onboarding | Implemented: a four-frame accessible welcome precedes native Codex/Antigravity status and sign-in; startup hard-gates every distinct effective route, `/auth` exposes the same global workflow, settings authenticates before route assignment and Save, and absent-only workspace defaults preserve explicit routing. Provider output, URLs, accounts, tokens, credentials, and native persistence remain provider-owned. |
 | #249 completion-aware native login | Implemented: while an inherited-terminal Codex or Antigravity login child remains open, silent bounded selected-provider probes use null streams. Fresh authenticated status stops and reaps only that exact child and returns automatically to startup, `/auth`, or Settings; Story adds no exit, confirmation, extra Enter, or second authorization-code paste. |
 | #237 high-visibility startup welcome | Implemented: the bounded four-frame startup lifecycle precedes native Codex/Antigravity authentication, preserves scrollback, and keeps provider output outside the terminal-owned presentation. |
@@ -98,6 +100,8 @@ The design must:
 
 - represent content and interaction semantically before rendering;
 - remain readable in structured plain text, including when color is disabled;
+- preserve accepted user-authored content and informative semantic output in
+  scrollback while clearing only interaction-owned presentation;
 - use one raw-terminal owner and pure control transitions;
 - keep preview and navigation free of runtime and storage effects;
 - preserve public Python compatibility and noninteractive machine contracts;
@@ -133,7 +137,7 @@ make the union nestable.
 | `Section` | Divides a panel or long record into a named logical region. |
 | `Field` | Associates one stable label with one value. The label remains visible when alignment degrades. |
 | `Notice` | Communicates status, guidance, warning, success, cancellation, empty, loading, or error meaning independent of color. |
-| `Message` | Presents attributed user, agent, or system content while preserving content boundaries. |
+| `Message` | Presents attributed user, agent, or system content while preserving content boundaries. Once emitted after acceptance, it is informative scrollback output rather than input-control state and must not be erased by later control cleanup. |
 | `Record` | Presents one atomic domain result or event with its metadata and content. |
 | `ListView` | Presents an ordered collection, count/position context, and an explicit empty state. Its items remain semantic records or fields, not preformatted terminal strings. |
 | `SuggestionPalette` | Presents noncommitting candidates anchored to an editable input buffer. It owns open/highlight state, never parser or runtime work. |
@@ -313,6 +317,54 @@ slice may make a narrower exception only for an explicitly documented and
 tested live-control redraw/restoration sequence. It must not split one domain
 record into multiple caller-visible callback records.
 
+### Informative content versus control presentation
+
+Terminal persistence is decided by semantic purpose, not by whether text was
+visible inside an input frame before Enter. In this section, **persistent**
+means that one user-visible representation remains in terminal scrollback; it
+does not add a storage, transcript-retention, provider-history, or audit
+guarantee.
+
+An input is **informative content** when it supplies user-authored domain or
+provider-bound meaning that a later reply, result, or error needs for readable
+conversation context. An input is **control-only** when it merely navigates,
+selects, confirms, or configures an interaction and the resulting semantic
+output identifies the accepted outcome. When uncertain, preserve a safe
+semantic representation if removing the text would make the following output
+ambiguous; do not preserve secrets, credentials, provider-native input, or raw
+diagnostics.
+
+| Surface or value | Post-interaction policy |
+| --- | --- |
+| Editable prompt rows, cursor/buffer presentation, suggestion palettes, pickers, settings/configuration editors, confirmations, validation attached to an active control, and composer scaffolding | Transient control presentation. Clear the complete capable frame after its outcome. A selected value is not echoed merely to reproduce the control. |
+| Accepted ordinary advisory text, `/say` text, and `@agent` routed-message text | Persistent user `Message`. Preserve the exact semantic message body with sender and target attribution; command envelope text is not the message body. |
+| Accepted `/run` and `/run --fresh` prompt text, including a multiline composer payload committed by `/send` | Persistent user `Message` or equivalently attributed prompt record before consensus progress. `/draft-file` source bytes are not echoed merely because a run consumes them. |
+| User-authored query, filter, subject, path, or other domain value needed to interpret a result | Include it in the resulting `Record`, `Notice`, `Panel`, or `ListView` context when the result does not already identify it. Do not retain a second raw input snapshot. Search and filtered-list output, for example, must name the accepted query or filter. |
+| Agent replies and informative system output, including completed, empty, cancelled, warning, error, result, orientation, and recovery components | Persistent semantic output by default. A component may be transient only when its purpose-bound contract explicitly classifies it as live progress or step-local control guidance. |
+| Loading glyphs, redraw-only progress, highlights, validation superseded inside the same active control, welcome animation intermediates, and other explicitly documented live frames | Transient presentation. Their final informative outcome follows the persistent-output rule above. |
+
+For a capable read, the driver first clears and restores the complete input
+frame. The controller then emits any required user `Message` or contextual
+domain record exactly once, before progress, an agent reply, or an operation
+result. That content remains visible even if the provider operation later
+fails, is cancelled, or is interrupted after acceptance. Parser rejection or
+controller rejection before the input becomes an accepted message emits only
+the established safe error; it must not misrepresent invalid input as a sent
+message.
+
+Ordinary-line fallback cannot erase the terminal's echoed input. It therefore
+keeps that one visible representation and must not add a duplicate solely to
+imitate capable-mode reprojection. Result context may still add attribution or
+a normalized domain field when needed, but must not print a second verbatim
+submitted snapshot. Informative output is never included in a later control's
+erase region, and redraw around such output must preserve it.
+
+**Availability:** #274 implements only the package-internal mode-gated
+accepted-input projection seam described below. It does not classify input or
+invoke that seam from advisory, consensus, search, or filtered-list controller
+paths. Those consumers and their end-to-end acceptance coverage remain pending
+#275, so the complete content-retention policy is not yet available.
+
 ### Permanent input-mode lifecycle
 
 One resource-free input latch belongs to each stream-backed driver. Before any
@@ -340,19 +392,52 @@ or restoration. Those remain in the driver and are acquired per capable
 interaction. The permanent ownership prevents a `TextIOWrapper` decoded queue
 from hiding bytes when a later component reads its raw buffer.
 
+### Mode-gated accepted-input projection
+
+#274 adds the unlisted
+`InteractiveSemanticOutput.write_accepted_input(component)` operation. The
+terminal core validates and renders the closed semantic component under its
+current output-capability profile, appends the final LF, and delegates that
+already rendered string to a distinct accepted-input sink. Callback
+construction keeps a no-op sink. Stream construction binds the sink to the sole
+driver without exposing its input-mode latch to the controller.
+
+The driver accepts that rendered string only after its input mode has been
+selected:
+
+| Selected mode | Projection behavior |
+| --- | --- |
+| `UNDECIDED` | Reject with an internal lifecycle error; accepted-input projection cannot choose the input mode or run before a read establishes it. |
+| `LIVE` | Write once through the existing persistent, progress-safe terminal path after the capable input frame has already been cleaned up and restored. |
+| `FALLBACK` | Write nothing because the ordinary reader's prompt and echoed input already remain visible; do not create a duplicate record. |
+
+The operation does not decide whether input is informative or accepted, parse
+commands, inspect the submitted component, retain a payload or commit token, or
+own cleanup. Its consumer must call it only after controller acceptance. The
+adapter retains only the terminal's two bound writer capabilities, and the
+driver retains no accepted-input state. The supported `InteractiveTerminal`
+constructor, methods, facade `__all__`, root exports, and noninteractive CLI
+contracts are unchanged. Controller use of this seam remains pending #275.
+
 ### Submitted-input lifecycle
 
 This is the normative lifecycle for interactive input. A **complete live
 frame** is every row and terminal cell drawn for one capable read: semantic
 context and prompt, the editable buffer, suggestions or choices, validation,
 and every redraw belonging to that read. It is transient display state, not a
-domain event or durable record.
+domain event or durable record. Accepted informative content may originate in
+that buffer, but its scrollback representation is a new semantic component
+emitted only after frame cleanup; the editable frame itself never becomes the
+record.
 After commit, cancellation, interrupt, EOF, or failure, a submitted picker or
 any other input component view must not remain printed in the terminal's
 display history on a capable stream. The driver erases or replaces that
-control before returning. A durable result, cancellation, validation, error,
-orientation, or event panel may be emitted separately after the input boundary
-and remain in scrollback.
+control before returning. This cleanup rule applies to interaction-owned
+presentation only; it does not authorize erasing previously emitted
+informative output or omitting the required post-acceptance user `Message`. A
+durable result, cancellation, validation, error, orientation, event panel, or
+accepted informative-content projection may be emitted separately after the
+input boundary and remain in scrollback.
 
 - The raw driver owns the complete frame. Before any capable input read returns
   or propagates a failure, it attempts to clear the whole current frame and
@@ -369,15 +454,17 @@ and remain in scrollback.
 - Cleanup changes only what remains visible from the input control. A successful
   nonblank main submission is still appended once to driver-local history after
   cleanup and restoration, and the parser still receives it once. Controller
-  validation, cancellation, discard, error, orientation, and result components
-  are persistent semantic output written after the input boundary and remain in
-  scrollback.
+  validation, cancellation, discard, error, orientation, and result components,
+  plus accepted provider-bound user content, are persistent semantic output
+  written after the input boundary and remain in scrollback. Control-only
+  commands and field values are not automatically echoed.
 - Within terminal capability limits, plain callback and ordinary-line fallback
   follow the same transient lifecycle intent: they do not print a duplicate
   submitted snapshot or synthetic final `completed` or `cancelled` control
   frame. They cannot erase prompts or input already printed by the terminal, so
-  those bytes remain visible. Pure controls may still use those internal states
-  to describe their outcome; the state is not an extra user-visible record.
+  those bytes remain visible and satisfy the one-visible-representation rule
+  for accepted informative input. Pure controls may still use internal outcome
+  states; the state is not an extra user-visible record.
 - Conversation-subject input remains history- and completion-free. After the
   driver selects `LIVE`, it uses a cleared capable frame; after the driver
   selects `FALLBACK`, it uses the ordinary callback. Its submitted value and
@@ -1290,9 +1377,14 @@ identity to that same unlisted seam. #85 adds unlisted
 compatibility facade. These names are not supported public API, do not change
 `__all__` or the root package facade, and must not be imported from package
 leaves by controller code. Constructing the semantic adapter validates and
-retains an `InteractiveTerminal` writer without rendering, observing streams,
-or acquiring a resource; each `write_component(component)` call renders and
-writes exactly one component.
+retains an `InteractiveTerminal` ordinary-component writer and accepted-input
+writer without rendering, observing streams, or acquiring a resource. Each
+`write_component(component)` call renders and writes exactly one component.
+The unlisted `write_accepted_input(component)` call also renders exactly one
+component, then delegates its completed text to the distinct mode-gated sink:
+callback and `FALLBACK` sinks write nothing, `LIVE` writes once, and
+`UNDECIDED` rejects the lifecycle violation. Neither operation changes the
+supported facade or root exports.
 
 #86 adds package-private `ComposerState`, `InputPromptView`, and
 `RenderedInputFrame` contracts. Those types remain outside the package facade,
@@ -1365,7 +1457,7 @@ boundary. Responsibility and dependency direction are fixed as follows:
 | --- | --- |
 | `interactive_settings` | Package-internal immutable opening baseline and pending configuration, safe lexical persona catalog, validation, exact stale-state detection, changed-only canonical persistence, and reverse exact-byte rollback. It has no terminal, controller, runtime, backend, or parser dependency and no facade export. |
 | `provider_catalog` | Private standard-library-only native-provider catalog subprocess boundary. It owns fresh exact commands, bounded stdout capture, strict provider parsing, fixed content-free states, and child/thread cleanup; it retains no cache, persistence, credentials, raw diagnostics, or import-time resource and has no root-facade export. |
-| `interactive_terminal.__init__` | Compatibility facade with the exact existing public surface, including the additive optional `write_error()` debug-log-path keyword, plus package-internal stream construction, semantic output, picker, cancellable-prompt, and supplied-text viewer seams. It owns no import-time resource or state. |
+| `interactive_terminal.__init__` | Compatibility facade with the exact existing public surface, including the additive optional `write_error()` debug-log-path keyword, plus package-internal stream construction, ordinary semantic output, mode-gated accepted-input projection, picker, cancellable-prompt, and supplied-text viewer seams. It owns no import-time resource or state. |
 | `interactive_terminal._model` | Immutable semantic components, bounded main-history/control state, distinct static, dynamic-choice, whole-file-reference, and ranged-reference palette positions, composer and picker control state, bounded picker viewport, semantic input/render frames, key/focus values including Shift+Up/Down, and transition/render results. No I/O. |
 | `interactive_terminal._controls` | Pure established line-input, main-command/history, dynamic main-choice, composer-line, confirmation-answer, cancellable-prompt, and picker transitions; immediate ranged-reference palette projection and highlight ownership; bounded history; completion/choice projection; picker initialization/reconciliation, disabled-skipping live navigation, exact fallback grammar, and viewport selection. |
 | `interactive_terminal._render` | Pure safe responsive output and semantic input renderers for plain and fixed ANSI profiles, including bounded live and complete-list fallback picker projections and the strict JSON agent-reply presentation projection. It sanitizes dynamic content before styling and returns render data without writing. |
@@ -1374,8 +1466,8 @@ boundary. Responsibility and dependency direction are fixed as follows:
 | `interactive_terminal._viewer_controls` | Pure initialization, clamped ordinary and anchored navigation, normalized commit and noncommit exits, exact ASCII fallback grammar, and contiguous viewport projection. |
 | `interactive_terminal._viewer_render` | Pure bounded-prefix one-row-per-source-line live projection and complete numbered fallback; visible escaping, one-based numbers, plain/ANSI current and selection cues, cell-aware live ellipsis clipping, and no fallback clipping. |
 | `interactive_terminal._input_lifecycle` | Irreversible per-driver `UNDECIDED` to `LIVE`/`FALLBACK` selection; exact live source/decoder identity; canonical ASCII/UTF-8/ISO-8859-1 and built-in strict/surrogateescape admission; one persistent exact-byte incremental reader with bounded decoded suffix, stable EOF, poisoning, interrupt reset, and synchronous input exclusion. It owns no stream closure, terminal, key, readiness, screen, or restoration resource. |
-| `interactive_terminal._driver` | Sole owner of raw streams, capability/width/height detection, byte/key decoding integration including Shift+Arrow, pre-activation configured-control validation, fixed Escape readiness wait after any pending decoded suffix, complete-live-frame cleanup, cursor controls, viewer alternate screen, raw mode, restoration, writes, flushes, and one bounded process-local main-history store per instance. Its supported main/composition, history-free semantic prompt, picker, and viewer routes accept call-local collaborators; Enter/Tab converts the nonmodal ranged-source highlight into viewer entry under the same input latch, and non-main input does not consult history. |
-| `interactive_terminal._core` | `InteractiveTerminal`, established public-operation orchestration, semantic composer/confirmation view construction and event mapping, canonical static/dynamic main-choice adapter, package-internal stream factory, semantic render seam, resource-free `InteractiveSemanticOutput`, and unlisted resource-free main, picker, prompt, and supplied-text viewer adapters. It binds call-local reference scope/source-list/text collaborators and these inputs to the sole driver without owning another store/raw implementation. |
+| `interactive_terminal._driver` | Sole owner of raw streams, capability/width/height detection, byte/key decoding integration including Shift+Arrow, pre-activation configured-control validation, fixed Escape readiness wait after any pending decoded suffix, complete-live-frame cleanup, cursor controls, viewer alternate screen, raw mode, restoration, writes, flushes, and one bounded process-local main-history store per instance. Its supported main/composition, history-free semantic prompt, picker, and viewer routes accept call-local collaborators; Enter/Tab converts the nonmodal ranged-source highlight into viewer entry under the same input latch, and non-main input does not consult history. It also mode-gates already rendered accepted-input output: selected `LIVE` uses the existing progress-safe persistent writer, selected `FALLBACK` is silent, and `UNDECIDED` rejects; it retains no payload or commit token. |
+| `interactive_terminal._core` | `InteractiveTerminal`, established public-operation orchestration, semantic composer/confirmation view construction and event mapping, canonical static/dynamic main-choice adapter, package-internal stream factory, semantic render seam, resource-free `InteractiveSemanticOutput`, and unlisted resource-free main, picker, prompt, and supplied-text viewer adapters. The semantic adapter binds separate ordinary-component and accepted-input capabilities; callback construction supplies a no-op accepted-input sink, and stream construction delegates that sink to the sole driver. Core binds call-local reference scope/source-list/text collaborators and these inputs without owning another store/raw implementation. |
 | `interactive_line_editor` | Standalone/public compatibility-only facade over the same supported main-command reader and one per-editor driver/history store. |
 
 The allowed graph is:
@@ -1516,9 +1608,10 @@ and 218 edges remain canonical in the module index.
 | Search results | `ListView`, `Record`, `Field`, `Notice` | Citation, snippet, active/archive state, truncation, empty/error | #84 (implemented) |
 | Transcript | `ListView`, `Record`, `Field`, `Notice` | Event identity/order and LF content boundaries remain intact | #84 (implemented) |
 | Focused history | `ListView`, `Record`, `Field`, `Notice` | Snapshot order, context accounting, empty/cancelled/error | #84 (implemented) |
-| Advisory turns | `Message`, `Notice`, `Field` | Operation result, cancelled/completed/error; optional capable-only indicator during advisory/consensus wait; no `[routing]`/`[waiting]` record | #83 and #111 (implemented) |
+| Accepted user-to-agent content | `Message`, optionally `Field` for target/scope | One persistent, attributed representation of ordinary, `/say`, routed, inline consensus, fresh consensus, and committed composer prompt content after capable cleanup; no command-envelope echo, draft-file byte echo, fallback duplicate, or false sent state after pre-acceptance rejection | #274 projection seam implemented; controller consumers pending #275 |
+| Advisory turns | `Message`, `Notice`, `Field` | Accepted user message before progress; agent result, cancelled/completed/error; optional capable-only indicator during advisory/consensus wait; no `[routing]`/`[waiting]` record | #83 and #111 implemented result views; user-message retention pending #275 |
 | Retrieval progress and summaries | `Notice`, `Record`, `ListView`, `Field` | Loading, citations/context accounting, result/error/cancelled | #83 (implemented accepted views) |
-| Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field`, `Message` | Loading, debate identity, handoff/action metadata, agent messages, result/cancelled/completed/error | #83, #119 (implemented) |
+| Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field`, `Message` | Accepted user prompt before progress; loading, debate identity, handoff/action metadata, agent messages, result/cancelled/completed/error | #83 and #119 implemented progress/result views; user-prompt retention pending #275 |
 | Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics; post-workspace application errors supply one fixed sanitized debug-log availability notice, while pre-workspace errors include no debug-log path | #83, #131 terminal seam, and #132 application wiring (implemented) |
 | Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Exact top-level order; provider-neutral Provider/Model/Effort editors; provider-qualified summary rows; field-triggered bounded model/effort choices with inherit/custom/compatibility paths; changed-only Current/Pending confirmation context with `(Changed)` cues and explicit no-diff notice; nested Escape silent; transient cleanup and fallback honesty; fixed safe discovery failure guidance; guarded two-file Save boundary | #93, #106, #115, and #252 (implemented) |
 | Welcome and provider authentication | Private startup wordmark renderer, `Prompt`, `Picker`, `Choice`, `Notice` | Four bounded capable welcome frames with physical-width wide/compact/narrow projections; clean prefix-free ASCII wordmark; static accessibility fallback; four explicit provider states; disabled unavailable choice; transient guidance/result; completion-aware exact-child return; no provider-controlled content | #209, #237, #241, #249 (implemented) |
@@ -1593,6 +1686,11 @@ commit Enter behavior, history routing, fresh post-submit validation, capable
 complete-frame cleanup across every input route and terminal outcome, ordinary
 subject semantics, fallback visibility, persistent semantic results, and
 unchanged public/internal action identities.
+Issue #274 adds the unlisted accepted-input operation to the existing semantic
+adapter, terminal-core rendering and stream/callback binding, and selected-mode
+driver projection. It preserves one raw owner, stores no submitted payload or
+commit token, and changes no public API. Controller classification and use for
+advisory, consensus, and result-defining values remain pending #275.
 Issue #162 covers strict pre-I/O supplied-text validation, independent source,
 logical-line, and complete-fallback capacities, LF-only line derivation,
 immutable active/anchor state, ordinary and reverse anchored navigation,
@@ -1614,6 +1712,8 @@ privacy, and the bounded/static startup presentation matrix.
 | Capability profiles | Representative plain, fixed-ANSI, `NO_COLOR`, narrow, non-TTY, `TERM=dumb`, missing/uncertain and independent input/output capability combinations, 80-column fallback, and 120-column cap cases. |
 | Rendering safety | Hostile ESC/OSC/control/bidi-format content is visibly sanitized before ANSI; local resets prevent bleed; removing decorative SGR exactly recovers the plain structure; ANSI is zero-width; wide/combining content and cursor positions use physical columns. |
 | Semantic output | Every general view group uses only the closed vocabulary; documented purpose-bound components such as `StartupWelcome` and the ranged viewer retain their dedicated projections and lifecycles; status remains understandable without color; one semantic record uses one callback write unless an explicit live-control exception is tested. |
+| Mode-gated accepted-input projection | The unlisted semantic adapter validates and renders one closed component before delegating its complete LF-terminated output; callback construction stays silent; stream `LIVE` writes exactly once after capable cleanup through the progress-safe persistent path; stream `FALLBACK` stays silent; `UNDECIDED` rejects without output; render/write failures propagate; no accepted payload or token is retained; public exports, constructor, actions, and supported method signatures remain exact. |
+| Informative-content retention | Pending #275: capable ordinary, `/say`, and routed advisory turns clear the editable frame then render one exact-body attributed user `Message` before progress/reply; inline, fresh, and composer consensus prompts receive the same one-record treatment; accepted content remains through success, provider failure, cancellation, and post-acceptance interrupt; pre-acceptance rejection never claims a send; search/filter and other result-defining values appear once in result context when otherwise ambiguous; fallback retains one visible representation without verbatim duplication; draft-file bytes, settings/configuration fields, picker choices, confirmations, credentials, provider-native input, and raw diagnostics receive no automatic echo; later input cleanup cannot erase existing informative output. |
 | Panel framing | Every semantic `Panel` entry path uses the ASCII top-title and bottom splitters in plain, ANSI, and `NO_COLOR` output; wide, narrow, wrapped-title/state, and physical-cell widths preserve content and omit side borders; non-Panel components remain unframed; one Panel remains one callback write. |
 | Agent reply presentation | Complete strict JSON object/array formatting only; two-space indentation; preserved key order and Unicode; unchanged fallback for malformed, embedded-prose, scalar, duplicate-key, non-finite, or unserializable content; direct/retrieval/transcript/history presentation only; stored/provider bytes unchanged; bold terminal-default `AGENT` styling with no background detection. |
 | State transitions | Pure tests cover idle/focused/open/highlighted/selected/disabled/loading/empty/error/cancelled/completed states and invalid or boundary transitions. |
