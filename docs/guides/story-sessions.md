@@ -150,8 +150,8 @@ mode clears it, and fallback may leave only inactive prompt text in scrollback.
 
 Language offers `KO`, `EN`, `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, and `RU`.
 Persona uses the safe lexical template catalog. Debate rounds accept a
-nonnegative ASCII integer, including audit-only `0`. Providers are edited per
-agent in roster order: Codex and Antigravity are available, with the workspace
+nonnegative ASCII integer, including audit-only `0`. Provider routes are edited
+per agent in roster order: Codex and Antigravity are available, with the workspace
 default and final Codex fallback used by nullable agent routes.
 
 Only entering Model or Effort discovers a catalog; opening Settings or Agents
@@ -182,10 +182,16 @@ rejected; use `antigravity`.
 
 Selecting a provider freshly authenticates it before changing that pending
 route. Authentication is subordinate to the Provider editor and returns there
-after its result. Save freshly gates every distinct effective provider before
-the guarded file update; a stale or failed status prevents Save. A default
-established by completed authentication is durable even if the remaining
-settings edit is cancelled.
+after its result. The provider route and any missing workspace default remain
+pending in memory; Escape or cancellation before confirmed Save leaves both
+configuration files byte-for-byte unchanged. No configuration value is
+persisted before Save is confirmed.
+
+After Save is confirmed, Save freshly gates every distinct effective provider
+before the guarded file update; a stale or failed status prevents the settings
+file transaction. Save-time authentication may durably establish a missing
+workspace default before that transaction. The completed post-confirmation
+default is not rolled back if later Save gating or transaction work stops.
 
 Save fails closed if either configuration file or the persona catalog changed
 after opening. A successful save affects only the next shell/backend

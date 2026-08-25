@@ -77,12 +77,22 @@ both providers and open the same native authentication picker. A completed new
 authentication may fill a missing workspace default; cancellation keeps any
 existing default and explicit routes unchanged.
 
-For a persistent route, use global `/settings`, choose Providers, choose an
-agent, and select Antigravity. If needed, native authentication runs before the
-pending route changes. Model and effort then edit that agent's active provider
-settings. Switching providers preserves the inactive provider's saved
-settings. Direct JSON editing is also supported; this excerpt routes only the
-plot architect and leaves omitted agents to inherit the workspace default:
+For a persistent route, use global `/settings`, choose Agents, choose an agent,
+and select Antigravity. If needed, native authentication runs as a subordinate
+Provider-editor action and returns to Provider. The route and any missing
+workspace default remain pending in memory; Escape or cancellation before
+confirmed Save leaves configuration bytes unchanged. No configuration value is
+persisted before Save is confirmed. Model and effort then edit that agent's
+active provider settings. Switching providers preserves the inactive provider's
+saved settings.
+
+After Save is confirmed, save-time authentication may durably establish a
+missing workspace default before the guarded settings-file transaction. That
+completed post-confirmation default is not rolled back if later Save gating or
+transaction work stops. This does not change startup authentication or explicit
+global `/auth`, which retain immediate absent-default durability. Direct JSON
+editing is also supported; this excerpt routes only the plot architect and
+leaves omitted agents to inherit the workspace default:
 
 ```json
 {
@@ -100,7 +110,7 @@ plot architect and leaves omitted agents to inherit the workspace default:
 
 Entering Model or Effort runs one fresh `agy models` discovery for the pending
 effective provider. This is separate from the startup status probe even though
-both use the same command: Settings open, Providers open, agent/provider
+both use the same command: Settings open, Agents open, agent/provider
 navigation, and Provider editing launch no discovery process. Model choices are
 Inherit, aligned opaque slug/display rows in provider order, Current custom
 when needed, and Custom model. The picker does not freeze the example list in

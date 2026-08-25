@@ -3450,6 +3450,106 @@ class ControllerSettingsTests(ControllerTestCase):
             1,
         )
 
+    def test_authenticated_provider_assignment_is_discarded_without_save(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        defaults_path = workspace.root / "config/system_defaults.json"
+        agents_path = workspace.root / "config/agent_configs.json"
+        durable_before = (defaults_path.read_bytes(), agents_path.read_bytes())
+        codex_only = _auth_snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.UNAUTHENTICATED,
+        )
+        both = _auth_snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.AUTHENTICATED,
+        )
+        coordinator = ScriptedAuthCoordinator(
+            snapshots=(codex_only, codex_only, both, both),
+            results=(_auth_result(both, "antigravity"),),
+        )
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "/settings",
+            "4",
+            "2",
+            "1",
+            "2",
+            "/cancel",
+            "/cancel",
+            "/cancel",
+            "6",
+            "1",
+            "/quit",
+            auth_coordinator=coordinator,
+            terminal_width=160,
+        )
+        returned_states = []
+        edit_provider = controller._edit_settings_agent_provider
+
+        def capture_returned_state(_controller, state, agent_id):
+            result = edit_provider(state, agent_id)
+            returned_states.append(result)
+            self.assertEqual(
+                (defaults_path.read_bytes(), agents_path.read_bytes()),
+                durable_before,
+            )
+            return result
+
+        with (
+            mock.patch.object(
+                InteractiveController,
+                "_edit_settings_agent_provider",
+                autospec=True,
+                side_effect=capture_returned_state,
+            ),
+            mock.patch.object(
+                controller_core_module,
+                "establish_settings_default_backend",
+                wraps=controller_core_module.establish_settings_default_backend,
+            ) as establish_default,
+            mock.patch.object(
+                controller_core_module,
+                "save_settings_state",
+                wraps=controller_core_module.save_settings_state,
+            ) as save,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        self.assertEqual(len(returned_states), 1)
+        returned, whole_cancel = returned_states[0]
+        self.assertFalse(whole_cancel)
+        self.assertIsNone(returned.pending.system_defaults.default_backend)
+        self.assertEqual(
+            returned.pending.agent_configs[PLOT_ARCHITECT].backend,
+            "antigravity",
+        )
+        establish_default.assert_not_called()
+        save.assert_not_called()
+        self.assertEqual(
+            (defaults_path.read_bytes(), agents_path.read_bytes()),
+            durable_before,
+        )
+        durable = settings_module.load_settings_state(workspace).pending
+        self.assertIsNone(durable.system_defaults.default_backend)
+        self.assertIsNone(durable.agent_configs[PLOT_ARCHITECT].backend)
+        self.assertEqual(
+            coordinator.events,
+            [
+                ("probe_all", None),
+                ("choices", "codex"),
+                ("probe_all", None),
+                ("run", "antigravity"),
+                ("probe_all", None),
+                ("probe_all", None),
+                ("choices", "antigravity"),
+            ],
+        )
+        rendered = "".join(callbacks.records)
+        self.assertIn("Settings cancelled", rendered)
+        self.assertNotIn("Settings saved", rendered)
+
     def test_failed_provider_auth_never_assigns_route_but_keeps_default(self) -> None:
         workspace = self.make_workspace()
         codex_only = _auth_snapshot(

@@ -235,7 +235,7 @@ options, so a configured Antigravity route requires `agy` on `PATH`.
 
 There is no `--codex-reasoning-effort` option or supported public
 system-default save API. Global `/settings` provides the installed interactive
-edit/save workflow; choose `Providers`, then an agent, then Provider, Model, or
+edit/save workflow; choose `Agents`, then an agent, then Provider, Model, or
 Effort. It supports Codex and Antigravity and edits only the active
 provider's per-agent model/effort while retaining inactive-provider values.
 Entering Model or Effort discovers the pending effective provider afresh;
@@ -408,8 +408,8 @@ text so the invoking shell does not expand `$`.
 `/auth` and `/settings` are alias-free, take no argument, and are available with
 or without an attached session. `/auth` follows the authentication contract
 above. `/settings` edits isolated Current and Pending snapshots for
-Language, Persona, Maximum debate rounds, and Providers through a six-choice
-editor in this order: those four fields, Save, Cancel. `Providers` opens a
+Language, Persona, Maximum debate rounds, and Agents through a six-choice
+editor in this order: those four fields, Save, Cancel. `Agents` opens a
 nested canonical-agent picker, then a provider-neutral Provider/Model/Effort
 picker. Current/Pending confirmations retain provider-qualified rows for both
 providers so inactive values remain identifiable.
@@ -447,14 +447,18 @@ Custom model prompt.
 
 Choosing a provider starts authentication before changing that agent's pending
 route. A failed or cancelled authentication leaves the route candidate
-unchanged; a newly established missing workspace default is a separate durable
-write and remains even if the pending settings workflow later cancels.
+unchanged. Successful authentication is subordinate and returns to Provider;
+the route and any missing workspace default remain pending in memory. Escape or
+cancellation before confirmed Save leaves configuration bytes unchanged. No
+configuration value is persisted before Save is confirmed.
 
 After Save confirmation, the controller freshly gates each distinct effective
 provider once before entering the configuration transaction. A stale,
 unavailable, unauthenticated, indeterminate, failed, cancelled, or interrupted
-status prevents Save. Authentication/default writes already completed remain
-durable. Save then validates the complete pending pair and rejects any
+status prevents the settings file transaction. Save-time authentication may
+durably establish a missing workspace default before that transaction; the
+completed post-confirmation default is not rolled back if later Save gating or
+transaction work stops. Save then validates the complete pending pair and rejects any
 exact-byte change to either configuration document or any persona-catalog
 change since opening.
 Only changed documents are canonically replaced, in system-defaults then
