@@ -139,9 +139,18 @@ Maximum debate rounds, Provider, Model, Custom model, and Effort stay active
 after a valid Enter: the picker selection or prompt default updates immediately,
 and the editor shows one inline completed success result for the latest value,
 replacing the previous result. Guidance states that Enter applies the pending
-value and keeps the editor open. Escape returns one level through Custom model
-> Model > Agent settings > Agents > Settings; Provider and Effort return
-directly to Agent settings. Escape at Settings, Ctrl-C, or EOF cancels the whole
+value and keeps the editor open. A second consecutive valid Enter with the same
+normalized value returns one level silently. Entering a different valid value
+applies it, keeps the editor open, and makes that value the new same-value
+comparison. Invalid input, authentication failure, Custom model navigation, or
+leaving and re-entering the editor resets the comparison. This is semantic
+commit sequencing, not a raw-key timing gesture.
+
+Escape returns one level through Custom model > Model > Agent settings > Agents
+> Settings; Provider and Effort return directly to Agent settings. At root,
+Escape invokes the same action as explicit Cancel: clean settings exit
+immediately, while dirty settings open the existing YES/NO Cancel confirmation.
+NO or Escape there returns to Settings. Ctrl-C or EOF still cancels the whole
 transaction without saving. Plain fallback uses the picker's numbered grammar
 and the same level hierarchy. In the per-agent active-provider Custom model
 prompt, blank means inherit that provider's workspace system model and
@@ -156,17 +165,21 @@ the completed result confirms that pending change, not a file save.
 When you return to the top-level Settings picker, it shows `[save required]
 Pending changes are in memory only and are not saved. Choose Save to persist
 them.` exactly while the complete pending settings differ from the values at
-opening. Reverting every change removes the warning. Nested Agents, Agent
-settings, value editors, and Save/Cancel confirmations do not show it. Narrow,
-`NO_COLOR`, and fallback terminals keep the full guidance; fallback may leave
-an older prompt in scrollback, but the newest top-level prompt reports the
-current state.
+opening. Its Save choice is exact plain `Save (*Required)` in that state and
+exact plain `Save` otherwise. Eligible ANSI decorates only `(*Required)`; the
+preceding separator space remains unstyled. Reverting every change removes the
+suffix and warning. Nested Agents, Agent settings, value editors, and
+Save/Cancel confirmations do not show the warning. Narrow, `NO_COLOR`, and
+fallback terminals keep the full plain guidance; fallback may leave an older
+prompt in scrollback, but the newest top-level prompt reports the current state.
 
-This retained-editor behavior is specific to `/settings`, not a global picker
-or navigation rule. Save and Cancel confirmation stays one-shot. Context-changing
-pickers also close after commit, especially `/session resume` and
-`/conversation resume`; a selected resume picker is no longer active, capable
-mode clears it, and fallback may leave only inactive prompt text in scrollback.
+This retained-editor and same-value exit behavior is specific to the `/settings`
+controller, not a global picker or prompt rule. Individual picker and prompt
+reads, Save/Cancel confirmations, and context-changing pickers stay one-shot.
+In particular, `/session resume` and `/conversation resume` close after
+selection; capable mode clears the selected picker, and fallback may leave only
+inactive prompt text in scrollback. All input components retain the universal
+transient-after-submit policy.
 
 Language offers `KO`, `EN`, `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, and `RU`.
 Persona uses the safe lexical template catalog. Debate rounds accept a

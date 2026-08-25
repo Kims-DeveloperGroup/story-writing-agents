@@ -241,6 +241,7 @@ _SETTINGS_VALUE_SAVE_GUIDANCE = (
     "Entered changes remain pending in memory and are not saved; choose Save in "
     "Settings to persist them."
 )
+_SETTINGS_UNARMED = object()
 
 
 _ExceptionState = tuple[BaseException, TracebackType | None]
@@ -2112,15 +2113,20 @@ class InteractiveController:
             return
 
         top_highlight = "language"
-        choices = (
-            Choice("language", "Language"),
-            Choice("persona", "Persona"),
-            Choice("max_debate_rounds", "Maximum debate rounds"),
-            Choice("providers", "Agents"),
-            Choice("save", "Save"),
-            Choice("cancel", "Cancel"),
-        )
         while True:
+            dirty = state.pending != state.baseline.configuration
+            choices = (
+                Choice("language", "Language"),
+                Choice("persona", "Persona"),
+                Choice("max_debate_rounds", "Maximum debate rounds"),
+                Choice("providers", "Agents"),
+                Choice(
+                    "save",
+                    "Save",
+                    warning_suffix="(*Required)" if dirty else None,
+                ),
+                Choice("cancel", "Cancel"),
+            )
             outcome = self._picker_input.read_picker(
                 Prompt(
                     "Settings",
@@ -2132,25 +2138,32 @@ class InteractiveController:
                 transient=True,
             )
             if outcome.kind in {
-                ControlOutcomeKind.CANCEL,
                 ControlOutcomeKind.INTERRUPT,
                 ControlOutcomeKind.EOF,
             }:
                 self._write_settings_cancelled()
                 return
+            if outcome.kind is ControlOutcomeKind.CANCEL:
+                top_highlight = "cancel"
+                if self._settings_cancel_action(state):
+                    self._write_settings_cancelled()
+                    return
+                continue
             selected = self._require_settings_commit(outcome)
             top_highlight = selected
-            if selected in {"save", "cancel"}:
+            if selected == "cancel":
+                if self._settings_cancel_action(state):
+                    self._write_settings_cancelled()
+                    return
+                continue
+            if selected == "save":
                 confirmation = self._settings_save_confirmation(
                     state,
-                    action=selected,
+                    action="save",
                 )
                 if confirmation == "return":
                     continue
                 if confirmation == "cancel":
-                    self._write_settings_cancelled()
-                    return
-                if selected == "cancel":
                     self._write_settings_cancelled()
                     return
                 if self._auth_coordinator is not None:
@@ -2324,6 +2337,16 @@ class InteractiveController:
             InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
         )
 
+    def _settings_cancel_action(self, state: SettingsState) -> bool:
+        """Return whether one root Cancel action should discard and exit."""
+
+        if state.pending == state.baseline.configuration:
+            return True
+        return self._settings_save_confirmation(
+            state,
+            action="cancel",
+        ) == "cancel"
+
     def _edit_settings_value(
         self,
         state: SettingsState,
@@ -2350,6 +2373,7 @@ class InteractiveController:
         """Select one of the fixed workspace language choices."""
 
         notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
         while True:
             pending = state.pending.system_defaults.language
             outcome = self._picker_input.read_picker(
@@ -2375,7 +2399,10 @@ class InteractiveController:
                 return state, True
             if value is None:
                 return state, False
+            if armed_value == value:
+                return state, False
             state = update_language(state, value)
+            armed_value = state.pending.system_defaults.language
             notice = _settings_entered_notice("Language", value)
 
     def _edit_settings_persona(
@@ -2393,6 +2420,7 @@ class InteractiveController:
             for entry in state.baseline.persona_catalog
         )
         notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
         while True:
             pending = state.pending.system_defaults.persona
             outcome = self._picker_input.read_picker(
@@ -2414,7 +2442,10 @@ class InteractiveController:
                 return state, True
             if value is None:
                 return state, False
+            if armed_value == value:
+                return state, False
             state = update_persona(state, value)
+            armed_value = state.pending.system_defaults.persona
             notice = _settings_entered_notice("Persona", value)
 
     def _edit_settings_rounds(
@@ -2424,6 +2455,7 @@ class InteractiveController:
         """Read and validate one pending nonnegative debate limit."""
 
         notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
         while True:
             outcome = self._prompt_input.read_prompt(
                 Prompt(
@@ -2448,6 +2480,7 @@ class InteractiveController:
                 return state, False
             if not value or any(character not in "0123456789" for character in value):
                 notice = None
+                armed_value = _SETTINGS_UNARMED
                 self._write_settings_validation(
                     "Maximum debate rounds must be a nonnegative ASCII integer."
                 )
@@ -2456,11 +2489,15 @@ class InteractiveController:
                 rounds = int(value)
             except ValueError:
                 notice = None
+                armed_value = _SETTINGS_UNARMED
                 self._write_settings_validation(
                     "Maximum debate rounds is too large."
                 )
                 continue
+            if armed_value == rounds:
+                return state, False
             state = update_max_debate_rounds(state, rounds)
+            armed_value = state.pending.system_defaults.max_debate_rounds
             notice = _settings_entered_notice(
                 "Maximum debate rounds",
                 str(rounds),
@@ -2552,6 +2589,7 @@ class InteractiveController:
             )
 
         notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
         while True:
             current = _effective_settings_provider(state, agent_id)
             outcome = self._picker_input.read_picker(
@@ -2592,7 +2630,10 @@ class InteractiveController:
             provider, whole_cancel = self._nested_settings_value(outcome)
             if whole_cancel or provider is None:
                 return state, whole_cancel
+            if armed_value == provider:
+                return state, False
             state = update_agent_backend(state, agent_id, provider)
+            armed_value = _effective_settings_provider(state, agent_id)
             notice = _settings_entered_notice(
                 "Provider",
                 _provider_display_name(provider),
@@ -2608,6 +2649,7 @@ class InteractiveController:
         coordinator = self._auth_coordinator
         assert coordinator is not None
         notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
         while True:
             snapshot = coordinator.probe_all()
             current = _effective_settings_provider(state, agent_id)
@@ -2647,7 +2689,10 @@ class InteractiveController:
             notice = None
             snapshot = coordinator.probe_all()
             if snapshot.is_authenticated(provider):
+                if armed_value == provider:
+                    return state, False
                 state = update_agent_backend(state, agent_id, provider)
+                armed_value = _effective_settings_provider(state, agent_id)
                 notice = _settings_entered_notice(
                     "Provider",
                     _provider_display_name(provider),
@@ -2659,6 +2704,7 @@ class InteractiveController:
                 selected_provider=provider,
             )
             if result.kind is InteractiveAuthResultKind.CANCEL:
+                armed_value = _SETTINGS_UNARMED
                 continue
             if result.kind in {
                 InteractiveAuthResultKind.INTERRUPT,
@@ -2672,13 +2718,17 @@ class InteractiveController:
                 and result.provider == provider
                 and snapshot.is_authenticated(provider)
             ):
+                if armed_value == provider:
+                    return state, False
                 state = update_agent_backend(state, agent_id, provider)
+                armed_value = _effective_settings_provider(state, agent_id)
                 notice = _settings_entered_notice(
                     "Provider",
                     _provider_display_name(provider),
                 )
                 continue
 
+            armed_value = _SETTINGS_UNARMED
             self._write_notice(
                 (
                     f"{_provider_display_name(provider)} was not assigned because "
@@ -2703,6 +2753,7 @@ class InteractiveController:
         catalog = discovery.catalog
         highlighted_id: str | None = None
         notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
         while True:
             agent = state.pending.agent_configs[agent_id]
             pending = (
@@ -2792,6 +2843,11 @@ class InteractiveController:
                 return state, False
             highlighted_id = value
             notice = None
+            updater = (
+                update_agent_antigravity_model
+                if antigravity
+                else update_agent_codex_model
+            )
             if value == _SETTINGS_CURRENT_CUSTOM_MODEL_ID:
                 display_value = (
                     pending
@@ -2800,6 +2856,10 @@ class InteractiveController:
                     and len(pending.encode("utf-8")) <= 256
                     else "Current custom"
                 )
+                if armed_value == pending:
+                    return state, False
+                state = updater(state, agent_id, pending)
+                armed_value = pending
                 notice = _settings_entered_notice("Model", display_value)
                 continue
             if value == _SETTINGS_CUSTOM_MODEL_ID:
@@ -2810,14 +2870,13 @@ class InteractiveController:
                 )
                 if whole_cancel:
                     return state, True
+                armed_value = _SETTINGS_UNARMED
                 continue
-            updater = (
-                update_agent_antigravity_model
-                if antigravity
-                else update_agent_codex_model
-            )
             if value == _SETTINGS_INHERIT_ID:
+                if armed_value is None:
+                    return state, False
                 state = updater(state, agent_id, None)
+                armed_value = None
                 notice = _settings_entered_notice("Model", "Inherit")
                 continue
             if value not in discovered_values:
@@ -2825,7 +2884,13 @@ class InteractiveController:
                     InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
                 )
             model_value, display_value = discovered_values[value]
+            if armed_value == model_value:
+                return state, False
             state = updater(state, agent_id, model_value)
+            agent = state.pending.agent_configs[agent_id]
+            armed_value = (
+                agent.antigravity_model if antigravity else agent.codex_model
+            )
             notice = _settings_entered_notice("Model", display_value)
 
     def _edit_settings_custom_model(
@@ -2839,6 +2904,7 @@ class InteractiveController:
         antigravity = provider == "antigravity"
         provider_name = _provider_display_name(provider)
         notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
         while True:
             agent = state.pending.agent_configs[agent_id]
             pending = (
@@ -2870,6 +2936,9 @@ class InteractiveController:
                 return state, True
             if value is None:
                 return state, False
+            normalized_value = None if value == "" else value
+            if armed_value == normalized_value:
+                return state, False
             try:
                 updater = (
                     update_agent_antigravity_model
@@ -2879,18 +2948,23 @@ class InteractiveController:
                 state = updater(
                     state,
                     agent_id,
-                    None if value == "" else value,
+                    normalized_value,
                 )
             except ConfigurationError:
                 notice = None
+                armed_value = _SETTINGS_UNARMED
                 self._write_settings_validation(
                     f"{provider_name} model must be safe nonempty text, "
                     "or blank to inherit."
                 )
                 continue
+            agent = state.pending.agent_configs[agent_id]
+            armed_value = (
+                agent.antigravity_model if antigravity else agent.codex_model
+            )
             notice = _settings_entered_notice(
                 "Custom model",
-                "Inherit" if value == "" else value,
+                "Inherit" if armed_value is None else str(armed_value),
             )
 
     def _edit_settings_agent_reasoning(
@@ -2972,6 +3046,7 @@ class InteractiveController:
 
         highlighted_id: str | None = None
         notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
         while True:
             agent = state.pending.agent_configs[agent_id]
             pending = (
@@ -3056,17 +3131,24 @@ class InteractiveController:
                 return state, False
             highlighted_id = value
             notice = None
-            if value == _SETTINGS_CURRENT_EFFORT_ID:
-                assert pending is not None
-                notice = _settings_entered_notice("Effort", pending)
-                continue
             updater = (
                 update_agent_antigravity_effort
                 if antigravity
                 else update_agent_codex_reasoning_effort
             )
+            if value == _SETTINGS_CURRENT_EFFORT_ID:
+                assert pending is not None
+                if armed_value == pending:
+                    return state, False
+                state = updater(state, agent_id, pending)
+                armed_value = pending
+                notice = _settings_entered_notice("Effort", pending)
+                continue
             if value == _SETTINGS_INHERIT_ID:
+                if armed_value is None:
+                    return state, False
                 state = updater(state, agent_id, None)
+                armed_value = None
                 notice = _settings_entered_notice("Effort", "Inherit")
                 continue
             if value not in effort_values:
@@ -3074,7 +3156,15 @@ class InteractiveController:
                     InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
                 )
             effort_value, display_value = effort_values[value]
+            if armed_value == effort_value:
+                return state, False
             state = updater(state, agent_id, effort_value)
+            agent = state.pending.agent_configs[agent_id]
+            armed_value = (
+                agent.antigravity_effort
+                if antigravity
+                else agent.codex_reasoning_effort
+            )
             notice = _settings_entered_notice("Effort", display_value)
 
     def _discover_settings_catalog(

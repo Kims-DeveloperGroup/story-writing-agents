@@ -2161,10 +2161,22 @@ print(
                         ).split()
                     ),
                 )
-                process.send_text("\x1b")
+                process.send_text("\n")
                 returned_settings = process.wait_for_text(
                     "[save required]",
                     after=language_mark,
+                )
+                self.assertIn(
+                    "Save (*Required)",
+                    re.sub(
+                        r"\x1b\[[0-9;]*[A-Za-z]",
+                        "",
+                        returned_settings,
+                    ),
+                )
+                self.assertIn(
+                    b"Save \x1b[33m(*Required)\x1b[0m",
+                    bytes(process.raw_bytes[language_mark:]),
                 )
                 self.assertIn(
                     "Pendingchangesareinmemoryonlyandarenotsaved."
@@ -2260,7 +2272,7 @@ print(
         )
         self.assertIn("[selected] [highlighted] GPT PTY", model_result)
         model_parent_mark = process.output_mark()
-        process.send_text("\x1b")
+        process.send_text("\n")
         process.wait_for_text(
             "Agent settings [Plot & Structure Architect]",
             after=model_parent_mark,
@@ -2277,7 +2289,7 @@ print(
         )
         self.assertIn("[selected] [highlighted] future_2", effort_result)
         effort_parent_mark = process.output_mark()
-        process.send_text("\x1b")
+        process.send_text("\n")
         process.wait_for_text(
             "Agent settings [Plot & Structure Architect]",
             after=effort_parent_mark,
@@ -2368,6 +2380,7 @@ print(
             after=returned_mark,
         )
         self.assertIn("[save required]", returned_settings)
+        self.assertIn("Save (*Required)", returned_settings)
         self.assertIn(
             "Pendingchangesareinmemoryonlyandarenotsaved."
             "ChooseSavetopersistthem.",
@@ -2375,6 +2388,15 @@ print(
         )
         cancelled_mark = process.output_mark()
         process.send_text("\x1b")
+        confirmation = process.wait_for_text(
+            "Cancel settings?",
+            after=cancelled_mark,
+        )
+        self.assertNotRegex(
+            confirmation,
+            r"\x1b\[(?:0|1|3[1-7])m",
+        )
+        process.send_text("\n")
         process.wait_for_text("[cancelled] Settings", after=cancelled_mark)
         process.wait_for_text("story[lobby]> ", after=cancelled_mark)
         process.send_text("/quit\n\n")
@@ -2484,6 +2506,7 @@ print(
             after=model_mark,
         )
         self.assertIn("[save required]", returned_settings)
+        self.assertIn("5. [available] Save (*Required)", returned_settings)
         self.assertIn(
             "Pendingchangesareinmemoryonlyandarenotsaved."
             "ChooseSavetopersistthem.",

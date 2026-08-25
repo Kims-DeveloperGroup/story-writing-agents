@@ -1113,20 +1113,24 @@ every intermediate arrow. The current runtime graph is acyclic.
   from the exact pending effective model, while Antigravity effort choices stay
   globally low, medium, and high without slug inference. The summary projection
   gives every settings value editor pending, not-saved, and top-level Save
-  guidance. The top-level Settings projection uses the existing notice semantics
-  to expose a save-required warning only when the pending configuration differs
-  from its opening baseline; the warning is absent initially, after a complete
-  revert, and from nested editors and Save/Cancel confirmations. The projection
+  guidance. On every top-level read, structural inequality between the pending
+  configuration and opening baseline adds `(*Required)` to the Save label and
+  retains the existing save-required warning notice; both are absent initially
+  and after a complete revert, while the notice remains absent from nested
+  editors and Save/Cancel confirmations. The projection
   names both providers' model/effort
   rows, so changed-only confirmations can identify changes to either without
   changing the active backend or runtime snapshot. Editors contain no repeated
-  Current/Pending context panel. Explicit Save and Cancel actions each use one
-  selectable YES/NO confirmation whose preceding context contains only changed
-  Current/Pending properties in stable settings and roster order; each changed
-  value has an explicit text cue and warning role, and an unchanged candidate
-  contains only an explicit no-changes notice without empty sections. NO or
-  nested Escape returns to the settings menu, while interrupt or EOF preserves
-  whole-flow cancellation. Provider-bound routes pass the submitted text
+  Current/Pending context panel. Explicit Save uses one selectable YES/NO
+  confirmation whose preceding context contains only changed Current/Pending
+  properties in stable settings and roster order; each changed value has an
+  explicit text cue and warning role, and an unchanged candidate contains only
+  an explicit no-changes notice without empty sections. Explicit Cancel and
+  root Settings Escape share one action: an unchanged candidate exits
+  immediately, while a structurally changed candidate uses the same selectable
+  confirmation context. Confirmation NO or nested Escape returns to the
+  settings menu, while Ctrl-C or EOF preserves whole-flow cancellation.
+  Provider-bound routes pass the submitted text
   unchanged to `StoryRuntime`; reference UI therefore emits only ordinary
   `${path}` or `${path}#Lx-Ly` tokens for the existing runtime parser and never
   authorizes a read. The controller borrows the filesystem-authoritative
@@ -1209,8 +1213,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   `AgentBackend` retains the actual access claim, manifest, and provider-thread
   coordination, while provider adapters retain binding, staging, and provider-
   native state and `provider_process` owns subprocess resources. The settings flow
-  retains only one call-local immutable baseline and pending candidate,
-  constructs its changed-only
+  retains only one call-local immutable baseline and pending candidate. Each
+  retained Language, Persona, Maximum debate rounds, Provider, Model, Custom
+  model, and Effort editor owns one entry-local normalized last-successful
+  semantic commit: the first success arms it, a different success replaces it,
+  and a second consecutive success of the same value returns silently to the
+  parent. Invalid input, authentication failure, Custom-model navigation, and
+  editor re-entry reset or recreate that state. The flow constructs its changed-only
   confirmation context, and delegates exact-byte conflict detection and guarded
   persistence to `interactive_settings`; cancellation or failed saves do not
   mutate the active backend or runtime snapshot. Accepted user-message and
