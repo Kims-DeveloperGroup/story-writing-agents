@@ -100,6 +100,53 @@ from the package root. See [Runtime API](runtime-api.md#runtime-diagnostic-side-
 [Backend and sessions](backend-and-sessions.md#backend-diagnostic-side-effect),
 and [Privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy).
 
+<a id="conversation-storage-composition"></a>
+
+## Conversation-storage composition
+
+The conversation-storage composition APIs are supported direct-subpackage
+imports; they are not re-exported by the 120-name project facade:
+
+```python
+from story_writing_agents.conversation_storage import (
+    WorkspaceConversationStorageMutationCoordinator,
+    compare_and_set_conversation_storage_activation,
+    compose_filesystem_conversation_storage,
+    load_conversation_storage_activation_state,
+)
+```
+
+`compose_filesystem_conversation_storage(workspace)` returns one
+`ConversationStorageServices` bundle whose catalog, event store, reference
+search, provenance token, and mutation coordinator derive from the same
+construction-pinned canonical absolute root. Its services remain concrete
+`FilesystemConversationCatalog`, `FilesystemConversationEventStore`, and
+`ReferenceConversationSearch` instances. Later caller-root mutation or
+inherited collaborator rebinding cannot redirect their I/O. Composition with
+an existing `Workspace` performs no conversation-storage I/O, creates no
+guard, and writes no activation state. A path-like argument still invokes
+ordinary `Workspace` construction.
+
+That pinning does not change standalone construction. A directly instantiated
+`FilesystemConversationCatalog(workspace)` or
+`FilesystemConversationEventStore(workspace)` retains the established borrowed
+workspace behavior, and `Workspace` itself remains mutable and pathname-based.
+The optional SQLite adapter has its own separately pinned database owner.
+
+`WorkspaceConversationStorageMutationCoordinator(workspace)` likewise captures
+its root without I/O. Its key, the guard lazily opened by an outer `borrow`, and
+every lease identify that root despite later caller mutation.
+
+Activation functions pin one root per call. Compare-and-set validates its lease
+against that root before constructing an operation workspace or accessing a
+path, so a mismatch raises `ConversationStorageCoordinationError` without
+filesystem I/O. A valid call reads state, applies the existing checks,
+revalidates the lease, and writes only through that root. This does not add
+automatic selection or make activation transactional with other operations.
+
+See [Filesystem safety](../operations/filesystem-safety.md#composed-conversation-storage-provenance)
+for the operational boundary.
+
 <a id="optional-sqlite-conversation-storage"></a>
 
 ## Optional SQLite conversation storage

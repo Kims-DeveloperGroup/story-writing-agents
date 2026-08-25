@@ -339,6 +339,37 @@ path-mismatched record raises `WorkspaceFormatError`. Symlinks raise
 `WorkspaceSecurityError`. Exact event rules are in
 [Conversation transcripts](../reference/conversation-transcripts.md).
 
+<a id="composed-conversation-storage-provenance"></a>
+
+### Composed conversation-storage provenance
+
+Direct standalone filesystem catalog and event-store adapters retain their
+established borrowed-`Workspace` behavior. The stronger provenance guarantee
+begins only at `compose_filesystem_conversation_storage`: the returned
+catalog, event store, reference search, and mutation coordinator all derive
+from one construction-pinned canonical absolute root. Changing the caller's
+`Workspace.root` or rebinding the composed instances' inherited collaborators
+cannot split root A provenance from root B I/O. This does not make the general
+`Workspace` type immutable.
+
+A separately constructed
+`WorkspaceConversationStorageMutationCoordinator` also pins its root at
+construction without opening a file. Its in-process coordination key refers to
+that root; each outer `borrow` opens its fixed
+`config/.conversation_storage.lock` guard and issues a lease for the same root.
+Later caller mutation cannot move the guard to another root; nested borrowing,
+expiry, timeout, and cleanup semantics are unchanged.
+
+Activation-state operations pin at call entry instead. Compare-and-set rejects
+a lease for another root with `ConversationStorageCoordinationError` before
+creating an operation workspace or performing filesystem I/O; a matching call
+reads, revalidates its lease, and publishes only within the captured root.
+Caller-root reassignment during a load or compare-and-set therefore cannot
+redirect its read or write. This path provenance is not an inode-pinned
+snapshot or a transaction with catalog, event, migration, or SQLite work.
+SQLite keeps its separate already-pinned database owner. See the
+[composition API](../reference/package-api.md#conversation-storage-composition).
+
 <a id="sqlite-conversation-storage-safety"></a>
 
 ## SQLite conversation-storage safety
