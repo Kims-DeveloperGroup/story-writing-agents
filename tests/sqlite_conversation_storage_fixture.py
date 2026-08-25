@@ -146,10 +146,10 @@ def make_append(
 
 
 def _worker_append(arguments: argparse.Namespace) -> None:
+    services = compose_sqlite_conversation_storage(arguments.workspace)
     print("ready", flush=True)
     if sys.stdin.read(1) != "x":
         raise RuntimeError("append worker did not receive its start token")
-    services = compose_sqlite_conversation_storage(arguments.workspace)
     user = services.event_store.append(
         make_append(
             session_id=arguments.session,
