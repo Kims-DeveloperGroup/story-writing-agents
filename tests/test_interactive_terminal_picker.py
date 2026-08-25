@@ -415,6 +415,33 @@ class PickerModelContractTests(unittest.TestCase):
                 self.assertIs(getattr(terminal_facade, name), value)
                 self.assertNotIn(name, terminal_facade.__all__)
 
+    def test_choice_warning_suffix_is_optional_keyword_only_and_compares(self) -> None:
+        signature = inspect.signature(Choice)
+        parameter = signature.parameters["warning_suffix"]
+        self.assertIs(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIsNone(parameter.default)
+
+        default = Choice("save", "Save")
+        explicit_none = Choice("save", "Save", warning_suffix=None)
+        warned = Choice("save", "Save", warning_suffix="(*Required)")
+        self.assertEqual(default, explicit_none)
+        self.assertNotEqual(default, warned)
+        self.assertEqual(warned.warning_suffix, "(*Required)")
+        self.assertIsNone(
+            Choice("save", "Save", description="Writes settings.").warning_suffix
+        )
+
+        with self.assertRaises(TypeError):
+            Choice("save", "Save", "(*Required)")  # type: ignore[misc]
+        for invalid, exception in (
+            (1, TypeError),
+            ("", ValueError),
+            ("   ", ValueError),
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(exception):
+                    Choice("save", "Save", warning_suffix=invalid)  # type: ignore[arg-type]
+
     def test_models_reject_invalid_state_and_viewport_relations(self) -> None:
         enabled = Choice("one", "One")
         disabled = Choice(
@@ -1011,6 +1038,233 @@ class PickerRenderingTests(unittest.TestCase):
         self.assertNotIn("hidden", combined.text)
         for line in combined.text.splitlines():
             self.assertLessEqual(_physical_width(line), 20)
+
+    def test_warning_suffix_numbered_profiles_wrap_and_preserve_state_precedence(
+        self,
+    ) -> None:
+        choices = (
+            Choice("save", "Save", warning_suffix="(*Required)"),
+            Choice(
+                "disabled",
+                "Disabled",
+                warning_suffix="(*Required)",
+                enabled=False,
+                disabled_reason="Unavailable",
+            ),
+            Choice("selected", "Selected", warning_suffix="(*Required)"),
+            Choice("highlighted", "Highlighted", warning_suffix="(*Required)"),
+        )
+        state = initialize_picker(
+            Picker(
+                Prompt("Choose"),
+                choices,
+                highlighted_id="highlighted",
+                selected_id="selected",
+            )
+        )
+        viewport = project_picker_viewport(state)
+        expected_plain = (
+            "Choose [focused] [open] >\n"
+            "Choices (highlighted 4/4) [open]\n"
+            "  1. [available] Save (*Required)\n"
+            "  2. [disabled] Disabled (*Required) (disabled: Unavailable)\n"
+            "  3. [selected] Selected (*Required)\n"
+            "  4. [highlighted] Highlighted (*Required)"
+        )
+        plain = render_picker_viewport(
+            viewport,
+            _capabilities(CapabilityProfile.PLAIN),
+        )
+        ansi = render_picker_viewport(
+            viewport,
+            _capabilities(CapabilityProfile.ANSI),
+        )
+        self.assertEqual(plain.text, expected_plain)
+        self.assertNotIn("\x1b", plain.text)
+        self.assertEqual(strip_decorative_sgr(ansi.text), expected_plain)
+        self.assertIn(
+            "  1. [available] Save \x1b[33m(*Required)\x1b[0m",
+            ansi.text,
+        )
+        self.assertEqual(ansi.text.count("\x1b[33m"), 1)
+        self.assertIn(
+            "\x1b[37m  2. [disabled] Disabled (*Required) "
+            "(disabled: Unavailable)\x1b[0m",
+            ansi.text,
+        )
+        self.assertIn(
+            "\x1b[32m  3. [selected] Selected (*Required)\x1b[0m",
+            ansi.text,
+        )
+        self.assertIn(
+            "\x1b[36m  4. [highlighted] Highlighted (*Required)\x1b[0m",
+            ansi.text,
+        )
+
+        fallback = render_picker_fallback(
+            state,
+            _capabilities(CapabilityProfile.LINE),
+        )
+        self.assertEqual(
+            fallback.text,
+            "Choices (highlighted 4/4) [open]\n"
+            "  1. [available] Save (*Required)\n"
+            "  2. [disabled] Disabled (*Required) (disabled: Unavailable)\n"
+            "  3. [selected] Selected (*Required)\n"
+            "  4. [highlighted] Highlighted (*Required)\n"
+            "[input] Enter a choice number, press Enter for the highlighted choice, or enter \n"
+            "        /cancel.\n"
+            "Choose > ",
+        )
+        self.assertEqual(fallback.plain_text, fallback.text)
+
+        narrow_plain = render_picker_viewport(
+            viewport,
+            _capabilities(CapabilityProfile.PLAIN, 24),
+        )
+        narrow_ansi = render_picker_viewport(
+            viewport,
+            _capabilities(CapabilityProfile.ANSI, 24),
+        )
+        self.assertIn(" 1. [available] Save (*R", narrow_plain.text.splitlines())
+        self.assertIn("                equired)", narrow_plain.text.splitlines())
+        self.assertEqual(strip_decorative_sgr(narrow_ansi.text), narrow_plain.text)
+        self.assertEqual(narrow_ansi.text.count("\x1b[33m"), 2)
+        for line in narrow_plain.text.splitlines():
+            self.assertLessEqual(_physical_width(line), 24)
+
+        combined = initialize_picker(
+            Picker(
+                Prompt("Choose"),
+                (Choice("save", "Save", warning_suffix="(*Required)"),),
+                highlighted_id="save",
+                selected_id="save",
+            )
+        )
+        combined_ansi = render_picker_viewport(
+            project_picker_viewport(combined),
+            _capabilities(CapabilityProfile.ANSI),
+        )
+        self.assertIn(
+            "\x1b[32m  1. [selected] [highlighted] Save (*Required)\x1b[0m",
+            combined_ansi.text,
+        )
+        self.assertNotIn("\x1b[33m", combined_ansi.text)
+
+    def test_warning_suffix_sanitizes_controls_and_excludes_description_style(
+        self,
+    ) -> None:
+        choices = (
+            Choice(
+                "save",
+                "Save",
+                warning_suffix="(*Required)",
+                description="Writes settings.",
+            ),
+            Choice(
+                "hostile",
+                "Hostile",
+                warning_suffix="(*Required)\x1b[31m\x00",
+            ),
+            Choice("continue", "Continue"),
+        )
+        state = initialize_picker(
+            Picker(
+                Prompt("Choose"),
+                choices,
+                highlighted_id="continue",
+            )
+        )
+        viewport = project_picker_viewport(state)
+        plain = render_picker_viewport(
+            viewport,
+            _capabilities(CapabilityProfile.PLAIN),
+        )
+        ansi = render_picker_viewport(
+            viewport,
+            _capabilities(CapabilityProfile.ANSI),
+        )
+
+        description_line = (
+            "  1. [available] Save (*Required) \u2014 Writes settings."
+        )
+        hostile_line = (
+            "  2. [available] Hostile (*Required)\\x1b[31m\\x00"
+        )
+        self.assertIn(description_line, plain.text.splitlines())
+        self.assertIn(hostile_line, plain.text.splitlines())
+        self.assertNotIn("\x1b", plain.text)
+        self.assertNotIn("\x00", plain.text)
+        self.assertEqual(strip_decorative_sgr(ansi.text), plain.text)
+        self.assertIn(
+            "  1. [available] Save \x1b[33m(*Required)\x1b[0m "
+            "\u2014 Writes settings.",
+            ansi.text.splitlines(),
+        )
+        self.assertIn(
+            "  2. [available] Hostile "
+            "\x1b[33m(*Required)\\x1b[31m\\x00\x1b[0m",
+            ansi.text.splitlines(),
+        )
+        self.assertEqual(ansi.text.count("\x1b[33m"), 2)
+        self.assertNotIn("\x1b[31m", ansi.text)
+        self.assertNotIn("\x00", ansi.text)
+
+    def test_warning_suffix_component_palette_and_selected_outside_projection(
+        self,
+    ) -> None:
+        save = Choice("save", "Save", warning_suffix="(*Required)")
+        continue_choice = Choice("continue", "Continue")
+        components = (
+            Picker(
+                Prompt("Choose"),
+                (save, continue_choice),
+                highlighted_id="continue",
+            ),
+            _model.SuggestionPalette(
+                "/",
+                (save, continue_choice),
+                highlighted_id="continue",
+            ),
+        )
+        for component in components:
+            with self.subTest(component=type(component).__name__):
+                plain = _render.render_component(
+                    component,
+                    _capabilities(CapabilityProfile.PLAIN),
+                )
+                ansi = _render.render_component(
+                    component,
+                    _capabilities(CapabilityProfile.ANSI),
+                )
+                self.assertIn("  - Save (*Required)", plain.text.splitlines())
+                self.assertEqual(strip_decorative_sgr(ansi.text), plain.text)
+                self.assertIn(
+                    "  - Save \x1b[33m(*Required)\x1b[0m",
+                    ansi.text.splitlines(),
+                )
+
+        outside_choices = (save,) + tuple(
+            Choice(str(index), f"Choice {index}") for index in range(2, 9)
+        )
+        outside = initialize_picker(
+            Picker(
+                Prompt("Choose"),
+                outside_choices,
+                highlighted_id="8",
+                selected_id="save",
+            )
+        )
+        outside_ansi = render_picker_viewport(
+            project_picker_viewport(outside),
+            _capabilities(CapabilityProfile.ANSI),
+        )
+        self.assertIn(
+            "\x1b[32m  Selected outside view: 1. [selected] "
+            "Save (*Required)\x1b[0m",
+            outside_ansi.text,
+        )
+        self.assertNotIn("\x1b[33m", outside_ansi.text)
 
     def test_hostile_empty_disabled_error_and_terminal_states_remain_visible(self) -> None:
         hostile = Choice(
