@@ -380,8 +380,19 @@ class SQLiteDatabase:
         _require_provisioning_candidates(parent, expected=())
 
         temporary_path: Path | None = None
+        publication_linked = False
+        preserve_temporary_sidecars = False
         body_failure: BaseException | None = None
         cleanup_failure: tuple[BaseException, TracebackType | None] | None = None
+
+        def require_current_candidates(*, expected: tuple[Path, ...]) -> None:
+            nonlocal preserve_temporary_sidecars
+            try:
+                _require_provisioning_candidates(parent, expected=expected)
+            except SQLiteDatabaseSecurityError:
+                preserve_temporary_sidecars = True
+                raise
+
         try:
             try:
                 descriptor, raw_temporary = tempfile.mkstemp(
@@ -390,36 +401,38 @@ class SQLiteDatabase:
                     dir=parent,
                 )
                 temporary_path = Path(raw_temporary)
+                owned_temporary = temporary_path
                 os.close(descriptor)
-                _require_provisioning_candidates(
-                    parent,
-                    expected=(temporary_path,),
+                require_current_candidates(
+                    expected=(owned_temporary,),
                 )
             except OSError as exc:
                 raise SQLiteDatabaseUnavailableError() from exc
 
             self._create_temporary_database(
                 module,
-                temporary_path,
+                owned_temporary,
                 validate_snapshot=validate_snapshot,
             )
             validate_lease()
-            _require_provisioning_candidates(
-                parent,
-                expected=(temporary_path,),
+            require_current_candidates(
+                expected=(owned_temporary,),
             )
             try:
-                os.link(temporary_path, target, follow_symlinks=False)
-                _require_provisioning_candidates(
-                    parent,
-                    expected=(temporary_path,),
+                validate_lease()
+                os.link(owned_temporary, target, follow_symlinks=False)
+                publication_linked = True
+                require_current_candidates(
+                    expected=(owned_temporary,),
                 )
-                temporary_path.unlink()
+                validate_lease()
+                owned_temporary.unlink()
+                temporary_path = None
+                publication_linked = False
                 _require_provisioning_candidates(parent, expected=())
             except FileExistsError:
-                _require_provisioning_candidates(
-                    parent,
-                    expected=(temporary_path,),
+                require_current_candidates(
+                    expected=(owned_temporary,),
                 )
                 self._run_connection(
                     module,
@@ -430,9 +443,8 @@ class SQLiteDatabase:
                     operation=lambda _connection: None,
                 )
                 validate_lease()
-                _require_provisioning_candidates(
-                    parent,
-                    expected=(temporary_path,),
+                require_current_candidates(
+                    expected=(owned_temporary,),
                 )
                 return
             except OSError as exc:
@@ -447,11 +459,14 @@ class SQLiteDatabase:
             body_failure = exc
             raise
         finally:
-            if temporary_path is not None:
-                for candidate in (
-                    temporary_path,
-                    *(Path(f"{temporary_path}{suffix}") for suffix in _SIDECAR_SUFFIXES),
-                ):
+            if temporary_path is not None and not publication_linked:
+                cleanup_candidates: tuple[Path, ...] = (temporary_path,)
+                if not preserve_temporary_sidecars:
+                    cleanup_candidates += tuple(
+                        Path(f"{temporary_path}{suffix}")
+                        for suffix in _SIDECAR_SUFFIXES
+                    )
+                for candidate in cleanup_candidates:
                     try:
                         candidate.unlink()
                     except FileNotFoundError:
@@ -1153,13 +1168,20 @@ def _recover_interrupted_provisioning_alias(
     target_identity = _recovery_file_identity(target)
     parent = target.parent
     candidates = _provisioning_alias_candidates(parent)
-    if len(candidates) != 1:
+    base_candidates = tuple(
+        candidate
+        for candidate in candidates
+        if _is_provisioning_temporary_base_name(candidate.name)
+    )
+    if len(base_candidates) != 1:
         raise SQLiteDatabaseSecurityError()
-    alias = candidates[0]
+    alias = base_candidates[0]
     if _recovery_file_identity(alias) != target_identity:
         raise SQLiteDatabaseSecurityError()
     _reject_sidecars(target)
     _reject_sidecars(alias)
+    if candidates != (alias,):
+        raise SQLiteDatabaseSecurityError()
 
     validate_target()
     validate_lease()
@@ -1226,7 +1248,19 @@ def _require_provisioning_candidates(
 
 
 def _is_provisioning_temporary_name(name: str) -> bool:
-    """Report whether one sibling name has the exact owned mkstemp shape."""
+    """Report an exact owned temporary base or sidecar-shaped sibling."""
+
+    if _is_provisioning_temporary_base_name(name):
+        return True
+    return any(
+        name.endswith(suffix)
+        and _is_provisioning_temporary_base_name(name[: -len(suffix)])
+        for suffix in _SIDECAR_SUFFIXES
+    )
+
+
+def _is_provisioning_temporary_base_name(name: str) -> bool:
+    """Report whether one sibling name has the exact owned mkstemp base shape."""
 
     return (
         name.startswith(_TEMPORARY_PREFIX)
