@@ -538,6 +538,84 @@ class ConversationStorageServicesTests(unittest.TestCase):
         )
         self.assertFalse(_marker_path(workspace).exists())
 
+    def test_composed_services_remain_concrete_and_use_only_pinned_workspace(
+        self,
+    ) -> None:
+        workspace = _initialized_workspace(self)
+        pinned_root = workspace.root
+        other = _initialized_workspace(self)
+        other_root = other.root
+        other_services = compose_filesystem_conversation_storage(other)
+        decoy = other_services.catalog.create("session_a", "Other workspace decoy")
+        other_services.event_store.append(
+            make_append(
+                session_id="session_a",
+                conversation_id=decoy.conversation_id,
+                turn_id="other_turn",
+                content="the pinned needle belongs to the other workspace",
+            )
+        )
+        other_before = _namespace_snapshot(other_root)
+
+        services = compose_filesystem_conversation_storage(workspace)
+        catalog = services.catalog
+        event_store = services.event_store
+        search = services.search
+        self.assertIsInstance(catalog, FilesystemConversationCatalog)
+        self.assertIsInstance(event_store, FilesystemConversationEventStore)
+        self.assertIsInstance(search, ReferenceConversationSearch)
+
+        workspace.root = other_root
+        setattr(catalog, "workspace", Workspace(other_root))
+        setattr(event_store, "workspace", Workspace(other_root))
+        setattr(event_store, "catalog", other_services.catalog)
+        setattr(search, "_catalog", other_services.catalog)
+        setattr(search, "_event_store", other_services.event_store)
+        self.assertEqual(getattr(catalog, "workspace").root, pinned_root)
+        self.assertEqual(getattr(event_store, "workspace").root, pinned_root)
+        self.assertIs(getattr(event_store, "catalog"), catalog)
+
+        metadata = catalog.create("session_a", "Pinned workspace witness")
+        user = event_store.append(
+            make_append(
+                session_id="session_a",
+                conversation_id=metadata.conversation_id,
+                turn_id="pinned_turn",
+                content="the pinned needle belongs to workspace A",
+            )
+        )
+        reply = event_store.append(
+            make_append(
+                session_id="session_a",
+                conversation_id=metadata.conversation_id,
+                turn_id="pinned_turn",
+                kind=ConversationEventKind.AGENT_REPLY,
+                content="acknowledged in workspace A",
+            )
+        )
+        result = search.search(
+            ConversationSearchScope("session_a"),
+            ConversationSearchQuery("pinned needle"),
+        )
+
+        self.assertEqual(len(result.hits), 1)
+        self.assertEqual(
+            result.hits[0].citation.conversation_id, metadata.conversation_id
+        )
+        self.assertEqual(result.hits[0].citation.sequence, user.sequence)
+        self.assertEqual(
+            event_store.read("session_a", metadata.conversation_id),
+            (user, reply),
+        )
+        self.assertEqual(
+            FilesystemConversationCatalog(Workspace(pinned_root)).get(
+                "session_a",
+                metadata.conversation_id,
+            ),
+            metadata,
+        )
+        self.assertEqual(_namespace_snapshot(other_root), other_before)
+
     def test_filesystem_bundle_shares_authoritative_catalog_event_and_search(
         self,
     ) -> None:
@@ -644,6 +722,106 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
         self.assertEqual(_namespace_snapshot(workspace.root), before)
         self.assertFalse(_marker_path(workspace).exists())
 
+    def test_activation_load_uses_one_pinned_workspace_during_root_mutation(
+        self,
+    ) -> None:
+        workspace = _initialized_workspace(self)
+        pinned_root = workspace.root
+        other = _initialized_workspace(self)
+        other_root = other.root
+        expected = ConversationStorageActivationState(
+            ConversationStorageBackend.SQLITE,
+            7,
+        )
+        workspace.write_json(
+            CONVERSATION_STORAGE_ACTIVATION_STATE_PATH,
+            expected.to_dict(),
+        )
+        other_marker = _marker_path(other)
+        other_bytes = b'{"decoy":"other activation bytes"}\n'
+        other_marker.write_bytes(other_bytes)
+        other_before = _namespace_snapshot(other_root)
+        original_read_text = Workspace.read_text
+        read_workspaces: list[Workspace] = []
+
+        def mutate_during_read(
+            operation_workspace: Workspace,
+            relative: str | os.PathLike[str],
+        ) -> str:
+            read_workspaces.append(operation_workspace)
+            workspace.root = other_root
+            return original_read_text(operation_workspace, relative)
+
+        with mock.patch.object(Workspace, "read_text", new=mutate_during_read):
+            loaded = load_conversation_storage_activation_state(workspace)
+
+        self.assertEqual(loaded, expected)
+        self.assertEqual(workspace.root, other_root)
+        self.assertEqual(len(read_workspaces), 1)
+        self.assertIsNot(read_workspaces[0], workspace)
+        self.assertEqual(read_workspaces[0].root, pinned_root)
+        self.assertEqual(_namespace_snapshot(other_root), other_before)
+        self.assertEqual(other_marker.read_bytes(), other_bytes)
+
+    def test_wrong_root_cas_rejects_a_lease_before_workspace_materialization(
+        self,
+    ) -> None:
+        workspace = _initialized_workspace(self)
+        other = _initialized_workspace(self)
+        other_marker = _marker_path(other)
+        other_bytes = b'{"decoy":"wrong root activation bytes"}\n'
+        other_marker.write_bytes(other_bytes)
+        coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)
+
+        with coordinator.borrow(timeout_seconds=2.0) as lease:
+            workspace_before = _namespace_snapshot(workspace.root)
+            other_before = _namespace_snapshot(other.root)
+            with (
+                mock.patch.object(
+                    Workspace,
+                    "__init__",
+                    side_effect=AssertionError("workspace materialized"),
+                ) as materialize,
+                mock.patch.object(
+                    Workspace,
+                    "path",
+                    side_effect=AssertionError("filesystem path accessed"),
+                ) as path,
+                mock.patch.object(
+                    Workspace,
+                    "read_text",
+                    side_effect=AssertionError("filesystem read attempted"),
+                ) as read_text,
+                mock.patch.object(
+                    Workspace,
+                    "write_json",
+                    side_effect=AssertionError("filesystem write attempted"),
+                ) as write_json,
+            ):
+                with self.assertRaises(ConversationStorageCoordinationError) as caught:
+                    compare_and_set_conversation_storage_activation(
+                        other,
+                        lease=lease,
+                        expected_generation=0,
+                        readiness=_readiness(
+                            ConversationStorageBackend.FILESYSTEM,
+                            ConversationStorageBackend.SQLITE,
+                        ),
+                    )
+
+            materialize.assert_not_called()
+            path.assert_not_called()
+            read_text.assert_not_called()
+            write_json.assert_not_called()
+            self.assertEqual(
+                str(caught.exception),
+                "conversation storage failure: coordination_failed",
+            )
+            self.assertIsNone(caught.exception.__cause__)
+            self.assertEqual(_namespace_snapshot(workspace.root), workspace_before)
+            self.assertEqual(_namespace_snapshot(other.root), other_before)
+            self.assertEqual(other_marker.read_bytes(), other_bytes)
+
     def test_same_backend_cas_is_an_unwritten_noop(self) -> None:
         workspace = _initialized_workspace(self)
         coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)
@@ -699,6 +877,80 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
             expected,
         )
 
+    def test_activation_cas_pins_read_revalidation_and_write_to_one_root(
+        self,
+    ) -> None:
+        workspace = _initialized_workspace(self)
+        pinned_root = workspace.root
+        other = _initialized_workspace(self)
+        other_root = other.root
+        current = ConversationStorageActivationState(
+            ConversationStorageBackend.FILESYSTEM,
+            1,
+        )
+        workspace.write_json(
+            CONVERSATION_STORAGE_ACTIVATION_STATE_PATH,
+            current.to_dict(),
+        )
+        other_marker = _marker_path(other)
+        other_bytes = b'{"decoy":"preserve other activation"}\n'
+        other_marker.write_bytes(other_bytes)
+        other_before = _namespace_snapshot(other_root)
+        coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)
+        original_read_text = Workspace.read_text
+        original_write_json = Workspace.write_json
+        read_roots: list[Path] = []
+        write_roots: list[Path] = []
+
+        def mutate_during_read(
+            operation_workspace: Workspace,
+            relative: str | os.PathLike[str],
+        ) -> str:
+            read_roots.append(operation_workspace.root)
+            workspace.root = other_root
+            return original_read_text(operation_workspace, relative)
+
+        def record_write(
+            operation_workspace: Workspace,
+            relative: str | os.PathLike[str],
+            value: object,
+        ) -> Path:
+            write_roots.append(operation_workspace.root)
+            return original_write_json(operation_workspace, relative, value)
+
+        with coordinator.borrow(timeout_seconds=2.0) as lease:
+            with (
+                mock.patch.object(Workspace, "read_text", new=mutate_during_read),
+                mock.patch.object(Workspace, "write_json", new=record_write),
+            ):
+                outcome = compare_and_set_conversation_storage_activation(
+                    workspace,
+                    lease=lease,
+                    expected_generation=1,
+                    readiness=_readiness(
+                        ConversationStorageBackend.FILESYSTEM,
+                        ConversationStorageBackend.SQLITE,
+                        generation=1,
+                    ),
+                )
+            lease.validate(workspace_key=os.fspath(pinned_root))
+            with self.assertRaises(ConversationStorageCoordinationError):
+                lease.validate(workspace_key=os.fspath(other_root))
+
+        expected = ConversationStorageActivationState(
+            ConversationStorageBackend.SQLITE,
+            2,
+        )
+        self.assertEqual(outcome.current, expected)
+        self.assertEqual(read_roots, [pinned_root])
+        self.assertEqual(write_roots, [pinned_root])
+        self.assertEqual(
+            load_conversation_storage_activation_state(Workspace(pinned_root)),
+            expected,
+        )
+        self.assertEqual(_namespace_snapshot(other_root), other_before)
+        self.assertEqual(other_marker.read_bytes(), other_bytes)
+
     def test_cas_rejects_stale_generation_source_generation_and_backend(
         self,
     ) -> None:
@@ -734,9 +986,7 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
                 readiness=readiness,
             ):
                 workspace = _initialized_workspace(self)
-                coordinator = WorkspaceConversationStorageMutationCoordinator(
-                    workspace
-                )
+                coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)
                 with coordinator.borrow(timeout_seconds=2.0) as lease:
                     with self.assertRaises(ConversationStorageActivationConflictError):
                         compare_and_set_conversation_storage_activation(
@@ -757,9 +1007,7 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
         ):
             with self.subTest(parity=parity):
                 workspace = _initialized_workspace(self)
-                coordinator = WorkspaceConversationStorageMutationCoordinator(
-                    workspace
-                )
+                coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)
                 readiness = _readiness(
                     ConversationStorageBackend.FILESYSTEM,
                     ConversationStorageBackend.SQLITE,
@@ -877,9 +1125,10 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
 
         with coordinator.borrow(timeout_seconds=2.0) as lease:
             with mock.patch.object(
-                workspace,
+                Workspace,
                 "write_json",
                 side_effect=OSError("simulated activation write failure"),
+                autospec=True,
             ) as write_json:
                 with self.assertRaises(ConversationStorageActivationError):
                     compare_and_set_conversation_storage_activation(
@@ -890,12 +1139,14 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
                     )
 
         write_json.assert_called_once_with(
+            mock.ANY,
             CONVERSATION_STORAGE_ACTIVATION_STATE_PATH,
             ConversationStorageActivationState(
                 ConversationStorageBackend.FILESYSTEM,
                 2,
             ).to_dict(),
         )
+        self.assertEqual(write_json.call_args.args[0].root, workspace.root)
         self.assertEqual(_marker_path(workspace).read_bytes(), before)
         self.assertEqual(_marker_temporaries(workspace), [])
         self.assertEqual(
@@ -916,17 +1167,22 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
                     ConversationStorageBackend.SQLITE,
                 ),
             )
-        original_write_json = workspace.write_json
+        original_write_json = Workspace.write_json
 
-        def write_then_fail(relative: object, value: object) -> None:
-            original_write_json(relative, value)
+        def write_then_fail(
+            operation_workspace: Workspace,
+            relative: str | os.PathLike[str],
+            value: object,
+        ) -> None:
+            original_write_json(operation_workspace, relative, value)
             raise OSError("simulated post-write activation failure")
 
         with coordinator.borrow(timeout_seconds=2.0) as lease:
             with mock.patch.object(
-                workspace,
+                Workspace,
                 "write_json",
                 side_effect=write_then_fail,
+                autospec=True,
             ) as write_json:
                 with self.assertRaises(ConversationStorageActivationError):
                     compare_and_set_conversation_storage_activation(
@@ -941,6 +1197,7 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
                     )
 
         write_json.assert_called_once()
+        self.assertEqual(write_json.call_args.args[0].root, workspace.root)
         self.assertEqual(
             load_conversation_storage_activation_state(workspace),
             ConversationStorageActivationState(
@@ -967,6 +1224,60 @@ class ConversationStorageCoordinatorTests(unittest.TestCase):
         self.assertFalse(
             (workspace.root / CONVERSATION_STORAGE_MUTATION_GUARD_PATH).exists()
         )
+
+    def test_borrow_uses_only_pinned_guard_after_root_mutation(self) -> None:
+        workspace = _initialized_workspace(self)
+        pinned_root = workspace.root
+        other = _initialized_workspace(self)
+        other_root = other.root
+        coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)
+        pinned_guard = pinned_root / CONVERSATION_STORAGE_MUTATION_GUARD_PATH
+        other_guard = other_root / CONVERSATION_STORAGE_MUTATION_GUARD_PATH
+        other_before = _namespace_snapshot(other_root)
+        real_open = os.open
+        opened: list[Path] = []
+
+        def record_open(
+            path: str | os.PathLike[str],
+            flags: int,
+            mode: int = 0o777,
+        ) -> int:
+            opened.append(Path(path))
+            return real_open(path, flags, mode)
+
+        workspace.root = other_root
+        with mock.patch.object(composition_module.os, "open", new=record_open):
+            with coordinator.borrow(timeout_seconds=2.0) as lease:
+                self.assertEqual(lease.workspace_key, os.fspath(pinned_root))
+                lease.validate(workspace_key=os.fspath(pinned_root))
+                with self.assertRaises(ConversationStorageCoordinationError) as caught:
+                    lease.validate(workspace_key=os.fspath(other_root))
+
+        workspace.root = pinned_root
+
+        def mutate_during_open(
+            path: str | os.PathLike[str],
+            flags: int,
+            mode: int = 0o777,
+        ) -> int:
+            opened.append(Path(path))
+            workspace.root = other_root
+            return real_open(path, flags, mode)
+
+        with mock.patch.object(composition_module.os, "open", new=mutate_during_open):
+            with coordinator.borrow(timeout_seconds=2.0) as lease:
+                self.assertEqual(lease.workspace_key, os.fspath(pinned_root))
+                lease.validate(workspace_key=os.fspath(pinned_root))
+
+        self.assertEqual(opened, [pinned_guard, pinned_guard])
+        self.assertEqual(
+            str(caught.exception),
+            "conversation storage failure: coordination_failed",
+        )
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertTrue(pinned_guard.is_file())
+        self.assertFalse(other_guard.exists())
+        self.assertEqual(_namespace_snapshot(other_root), other_before)
 
     def test_same_thread_nested_borrows_share_one_lease_and_expiry(self) -> None:
         workspace = _initialized_workspace(self)
@@ -1242,6 +1553,17 @@ print("released", flush=True)
 
 class ConversationStorageBoundaryTests(unittest.TestCase):
     def test_package_exports_owning_modules_and_root_facade_are_exact(self) -> None:
+        self.assertEqual(
+            composition_module.__all__,
+            [
+                "CONVERSATION_STORAGE_ACTIVATION_STATE_PATH",
+                "CONVERSATION_STORAGE_MUTATION_GUARD_PATH",
+                "WorkspaceConversationStorageMutationCoordinator",
+                "compare_and_set_conversation_storage_activation",
+                "compose_filesystem_conversation_storage",
+                "load_conversation_storage_activation_state",
+            ],
+        )
         expected = set(contracts_module.__all__) | set(composition_module.__all__)
         self.assertEqual(set(storage.__all__), expected)
         for name in contracts_module.__all__:
