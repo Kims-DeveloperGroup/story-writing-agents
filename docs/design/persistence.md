@@ -39,10 +39,13 @@ select the runtime files automatically.
 The optional adapter owns one fixed contained file:
 `discussion_logs/conversation_storage.sqlite3`. Its database identity is schema
 version `1`, SQLite application ID `0x53574143` (`SWAC`), UTF-8 encoding, and a
-fixed schema cookie and schema-manifest fingerprint. Each operation against an
-existing file verifies the exact table, index, and trigger manifest,
-`PRAGMA integrity_check`, foreign keys, and all reconstructed domain values
-before trusting the database snapshot.
+fixed schema cookie and schema-manifest fingerprint. Strict preflight,
+composition readiness, and existing-target or temporary-database provisioning
+verify the exact table, index, and trigger manifest, run
+`PRAGMA integrity_check` and a global foreign-key check, reject orphan events,
+and reconstruct every domain row. Routine adapter calls instead verify the
+database and schema identity, then validate the rows involved in the requested
+operation; they do not scan unrelated database contents.
 
 The normalized schema has three authoritative tables: one singleton storage
 identity, catalog rows keyed by `(session_id, conversation_id)`, and ordered
@@ -56,21 +59,23 @@ is no full-text or other persisted search index; composition uses the existing
 provider-free `ReferenceConversationSearch`.
 
 Every ordinary adapter read owns a read-only `mode=ro` connection and explicit
-`BEGIN`/`COMMIT` transaction. Verification and the requested operation observe
-one stable snapshot; the connection is then closed. That boundary is one
-catalog or event-store operation. A search can perform multiple operations and
-is not one database-global snapshot.
+`BEGIN`/`COMMIT` transaction. Bounded identity verification and the requested
+row validation observe one stable snapshot; the connection is then closed.
+That boundary is one catalog or event-store operation. A search can perform
+multiple operations and is not one database-global snapshot.
 
 Every supported mutation acquires the workspace conversation-storage
 coordinator before opening its `mode=rw` connection. It verifies the database
 and active workspace/owner-thread lease, uses `BEGIN IMMEDIATE`, performs the
-operation, reverifies schema and domain state plus the lease, commits, checks
-the named database identity, and closes. The connection policy is DELETE
-journal mode, `synchronous=FULL`, foreign keys enabled, a fixed five-second
+operation with operation-local row validation and database constraints,
+reverifies schema identity plus the lease, commits, checks the named database
+identity, and closes. The connection policy is DELETE journal mode,
+`synchronous=FULL`, foreign keys enabled and enforced, a fixed five-second
 SQLite busy timeout, and UTF-8. This serializes supported writers through the
 workspace guard but is not a transaction with filesystem conversations,
 defaults, sessions, debates, artifacts, provider state, or other workspace
-channels.
+channels. Routine writes do not run the exhaustive preflight scan over
+unrelated rows.
 
 Provisioning builds and verifies one private temporary database, installs it
 create-only, and synchronizes the installed file and containing directory. It

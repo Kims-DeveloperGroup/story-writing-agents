@@ -898,14 +898,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   read-only connection so verification and the operation share one snapshot;
   writes validate an already-held lease before a `BEGIN IMMEDIATE` transaction
   and again before commit. Both paths commit explicitly, roll back an
-  uncommitted transaction, and always close their connection. Verification
-  checks the application ID, user/schema versions, exact schema manifest and
-  fingerprint, database integrity, an empty `foreign_key_check`, composite
-  ownership, contiguous event/correlation invariants supplied by the adapter,
-  and every derived normalized subject. It rejects unsafe or multiply linked
-  named files. Strict verification/preflight, provisioning, and writes reject
-  every rollback/WAL sidecar without repairing or removing it; ordinary reads
-  alone tolerate a concurrent DELETE-mode `-journal` at their initial and final
+  uncommitted transaction, and always close their connection. Routine reads
+  and writes perform bounded application ID, user/schema version, exact schema
+  manifest, and fingerprint verification without scanning unrelated catalog or
+  event rows; configured foreign-key enforcement, schema constraints, and the
+  adapter's operation-local reconstruction retain addressed-row domain
+  validation. Explicit `verify_existing`/preflight and new, existing, or
+  race-winner provisioning validation additionally check database integrity,
+  an empty `foreign_key_check`, composite ownership, every contiguous
+  event/correlation invariant supplied by the adapter, and every derived
+  normalized subject. Verification rejects unsafe or multiply linked named
+  files. Strict verification/preflight, provisioning, and writes reject every
+  rollback/WAL sidecar without repairing or removing it; ordinary reads alone
+  tolerate a concurrent DELETE-mode `-journal` at their initial and final
   boundary checks only when it is a singly linked regular file, while still
   rejecting unsafe journal forms and every `-wal` or `-shm` sidecar. Explicit
   provisioning builds and verifies a private temporary database,

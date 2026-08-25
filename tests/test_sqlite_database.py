@@ -6,6 +6,7 @@ import os
 import sqlite3
 import threading
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Callable
 from unittest import mock
@@ -98,6 +99,49 @@ class _TrackingConnection:
         finally:
             if self.close_failure is not None:
                 raise self.close_failure
+
+
+def _tracking_connect(
+    trace: list[str],
+    **options: object,
+) -> tuple[Callable[..., _TrackingConnection], list[_TrackingConnection]]:
+    """Return one real connection wrapper factory and its opened connections."""
+
+    real_connect = database_module._connect
+    connections: list[_TrackingConnection] = []
+
+    def connect(
+        module: object,
+        path: Path,
+        *,
+        read_only: bool,
+    ) -> _TrackingConnection:
+        delegate = real_connect(module, path, read_only=read_only)
+        wrapper = _TrackingConnection(delegate, trace, **options)
+        connections.append(wrapper)
+        return wrapper
+
+    return connect, connections
+
+
+def _assert_exhaustive_statements(
+    test_case: unittest.TestCase,
+    trace: list[str],
+    *,
+    expected_count: int,
+) -> None:
+    """Assert one complete exhaustive verification statement set per scan."""
+
+    test_case.assertEqual(trace.count("PRAGMA integrity_check"), expected_count)
+    test_case.assertEqual(trace.count("PRAGMA foreign_key_check"), expected_count)
+    test_case.assertEqual(
+        sum(
+            "LEFT JOIN conversations AS conversation" in statement
+            and "WHERE conversation.session_id IS NULL" in statement
+            for statement in trace
+        ),
+        expected_count,
+    )
 
 
 class SQLiteDatabaseVerificationTests(unittest.TestCase):
@@ -273,6 +317,45 @@ class SQLiteDatabaseVerificationTests(unittest.TestCase):
                 preflight_sqlite_conversation_storage(workspace)
         self.assertEqual(storage_snapshot(workspace), before)
 
+    def test_verify_existing_and_preflight_remain_exhaustive(self) -> None:
+        workspace = initialized_workspace(self)
+        provision(workspace)
+        database = database_module.SQLiteDatabase(workspace)
+        real_snapshot_validator = sqlite_module._validate_database_snapshot
+
+        for pathway in ("verify_existing", "preflight"):
+            with self.subTest(pathway=pathway):
+                trace: list[str] = []
+                snapshot_calls: list[object] = []
+                connect, connections = _tracking_connect(trace)
+
+                def validate_snapshot(connection: object) -> None:
+                    snapshot_calls.append(connection)
+                    real_snapshot_validator(connection)
+
+                with mock.patch.object(database_module, "_connect", connect):
+                    if pathway == "verify_existing":
+                        database.verify_existing(validate_snapshot)
+                    else:
+                        with mock.patch.object(
+                            sqlite_module,
+                            "_validate_database_snapshot",
+                            validate_snapshot,
+                        ):
+                            result = preflight_sqlite_conversation_storage(workspace)
+                        self.assertIs(
+                            result.capability,
+                            ConversationStorageCapability.READY,
+                        )
+
+                self.assertEqual(len(connections), 1)
+                self.assertEqual(snapshot_calls, [connections[0]])
+                _assert_exhaustive_statements(
+                    self,
+                    trace,
+                    expected_count=1,
+                )
+
 
 class SQLiteDatabaseTransactionTests(unittest.TestCase):
     def _tracking_connect(
@@ -280,21 +363,79 @@ class SQLiteDatabaseTransactionTests(unittest.TestCase):
         trace: list[str],
         **options: object,
     ) -> tuple[Callable[..., _TrackingConnection], list[_TrackingConnection]]:
-        real_connect = database_module._connect
-        connections: list[_TrackingConnection] = []
+        return _tracking_connect(trace, **options)
 
-        def connect(
-            module: object,
-            path: Path,
-            *,
-            read_only: bool,
-        ) -> _TrackingConnection:
-            delegate = real_connect(module, path, read_only=read_only)
-            wrapper = _TrackingConnection(delegate, trace, **options)
-            connections.append(wrapper)
-            return wrapper
+    def test_routine_read_and_write_omit_exhaustive_verification(self) -> None:
+        workspace = initialized_workspace(self)
+        provision(workspace)
+        database = database_module.SQLiteDatabase(workspace)
+        snapshot_calls: list[object] = []
 
-        return connect, connections
+        def reject_snapshot(connection: object) -> None:
+            snapshot_calls.append(connection)
+            raise AssertionError("routine operation reconstructed the global snapshot")
+
+        read_trace: list[str] = []
+        read_connect, _ = _tracking_connect(read_trace)
+        with mock.patch.object(database_module, "_connect", read_connect):
+            result = database.read(
+                lambda connection: connection.execute("SELECT 1").fetchone()[0],
+                validate_snapshot=reject_snapshot,
+            )
+        self.assertEqual(result, 1)
+        self.assertEqual(snapshot_calls, [])
+        _assert_exhaustive_statements(self, read_trace, expected_count=0)
+        self.assertEqual(read_trace.count("PRAGMA user_version"), 1)
+        self.assertEqual(
+            sum(
+                statement.startswith(
+                    "SELECT singleton, schema_version, schema_fingerprint"
+                )
+                for statement in read_trace
+            ),
+            1,
+        )
+        self.assertEqual(
+            sum(
+                statement.startswith("SELECT sql FROM sqlite_master")
+                for statement in read_trace
+            ),
+            1,
+        )
+
+        write_trace: list[str] = []
+        write_connect, _ = _tracking_connect(write_trace)
+        coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)
+        with coordinator.borrow(timeout_seconds=2.0) as lease:
+            with mock.patch.object(database_module, "_connect", write_connect):
+                database.write(
+                    lambda connection: connection.execute("SELECT 1").fetchone()[0],
+                    validate_snapshot=reject_snapshot,
+                    validate_lease=lambda: lease.validate(
+                        workspace_key=coordinator.workspace_key
+                    ),
+                )
+        self.assertEqual(snapshot_calls, [])
+        _assert_exhaustive_statements(self, write_trace, expected_count=0)
+        self.assertEqual(write_trace.count("PRAGMA user_version"), 2)
+        self.assertEqual(
+            sum(
+                statement.startswith(
+                    "SELECT singleton, schema_version, schema_fingerprint"
+                )
+                for statement in write_trace
+            ),
+            2,
+        )
+        self.assertEqual(
+            sum(
+                statement.startswith("SELECT sql FROM sqlite_master")
+                for statement in write_trace
+            ),
+            2,
+        )
+        self.assertIn("BEGIN IMMEDIATE", write_trace)
+        self.assertIn("COMMIT", write_trace)
 
     def test_read_uses_begin_snapshot_operation_commit_and_close_order(self) -> None:
         workspace = initialized_workspace(self)
@@ -566,6 +707,71 @@ class SQLiteDatabaseTransactionTests(unittest.TestCase):
 
 
 class SQLiteDatabaseProvisioningTests(unittest.TestCase):
+    def test_every_provisioning_path_retains_exhaustive_verification(self) -> None:
+        template = initialized_workspace(self)
+        provision(template)
+        race_winner_bytes = database_path(template).read_bytes()
+
+        for pathway, expected_count in (
+            ("new", 1),
+            ("existing", 1),
+            ("race_winner", 2),
+        ):
+            with self.subTest(pathway=pathway):
+                workspace = initialized_workspace(self)
+                if pathway == "existing":
+                    provision(workspace)
+                database = database_module.SQLiteDatabase(workspace)
+                coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)
+                trace: list[str] = []
+                snapshot_calls: list[object] = []
+                connect, connections = _tracking_connect(trace)
+
+                def validate_snapshot(connection: object) -> None:
+                    snapshot_calls.append(connection)
+                    sqlite_module._validate_database_snapshot(connection)
+
+                def install_race_winner(
+                    source: Path,
+                    target: Path,
+                    *,
+                    follow_symlinks: bool = True,
+                ) -> None:
+                    del source, follow_symlinks
+                    target.write_bytes(race_winner_bytes)
+                    raise FileExistsError("deterministic competing provisioner")
+
+                with ExitStack() as stack:
+                    stack.enter_context(
+                        mock.patch.object(database_module, "_connect", connect)
+                    )
+                    if pathway == "race_winner":
+                        stack.enter_context(
+                            mock.patch.object(
+                                os,
+                                "link",
+                                side_effect=install_race_winner,
+                            )
+                        )
+                    with coordinator.borrow(timeout_seconds=2.0) as lease:
+                        database.provision(
+                            validate_snapshot,
+                            validate_lease=lambda: lease.validate(
+                                workspace_key=coordinator.workspace_key
+                            ),
+                        )
+
+                self.assertEqual(len(snapshot_calls), expected_count)
+                self.assertTrue(
+                    all(connection in connections for connection in snapshot_calls)
+                )
+                _assert_exhaustive_statements(
+                    self,
+                    trace,
+                    expected_count=expected_count,
+                )
+                self.assertTrue(database_path(workspace).is_file())
+
     def test_link_failure_cleans_only_owned_temporary_artifacts(self) -> None:
         workspace = initialized_workspace(self)
         coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)

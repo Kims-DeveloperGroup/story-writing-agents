@@ -62,11 +62,20 @@ from story_writing_agents.conversation_storage.sqlite import (
 
 workspace = swa.Workspace("/path/to/initialized-story")
 services = compose_sqlite_conversation_storage(workspace)
-memory = services.search  # ReferenceConversationSearch
+memory = swa.ConversationMemoryService(
+    swa.ConversationSearchScope("novel"),
+    services.catalog,
+    services.event_store,
+    search=services.search,
+)
 result = memory.search(swa.ConversationSearchQuery("council vessel"))
 ```
 
-This does not select SQLite for the shell or `StoryRuntime`. See the
+The composed bundle exposes a raw `ReferenceConversationSearch`, whose
+`search(scope, query)` port requires an explicit scope. Wrapping that raw port
+with its same-provenance catalog and event store creates the authorized
+one-argument memory service used above. This does not select SQLite for the
+shell or `StoryRuntime`. See the
 [preflight and provisioning example](package-api.md#optional-sqlite-conversation-storage)
 before composition.
 

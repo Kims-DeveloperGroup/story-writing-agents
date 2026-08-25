@@ -355,12 +355,15 @@ when an operation is requested, and SQLite 3.7.16 or later is required.
 
 Header verification requires the SQLite format header, DELETE rollback-journal
 read/write versions, UTF-8 encoding, application ID `0x53574143` (`SWAC`), and
-schema version `1`. Transaction verification also requires the exact schema
-manifest and fingerprint, fixed schema cookie, `integrity_check` result,
-foreign-key integrity, and valid catalog/event domain rows. In particular, the
-stored normalized subject must equal the public normalization function and the
-private event turn slot must agree with event kind and pairing. Validation is
-read-only and never repairs a value.
+schema version `1`. Every connection against an existing database also verifies
+the exact schema manifest and fingerprint and fixed schema cookie. Strict
+preflight and composition readiness, along with both existing-target and new
+temporary-database validation during provisioning, additionally run
+`integrity_check`, a global foreign-key check, an orphan scan, and full
+catalog/event reconstruction. Routine reads and writes validate the rows
+involved in their requested operation; database constraints, triggers, and
+enabled foreign-key enforcement protect supported mutations. They do not scan
+unrelated database contents. Validation never repairs a value.
 
 Sidecar handling deliberately differs by operation:
 
@@ -374,20 +377,23 @@ Sidecar handling deliberately differs by operation:
   provisioning cleanup is limited to sidecars of its own private temporary.
 
 An ordinary read opens one read-only connection, verifies connection policy,
-executes `BEGIN`, verifies the complete database snapshot, performs one adapter
-operation, commits, closes, then rechecks the sidecar and database identity.
-This gives one stable snapshot for that operation. It does not combine the
-several catalog/event-store reads made by `ReferenceConversationSearch` into a
-single database-global snapshot.
+executes `BEGIN`, verifies bounded database/schema identity, validates the rows
+requested by one adapter operation, commits, closes, then rechecks the sidecar
+and database identity. This gives one stable snapshot for that operation. It
+does not run the exhaustive preflight scan or combine the several
+catalog/event-store reads made by `ReferenceConversationSearch` into a single
+database-global snapshot.
 
 Every supported mutation acquires an active workspace conversation-storage
 lease before database work. The coordinator uses a weakly shared in-process
 lock and the fixed `config/.conversation_storage.lock` POSIX advisory guard;
 same-thread nesting reuses the same owner-thread/workspace-bound lease without
 extending its expiry. After acquisition the adapter opens `mode=rw`, verifies
-the database and lease, starts `BEGIN IMMEDIATE`, mutates, reverifies database
-and lease, commits, and checks named identity again. The connection uses
-`journal_mode=DELETE`, `synchronous=FULL`, foreign keys on, UTF-8, and a
+the database and lease, starts `BEGIN IMMEDIATE`, validates and mutates the
+operation's affected rows under schema constraints and foreign-key
+enforcement, reverifies schema identity and the lease, commits, and checks
+named identity again. It does not globally scan unrelated rows. The connection
+uses `journal_mode=DELETE`, `synchronous=FULL`, foreign keys on, UTF-8, and a
 five-second SQLite busy timeout. The separately configurable mutation timeout
 bounds coordinator acquisition.
 

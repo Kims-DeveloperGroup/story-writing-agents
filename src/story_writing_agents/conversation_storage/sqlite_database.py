@@ -277,6 +277,7 @@ class SQLiteDatabase:
             module,
             self._path,
             read_only=True,
+            exhaustive_verification=True,
             validate_snapshot=validate_snapshot,
             operation=lambda _connection: None,
         )
@@ -287,7 +288,7 @@ class SQLiteDatabase:
         *,
         validate_snapshot: _SnapshotValidator,
     ) -> _ResultT:
-        """Run one operation after strict verification on a read-only connection."""
+        """Run one operation after bounded verification on a read-only connection."""
 
         module = _load_and_probe_sqlite()
         return self._run_connection(
@@ -334,6 +335,7 @@ class SQLiteDatabase:
                 module,
                 self._path,
                 read_only=True,
+                exhaustive_verification=True,
                 validate_snapshot=validate_snapshot,
                 operation=lambda _connection: None,
             )
@@ -377,6 +379,7 @@ class SQLiteDatabase:
                     module,
                     target,
                     read_only=True,
+                    exhaustive_verification=True,
                     validate_snapshot=validate_snapshot,
                     operation=lambda _connection: None,
                 )
@@ -482,6 +485,7 @@ class SQLiteDatabase:
             module,
             path,
             read_only=True,
+            exhaustive_verification=True,
             validate_snapshot=validate_snapshot,
             operation=lambda _connection: None,
         )
@@ -493,6 +497,7 @@ class SQLiteDatabase:
         *,
         read_only: bool,
         allow_live_rollback_journal: bool = False,
+        exhaustive_verification: bool = False,
         validate_snapshot: _SnapshotValidator,
         operation: _ConnectionOperation[_ResultT],
         validate_lease: _LeaseValidator | None = None,
@@ -517,32 +522,33 @@ class SQLiteDatabase:
             if read_only:
                 _execute(module, connection, "BEGIN")
                 transaction_started = True
-                self._verify_database(
-                    module,
-                    connection,
-                    validate_snapshot=validate_snapshot,
-                )
+                if exhaustive_verification:
+                    self._verify_database_exhaustive(
+                        module,
+                        connection,
+                        validate_snapshot=validate_snapshot,
+                    )
+                else:
+                    self._verify_database_identity(module, connection)
                 result = operation(connection)
                 _execute(module, connection, "COMMIT")
                 committed = True
             else:
-                self._verify_database(
-                    module,
-                    connection,
-                    validate_snapshot=validate_snapshot,
-                )
+                if exhaustive_verification:
+                    self._verify_database_exhaustive(
+                        module,
+                        connection,
+                        validate_snapshot=validate_snapshot,
+                    )
+                else:
+                    self._verify_database_identity(module, connection)
                 if validate_lease is None:
                     raise SQLiteDatabaseUnavailableError()
                 validate_lease()
                 _execute(module, connection, "BEGIN IMMEDIATE")
                 transaction_started = True
                 result = operation(connection)
-                self._verify_database(
-                    module,
-                    connection,
-                    validate_snapshot=validate_snapshot,
-                    allow_live_journal=True,
-                )
+                self._verify_database_identity(module, connection)
                 validate_lease()
                 _execute(module, connection, "COMMIT")
                 committed = True
@@ -583,16 +589,12 @@ class SQLiteDatabase:
         return result
 
     @staticmethod
-    def _verify_database(
+    def _verify_database_identity(
         module: Any,
         connection: Any,
-        *,
-        validate_snapshot: _SnapshotValidator,
-        allow_live_journal: bool = False,
     ) -> None:
-        """Verify identity, manifest, integrity, FK ownership, and domain rows."""
+        """Verify bounded database and schema identity invariants."""
 
-        del allow_live_journal  # The live journal is checked by the path owner.
         try:
             user_version = _single_pragma_value(
                 module,
@@ -653,7 +655,24 @@ class SQLiteDatabase:
                 manifest != _EXPECTED_SCHEMA_MANIFEST
             ):
                 raise SQLiteDatabaseFormatError()
+        except (_SQLiteDatabaseError, KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as exc:
+            if _is_sqlite_exception(module, exc):
+                _raise_mapped_sqlite_exception(module, exc, verification=True)
+            raise
 
+    @staticmethod
+    def _verify_database_exhaustive(
+        module: Any,
+        connection: Any,
+        *,
+        validate_snapshot: _SnapshotValidator,
+    ) -> None:
+        """Verify integrity, FK ownership, and every domain row."""
+
+        SQLiteDatabase._verify_database_identity(module, connection)
+        try:
             integrity_rows = _fetchall(
                 module,
                 connection,
