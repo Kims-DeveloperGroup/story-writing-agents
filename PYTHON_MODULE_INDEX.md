@@ -1470,13 +1470,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   two-notice record, while supplied safe one-line strict-UTF-8 text adds
   exactly one third notice labelled `debug log` without changing the typed
   error value. The
-  unlisted `InteractiveSemanticOutput` binds one terminal's semantic write
-  capability for controller use, and the existing `Field`, `ListView`,
+  unlisted `InteractiveSemanticOutput` binds one terminal's ordinary semantic
+  write capability plus its mode-gated accepted-input projection for controller
+  use, and the existing `Field`, `ListView`,
   `Message`, `Notice`, `Panel`, `Record`, `Section`, `SemanticRole`, and
   `ViewState` contracts are likewise facade-bound but omitted from `__all__`.
   These bindings support count-aware dense semantic views without changing the
-  package-supported surface. The adapter and contracts add no project-root
-  export or raw-resource ownership. Unlisted package-internal
+  package-supported surface. Callback construction discards accepted-input
+  projections because its ordinary reader already owns the visible echo, while
+  stream construction routes them through the sole driver's selected input
+  mode without exposing that mode. The adapter and contracts add no
+  project-root export or raw-resource ownership. Unlisted package-internal
   `InteractiveStartupPresentation` binds the terminal-owned fixed welcome,
   authentication-notice, result-boundary, timing, and cleanup lifecycle for
   `interactive_auth` without exposing capabilities, streams, or a public
@@ -1929,7 +1933,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   enters history only after that cleanup and restoration; an eligible fallback
   submission enters history after the ordinary reader returns. Static
   completion-only Enter keeps the live read open, performs no submitted-frame
-  cleanup, and appends nothing.
+  cleanup, and appends nothing. Package-internal `write_accepted_input` accepts
+  one already rendered semantic payload only after the latch has selected an
+  input mode: `LIVE` delegates to the existing progress-safe persistent write,
+  `FALLBACK` performs no write because ordinary input remains visible, and
+  `UNDECIDED` is rejected. It interprets no component or submitted content and
+  retains no commit token or payload.
   The lower-level semantic-input, picker, and prompt methods validate their
   per-read transient flags, while the installed facade adapters always request
   this lifecycle. Line fallback cannot erase printed prompts or input and emits
@@ -2133,8 +2142,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   orientation plus specialized run, agent, typed-error, help, agent-roster,
   conversation-list, search-hit, and transcript-event writers construct
   semantic components; `InteractiveSemanticOutput` binds the same private
-  component writer so controller-owned components share the identical
-  render-and-one-write path. The specialized agent writer applies the pure
+  component writer plus a separate accepted-input writer. Both render the
+  closed component vocabulary through the terminal, while the latter delegates
+  its completed rendering to a mode-aware callback without exposing terminal
+  mode to the controller. The specialized agent writer applies the pure
   strict-JSON reply projection before constructing its semantic message, and
   the core binds that formatter through the facade for controller-owned
   retrieval and persisted reply records. Composition opening, rejection, send,
@@ -2195,8 +2206,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   same cleanup on failure, while callback and line fallback retain printed
   prompts and input and emit no synthetic `completed` or `cancelled` control
   frame. Stream-backed conversation-subject input shares the driver's capable
-  history-free route; callback construction remains ordinary. Persistent
-  semantic records are unchanged. Resource-free `InteractiveAdvisoryProgress` and
+  history-free route; callback construction remains ordinary. Ordinary
+  persistent semantic records retain the established write path. Accepted-input
+  components use a no-op callback sink and the driver's selected-mode sink for
+  callback and stream construction respectively. Resource-free
+  `InteractiveAdvisoryProgress` and
   `InteractiveDebateProgress` bind the terminal's advisory and consensus
   awaitable wrappers: callback construction remains visually silent, and stream
   construction injects the pure fixed-glyph renderer into the sole driver
@@ -2240,8 +2254,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   data; all input exclusion, capability, stream, raw-mode, input-discard, delay,
   geometry, and cleanup resources remain driver-owned. The pure fixed startup
   projection and its immutable visual data remain renderer-owned.
-  The semantic adapter retains only the
-  terminal's bound component capability and acquires no stream or raw resource.
+  The semantic adapter retains only the terminal's bound ordinary-component
+  writer and accepted-input writer and acquires no stream or raw resource. The
+  callback accepted-input writer is a no-op; the stream-bound writer delegates
+  the already rendered payload to the driver without retaining it.
   The optional debug-log path is call-local presentation input and is not
   retained by the terminal or semantic adapter.
   There is no runtime, filesystem, persistence, subprocess, network, or

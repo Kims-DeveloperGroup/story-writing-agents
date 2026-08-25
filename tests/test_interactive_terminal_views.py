@@ -155,7 +155,14 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             str(inspect.signature(InteractiveSemanticOutput.write_component)),
             "(self, component: 'Component') -> 'None'",
         )
-        self.assertEqual(InteractiveSemanticOutput.__slots__, ("_write",))
+        self.assertEqual(
+            str(inspect.signature(InteractiveSemanticOutput.write_accepted_input)),
+            "(self, component: 'Component') -> 'None'",
+        )
+        self.assertEqual(
+            InteractiveSemanticOutput.__slots__,
+            ("_write", "_write_accepted"),
+        )
 
         self.assertIs(
             terminal_facade.format_agent_reply_content,
@@ -269,6 +276,27 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
 
         self.assertEqual(render.call_count, len(components))
         self.assertEqual(len(records), len(components))
+
+    def test_callback_accepted_input_validates_but_remains_silent(self) -> None:
+        reads: list[str] = []
+        records: list[str] = []
+
+        def read_line(prompt: str) -> str:
+            reads.append(prompt)
+            raise AssertionError("accepted input output must not read")
+
+        terminal = InteractiveTerminal(read_line, records.append, width=80)
+        output = InteractiveSemanticOutput(terminal)
+        component = Message("user", "Accepted input remains callback-visible.")
+
+        output.write_accepted_input(component)
+        self.assertEqual(reads, [])
+        self.assertEqual(records, [])
+
+        with self.assertRaisesRegex(TypeError, "closed semantic vocabulary"):
+            output.write_accepted_input(object())  # type: ignore[arg-type]
+        self.assertEqual(reads, [])
+        self.assertEqual(records, [])
 
     def test_adapter_rejects_non_terminal_and_propagates_render_and_writer_failures(
         self,

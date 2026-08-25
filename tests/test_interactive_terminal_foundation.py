@@ -1808,8 +1808,28 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                 text="/session resume alpha",
             ),
         )
+        accepted_component = Message("user", "Accepted input projection.")
+        expected_accepted = render_component(
+            accepted_component,
+            driver.capabilities.return_value,
+        )
+        with mock.patch.object(
+            _core,
+            "render_component",
+            wraps=render_component,
+        ) as accepted_render:
+            terminal_facade.InteractiveSemanticOutput(
+                terminal
+            ).write_accepted_input(accepted_component)
+        accepted_render.assert_called_once_with(
+            accepted_component,
+            driver.capabilities.return_value,
+        )
+        driver.write_accepted_input.assert_called_once_with(
+            f"{expected_accepted.text}\n"
+        )
         terminal.write_status(TerminalMessageKind.RESULT, "ready")
-        self.assertEqual(driver.capabilities.call_count, 3)
+        self.assertEqual(driver.capabilities.call_count, 4)
         main_calls = driver.read_main_command_line.call_args_list
         self.assertEqual(len(main_calls), 3)
         for call in main_calls:

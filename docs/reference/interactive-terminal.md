@@ -19,7 +19,12 @@
 > successful read with eligible rows invokes a generic picker that is live on
 > capable streams and numbered in fallback, while empty or failed reads report
 > without opening it. Every capable input frame clears before return; fallback
-> input remains visible without a synthetic final control frame. Advisory and
+> input remains visible without a synthetic final control frame. #274 adds an
+> unlisted mode-gated accepted-input projection operation: it can restore one
+> semantic record after capable cleanup while remaining silent for callback and
+> ordinary-line fallback input. Controller advisory, consensus, and
+> query/filter consumers remain pending #275, so end-to-end informative-content
+> retention is not yet available. Advisory and
 > consensus turns additionally use
 > one unlisted terminal-owned rolling indicator on capable raw streams;
 > callback and incapable paths remain silent, and these waits emit no
@@ -133,6 +138,7 @@ The narrow internal adapters have these signatures:
 ```python
 InteractiveSemanticOutput(terminal: InteractiveTerminal) -> None
 write_component(component: Component) -> None
+write_accepted_input(component: Component) -> None
 
 InteractiveMainInput(terminal: InteractiveTerminal) -> None
 read_main(choice_provider: Callable[[str, int], Picker | None], *,
@@ -173,10 +179,16 @@ The viewer result contains only an exit kind and, for `selected`, a one-based
 inclusive `(start_line, end_line)` tuple. It never carries supplied text,
 display metadata, a path, a reference, a viewport, or terminal state.
 
-Construction validates and retains the terminal's bound component writer but
-does not render, read, write, observe a stream, or acquire a resource. Each
-accepted component call performs one render and one callback write, including
-the final LF; failures propagate without a retry. The main-input adapter binds
+Construction validates and retains the terminal's bound ordinary-component
+writer and accepted-input writer but does not render, read, write, observe a
+stream, or acquire a resource. `write_component()` performs one render and one
+ordinary component write, including the final LF. `write_accepted_input()`
+performs the same one-component render, then delegates the LF-terminated text
+to the terminal's distinct mode-aware sink: callback construction is silent;
+stream `LIVE` writes once; stream `FALLBACK` is silent; and stream `UNDECIDED`
+rejects the lifecycle violation. Render and writer failures propagate without
+a retry. Neither operation retains the component, rendered payload, or a
+commit token. The main-input adapter binds
 a call-local choice provider; the picker adapter likewise binds only the
 terminal's picker reader without observing capabilities or acquiring I/O. The
 controller supplies disposable session/conversation snapshots to the main
@@ -330,6 +342,11 @@ driver. That driver alone owns its streams, capability/width observation, key
 decoding, functional cursor sequences, raw-mode activation/restoration, writes,
 flushes, and one bounded process-local main history store. Each separate stream
 terminal or compatibility editor therefore has an isolated store.
+The factory also binds the terminal's accepted-input sink to that same driver's
+selected-mode projection; it does not add a second raw owner or expose the
+driver's latch to controller code. Callback construction retains a no-op sink,
+so callback readers that already leave their submitted text visible receive no
+duplicate record.
 `interactive_line_editor.InteractiveMainLineEditor` remains a
 standalone compatibility facade with its exact constructor and `read_line`
 surface, delegating to the same driver implementation rather than owning a
@@ -475,6 +492,18 @@ later interaction are not lost by mixing wrapper-level text reads with raw
 byte reads. See the [terminal safety contract](../operations/terminal-safety.md#permanent-input-ownership)
 for decoder and drift details.
 
+After a read has selected the mode and returned, the unlisted
+`InteractiveSemanticOutput.write_accepted_input(component)` operation renders
+one closed semantic component in terminal core, appends its final LF, and
+delegates the resulting string to the driver. `LIVE` uses the established
+progress-safe persistent writer, so a consumer can project one accepted record
+after the complete live frame has been cleaned up. `FALLBACK` deliberately
+writes nothing because its ordinary prompt and submitted input already remain
+visible. `UNDECIDED` raises before output because projection cannot choose a
+mode. The driver interprets no component, stores no accepted payload or token,
+and owns no additional cleanup. #275 remains responsible for deciding which
+controller inputs are accepted informative content and invoking this operation.
+
 Every successful capable input operation clears its complete live frame before returning:
 semantic context and prompt, editable text, suggestions or choices, validation,
 and redraws. This applies to submit, commit, cancel, interrupt, and EOF across
@@ -486,7 +515,9 @@ A static highlighted Enter only completes and leaves the main read active, so
 it does not clear or enter history until later submission. Cleanup is display
 only: an eligible main line is appended to driver-local history after cleanup
 and restoration, and persistent semantic validation, cancellation, discard,
-error, orientation, and result records remain in scrollback.
+error, orientation, and result records remain in scrollback. A later
+accepted-input projection is a new semantic record; it is not the restored or
+retained editable frame.
 
 Callback and ordinary-line fallback cannot erase printed prompt or input text,
 so it stays visible. These paths do not add a synthetic final `completed` or

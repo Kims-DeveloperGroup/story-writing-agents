@@ -4,7 +4,9 @@
 > output, established package-supported terminal records, and the unlisted
 > supplied-text ranged viewer. Provider-bound `$`/`$$` editing now invokes that
 > private viewer through the controller, without adding a standalone command or
-> public API. These rules do not make scrollback or process memory private.
+> public API. #274 also adds an unlisted mode-gated accepted-input projection
+> seam; its controller consumers remain pending #275. These rules do not make
+> scrollback or process memory private.
 
 Key terms: **TTY guard**—check for interactive streams; **typed error**—trusted
 public code instead of exception prose; **display escaping**—showing a control
@@ -53,6 +55,14 @@ driver-local history store. The fallback itself provides no component-owned
 live Up/Down navigation, and the same driver never upgrades from `FALLBACK` to
 `LIVE`. The entry remains in that process-local store, but users cannot recall
 it through that driver's fallback input UI.
+
+After an input read selects the permanent mode, the driver's accepted-input
+projection is likewise mode-gated. `LIVE` writes one already rendered semantic
+record through the existing progress-safe persistent path. `FALLBACK` writes
+nothing because the ordinary prompt and submitted input already remain
+visible. `UNDECIDED` rejects before output; projection cannot select a mode.
+The driver interprets no component and retains no accepted payload or commit
+token.
 
 The output descriptor supplies width. During capability observation, a missing,
 failing, nonpositive, or invalid result falls back to 80 columns; a reliable
@@ -253,9 +263,13 @@ the same current/selection meaning when all viewer decoration is removed.
 
 The controller constructs semantic components only from trusted roles/states
 and validated facts. Its unlisted `InteractiveSemanticOutput` adapter acquires
-no resource when constructed and performs exactly one render and one callback
-write for each established component record. It neither reads input nor owns a
-second stream, raw mode, cursor, width, or restoration lifecycle.
+no resource when constructed. `write_component()` performs exactly one render
+and one ordinary component write. The separate
+`write_accepted_input()` operation also renders exactly one closed component,
+then delegates the complete LF-terminated string to a no-op callback sink or
+the stream driver's mode-gated sink. It neither reads input nor owns a second
+stream, raw mode, cursor, width, restoration lifecycle, payload store, or
+commit token. #275 remains responsible for controller classification and use.
 
 Dense list commands preserve callback granularity by rendering each row as one
 positioned, one-record `ListView`. If search, transcript, or history rendering
@@ -347,6 +361,15 @@ only byte consumer and prevents bytes already decoded into a `TextIOWrapper`
 queue from disappearing when a later interaction reads its raw buffer.
 External concurrent reads, or mixing another wrapper/raw reader with this
 driver, are unsupported.
+
+Accepted-input projection is downstream of this state machine and cannot
+mutate it. The terminal core first validates and renders one semantic component
+under the current output-capability profile. Callback construction discards
+that rendered record; stream construction delegates it to the sole driver.
+The driver requires an already selected mode, writes only for `LIVE`, and is
+silent for `FALLBACK`. This avoids both removal after capable cleanup and a
+second verbatim representation in ordinary-line fallback without exposing the
+latch to the controller.
 
 Before selecting `LIVE`, decoder preflight admits only registry-canonical
 ASCII, UTF-8, or ISO-8859-1 with the resolved built-in `strict` or
@@ -465,6 +488,13 @@ so its frame remains active and no history entry exists yet. See the exact
 [main](../reference/interactive-terminal.md#main-prompt-live-suggestions) and
 [composition](../reference/interactive-terminal.md#composition-live-suggestions)
 tokens.
+
+Once that cleanup and restoration have completed, a controller consumer may
+use the accepted-input seam to emit one new persistent semantic record. That
+record is outside the erased frame and uses the existing progress-aware writer.
+The seam does not retain or recover the editable frame, and #274 alone does not
+add any advisory, consensus, search, or filtered-list caller; those remain
+pending #275.
 
 Main palette projection, filtering, highlight, replacement, snapshot restore,
 and dismissal call no parser, story provider, runtime, filesystem, persistence,
