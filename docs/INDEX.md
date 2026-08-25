@@ -28,6 +28,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Show registry help or shell status | Global in the installed shell |
 | Apply directives; safely inspect sessions or debates | Current attachment; no conversation focus required |
 | Create, list, resume, rename, or archive subject conversations | Installed shell after session attachment; catalog Python API |
+| Use the optional SQLite conversation catalog, transcript store, and reference search | Direct Python API after readiness preflight and, when absent, explicit provisioning; not selected by the shell or default runtime composition |
 | List or target agents; send ordinary, `@AGENT`, or `/say` turns | Installed shell; an active conversation must have current focus |
 | Read durable/access facts and perform exact session transitions | Python API; used by the installed shell and runtime |
 | Parse the interactive command language and route metadata | Python API; the shell dispatches a documented subset |
@@ -89,7 +90,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 
 - [Overview](design/overview.md)
 - [Interactive CLI design system contract](design/interactive-cli-design-system.md)
-- [Canonical Python module inventory (56 production units)](../PYTHON_MODULE_INDEX.md)
+- [Canonical Python module inventory (61 production units)](../PYTHON_MODULE_INDEX.md)
 - [Prompts and provider boundary](design/prompts-and-provider.md)
 - [Session lifecycle](design/session-lifecycle.md)
 - [Consensus workflow](design/consensus-workflow.md)

@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 59.
+Importable production units indexed: 61.
 
-Direct internal dependency edges indexed: 224.
+Direct internal dependency edges indexed: 232.
 
 ## Current Dependency Direction
 
@@ -108,6 +108,10 @@ conversation_storage.composition -> conversation_search
                                  -> conversation_storage.contracts
                                  -> workspace
 conversation_storage.contracts -> conversation_search/conversations/errors
+conversation_storage.sqlite_database -> workspace
+conversation_storage.sqlite -> conversation_search/conversations/errors/workspace
+                            -> conversation_storage.sqlite_database
+                            -> conversation_storage.composition/contracts
 models -> conversations/agents/errors
 provider_adapter -> models
 provider_auth -> (standard library only)
@@ -748,12 +752,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   `compose_filesystem_conversation_storage`,
   `load_conversation_storage_activation_state`, and
   `compare_and_set_conversation_storage_activation`. None are re-exported by
-  the project-root `story_writing_agents` facade.
+  the project-root `story_writing_agents` facade. The separately imported
+  optional `story_writing_agents.conversation_storage.sqlite` and
+  `story_writing_agents.conversation_storage.sqlite_database` modules have
+  their own supported surfaces; neither is re-exported by this package or the
+  root facade.
 - **Direct internal dependencies:** `conversation_storage.composition` and
   `conversation_storage.contracts`.
 - **State, resources, and side effects:** Owns no state or resource; importing
-  the package loads its two modules but performs no filesystem access, lock-file
-  open, thread creation, database access, or adapter construction.
+  the package loads exactly its `composition` and `contracts` modules but does
+  not import the optional SQLite adapter or load the standard-library
+  `sqlite3` module. Import performs no filesystem access, lock-file open,
+  thread creation, database access, or adapter construction.
 - **Primary verification/documentation:**
   `tests/test_conversation_storage.py`,
   `tests/test_conversation_catalog.py`,
@@ -855,6 +865,176 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/reference/conversation-catalog.md`,
   `docs/reference/conversation-transcripts.md`, and
   `docs/reference/conversation-search.md`.
+
+### `story_writing_agents.conversation_storage.sqlite_database`
+
+- **Source:**
+  `src/story_writing_agents/conversation_storage/sqlite_database.py`
+- **Responsibility:** Own the optional SQLite database identity,
+  version-1 schema, fixed contained path, capability probe, connection and
+  transaction lifecycle, verification, and create-only provisioning mechanics.
+- **Supported surface:** Exactly 11 names in `__all__`: fixed
+  `SQLITE_APPLICATION_ID`, `SQLITE_BUSY_TIMEOUT_SECONDS`,
+  `SQLITE_DATABASE_PATH`, `SQLITE_MINIMUM_VERSION`, and
+  `SQLITE_SCHEMA_VERSION` constants; `SQLiteDatabase`, whose supported
+  construction and operation surface is `workspace_key`, `verify_existing`,
+  `read`, `write`, and `provision`; and content-free
+  `SQLiteDatabaseFormatError`, `SQLiteDatabaseMissingError`,
+  `SQLiteDatabaseSecurityError`, `SQLiteDatabaseUnavailableError`, and
+  `SQLiteDatabaseVersionError`. The contained path property, callback aliases,
+  common error base, and connection helpers remain unsupported implementation
+  details. The sibling `conversation_storage.sqlite` adapter is the production
+  consumer of this owner interface.
+- **Direct internal dependencies:** `workspace`.
+- **State, resources, and side effects:** Import defines immutable schema and
+  policy metadata only and deliberately does not load `sqlite3`; each requested
+  operation lazily loads and probes the standard-library module for SQLite
+  3.7.16 or newer. One `SQLiteDatabase` captures the supplied `Workspace`'s
+  canonical root once and retains only its exact key and the fixed contained
+  `discussion_logs/conversation_storage.sqlite3` path, so later mutation of the
+  supplied `Workspace.root` cannot retarget database I/O. Construction performs
+  only path arithmetic and creates nothing. Schema version 1 has nine explicit
+  application-owned objects: three tables, three indexes, and three insert
+  triggers. The event composite-primary-key autoindex serves ordered/MAX
+  sequence access, so no redundant explicit event-order index is owned.
+  Each ordinary read or write, and each standalone explicit verification, owns
+  and closes one non-creating URI connection. Provisioning and recovery from
+  interrupted publication may instead use a bounded sequence of individually
+  owned and closed creation or verification connections. Every opened storage
+  connection uses a finite five-second busy timeout, verified foreign keys,
+  `DELETE` journaling, `FULL` synchronization, UTF-8 encoding, and strict UTF-8
+  decoding for stored `TEXT`.
+  Malformed stored text raises the content-free database-format failure, while
+  a caller-operation `UnicodeDecodeError` is not reclassified. Reads use an
+  explicit transaction on a read-only connection so verification and the
+  operation share one snapshot;
+  writes validate an already-held lease before a `BEGIN IMMEDIATE` transaction
+  and again before commit. Both paths commit explicitly, roll back an
+  uncommitted transaction, and always close their connection. Routine reads
+  and writes perform bounded application ID, user/schema version, exact schema
+  manifest, and fingerprint verification without scanning unrelated catalog or
+  event rows; configured foreign-key enforcement, schema constraints, and the
+  adapter's operation-local reconstruction retain addressed-row domain
+  validation. Explicit `verify_existing`/preflight and new, existing, or
+  race-winner provisioning validation additionally check database integrity,
+  an empty `foreign_key_check`, composite ownership, every contiguous
+  event/correlation invariant supplied by the adapter, and every derived
+  normalized subject. Verification rejects unsafe or multiply linked named
+  files; a named-database symlink or a nonmeaningful device/inode identity
+  fails closed as a security error. Strict verification/preflight,
+  provisioning, and writes reject every
+  rollback/WAL sidecar without repairing or removing it; ordinary reads alone
+  tolerate a concurrent DELETE-mode `-journal` at their initial and final
+  boundary checks only when it is a singly linked regular file, while still
+  rejecting unsafe journal forms and every `-wal` or `-shm` sidecar. Explicit
+  fresh provisioning exhaustively validates its private temporary inode before
+  installation. Under repeated caller-lease and exact candidate checks it
+  creates the target hard link, revalidates before removing the temporary alias,
+  verifies the singly linked named target, and synchronizes the file and
+  directory; it does not repeat exhaustive domain verification through the
+  freshly installed name. Candidate checks include exact owned-pattern
+  temporary base names and the corresponding `-journal`, `-wal`, and `-shm`
+  suffixed name shapes; ambiguity is preserved and rejected. A lease or
+  candidate-validation failure after linking but before alias removal preserves
+  both names, and lease expiry never authorizes that alias cleanup. Under a valid
+  provisioning lease only, it may recover the single exact interrupted
+  publication shape where the target and exactly one fixed-pattern temporary
+  sibling are regular names for the same two-link inode with no sidecar or link
+  ambiguity. It first exhaustively validates the intact target through a
+  read-only connection that requires the exact two-link identity, then
+  revalidates the lease, namespace, sidecars, identities, and link counts before
+  removing only that alias and synchronizing. The outer provision path then
+  exhaustively verifies the resulting singly linked target. Preflight and
+  ordinary reads remain observational, and every ambiguous or unsafe shape is
+  preserved and rejected.
+- **Primary verification/documentation:**
+  `tests/test_sqlite_database.py`,
+  `tests/test_conversation_storage.py`,
+  `tests/test_conversation_catalog.py`,
+  `tests/conversation_event_store_contract.py`,
+  `tests/conversation_search_contract.py`,
+  `docs/design/persistence.md`,
+  `docs/reference/configuration/session-storage.md`,
+  `docs/reference/conversation-catalog.md`,
+  `docs/reference/conversation-transcripts.md`,
+  `docs/reference/conversation-search.md`,
+  `docs/operations/filesystem-safety.md`,
+  `docs/operations/privacy-and-provider.md`, and
+  `docs/operations/recovery-and-limitations.md`.
+
+### `story_writing_agents.conversation_storage.sqlite`
+
+- **Source:** `src/story_writing_agents/conversation_storage/sqlite.py`
+- **Responsibility:** Provide the explicitly selected optional standard-library
+  SQLite catalog, event-store, archive, preflight, provisioning, and composition
+  adapter boundary without changing filesystem defaults or activation.
+- **Supported surface:** Exactly 12 names in `__all__`: fixed
+  `SQLITE_CONVERSATION_STORAGE_APPLICATION_ID`,
+  `SQLITE_CONVERSATION_STORAGE_BUSY_TIMEOUT_SECONDS`,
+  `SQLITE_CONVERSATION_STORAGE_DATABASE_PATH`,
+  `SQLITE_CONVERSATION_STORAGE_MINIMUM_VERSION`, and
+  `SQLITE_CONVERSATION_STORAGE_SCHEMA_VERSION` constants;
+  `SQLiteConversationArchiveAdapter`, `SQLiteConversationCatalog`, and
+  `SQLiteConversationEventStore`; and
+  `compose_sqlite_conversation_archive`,
+  `compose_sqlite_conversation_storage`,
+  `preflight_sqlite_conversation_storage`, and
+  `provision_sqlite_conversation_storage`. The adapter-private archive payload
+  and record values are deliberately unsupported pending the canonical archive
+  contract.
+- **Direct internal dependencies:** `conversation_search`,
+  `conversation_storage.sqlite_database`,
+  `conversation_storage.composition`, `conversation_storage.contracts`,
+  `conversations`, `errors`, and `workspace`.
+- **State, resources, and side effects:** Import defines immutable constants,
+  frozen private archive values, and adapter classes only; it performs no I/O,
+  constructs no adapter, and does not load `sqlite3`. Each adapter retains one
+  database owner, exact-workspace mutation coordinator, and finite
+  mutation timeout. Ordinary reads never provision, migrate, repair, or write;
+  preflight verifies existing storage and returns content-free capability while
+  mapping unsupported, malformed, unsafe, and unavailable states to established
+  storage/workspace failures. Provisioning requires an explicit active
+  correct-workspace lease. Catalog and event mutations borrow the workspace
+  coordinator before opening the SQLite write transaction, so database
+  revision, sequence, turn-slot, and reply-correlation changes are atomic;
+  normalized subjects are stored as nonunique derived data and checked during
+  every metadata reconstruction. Fresh ID allocation performs one bounded
+  exact-identity event probe and rejects orphan rows before inserting metadata.
+  Append obtains one plus the indexed maximum sequence and reads at most the
+  addressed turn's user/outcome pair; constraints and triggers retain contiguous
+  ordering and turn correlation without scanning unrelated transcript history.
+  Transcript-context reads materialize the addressed transcript once and return
+  context from that same validation and selection pass. Privileged archive
+  export/import validates a caller-supplied outer lease and the complete database
+  snapshot: export rejects orphan events rather than omitting them, while import
+  validates all destination rows before mutation and the resulting rows afterward
+  in the same transaction, preserving exact create-or-identical semantics and
+  rejecting divergence.
+  Valid existing storage remains available to observational preflight and reads
+  when POSIX `fcntl` is unavailable, while provisioning and supported mutations
+  fail closed through the coordinator; full activation readiness remains owned
+  by Issue #261. Service composition preflights once and returns same-provenance
+  catalog/event-store bindings plus a provider-free
+  `ReferenceConversationSearch` binding and the shared coordinator; archive
+  composition returns the separate privileged adapter. Neither composition
+  changes the selected default, root facade, or activation state.
+- **Primary verification/documentation:**
+  `tests/test_sqlite_conversation_storage.py`,
+  `tests/test_conversation_storage.py`,
+  `tests/test_conversation_catalog.py`,
+  `tests/conversation_event_store_contract.py`,
+  `tests/conversation_search_contract.py`,
+  `README.md`,
+  `docs/INDEX.md`,
+  `docs/design/persistence.md`,
+  `docs/reference/package-api.md`,
+  `docs/reference/configuration/session-storage.md`,
+  `docs/reference/conversation-catalog.md`,
+  `docs/reference/conversation-transcripts.md`,
+  `docs/reference/conversation-search.md`,
+  `docs/operations/filesystem-safety.md`,
+  `docs/operations/privacy-and-provider.md`, and
+  `docs/operations/recovery-and-limitations.md`.
 
 ### `story_writing_agents.conversations`
 
@@ -3267,9 +3447,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   collaborators and adds no resource ownership or allocation behavior to their
   narrow ports. Missing activation state remains the unwritten filesystem
   baseline. A supported mutation borrows one exclusive, owner-thread-bound,
-  expiring lease first; archive/migration/parity operations remain future
-  consumers of that contract, and activation CAS validates the supplied lease
-  rather than acquiring one behind its caller.
+  expiring lease first. SQLite catalog/event mutations borrow that coordinator
+  before their database transaction, while SQLite provisioning and archive
+  operations validate a caller-supplied outer lease; migration and parity
+  remain future consumers. Activation CAS likewise validates its supplied lease
+  rather than acquiring one behind its caller. The optional SQLite module
+  depends inward on the existing contracts and composition boundary plus the
+  database owner; neither package facade imports it, and no runtime,
+  controller, config, workspace, or root-facade module selects it by default.
 
 - Writing-artifact directive parsing is a pure package-local boundary:
   `writing_artifacts.directives` scans only one supplied current input and

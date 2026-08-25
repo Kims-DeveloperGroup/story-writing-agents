@@ -3,8 +3,11 @@
 > **Available:** guarded access recovery, shell workflows, and process-level
 > POSIX PTY verification, including the package-internal ranged viewer.
 > Interactive `$`/`$$` artifact discovery and selection are available in
-> provider-bound prompt spans. Automatic retry, destructive cleanup, event
-> repair, automation picker UI, and Windows console emulation are not available.
+> provider-bound prompt spans. Automatic retry, general destructive cleanup,
+> event repair, automation picker UI, and Windows console emulation are not available.
+> Optional SQLite conversation storage also fails closed without automatic
+> installation, provisioning, general repair, migration, or retry. Explicit
+> provisioning recognizes only one exact interrupted-publication alias shape.
 
 Key terms: **fail closed** means preserve uncertain state; **taint** means stop
 continuing incomplete provider history; **external backup** is outside the workspace.
@@ -25,6 +28,74 @@ preserves foreign/changed ownership. No remote probe occurs.
 A same-host missing PID needs no deletion: acquisition replaces its unchanged
 claim under the guard. If ownership is unknown, back up and investigate before
 retrying. Never manufacture `claimable` by removing files.
+
+<a id="sqlite-conversation-storage-recovery"></a>
+
+## SQLite conversation-storage recovery
+
+SQLite preflight is strict, observational, and byte-preserving. It may load and
+probe the host `sqlite3` runtime and open an existing database read-only, but it
+does not create, repair, migrate, rewrite, or remove storage.
+
+| Result or failure | Meaning | Safe response |
+| --- | --- | --- |
+| `provisioning_needed` | On a capable host, the fixed database is absent. | Provision only after deciding the SQLite destination is deliberately empty and acquiring the exact workspace mutation lease. Provisioning does not import filesystem conversations. |
+| `unavailable` or `ConversationStorageUnavailableError` | `sqlite3` is missing, older than 3.7.16, fails its runtime probe, the database is busy/locked, or an operational resource is unavailable. | Inspect the host/runtime and competing processes outside this API, then retry explicitly. Issue #261 owns integrating detection/installation into the user-facing flow; direct preflight only reports capability, this release installs nothing, and there is no automatic retry. |
+| `ConversationStorageProvisioningNeededError` | Composition or an adapter operation requires a database that has not been provisioned. | Run observational preflight and, only for an intended empty target, the explicit leased provisioning flow. |
+| `WorkspaceVersionUnsupportedError` | The file has the recognized application identity but an unsupported schema version. | Stop workspace processes, preserve and verify a complete backup, then use a compatible runtime or a separately approved migration. This adapter supplies no migration. |
+| `WorkspaceFormatError` | Header, schema manifest/fingerprint/cookie, encoding, integrity, foreign keys, normalized subject, event structure, or strict sidecar state is invalid, or the stable database-name entry is nonregular without being a symlink. | Preserve the database and sidecars unchanged. Restore a known-good complete database or investigate offline; do not hand-edit or ask preflight to repair it. |
+| `WorkspaceSecurityError` | The database name is a symlink, or its named/opened path identity is unsafe, nonmeaningful, replaced, mismatched, or has an unexpected link count. | Stop all processes, back up the complete workspace, and restore safe exact path identities. Do not manually follow, unlink, or replace suspicious names. Explicit leased provisioning can recognize only the exact interrupted-publication case described below. |
+| `ConversationStorageCoordinationError` | A lease is wrong-workspace, wrong-thread, expired, released, or cannot be acquired safely; the POSIX advisory guard may also be unavailable or unsafe. | Let the supported owner finish or close it, then acquire a fresh exact-workspace lease. Never reuse or manufacture lease evidence. Without `fcntl`, keep use observational; supported provisioning and mutations remain unavailable. |
+| `ConversationExistsError` during private archive import | An existing identity differs from the incoming exact metadata or transcript. | Keep both sources and investigate. The whole import transaction rolls back; there is no merge or overwrite mode. |
+
+Preflight and ordinary reads never repair or remove storage. Explicit leased
+provisioning has one narrow cleanup for an interrupted no-overwrite
+publication: the target and exactly one provisioning-pattern sibling must be
+the same regular inode with link count two, with no sidecars, extra link, or
+candidate ambiguity. Provisioning exhaustively validates that intact two-link
+target before any unlink, then rechecks the lease, exact candidate set,
+sidecars, and both identities. Only then does it remove the temporary alias and
+synchronize the target and parent directory; it exhaustively validates the
+recovered single-link target again before success. Symlinks, wrong or multiple
+candidates, unrelated inodes, extra links, sidecars, and malformed, corrupt, or
+unsupported target content are preserved and fail closed. This is not a
+general database repair path.
+
+Routine catalog and event-store calls verify bounded database/schema identity
+and only the rows addressed by the operation. Append obtains the indexed
+maximum sequence and at most one user/outcome pair for its turn; it does not
+scan the full transcript. Run explicit preflight when full database health must
+be established: it runs integrity and global foreign-key checks, rejects
+orphans, and reconstructs every domain row. Archive export also validates all
+metadata/event rows globally and rejects orphans. Archive import validates the
+complete destination both before and after mutation in one transaction, so
+preexisting or newly introduced orphan/malformed rows cannot be silently
+adopted or dropped.
+
+If POSIX `fcntl` is unavailable, a valid existing database can still be
+preflighted and read through the direct API. The supported coordinator cannot
+acquire its mutation lease, so provisioning and supported writes fail closed
+without changing the SQLite database or conversation domain state. The lazy
+coordination guard retains its documented lifecycle. Issue #261 owns full
+non-POSIX coordinator and activation readiness as well as the future confirmed
+detection, installation, and settings flow.
+
+Strict preflight, composition, provisioning, and write boundaries reject and
+preserve every `-journal`, `-wal`, or `-shm` sidecar. An ordinary adapter read
+alone may tolerate a regular, singly linked DELETE rollback journal while a
+supported writer is live. If strict preflight observes a journal, allow the
+writer to finish and retry; never delete a sidecar to force readiness. A
+lingering, malformed, linked, WAL, or shared-memory sidecar remains a
+fail-closed condition requiring offline investigation or restoration.
+
+Transactions roll back uncommitted work and close their connection. A commit
+can succeed before a later close failure is reported, and provisioning can
+install one complete database before file/directory synchronization reports a
+failure. After either case, stop competing work and run fresh preflight plus a
+domain read before deciding whether to retry; blindly replaying a logical
+append could duplicate intended work. Beyond the exact leased alias cleanup
+above, the API performs no repair, compensation, retry,
+filesystem-to-SQLite migration, or SQLite-to-filesystem migration.
 
 <a id="unsupported-v1-session-data"></a>
 
@@ -423,6 +494,12 @@ work; the newest desired definition is selected instead.
 - Advisory input is one line; `/run --output PART/PATH.md` without prompt text
   owns multiline composition. Bare `/run` first prompts for the output.
 - Conversation search is active-only; transcript reads retain no cursor.
+- Filesystem conversation storage remains selected by the installed shell and
+  runtime. SQLite is a direct optional Python API only; there is no `/settings`
+  storage choice, installer, automatic provisioning, default switch,
+  migration, FTS, RAG, or MySQL implementation. Issue #261 owns later
+  user-facing integration of detection, installation, and selection; direct
+  preflight here only reports capability.
 - Parsing, repository authorization/evidence, top-level `StoryRuntime`
   propagation, and provider-enforced reads are active for inline canonical
   references. Provider-bound interactive spans add `$` completion and

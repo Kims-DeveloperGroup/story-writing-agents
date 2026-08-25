@@ -1351,7 +1351,14 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 59)
+        self.assertEqual(len(modules), 61)
+        self.assertTrue(
+            {
+                "story_writing_agents.conversation_storage.sqlite_database",
+                "story_writing_agents.conversation_storage.sqlite",
+            }
+            <= modules
+        )
 
     def test_reference_callbacks_are_scoped_fresh_bounded_and_content_free(
         self,
