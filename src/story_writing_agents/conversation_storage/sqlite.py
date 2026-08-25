@@ -1079,6 +1079,8 @@ def _insert_metadata(
 ) -> None:
     """Insert all exact authoritative metadata fields."""
 
+    if metadata.subject_revision > _SQLITE_SIGNED_INTEGER_MAX:
+        raise SQLiteDatabaseFormatError()
     connection.execute(  # type: ignore[attr-defined]
         "INSERT INTO conversations "
         "(session_id, conversation_id, schema_version, subject, "

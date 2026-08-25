@@ -1013,6 +1013,43 @@ class SQLiteBoundedAppendTests(unittest.TestCase):
             )
         self.assertEqual(storage_snapshot(workspace), before)
 
+        turn_sql = (
+            "SELECT sequence, turn_id, turn_slot, kind, sender, recipient, content "
+            "FROM conversation_events WHERE session_id = ? AND conversation_id = ? "
+            "AND turn_id = ? ORDER BY turn_slot"
+        )
+        turn_parameters = (
+            identity["session_id"],
+            identity["conversation_id"],
+            identity["turn_id"],
+        )
+        with raw_connection(workspace) as connection:
+            connection.execute(
+                "DELETE FROM conversation_events WHERE session_id = ? "
+                "AND conversation_id = ? AND turn_id = ? AND turn_slot = 0",
+                turn_parameters,
+            )
+            outcome_only = connection.execute(
+                turn_sql,
+                turn_parameters,
+            ).fetchall()
+        self.assertEqual(len(outcome_only), 1)
+        self.assertEqual(outcome_only[0][2:4], (1, "agent_reply"))
+        before = storage_snapshot(workspace)
+
+        with self.assertRaises(WorkspaceFormatError) as caught:
+            services.event_store.append(make_append(**identity))
+
+        self.assertEqual(
+            str(caught.exception),
+            "invalid SQLite conversation storage",
+        )
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertEqual(storage_snapshot(workspace), before)
+        with raw_connection(workspace) as connection:
+            after = connection.execute(turn_sql, turn_parameters).fetchall()
+        self.assertEqual(after, outcome_only)
+
 
 class SQLiteDatabaseTransactionTests(unittest.TestCase):
     def _tracking_connect(

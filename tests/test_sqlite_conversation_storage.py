@@ -742,6 +742,109 @@ class SQLiteArchiveTests(unittest.TestCase):
         self.assertIs(unchanged.status, ConversationArchiveImportStatus.UNCHANGED)
         self.assertEqual(storage_snapshot(target), before)
 
+    def test_archive_import_subject_revision_sqlite_bounds_are_exact(self) -> None:
+        maximum = (1 << 63) - 1
+        source, services = provisioned_services(self)
+        metadata = services.catalog.create("session_a", "Archive bound witness")
+        source_archive = compose_sqlite_conversation_archive(source)
+        source_coordinator = WorkspaceConversationStorageMutationCoordinator(source)
+        with source_coordinator.borrow(timeout_seconds=2.0) as lease:
+            payload = source_archive.export_archive(lease)
+        self.assertEqual(len(payload.records), 1)
+        payload_metadata = payload.records[0].metadata
+        self.assertEqual(
+            (payload_metadata.session_id, payload_metadata.conversation_id),
+            (metadata.session_id, metadata.conversation_id),
+        )
+
+        object.__setattr__(payload_metadata, "subject_revision", maximum)
+        maximum_target = initialized_workspace(self)
+        provision(maximum_target)
+        maximum_archive = compose_sqlite_conversation_archive(maximum_target)
+        maximum_coordinator = WorkspaceConversationStorageMutationCoordinator(
+            maximum_target
+        )
+        with maximum_coordinator.borrow(timeout_seconds=2.0) as lease:
+            imported = maximum_archive.import_archive(lease, payload)
+            exact = maximum_archive.export_archive(lease)
+        self.assertIs(imported.status, ConversationArchiveImportStatus.IMPORTED)
+        self.assertEqual(exact, payload)
+        maximum_services = compose_sqlite_conversation_storage(maximum_target)
+        self.assertEqual(
+            maximum_services.catalog.get(
+                metadata.session_id,
+                metadata.conversation_id,
+            ).subject_revision,
+            maximum,
+        )
+
+        object.__setattr__(payload_metadata, "subject_revision", maximum + 1)
+        overflow_target = initialized_workspace(self)
+        provision(overflow_target)
+        overflow_archive = compose_sqlite_conversation_archive(overflow_target)
+        overflow_coordinator = WorkspaceConversationStorageMutationCoordinator(
+            overflow_target
+        )
+        with raw_connection(overflow_target) as connection:
+            logical_before = (
+                tuple(
+                    connection.execute(
+                        "SELECT * FROM conversations ORDER BY session_id, "
+                        "conversation_id"
+                    ).fetchall()
+                ),
+                tuple(
+                    connection.execute(
+                        "SELECT * FROM conversation_events ORDER BY session_id, "
+                        "conversation_id, sequence"
+                    ).fetchall()
+                ),
+            )
+        self.assertEqual(logical_before, ((), ()))
+        before = storage_snapshot(overflow_target)
+        with (
+            mock.patch.object(
+                sqlite_module,
+                "_insert_metadata",
+                wraps=sqlite_module._insert_metadata,
+            ) as insert_metadata,
+            overflow_coordinator.borrow(timeout_seconds=2.0) as lease,
+        ):
+            with self.assertRaises(WorkspaceFormatError) as caught:
+                overflow_archive.import_archive(lease, payload)
+
+        insert_metadata.assert_called_once()
+        self.assertEqual(
+            str(caught.exception),
+            "invalid SQLite conversation storage",
+        )
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertNotIn("overflow", str(caught.exception).casefold())
+        self.assertNotIn("too large", str(caught.exception).casefold())
+        self.assertNotIn(payload_metadata.subject, str(caught.exception))
+        self.assertEqual(storage_snapshot(overflow_target), before)
+        with raw_connection(overflow_target) as connection:
+            logical_after = (
+                tuple(
+                    connection.execute(
+                        "SELECT * FROM conversations ORDER BY session_id, "
+                        "conversation_id"
+                    ).fetchall()
+                ),
+                tuple(
+                    connection.execute(
+                        "SELECT * FROM conversation_events ORDER BY session_id, "
+                        "conversation_id, sequence"
+                    ).fetchall()
+                ),
+            )
+        self.assertEqual(logical_after, logical_before)
+        overflow_services = compose_sqlite_conversation_storage(overflow_target)
+        self.assertEqual(
+            overflow_services.catalog.list("session_a", include_archived=True),
+            (),
+        )
+
     def test_archive_divergence_rolls_back_earlier_imports(self) -> None:
         source, _, source_archive = self._populated_archive()
         coordinator = WorkspaceConversationStorageMutationCoordinator(source)
