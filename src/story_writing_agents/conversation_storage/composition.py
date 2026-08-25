@@ -10,6 +10,8 @@ import threading
 import time
 import weakref
 from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Iterator
 
 try:
@@ -17,7 +19,12 @@ try:
 except ImportError:  # pragma: no cover - non-POSIX hosts fail closed on borrow.
     _fcntl = None
 
-from ..conversation_search import ReferenceConversationSearch
+from ..conversation_search import (
+    ConversationSearchQuery,
+    ConversationSearchResult,
+    ConversationSearchScope,
+    ReferenceConversationSearch,
+)
 from ..workspace import (
     FilesystemConversationCatalog,
     FilesystemConversationEventStore,
@@ -56,6 +63,121 @@ _ACTIVATION_STATE_FIELDS = frozenset({
     "generation",
 })
 _MUTATION_LOCK_RETRY_SECONDS = 0.05
+
+
+@dataclass(frozen=True, slots=True)
+class _WorkspaceTopology:
+    """One immutable canonical root used to materialize operation-local workspaces."""
+
+    root: Path
+
+    @classmethod
+    def capture(cls, workspace: Workspace) -> _WorkspaceTopology:
+        """Snapshot one absolute root without retaining the caller's workspace."""
+
+        root = Path(os.fspath(workspace.root))
+        if not root.is_absolute():
+            root = Path(os.path.abspath(root))
+        return cls(root=root)
+
+    @property
+    def workspace_key(self) -> str:
+        """Return the exact provenance and coordination key."""
+
+        return os.fspath(self.root)
+
+    def workspace(self) -> Workspace:
+        """Return a fresh workspace whose root derives only from this topology."""
+
+        return Workspace(self.root)
+
+
+class _PinnedFilesystemConversationCatalog(FilesystemConversationCatalog):
+    """Concrete catalog whose inherited operations use only a pinned topology."""
+
+    __slots__ = ("_topology",)
+
+    def __init__(
+        self,
+        topology: _WorkspaceTopology,
+        construction_workspace: Workspace,
+    ) -> None:
+        self._topology = topology
+        super().__init__(construction_workspace)
+
+    @property
+    def workspace(self) -> Workspace:
+        """Materialize a pinned workspace for each inherited operation access."""
+
+        return self._topology.workspace()
+
+    @workspace.setter
+    def workspace(self, _workspace: object) -> None:
+        """Ignore mutable collaborator rebinding in favor of the pinned topology."""
+
+
+class _PinnedFilesystemConversationEventStore(FilesystemConversationEventStore):
+    """Concrete event store pinned to one topology and catalog collaborator."""
+
+    __slots__ = ("_pinned_catalog", "_topology")
+
+    def __init__(
+        self,
+        topology: _WorkspaceTopology,
+        construction_workspace: Workspace,
+        *,
+        catalog: FilesystemConversationCatalog,
+    ) -> None:
+        self._topology = topology
+        self._pinned_catalog = catalog
+        super().__init__(construction_workspace, catalog=catalog)
+
+    @property
+    def workspace(self) -> Workspace:
+        """Materialize a pinned workspace for each inherited operation access."""
+
+        return self._topology.workspace()
+
+    @workspace.setter
+    def workspace(self, _workspace: object) -> None:
+        """Ignore mutable workspace rebinding in favor of the pinned topology."""
+
+    @property
+    def catalog(self) -> FilesystemConversationCatalog:
+        """Return the construction-pinned catalog collaborator."""
+
+        return self._pinned_catalog
+
+    @catalog.setter
+    def catalog(self, _catalog: object) -> None:
+        """Ignore mutable catalog rebinding in favor of the pinned collaborator."""
+
+
+class _PinnedReferenceConversationSearch(ReferenceConversationSearch):
+    """Concrete search that ignores mutable inherited collaborator bindings."""
+
+    __slots__ = ("_pinned_catalog", "_pinned_event_store")
+
+    def __init__(
+        self,
+        catalog: FilesystemConversationCatalog,
+        event_store: FilesystemConversationEventStore,
+    ) -> None:
+        self._pinned_catalog = catalog
+        self._pinned_event_store = event_store
+        super().__init__(catalog, event_store)
+
+    def search(
+        self,
+        scope: ConversationSearchScope,
+        query: ConversationSearchQuery,
+    ) -> ConversationSearchResult:
+        """Search through only the construction-pinned concrete collaborators."""
+
+        return ReferenceConversationSearch(
+            self._pinned_catalog,
+            self._pinned_event_store,
+        ).search(scope, query)
 
 
 class _WorkspaceMutationState:
@@ -161,13 +283,29 @@ class WorkspaceConversationStorageMutationCoordinator:
     parity, migration, or activation locks.
     """
 
-    __slots__ = ("_state", "_workspace", "_workspace_key")
+    __slots__ = ("_state", "_topology", "_workspace_key")
 
     def __init__(self, workspace: Workspace) -> None:
         if not isinstance(workspace, Workspace):
             raise TypeError("workspace must be a Workspace")
-        self._workspace = workspace
-        self._workspace_key = os.fspath(workspace.root)
+        self._initialize_topology(_WorkspaceTopology.capture(workspace))
+
+    @classmethod
+    def _from_topology(
+        cls,
+        topology: _WorkspaceTopology,
+    ) -> WorkspaceConversationStorageMutationCoordinator:
+        """Construct internally from the bundle's already-captured topology."""
+
+        coordinator = cls.__new__(cls)
+        coordinator._initialize_topology(topology)
+        return coordinator
+
+    def _initialize_topology(self, topology: _WorkspaceTopology) -> None:
+        """Bind immutable topology, exact key, and shared process state once."""
+
+        self._topology = topology
+        self._workspace_key = topology.workspace_key
         self._state = _mutation_state_for(self._workspace_key)
 
     @property
@@ -261,10 +399,9 @@ class WorkspaceConversationStorageMutationCoordinator:
 
         descriptor: int | None = None
         try:
-            parent = self._workspace.path("config")
-            target = self._workspace.path(
-                CONVERSATION_STORAGE_MUTATION_GUARD_PATH
-            )
+            workspace = self._topology.workspace()
+            parent = workspace.path("config")
+            target = workspace.path(CONVERSATION_STORAGE_MUTATION_GUARD_PATH)
             if not parent.is_dir():
                 raise OSError("conversation storage guard parent is unavailable")
             flags = os.O_CREAT | os.O_RDWR
@@ -286,7 +423,7 @@ class WorkspaceConversationStorageMutationCoordinator:
         """Require descriptor and fixed name to identify one safe regular file."""
 
         try:
-            target = self._workspace.path(
+            target = self._topology.workspace().path(
                 CONVERSATION_STORAGE_MUTATION_GUARD_PATH
             )
             opened = os.fstat(descriptor)
@@ -345,13 +482,18 @@ def compose_filesystem_conversation_storage(
     """Bind the unchanged filesystem catalog, event store, and search ports."""
 
     resolved = workspace if isinstance(workspace, Workspace) else Workspace(workspace)
+    topology = _WorkspaceTopology.capture(resolved)
     provenance = ConversationStorageProvenance(
         backend=ConversationStorageBackend.FILESYSTEM,
-        workspace_key=os.fspath(resolved.root),
+        workspace_key=topology.workspace_key,
     )
-    catalog = FilesystemConversationCatalog(resolved)
-    event_store = FilesystemConversationEventStore(resolved, catalog=catalog)
-    search = ReferenceConversationSearch(catalog, event_store)
+    catalog = _PinnedFilesystemConversationCatalog(topology, resolved)
+    event_store = _PinnedFilesystemConversationEventStore(
+        topology,
+        resolved,
+        catalog=catalog,
+    )
+    search = _PinnedReferenceConversationSearch(catalog, event_store)
     return ConversationStorageServices(
         catalog_binding=ConversationStorageComponentBinding(
             provenance=provenance,
@@ -366,7 +508,7 @@ def compose_filesystem_conversation_storage(
             component=search,
         ),
         mutation_coordinator=(
-            WorkspaceConversationStorageMutationCoordinator(resolved)
+            WorkspaceConversationStorageMutationCoordinator._from_topology(topology)
         ),
     )
 
@@ -379,6 +521,19 @@ def load_conversation_storage_activation_state(
     if not isinstance(workspace, Workspace):
         raise TypeError("workspace must be a Workspace")
     try:
+        topology = _WorkspaceTopology.capture(workspace)
+    except Exception:
+        raise ConversationStorageActivationStateError() from None
+    return _load_conversation_storage_activation_state(topology)
+
+
+def _load_conversation_storage_activation_state(
+    topology: _WorkspaceTopology,
+) -> ConversationStorageActivationState:
+    """Read activation state through one operation-local pinned workspace."""
+
+    try:
+        workspace = topology.workspace()
         target = workspace.path(CONVERSATION_STORAGE_ACTIVATION_STATE_PATH)
         if not target.exists():
             return ConversationStorageActivationState(
@@ -442,7 +597,8 @@ def compare_and_set_conversation_storage_activation(
         raise ValueError("expected generation must not be negative")
     if type(readiness) is not ConversationStorageMigrationReadiness:
         raise TypeError("readiness must be a ConversationStorageMigrationReadiness")
-    workspace_key = os.fspath(workspace.root)
+    topology = _WorkspaceTopology.capture(workspace)
+    workspace_key = topology.workspace_key
     try:
         lease.validate(workspace_key=workspace_key)
     except ConversationStorageCoordinationError:
@@ -450,7 +606,7 @@ def compare_and_set_conversation_storage_activation(
     except Exception:
         raise ConversationStorageCoordinationError() from None
 
-    current = load_conversation_storage_activation_state(workspace)
+    current = _load_conversation_storage_activation_state(topology)
     if (
         current.generation != expected_generation
         or readiness.source_generation != expected_generation
@@ -475,7 +631,7 @@ def compare_and_set_conversation_storage_activation(
         generation=expected_generation + 1,
     )
     try:
-        workspace.write_json(
+        topology.workspace().write_json(
             CONVERSATION_STORAGE_ACTIVATION_STATE_PATH,
             next_state.to_dict(),
         )
