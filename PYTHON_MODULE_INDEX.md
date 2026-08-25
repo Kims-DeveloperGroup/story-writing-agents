@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 56.
+Importable production units indexed: 59.
 
-Direct internal dependency edges indexed: 216.
+Direct internal dependency edges indexed: 224.
 
 ## Current Dependency Direction
 
@@ -102,6 +102,12 @@ story_writing_agents facade -> interactive_commands
                             |                          -> conversations/errors
                             -> conversation_search -> conversations/errors
                             -> session_lifecycle
+conversation_storage -> conversation_storage.composition
+                     -> conversation_storage.contracts
+conversation_storage.composition -> conversation_search
+                                 -> conversation_storage.contracts
+                                 -> workspace
+conversation_storage.contracts -> conversation_search/conversations/errors
 models -> conversations/agents/errors
 provider_adapter -> models
 provider_auth -> (standard library only)
@@ -702,6 +708,152 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:**
   `tests/conversation_search_contract.py`,
   `tests/test_conversation_search.py`, and
+  `docs/reference/conversation-search.md`.
+
+### `story_writing_agents.conversation_storage`
+
+- **Source:** `src/story_writing_agents/conversation_storage/__init__.py`
+- **Responsibility:** Provide the intentional public boundary for conversation-
+  storage selection, composition, coordination, activation, and archive ports.
+- **Supported surface:** Exactly 40 names in `__all__`: the fixed
+  `CONVERSATION_STORAGE_ACTIVATION_SCHEMA_VERSION`,
+  `CONVERSATION_STORAGE_ACTIVATION_STATE_PATH`,
+  `CONVERSATION_STORAGE_MUTATION_GUARD_PATH`, and
+  `CONVERSATION_STORAGE_MUTATION_MAX_TIMEOUT_SECONDS` constants; generic
+  `ConversationArchiveSource` and `ConversationArchiveSink`, plus
+  `ConversationArchiveImportStatus` and `ConversationArchiveImportReceipt`;
+  `ConversationStorageBackend`, `ConversationStorageCapability`,
+  `ConversationStorageParity`, `ConversationStorageActivationOutcomeKind`,
+  `ConversationStorageFailure`, `ConversationStoragePreflight`,
+  `ConversationStorageMigrationReadiness`,
+  `ConversationStorageActivationState`,
+  `ConversationStorageActivationOutcome`,
+  `ConversationStorageProvenance`, `ConversationStorageComponentBinding`,
+  `ConversationStorageServices`, `ConversationStorageMutationLease`, and
+  `ConversationStorageMutationCoordinator`; fixed
+  `ConversationStorageError`, `ConversationStorageConfigurationError`,
+  `ConversationStorageServicesError`,
+  `ConversationStorageUnavailableError`,
+  `ConversationStorageProvisioningNeededError`,
+  `ConversationStorageMigrationRequiredError`,
+  `ConversationStorageParityError`,
+  `ConversationStorageActivationStateError`,
+  `ConversationStorageActivationVersionError`,
+  `ConversationStorageActivationConflictError`,
+  `ConversationStorageActivationError`, and
+  `ConversationStorageCoordinationError`; concrete
+  `WorkspaceConversationStorageMutationCoordinator`; and
+  `parse_conversation_storage_backend`,
+  `validate_conversation_storage_mutation_timeout`,
+  `compose_filesystem_conversation_storage`,
+  `load_conversation_storage_activation_state`, and
+  `compare_and_set_conversation_storage_activation`. None are re-exported by
+  the project-root `story_writing_agents` facade.
+- **Direct internal dependencies:** `conversation_storage.composition` and
+  `conversation_storage.contracts`.
+- **State, resources, and side effects:** Owns no state or resource; importing
+  the package loads its two modules but performs no filesystem access, lock-file
+  open, thread creation, database access, or adapter construction.
+- **Primary verification/documentation:**
+  `tests/test_conversation_storage.py`,
+  `tests/test_conversation_catalog.py`,
+  `tests/test_conversation_event_store.py`,
+  `tests/test_conversation_search.py`,
+  `docs/reference/conversation-catalog.md`,
+  `docs/reference/conversation-transcripts.md`, and
+  `docs/reference/conversation-search.md`.
+
+### `story_writing_agents.conversation_storage.composition`
+
+- **Source:**
+  `src/story_writing_agents/conversation_storage/composition.py`
+- **Responsibility:** Own workspace-facing conversation-storage composition.
+- **Supported surface:** Package-supported
+  `CONVERSATION_STORAGE_ACTIVATION_STATE_PATH`,
+  `CONVERSATION_STORAGE_MUTATION_GUARD_PATH`,
+  `WorkspaceConversationStorageMutationCoordinator`,
+  `compose_filesystem_conversation_storage`,
+  `load_conversation_storage_activation_state`, and
+  `compare_and_set_conversation_storage_activation`.
+  `compose_filesystem_conversation_storage` returns the raw established
+  `FilesystemConversationCatalog`, `FilesystemConversationEventStore`, and
+  `ReferenceConversationSearch` instances under three explicit same-provenance
+  `ConversationStorageComponentBinding` values; it does not change their
+  established paths, root exports, or default behavior. The compare-and-set
+  operation requires an active correct-workspace owner-thread lease and an exact expected
+  generation; it never acquires coordination internally.
+- **Direct internal dependencies:** `conversation_search`,
+  `conversation_storage.contracts`, and `workspace`.
+- **State, resources, and side effects:** Import initializes only a synchronized
+  weak in-process registry and immutable constants; it performs no filesystem
+  access and opens no resource. Coordinator construction is I/O-free. Its one
+  exclusive borrow validates a finite caller-supplied timeout, shares an
+  in-process reentrant lock per canonical workspace, and on POSIX opens,
+  validates, advisory-locks, unlocks, and closes the contained
+  `config/.conversation_storage.lock` guard. Same-thread reentry returns the
+  same owner-thread/workspace-bound lease without extending its monotonic
+  expiry; exit deactivates it, and unsupported or unsafe coordination fails
+  closed. Callers acquire this lease before all backend-specific mutation locks
+  and acquire multiple workspace leases in canonical-key order. The weak
+  registry has an inactive-state reset seam and retains no external resource.
+  Activation reads exactly the version-1 `schema_version`, `backend`, and
+  nonnegative `generation` fields at
+  `config/conversation_storage_state.json`; a missing marker returns filesystem
+  generation zero without writing, malformed or unsupported state fails
+  closed, same-backend CAS is unwritten, and successful backend change uses the
+  workspace's contained atomic JSON replacement before returning the next
+  generation.
+- **Primary verification/documentation:**
+  `tests/test_conversation_storage.py`,
+  `tests/test_conversation_catalog.py`,
+  `tests/test_conversation_event_store.py`,
+  `tests/test_conversation_search.py`,
+  `docs/reference/conversation-catalog.md`, and
+  `docs/reference/conversation-transcripts.md`.
+
+### `story_writing_agents.conversation_storage.contracts`
+
+- **Source:** `src/story_writing_agents/conversation_storage/contracts.py`
+- **Responsibility:** Define stable typed contracts for conversation-storage
+  selection, composition, migration, activation, and exact archive transfer.
+- **Supported surface:** Package-supported
+  `CONVERSATION_STORAGE_ACTIVATION_SCHEMA_VERSION`,
+  `CONVERSATION_STORAGE_MUTATION_MAX_TIMEOUT_SECONDS`,
+  `ConversationStorageBackend`, `ConversationStorageCapability`,
+  `ConversationStorageParity`, `ConversationStorageActivationOutcomeKind`,
+  `ConversationStorageFailure`, `ConversationArchiveImportStatus`,
+  `ConversationStoragePreflight`, `ConversationStorageMigrationReadiness`,
+  `ConversationStorageActivationState`,
+  `ConversationStorageActivationOutcome`,
+  `ConversationStorageProvenance`, `ConversationStorageComponentBinding`,
+  `ConversationStorageServices`, `ConversationStorageMutationLease`,
+  `ConversationStorageMutationCoordinator`, generic
+  `ConversationArchiveSource` and `ConversationArchiveSink`,
+  `ConversationArchiveImportReceipt`, the fixed storage exception hierarchy
+  rooted at `ConversationStorageError`,
+  `parse_conversation_storage_backend`, and
+  `validate_conversation_storage_mutation_timeout`. Each component binding is
+  an adapter-owned explicit assertion over one raw narrow catalog, event-store,
+  or search port; bundle validation requires the same identity-bearing
+  provenance token and does not inspect adapter-private state or infer
+  provenance from collaborator attributes. Archive payload shape remains
+  generic and adapter-owned, while the source/sink signatures require an active
+  lease and the sink returns a typed imported/unchanged receipt; no archive
+  record, serialization, or ordinary ID/timestamp/sequence allocation API is
+  introduced.
+- **Direct internal dependencies:** `conversation_search`, `conversations`,
+  and `errors`.
+- **State, resources, and side effects:** Frozen, slotted values, protocols,
+  enums, pure validators, and fixed exceptions only; owns no mutable state,
+  filesystem, database, lock, process, thread, network, or import-time
+  operational side effect.
+- **Primary verification/documentation:**
+  `tests/test_conversation_storage.py`,
+  `tests/test_conversation_catalog.py`,
+  `tests/test_conversation_event_store.py`,
+  `tests/test_conversation_search.py`,
+  `docs/reference/conversation-catalog.md`,
+  `docs/reference/conversation-transcripts.md`, and
   `docs/reference/conversation-search.md`.
 
 ### `story_writing_agents.conversations`
@@ -3101,6 +3253,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/operations/recovery-and-limitations.md`.
 
 ## Consistency Notes
+
+- `conversation_storage.contracts` is the backend-neutral direction owner for
+  filesystem/SQLite selection, explicit raw-port component binding, capability
+  preflight, migration readiness/parity, activation outcomes/failures, bounded
+  mutation leases, and generic exact archive transfer. It depends only on the
+  existing catalog/event-store/search/error contracts. The package facade and
+  `composition` depend inward on it; no existing runtime, controller, config,
+  workspace, or root-facade module depends on the new package in this slice.
+  `conversation_storage.composition` alone owns the weak workspace coordinator
+  registry, contained POSIX advisory guard, activation marker I/O, and explicit
+  filesystem binding. Its service bundle exposes the raw existing filesystem
+  collaborators and adds no resource ownership or allocation behavior to their
+  narrow ports. Missing activation state remains the unwritten filesystem
+  baseline. A supported mutation borrows one exclusive, owner-thread-bound,
+  expiring lease first; archive/migration/parity operations remain future
+  consumers of that contract, and activation CAS validates the supplied lease
+  rather than acquiring one behind its caller.
 
 - Writing-artifact directive parsing is a pure package-local boundary:
   `writing_artifacts.directives` scans only one supplied current input and
