@@ -275,6 +275,14 @@ it. `/conversation list` remains active-only unless `--all` is supplied. The
 picker does not change startup default restoration, routing, noninteractive
 commands, storage/provider schemas, or package APIs.
 
+The shell shows `Conversation scope` on initial attachment and again only when
+the session, visible conversation handle, subject, or sticky agent changes.
+Commands that leave those facts unchanged do not repeat the panel. Catalog and
+focus freshness are still checked before every attached prompt, so an external
+rename, archive, deletion, or handle-collision change is reflected on the next
+prompt. Detaching clears the presentation snapshot; reattaching shows scope
+again even when the semantic values match the earlier attachment.
+
 References follow the same routing: `@plot Review ${core_documents/global_outline.md}`
 addresses one agent once, while ordinary text after `/to character` addresses
 the sticky character focus. Every provider-bound turn captures its own ordered
