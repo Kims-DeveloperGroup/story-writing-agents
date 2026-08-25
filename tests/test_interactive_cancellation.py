@@ -45,6 +45,7 @@ from story_writing_agents.interactive_terminal import (
     InteractiveErrorCode,
     InteractiveTerminal,
 )
+from story_writing_agents import interactive_terminal as terminal_module
 from story_writing_agents.models import (
     AgentDefinition,
     AgentReply,
@@ -69,6 +70,7 @@ from tests.test_interactive_conversation import (
     _REAL_RUNTIME,
     InteractiveConversationTestCase,
     ScriptedTerminalCallbacks,
+    _capture_semantic_method,
     _conversation_result,
     _error_record,
 )
@@ -1220,7 +1222,12 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
             predicates={1: lambda: state["entered"] is True},
         )
         core_before = core_snapshot(workspace)
+        accepted_components: list[object] = []
         with (
+            _capture_semantic_method(
+                "write_accepted_input",
+                accepted_components,
+            ),
             mock.patch.object(controller_core_module.asyncio, "Runner", runner_factory),
             mock.patch.object(backend, "bind", new=bind),
             mock.patch.object(store, "append", side_effect=append),
@@ -1263,6 +1270,10 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
         )
         self.assertEqual(core_snapshot(workspace), core_before)
         self.assertEqual(all_manuscripts(workspace), [])
+        self.assertEqual(
+            [component.content for component in accepted_components],
+            ["cancel me", "after cancellation"],
+        )
         self.assertFalse(workspace.path(_ACCESS_RELATIVE).exists())
         runner = runner_factory.instances[0]
         self.assertEqual(runner.run_calls, 2)
@@ -1359,10 +1370,22 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
             real_runner,
             interruptions={1: "before_entry"},
         )
-        with mock.patch.object(
-            controller_core_module.asyncio,
-            "Runner",
-            runner_factory,
+        accepted_components: list[object] = []
+        semantic_components: list[object] = []
+        with (
+            _capture_semantic_method(
+                "write_accepted_input",
+                accepted_components,
+            ),
+            _capture_semantic_method(
+                "write_component",
+                semantic_components,
+            ),
+            mock.patch.object(
+                controller_core_module.asyncio,
+                "Runner",
+                runner_factory,
+            ),
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
 
@@ -1371,6 +1394,37 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
         self.assertEqual(controller._last_started_debate_by_session, {})
         self.assertEqual(_file_bytes(workspace), before)
         self.assertEqual(all_manuscripts(workspace), [])
+        self.assertEqual(
+            accepted_components,
+            [
+                terminal_module.Message(
+                    "you → consensus",
+                    "prompt",
+                    state=terminal_module.ViewState.COMPLETED,
+                )
+            ],
+        )
+        self.assertEqual(
+            [
+                component
+                for component in semantic_components
+                if type(component) is terminal_module.Record
+                and component.title == "Consensus request"
+            ],
+            [
+                terminal_module.Record(
+                    "context",
+                    title="Consensus request",
+                    fields=(
+                        terminal_module.Field(
+                            "Output",
+                            "part-01/interactive-2.md",
+                        ),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                )
+            ],
+        )
         rendered = "".join(callbacks.records)
         self.assertIn(
             "[cancelled] Consensus run was cancelled before start.\n",
@@ -1398,14 +1452,25 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
             interruptions={1: "joined"},
             predicates={1: lambda: runtime.entered},
         )
-        with mock.patch.object(
-            controller_core_module.asyncio,
-            "Runner",
-            runner_factory,
+        accepted_components: list[object] = []
+        with (
+            _capture_semantic_method(
+                "write_accepted_input",
+                accepted_components,
+            ),
+            mock.patch.object(
+                controller_core_module.asyncio,
+                "Runner",
+                runner_factory,
+            ),
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
 
         self.assertTrue(runtime.cancelled)
+        self.assertEqual(
+            [component.content for component in accepted_components],
+            ["prompt"],
+        )
         self.assertEqual(controller._last_started_debate_by_session, {})
         self.assertEqual(_file_bytes(workspace), before)
         self.assertEqual(all_manuscripts(workspace), [])

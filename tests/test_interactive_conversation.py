@@ -89,6 +89,26 @@ _TIMESTAMP = "2026-01-01T00:00:00+00:00"
 _REAL_RUNTIME = object()
 
 
+def _capture_semantic_method(
+    method_name: str,
+    components: list[object],
+) -> Any:
+    """Patch one slotted semantic-output method while retaining real behavior."""
+
+    method = getattr(terminal_module.InteractiveSemanticOutput, method_name)
+
+    def capture(output: object, component: object) -> object:
+        components.append(component)
+        return method(output, component)
+
+    return mock.patch.object(
+        terminal_module.InteractiveSemanticOutput,
+        method_name,
+        autospec=True,
+        side_effect=capture,
+    )
+
+
 class ScriptedTerminalCallbacks:
     """Record exact terminal traffic and return scripted lines or events."""
 
@@ -552,7 +572,12 @@ class RuntimeWiringAndGateTests(InteractiveConversationTestCase):
             "/quit",
             runtime=runtime,
         )
+        accepted_components: list[object] = []
         with (
+            _capture_semantic_method(
+                "write_accepted_input",
+                accepted_components,
+            ),
             mock.patch.object(backend, "validate_provider_configuration") as validate_configuration,
             mock.patch.object(backend, "bind") as bind,
             mock.patch.object(
@@ -563,6 +588,7 @@ class RuntimeWiringAndGateTests(InteractiveConversationTestCase):
             self.assertEqual(controller.run_session_lobby(), 0)
 
         self.assertEqual(runtime.calls, [])
+        self.assertEqual(accepted_components, [])
         run_boundary.assert_not_called()
         validate_configuration.assert_not_called()
         bind.assert_not_called()
@@ -603,14 +629,22 @@ class RuntimeWiringAndGateTests(InteractiveConversationTestCase):
             runtime=runtime,
         )
         real_run = asyncio.run
-        with mock.patch.object(
-            controller_core_module.asyncio,
-            "run",
-            side_effect=real_run,
-        ) as run_boundary:
+        accepted_components: list[object] = []
+        with (
+            _capture_semantic_method(
+                "write_accepted_input",
+                accepted_components,
+            ),
+            mock.patch.object(
+                controller_core_module.asyncio,
+                "run",
+                side_effect=real_run,
+            ) as run_boundary,
+        ):
             self.assertEqual(controller.run_session_lobby(), 0)
 
         self.assertEqual(runtime.calls, [])
+        self.assertEqual(accepted_components, [])
         run_boundary.assert_not_called()
         rendered = "".join(callbacks.records)
         self.assertEqual(rendered.count("[error conversation_required]"), 3)
@@ -669,7 +703,12 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
         )
         assert store is not None
         real_run = asyncio.run
+        accepted_components: list[object] = []
         with (
+            _capture_semantic_method(
+                "write_accepted_input",
+                accepted_components,
+            ),
             mock.patch.object(store, "read_context") as read_context,
             mock.patch.object(store, "append") as append,
             mock.patch.object(
@@ -684,6 +723,10 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
                 side_effect=real_run,
             ) as run_boundary,
         ):
+            accepted_counts_at_runtime: list[int] = []
+            runtime.on_call = lambda: accepted_counts_at_runtime.append(
+                len(accepted_components)
+            )
             self.assertEqual(controller.run_session_lobby(), 0)
 
         conversation_id = entries[0].conversation_id
@@ -716,6 +759,32 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
                 ),
             ],
         )
+        self.assertEqual(accepted_counts_at_runtime, [1, 2, 3, 4])
+        self.assertEqual(
+            accepted_components,
+            [
+                terminal_module.Message(
+                    "you → lead",
+                    "ordinary ${core_documents/global_outline.md}",
+                    state=terminal_module.ViewState.COMPLETED,
+                ),
+                terminal_module.Message(
+                    "you → plot",
+                    "routed ${core_documents/character_sheets.md}#L2-L2",
+                    state=terminal_module.ViewState.COMPLETED,
+                ),
+                terminal_module.Message(
+                    "you → character",
+                    "sticky ${core_documents/narrative_rules.md}",
+                    state=terminal_module.ViewState.COMPLETED,
+                ),
+                terminal_module.Message(
+                    "you → lead",
+                    "/run is literal ${manuscript/part-01/seed.md}",
+                    state=terminal_module.ViewState.COMPLETED,
+                ),
+            ],
+        )
         self.assertEqual(len(runtime.memory_services), 4)
         self.assertEqual(len({id(service) for service in runtime.memory_services}), 1)
         self.assertEqual(runtime.memory_services[0].scope.session_id, "session")
@@ -737,6 +806,7 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
         )
 
         rendered = "".join(callbacks.records)
+        self.assertNotIn("you →", rendered)
         self.assertNotIn("[routing] One-shot route", rendered)
         self.assertNotIn("[waiting] ", rendered)
         self.assertIn("lead [completed]> lead reply\\x1b\n", rendered)
@@ -1225,13 +1295,28 @@ class FailureAndResultTests(InteractiveConversationTestCase):
                         runtime=runtime,
                     )
                 )
-                self.assertEqual(controller.run_session_lobby(), 0)
+                accepted_components: list[object] = []
+                with _capture_semantic_method(
+                    "write_accepted_input",
+                    accepted_components,
+                ):
+                    self.assertEqual(controller.run_session_lobby(), 0)
 
                 rendered = "".join(callbacks.records)
                 self.assertIn(_error_record(expected_code), rendered)
                 self.assertNotIn("secret", rendered)
                 self.assertIn("lead [completed]> recovered reply\n", rendered)
                 self.assertEqual(len(runtime.calls), 2)
+                self.assertEqual(
+                    [component.content for component in accepted_components],
+                    ["first", "second"],
+                )
+                self.assertTrue(
+                    all(
+                        component.sender == "you → lead"
+                        for component in accepted_components
+                    )
+                )
                 if isinstance(failure, BackendProtocolError) and type(
                     failure
                 ) is BackendProtocolError:
@@ -1333,7 +1418,12 @@ class FailureAndResultTests(InteractiveConversationTestCase):
                     "/quit",
                     runtime=runtime,
                 )
+                accepted_components: list[object] = []
                 with (
+                    _capture_semantic_method(
+                        "write_accepted_input",
+                        accepted_components,
+                    ),
                     mock.patch.object(
                         backend,
                         "release_session_access",
@@ -1349,6 +1439,10 @@ class FailureAndResultTests(InteractiveConversationTestCase):
                 detach.assert_called_once_with("session")
                 close.assert_called_once_with()
                 self.assertEqual(callbacks.reads, ["/quit"])
+                self.assertEqual(
+                    [component.content for component in accepted_components],
+                    ["message"],
+                )
                 rendered = "".join(callbacks.records)
                 self.assertIn(
                     _error_record(InteractiveErrorCode.INTERNAL_ERROR),

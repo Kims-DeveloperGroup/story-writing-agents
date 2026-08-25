@@ -143,6 +143,14 @@ class MainInputHistoryContractTests(unittest.TestCase):
             ("self", "prompt", "suggestion_provider"),
         )
         self.assertEqual(
+            tuple(
+                inspect.signature(
+                    RawTerminalDriver.write_accepted_input
+                ).parameters
+            ),
+            ("self", "text"),
+        )
+        self.assertEqual(
             RawTerminalDriver.__slots__,
             (
                 "_fallback_read_line",

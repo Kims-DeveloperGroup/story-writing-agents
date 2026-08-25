@@ -388,6 +388,42 @@ class InputLatchAndDriverTests(unittest.TestCase):
         driver._termios_provider.assert_not_called()
         driver._os_provider.assert_not_called()
 
+    def test_accepted_input_output_obeys_the_sticky_mode_without_retention(
+        self,
+    ) -> None:
+        payload = "user [completed]> accepted input 🌊\n"
+
+        undecided, undecided_input, undecided_output = _resource_free_driver(
+            mock.Mock(return_value="unused")
+        )
+        with self.assertRaisesRegex(RuntimeError, "requires a selected input mode"):
+            undecided.write_accepted_input(payload)
+        self.assertEqual(undecided_input.mock_calls, [])
+        self.assertEqual(undecided_output.mock_calls, [])
+
+        fallback, fallback_input, fallback_output = _resource_free_driver(
+            mock.Mock(return_value="unused")
+        )
+        fallback._input_latch.latch_fallback()
+        fallback.write_accepted_input(payload)
+        self.assertEqual(fallback_input.mock_calls, [])
+        self.assertEqual(fallback_output.mock_calls, [])
+
+        live, live_input, live_output = _resource_free_driver(
+            mock.Mock(return_value="unused")
+        )
+        live._input_latch.latch_live(_spec(_ByteBackedInput()))
+        live_output.write.return_value = len(payload)
+        live.write_accepted_input(payload)
+        self.assertEqual(live_input.mock_calls, [])
+        self.assertEqual(
+            live_output.mock_calls,
+            [mock.call.write(payload), mock.call.flush()],
+        )
+        self.assertFalse(
+            any("accepted" in name for name in RawTerminalDriver.__slots__)
+        )
+
     def test_first_fallback_is_permanent_and_skips_future_capability_inspection(self) -> None:
         fallback = mock.Mock(side_effect=("first", "second"))
         driver, input_stream, output_stream = _resource_free_driver(fallback)

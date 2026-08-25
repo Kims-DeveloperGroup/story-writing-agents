@@ -267,6 +267,18 @@ orientation, validation, cancellation, discard, error, and result records are
 written after that boundary and remain visible. Conversation-subject input is
 always an ordinary read.
 
+Accepted provider-bound content is informative output, not a retained control
+frame. On a capable stream, ordinary, `/say`, and `@agent` advisory text is
+rendered once after cleanup as `you → ALIAS`, using the resolved preferred
+target alias and exact semantic body without the command envelope. Inline,
+fresh, and committed composer consensus prompts use `you → consensus`. These
+messages appear before progress or provider work and remain through later
+success, handled failure, cancellation, or post-acceptance interrupt. In
+ordinary-line fallback the submitted input already remains visible, so the
+terminal adds no duplicate accepted-input message. This is terminal
+presentation only, not a storage, transcript-retention, provider-history, or
+audit guarantee.
+
 After workspace resolution, a capable POSIX terminal shows a bounded,
 width-aware four-frame welcome before the authentication gate. Physical widths
 of 48 columns and wider progressively reveal the original five-letter colored
@@ -480,6 +492,16 @@ documented availability line is the sole additive noninteractive stderr
 contract for a caught exception after CLI workspace initialization or discovery
 succeeds, independently of whether a diagnostic handle or file is available.
 
+Before local result work, accepted request context keeps output interpretable.
+`/search` shows its normalized query and active scope; a filtered
+`/conversation list` shows its normalized query and active/all scope, while an
+unfiltered list adds no request record. After transcript identity resolution,
+`/transcript` shows the visible conversation handle and effective start/count
+before reading the page. These safe semantic records remain visible when later
+work returns empty, fails safely, or is cancelled; fallback may therefore show
+both its original command and the normalized result context without repeating
+the same verbatim snapshot.
+
 During one advisory turn, a capable raw stream may show the terminal-owned
 four-glyph rolling indicator `◐`, `◓`, `◑`, `◒`. The driver clears the active
 cell before each semantic/progress/result write, redraws while the operation is
@@ -601,6 +623,17 @@ reads can include archives. See [grammar](interactive-command-parser.md) and
 | `/run --output PART/PATH.md PROMPT` or `/run --output PART/PATH.md` then `/send` | One bounded snapshot of current focus. |
 | `/run --fresh --output PART/PATH.md PROMPT` | Records focused identity; sends no transcript. |
 | `/draft-file PATH` | Strict-UTF-8 draft plus one focused snapshot; prompts for `PART/PATH.md`. |
+
+After prompt and path validation, inline, fresh, and committed composer runs
+write one exact-body `you → consensus` message before the `Consensus request`
+record and before progress. Every request record names the validated `Output`.
+`/draft-file` instead adds only its validated `Source` path: loaded draft bytes
+are never echoed as a terminal message. Prompt messages and request context
+remain visible through later debate success, deadlock, handled failure,
+cancellation, or post-acceptance interrupt. Ordinary-line fallback retains its
+already printed prompt text and receives no duplicate message; the distinct
+output/source context is still written. None of this changes `story run` or
+other noninteractive output.
 
 In both `/run --output ...` and `/run --fresh --output ...`, option boundaries
 use ASCII space or tab only. Unicode whitespace cannot separate `--output` from
