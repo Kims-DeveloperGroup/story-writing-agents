@@ -6,7 +6,8 @@
 > Provider-bound prompt text accepts inline `${path}` and `${path}#Lx-Ly`
 > canonical artifact references. In eligible
 > interactive prompt spans, `$`, `$${path}`, and `$$` discover and attach them
-> without submitting.
+> without submitting. Separate `story storage` commands migrate or verify
+> already-ready conversation stores without a provider.
 
 `story` and `story-writing-agents` are aliases for
 `story_writing_agents.cli:main`.
@@ -23,6 +24,8 @@
 | Session create | `story session create SESSION [--workspace PATH]` |
 | Session reopen | `story session reopen [SESSION] [--workspace PATH]` |
 | Session pause | `story session pause [SESSION] [--workspace PATH]` |
+| Storage migrate | `story storage migrate --from BACKEND --to BACKEND [--dry-run] [--workspace PATH]` |
+| Storage verify | `story storage verify --from BACKEND --to BACKEND [--workspace PATH]` |
 | Smoke | `story smoke [--workspace PATH]` |
 
 Lifecycle commands have no `--session`. Omitted reopen/pause uses the default;
@@ -40,6 +43,92 @@ Pause retains the default. Success prints sorted, indented JSON with exactly:
 
 Pause prints `paused` instead of `ready`. Access is always `claimable` after a
 successful lifecycle process exits.
+
+<a id="conversation-storage-migration"></a>
+
+## Conversation storage migration
+
+`BACKEND` is exactly `filesystem` or `sqlite`, and the two values must differ.
+The command uses `--workspace PATH` or the nearest initialized workspace. The
+`--from` value must equal the workspace's current conversation-storage
+activation state; absence of that state means filesystem generation zero.
+SQLite must already be provisioned and pass readiness checks whether it is the
+source or destination. These commands never install or provision SQLite,
+change activation or settings, delete the source, dual-write future changes,
+or copy the derived FTS companion.
+
+Use the same direction for planning, transfer, and confirmation:
+
+```bash
+story storage migrate --from filesystem --to sqlite --dry-run
+story storage migrate --from filesystem --to sqlite
+story storage verify --from filesystem --to sqlite
+```
+
+Each invocation freshly exports both stores under one workspace mutation lease
+and classifies every conversation identity as `create`, `identical`,
+`conflict`, `unsupported`, or `destination_only`. Conflict or unsupported
+SQLite values block both operations. `unsupported` means a source subject
+revision or event sequence cannot fit SQLite's signed 64-bit integer range.
+Destination-only data blocks migration; verify instead reports an otherwise
+valid create/destination-only difference as a parity mismatch. Exact parity
+covers every canonical active/archived metadata field and every event including
+`runtime_error`. FTS data is excluded.
+
+`--dry-run` is accepted only by `migrate`. It performs activation/readiness,
+fresh exports, planning, and—when the plan is otherwise unblocked—checkpoint
+validation, but writes neither destination conversations nor a checkpoint. It
+reports `work_required` when at least one conversation would be created and
+`completed`/`verified` when no creation is needed. A blocker still reports
+`failed`. Dry-run and verify may create only the empty
+`config/.conversation_storage.lock` used for their outer lease; verify ignores
+checkpoint contents entirely.
+
+Valid command grammar writes exactly one compact, key-sorted schema-v1 JSON
+object plus LF to stdout and nothing to stderr. It creates no runtime debug
+record and dispatches before broader CLI context, authentication, provider,
+runtime, settings, or session construction. A representative dry-run line is:
+
+```json
+{"checkpoint":"none","counts":{"conflict":0,"create":3,"destination_only":0,"identical":0,"unsupported":0},"dry_run":true,"failure":null,"from":"filesystem","operation":"migrate","outcome":"work_required","parity":"unverified","schema_version":1,"source":{"conversations":3,"events":4},"to":"sqlite"}
+```
+
+The exact top-level fields are `checkpoint`, `counts`, `dry_run`, `failure`,
+`from`, `operation`, `outcome`, `parity`, `schema_version`, `source`, and `to`.
+`counts` has exactly the five planning categories above; `source` has
+`conversations` and `events`. `checkpoint` is `none`, `resumed`, `advanced`, or
+`completed`; `outcome` is `completed`, `work_required`, or `failed`; `parity`
+is `verified`, `mismatch`, or `unverified`. Verify always reports
+`"dry_run":false`. `failure` is `null` unless failed, then one of:
+
+```text
+activation_invalid activation_mismatch backend_unavailable checkpoint_invalid
+checkpoint_unsupported conflict coordination_failed destination_invalid
+destination_only invalid_request operational_failure parity_mismatch
+provisioning_needed source_changed source_invalid unsafe_state unsupported
+workspace_invalid
+```
+
+Reports expose only fixed backend/outcome/failure values, checkpoint state, and
+aggregate counts. They do not include conversation identities, subjects,
+events, paths, exception text, malformed values, or FTS data.
+
+Exit status is fixed:
+
+- `0`: successful migration, valid dry-run (including `work_required`), or
+  verified equality;
+- `1`: verify-only, otherwise valid create or destination-only parity mismatch;
+  and
+- `2`: argparse usage, request/precondition failure, conflict, unsupported
+  data/version, unsafe state, checkpoint failure, source/destination failure,
+  or another operational failure.
+
+A successful migration retains a terminal direction-specific checkpoint and
+freshly proves source/destination canonical parity, but never activates the
+destination. Failure after destination work does not imply rollback across
+both stores. See [Conversation storage migration recovery](../operations/recovery-and-limitations.md#conversation-storage-migration-recovery)
+before retrying and [Session storage](configuration/session-storage.md#conversation-migration-checkpoints)
+for checkpoint contents.
 
 <a id="smoke-report"></a>
 

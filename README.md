@@ -143,7 +143,7 @@ For Python integrations, start with the [runtime API](docs/reference/runtime-api
 Canonical conversation archive values and lease-bound filesystem export/import
 are available from the `story_writing_agents.conversation_storage` subpackage.
 They are application-controlled transport infrastructure, not a shell command,
-complete workspace backup, restore workflow, or storage migration. See
+complete workspace backup, or arbitrary restore workflow. See
 [Conversation archives](docs/reference/conversation-archives.md).
 
 Conversation catalog, transcript, and reference-search ports also have an
@@ -153,6 +153,21 @@ selected by the installed shell or `StoryRuntime`; start with the
 before provisioning its separate database. Its `SQLiteConversationSearch`
 keeps the public literal-search contract exact; a private disposable FTS5
 companion can supply hints but never determines a result.
+
+Already-provisioned filesystem and SQLite stores in the same workspace can be
+planned, copied, and compared without a provider:
+
+```bash
+story storage migrate --from filesystem --to sqlite --dry-run
+story storage migrate --from filesystem --to sqlite
+story storage verify --from filesystem --to sqlite
+```
+
+`--from` must name the workspace's active backend, and the two backend names
+must differ. Migration preserves exact active and archived conversation
+metadata and every transcript event, but it never provisions SQLite, changes
+the active backend, deletes the source, or copies the derived FTS companion.
+See the [CLI contract](docs/reference/cli.md#conversation-storage-migration).
 
 <a id="current-limitations"></a>
 
@@ -165,12 +180,14 @@ companion can supply hints but never determines a result.
   on the next catalog or publication access after an interruption. It is not
   one transaction with debate logs, lifecycle state, or result files.
 - The installed shell and runtime continue to use filesystem conversation
-  storage. SQLite is an explicit, optional Python API: there is no `/settings`
-  selection, installation, automatic provisioning, default switch, migration,
+  storage. SQLite is an explicit, optional Python API. Provider-free
+  `story storage migrate` and `story storage verify` operate only on two
+  already-ready same-workspace stores and never activate one. There is no
+  `/settings` selection, installation, automatic provisioning, default switch,
   RAG, or MySQL adapter. Its derived FTS5 companion does not change readiness,
-  exact literal results, or default selection. Issue #261 owns integrating
-  detection, installation, and selection into the user-facing settings/runtime
-  flow; direct preflight here only reports capability.
+  exact literal results, migration parity, or default selection. Issue #261
+  owns integrating detection, installation, and selection into the user-facing
+  settings/runtime flow; direct preflight here only reports capability.
 - Smoke's explicit workspace is not read-only and retains bounded plaintext
   diagnostics when they can be written; abrupt termination can interrupt
   cleanup. A pass does not validate provider/model, terminal behavior,

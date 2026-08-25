@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import tempfile
@@ -869,6 +870,118 @@ class FilesystemConversationArchiveImportTests(unittest.TestCase):
             receipt = adapter.import_archive(lease, payload)
         return adapter, receipt
 
+    def test_completion_callback_is_keyword_only_ordered_and_exact(self) -> None:
+        parameter = inspect.signature(
+            FilesystemConversationArchiveAdapter.import_archive
+        ).parameters["on_conversation_completed"]
+        self.assertIs(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIsNone(parameter.default)
+
+        workspace = initialized_workspace(self)
+        payload = archive_from_conversations(
+            archive_conversation(
+                session_id="session_a",
+                conversation_id="conversation_a",
+                subject="empty callback record",
+            ),
+            archive_conversation(
+                session_id="session_b",
+                conversation_id="conversation_b",
+                subject="event callback record",
+                events=archive_events(
+                    session_id="session_b",
+                    conversation_id="conversation_b",
+                ),
+            ),
+        )
+        adapter = compose_filesystem_conversation_archive(workspace)
+        coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)
+        completed: list[tuple[str, str]] = []
+
+        def observe(session_id: str, conversation_id: str) -> None:
+            metadata = workspace.path(metadata_relative(session_id, conversation_id))
+            transcript = workspace.path(
+                transcript_relative(session_id, conversation_id)
+            )
+            self.assertTrue(metadata.is_file())
+            if conversation_id == "conversation_a":
+                self.assertFalse(transcript.exists())
+            else:
+                self.assertTrue(transcript.is_file())
+                self.assertEqual(
+                    len(transcript.read_text(encoding="utf-8").splitlines()), 2
+                )
+            completed.append((session_id, conversation_id))
+
+        with coordinator.borrow(timeout_seconds=2.0) as lease:
+            receipt = adapter.import_archive(
+                lease,
+                payload,
+                on_conversation_completed=observe,
+            )
+        self.assertIs(receipt.status, ConversationArchiveImportStatus.IMPORTED)
+        self.assertEqual(
+            completed,
+            [("session_a", "conversation_a"), ("session_b", "conversation_b")],
+        )
+
+        completed.clear()
+        with coordinator.borrow(timeout_seconds=2.0) as lease:
+            unchanged = adapter.import_archive(
+                lease,
+                payload,
+                on_conversation_completed=observe,
+            )
+        self.assertIs(unchanged.status, ConversationArchiveImportStatus.UNCHANGED)
+        self.assertEqual(
+            completed,
+            [("session_a", "conversation_a"), ("session_b", "conversation_b")],
+        )
+
+    def test_callback_failure_leaves_complete_retryable_record_and_preflight_never_calls(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        payload = one_conversation_archive(events=archive_events())
+        adapter = compose_filesystem_conversation_archive(workspace)
+        coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)
+        calls: list[tuple[str, str]] = []
+
+        def fail_after_completion(session_id: str, conversation_id: str) -> None:
+            calls.append((session_id, conversation_id))
+            raise RuntimeError("private callback sentinel")
+
+        with coordinator.borrow(timeout_seconds=2.0) as lease:
+            with self.assertRaisesRegex(RuntimeError, "private callback sentinel"):
+                adapter.import_archive(
+                    lease,
+                    payload,
+                    on_conversation_completed=fail_after_completion,
+                )
+        self.assertEqual(calls, [("session_a", "conversation_a")])
+        with coordinator.borrow(timeout_seconds=2.0) as lease:
+            self.assertEqual(adapter.export_archive(lease), payload)
+            retry = adapter.import_archive(
+                lease,
+                payload,
+                on_conversation_completed=lambda session_id,
+                conversation_id: calls.append((session_id, conversation_id)),
+            )
+        self.assertIs(retry.status, ConversationArchiveImportStatus.UNCHANGED)
+        self.assertEqual(len(calls), 2)
+
+        conflict = one_conversation_archive(subject="different")
+        calls.clear()
+        with coordinator.borrow(timeout_seconds=2.0) as lease:
+            with self.assertRaises(ConversationArchiveConflictError):
+                adapter.import_archive(
+                    lease,
+                    conflict,
+                    on_conversation_completed=lambda session_id,
+                    conversation_id: calls.append((session_id, conversation_id)),
+                )
+        self.assertEqual(calls, [])
+
     def test_absent_import_is_exact_and_identical_retry_is_unchanged(self) -> None:
         workspace = initialized_workspace(self)
         payload = nonempty_archive()
@@ -1335,6 +1448,7 @@ class FilesystemConversationArchiveImportTests(unittest.TestCase):
         payload = nonempty_archive()
         adapter = compose_filesystem_conversation_archive(workspace)
         original_write_text = Workspace.write_text
+        completed: list[tuple[str, str]] = []
 
         def fail_transcript(
             operation_workspace: Workspace,
@@ -1360,10 +1474,18 @@ class FilesystemConversationArchiveImportTests(unittest.TestCase):
         ):
             with coordinator.borrow(timeout_seconds=2.0) as lease:
                 with self.assertRaises(ConversationArchiveDestinationError) as raised:
-                    adapter.import_archive(lease, payload)
+                    adapter.import_archive(
+                        lease,
+                        payload,
+                        on_conversation_completed=lambda session_id,
+                        conversation_id: completed.append(
+                            (session_id, conversation_id)
+                        ),
+                    )
                 self.assertIs(
                     type(raised.exception), ConversationArchiveDestinationError
                 )
+        self.assertEqual(completed, [])
         self.assertTrue(
             workspace.path(metadata_relative("session_a", "conversation_a")).is_file()
         )
@@ -1371,8 +1493,14 @@ class FilesystemConversationArchiveImportTests(unittest.TestCase):
             workspace.path(transcript_relative("session_a", "conversation_a")).exists()
         )
         with coordinator.borrow(timeout_seconds=2.0) as lease:
-            receipt = adapter.import_archive(lease, payload)
+            receipt = adapter.import_archive(
+                lease,
+                payload,
+                on_conversation_completed=lambda session_id,
+                conversation_id: completed.append((session_id, conversation_id)),
+            )
         self.assertIs(receipt.status, ConversationArchiveImportStatus.IMPORTED)
+        self.assertEqual(completed, [("session_a", "conversation_a")])
 
     def test_empty_directory_residue_after_metadata_failure_is_resumable(self) -> None:
         workspace = initialized_workspace(self)

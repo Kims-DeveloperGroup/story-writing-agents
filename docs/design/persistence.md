@@ -5,8 +5,9 @@
 > artifacts, content-free explicit-reference authorization evidence, and
 > bounded runtime debug-log infrastructure. Direct Python callers can also
 > construct canonical conversation-only archive bytes and use the privileged
-> filesystem transfer adapter. A separate optional SQLite
-> conversation store is available only through a direct Python module.
+> filesystem transfer adapter. A separate optional SQLite conversation store is
+> available through direct Python modules, and provider-free storage commands
+> can migrate or verify two already-ready stores in one workspace.
 > `StoryRuntime` creates and finalizes reference evidence for inline referenced
 > operations; Python callers can inspect it by operation ID.
 
@@ -28,6 +29,7 @@ select the runtime files automatically.
 | Session/conversation defaults | CLI context helpers |
 | Conversation metadata and transcript | Filesystem catalog/event-store adapters by default; optional SQLite adapters by direct composition |
 | Canonical conversation archive value and bytes | `conversation_storage.archive`; caller owns any stored or transmitted bytes |
+| Same-workspace conversation migration and checkpoints | `conversation_storage.migration`; canonical archive adapters remain the data boundary |
 | Bounded runtime diagnostics | Internal `debug_log` writer |
 | Retrieval actions, observations, progress, sources | Process/terminal only |
 | Current conversation and agent focus | Controller memory only |
@@ -70,11 +72,12 @@ destination afterward. It makes no rollback or deletion claim: an operational
 failure may leave only recognized exact prefixes that the same payload can
 complete under a fresh valid lease.
 
-This boundary neither persists an archive automatically nor combines
+This archive boundary neither persists an archive automatically nor combines
 conversation files with debates, defaults, provider state, prompts,
 manuscripts, artifacts, diagnostics, or configuration. It is not a complete
-workspace transaction, backup, restore, storage migration, checkpoint, parity,
-activation, or dual-write mechanism. See the exact
+workspace transaction, backup, arbitrary restore, activation, or dual-write
+mechanism. The separate migration coordinator described below composes the
+archive adapters for one same-workspace copy/parity workflow. See the exact
 [archive reference](../reference/conversation-archives.md) and
 [filesystem boundary](../operations/filesystem-safety.md#conversation-archive-filesystem-safety).
 
@@ -179,11 +182,10 @@ create-only, and synchronizes the installed file and containing directory. It
 does not install SQLite or ingest the filesystem store. It may initialize the
 derived FTS companion after the main database is ready, but FTS absence or
 failure is not a provisioning or readiness failure. The privileged archive
-adapter can round-trip exact SQLite catalog/event rows under explicit leases,
-but its payload and record types are private and are not a public format or
-migration contract. Export globally reconstructs all metadata and event rows
-and rejects every orphan event. Import validates the complete destination
-before mutation and again after mutation in the same transaction, so an orphan,
+adapter round-trips the public canonical `ConversationArchive` value under an
+explicit lease. Export globally reconstructs all metadata and event rows and
+rejects every orphan event. Import validates the complete destination before
+mutation and again after mutation in the same transaction, so an orphan,
 malformed row, or divergent existing identity cannot be silently adopted or
 dropped; failure rolls back the whole import.
 
@@ -194,12 +196,70 @@ domain state. Full non-POSIX coordinator and activation readiness is deferred
 to Issue #261.
 
 `story init`, `/settings`, the installed shell, and `StoryRuntime` do not
-provision or select this database. There is no automatic installation,
-migration, activation, RAG, MySQL, or FTS-dependent search behavior in this
+provision or select this database. The explicit migration coordinator can copy
+canonical conversations between an already-ready database and the filesystem,
+but it does not install, provision, or activate SQLite. There is no automatic
+installation, activation, RAG, MySQL, or FTS-dependent search behavior in this
 adapter. See the
 [direct API](../reference/package-api.md#optional-sqlite-conversation-storage),
 [filesystem boundary](../operations/filesystem-safety.md#sqlite-conversation-storage-safety),
 and [recovery table](../operations/recovery-and-limitations.md#sqlite-conversation-storage-recovery).
+
+<a id="conversation-storage-migration"></a>
+
+## Conversation storage migration
+
+`conversation_storage.migration` owns one provider-free, same-workspace
+coordinator over the canonical filesystem and SQLite archive adapters. The
+installed `story storage migrate` and `story storage verify` commands dispatch
+to it before debug logging, broader CLI context, authentication, provider,
+runtime, settings, or session construction. Importing the module performs no
+I/O and keeps `sqlite3` lazy until an operation needs an adapter.
+
+One outer workspace conversation-storage lease spans active-backend validation,
+SQLite readiness, fresh source and destination exports, deterministic planning,
+transfer, checkpoint publication, fresh final exports, and exact canonical-byte
+parity. The source and destination must be distinct; `--from` must equal the
+persisted active backend (an absent activation record means filesystem), and
+SQLite must already be provisioned and ready. The coordinator never installs or
+provisions SQLite, changes activation/configuration, deletes source data, or
+dual-writes later mutations.
+
+Planning classifies every `(session_id, conversation_id)` as `create`,
+`identical`, `conflict`, `unsupported`, or `destination_only`. Any conflict or
+SQLite-unrepresentable canonical integer blocks every transfer. Destination-only
+state also blocks migration because copying must not silently accept asymmetric
+authority. Verification treats otherwise valid create or destination-only
+state as a parity mismatch. Exact comparison includes active and archived
+metadata, empty histories, and every event kind including `runtime_error`; the
+derived FTS companion is outside both transfer and parity.
+
+Filesystem-to-SQLite import is one complete SQLite transaction. A failed
+uncommitted import rolls back all destination rows. SQLite-to-filesystem import
+first preflights the complete global destination and then publishes complete
+conversations create-only. After each conversation is reread and proved exact,
+the coordinator atomically advances a per-direction checkpoint. If publication
+or checkpointing is interrupted, a retry freshly exports both stores and
+accepts only exact completed records before resuming.
+
+Checkpoints are retained beneath
+`agent_states/orchestrator_state/conversation_storage_migrations/` as
+`filesystem-to-sqlite.json` and `sqlite-to-filesystem.json`. Strict schema v1
+contains only direction, a SHA-256 source fingerprint, aggregate counts,
+completed conversation identities, and progress counts. It contains no subject,
+event, error, or FTS content. A successful migration retains a terminal complete
+checkpoint as audit state. Dry-run never writes one; verify neither reads nor
+writes one. Either read-only workflow may still create the empty
+`config/.conversation_storage.lock` guard required to acquire its outer lease.
+
+After transfer, fresh canonical exports must still equal the original source.
+A source change or final mismatch can be reported after complete destination
+state was committed or published; the coordinator makes no cross-store rollback
+claim. Recovery therefore starts with both stores quiescent and fresh
+verification, not activation or source deletion. See the
+[CLI report and exit contract](../reference/cli.md#conversation-storage-migration),
+[checkpoint layout](../reference/configuration/session-storage.md#conversation-migration-checkpoints),
+and [recovery procedure](../operations/recovery-and-limitations.md#conversation-storage-migration-recovery).
 
 <a id="workspace-runtime-debug-log"></a>
 

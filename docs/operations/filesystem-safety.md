@@ -453,6 +453,56 @@ snapshot or a transaction with catalog, event, migration, or SQLite work.
 SQLite keeps its separate already-pinned database owner. See the
 [composition API](../reference/package-api.md#conversation-storage-composition).
 
+<a id="conversation-storage-migration-safety"></a>
+
+## Conversation storage migration safety
+
+The migration coordinator captures one canonical workspace root and acquires
+one outer `WorkspaceConversationStorageMutationCoordinator` lease for the
+complete operation. That lease covers activation/readiness checks, fresh
+canonical exports, planning, all destination work, checkpoint publication, and
+fresh final parity. Root and lease correlation are revalidated throughout, so
+later mutation of the caller's `Workspace.root` cannot redirect any phase.
+Acquiring the lease may create the empty, owner-only
+`config/.conversation_storage.lock` guard even for dry-run or verify; those
+workflows create no conversation rows/files or checkpoint.
+
+The coordinator serializes every supported filesystem/SQLite writer that uses
+the same guard. Direct low-level filesystem catalog/event-store writers do not
+acquire it automatically, and external database/file editors do not participate
+at all. Stop or otherwise coordinate those writers before migration. The guard
+is advisory coordination, not caller authorization, a hostile-process defense,
+or a transaction spanning both stores.
+
+Migration reads each per-direction checkpoint through a bounded no-follow file
+descriptor and requires the fixed name and descriptor to remain one regular,
+singly linked file with stable identity and size. Strict UTF-8 JSON parsing
+rejects duplicate, missing, extra, noncanonical, oversized, wrong-direction,
+unsupported-version, invalid-count, or unsafe-identity state. Symlinks, hard
+links, nonregular files, replacement races, and ambiguous state are preserved
+and fail closed. Publication uses the workspace's contained atomic JSON write,
+compares the expected prior checkpoint before and after writing, revalidates the
+lease, and rereads the exact result. Do not edit, relink, or replace a checkpoint
+to manufacture progress.
+
+Filesystem-to-SQLite destination work occurs in one `BEGIN IMMEDIATE`
+transaction, so an uncommitted failure rolls back the complete import.
+SQLite-to-filesystem work first preflights the complete destination union, then
+uses create-only archive publication. A progress callback runs only after one
+conversation's metadata and optional transcript are present as one complete
+canonical value and have been reread exactly. If checkpoint publication fails,
+those complete files remain; the next run accepts them only after fresh source
+and destination exports revalidate the fingerprint, counts, completed
+identities, and exact records.
+
+Conflict, unsupported SQLite values, or destination-only data blocks migration
+before checkpoint or destination mutation. Final parity still uses fresh
+canonical exports. A source change can therefore be discovered after a complete
+destination transaction, and a final mismatch can follow create-only
+filesystem publication; neither condition triggers destructive rollback. See
+[migration recovery](recovery-and-limitations.md#conversation-storage-migration-recovery)
+before retrying.
+
 <a id="sqlite-conversation-storage-safety"></a>
 
 ## SQLite conversation-storage safety

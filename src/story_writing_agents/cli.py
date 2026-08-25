@@ -215,6 +215,32 @@ def build_parser() -> argparse.ArgumentParser:
             )
         action_parser.add_argument("--workspace", help=_WORKSPACE_HELP)
 
+    storage = subcommands.add_parser(
+        "storage",
+        help="migrate or verify authoritative conversation storage",
+    )
+    storage_actions = storage.add_subparsers(
+        dest="storage_action",
+        required=True,
+    )
+    for action in ("migrate", "verify"):
+        action_parser = storage_actions.add_parser(action)
+        action_parser.add_argument(
+            "--from",
+            dest="source_backend",
+            choices=("filesystem", "sqlite"),
+            required=True,
+        )
+        action_parser.add_argument(
+            "--to",
+            dest="destination_backend",
+            choices=("filesystem", "sqlite"),
+            required=True,
+        )
+        action_parser.add_argument("--workspace", help=_WORKSPACE_HELP)
+        if action == "migrate":
+            action_parser.add_argument("--dry-run", action="store_true")
+
     smoke = subcommands.add_parser(
         "smoke",
         help="run a provider-free deterministic runtime smoke check",
@@ -992,6 +1018,44 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ),
                 )
             return exit_code
+
+        if arguments.command == "storage":
+            from .conversation_storage.migration import (
+                ConversationStorageMigrationOperation,
+                ConversationStorageMigrationReport,
+                migrate_conversation_storage,
+                verify_conversation_storage,
+            )
+
+            operation = ConversationStorageMigrationOperation(arguments.storage_action)
+            dry_run = bool(getattr(arguments, "dry_run", False))
+            try:
+                workspace = resolve_workspace(arguments.workspace)
+            except Exception:
+                storage_report = ConversationStorageMigrationReport.failed(
+                    operation=operation,
+                    source_backend=arguments.source_backend,
+                    destination_backend=arguments.destination_backend,
+                    dry_run=dry_run,
+                    failure="workspace_invalid",
+                )
+            else:
+                storage_report = (
+                    migrate_conversation_storage(
+                        workspace,
+                        source_backend=arguments.source_backend,
+                        destination_backend=arguments.destination_backend,
+                        dry_run=dry_run,
+                    )
+                    if operation is ConversationStorageMigrationOperation.MIGRATE
+                    else verify_conversation_storage(
+                        workspace,
+                        source_backend=arguments.source_backend,
+                        destination_backend=arguments.destination_backend,
+                    )
+                )
+            print(storage_report.to_json())
+            return storage_report.exit_code
 
         workspace = resolve_workspace(arguments.workspace)
         debug_log_hint_available = True

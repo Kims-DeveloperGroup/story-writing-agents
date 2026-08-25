@@ -1,9 +1,10 @@
 # Canonical conversation archives
 
 > **Availability:** canonical conversation archive values, deterministic bytes,
-> and privileged filesystem export/import are direct Python APIs. The installed
-> shell and `StoryRuntime` do not expose an archive command or run archive work
-> automatically.
+> and privileged filesystem/SQLite export/import are direct Python APIs. There
+> is no raw archive shell command. Provider-free `story storage migrate` and
+> `story storage verify` compose these adapters for two already-ready stores in
+> one workspace; `StoryRuntime` does not run archive work automatically.
 
 Key terms: **canonical**—one logical value has exactly one accepted byte image;
 **authoritative conversation data**—catalog metadata and its complete
@@ -69,6 +70,8 @@ adapter.export_archive(
 adapter.import_archive(
     lease: ConversationStorageMutationLease,
     payload: ConversationArchive,
+    *,
+    on_conversation_completed: Callable[[str, str], None] | None = None,
 ) -> ConversationArchiveImportReceipt
 ```
 
@@ -110,6 +113,29 @@ collaborator materialization or filesystem I/O, while later mutation of the
 original workspace cannot redirect root A transfer into root B. This topology
 belongs to the archive adapter; it is separate from composed conversation
 service pinning and SQLite's independent database owner.
+
+The optional callback is invoked after each addressed filesystem conversation
+has complete exact metadata and, when nonempty, an exact transcript, and after
+that complete value has been reread. It runs under the caller's active lease;
+an exception stops the import without deleting already completed create-only
+records. The migration coordinator uses this hook to publish progress only
+after a resumable unit is complete.
+
+The optional SQLite module exposes another implementation of the same canonical
+archive source/sink contract:
+
+```python
+from story_writing_agents.conversation_storage.sqlite import (
+    SQLiteConversationArchiveAdapter,
+    compose_sqlite_conversation_archive,
+)
+```
+
+Its database must already be provisioned and ready. Export returns a canonical
+`ConversationArchive`; import accepts that same value, preserves every exact
+metadata/event field, and commits the complete archive import in one SQLite
+transaction. The adapter and composer remain direct-module exports rather than
+subpackage or package-root facade names.
 
 <a id="archive-logical-values"></a>
 
@@ -372,6 +398,39 @@ fresh valid lease can complete those exact recognized prefixes. A divergent
 file, unknown artifact, or changed post-preflight destination is never treated
 as resumable and is never overwritten.
 
+<a id="conversation-storage-migration"></a>
+
+## Same-workspace migration and verification
+
+The direct `story_writing_agents.conversation_storage.migration` module and
+`story storage` commands turn the two archive adapters into one bounded
+filesystem↔SQLite workflow. They always operate inside one initialized
+workspace. The source must be the active backend, the destination must be the
+other backend, and SQLite must already be provisioned and ready.
+
+Migration copies the complete canonical archive: active and archived
+conversations, empty histories, exact timestamps/revisions, and every event
+kind including runtime errors. It excludes all non-conversation workspace
+channels and the derived FTS companion. A deterministic plan must have no
+conflict, SQLite-unrepresentable record, or destination-only identity before
+any transfer. The coordinator then performs destination work and requires fresh
+source and destination exports to equal the original canonical source bytes.
+
+Use dry-run before transfer and verify afterward:
+
+```bash
+story storage migrate --from filesystem --to sqlite --dry-run
+story storage migrate --from filesystem --to sqlite
+story storage verify --from filesystem --to sqlite
+```
+
+Neither operation changes the active backend. Migration retains a strict,
+privacy-limited per-direction checkpoint for safe replay of exact complete
+filesystem conversations and terminal audit. Dry-run never writes a checkpoint;
+verify ignores it. Exact JSON fields, exit codes, failure codes, and recovery
+steps are in the [CLI reference](cli.md#conversation-storage-migration) and
+[migration recovery](../operations/recovery-and-limitations.md#conversation-storage-migration-recovery).
+
 <a id="archive-failures"></a>
 
 ## Content-free failures
@@ -416,12 +475,13 @@ authorization, managed archive file, network transport, or retention policy.
 Its digest is integrity evidence only. A caller that stores or transmits the
 bytes owns all resulting copies and exposure.
 
-This release provides transport infrastructure, not a complete workspace
+The archive layer provides transport infrastructure, not a complete workspace
 backup, arbitrary restore, ordinary catalog/event mutation or default
-selection, cross-workspace authorization, migration/checkpoint/parity workflow,
-backend activation, dual write, SQLite transfer or database-owner behavior,
-`/settings` integration, shell command, MySQL behavior, or RAG integration. It
-does not copy or delete the excluded workspace channels listed above. Catalog
-and transcript domain contracts remain in
+selection, cross-workspace authorization, backend activation, dual write,
+`/settings` integration, MySQL behavior, or RAG integration. The separate
+same-workspace migration workflow composes the filesystem and SQLite adapters;
+it still does not copy or delete the excluded workspace channels, provision a
+database, activate a backend, or establish cross-workspace authorization.
+Catalog and transcript domain contracts remain in
 [Conversation catalog](conversation-catalog.md) and
 [Conversation transcripts](conversation-transcripts.md).
