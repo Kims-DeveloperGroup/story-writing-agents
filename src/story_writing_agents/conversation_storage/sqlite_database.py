@@ -338,6 +338,7 @@ class SQLiteDatabase:
                 operation=lambda _connection: None,
             )
             validate_lease()
+            _require_provisioning_candidates(self._path.parent, expected=())
             return
         except SQLiteDatabaseMissingError:
             pass
@@ -368,6 +369,7 @@ class SQLiteDatabase:
                 operation=lambda _connection: None,
             )
             validate_lease()
+            _require_provisioning_candidates(self._path.parent, expected=())
             return
 
         target = self._path
@@ -375,6 +377,7 @@ class SQLiteDatabase:
         if not parent.exists() or not parent.is_dir():
             raise SQLiteDatabaseUnavailableError()
         _reject_sidecars(target)
+        _require_provisioning_candidates(parent, expected=())
 
         temporary_path: Path | None = None
         body_failure: BaseException | None = None
@@ -388,6 +391,10 @@ class SQLiteDatabase:
                 )
                 temporary_path = Path(raw_temporary)
                 os.close(descriptor)
+                _require_provisioning_candidates(
+                    parent,
+                    expected=(temporary_path,),
+                )
             except OSError as exc:
                 raise SQLiteDatabaseUnavailableError() from exc
 
@@ -397,10 +404,23 @@ class SQLiteDatabase:
                 validate_snapshot=validate_snapshot,
             )
             validate_lease()
+            _require_provisioning_candidates(
+                parent,
+                expected=(temporary_path,),
+            )
             try:
                 os.link(temporary_path, target, follow_symlinks=False)
+                _require_provisioning_candidates(
+                    parent,
+                    expected=(temporary_path,),
+                )
                 temporary_path.unlink()
+                _require_provisioning_candidates(parent, expected=())
             except FileExistsError:
+                _require_provisioning_candidates(
+                    parent,
+                    expected=(temporary_path,),
+                )
                 self._run_connection(
                     module,
                     target,
@@ -410,6 +430,10 @@ class SQLiteDatabase:
                     operation=lambda _connection: None,
                 )
                 validate_lease()
+                _require_provisioning_candidates(
+                    parent,
+                    expected=(temporary_path,),
+                )
                 return
             except OSError as exc:
                 raise SQLiteDatabaseUnavailableError() from exc
@@ -418,6 +442,7 @@ class SQLiteDatabase:
             validate_lease()
             _synchronize_file(target)
             _synchronize_directory(parent)
+            _require_provisioning_candidates(parent, expected=())
         except BaseException as exc:
             body_failure = exc
             raise
@@ -1187,6 +1212,17 @@ def _provisioning_alias_candidates(parent: Path) -> tuple[Path, ...]:
             )
     except OSError:
         raise SQLiteDatabaseUnavailableError() from None
+
+
+def _require_provisioning_candidates(
+    parent: Path,
+    *,
+    expected: tuple[Path, ...],
+) -> None:
+    """Require the exact provisioning candidate set at one mutation boundary."""
+
+    if _provisioning_alias_candidates(parent) != expected:
+        raise SQLiteDatabaseSecurityError()
 
 
 def _is_provisioning_temporary_name(name: str) -> bool:

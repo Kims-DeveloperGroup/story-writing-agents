@@ -1421,6 +1421,89 @@ class SQLiteDatabaseTransactionTests(unittest.TestCase):
 
 
 class SQLiteDatabaseProvisioningTests(unittest.TestCase):
+    def test_provision_rejects_preexisting_temporary_residue_without_change(
+        self,
+    ) -> None:
+        template = initialized_workspace(self)
+        provision(template)
+        candidate_bytes = database_path(template).read_bytes()
+
+        for target_state in ("missing", "existing"):
+            with self.subTest(target=target_state):
+                workspace = initialized_workspace(self)
+                if target_state == "existing":
+                    provision(workspace)
+                target = database_path(workspace)
+                candidate = target.with_name(
+                    ".conversation_storage.sqlite3.stale-before-link.tmp"
+                )
+                candidate.write_bytes(candidate_bytes)
+                before = storage_snapshot(workspace)
+                coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)
+
+                for attempt in range(2):
+                    with self.subTest(target=target_state, attempt=attempt):
+                        with coordinator.borrow(timeout_seconds=2.0) as lease:
+                            with self.assertRaises(WorkspaceSecurityError) as caught:
+                                provision_sqlite_conversation_storage(
+                                    workspace,
+                                    lease=lease,
+                                )
+                        self.assertEqual(
+                            str(caught.exception),
+                            "unsafe SQLite conversation storage path",
+                        )
+                        self.assertIsNone(caught.exception.__cause__)
+                        self.assertEqual(storage_snapshot(workspace), before)
+
+    def test_provision_rejects_temporary_residue_racing_after_initial_scan(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        target = database_path(workspace)
+        candidate = target.with_name(
+            ".conversation_storage.sqlite3.raced-before-link.tmp"
+        )
+        candidate_bytes = b"preserve raced provisioning residue"
+        real_mkstemp = tempfile.mkstemp
+
+        def mkstemp_with_residue(
+            suffix: str | None = None,
+            prefix: str | None = None,
+            dir: str | os.PathLike[str] | None = None,
+            text: bool = False,
+        ) -> tuple[int, str]:
+            descriptor, temporary = real_mkstemp(
+                suffix=suffix,
+                prefix=prefix,
+                dir=dir,
+                text=text,
+            )
+            candidate.write_bytes(candidate_bytes)
+            return descriptor, temporary
+
+        coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)
+        with mock.patch.object(
+            tempfile,
+            "mkstemp",
+            side_effect=mkstemp_with_residue,
+        ):
+            with coordinator.borrow(timeout_seconds=2.0) as lease:
+                with self.assertRaises(WorkspaceSecurityError) as caught:
+                    provision_sqlite_conversation_storage(workspace, lease=lease)
+
+        self.assertEqual(
+            str(caught.exception),
+            "unsafe SQLite conversation storage path",
+        )
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertFalse(target.exists())
+        self.assertEqual(candidate.read_bytes(), candidate_bytes)
+        self.assertEqual(
+            list(target.parent.glob(".conversation_storage.sqlite3.*.tmp")),
+            [candidate],
+        )
+
     def test_every_provisioning_path_retains_exhaustive_verification(self) -> None:
         template = initialized_workspace(self)
         provision(template)
