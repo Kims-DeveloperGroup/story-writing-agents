@@ -1535,7 +1535,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `InteractivePickerInput`, `Choice`, `Picker`, `Prompt`, `ControlOutcome`, and
   `ControlOutcomeKind` bindings provide one resource-free generic picker input
   boundary without exposing opaque choice identities, terminal leaves, or a
-  new package-supported API. Unlisted `InteractivePromptInput` binds one
+  new package-supported API. Existing `Choice` values may carry one optional
+  validated plain warning suffix; capable ANSI decorates only that suffix when
+  no disabled, selected, or highlighted role supersedes it, while plain,
+  `NO_COLOR`, and fallback projections retain the exact same text. This adds no
+  facade export. Unlisted `InteractivePromptInput` binds one
   resource-free semantic cancellable-line capability for nested settings input;
   callback and stream factories respectively provide deterministic plain and
   sole-driver-backed implementations without changing the exact public
@@ -1608,7 +1612,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   design-component contract outside the general `Component` union, the closed
   `Prompt`, `Panel`, `Section`, `Field`, `Notice`, `Message`, `Record`,
   `ListView`, `SuggestionPalette`, and `Picker` component vocabulary, shared
-  `Choice`, `RenderedFrame`, internal `InputPromptView` and
+  `Choice` with its optional keyword-only validated plain `warning_suffix`,
+  `RenderedFrame`, internal `InputPromptView` and
   `RenderedInputFrame` transfer contracts outside the closed component
   vocabulary, terminal-text sanitization, and deterministic physical-cell
   measurement.
@@ -1624,7 +1629,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   validated semantic picker and its
   call-local window origin, while viewport values carry one contiguous
   at-most-seven-choice slice; stable choice identities remain internal
-  correlation keys. Composer values retain exact accepted lines
+  correlation keys. A choice owns its immutable warning-suffix semantics but
+  no styling or control precedence. Composer values retain exact accepted lines
   and derive joined content and code-point counts without mutation. Startup
   welcome values carry only one validated semantic stage and no terminal,
   presentation, provider, or authentication data. Models create no ANSI and own
@@ -1727,7 +1733,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   and an ordinal/label-only selected-outside-window summary;
   `render_picker_fallback` renders the complete numbered list and semantic input
   prompt. Both keep opaque identities internal and preserve equivalent
-  sanitized plain and fixed-ANSI meaning. `format_agent_reply_content`
+  sanitized plain and fixed-ANSI meaning. Their segment-aware physical-cell
+  wrapping preserves an optional choice warning suffix across narrow lines;
+  fixed ANSI decorates only suffix characters on otherwise available rows,
+  while disabled, selected, and highlighted roles retain precedence and every
+  rich projection strips to the exact plain, `NO_COLOR`, and fallback text.
+  `format_agent_reply_content`
   recognizes only a complete strict JSON object or array, rejects duplicate
   object keys and non-finite constants, and preserves key order and Unicode in
   a two-space-indented projection; malformed JSON, scalars, embedded prose, and
