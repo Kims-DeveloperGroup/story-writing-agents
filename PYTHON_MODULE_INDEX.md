@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 65.
+Importable production units indexed: 66.
 
-Direct internal dependency edges indexed: 244.
+Direct internal dependency edges indexed: 253.
 
 ## Current Dependency Direction
 
@@ -26,7 +26,8 @@ The current graph flows from entry points and orchestration toward provider,
 configuration, prompt, persistence, and stable contract modules:
 
 ```text
-__main__ -> cli -> interactive_controller -> interactive_controller._core
+__main__ -> cli -> conversation_storage.migration
+                 -> interactive_controller -> interactive_controller._core
                  -> interactive_terminal -> interactive_terminal._core
                  -> interactive_auth -> interactive_terminal/provider_auth
                  -> interactive_settings -> agents/config/errors/workspace
@@ -114,9 +115,13 @@ conversation_storage.composition -> conversation_search
 conversation_storage.contracts -> conversation_search/conversations/errors
 conversation_storage.filesystem_archive -> conversation_storage.archive/contracts
                                         -> conversations/errors/workspace
+conversation_storage.migration -> conversation_storage.archive/composition/contracts
+                               -> conversation_storage.filesystem_archive/sqlite
+                               -> errors/workspace
 conversation_storage.sqlite_database -> workspace
 conversation_storage.sqlite_search_index -> (standard library only)
 conversation_storage.sqlite -> conversation_literal_search/conversation_search
+                            -> conversation_storage.archive
                             -> conversations/errors/workspace
                             -> conversation_storage.sqlite_database
                             -> conversation_storage.sqlite_search_index
@@ -548,12 +553,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   while pause retains it. Lifecycle success is printed after access release as
   sorted, indented JSON containing only `access_state`, `durable_state`, and
   `session_id`. Noninteractive `run` requires `--output PART/PATH.md`; the
-  runtime publishes it create-only beneath `manuscript/PART/`.
+  runtime publishes it create-only beneath `manuscript/PART/`. The provider-
+  free storage grammar is exactly
+  `storage migrate --from BACKEND --to BACKEND [--dry-run] [--workspace PATH]`
+  and `storage verify --from BACKEND --to BACKEND [--workspace PATH]`, where
+  both backend arguments are restricted to `filesystem` or `sqlite`.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`, `config`,
-  `debug_log`, `errors`, `interactive_auth`, `interactive_controller`,
-  `interactive_settings`, `interactive_terminal`, `models`, `orchestrator`,
-  `provider_auth`, `run_inputs`, `session_lifecycle`, and `workspace`; imports
-  `smoke` lazily for the diagnostic command.
+  `conversation_storage.migration`, `debug_log`, `errors`, `interactive_auth`,
+  `interactive_controller`, `interactive_settings`, `interactive_terminal`,
+  `models`, `orchestrator`, `provider_auth`, `run_inputs`,
+  `session_lifecycle`, and `workspace`; imports both `smoke` and
+  `conversation_storage.migration` lazily in their owning command branches.
 - **State, resources, and side effects:** Reads terminal input and delegates
   caller-selected draft-file reads to `run_inputs`; writes JSON, plain-text
   interaction, or errors to standard streams; creates backends; constructs one
@@ -596,12 +606,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   startup failures after workspace discovery add the corresponding fixed
   terminal notice independently of handle availability. Existing sanitized
   error text and exit behavior are otherwise unchanged, and `debug_log`
-  retains storage ownership.
+  retains storage ownership. A valid storage command resolves its workspace
+  and dispatches through the migration owner before debug-log creation, CLI-
+  context loading, authentication, provider/backend/runtime/settings/session
+  composition, or `sqlite3` import. It writes exactly one compact sorted
+  counts-only migration report plus LF to standard output and returns that
+  report's fixed exit code; workspace-discovery failure uses the same fixed
+  content-free report schema.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
+  `tests/test_conversation_storage_migration_cli.py`,
   `tests/test_cli_context.py`, `tests/test_smoke_cli.py`, and
   `tests/test_interactive_pty.py` for primary process-level POSIX PTY
-  verification; `docs/reference/cli.md`, `docs/getting-started.md`, and
-  `docs/guides/artifact-references.md`, and `docs/guides/antigravity.md`.
+  verification; `docs/reference/cli.md`, `docs/reference/package-api.md`,
+  `docs/getting-started.md`, `docs/guides/artifact-references.md`, and
+  `docs/guides/antigravity.md`.
 
 ### `story_writing_agents.cli_context`
 
@@ -810,8 +828,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `story_writing_agents.conversation_storage.sqlite_database` modules, plus the
   direct integration surface in
   `story_writing_agents.conversation_storage.sqlite_search_index`, have their
-  own supported surfaces; none is re-exported by this package or the root
-  facade.
+  own supported surfaces. The seven-name direct integration surface in
+  `story_writing_agents.conversation_storage.migration` is likewise excluded;
+  none of these optional or workflow modules is re-exported by this package or
+  the root facade.
 - **Direct internal dependencies:** `conversation_storage.archive`,
   `conversation_storage.composition`, `conversation_storage.contracts`, and
   `conversation_storage.filesystem_archive`.
@@ -828,7 +848,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_conversation_catalog.py`,
   `tests/test_conversation_event_store.py`,
   `tests/test_conversation_search.py`,
+  `tests/test_public_api_and_cli.py`,
   `docs/reference/conversation-archives.md`,
+  `docs/reference/package-api.md`,
   `docs/operations/filesystem-safety.md`,
   `docs/reference/conversation-catalog.md`,
   `docs/reference/conversation-transcripts.md`, and
@@ -869,10 +891,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   verifies the digest, and maps recursion anywhere in the complete parse and
   canonical-revalidation path to a content-free format error without retained
   cause. All archive errors are content-free, and the module performs no I/O.
+  Its canonical bytes are the backend-neutral equality, source-fingerprint,
+  and final-parity boundary consumed by explicit filesystem/SQLite migration;
+  the archive owner itself knows no backend, checkpoint, CLI, or activation
+  lifecycle.
 - **Primary verification/documentation:**
   `tests/test_conversation_archive.py`, supported by
   `tests/conversation_archive_fixture.py`, and
-  `docs/reference/conversation-archives.md`.
+  `tests/test_conversation_storage_migration.py`;
+  `docs/reference/conversation-archives.md` and
+  `docs/reference/package-api.md`.
 
 ### `story_writing_agents.conversation_storage.composition`
 
@@ -991,7 +1019,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   established filesystem conversation layout.
 - **Supported surface:** Exactly two package-re-exported names in `__all__`:
   `FilesystemConversationArchiveAdapter` and
-  `compose_filesystem_conversation_archive`.
+  `compose_filesystem_conversation_archive`. The concrete adapter's established
+  two-positional-argument `import_archive` calls remain valid; an optional
+  keyword-only `on_conversation_completed` callback is the supported progress
+  seam for a caller that owns resumability.
 - **Direct internal dependencies:** `conversation_storage.archive`,
   `conversation_storage.contracts`, `conversations`, `errors`, and `workspace`.
 - **State, resources, and side effects:** Import performs no I/O. One adapter
@@ -1018,13 +1049,101 @@ every intermediate arrow. The current runtime graph is acyclic.
   the expected canonical wire. Import preserves unrelated excluded state,
   performs only create-only atomic metadata-first writes, accepts exact
   collisions, and verifies the complete expected bounded post-import snapshot.
+  When supplied, the completion callback runs for every payload conversation,
+  including an already-identical resumable record, only after that record has
+  been reread as an exact complete durable value and while the lease validates
+  immediately before and after the call. Callback failure propagates without
+  rollback or deletion; the adapter owns neither checkpoint state nor progress
+  policy.
   Operational failure can leave only canonical addressed directory prefixes,
   a complete exact conversation, or exact metadata awaiting its transcript,
   so retry converges without overwrite, deletion, or ordinary allocation.
 - **Primary verification/documentation:**
   `tests/test_filesystem_conversation_archive.py`,
-  `docs/reference/conversation-archives.md`, and
-  `docs/operations/filesystem-safety.md`.
+  `tests/test_conversation_storage_migration.py`,
+  `docs/reference/conversation-archives.md`,
+  `docs/operations/filesystem-safety.md`, and
+  `docs/operations/recovery-and-limitations.md`.
+
+### `story_writing_agents.conversation_storage.migration`
+
+- **Source:**
+  `src/story_writing_agents/conversation_storage/migration.py`
+- **Responsibility:** Own provider-free same-workspace canonical conversation-
+  storage migration, exact parity verification, reporting, and resumability.
+- **Supported surface:** Exactly seven direct-module names in `__all__`:
+  `CONVERSATION_STORAGE_MIGRATION_SCHEMA_VERSION`,
+  `CONVERSATION_STORAGE_MIGRATION_CHECKPOINT_DIRECTORY`,
+  `ConversationStorageMigrationOperation`,
+  `ConversationStorageMigrationOutcome`,
+  `ConversationStorageMigrationReport`, `migrate_conversation_storage`, and
+  `verify_conversation_storage`. The schema version is exactly one and the
+  checkpoint directory is exactly
+  `agent_states/orchestrator_state/conversation_storage_migrations`.
+  The frozen report provides its fixed counts-only `to_dict`, compact sorted
+  `to_json`, and process `exit_code` projections. These names are absent from
+  both the 64-name conversation-storage facade and 120-name package-root
+  facade.
+- **Direct internal dependencies:** `conversation_storage.archive`,
+  `conversation_storage.composition`, `conversation_storage.contracts`,
+  `conversation_storage.filesystem_archive`, `conversation_storage.sqlite`,
+  `errors`, and `workspace`.
+- **State, resources, and side effects:** Import defines frozen values, fixed
+  policy metadata, validators, and workflow functions only; it performs no I/O
+  and does not load `sqlite3`. Each call captures one canonical absolute
+  workspace root, constructs operation-local public adapters, and holds one
+  outer workspace mutation lease across activation/readiness validation, fresh
+  canonical exports, planning, any destination mutation and checkpoint
+  publication, and fresh final source/destination parity. The source must be
+  the active backend, filesystem and SQLite must differ, and SQLite must
+  already be provisioned and capable. Every identity is classified exactly
+  once as create, identical, conflict, unsupported, or destination-only;
+  SQLite-unrepresentable subject revisions or event sequences are unsupported
+  before mutation. Conflict and unsupported state block both workflows, while
+  destination-only state additionally blocks migration and create or
+  destination-only state is a valid verify mismatch.
+
+  Dry-run performs no destination or checkpoint write, although it may validate
+  a same-source checkpoint; verify ignores checkpoint state. Their only
+  possible creation is the coordinator's empty fixed guard. A real filesystem-
+  to-SQLite copy submits the complete canonical archive to one SQLite
+  transaction. A SQLite-to-filesystem copy retains the filesystem adapter's
+  complete global preflight and advances progress only through its post-durable-
+  conversation callback, including already-identical resumable records. Both
+  directions freshly re-export the unchanged source and exact destination
+  before success. FTS, configuration, activation, provisioning, source
+  deletion, and dual-write lifecycles are excluded.
+
+  The owner reads and performs atomic durable replacement only for the bounded
+  version-1 direction files `filesystem-to-sqlite.json` and
+  `sqlite-to-filesystem.json` below its fixed directory. A checkpoint contains
+  only its direction, canonical source fingerprint and aggregate counts,
+  progress counts, and sorted completed stable session/conversation identities;
+  it contains no subject, event, path, archive, configuration, activation, or
+  FTS bytes. No-follow single-link reads, exact schema/type/count/identity
+  checks, previous-value comparison, lease validation, atomic workspace
+  replacement, and exact reread make malformed, tampered, unsupported, or
+  impossible progress fail closed. Matching progress is revalidated against
+  current source/destination records; a changed source can replace prior state
+  only after a fresh unblocked global plan. Successful migration retains a
+  terminal completed checkpoint. Domain and operational failures become fixed
+  content-free reports whose complete stable schema always includes operation,
+  outcome, backends, dry-run/parity/checkpoint/failure state, five plan counts,
+  and source conversation/event counts; process-control exceptions and
+  `dry_run` or backend argument failures rejected before workflow entry remain
+  ordinary exceptions.
+- **Primary verification/documentation:**
+  `tests/test_conversation_storage_migration.py`, supported by
+  `tests/conversation_storage_migration_fixture.py`,
+  `tests/test_conversation_storage_migration_cli.py`,
+  `tests/test_filesystem_conversation_archive.py`, and
+  `tests/test_sqlite_conversation_storage.py`;
+  `docs/reference/package-api.md`, `docs/reference/cli.md`,
+  `docs/reference/conversation-archives.md`, `docs/design/persistence.md`,
+  `docs/reference/configuration/session-storage.md`,
+  `docs/operations/filesystem-safety.md`,
+  `docs/operations/privacy-and-provider.md`, and
+  `docs/operations/recovery-and-limitations.md`.
 
 ### `story_writing_agents.conversation_storage.sqlite_database`
 
@@ -1148,17 +1267,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   `compose_sqlite_conversation_archive`,
   `compose_sqlite_conversation_storage`,
   `preflight_sqlite_conversation_storage`, and
-  `provision_sqlite_conversation_storage`. The adapter-private archive payload
-  and record values remain deliberately unsupported and separate from the
-  canonical archive values owned by the sibling `archive` module.
+  `provision_sqlite_conversation_storage`. The archive adapter directly
+  consumes and produces the canonical `ConversationArchive` values owned by
+  the sibling `archive` module; it adds no private payload or record surface.
 - **Direct internal dependencies:** `conversation_literal_search`,
   `conversation_search`,
+  `conversation_storage.archive`,
   `conversation_storage.sqlite_database`,
   `conversation_storage.sqlite_search_index`,
   `conversation_storage.composition`, `conversation_storage.contracts`,
   `conversations`, `errors`, and `workspace`.
-- **State, resources, and side effects:** Import defines immutable constants,
-  frozen private archive values, and adapter classes only; it performs no I/O,
+- **State, resources, and side effects:** Import defines immutable constants
+  and adapter classes only; it performs no I/O,
   constructs no adapter, and does not load `sqlite3`. Each adapter retains one
   construction-pinned database owner, exact-workspace mutation coordinator,
   finite mutation timeout, and path-pinned disposable search-index owner.
@@ -1199,11 +1319,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   reporting the exact total and excluding an unmatched newest user.
 
   Privileged archive export/import validates a caller-supplied outer lease and
-  the complete database snapshot: export rejects orphan events rather than
-  omitting them, while import validates all destination rows before mutation
-  and the resulting rows afterward in the same transaction, preserving exact
-  create-or-identical semantics and rejecting divergence. Effective import also
-  participates in the required generation and post-commit companion lifecycle.
+  the complete database snapshot. Export constructs the exact canonical
+  archive, including every active/archived metadata field and ordered event
+  kind such as `runtime_error`, and rejects orphan events rather than omitting
+  them. Import canonicalizes and completely validates the payload, including
+  SQLite signed-integer representability, before the write transaction; it
+  validates every destination row before mutation and the resulting rows
+  afterward in the same transaction, preserves exact create-or-identical
+  semantics, and reports divergent identities through the canonical archive
+  conflict taxonomy. Effective import also participates in the required
+  generation and post-commit companion lifecycle. The derived FTS companion is
+  excluded from archive content, migration parity, and checkpoint identity.
   Valid existing storage remains available to observational preflight and reads
   when POSIX `fcntl` is unavailable, while provisioning and supported mutations
   fail closed through the coordinator; full activation readiness remains owned
@@ -1215,6 +1341,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   activation state.
 - **Primary verification/documentation:**
   `tests/test_sqlite_conversation_storage.py`,
+  `tests/test_conversation_storage_migration.py`,
   `tests/test_conversation_storage.py`,
   `tests/test_conversation_catalog.py`,
   `tests/conversation_event_store_contract.py`,
@@ -1223,6 +1350,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/INDEX.md`,
   `docs/design/persistence.md`,
   `docs/reference/package-api.md`,
+  `docs/reference/conversation-archives.md`,
   `docs/reference/configuration/session-storage.md`,
   `docs/reference/conversation-catalog.md`,
   `docs/reference/conversation-transcripts.md`,
@@ -3690,8 +3818,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   module owns the canonical backend-neutral logical/wire value independently
   of those generic ports, while `filesystem_archive` alone knows the fixed
   filesystem layout and depends inward on both. The package facade re-exports
-  their additive supported surfaces; no runtime, controller, config, workspace,
-  or root-facade module depends on them or changes default selection.
+  their additive supported surfaces. The CLI locally imports the separate
+  direct-only `conversation_storage.migration` workflow only for explicit
+  `storage` commands; no runtime, controller, config, workspace, or root-facade
+  module depends on it or changes default selection.
   `conversation_storage.composition` alone owns the weak workspace coordinator
   registry, contained POSIX advisory guard, activation marker I/O, and explicit
   filesystem binding. Its service bundle exposes
@@ -3704,8 +3834,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   expiring lease first. Filesystem archive transfer validates that supplied
   outer lease throughout its privileged operation. SQLite catalog/event
   mutations borrow the same coordinator before their database transaction,
-  while SQLite provisioning and its adapter-private archive operations validate
-  a caller-supplied outer lease; migration and parity remain future consumers.
+  while SQLite provisioning and its canonical archive operations validate a
+  caller-supplied outer lease. The migration owner is the explicit current
+  consumer: it captures one root, acquires one outer lease, composes both
+  canonical archive adapters, owns planning/checkpointing, and proves fresh
+  final parity without changing activation.
   Activation CAS likewise validates its supplied lease rather than acquiring
   one behind its caller. The pure `conversation_literal_search` module owns the
   shared versioned normalization/classification/snippet/order mechanics;

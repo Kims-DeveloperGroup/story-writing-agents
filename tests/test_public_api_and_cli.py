@@ -1082,6 +1082,7 @@ class CliTests(unittest.TestCase):
             "run",
             "inspect",
             "session",
+            "storage",
             "smoke",
         ):
             with self.subTest(command=command):
@@ -1178,6 +1179,9 @@ class CliTests(unittest.TestCase):
             ["session", "create", "--help"],
             ["session", "reopen", "--help"],
             ["session", "pause", "--help"],
+            ["storage", "--help"],
+            ["storage", "migrate", "--help"],
+            ["storage", "verify", "--help"],
         ):
             with self.subTest(arguments=arguments):
                 completed = subprocess.run(

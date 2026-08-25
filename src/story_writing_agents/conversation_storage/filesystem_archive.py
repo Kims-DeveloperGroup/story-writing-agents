@@ -287,9 +287,15 @@ class FilesystemConversationArchiveAdapter(
         self,
         lease: ConversationStorageMutationLease,
         payload: ConversationArchive,
+        *,
+        on_conversation_completed: Callable[[str, str], None] | None = None,
     ) -> ConversationArchiveImportReceipt:
         """Create missing exact files or accept an identical destination."""
 
+        if on_conversation_completed is not None and not callable(
+            on_conversation_completed
+        ):
+            raise TypeError("conversation completion callback must be callable")
         canonical = deserialize_conversation_archive(
             serialize_conversation_archive(payload)
         )
@@ -341,6 +347,18 @@ class FilesystemConversationArchiveAdapter(
                     )
                     or created
                 )
+            if on_conversation_completed is not None:
+                self._validate_completed_plan(
+                    operation,
+                    plan,
+                    validate_lease=validate_lease,
+                )
+                validate_lease()
+                on_conversation_completed(
+                    plan.value.session_id,
+                    plan.value.conversation_id,
+                )
+                validate_lease()
 
         validate_lease()
         try:
@@ -363,6 +381,45 @@ class FilesystemConversationArchiveAdapter(
                 else ConversationArchiveImportStatus.UNCHANGED
             )
         )
+
+    def _validate_completed_plan(
+        self,
+        operation: _ArchiveOperation,
+        plan: _InstallPlan,
+        *,
+        validate_lease: Callable[[], None],
+    ) -> None:
+        """Require one durable exact conversation before progress publication."""
+
+        validate_lease()
+        if not self._metadata_collision_is_exact(
+            operation,
+            plan.value,
+            validate_lease=validate_lease,
+        ):
+            raise ConversationArchiveDestinationChangedError()
+        if plan.value.events:
+            if not self._transcript_collision_is_exact(
+                operation,
+                plan.value,
+                validate_lease=validate_lease,
+            ):
+                raise ConversationArchiveDestinationChangedError()
+        else:
+            try:
+                transcript = operation.workspace.path(
+                    _transcript_relative(
+                        plan.value.session_id,
+                        plan.value.conversation_id,
+                    )
+                )
+                if os.path.lexists(transcript):
+                    raise ConversationArchiveDestinationChangedError()
+            except ConversationArchiveError:
+                raise
+            except Exception:
+                raise ConversationArchiveDestinationChangedError() from None
+        validate_lease()
 
     def _validate_lease(self, lease: ConversationStorageMutationLease) -> None:
         validator = getattr(lease, "validate", None)

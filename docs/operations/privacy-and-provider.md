@@ -4,7 +4,7 @@
 > retrieval-enabled turns, management commands, focused-context consensus, and
 > runtime explicit-reference authorization and backend enforcement, plus direct
 > Python conversation archive values, filesystem transfer, and optional SQLite
-> conversation/search storage.
+> conversation/search storage and provider-free conversation migration.
 > They do not make either provider, its executable, the workspace, or the
 > terminal trusted.
 > Inline canonical references in provider-bound prompt text are active.
@@ -20,10 +20,10 @@ stored or displayed failure text.
 There is no encryption, application access control, or secure erase.
 Documents, debate/context records, provider metadata, subjects, transcripts,
 scrollback, manuscripts, artifact catalogs, commit provenance, transaction
-journals, reference-operation evidence, and recovery markers have no
-application-managed retention policy and rely on OS/terminal-service
-protection. The workspace debug log is the one bounded-retention channel
-described below; it is still plaintext.
+journals, migration checkpoints, reference-operation evidence, and recovery
+markers have no application-managed retention policy and rely on
+OS/terminal-service protection. The workspace debug log is the one
+bounded-retention channel described below; it is still plaintext.
 
 Blackboards can contain input, drafts, reviews, and errors. Provider output is
 not generally scrubbed; catalog archive status neither deletes nor conceals
@@ -70,10 +70,27 @@ the main database; it may omit the companion because exact search falls back
 to the main snapshot. Search preserves and ignores an unsafe companion rather
 than reading or repairing it.
 
-Provisioning is creation, not migration or deletion; archive export/import is
-copying, not secure erase or a retention policy. The private archive payload
-contains exact metadata and events in memory, and any persistence or
-transmission performed by its caller is outside this adapter's controls.
+Provisioning is creation, not migration or deletion; archive export/import and
+the explicit storage migration workflow copy plaintext rather than securely
+erasing a source. The canonical archive payload contains exact metadata and
+events in memory, and any persistence or transmission performed by its caller
+is outside the adapters' controls.
+
+`story storage migrate` and `story storage verify` emit one content-free report
+containing backend names, fixed outcomes/failures, parity, checkpoint state, and
+aggregate classification/source counts. They never print subjects, conversation
+IDs, event text, paths, malformed values, or FTS content and never create a
+runtime debug record. This output boundary does not make the copied destination
+confidential: migration can leave the same plaintext conversations in both
+stores, never deletes the source, and does not impose a retention policy.
+
+Retained migration checkpoints contain session and conversation IDs, a SHA-256
+fingerprint of the canonical source archive, source conversation/event counts,
+and completed/total progress. They omit subjects, timestamps, statuses, events,
+runtime errors, and FTS data, but identities, counts, timing of file updates, and
+the fingerprint can still be sensitive. Protect both per-direction checkpoint
+files with the workspace; terminal completion is audit state, not secure
+erasure or authorization.
 
 ## Local management, search, and reads
 
@@ -106,7 +123,11 @@ are provider-free and add no network call, authentication, RAG, or new citation
 mechanism. Optional FTS5 hint lookup adds no network path and never becomes
 search truth. Returned Python values, application logs, process memory, and
 caller-created backups can still move or expose plaintext beyond the
-workspace. The installed runtime does not select this store automatically.
+workspace. Storage migration/verification is also provider-free and dispatches
+before authentication, broader settings/context, backend, runtime, session, or
+debug-log construction. It still performs local archive reads and, outside
+dry-run/verify, destination and checkpoint writes. The installed runtime does
+not select this store automatically.
 
 <a id="native-authentication-boundary"></a>
 

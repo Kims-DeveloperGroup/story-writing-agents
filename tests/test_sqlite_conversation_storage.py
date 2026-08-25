@@ -24,7 +24,6 @@ from story_writing_agents import (
     ConversationEvent,
     ConversationEventKind,
     ConversationEventStore,
-    ConversationExistsError,
     ConversationSearchQuery,
     ConversationSearchScope,
     ReferenceConversationSearch,
@@ -40,6 +39,8 @@ from story_writing_agents.conversation_literal_search import (
 )
 from story_writing_agents.conversations import select_bounded_conversation_context
 from story_writing_agents.conversation_storage import (
+    ConversationArchiveConflictError,
+    ConversationArchiveFormatError,
     ConversationArchiveImportStatus,
     ConversationStorageBackend,
     ConversationStorageCapability,
@@ -89,6 +90,16 @@ from tests.sqlite_conversation_storage_fixture import (
     storage_snapshot,
 )
 from tests.test_conversation_catalog import _ConversationCatalogContractMixin
+
+
+def _archive_conversations(archive):  # type: ignore[no-untyped-def]
+    """Flatten one canonical archive in its established order."""
+
+    return tuple(
+        conversation
+        for session in archive.sessions
+        for conversation in session.conversations
+    )
 
 
 class SQLiteConversationCatalogContractTests(
@@ -1602,6 +1613,7 @@ assert all(name not in package.__all__ for name in literal_owner.__all__)
         self.assertEqual(
             dependencies,
             {
+                "archive",
                 "conversation_search",
                 "conversation_literal_search",
                 "conversations",
@@ -2062,9 +2074,10 @@ class SQLiteArchiveTests(unittest.TestCase):
             first = archive.export_archive(lease)
             second = archive.export_archive(lease)
         self.assertEqual(first, second)
+        conversations = _archive_conversations(first)
         identities = tuple(
-            (record.metadata.session_id, record.metadata.conversation_id)
-            for record in first.records
+            (conversation.session_id, conversation.conversation_id)
+            for conversation in conversations
         )
         self.assertEqual(
             identities,
@@ -2082,7 +2095,9 @@ class SQLiteArchiveTests(unittest.TestCase):
             ),
         )
         event_contents = tuple(
-            event.content for record in first.records for event in record.events
+            event.content
+            for conversation in conversations
+            for event in conversation.events
         )
         self.assertIn("exact \x00 한🙂 content", event_contents)
 
@@ -2116,8 +2131,9 @@ class SQLiteArchiveTests(unittest.TestCase):
         source_coordinator = WorkspaceConversationStorageMutationCoordinator(source)
         with source_coordinator.borrow(timeout_seconds=2.0) as lease:
             payload = source_archive.export_archive(lease)
-        self.assertEqual(len(payload.records), 1)
-        payload_metadata = payload.records[0].metadata
+        conversations = _archive_conversations(payload)
+        self.assertEqual(len(conversations), 1)
+        payload_metadata = conversations[0]
         self.assertEqual(
             (payload_metadata.session_id, payload_metadata.conversation_id),
             (metadata.session_id, metadata.conversation_id),
@@ -2179,7 +2195,7 @@ class SQLiteArchiveTests(unittest.TestCase):
             with self.assertRaises(WorkspaceFormatError) as caught:
                 overflow_archive.import_archive(lease, payload)
 
-        insert_metadata.assert_called_once()
+        insert_metadata.assert_not_called()
         self.assertEqual(
             str(caught.exception),
             "invalid SQLite conversation storage",
@@ -2211,7 +2227,7 @@ class SQLiteArchiveTests(unittest.TestCase):
             (),
         )
 
-    def test_archive_import_rejects_integer_subtypes_at_every_sink_field(
+    def test_archive_canonicalizes_integer_subtypes_before_sqlite_sinks(
         self,
     ) -> None:
         class IntegerSubtype(int):
@@ -2250,18 +2266,19 @@ class SQLiteArchiveTests(unittest.TestCase):
         source_coordinator = WorkspaceConversationStorageMutationCoordinator(source)
         with source_coordinator.borrow(timeout_seconds=2.0) as lease:
             payload = source_archive.export_archive(lease)
-        self.assertEqual(len(payload.records), 1)
-        self.assertEqual(payload.records[0].events, (event,))
-        payload_metadata = payload.records[0].metadata
-        payload_event = payload.records[0].events[0]
+        conversations = _archive_conversations(payload)
+        self.assertEqual(len(conversations), 1)
+        payload_metadata = conversations[0]
+        self.assertEqual(len(payload_metadata.events), 1)
+        payload_event = payload_metadata.events[0]
         cases = (
-            ("metadata schema version", payload_metadata, "schema_version", False),
+            ("metadata schema version", payload_metadata, "schema_version", True),
             ("subject revision", payload_metadata, "subject_revision", False),
             ("event schema version", payload_event, "schema_version", True),
-            ("event sequence", payload_event, "sequence", True),
+            ("event sequence", payload_event, "sequence", False),
         )
 
-        for label, owner, field, reaches_event_sink in cases:
+        for label, owner, field, rejected in cases:
             with self.subTest(field=label):
                 original = getattr(owner, field)
                 object.__setattr__(owner, field, IntegerSubtype(1))
@@ -2288,35 +2305,41 @@ class SQLiteArchiveTests(unittest.TestCase):
                         ) as insert_event,
                         coordinator.borrow(timeout_seconds=2.0) as lease,
                     ):
-                        with self.assertRaises(WorkspaceFormatError) as caught:
-                            archive.import_archive(lease, payload)
+                        if rejected:
+                            with self.assertRaises(
+                                ConversationArchiveFormatError
+                            ) as caught:
+                                archive.import_archive(lease, payload)
+                        else:
+                            receipt = archive.import_archive(lease, payload)
+                            exact = archive.export_archive(lease)
 
-                    insert_metadata.assert_called_once()
-                    self.assertEqual(
-                        insert_event.call_count,
-                        1 if reaches_event_sink else 0,
-                    )
-                    self.assertEqual(
-                        str(caught.exception),
-                        "invalid SQLite conversation storage",
-                    )
-                    self.assertIsNone(caught.exception.__cause__)
-                    self.assertNotIn(
-                        "integersubtype",
-                        str(caught.exception).casefold(),
-                    )
-                    self.assertNotIn(metadata.subject, str(caught.exception))
-                    self.assertNotIn(event.content, str(caught.exception))
-                    self.assertEqual(storage_snapshot(target), before)
-                    self.assertEqual(logical_rows(target), logical_before)
-                    target_services = compose_sqlite_conversation_storage(target)
-                    self.assertEqual(
-                        target_services.catalog.list(
-                            metadata.session_id,
-                            include_archived=True,
-                        ),
-                        (),
-                    )
+                    if rejected:
+                        insert_metadata.assert_not_called()
+                        insert_event.assert_not_called()
+                        self.assertEqual(
+                            str(caught.exception),
+                            "conversation archive format is invalid",
+                        )
+                        self.assertIsNone(caught.exception.__cause__)
+                        self.assertNotIn(
+                            "integersubtype",
+                            str(caught.exception).casefold(),
+                        )
+                        self.assertNotIn(metadata.subject, str(caught.exception))
+                        self.assertNotIn(event.content, str(caught.exception))
+                        self.assertEqual(storage_snapshot(target), before)
+                        self.assertEqual(logical_rows(target), logical_before)
+                    else:
+                        self.assertIs(
+                            receipt.status,
+                            ConversationArchiveImportStatus.IMPORTED,
+                        )
+                        insert_metadata.assert_called_once()
+                        insert_event.assert_called_once()
+                        exact_conversation = _archive_conversations(exact)[0]
+                        self.assertIs(type(exact_conversation.subject_revision), int)
+                        self.assertIs(type(exact_conversation.events[0].sequence), int)
                 finally:
                     object.__setattr__(owner, field, original)
 
@@ -2360,11 +2383,12 @@ class SQLiteArchiveTests(unittest.TestCase):
         coordinator = WorkspaceConversationStorageMutationCoordinator(source)
         with coordinator.borrow(timeout_seconds=2.0) as lease:
             payload = source_archive.export_archive(lease)
-        self.assertGreaterEqual(len(payload.records), 2)
+        conversations = _archive_conversations(payload)
+        self.assertGreaterEqual(len(conversations), 2)
 
         target = initialized_workspace(self)
         provision(target)
-        conflict = payload.records[-1].metadata
+        conflict = conversations[-1]
         with raw_connection(target) as connection:
             connection.execute(
                 "INSERT INTO conversations "
@@ -2387,7 +2411,7 @@ class SQLiteArchiveTests(unittest.TestCase):
         target_archive = compose_sqlite_conversation_archive(target)
         target_coordinator = WorkspaceConversationStorageMutationCoordinator(target)
         with target_coordinator.borrow(timeout_seconds=2.0) as lease:
-            with self.assertRaises(ConversationExistsError):
+            with self.assertRaises(ConversationArchiveConflictError):
                 target_archive.import_archive(lease, payload)
         self.assertEqual(storage_snapshot(target), before)
         target_services = compose_sqlite_conversation_storage(target)
@@ -2427,11 +2451,11 @@ class SQLiteArchiveTests(unittest.TestCase):
             payload = source_archive.export_archive(lease)
         same_identity = next(
             (
-                record.metadata.session_id,
-                record.metadata.conversation_id,
+                conversation.session_id,
+                conversation.conversation_id,
             )
-            for record in payload.records
-            if record.events
+            for conversation in _archive_conversations(payload)
+            if conversation.events
         )
 
         for label, identity in (
@@ -2550,8 +2574,15 @@ class SQLiteArchiveTests(unittest.TestCase):
             services.event_store.read("extra_session", extra_metadata.conversation_id),
             (extra_event,),
         )
-        self.assertTrue(all(record in combined.records for record in payload.records))
-        self.assertEqual(len(combined.records), len(payload.records) + 1)
+        payload_conversations = _archive_conversations(payload)
+        combined_conversations = _archive_conversations(combined)
+        self.assertTrue(
+            all(
+                conversation in combined_conversations
+                for conversation in payload_conversations
+            )
+        )
+        self.assertEqual(len(combined_conversations), len(payload_conversations) + 1)
 
         before = storage_snapshot(target)
         with coordinator.borrow(timeout_seconds=2.0) as lease:
@@ -2576,10 +2607,10 @@ class SQLiteArchiveTests(unittest.TestCase):
             payload = archive.export_archive(released)
         with self.assertRaises(ConversationStorageCoordinationError):
             archive.export_archive(released)
-        object.__setattr__(payload, "records", list(payload.records))
+        object.__setattr__(payload, "sessions", list(payload.sessions))
         before = storage_snapshot(workspace)
         with coordinator.borrow(timeout_seconds=2.0) as lease:
-            with self.assertRaises(TypeError):
+            with self.assertRaises(ConversationArchiveFormatError):
                 archive.import_archive(lease, payload)
         self.assertEqual(storage_snapshot(workspace), before)
 

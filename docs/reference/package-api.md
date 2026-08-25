@@ -4,8 +4,9 @@
 > implemented `story_writing_agents` package facade. Separate sections document
 > archive additions to the supported `story_writing_agents.conversation_storage`
 > subpackage, pure literal-search mechanics, and the optional SQLite owning
-> modules; none is a package-root facade export. Context and progress types are
-> Python APIs; an export does not imply a CLI command.
+> modules plus direct-only conversation migration; none is a package-root
+> facade export. Context and progress types are Python APIs; an export does not
+> imply a CLI command.
 
 Key terms: **package facade**—the names re-exported at the package root;
 **public import**—a supported symbol imported from its documented owning
@@ -169,7 +170,9 @@ from story_writing_agents.conversation_storage import (
 )
 ```
 
-These imports add no CLI command and perform no scan or mutation. Exact
+These imports add no raw archive CLI command and perform no scan or mutation.
+The separate storage migration CLI composes archive adapters rather than
+serializing caller-owned archive bytes. Exact
 constants, value fields, callable signatures, error hierarchy, bounds, wire
 format, lease usage, and filesystem behavior are in
 [Canonical conversation archives](conversation-archives.md#public-archive-api).
@@ -236,6 +239,91 @@ automatic selection or make activation transactional with other operations.
 
 See [Filesystem safety](../operations/filesystem-safety.md#composed-conversation-storage-provenance)
 for the operational boundary.
+
+<a id="conversation-storage-migration-api"></a>
+
+## Conversation storage migration
+
+Provider-free migration and exact parity verification are supported from one
+direct-only module. Its seven names are absent from both the 120-name package
+root and 64-name conversation-storage facade:
+
+```python
+from story_writing_agents.conversation_storage.migration import (
+    CONVERSATION_STORAGE_MIGRATION_SCHEMA_VERSION,
+    CONVERSATION_STORAGE_MIGRATION_CHECKPOINT_DIRECTORY,
+    ConversationStorageMigrationOperation,
+    ConversationStorageMigrationOutcome,
+    ConversationStorageMigrationReport,
+    migrate_conversation_storage,
+    verify_conversation_storage,
+)
+```
+
+The schema version is exactly `1`; the checkpoint directory is exactly
+`"agent_states/orchestrator_state/conversation_storage_migrations"`.
+Importing this module performs no I/O and does not load `sqlite3`. Its public
+workflow signatures are:
+
+```python
+migrate_conversation_storage(
+    workspace: Workspace,
+    *,
+    source_backend: ConversationStorageBackend | str,
+    destination_backend: ConversationStorageBackend | str,
+    dry_run: bool = False,
+) -> ConversationStorageMigrationReport
+verify_conversation_storage(
+    workspace: Workspace,
+    *,
+    source_backend: ConversationStorageBackend | str,
+    destination_backend: ConversationStorageBackend | str,
+) -> ConversationStorageMigrationReport
+```
+
+Backend strings are exactly `filesystem` and `sqlite`. Source and destination
+must differ, the source must equal the current activation state, and SQLite
+must already be provisioned/ready. One outer workspace mutation lease covers
+fresh source/destination archive exports, deterministic planning, transfer,
+checkpointing, and fresh final exact parity. The operations preserve all
+canonical metadata and events, including archived records and runtime errors;
+they exclude FTS and every non-conversation workspace channel. They never
+install/provision SQLite, change configuration or activation, delete a source,
+or establish dual write.
+
+`ConversationStorageMigrationOperation` values are `migrate` and `verify`;
+`ConversationStorageMigrationOutcome` values are `completed`, `work_required`,
+and `failed`. The frozen report fields are:
+
+```text
+operation, outcome, source_backend, destination_backend, dry_run, parity,
+create, identical, conflict, unsupported, destination_only,
+source_conversations, source_events, checkpoint, failure
+```
+
+`to_dict()` returns the fixed nested schema-v1 object, `to_json()` returns its
+compact key-sorted representation without a trailing LF, and `exit_code`
+returns `0`, `1`, or `2` under the CLI contract. `checkpoint` is `none`,
+`resumed`, `advanced`, or `completed`; `failure` is `None` on nonfailed
+reports. The workflow catches content/storage/coordination failures into a
+content-free report; invalid Python argument types or backend values rejected
+before workflow entry, and process-control exceptions, retain their ordinary
+exception behavior.
+
+Migration plans every identity as create, identical, conflict, unsupported, or
+destination-only. Conflict and unsupported data block all operations;
+destination-only blocks migration, while otherwise valid create or
+destination-only state makes verify return mismatch. Filesystem-to-SQLite
+transfer is one complete transaction. SQLite-to-filesystem uses a complete
+global preflight, create-only complete-conversation publication, and a
+per-conversation checkpoint callback. Final source and destination exports must
+equal the initial source bytes.
+
+Use the public CLI for the installed workflow and the direct functions when an
+application already owns a `Workspace`; neither route activates the destination.
+See the [exact command/report contract](cli.md#conversation-storage-migration),
+[archive semantics](conversation-archives.md#conversation-storage-migration),
+and [checkpoint recovery](../operations/recovery-and-limitations.md#conversation-storage-migration-recovery).
 
 <a id="optional-sqlite-conversation-storage"></a>
 
@@ -322,6 +410,13 @@ SQLiteConversationArchiveAdapter(
     mutation_coordinator: ConversationStorageMutationCoordinator | None = None,
     mutation_timeout_seconds: float = 5.0,
 )
+SQLiteConversationArchiveAdapter.export_archive(
+    lease: ConversationStorageMutationLease,
+) -> ConversationArchive
+SQLiteConversationArchiveAdapter.import_archive(
+    lease: ConversationStorageMutationLease,
+    payload: ConversationArchive,
+) -> ConversationArchiveImportReceipt
 preflight_sqlite_conversation_storage(
     workspace: Workspace | str | os.PathLike[str],
     /,
@@ -499,14 +594,15 @@ publication checks; it is not a delete, main-database migration, readiness, or
 search-authority API. Ordinary application search should use
 `SQLiteConversationSearch` or SQLite composition rather than managing hints.
 
-`SQLiteConversationArchiveAdapter` is a privileged integration boundary. Its
-payload and record types are private, adapter-owned implementation details, so
-it is not a supported serialization format or migration API. There is no
-public archive-payload constructor to document or persist independently.
-Export validates every metadata and event row globally and rejects orphan
-events. Import validates the complete destination before mutation and again
-after mutation in the same transaction; orphan or malformed rows and divergent
-existing identities fail without a partial import.
+`SQLiteConversationArchiveAdapter` is a privileged integration boundary over
+the public canonical `ConversationArchive` value; it does not define a second
+payload or wire format. Export validates every metadata and event row globally
+and rejects orphan events. Import round-trips the canonical value, validates the
+complete destination before mutation and again after mutation in the same
+transaction, and preserves exact statuses and every event kind. Orphan or
+malformed rows and divergent existing identities fail without a partial import.
+The migration coordinator composes this adapter with the filesystem archive
+adapter rather than exposing database internals.
 
 The amended exact schema remains version `1`; it is the first published
 contract for this adapter. A database created by older unpublished pre-Issue-257
@@ -527,9 +623,11 @@ None of these names is re-exported by `story_writing_agents` or
 `story_writing_agents.conversation_storage`. The installed shell and runtime
 continue to use filesystem conversation storage. This module adds no
 `/settings` selection, automatic install or provisioning, default activation,
-migration, RAG, MySQL, or new citation behavior. The private local FTS5
-companion supplies non-authoritative hints only and is not a backend, readiness
-requirement, or FTS-only search mode. Issue #261 owns later integration of
+RAG, MySQL, or new citation behavior. Explicit migration is owned by the
+separate direct migration module/CLI and operates only after SQLite is ready; it
+does not select the destination. The private local FTS5 companion supplies
+non-authoritative hints only and is not a backend, readiness requirement,
+migration input, or FTS-only search mode. Issue #261 owns later integration of
 detection, installation, and provider selection into the user-facing
 settings/runtime flow; direct preflight here only reports capability.
 
@@ -568,7 +666,7 @@ aliases. See [Backend and sessions](backend-and-sessions.md#lifecycle-value-cont
 - [Canonical writing artifacts](writing-artifacts.md)
 - [Conversation catalog](conversation-catalog.md)
 - [Conversation transcripts](conversation-transcripts.md)
-- [Canonical conversation archives](conversation-archives.md)
+- [Canonical conversation archives and storage migration](conversation-archives.md)
 - [Conversation search and cited transcript pages](conversation-search.md)
 - [Bounded conversation retrieval](conversation-retrieval.md)
 - [Interactive command parser](interactive-command-parser.md)
@@ -577,11 +675,12 @@ aliases. See [Backend and sessions](backend-and-sessions.md#lifecycle-value-cont
 Lower-level modules may contain implementation helpers. The package-root facade
 matches its `__all__`; archive names are supported only through the explicitly
 documented conversation-storage subpackage and its owning-module surfaces.
-The explicitly documented literal-search, SQLite adapter, and SQLite companion
-owner modules are also supported direct-module surfaces and match their own
-`__all__` values. None is re-exported by the package-root or
-conversation-storage facade.
+The explicitly documented literal-search, SQLite adapter, SQLite companion
+owner, and conversation-migration modules are also supported direct-module
+surfaces and match their own `__all__` values. None is re-exported by the
+package-root or conversation-storage facade.
 
 The exact current inventories are package root `120`, conversation storage
 `64`, conversation search `13`, SQLite database owner `11`, SQLite adapter
-`13`, literal-search mechanics `6`, and SQLite companion owner `5`.
+`13`, literal-search mechanics `6`, SQLite companion owner `5`, and conversation
+migration `7`. The production module inventory is `66`.

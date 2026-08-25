@@ -18,6 +18,7 @@ Key terms: **default**—a persisted command or conversation fallback;
 workspace/
 ├── config/
 │   ├── {system_defaults.json,agent_configs.json,agents/,persona_templates/}
+│   ├── conversation_storage_state.json                        [lazy explicit active-backend state]
 │   └── .conversation_storage.lock                             [lazy conversation-storage mutation guard]
 ├── core_documents/{global_outline.md,part_outlines.md,character_sheets.md,narrative_rules.md} [lazy agent publications]
 ├── agent_states/
@@ -25,6 +26,9 @@ workspace/
 │   │   ├── sessions/<session_id>.json                          [lazy overrides]
 │   │   ├── cli_context.json                                   [lazy default session]
 │   │   ├── conversation_defaults/<session_id>.json             [lazy default conversation]
+│   │   ├── conversation_storage_migrations/
+│   │   │   ├── filesystem-to-sqlite.json                       [lazy retained migration checkpoint]
+│   │   │   └── sqlite-to-filesystem.json                       [lazy retained migration checkpoint]
 │   │   ├── provider_sessions/.access-claims.lock               [lazy guard]
 │   │   ├── provider_sessions/.antigravity/                      [lazy retained provider state]
 │   │   ├── provider_sessions/<session_id>.json                 [lazy manifest]
@@ -84,15 +88,17 @@ the optional direct Python adapter. `story init`, the installed shell,
 `StoryRuntime`, and `/settings` neither create nor select it. Importing the
 adapter also creates nothing and does not load `sqlite3`; the standard-library
 module is loaded and checked only when preflight, provisioning, composition, or
-an adapter operation requests it.
+an adapter or storage-migration operation requests it.
 
 Provisioning is an explicit create-only operation under an active
 workspace-matched conversation-storage lease. Supported mutations use the
 lazy `config/.conversation_storage.lock` coordinator guard; the guard is not a
 database, selection record, or settings file. The filesystem conversation
 paths remain the shell/runtime storage and can coexist with the SQLite file.
-There is no synchronization, import, migration, or authority relationship
-between those two stores.
+There is no automatic synchronization or shared authority between those two
+stores. Explicit `story storage migrate` can copy one active canonical store
+into the other already-ready store, and `story storage verify` can compare
+them; neither command changes activation.
 
 The main database is authoritative. It includes required normalized subject
 and transcript-search values plus a lexical generation. The fixed private
@@ -118,10 +124,77 @@ force search behavior; the adapter preserves and ignores it.
 Issue #261 owns integrating detection, installation, and provider selection
 into the user-facing settings/runtime flow; the direct preflight here only
 reports capability. This release has no automatic installation or
-provisioning, default backend change, `/settings` storage field, migration,
-MySQL adapter, RAG integration, or FTS-dependent result behavior. See the
+provisioning, default backend change, `/settings` storage field, MySQL adapter,
+RAG integration, or FTS-dependent result behavior. Explicit migration is a
+separate provider-free command/direct API over two already-ready stores; it
+never provisions or activates one. See the
 [direct package API](../package-api.md#optional-sqlite-conversation-storage)
 and [recovery guidance](../../operations/recovery-and-limitations.md#sqlite-conversation-storage-recovery).
+
+<a id="conversation-migration-checkpoints"></a>
+
+### Conversation migration checkpoints
+
+Migration owns one retained checkpoint per direction:
+
+```text
+agent_states/orchestrator_state/conversation_storage_migrations/
+├── filesystem-to-sqlite.json
+└── sqlite-to-filesystem.json
+```
+
+Each is strict UTF-8 schema-v1 JSON with exactly these fields and nested shapes:
+
+```json
+{
+  "schema_version": 1,
+  "direction": "filesystem-to-sqlite",
+  "source_fingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "source": {
+    "conversations": 1,
+    "events": 4
+  },
+  "progress": {
+    "completed_conversations": 1,
+    "total_conversations": 1
+  },
+  "completed": [
+    {
+      "session_id": "novel",
+      "conversation_id": "c_0123456789abcdef0123456789abcdef"
+    }
+  ]
+}
+```
+
+The fingerprint is lowercase hexadecimal SHA-256 over the complete canonical
+source archive bytes. Counts are bounded by the canonical archive limits;
+`completed` is a unique, sorted list of safe `(session_id, conversation_id)`
+identities, its length equals `completed_conversations`, and total progress
+equals the source conversation count.
+
+Checkpoint files intentionally omit subjects, statuses, timestamps, event
+content/kinds, errors, and FTS state. They remain plaintext identity and progress
+metadata, so protect them with the workspace. The reader requires a bounded,
+regular, singly linked stable file; duplicate/extra/missing fields, malformed or
+noncanonical values, another direction, an unsupported version, symlinks, hard
+links, replacements, and oversized state fail closed.
+
+For SQLite-to-filesystem migration, a checkpoint advances only after one
+complete exact conversation is present and has been reread. On resume, fresh
+source/destination exports must prove every recorded identity still matches.
+Filesystem-to-SQLite uses one complete transaction and publishes its terminal
+checkpoint only after final parity. A successful migration retains the complete
+terminal checkpoint; a later safe migration with a changed source fingerprint
+replaces it only after an otherwise unblocked plan. Do not edit or delete it to
+force recovery.
+
+Dry-run reads and validates the applicable checkpoint when planning reaches
+that phase but never writes it. Verify neither reads nor writes a checkpoint.
+Both may create the empty `config/.conversation_storage.lock` while acquiring
+their outer coordinator lease. Migration never changes
+`config/conversation_storage_state.json`, other settings, or backend activation.
+See [migration recovery](../../operations/recovery-and-limitations.md#conversation-storage-migration-recovery).
 
 `input_snapshots/` is lazy, internal authorization evidence for nonempty
 explicit-reference operations. Its operation and invocation manifests and
