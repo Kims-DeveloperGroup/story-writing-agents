@@ -335,6 +335,17 @@ def _settings_effort_description(
     return effort.description
 
 
+def _settings_entered_notice(field: str, display_value: str) -> Notice:
+    """Project one successful value result into the reopened editor."""
+
+    return Notice(
+        f"Pending {field} entered: {display_value}.",
+        label="entered",
+        role=SemanticRole.SUCCESS,
+        state=ViewState.COMPLETED,
+    )
+
+
 def _remember_first_process_control(
     retained: _ExceptionState | None,
     failure: BaseException,
@@ -2081,7 +2092,7 @@ class InteractiveController:
             Choice("language", "Language"),
             Choice("persona", "Persona"),
             Choice("max_debate_rounds", "Maximum debate rounds"),
-            Choice("providers", "Providers"),
+            Choice("providers", "Agents"),
             Choice("save", "Save"),
             Choice("cancel", "Cancel"),
         )
@@ -2313,20 +2324,34 @@ class InteractiveController:
     ) -> tuple[SettingsState, bool]:
         """Select one of the fixed workspace language choices."""
 
-        pending = state.pending.system_defaults.language
-        outcome = self._picker_input.read_picker(
-            Prompt("Language", instruction="Choose the workspace language."),
-            tuple(Choice(language, language) for language in SETTINGS_LANGUAGES),
-            highlighted_id=pending,
-            selected_id=pending,
-            transient=True,
-        )
-        value, whole_cancel = self._nested_settings_value(outcome)
-        if whole_cancel:
-            return state, True
-        if value is None:
-            return state, False
-        return update_language(state, value), False
+        notice: Notice | None = None
+        while True:
+            pending = state.pending.system_defaults.language
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Language",
+                    instruction=(
+                        "Choose the workspace language. Enter applies the value "
+                        "and keeps this editor open; press Esc to return to "
+                        "Settings."
+                    ),
+                ),
+                tuple(
+                    Choice(language, language)
+                    for language in SETTINGS_LANGUAGES
+                ),
+                highlighted_id=pending,
+                selected_id=pending,
+                notice=notice,
+                transient=True,
+            )
+            value, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel:
+                return state, True
+            if value is None:
+                return state, False
+            state = update_language(state, value)
+            notice = _settings_entered_notice("Language", value)
 
     def _edit_settings_persona(
         self,
@@ -2334,7 +2359,6 @@ class InteractiveController:
     ) -> tuple[SettingsState, bool]:
         """Select one persona from the immutable opening catalog."""
 
-        pending = state.pending.system_defaults.persona
         choices = tuple(
             Choice(
                 entry.name,
@@ -2343,19 +2367,30 @@ class InteractiveController:
             )
             for entry in state.baseline.persona_catalog
         )
-        outcome = self._picker_input.read_picker(
-            Prompt("Persona", instruction="Choose a persona template."),
-            choices,
-            highlighted_id=pending,
-            selected_id=pending,
-            transient=True,
-        )
-        value, whole_cancel = self._nested_settings_value(outcome)
-        if whole_cancel:
-            return state, True
-        if value is None:
-            return state, False
-        return update_persona(state, value), False
+        notice: Notice | None = None
+        while True:
+            pending = state.pending.system_defaults.persona
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Persona",
+                    instruction=(
+                        "Choose a persona template. Enter applies the value and "
+                        "keeps this editor open; press Esc to return to Settings."
+                    ),
+                ),
+                choices,
+                highlighted_id=pending,
+                selected_id=pending,
+                notice=notice,
+                transient=True,
+            )
+            value, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel:
+                return state, True
+            if value is None:
+                return state, False
+            state = update_persona(state, value)
+            notice = _settings_entered_notice("Persona", value)
 
     def _edit_settings_rounds(
         self,
@@ -2363,16 +2398,22 @@ class InteractiveController:
     ) -> tuple[SettingsState, bool]:
         """Read and validate one pending nonnegative debate limit."""
 
+        notice: Notice | None = None
         while True:
             outcome = self._prompt_input.read_prompt(
                 Prompt(
                     "Maximum debate rounds",
                     scope="settings",
-                    instruction="Enter a nonnegative integer; 0 is audit-only.",
+                    instruction=(
+                        "Enter a nonnegative integer; 0 is audit-only. Enter "
+                        "applies the value and keeps this editor open; press Esc "
+                        "to return to Settings."
+                    ),
                     default=str(
                         state.pending.system_defaults.max_debate_rounds
                     ),
                 ),
+                context=(notice,) if notice is not None else (),
                 transient=True,
             )
             value, whole_cancel = self._nested_settings_value(outcome)
@@ -2381,6 +2422,7 @@ class InteractiveController:
             if value is None:
                 return state, False
             if not value or any(character not in "0123456789" for character in value):
+                notice = None
                 self._write_settings_validation(
                     "Maximum debate rounds must be a nonnegative ASCII integer."
                 )
@@ -2388,11 +2430,16 @@ class InteractiveController:
             try:
                 rounds = int(value)
             except ValueError:
+                notice = None
                 self._write_settings_validation(
                     "Maximum debate rounds is too large."
                 )
                 continue
-            return update_max_debate_rounds(state, rounds), False
+            state = update_max_debate_rounds(state, rounds)
+            notice = _settings_entered_notice(
+                "Maximum debate rounds",
+                str(rounds),
+            )
 
     def _edit_settings_provider(
         self,
@@ -2401,11 +2448,15 @@ class InteractiveController:
         """Select one agent, then one provider/model/reasoning setting."""
 
         agent_highlight = ROSTER[0]
+        field_highlights = {agent_id: "provider" for agent_id in ROSTER}
         while True:
             agent_outcome = self._picker_input.read_picker(
                 Prompt(
-                    "Providers",
-                    instruction="Choose an agent provider route to edit.",
+                    "Agents",
+                    instruction=(
+                        "Select an agent to configure; press Esc to return to "
+                        "Settings."
+                    ),
                 ),
                 tuple(
                     Choice(agent_id, AGENT_SPECS[agent_id].display_name)
@@ -2420,47 +2471,47 @@ class InteractiveController:
             if agent_id is None:
                 return state, False
             agent_highlight = agent_id
-            provider = _effective_settings_provider(state, agent_id)
-            provider_name = (
-                "Antigravity" if provider == "antigravity" else "Codex"
-            )
-            field_outcome = self._picker_input.read_picker(
-                Prompt(
-                    "Agent settings",
-                    scope=AGENT_SPECS[agent_id].display_name,
-                    instruction="Choose a provider, model, or effort setting.",
-                ),
-                (
-                    Choice("provider", "Provider"),
-                    Choice("model", "Model"),
-                    Choice("reasoning", "Effort"),
-                ),
-                highlighted_id="provider",
-                transient=True,
-            )
-            field, whole_cancel = self._nested_settings_value(field_outcome)
-            if whole_cancel:
-                return state, True
-            if field is None:
-                return state, False
-            if field == "provider":
-                state, whole_cancel = self._edit_settings_agent_provider(
-                    state,
-                    agent_id,
+            while True:
+                field_outcome = self._picker_input.read_picker(
+                    Prompt(
+                        "Agent settings",
+                        scope=AGENT_SPECS[agent_id].display_name,
+                        instruction=(
+                            "Choose a provider, model, or effort setting; press "
+                            "Esc to return to Agents."
+                        ),
+                    ),
+                    (
+                        Choice("provider", "Provider"),
+                        Choice("model", "Model"),
+                        Choice("reasoning", "Effort"),
+                    ),
+                    highlighted_id=field_highlights[agent_id],
+                    transient=True,
                 )
-            elif field == "model":
-                state, whole_cancel = self._edit_settings_agent_model(
-                    state,
-                    agent_id,
-                )
-            else:
-                state, whole_cancel = self._edit_settings_agent_reasoning(
-                    state,
-                    agent_id,
-                )
-            if whole_cancel:
-                return state, True
-            return state, False
+                field, whole_cancel = self._nested_settings_value(field_outcome)
+                if whole_cancel:
+                    return state, True
+                if field is None:
+                    break
+                field_highlights[agent_id] = field
+                if field == "provider":
+                    state, whole_cancel = self._edit_settings_agent_provider(
+                        state,
+                        agent_id,
+                    )
+                elif field == "model":
+                    state, whole_cancel = self._edit_settings_agent_model(
+                        state,
+                        agent_id,
+                    )
+                else:
+                    state, whole_cancel = self._edit_settings_agent_reasoning(
+                        state,
+                        agent_id,
+                    )
+                if whole_cancel:
+                    return state, True
 
     def _edit_settings_agent_provider(
         self,
@@ -2475,41 +2526,52 @@ class InteractiveController:
                 agent_id,
             )
 
-        current = _effective_settings_provider(state, agent_id)
-        outcome = self._picker_input.read_picker(
-            Prompt(
+        notice: Notice | None = None
+        while True:
+            current = _effective_settings_provider(state, agent_id)
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Provider",
+                    scope=AGENT_SPECS[agent_id].display_name,
+                    instruction=(
+                        "Choose Codex or Antigravity. Enter applies the value "
+                        "and keeps this editor open; press Esc to return to "
+                        "Agent settings."
+                    ),
+                ),
+                (
+                    Choice(
+                        "codex",
+                        "Codex",
+                        description=(
+                            "Current saved provider."
+                            if current == "codex"
+                            else "Available provider."
+                        ),
+                    ),
+                    Choice(
+                        "antigravity",
+                        "Antigravity",
+                        description=(
+                            "Current saved provider."
+                            if current == "antigravity"
+                            else "Available provider."
+                        ),
+                    ),
+                ),
+                highlighted_id=current,
+                selected_id=current,
+                notice=notice,
+                transient=True,
+            )
+            provider, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel or provider is None:
+                return state, whole_cancel
+            state = update_agent_backend(state, agent_id, provider)
+            notice = _settings_entered_notice(
                 "Provider",
-                scope=AGENT_SPECS[agent_id].display_name,
-                instruction="Choose Codex or Antigravity.",
-            ),
-            (
-                Choice(
-                    "codex",
-                    "Codex",
-                    description=(
-                        "Current saved provider."
-                        if current == "codex"
-                        else "Available provider."
-                    ),
-                ),
-                Choice(
-                    "antigravity",
-                    "Antigravity",
-                    description=(
-                        "Current saved provider."
-                        if current == "antigravity"
-                        else "Available provider."
-                    ),
-                ),
-            ),
-            highlighted_id=current,
-            selected_id=current,
-            transient=True,
-        )
-        provider, whole_cancel = self._nested_settings_value(outcome)
-        if whole_cancel or provider is None:
-            return state, whole_cancel
-        return update_agent_backend(state, agent_id, provider), False
+                _provider_display_name(provider),
+            )
 
     def _edit_authenticated_settings_agent_provider(
         self,
@@ -2520,85 +2582,87 @@ class InteractiveController:
 
         coordinator = self._auth_coordinator
         assert coordinator is not None
-        snapshot = coordinator.probe_all()
-        state = self._rebase_missing_settings_default(state, snapshot)
-        current = _effective_settings_provider(state, agent_id)
-        choices = coordinator.choices(
-            snapshot,
-            selected_provider=current,
-        )
-        current_choice = next(
-            choice for choice in choices if choice.identity == current
-        )
-        selected_id = current if current_choice.enabled else None
-        highlighted_id = selected_id or next(
-            (choice.identity for choice in choices if choice.enabled),
-            None,
-        )
-        outcome = self._picker_input.read_picker(
-            Prompt(
-                "Provider",
-                scope=AGENT_SPECS[agent_id].display_name,
-                instruction=(
-                    "Choose an authenticated provider, or select an available "
-                    "provider to authenticate it first."
+        notice: Notice | None = None
+        while True:
+            snapshot = coordinator.probe_all()
+            current = _effective_settings_provider(state, agent_id)
+            choices = coordinator.choices(
+                snapshot,
+                selected_provider=current,
+            )
+            current_choice = next(
+                choice for choice in choices if choice.identity == current
+            )
+            selected_id = current if current_choice.enabled else None
+            highlighted_id = selected_id or next(
+                (choice.identity for choice in choices if choice.enabled),
+                None,
+            )
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Provider",
+                    scope=AGENT_SPECS[agent_id].display_name,
+                    instruction=(
+                        "Choose an authenticated provider, or select an available "
+                        "provider to authenticate it first. Enter applies the "
+                        "value and keeps this editor open; press Esc to return "
+                        "to Agent settings."
+                    ),
                 ),
-            ),
-            choices,
-            highlighted_id=highlighted_id,
-            selected_id=selected_id,
-            transient=True,
-        )
-        provider, whole_cancel = self._nested_settings_value(outcome)
-        if whole_cancel or provider is None:
-            return state, whole_cancel
+                choices,
+                highlighted_id=highlighted_id,
+                selected_id=selected_id,
+                notice=notice,
+                transient=True,
+            )
+            provider, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel or provider is None:
+                return state, whole_cancel
 
-        snapshot = coordinator.probe_all()
-        state = self._rebase_missing_settings_default(state, snapshot)
-        if snapshot.is_authenticated(provider):
-            return update_agent_backend(state, agent_id, provider), False
+            notice = None
+            snapshot = coordinator.probe_all()
+            if snapshot.is_authenticated(provider):
+                state = update_agent_backend(state, agent_id, provider)
+                notice = _settings_entered_notice(
+                    "Provider",
+                    _provider_display_name(provider),
+                )
+                continue
 
-        before = snapshot
-        result = coordinator.run(
-            snapshot,
-            selected_provider=provider,
-        )
-        if result.kind is InteractiveAuthResultKind.CANCEL:
-            return state, False
-        if result.kind in {
-            InteractiveAuthResultKind.INTERRUPT,
-            InteractiveAuthResultKind.EOF,
-        }:
-            return state, True
+            result = coordinator.run(
+                snapshot,
+                selected_provider=provider,
+            )
+            if result.kind is InteractiveAuthResultKind.CANCEL:
+                continue
+            if result.kind in {
+                InteractiveAuthResultKind.INTERRUPT,
+                InteractiveAuthResultKind.EOF,
+            }:
+                return state, True
 
-        snapshot = coordinator.probe_all()
-        newly_authenticated = self._newly_authenticated_provider(
-            before,
-            result,
-            snapshot,
-        )
-        state = self._rebase_missing_settings_default(
-            state,
-            snapshot,
-            newly_authenticated_provider=newly_authenticated,
-        )
-        if (
-            result.kind is InteractiveAuthResultKind.AUTHENTICATED
-            and result.provider == provider
-            and snapshot.is_authenticated(provider)
-        ):
-            return update_agent_backend(state, agent_id, provider), False
+            snapshot = coordinator.probe_all()
+            if (
+                result.kind is InteractiveAuthResultKind.AUTHENTICATED
+                and result.provider == provider
+                and snapshot.is_authenticated(provider)
+            ):
+                state = update_agent_backend(state, agent_id, provider)
+                notice = _settings_entered_notice(
+                    "Provider",
+                    _provider_display_name(provider),
+                )
+                continue
 
-        self._write_notice(
-            (
-                f"{_provider_display_name(provider)} was not assigned because "
-                "fresh authentication was not confirmed."
-            ),
-            label="authentication required",
-            role=SemanticRole.ERROR,
-            state=ViewState.ERROR,
-        )
-        return state, False
+            self._write_notice(
+                (
+                    f"{_provider_display_name(provider)} was not assigned because "
+                    "fresh authentication was not confirmed."
+                ),
+                label="authentication required",
+                role=SemanticRole.ERROR,
+                state=ViewState.ERROR,
+            )
 
     def _edit_settings_agent_model(
         self,
@@ -2607,101 +2671,137 @@ class InteractiveController:
     ) -> tuple[SettingsState, bool]:
         """Select one discovered active-provider model or a custom value."""
 
-        agent = state.pending.agent_configs[agent_id]
         provider = _effective_settings_provider(state, agent_id)
         antigravity = provider == "antigravity"
         provider_name = _provider_display_name(provider)
-        pending = (
-            agent.antigravity_model if antigravity else agent.codex_model
-        )
         discovery = self._discover_settings_catalog(provider)
         catalog = discovery.catalog
-        choices: list[Choice] = [
-            Choice(
-                _SETTINGS_INHERIT_ID,
-                "Inherit",
-                description=(
-                    f"Use the workspace {provider_name} model, then the "
-                    "provider default."
-                ),
+        highlighted_id: str | None = None
+        notice: Notice | None = None
+        while True:
+            agent = state.pending.agent_configs[agent_id]
+            pending = (
+                agent.antigravity_model if antigravity else agent.codex_model
             )
-        ]
-        discovered_values: dict[str, str] = {}
-        selected_id = _SETTINGS_INHERIT_ID
-        matched_model: ProviderModel | None = None
-        if catalog is not None:
-            for index, model in enumerate(catalog.models):
-                choice_id = f"{_SETTINGS_MODEL_ID_PREFIX}{index}"
-                discovered_values[choice_id] = model.identity
+            choices: list[Choice] = [
+                Choice(
+                    _SETTINGS_INHERIT_ID,
+                    "Inherit",
+                    description=(
+                        f"Use the workspace {provider_name} model, then the "
+                        "provider default."
+                    ),
+                )
+            ]
+            discovered_values: dict[str, tuple[str, str]] = {}
+            selected_id = _SETTINGS_INHERIT_ID
+            matched_model: ProviderModel | None = None
+            if catalog is not None:
+                for index, model in enumerate(catalog.models):
+                    choice_id = f"{_SETTINGS_MODEL_ID_PREFIX}{index}"
+                    discovered_values[choice_id] = (
+                        model.identity,
+                        model.label,
+                    )
+                    choices.append(
+                        Choice(
+                            choice_id,
+                            model.label,
+                            description=_settings_model_description(model),
+                        )
+                    )
+                    if pending == model.identity:
+                        selected_id = choice_id
+                        matched_model = model
+            if pending is not None and matched_model is None:
                 choices.append(
                     Choice(
-                        choice_id,
-                        model.label,
-                        description=_settings_model_description(model),
+                        _SETTINGS_CURRENT_CUSTOM_MODEL_ID,
+                        "Current custom",
+                        description=_settings_current_model_description(pending),
                     )
                 )
-                if pending == model.identity:
-                    selected_id = choice_id
-                    matched_model = model
-        if pending is not None and matched_model is None:
+                selected_id = _SETTINGS_CURRENT_CUSTOM_MODEL_ID
             choices.append(
                 Choice(
-                    _SETTINGS_CURRENT_CUSTOM_MODEL_ID,
-                    "Current custom",
-                    description=_settings_current_model_description(pending),
+                    _SETTINGS_CUSTOM_MODEL_ID,
+                    "Custom model",
+                    description=(
+                        f"Enter an exact safe {provider_name} model value."
+                    ),
                 )
             )
-            selected_id = _SETTINGS_CURRENT_CUSTOM_MODEL_ID
-        choices.append(
-            Choice(
-                _SETTINGS_CUSTOM_MODEL_ID,
-                "Custom model",
-                description=(
-                    f"Enter an exact safe {provider_name} model value."
+            choice_ids = {choice.identity for choice in choices}
+            if highlighted_id not in choice_ids:
+                highlighted_id = selected_id
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Model",
+                    scope=(
+                        f"{AGENT_SPECS[agent_id].display_name} · {provider_name}"
+                    ),
+                    instruction=(
+                        f"Choose a model for the pending {provider_name} "
+                        "provider. Enter applies a value and keeps Model open; "
+                        "Custom model opens its editor. Press Esc to return to "
+                        "Agent settings."
+                    ),
                 ),
+                tuple(choices),
+                highlighted_id=highlighted_id,
+                selected_id=selected_id,
+                notice=(
+                    notice
+                    or _settings_catalog_notice(
+                        provider,
+                        discovery.state,
+                        model_picker=True,
+                    )
+                ),
+                transient=True,
             )
-        )
-        outcome = self._picker_input.read_picker(
-            Prompt(
-                "Model",
-                scope=(
-                    f"{AGENT_SPECS[agent_id].display_name} · {provider_name}"
-                ),
-                instruction=(
-                    f"Choose a model for the pending {provider_name} provider."
-                ),
-            ),
-            tuple(choices),
-            highlighted_id=selected_id,
-            selected_id=selected_id,
-            notice=_settings_catalog_notice(
-                provider,
-                discovery.state,
-                model_picker=True,
-            ),
-            transient=True,
-        )
-        value, whole_cancel = self._nested_settings_value(outcome)
-        if whole_cancel:
-            return state, True
-        if value is None:
-            return state, False
-        if value == _SETTINGS_CURRENT_CUSTOM_MODEL_ID:
-            return state, False
-        if value == _SETTINGS_CUSTOM_MODEL_ID:
-            return self._edit_settings_custom_model(state, agent_id, provider)
-        updater = (
-            update_agent_antigravity_model
-            if antigravity
-            else update_agent_codex_model
-        )
-        if value == _SETTINGS_INHERIT_ID:
-            return updater(state, agent_id, None), False
-        if value not in discovered_values:
-            raise _ControllerAbort(
-                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            value, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel:
+                return state, True
+            if value is None:
+                return state, False
+            highlighted_id = value
+            notice = None
+            if value == _SETTINGS_CURRENT_CUSTOM_MODEL_ID:
+                display_value = (
+                    pending
+                    if pending is not None
+                    and not pending.isspace()
+                    and len(pending.encode("utf-8")) <= 256
+                    else "Current custom"
+                )
+                notice = _settings_entered_notice("Model", display_value)
+                continue
+            if value == _SETTINGS_CUSTOM_MODEL_ID:
+                state, whole_cancel = self._edit_settings_custom_model(
+                    state,
+                    agent_id,
+                    provider,
+                )
+                if whole_cancel:
+                    return state, True
+                continue
+            updater = (
+                update_agent_antigravity_model
+                if antigravity
+                else update_agent_codex_model
             )
-        return updater(state, agent_id, discovered_values[value]), False
+            if value == _SETTINGS_INHERIT_ID:
+                state = updater(state, agent_id, None)
+                notice = _settings_entered_notice("Model", "Inherit")
+                continue
+            if value not in discovered_values:
+                raise _ControllerAbort(
+                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                )
+            model_value, display_value = discovered_values[value]
+            state = updater(state, agent_id, model_value)
+            notice = _settings_entered_notice("Model", display_value)
 
     def _edit_settings_custom_model(
         self,
@@ -2709,10 +2809,11 @@ class InteractiveController:
         agent_id: str,
         provider: str,
     ) -> tuple[SettingsState, bool]:
-        """Read one safe custom model while preserving nested cancellation."""
+        """Read safe custom models until return or whole-settings cancellation."""
 
         antigravity = provider == "antigravity"
         provider_name = _provider_display_name(provider)
+        notice: Notice | None = None
         while True:
             agent = state.pending.agent_configs[agent_id]
             pending = (
@@ -2726,7 +2827,9 @@ class InteractiveController:
                     ),
                     instruction=(
                         f"Enter an exact {provider_name} model, or leave blank "
-                        "to inherit the workspace setting."
+                        "to inherit the workspace setting. Enter applies the "
+                        "value and keeps this editor open; press Esc to return "
+                        "to Model."
                     ),
                     default=(
                         pending
@@ -2734,6 +2837,7 @@ class InteractiveController:
                         else None
                     ),
                 ),
+                context=(notice,) if notice is not None else (),
                 transient=True,
             )
             value, whole_cancel = self._nested_settings_value(outcome)
@@ -2747,16 +2851,22 @@ class InteractiveController:
                     if antigravity
                     else update_agent_codex_model
                 )
-                return updater(
+                state = updater(
                     state,
                     agent_id,
                     None if value == "" else value,
-                ), False
+                )
             except ConfigurationError:
+                notice = None
                 self._write_settings_validation(
                     f"{provider_name} model must be safe nonempty text, "
                     "or blank to inherit."
                 )
+                continue
+            notice = _settings_entered_notice(
+                "Custom model",
+                "Inherit" if value == "" else value,
+            )
 
     def _edit_settings_agent_reasoning(
         self,
@@ -2814,50 +2924,13 @@ class InteractiveController:
                 "Use the workspace setting, then provider default."
             )
 
-        choices: list[Choice] = [
-            Choice(
-                _SETTINGS_INHERIT_ID,
-                "Inherit",
-                description=inherit_description,
-            )
-        ]
-        effort_values: dict[str, str] = {}
-        selected_id = _SETTINGS_INHERIT_ID
-        for index, effort in enumerate(efforts):
-            choice_id = f"{_SETTINGS_EFFORT_ID_PREFIX}{index}"
-            effort_values[choice_id] = effort.identity
-            choices.append(
-                Choice(
-                    choice_id,
-                    effort.label,
-                    description=_settings_effort_description(
-                        effort,
-                        is_default=(
-                            selected_model is not None
-                            and selected_model.default_effort == effort.identity
-                        ),
-                    ),
-                )
-            )
-            if pending == effort.identity:
-                selected_id = choice_id
-        if pending is not None and pending not in effort_values.values():
-            choices.append(
-                Choice(
-                    _SETTINGS_CURRENT_EFFORT_ID,
-                    "Current compatibility",
-                    description=f"Keep exact pending effort: {pending}",
-                )
-            )
-            selected_id = _SETTINGS_CURRENT_EFFORT_ID
-
-        notice = _settings_catalog_notice(
+        catalog_notice = _settings_catalog_notice(
             provider,
             discovery.state,
             model_picker=False,
         )
         if discovery.ready and not antigravity and selected_model is None:
-            notice = Notice(
+            catalog_notice = Notice(
                 "The inherited or selected Codex model does not match this "
                 "catalog. Choose a matching Model before selecting a model-"
                 "specific effort; pending settings were preserved.",
@@ -2865,47 +2938,119 @@ class InteractiveController:
                 role=SemanticRole.WARNING,
             )
         elif discovery.ready and not efforts:
-            notice = Notice(
+            catalog_notice = Notice(
                 f"The selected {provider_name} model reports no effort choices. "
                 "Inherit or keep the current compatibility value.",
                 label="effort catalog",
                 role=SemanticRole.WARNING,
             )
 
-        outcome = self._picker_input.read_picker(
-            Prompt(
-                "Effort",
-                scope=(
-                    f"{AGENT_SPECS[agent_id].display_name} · {provider_name}"
-                ),
-                instruction=(
-                    f"Choose effort for the pending {provider_name} provider "
-                    "and effective model."
-                ),
-            ),
-            tuple(choices),
-            highlighted_id=selected_id,
-            selected_id=selected_id,
-            notice=notice,
-            transient=True,
-        )
-        value, whole_cancel = self._nested_settings_value(outcome)
-        if whole_cancel:
-            return state, True
-        if value is None or value == _SETTINGS_CURRENT_EFFORT_ID:
-            return state, False
-        updater = (
-            update_agent_antigravity_effort
-            if antigravity
-            else update_agent_codex_reasoning_effort
-        )
-        if value == _SETTINGS_INHERIT_ID:
-            return updater(state, agent_id, None), False
-        if value not in effort_values:
-            raise _ControllerAbort(
-                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+        highlighted_id: str | None = None
+        notice: Notice | None = None
+        while True:
+            agent = state.pending.agent_configs[agent_id]
+            pending = (
+                agent.antigravity_effort
+                if antigravity
+                else agent.codex_reasoning_effort
             )
-        return updater(state, agent_id, effort_values[value]), False
+            choices: list[Choice] = [
+                Choice(
+                    _SETTINGS_INHERIT_ID,
+                    "Inherit",
+                    description=inherit_description,
+                )
+            ]
+            effort_values: dict[str, tuple[str, str]] = {}
+            selected_id = _SETTINGS_INHERIT_ID
+            for index, effort in enumerate(efforts):
+                choice_id = f"{_SETTINGS_EFFORT_ID_PREFIX}{index}"
+                effort_values[choice_id] = (
+                    effort.identity,
+                    effort.label,
+                )
+                choices.append(
+                    Choice(
+                        choice_id,
+                        effort.label,
+                        description=_settings_effort_description(
+                            effort,
+                            is_default=(
+                                selected_model is not None
+                                and selected_model.default_effort
+                                == effort.identity
+                            ),
+                        ),
+                    )
+                )
+                if pending == effort.identity:
+                    selected_id = choice_id
+            if (
+                pending is not None
+                and pending not in {
+                    effort_value
+                    for effort_value, _display_value in effort_values.values()
+                }
+            ):
+                choices.append(
+                    Choice(
+                        _SETTINGS_CURRENT_EFFORT_ID,
+                        "Current compatibility",
+                        description=f"Keep exact pending effort: {pending}",
+                    )
+                )
+                selected_id = _SETTINGS_CURRENT_EFFORT_ID
+
+            choice_ids = {choice.identity for choice in choices}
+            if highlighted_id not in choice_ids:
+                highlighted_id = selected_id
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Effort",
+                    scope=(
+                        f"{AGENT_SPECS[agent_id].display_name} · "
+                        f"{provider_name}"
+                    ),
+                    instruction=(
+                        f"Choose effort for the pending {provider_name} "
+                        "provider and effective model. Enter applies the value "
+                        "and keeps this editor open; press Esc to return to "
+                        "Agent settings."
+                    ),
+                ),
+                tuple(choices),
+                highlighted_id=highlighted_id,
+                selected_id=selected_id,
+                notice=notice or catalog_notice,
+                transient=True,
+            )
+            value, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel:
+                return state, True
+            if value is None:
+                return state, False
+            highlighted_id = value
+            notice = None
+            if value == _SETTINGS_CURRENT_EFFORT_ID:
+                assert pending is not None
+                notice = _settings_entered_notice("Effort", pending)
+                continue
+            updater = (
+                update_agent_antigravity_effort
+                if antigravity
+                else update_agent_codex_reasoning_effort
+            )
+            if value == _SETTINGS_INHERIT_ID:
+                state = updater(state, agent_id, None)
+                notice = _settings_entered_notice("Effort", "Inherit")
+                continue
+            if value not in effort_values:
+                raise _ControllerAbort(
+                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                )
+            effort_value, display_value = effort_values[value]
+            state = updater(state, agent_id, effort_value)
+            notice = _settings_entered_notice("Effort", display_value)
 
     def _discover_settings_catalog(
         self,

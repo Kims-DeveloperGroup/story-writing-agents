@@ -2094,10 +2094,12 @@ print(
                 )
                 process.send_text("\x1b[B\n")
                 language_result = process.wait_for_text(
-                    "Language [focused] [open]",
+                    f"[entered] Pending Language entered: {expected_language}.",
                     after=language_mark,
                 )
+                self.assertIn("Language [focused] [open]", language_result)
                 self.assertIn(expected_language, language_result)
+                process.send_text("\x1b")
                 returned_settings = process.wait_for_text(
                     "Choose a setting to edit, save, or cancel.",
                     after=language_mark,
@@ -2166,39 +2168,70 @@ print(
         )
 
         process.send_text(("\x1b[B" * 3) + "\n")
-        process.wait_for_text("Choose an agent provider route to edit.", after=mark)
+        process.wait_for_text("Select an agent to configure", after=mark)
         process.send_text("\x1b[B\n")
         process.wait_for_text(
-            "Choose a provider, model, or effort setting.",
+            "Choose a provider, model, or effort setting",
             after=mark,
         )
+        model_picker_mark = process.output_mark()
         process.send_text("\x1b[B\n")
-        model_picker = process.wait_for_text("GPT PTY", after=mark)
+        model_picker = process.wait_for_text("GPT PTY", after=model_picker_mark)
         self.assertIn("GPT PTY", model_picker)
         self.assertIn("gpt-pty", model_picker)
+        model_commit_mark = process.output_mark()
         process.send_text("\x1b[B\n")
-        process.wait_for_text("Settings [focused] [open]", after=mark)
-
-        process.send_text("\n")
-        process.wait_for_text("Choose an agent provider route to edit.", after=mark)
-        process.send_text("\x1b[B\n")
-        process.wait_for_text(
-            "Choose a provider, model, or effort setting.",
-            after=mark,
+        model_result = process.wait_for_text(
+            "[entered] Pending Model entered: GPT PTY.",
+            after=model_commit_mark,
         )
-        process.send_text(("\x1b[B" * 2) + "\n")
-        effort_picker = process.wait_for_text("future_2", after=mark)
-        self.assertIn("future_2", effort_picker)
-        process.send_text(("\x1b[B" * 2) + "\n")
-        process.wait_for_text("Settings [focused] [open]", after=mark)
-
+        self.assertIn("[selected] [highlighted] GPT PTY", model_result)
+        model_parent_mark = process.output_mark()
+        process.send_text("\x1b")
+        process.wait_for_text(
+            "Agent settings [Plot & Structure Architect]",
+            after=model_parent_mark,
+        )
+        effort_picker_mark = process.output_mark()
         process.send_text("\x1b[B\n")
-        process.wait_for_text("Save settings?", after=mark)
+        effort_picker = process.wait_for_text("future_2", after=effort_picker_mark)
+        self.assertIn("future_2", effort_picker)
+        effort_commit_mark = process.output_mark()
+        process.send_text(("\x1b[B" * 2) + "\n")
+        effort_result = process.wait_for_text(
+            "[entered] Pending Effort entered: future_2.",
+            after=effort_commit_mark,
+        )
+        self.assertIn("[selected] [highlighted] future_2", effort_result)
+        effort_parent_mark = process.output_mark()
+        process.send_text("\x1b")
+        process.wait_for_text(
+            "Agent settings [Plot & Structure Architect]",
+            after=effort_parent_mark,
+        )
+        agents_parent_mark = process.output_mark()
+        process.send_text("\x1b")
+        process.wait_for_text(
+            "Agents [focused] [open]",
+            after=agents_parent_mark,
+        )
+        settings_parent_mark = process.output_mark()
+        process.send_text("\x1b")
+        process.wait_for_text(
+            "Settings [focused] [open]",
+            after=settings_parent_mark,
+        )
+
+        save_prompt_mark = process.output_mark()
+        process.send_text("\x1b[B\n")
+        process.wait_for_text("Save settings?", after=save_prompt_mark)
+        save_commit_mark = process.output_mark()
         process.send_text("\n")
-        saved = process.wait_for_text("[saved] Settings saved.", after=mark)
-        self.assertIn("gpt-pty", saved)
-        self.assertIn("future_2", saved)
-        process.wait_for_text("story[lobby]> ", after=mark)
+        saved = process.wait_for_text(
+            "[saved] Settings saved.",
+            after=save_commit_mark,
+        )
+        process.wait_for_text("story[lobby]> ", after=save_commit_mark)
         self.assertIn(b"\x1b[", bytes(process.raw_bytes[mark:]))
         process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
@@ -2230,7 +2263,7 @@ print(
         process.send_text("/settings\n\n")
         process.wait_for_text("[highlighted] Language", after=mark)
         process.send_text(("\x1b[B" * 3) + "\n")
-        process.wait_for_text("Providers [focused] [open]", after=mark)
+        process.wait_for_text("Agents [focused] [open]", after=mark)
         process.send_text("\x1b[B\n")
         process.wait_for_text("Agent settings", after=mark)
         process.send_text("\x1b[B\n")
@@ -2240,6 +2273,10 @@ print(
             r"\x1b\[(?:0|1|3[1-7])m",
         )
         returned_mark = process.output_mark()
+        process.send_text("\x1b")
+        process.wait_for_text("Agent settings", after=returned_mark)
+        process.send_text("\x1b")
+        process.wait_for_text("Agents [focused] [open]", after=returned_mark)
         process.send_text("\x1b")
         process.wait_for_text("Settings [focused] [open]", after=returned_mark)
         cancelled_mark = process.output_mark()
@@ -2319,7 +2356,7 @@ print(
         process.send_line("/settings")
         process.wait_for_text("6. [available] Cancel", after=mark)
         process.send_line("4")
-        process.wait_for_text("Providers > ", after=mark)
+        process.wait_for_text("Agents > ", after=mark)
         process.send_line("2")
         process.wait_for_text("Agent settings", after=mark)
         process.send_line("2")
@@ -2330,6 +2367,18 @@ print(
         model_mark = process.output_mark()
         process.send_line("3")
         process.wait_for_text("Custom model", after=model_mark)
+        process.send_line("/cancel")
+        entered = process.wait_for_text("Pending Custom model", after=model_mark)
+        self.assertIn(
+            "[entered]PendingCustommodelentered:/cancel.",
+            "".join(entered.split()),
+        )
+        process.send_text("\x1b\n")
+        process.wait_for_text("Model [Plot & Structure Architect", after=model_mark)
+        process.send_line("/cancel")
+        process.wait_for_text("Agent settings", after=model_mark)
+        process.send_line("/cancel")
+        process.wait_for_text("Agents > ", after=model_mark)
         process.send_line("/cancel")
         process.wait_for_text("6. [available] Cancel", after=model_mark)
         process.send_line("5")

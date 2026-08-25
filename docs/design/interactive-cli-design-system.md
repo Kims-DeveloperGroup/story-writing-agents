@@ -45,6 +45,9 @@
 > application color-default semantics.
 > #252 adds provider-neutral Model and Effort pickers backed by fresh, bounded
 > native-provider catalog discovery.
+> #270 keeps `/settings` value editors active after valid commits, renames the
+> top-level roster path to Agents, and makes each Escape return exactly one
+> settings level without changing one-shot picker behavior elsewhere.
 
 This contract governs every human-facing interactive view and control in the
 installed shell. It preserves scrollback and the established command/runtime
@@ -75,6 +78,7 @@ current production behavior.
 | #94 workspace Codex defaults | Implemented: the original slice added optional workspace fallback Codex model and reasoning values. The current closed eight-field system schema also contains Antigravity model/effort and nullable `default_backend`; new workspaces initialize provider fields to null, legacy files remain valid and byte-preserved, and each backend validates and snapshots effective invocation values at construction. |
 | #93 settings UI | Implemented: global alias-free `/settings` edits isolated current/pending snapshots of workspace defaults and per-agent provider, model, and reasoning choices through shared picker and prompt controls. Save validates an exact opening baseline and persona catalog, writes only changed configuration documents in deterministic order, and attempts reverse exact-byte rollback after a write failure. The workflow adds no supported public save API. |
 | #252 provider-discovered settings | Implemented: the per-agent editor exposes provider-neutral Provider, Model, and Effort fields. Entering Model or Effort performs one fresh, bounded discovery for the pending effective provider; model choices preserve provider order and custom/inherit compatibility, while effort choices use the pending effective model for Codex and the fixed Antigravity vocabulary. Raw catalogs and diagnostics are never persisted. |
+| #270 retained settings value editors | Implemented: the top-level and roster path use Settings > Agents > Agent settings, while Provider remains the field-level configuration concept. Valid Enter in Language, Persona, Maximum debate rounds, Provider, Model, Custom model, or Effort applies the pending value and reopens that editor with updated selection/default plus one replacing inline completed success result. Escape returns one settings level; Ctrl-C/EOF cancel the whole settings transaction. This policy is local to `/settings`; resume pickers and Save/Cancel confirmations remain one-shot. |
 | #105 agent reply presentation | Implemented: direct, retrieval, transcript, and focused-history agent replies use a presentation-only strict JSON object/array projection with exact unchanged fallback cases and two-space Unicode-preserving output; stored/provider content remains unchanged, and the `AGENT` role uses bold terminal-default foreground styling without background detection. |
 | #106 transient settings UI | Implemented: settings picker and prompt reads clear capable transient rows, suppress duplicate fallback finals, and keep nested Escape silent. #142 later makes this lifecycle universal for capable submitted input. |
 | #111 advisory progress indicator | Implemented: one advisory and consensus waiting four-glyph rolling indicator runs only on capable raw streams, including `NO_COLOR`; callback, non-TTY, `TERM=dumb`, and uncertain-capability paths remain silent, and no general animation or `[routing]`/`[waiting]` record is introduced. |
@@ -446,7 +450,7 @@ changing the established controls.
 | Main one-line input | Text, Backspace/Delete, Left/Right, and Home/End edit. Up/Down navigate history only while no palette is open. Slash-prefixed input or a leading routed-message token may open a palette; Tab applies a highlighted static completion. | Enter submits the exact visible buffer once when no highlighted suggestion is open. Configured VEOF with a nonempty buffer submits the exact visible buffer unconditionally. | Ctrl-C, configured VEOF on an empty buffer, and physical EOF retain their established typed outcomes; no text is parsed. Every returned capable outcome follows the submitted-input cleanup contract. |
 | `SuggestionPalette` anchored to main input | Opening highlights the first eligible candidate without editing. Up/Down moves the highlight among eligible candidates without replacement; Tab applies its highlighted completion. Shift-Tab has no palette action. Exact omitted resume commands may instead project controller-owned dynamic choices. | Enter with a static highlight applies completion without submitting, closes and latches the palette dismissed, and leaves a later Enter to submit. Enter with a dynamic resume choice commits its full explicit command immediately. | Escape closes the palette and restores the pre-Tab buffer and cursor snapshot when one exists. Dismissing a dynamic choice overlay leaves the exact buffer unchanged. |
 | `Picker` | Up/Down changes highlight among enabled items. Highlight never selects or commits. | Enter selects and commits the highlighted enabled item. | Escape cancels. Ctrl-C and EOF leave without commit and retain the invoking API's typed semantics. |
-| Settings `Prompt` | Text and ordinary line-edit keys edit one history-free value. Completion keys have no effect. | Enter commits the exact buffer for field validation. | Escape returns to the parent without changing the pending value; Ctrl-C and EOF cancel the whole settings workflow. |
+| Settings `Prompt` | Text and ordinary line-edit keys edit one history-free value. Completion keys have no effect. | Enter commits the exact buffer for field validation. A valid `/settings` commit applies the pending value and immediately reopens the same editor. | Escape returns one settings level without changing an already applied pending value; Ctrl-C and EOF cancel the whole settings workflow. |
 | Ranged text viewer | Up/Down clears the anchor and moves/clamps the active line. Shift+Up/Down fixes the first anchor and moves the active end through extension, contraction, reversal, and clamping. Other keys are no-ops. Configured VINTR, then VEOF, take priority over ordinary key roles. | Enter returns the active singleton or normalized anchored one-based inclusive range; empty text cannot commit. | Escape returns `cancelled`; configured VINTR returns `interrupted`; configured VEOF or stream EOF returns `eof`. Operational failures are raised after cleanup. |
 | Line-oriented composer | Each ordinary line appends exact content. Up/Down, Tab, Shift-Tab, and Escape are no-ops; no full-screen editing or command-history traversal is introduced. | `/send` commits the exact LF-joined content when nonblank. | `/cancel`, Ctrl-C, and EOF preserve established discard outcomes and counts. |
 | Confirmation | Existing accepted yes/no input and blank-default behavior remain authoritative. Up/Down, Tab, Shift-Tab, and Escape are no-ops. Invalid input marks the choices as erroneous, writes one hint, and asks again. | A valid answer or blank default returns the established `yes` or `no` result. | Ctrl-C and EOF return the established `interrupt` or `eof` result. |
@@ -455,6 +459,20 @@ changing the established controls.
 `/send` and `/cancel` lines. The composer remains line-oriented; preview,
 highlight, and history behavior supplied by contextual suggestions must not
 change `/send`, `/cancel`, `/say`, Ctrl-C, or EOF semantics.
+
+Retained commit presentation is a `/settings`-only controller policy, not a
+change to the generic `Picker` transition. Language, Persona, Maximum debate
+rounds, Provider, Model, Custom model, and Effort consume a valid commit, apply
+the pending value, and immediately open the same editor again. The active
+`Picker` remains `ViewState.OPEN` with its prompt focused, or the active
+`Prompt` remains `ViewState.FOCUSED`; its selected value or default updates to
+the applied value. Exactly one inline `Notice` uses `SemanticRole.SUCCESS` and
+`ViewState.COMPLETED` to report the latest result, replacing the prior success
+result on the next commit. Save and Cancel confirmation pickers remain
+one-shot. Context-changing pickers also remain one-shot, especially submitted
+`/session resume` and `/conversation resume`: commit closes the picker, capable
+mode clears its frame, and fallback may retain printed scrollback but no active
+picker.
 
 ### Main-command history
 
@@ -790,13 +808,14 @@ Current/Pending confirmation remains intentionally provider-qualified—each
 agent can show Codex model, Codex reasoning, Antigravity model, and Antigravity
 effort rows—so inactive stored routes and changes remain unambiguous.
 
-The top-level settings order is exact:
+The top-level settings order is exact. Agents names the roster navigation
+choice; Provider remains the field-level route concept:
 
 ```text
 Language
 Persona
 Maximum debate rounds
-Providers
+Agents
 Save
 Cancel
 ```
@@ -806,16 +825,18 @@ Cancel
 | Language | The picker candidates are exactly `KO`, `EN`, `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, `RU`, in that order. A schema-valid existing value outside this UI catalog remains visible and may be preserved, but is not synthesized as a candidate. |
 | Persona | Candidates come only from the existing safe persona-template catalog. Duplicate identifiers resolve with the top-level template taking precedence over `alternative_templates`; the resulting identifiers are ordered lexically. The picker does not read, preview, create, or edit template content. |
 | Maximum debate rounds | A numeric `Prompt` accepts a pending nonnegative integer under the existing validation rule. Blank, negative, fractional, and nonnumeric values produce an inline error `Notice` and retain focus without changing the pending value. `0` remains valid and means audit-only consensus. |
-| Providers | A nested agent picker follows canonical `ROSTER` order, then a Provider/Model/Effort picker edits only that agent's pending `agent_configs` values. Codex and Antigravity are selectable; nullable routes inherit the workspace default and final Codex fallback. A provider freshly authenticates before its route becomes pending. Changing the route preserves the inactive provider's model/effort settings. Unsupported legacy provider names are not selectable or valid backends. The UI neither invents providers nor changes roster identity. |
+| Agents | A nested agent picker follows canonical `ROSTER` order, then an Agent settings picker exposes Provider/Model/Effort and edits only that agent's pending `agent_configs` values. Codex and Antigravity are selectable Provider values; nullable routes inherit the workspace default and final Codex fallback. A provider freshly authenticates before its route becomes pending. Changing the route preserves the inactive provider's model/effort settings. Unsupported legacy provider names are not selectable or valid backends. The UI neither invents providers nor changes roster identity. |
 | Agent Model | The picker order is exact: Inherit; every validated discovered model in provider order; Current custom only when the pending model is absent from that catalog; then Custom model. Inherit stores null. Current custom preserves the pending value. Custom model opens the safe-model prompt, where blank stores null and inherits that provider's workspace model. |
 | Agent Effort | The picker order is exact: Inherit; the selected Codex model's exact discovered effort rows or Antigravity's global `low`, `medium`, `high` rows; then Current compatibility only when a non-null pending effort is not reported. Inherit uses the active provider's workspace value and then provider default. Current compatibility preserves the pending value. The UI adds no Codex reasoning CLI flag. |
 
 Entering Model or Effort is the only catalog-discovery trigger. Opening
-`/settings`, opening Providers, moving between agents or providers, and
-editing Provider do not launch a catalog command. Each Model or Effort entry
-performs one fresh discovery for the pending effective provider; Effort also
-uses the pending effective model after agent-over-workspace inheritance. There
-is no automatic retry, cache, cross-entry reuse, or persistent catalog.
+`/settings`, opening Agents, moving between agents or providers, and editing
+Provider do not launch a catalog command. Each Model or Effort entry performs
+one fresh discovery for the pending effective provider; retained commits and
+redraws within that editor reuse the entry's projection and do not discover
+again. Effort also uses the pending effective model after agent-over-workspace
+inheritance. There is no automatic retry, cache, cross-entry reuse, or
+persistent catalog.
 
 Codex discovery launches exact `codex debug models --bundled` and projects only
 `visibility="list"` model rows, in provider order, with each exact
@@ -854,17 +875,23 @@ one control is focused:
 
 - Up/Down moves only the current picker's highlight; highlighting does not edit
   pending values or write configuration.
-- Enter on Language, Persona, or Providers transfers focus to the corresponding
-  nested picker. Provider editing transfers first to the canonical agent
-  picker, then to that agent's Provider/Model/Effort picker, and
-  finally to the selected editor. Enter updates only the applicable pending
-  value and returns focus to its parent;
-  Escape restores that editor's prior pending value and returns focus without
-  a write.
+- Enter on Language, Persona, or Agents transfers focus to the corresponding
+  nested picker. Language and Persona apply a valid Enter, update selection,
+  show the replacing inline completed success `Notice`, and keep that picker
+  open. Escape then returns to Settings without undoing applied pending values.
+- Agents transfers first to the canonical roster picker and then to that
+  agent's Agent settings picker. Provider, Model, and Effort each apply valid
+  Enter while keeping the selected editor open. Custom model opens beneath
+  Model and likewise stays open after a valid Enter. Escape returns one level
+  in the exact hierarchy Custom model > Model > Agent settings > Agents >
+  Settings. Provider and Effort return directly to Agent settings. A provider
+  authentication action is subordinate to Provider and returns there after its
+  result; it does not skip to Agent settings or trigger catalog discovery.
 - Enter on Maximum debate rounds transfers focus to its `Prompt`. Valid Enter
-  updates only the pending value and returns focus;
+  updates the pending value and default, shows the replacing inline completed
+  success `Notice`, and keeps the prompt focused;
   invalid Enter leaves the prompt focused with a trusted validation notice.
-  Escape restores its prior pending value.
+  Escape returns to Settings without undoing applied pending values.
 - Enter on Save opens a transient `Save settings?` picker with highlighted YES
   and NO choices plus the changed-only Current/Pending context. YES first
   freshly gates each distinct effective provider outside the candidate
@@ -887,7 +914,8 @@ one control is focused:
 - Enter on Cancel opens a transient `Cancel settings?` picker with highlighted
   YES and NO choices plus the same separately rendered changed-only or
   no-changes context `Panel`. Capable raw input initially highlights YES; Enter
-  commits the highlighted choice, while Escape returns to the top-level picker.
+  commits and closes this one-shot confirmation, while Escape returns to the
+  top-level picker.
   Line fallback accepts blank to commit the highlighted choice (initially YES),
   decimal ordinal `1` for YES or `2` for NO, and `/cancel` to return; free-form
   `yes`/`y` and `no`/`n` are rejected. Committed YES returns `cancelled`
@@ -1520,7 +1548,7 @@ and 218 edges remain canonical in the module index.
 | Retrieval progress and summaries | `Notice`, `Record`, `ListView`, `Field` | Loading, citations/context accounting, result/error/cancelled | #83 (implemented accepted views) |
 | Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field`, `Message` | Loading, debate identity, handoff/action metadata, agent messages, result/cancelled/completed/error | #83, #119 (implemented) |
 | Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics; post-workspace application errors supply one fixed sanitized debug-log availability notice, while pre-workspace errors include no debug-log path | #83, #131 terminal seam, and #132 application wiring (implemented) |
-| Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Exact top-level order; provider-neutral Provider/Model/Effort editors; provider-qualified summary rows; field-triggered bounded model/effort choices with inherit/custom/compatibility paths; changed-only Current/Pending confirmation context with `(Changed)` cues and explicit no-diff notice; nested Escape silent; transient cleanup and fallback honesty; fixed safe discovery failure guidance; guarded two-file Save boundary | #93, #106, #115, and #252 (implemented) |
+| Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Exact Settings/Agents/Agent settings hierarchy; provider-neutral Provider/Model/Effort editors; retained valid commits with updated selection/default and one replacing inline `SemanticRole.SUCCESS`/`ViewState.COMPLETED` result; provider-qualified summary rows; field-entry-triggered bounded model/effort choices with inherit/custom/compatibility paths; changed-only Current/Pending confirmation context with `(Changed)` cues and explicit no-diff notice; one-level nested Escape; transient cleanup and fallback honesty; fixed safe discovery failure guidance; guarded two-file Save boundary | #93, #106, #115, #252, and #270 (implemented) |
 | Welcome and provider authentication | Private startup wordmark renderer, `Prompt`, `Picker`, `Choice`, `Notice` | Four bounded capable welcome frames with physical-width wide/compact/narrow projections; clean prefix-free ASCII wordmark; static accessibility fallback; four explicit provider states; disabled unavailable choice; transient guidance/result; completion-aware exact-child return; no provider-controlled content | #209, #237, #241, #249 (implemented) |
 
 ### Control groups
@@ -1537,7 +1565,7 @@ and 218 edges remain canonical in the module index.
 | Independent ranged text viewer | Private viewer document/state/viewport/result values, not a `Component` | Ordinary versus anchored clamped navigation, inclusive commit, typed noncommit exits, height-bounded alternate-screen rendering, strict complete-text fallback, and no retained caller or composer state | #162 foundation; #164 provider-bound shell caller (implemented) |
 | Artifact-reference activation | Private marker projection plus existing palette/viewer controls | Provider-span-only `$` completion; immediate exact-`$$` ranged-source palette; direct `$${path}` or highlighted Enter/Tab viewer entry; exact origin restoration; multiple ordered indicators; fixed content-free errors; and fallback second confirmation | #164 (implemented) |
 | Live omitted-resume choices | `SuggestionPalette`, `Picker`, `Prompt`, `Field` | Exact capable command only; controller-owned ordered rows/highlight/fresh validation; Up/Down preview; one-Enter explicit commit; Escape dismissal; Tab no-op; submitted omitted command uses a live capable or numbered fallback picker only after a successful fresh read returns eligible rows; empty/error short-circuit | #142 (implemented) |
-| Settings field and action navigation | `Panel`, `Prompt`, `Picker`, `Field`, `Notice` | Single focus; nested agent/provider and provider-ordered Model/Effort pickers; transient custom-model/numeric editors; explicit Save/Cancel; no write before guarded Save; universal capable cleanup and honest fallback visibility | #93, #106, #115, #142, and #252 (implemented) |
+| Settings field and action navigation | `Panel`, `Prompt`, `Picker`, `Field`, `Notice` | Single focus; Settings > Agents > Agent settings navigation; retained Language/Persona/rounds/Provider/Model/Custom model/Effort editors; explicit one-level Escape hierarchy; subordinate authentication return to Provider; per-entry discovery without retained-commit redraw discovery; one-shot Save/Cancel; no write before guarded Save; universal capable cleanup and honest fallback visibility | #93, #106, #115, #142, #252, and #270 (implemented) |
 | Authentication and startup gate | Private `StartupWelcome`, `Picker`, `Choice`, `Notice` | Four stage-only startup values and dedicated projection; fresh probes; native-login handoff and completion-aware return; initial/effective-route loops; absent-only default; `/auth`; settings assignment/Save; capable cleanup and no-delay static fallback | #209, #241, #249 (implemented) |
 
 Contextual non-main-prompt suggestions from completed issue #73 use the same
@@ -1622,7 +1650,7 @@ privacy, and the bounded/static startup presentation matrix.
 | Picker and live resume choices | Highlight-versus-selection, disabled-skipping clamped navigation, exact resume ordering/highlights, Tab no-op and one-Enter dynamic commit, Escape cancel/dismissal, typed interrupt/EOF, empty/all-disabled/one/long lists, exact fallback acceptance/rejection, stable identity reconciliation and fresh controller validation, selected-outside-window summary, no synthetic final control frame, complete capable cleanup on every returned outcome/failure, honest fallback visibility, and resize on each live redraw. |
 | Permanent input lifecycle | Resource-free `UNDECIDED` construction; first-read irreversible `LIVE`/`FALLBACK`; sticky fallback and no post-live downgrade; stable source/decoder/configuration correlation; canonical ASCII/UTF-8/ISO-8859-1 plus built-in strict/surrogateescape admission; exact one-byte reads; fragmented code points; maximum four-code-point pending suffix before Escape readiness; clean and partial EOF; read/decode/shape poison; interrupt reset without mode change; synchronous reentry rejection; PENDIN-only tolerated configuration drift; capable history-free subject frames; and cross-prompt/viewer preservation without mixed wrapper/raw reads. |
 | Ranged text viewer | Exact `str`, display-name, strict-UTF-8, private 8 MiB source, exact 65,536-line and 16 MiB complete-fallback boundaries, initial-line, empty/final-LF validation before terminal access; ordinary and Shift+Arrow clamped selection including reversal; configured VINTR/VEOF raw-byte disable/decode/round-trip classification and priority; singleton/range commit; distinct cancel/interrupt/EOF; one row per logical line; safe CR/U+2028/control display; bounded-prefix plain/ANSI current and selected cues; wide/combining/ellipsis behavior; suffix-independent redraw work; bounded height and next-nonexit-key resize; exact untruncated `START-END` or `/cancel` fallback with reverse normalization and visible retry; content-free results; close-on-select/cancel, repeat-open disposal; and no workspace/artifact/runtime/controller dependencies. |
-| Settings | Two-snapshot current/pending separation; exact top-level/language/roster order; safe persona precedence and lexical order; numeric `0`, positive, blank, negative, fractional, and nonnumeric cases; provider-neutral Provider/Model/Effort editors with provider-qualified summaries; selectable Codex/Antigravity routes with nullable agent/default fallback, authentication-before-assignment, inactive-provider setting preservation, and unsupported legacy-provider rejection; fresh field-triggered pending-provider discovery only; exact five-second/one-MiB capture bounds and cleanup; Codex list-only model rows and model-specific exact effort/default projection; Antigravity aligned opaque rows and global low/medium/high effort without inference; exact model/effort picker ordering; safe custom/inherit/current compatibility; fixed content-free failure states; forward-compatible Codex effort validation; no catalog persistence/cache/retry; fresh distinct-effective-provider Save gate outside the transaction; one focused control and deterministic focus return; nested and whole-panel cancellation; exact-byte and persona-catalog conflict before writes; changed-only canonical system-then-agent save; per-file atomic replacement; failing-target-inclusive reverse exact-byte rollback and rollback uncertainty; pending retention; no candidate write on open/edit/highlight/error/cancel; durable completed auth/default writes; next-lifecycle-only application with higher live overrides; plain/ANSI/`NO_COLOR`/narrow/line fallback; hostile display content; and unchanged identity, thread, precedence, public, and machine contracts. |
+| Settings | Two-snapshot current/pending separation; exact Settings/Agents/Agent settings and language/roster order; safe persona precedence and lexical order; numeric `0`, positive, blank, negative, fractional, and nonnumeric cases; provider-neutral Provider/Model/Effort editors with provider-qualified summaries; retained valid commits with updated selection/default and one replacing inline completed success result; exact one-level Escape hierarchy and whole-transaction Ctrl-C/EOF; one-shot Save/Cancel and resume-picker compatibility; selectable Codex/Antigravity routes with nullable agent/default fallback, subordinate authentication-before-assignment returning to Provider, inactive-provider setting preservation, and unsupported legacy-provider rejection; fresh field-entry-triggered pending-provider discovery without retained-commit/redraw discovery; exact five-second/one-MiB capture bounds and cleanup; Codex list-only model rows and model-specific exact effort/default projection; Antigravity aligned opaque rows and global low/medium/high effort without inference; exact model/effort picker ordering; safe custom/inherit/current compatibility; fixed content-free failure states; forward-compatible Codex effort validation; no catalog persistence/cache/retry; fresh distinct-effective-provider Save gate outside the transaction; one focused control and deterministic focus return; exact-byte and persona-catalog conflict before writes; changed-only canonical system-then-agent save; per-file atomic replacement; failing-target-inclusive reverse exact-byte rollback and rollback uncertainty; pending retention; no candidate write on open/edit/highlight/error/cancel; durable completed auth/default writes; next-lifecycle-only application with higher live overrides; plain/ANSI/`NO_COLOR`/narrow/line fallback; hostile display content; and unchanged identity, thread, precedence, public, and machine contracts. |
 | Authentication startup | Exact Codex and resolved-executable Antigravity probes and logins; four states; disabled unavailable choice; bounded null-stream monitoring while native login remains open; fresh-status-only authority; exact-child bounded stop/reap and automatic return; at most one provider-controlled code paste with no extra exit/confirmation; initial/effective-route hard gates; `/auth`; absent-only default policy; settings integration; inherited terminal/environment/root/process group; no output/URL/code/account/token/credential capture; four physical-width-aware welcome frames with exactly three 0.4-second waits; bold cyan/magenta/yellow/blue/green wordmark spans with local resets; reduced-motion one-final-colored-frame path; 0.8-second transient notices; right-margin/resize safety; foreground-process-group and termios restoration; no cursor hiding or alternate screen; static no-delay nonzero-`NO_COLOR`/callback/non-TTY/`TERM=dumb`/non-POSIX/uncertain fallbacks. |
 | Advisory progress | One four-glyph cycle only for capable raw advisory and consensus awaitables; `NO_COLOR` glyph preservation; clear/redraw around semantic writes; clear and task joining before result/cancel/error; silent callback/non-TTY/`TERM=dumb`/uncertain fallback; operation-error precedence; indicator-only internal-error mapping; no `[routing]`/`[waiting]` records or reusable animation API. |
 | Parser and mutation boundary | The exact visible committed main buffer reaches the established parser once; previews, recall, replacement, highlight, rerender, cancel, Ctrl-C, empty VEOF, and physical EOF cause no parser/runtime/storage call. |
