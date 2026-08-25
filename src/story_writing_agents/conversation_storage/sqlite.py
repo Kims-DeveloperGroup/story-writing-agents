@@ -1079,7 +1079,13 @@ def _insert_metadata(
 ) -> None:
     """Insert all exact authoritative metadata fields."""
 
-    if metadata.subject_revision > _SQLITE_SIGNED_INTEGER_MAX:
+    if (
+        type(metadata.schema_version) is not int
+        or metadata.schema_version != CONVERSATION_METADATA_SCHEMA_VERSION
+        or type(metadata.subject_revision) is not int
+        or metadata.subject_revision < 1
+        or metadata.subject_revision > _SQLITE_SIGNED_INTEGER_MAX
+    ):
         raise SQLiteDatabaseFormatError()
     connection.execute(  # type: ignore[attr-defined]
         "INSERT INTO conversations "
@@ -1103,6 +1109,14 @@ def _insert_metadata(
 def _insert_event(connection: object, event: ConversationEvent) -> None:
     """Insert all exact authoritative event fields and its derived slot."""
 
+    if (
+        type(event.schema_version) is not int
+        or event.schema_version != CONVERSATION_EVENT_SCHEMA_VERSION
+        or type(event.sequence) is not int
+        or event.sequence < 1
+        or event.sequence > _SQLITE_SIGNED_INTEGER_MAX
+    ):
+        raise SQLiteDatabaseFormatError()
     turn_slot = 0 if event.kind is ConversationEventKind.USER_MESSAGE else 1
     connection.execute(  # type: ignore[attr-defined]
         "INSERT INTO conversation_events "

@@ -17,7 +17,9 @@ from unittest import mock
 import story_writing_agents
 import story_writing_agents.conversation_storage as storage_package
 from story_writing_agents import (
+    CONVERSATION_EVENT_SCHEMA_VERSION,
     ConversationCatalog,
+    ConversationEvent,
     ConversationEventKind,
     ConversationEventStore,
     ConversationExistsError,
@@ -844,6 +846,150 @@ class SQLiteArchiveTests(unittest.TestCase):
             overflow_services.catalog.list("session_a", include_archived=True),
             (),
         )
+
+    def test_archive_import_rejects_integer_subtypes_at_every_sink_field(
+        self,
+    ) -> None:
+        class IntegerSubtype(int):
+            """One non-exact integer accepted by domain value validation."""
+
+        def logical_rows(
+            workspace: Workspace,
+        ) -> tuple[tuple[object, ...], tuple[object, ...]]:
+            with raw_connection(workspace) as connection:
+                return (
+                    tuple(
+                        connection.execute(
+                            "SELECT * FROM conversations ORDER BY session_id, "
+                            "conversation_id"
+                        ).fetchall()
+                    ),
+                    tuple(
+                        connection.execute(
+                            "SELECT * FROM conversation_events ORDER BY session_id, "
+                            "conversation_id, sequence"
+                        ).fetchall()
+                    ),
+                )
+
+        source, services = provisioned_services(self)
+        metadata = services.catalog.create("session_a", "Subtype payload subject")
+        event = services.event_store.append(
+            make_append(
+                session_id=metadata.session_id,
+                conversation_id=metadata.conversation_id,
+                turn_id="turn_a",
+                content="subtype payload event content",
+            )
+        )
+        source_archive = compose_sqlite_conversation_archive(source)
+        source_coordinator = WorkspaceConversationStorageMutationCoordinator(source)
+        with source_coordinator.borrow(timeout_seconds=2.0) as lease:
+            payload = source_archive.export_archive(lease)
+        self.assertEqual(len(payload.records), 1)
+        self.assertEqual(payload.records[0].events, (event,))
+        payload_metadata = payload.records[0].metadata
+        payload_event = payload.records[0].events[0]
+        cases = (
+            ("metadata schema version", payload_metadata, "schema_version", False),
+            ("subject revision", payload_metadata, "subject_revision", False),
+            ("event schema version", payload_event, "schema_version", True),
+            ("event sequence", payload_event, "sequence", True),
+        )
+
+        for label, owner, field, reaches_event_sink in cases:
+            with self.subTest(field=label):
+                original = getattr(owner, field)
+                object.__setattr__(owner, field, IntegerSubtype(1))
+                try:
+                    target = initialized_workspace(self)
+                    provision(target)
+                    archive = compose_sqlite_conversation_archive(target)
+                    coordinator = WorkspaceConversationStorageMutationCoordinator(
+                        target
+                    )
+                    logical_before = logical_rows(target)
+                    self.assertEqual(logical_before, ((), ()))
+                    before = storage_snapshot(target)
+                    with (
+                        mock.patch.object(
+                            sqlite_module,
+                            "_insert_metadata",
+                            wraps=sqlite_module._insert_metadata,
+                        ) as insert_metadata,
+                        mock.patch.object(
+                            sqlite_module,
+                            "_insert_event",
+                            wraps=sqlite_module._insert_event,
+                        ) as insert_event,
+                        coordinator.borrow(timeout_seconds=2.0) as lease,
+                    ):
+                        with self.assertRaises(WorkspaceFormatError) as caught:
+                            archive.import_archive(lease, payload)
+
+                    insert_metadata.assert_called_once()
+                    self.assertEqual(
+                        insert_event.call_count,
+                        1 if reaches_event_sink else 0,
+                    )
+                    self.assertEqual(
+                        str(caught.exception),
+                        "invalid SQLite conversation storage",
+                    )
+                    self.assertIsNone(caught.exception.__cause__)
+                    self.assertNotIn(
+                        "integersubtype",
+                        str(caught.exception).casefold(),
+                    )
+                    self.assertNotIn(metadata.subject, str(caught.exception))
+                    self.assertNotIn(event.content, str(caught.exception))
+                    self.assertEqual(storage_snapshot(target), before)
+                    self.assertEqual(logical_rows(target), logical_before)
+                    target_services = compose_sqlite_conversation_storage(target)
+                    self.assertEqual(
+                        target_services.catalog.list(
+                            metadata.session_id,
+                            include_archived=True,
+                        ),
+                        (),
+                    )
+                finally:
+                    object.__setattr__(owner, field, original)
+
+    def test_event_insert_signed_maximum_is_inclusive_at_sink(self) -> None:
+        maximum = (1 << 63) - 1
+
+        def event_with_sequence(sequence: int) -> ConversationEvent:
+            return ConversationEvent(
+                schema_version=CONVERSATION_EVENT_SCHEMA_VERSION,
+                session_id="session_a",
+                conversation_id="conversation_a",
+                turn_id="turn_a",
+                sequence=sequence,
+                timestamp="2026-08-25T00:00:00+00:00",
+                sender="user",
+                recipient="plot_architect",
+                kind=ConversationEventKind.USER_MESSAGE,
+                content="sink boundary event",
+            )
+
+        connection = mock.Mock()
+        sqlite_module._insert_event(connection, event_with_sequence(maximum))
+        connection.execute.assert_called_once()
+        sql, parameters = connection.execute.call_args.args
+        self.assertIn("INSERT INTO conversation_events", sql)
+        self.assertEqual(parameters[2], maximum)
+        self.assertIs(type(parameters[2]), int)
+
+        connection.reset_mock()
+        with self.assertRaises(sqlite_module.SQLiteDatabaseFormatError) as caught:
+            sqlite_module._insert_event(
+                connection,
+                event_with_sequence(maximum + 1),
+            )
+        self.assertEqual(str(caught.exception), "")
+        self.assertIsNone(caught.exception.__cause__)
+        connection.execute.assert_not_called()
 
     def test_archive_divergence_rolls_back_earlier_imports(self) -> None:
         source, _, source_archive = self._populated_archive()
