@@ -110,6 +110,18 @@ class _TrackingConnection:
                 raise self.close_failure
 
 
+class _ExpirableProvisioningLease:
+    """Deterministic lease evidence for one provisioning-boundary failure."""
+
+    def __init__(self, workspace_key: str) -> None:
+        self.workspace_key = workspace_key
+        self.expired = False
+
+    def validate(self, *, workspace_key: str) -> None:
+        if workspace_key != self.workspace_key or self.expired:
+            raise ConversationStorageCoordinationError()
+
+
 def _tracking_connect(
     trace: list[str],
     **options: object,
@@ -1421,6 +1433,42 @@ class SQLiteDatabaseTransactionTests(unittest.TestCase):
 
 
 class SQLiteDatabaseProvisioningTests(unittest.TestCase):
+    def test_provision_rejects_orphaned_temporary_sidecars_without_change(
+        self,
+    ) -> None:
+        for suffix in ("-journal", "-wal", "-shm"):
+            with self.subTest(suffix=suffix):
+                workspace = initialized_workspace(self)
+                target = database_path(workspace)
+                sidecar = target.with_name(
+                    f".conversation_storage.sqlite3.orphan.tmp{suffix}"
+                )
+                sidecar_bytes = f"orphan temporary {suffix} bytes".encode()
+                sidecar.write_bytes(sidecar_bytes)
+                before = storage_snapshot(workspace)
+                coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)
+
+                for attempt in range(2):
+                    with self.subTest(suffix=suffix, attempt=attempt):
+                        with coordinator.borrow(timeout_seconds=2.0) as lease:
+                            with self.assertRaises(WorkspaceSecurityError) as caught:
+                                provision_sqlite_conversation_storage(
+                                    workspace,
+                                    lease=lease,
+                                )
+                        self.assertEqual(
+                            str(caught.exception),
+                            "unsafe SQLite conversation storage path",
+                        )
+                        self.assertIsNone(caught.exception.__cause__)
+                        self.assertFalse(target.exists())
+                        self.assertEqual(storage_snapshot(workspace), before)
+                        self.assertEqual(sidecar.read_bytes(), sidecar_bytes)
+                        self.assertEqual(
+                            list(target.parent.glob(".conversation_storage.sqlite3.*")),
+                            [sidecar],
+                        )
+
     def test_provision_rejects_preexisting_temporary_residue_without_change(
         self,
     ) -> None:
@@ -1502,6 +1550,58 @@ class SQLiteDatabaseProvisioningTests(unittest.TestCase):
         self.assertEqual(
             list(target.parent.glob(".conversation_storage.sqlite3.*.tmp")),
             [candidate],
+        )
+
+    def test_provision_preserves_temporary_sidecar_racing_after_mkstemp(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        target = database_path(workspace)
+        sidecar_bytes = b"preserve raced temporary sidecar"
+        created: list[tuple[Path, Path]] = []
+        real_mkstemp = tempfile.mkstemp
+
+        def mkstemp_with_sidecar(
+            suffix: str | None = None,
+            prefix: str | None = None,
+            dir: str | os.PathLike[str] | None = None,
+            text: bool = False,
+        ) -> tuple[int, str]:
+            descriptor, temporary = real_mkstemp(
+                suffix=suffix,
+                prefix=prefix,
+                dir=dir,
+                text=text,
+            )
+            temporary_path = Path(temporary)
+            sidecar = Path(f"{temporary}-wal")
+            sidecar.write_bytes(sidecar_bytes)
+            created.append((temporary_path, sidecar))
+            return descriptor, temporary
+
+        coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)
+        with mock.patch.object(
+            tempfile,
+            "mkstemp",
+            side_effect=mkstemp_with_sidecar,
+        ):
+            with coordinator.borrow(timeout_seconds=2.0) as lease:
+                with self.assertRaises(WorkspaceSecurityError) as caught:
+                    provision_sqlite_conversation_storage(workspace, lease=lease)
+
+        self.assertEqual(
+            str(caught.exception),
+            "unsafe SQLite conversation storage path",
+        )
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertEqual(len(created), 1)
+        temporary, sidecar = created[0]
+        self.assertFalse(target.exists())
+        self.assertFalse(temporary.exists())
+        self.assertEqual(sidecar.read_bytes(), sidecar_bytes)
+        self.assertEqual(
+            list(target.parent.glob(".conversation_storage.sqlite3.*")),
+            [sidecar],
         )
 
     def test_every_provisioning_path_retains_exhaustive_verification(self) -> None:
@@ -1910,6 +2010,130 @@ class SQLiteDatabaseProvisioningTests(unittest.TestCase):
         self.assertFalse(target.exists())
         self.assertEqual(
             list(target.parent.glob(".conversation_storage.sqlite3.*")), []
+        )
+
+    def test_lease_expiry_after_final_prelink_scan_cleans_without_publication(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        target = database_path(workspace)
+        lease = _ExpirableProvisioningLease(os.fspath(workspace.root))
+        real_require = database_module._require_provisioning_candidates
+        temporary_scans = 0
+
+        def require_candidates(
+            parent: Path,
+            *,
+            expected: tuple[Path, ...],
+        ) -> None:
+            nonlocal temporary_scans
+            real_require(parent, expected=expected)
+            if expected:
+                temporary_scans += 1
+                if temporary_scans == 2:
+                    lease.expired = True
+
+        with mock.patch.object(
+            database_module,
+            "_require_provisioning_candidates",
+            side_effect=require_candidates,
+        ):
+            with self.assertRaises(ConversationStorageCoordinationError) as caught:
+                provision_sqlite_conversation_storage(
+                    workspace,
+                    lease=lease,  # type: ignore[arg-type]
+                )
+
+        self.assertEqual(temporary_scans, 2)
+        self.assertEqual(
+            str(caught.exception),
+            "conversation storage failure: coordination_failed",
+        )
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertFalse(target.exists())
+        self.assertEqual(
+            list(target.parent.glob(".conversation_storage.sqlite3.*")),
+            [],
+        )
+
+    @unittest.skipUnless(os.name == "posix", "hard-link publication is POSIX-only")
+    def test_lease_expiry_after_link_preserves_recoverable_two_link_state(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        target = database_path(workspace)
+        probe_source = target.with_name("hard-link-capability-probe")
+        probe_alias = target.with_name("hard-link-capability-alias")
+        probe_source.write_bytes(b"probe")
+        try:
+            os.link(probe_source, probe_alias, follow_symlinks=False)
+        except OSError as exc:
+            self.skipTest(f"hard links are unsupported: {exc}")
+        finally:
+            probe_alias.unlink(missing_ok=True)
+            probe_source.unlink(missing_ok=True)
+        lease = _ExpirableProvisioningLease(os.fspath(workspace.root))
+        real_require = database_module._require_provisioning_candidates
+        temporary_scans = 0
+
+        def require_candidates(
+            parent: Path,
+            *,
+            expected: tuple[Path, ...],
+        ) -> None:
+            nonlocal temporary_scans
+            real_require(parent, expected=expected)
+            if expected:
+                temporary_scans += 1
+                if temporary_scans == 3:
+                    lease.expired = True
+
+        with mock.patch.object(
+            database_module,
+            "_require_provisioning_candidates",
+            side_effect=require_candidates,
+        ):
+            with self.assertRaises(ConversationStorageCoordinationError) as caught:
+                provision_sqlite_conversation_storage(
+                    workspace,
+                    lease=lease,  # type: ignore[arg-type]
+                )
+
+        self.assertEqual(temporary_scans, 3)
+        self.assertEqual(
+            str(caught.exception),
+            "conversation storage failure: coordination_failed",
+        )
+        self.assertIsNone(caught.exception.__cause__)
+        aliases = list(target.parent.glob(".conversation_storage.sqlite3.*.tmp"))
+        self.assertEqual(len(aliases), 1)
+        alias = aliases[0]
+        self.assertTrue(target.is_file())
+        self.assertTrue(alias.is_file())
+        self.assertTrue(os.path.samefile(target, alias))
+        self.assertEqual(os.stat(target, follow_symlinks=False).st_nlink, 2)
+        target_bytes = target.read_bytes()
+        self.assertEqual(alias.read_bytes(), target_bytes)
+        self.assertNotIn(alias.name, str(caught.exception))
+
+        coordinator = WorkspaceConversationStorageMutationCoordinator(workspace)
+        with coordinator.borrow(timeout_seconds=2.0) as fresh_lease:
+            recovered = provision_sqlite_conversation_storage(
+                workspace,
+                lease=fresh_lease,
+            )
+        self.assertIs(recovered.capability, ConversationStorageCapability.READY)
+        self.assertTrue(target.is_file())
+        self.assertEqual(target.read_bytes(), target_bytes)
+        self.assertEqual(os.stat(target, follow_symlinks=False).st_nlink, 1)
+        self.assertFalse(alias.exists())
+        self.assertEqual(
+            list(target.parent.glob(".conversation_storage.sqlite3.*")),
+            [],
+        )
+        self.assertIs(
+            preflight_sqlite_conversation_storage(workspace).capability,
+            ConversationStorageCapability.READY,
         )
 
     def test_postinstall_sync_failure_leaves_one_complete_database(self) -> None:
