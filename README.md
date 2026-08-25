@@ -119,6 +119,7 @@ story run --output part-01/opening.md --prompt 'Draft the opening.'
 - [Documentation index](docs/INDEX.md) routes each task, contract, design topic, and operational concern.
 - [Workspace guide](docs/guides/workspaces.md) explains the editable project files.
 - [Writing artifacts](docs/reference/writing-artifacts.md) separates current reference sources from publication identity, provenance, and recovery.
+- [Conversation archives](docs/reference/conversation-archives.md) documents canonical conversation-only bytes and privileged filesystem transfer.
 - [Antigravity guide](docs/guides/antigravity.md) covers `agy` setup, authentication, routing, safety, sessions, and provider-free verification.
 - [Story sessions](docs/guides/story-sessions.md) shows shell management, conversation reads, retrieval, and consensus.
 - [Session lifecycle](docs/design/session-lifecycle.md) maps internal state to commands, output, errors, and next actions.
@@ -138,6 +139,12 @@ The only supported backend names are `codex` and `antigravity`; legacy
 <a id="minimal-python-api"></a>
 
 For Python integrations, start with the [runtime API](docs/reference/runtime-api.md), [agent contracts](docs/reference/agent-contracts.md), and [bounded retrieval](docs/reference/conversation-retrieval.md).
+
+Canonical conversation archive values and lease-bound filesystem export/import
+are available from the `story_writing_agents.conversation_storage` subpackage.
+They are application-controlled transport infrastructure, not a shell command,
+complete workspace backup, restore workflow, or storage migration. See
+[Conversation archives](docs/reference/conversation-archives.md).
 
 Conversation catalog, transcript, and reference-search ports also have an
 optional SQLite implementation for direct Python composition. It is not

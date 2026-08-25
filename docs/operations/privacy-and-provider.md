@@ -2,7 +2,8 @@
 
 > **Availability:** these controls cover local reads, advisory turns, and
 > retrieval-enabled turns, management commands, focused-context consensus, and
-> runtime explicit-reference authorization and backend enforcement.
+> runtime explicit-reference authorization and backend enforcement, plus direct
+> Python conversation archive values and filesystem transfer.
 > They do not make either provider, its executable, the workspace, or the
 > terminal trusted.
 > Inline canonical references in provider-bound prompt text are active.
@@ -24,8 +25,31 @@ protection. The workspace debug log is the one bounded-retention channel
 described below; it is still plaintext.
 
 Blackboards can contain input, drafts, reviews, and errors. Provider output is
-not generally scrubbed; archive neither deletes nor conceals conversations;
-transcripts retain messages, replies, and runtime errors.
+not generally scrubbed; catalog archive status neither deletes nor conceals
+conversations; transcripts retain messages, replies, and runtime errors.
+
+<a id="conversation-archive-privacy"></a>
+
+### Conversation archive exposure
+
+Canonical conversation archive values and serialized bytes contain exact
+plaintext subjects, identities, timestamps, statuses, user messages, agent
+replies, and runtime-error content. Serialization performs no redaction or
+encryption. Its SHA-256 digest detects modification but provides no secrecy,
+signature, origin authentication, or access control.
+
+Filesystem export deliberately excludes debate/runtime logs, debate
+state/results/context, credentials, provider and agent state, prompts,
+configuration/defaults, storage activation and RAG state, manuscripts, and
+writing artifacts. Those exclusions make the value conversation-only; they do
+not make its included transcript content safe to disclose. Import copies the
+included plaintext and neither deletes excluded state nor securely erases a
+source or caller-owned archive copy.
+
+The runtime owns no archive file or retention policy. A caller that stores,
+transmits, logs, or otherwise retains the returned bytes owns protection and
+cleanup for every copy. See
+[Canonical conversation archives](../reference/conversation-archives.md#archive-non-goals).
 
 The optional `discussion_logs/conversation_storage.sqlite3` database is also
 plaintext and can coexist with the filesystem catalog and transcripts, leaving

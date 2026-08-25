@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 61.
+Importable production units indexed: 63.
 
-Direct internal dependency edges indexed: 232.
+Direct internal dependency edges indexed: 241.
 
 ## Current Dependency Direction
 
@@ -102,12 +102,15 @@ story_writing_agents facade -> interactive_commands
                             |                          -> conversations/errors
                             -> conversation_search -> conversations/errors
                             -> session_lifecycle
-conversation_storage -> conversation_storage.composition
-                     -> conversation_storage.contracts
+conversation_storage -> conversation_storage.archive/composition/contracts
+                     -> conversation_storage.filesystem_archive
+conversation_storage.archive -> conversations/errors
 conversation_storage.composition -> conversation_search
                                  -> conversation_storage.contracts
                                  -> workspace
 conversation_storage.contracts -> conversation_search/conversations/errors
+conversation_storage.filesystem_archive -> conversation_storage.archive/contracts
+                                        -> conversations/errors/workspace
 conversation_storage.sqlite_database -> workspace
 conversation_storage.sqlite -> conversation_search/conversations/errors/workspace
                             -> conversation_storage.sqlite_database
@@ -718,8 +721,9 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:** `src/story_writing_agents/conversation_storage/__init__.py`
 - **Responsibility:** Provide the intentional public boundary for conversation-
-  storage selection, composition, coordination, activation, and archive ports.
-- **Supported surface:** Exactly 40 names in `__all__`: the fixed
+  storage selection, composition, coordination, activation, and exact archive
+  transfer.
+- **Supported surface:** Exactly 64 names in `__all__`: the retained fixed
   `CONVERSATION_STORAGE_ACTIVATION_SCHEMA_VERSION`,
   `CONVERSATION_STORAGE_ACTIVATION_STATE_PATH`,
   `CONVERSATION_STORAGE_MUTATION_GUARD_PATH`, and
@@ -751,27 +755,85 @@ every intermediate arrow. The current runtime graph is acyclic.
   `validate_conversation_storage_mutation_timeout`,
   `compose_filesystem_conversation_storage`,
   `load_conversation_storage_activation_state`, and
-  `compare_and_set_conversation_storage_activation`. None are re-exported by
-  the project-root `story_writing_agents` facade. The separately imported
-  optional `story_writing_agents.conversation_storage.sqlite` and
+  `compare_and_set_conversation_storage_activation`; plus additive
+  `CONVERSATION_ARCHIVE_SCHEMA_VERSION`,
+  `CONVERSATION_ARCHIVE_MAX_RAW_BYTES`,
+  `CONVERSATION_ARCHIVE_MAX_SESSIONS`,
+  `CONVERSATION_ARCHIVE_MAX_CONVERSATIONS`,
+  `CONVERSATION_ARCHIVE_MAX_EVENTS`,
+  `CONVERSATION_ARCHIVE_MAX_AGGREGATE_UTF8_BYTES`, `ConversationArchive`,
+  `ConversationArchiveSession`,
+  `ConversationArchiveConversation`, `ConversationArchiveEvent`, the ten-name
+  canonical archive exception hierarchy rooted at `ConversationArchiveError`,
+  `serialize_conversation_archive`, `deserialize_conversation_archive`,
+  `FilesystemConversationArchiveAdapter`, and
+  `compose_filesystem_conversation_archive`. None are re-exported by the
+  project-root `story_writing_agents` facade. The separately imported optional
+  `story_writing_agents.conversation_storage.sqlite` and
   `story_writing_agents.conversation_storage.sqlite_database` modules have
   their own supported surfaces; neither is re-exported by this package or the
   root facade.
-- **Direct internal dependencies:** `conversation_storage.composition` and
-  `conversation_storage.contracts`.
+- **Direct internal dependencies:** `conversation_storage.archive`,
+  `conversation_storage.composition`, `conversation_storage.contracts`, and
+  `conversation_storage.filesystem_archive`.
 - **State, resources, and side effects:** Owns no state or resource; importing
-  the package loads exactly its `composition` and `contracts` modules but does
-  not import the optional SQLite adapter or load the standard-library
-  `sqlite3` module. Import performs no filesystem access, lock-file open,
-  thread creation, database access, or adapter construction.
+  the package loads exactly its archive, composition, contracts, and filesystem
+  archive modules, but does not import either optional SQLite module or load
+  the standard-library `sqlite3` module. Import performs no filesystem access,
+  lock-file open, thread creation, archive scan, database access, or adapter
+  construction.
 - **Primary verification/documentation:**
+  `tests/test_conversation_archive.py`,
+  `tests/test_filesystem_conversation_archive.py`,
   `tests/test_conversation_storage.py`,
   `tests/test_conversation_catalog.py`,
   `tests/test_conversation_event_store.py`,
   `tests/test_conversation_search.py`,
+  `docs/reference/conversation-archives.md`,
+  `docs/operations/filesystem-safety.md`,
   `docs/reference/conversation-catalog.md`,
   `docs/reference/conversation-transcripts.md`, and
   `docs/reference/conversation-search.md`.
+
+### `story_writing_agents.conversation_storage.archive`
+
+- **Source:** `src/story_writing_agents/conversation_storage/archive.py`
+- **Responsibility:** Own the immutable canonical conversation archive domain
+  and its deterministic version-1 wire representation.
+- **Supported surface:** Exactly 22 names in `__all__`: fixed
+  `CONVERSATION_ARCHIVE_SCHEMA_VERSION`,
+  `CONVERSATION_ARCHIVE_MAX_RAW_BYTES`,
+  `CONVERSATION_ARCHIVE_MAX_SESSIONS`,
+  `CONVERSATION_ARCHIVE_MAX_CONVERSATIONS`,
+  `CONVERSATION_ARCHIVE_MAX_EVENTS`, and
+  `CONVERSATION_ARCHIVE_MAX_AGGREGATE_UTF8_BYTES` policy constants; frozen
+  `ConversationArchive`, `ConversationArchiveSession`,
+  `ConversationArchiveConversation`, and `ConversationArchiveEvent` values;
+  content-free `ConversationArchiveError`, `ConversationArchiveFormatError`,
+  `ConversationArchiveVersionError`, `ConversationArchiveBoundsError`,
+  `ConversationArchiveDigestError`, `ConversationArchiveSourceError`,
+  `ConversationArchiveSourceChangedError`,
+  `ConversationArchiveDestinationError`, `ConversationArchiveConflictError`,
+  and `ConversationArchiveDestinationChangedError`; and
+  `serialize_conversation_archive` plus `deserialize_conversation_archive`.
+- **Direct internal dependencies:** `conversations` and `errors`.
+- **State, resources, and side effects:** Owns no mutable state or external
+  resource. Construction, serialization, and parsing enforce exact container
+  types and local counts, then shallow child types and complete nested global
+  counts, before inspecting or copying descendant fields. They consume the
+  fixed 32-MiB aggregate subject/content UTF-8 budget incrementally. Values are
+  immutable and canonicalize session, conversation, and event order.
+  Serialization emits strict version-1 UTF-8 JSON with exact field order and
+  one final LF; its lower-case SHA-256 covers the same canonical top-level
+  schema/version and sessions image without the digest field. Deserialization
+  caps raw bytes before decoding, rejects duplicate or noncanonical JSON,
+  verifies the digest, and maps recursion anywhere in the complete parse and
+  canonical-revalidation path to a content-free format error without retained
+  cause. All archive errors are content-free, and the module performs no I/O.
+- **Primary verification/documentation:**
+  `tests/test_conversation_archive.py`, supported by
+  `tests/conversation_archive_fixture.py`, and
+  `docs/reference/conversation-archives.md`.
 
 ### `story_writing_agents.conversation_storage.composition`
 
@@ -864,9 +926,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   provenance token and does not inspect adapter-private state or infer
   provenance from collaborator attributes. Archive payload shape remains
   generic and adapter-owned, while the source/sink signatures require an active
-  lease and the sink returns a typed imported/unchanged receipt; no archive
-  record, serialization, or ordinary ID/timestamp/sequence allocation API is
-  introduced.
+  lease and the sink returns a typed imported/unchanged receipt. This contracts
+  module itself owns no archive record, serialization, or ordinary
+  ID/timestamp/sequence allocation API.
 - **Direct internal dependencies:** `conversation_search`, `conversations`,
   and `errors`.
 - **State, resources, and side effects:** Frozen, slotted values, protocols,
@@ -881,6 +943,49 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/reference/conversation-catalog.md`,
   `docs/reference/conversation-transcripts.md`, and
   `docs/reference/conversation-search.md`.
+
+### `story_writing_agents.conversation_storage.filesystem_archive`
+
+- **Source:**
+  `src/story_writing_agents/conversation_storage/filesystem_archive.py`
+- **Responsibility:** Own privileged lease-bound exact archive transfer for the
+  established filesystem conversation layout.
+- **Supported surface:** Exactly two package-re-exported names in `__all__`:
+  `FilesystemConversationArchiveAdapter` and
+  `compose_filesystem_conversation_archive`.
+- **Direct internal dependencies:** `conversation_storage.archive`,
+  `conversation_storage.contracts`, `conversations`, `errors`, and `workspace`.
+- **State, resources, and side effects:** Import performs no I/O. One adapter
+  captures only one private immutable canonical root and workspace key; it
+  retains no caller `Workspace` or publicly reachable catalog/event-store
+  binding. Each export or import validates the caller-owned active
+  correct-workspace owner-thread lease before materializing one unreachable
+  operation-local public `Workspace`, `FilesystemConversationCatalog`, and
+  `FilesystemConversationEventStore` set pinned to that root, then revalidates
+  the same lease throughout scans and immediately before writes. Every
+  included or excluded descendant entry is charged before retention, stat, or
+  descent, with fixed limits of 1,000,000 entries, 1,024 contributing sessions,
+  65,536 conversations, 1,000,000 addressed events, 64 MiB per included file,
+  128 MiB cumulative included bytes, the archive's incremental 32-MiB logical
+  text budget, and its canonical wire bound. Included files are no-follow
+  singly linked regular files; excluded bytes and the metadata-validated empty
+  `.gitkeep` sentinel are never read. Authoritative reads use addressed
+  `catalog.get` and event-store operations rather than a catalog-wide rescan.
+  Export returns only after two complete byte-identical canonical scans; the
+  caller must keep the source stable because this detects change without
+  blocking ordinary writers. Before the first import write, the adapter
+  validates the complete destination-plus-payload union, precomputed target
+  bytes, projected paths and aggregate bounds, every target and ancestor, and
+  the expected canonical wire. Import preserves unrelated excluded state,
+  performs only create-only atomic metadata-first writes, accepts exact
+  collisions, and verifies the complete expected bounded post-import snapshot.
+  Operational failure can leave only canonical addressed directory prefixes,
+  a complete exact conversation, or exact metadata awaiting its transcript,
+  so retry converges without overwrite, deletion, or ordinary allocation.
+- **Primary verification/documentation:**
+  `tests/test_filesystem_conversation_archive.py`,
+  `docs/reference/conversation-archives.md`, and
+  `docs/operations/filesystem-safety.md`.
 
 ### `story_writing_agents.conversation_storage.sqlite_database`
 
@@ -996,8 +1101,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `compose_sqlite_conversation_storage`,
   `preflight_sqlite_conversation_storage`, and
   `provision_sqlite_conversation_storage`. The adapter-private archive payload
-  and record values are deliberately unsupported pending the canonical archive
-  contract.
+  and record values remain deliberately unsupported and separate from the
+  canonical archive values owned by the sibling `archive` module.
 - **Direct internal dependencies:** `conversation_search`,
   `conversation_storage.sqlite_database`,
   `conversation_storage.composition`, `conversation_storage.contracts`,
@@ -3454,23 +3559,31 @@ every intermediate arrow. The current runtime graph is acyclic.
   filesystem/SQLite selection, explicit raw-port component binding, capability
   preflight, migration readiness/parity, activation outcomes/failures, bounded
   mutation leases, and generic exact archive transfer. It depends only on the
-  existing catalog/event-store/search/error contracts. The package facade and
-  `composition` depend inward on it; no existing runtime, controller, config,
-  workspace, or root-facade module depends on the new package in this slice.
+  existing catalog/event-store/search/error contracts. The pure `archive`
+  module owns the canonical backend-neutral logical/wire value independently
+  of those generic ports, while `filesystem_archive` alone knows the fixed
+  filesystem layout and depends inward on both. The package facade re-exports
+  their additive supported surfaces; no runtime, controller, config, workspace,
+  or root-facade module depends on them or changes default selection.
   `conversation_storage.composition` alone owns the weak workspace coordinator
   registry, contained POSIX advisory guard, activation marker I/O, and explicit
-  filesystem binding. Its service bundle exposes the raw existing filesystem
-  collaborators and adds no resource ownership or allocation behavior to their
-  narrow ports. Missing activation state remains the unwritten filesystem
-  baseline. A supported mutation borrows one exclusive, owner-thread-bound,
-  expiring lease first. SQLite catalog/event mutations borrow that coordinator
-  before their database transaction, while SQLite provisioning and archive
-  operations validate a caller-supplied outer lease; migration and parity
-  remain future consumers. Activation CAS likewise validates its supplied lease
-  rather than acquiring one behind its caller. The optional SQLite module
-  depends inward on the existing contracts and composition boundary plus the
-  database owner; neither package facade imports it, and no runtime,
-  controller, config, workspace, or root-facade module selects it by default.
+  filesystem binding. Its service bundle exposes
+  concrete-`isinstance`-compatible construction-pinned filesystem collaborators
+  under one explicit provenance, using operation-local workspaces without
+  retaining caller-mutable bindings or adding external resource ownership.
+  Direct standalone adapters retain their borrowed-`Workspace` behavior.
+  Missing activation state remains the unwritten filesystem baseline. A
+  supported mutation borrows one exclusive, owner-thread-bound,
+  expiring lease first. Filesystem archive transfer validates that supplied
+  outer lease throughout its privileged operation. SQLite catalog/event
+  mutations borrow the same coordinator before their database transaction,
+  while SQLite provisioning and its adapter-private archive operations validate
+  a caller-supplied outer lease; migration and parity remain future consumers.
+  Activation CAS likewise validates its supplied lease rather than acquiring
+  one behind its caller. The optional SQLite module depends inward on the
+  existing contracts and composition boundary plus the database owner; neither
+  package facade imports it, and no runtime, controller, config, workspace, or
+  root-facade module selects it by default.
 
 - Writing-artifact directive parsing is a pure package-local boundary:
   `writing_artifacts.directives` scans only one supplied current input and

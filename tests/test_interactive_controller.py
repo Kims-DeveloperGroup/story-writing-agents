@@ -1351,9 +1351,11 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 61)
+        self.assertEqual(len(modules), 63)
         self.assertTrue(
             {
+                "story_writing_agents.conversation_storage.archive",
+                "story_writing_agents.conversation_storage.filesystem_archive",
                 "story_writing_agents.conversation_storage.sqlite_database",
                 "story_writing_agents.conversation_storage.sqlite",
             }

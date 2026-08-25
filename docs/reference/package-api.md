@@ -1,14 +1,16 @@
 # Package API and exports
 
 > **Availability:** the 120-name inventory below is exported from the
-> implemented `story_writing_agents` package facade. The optional SQLite API has
-> a separate owning module and is explicitly documented after that inventory;
-> it is not a facade export. Context and progress types are Python APIs; an
-> export does not imply a CLI command.
+> implemented `story_writing_agents` package facade. Separate sections document
+> archive additions to the supported `story_writing_agents.conversation_storage`
+> subpackage and the optional SQLite owning module; neither is a facade export.
+> Context and progress types are Python APIs; an export does not imply a CLI
+> command.
 
 Key terms: **package facade**—the names re-exported at the package root;
-**public import**—a supported symbol imported from that facade; **alias**—a
-second name for the same object; **enum**—a type with a fixed value set.
+**public import**—a supported symbol imported from its documented owning
+package; **alias**—a second name for the same object; **enum**—a type with a
+fixed value set.
 
 Import public contracts from the package root:
 
@@ -90,6 +92,39 @@ interactive activation values remain internal. The installed controller uses
 that private UI boundary for `$`/`$$` prompt editing without adding a public
 selection API or standalone artifact command. See
 [Canonical writing artifacts](writing-artifacts.md).
+
+<a id="conversation-storage-subpackage"></a>
+
+## Conversation-storage subpackage
+
+Canonical conversation archive values, deterministic serialization, and the
+privileged filesystem archive adapter are supported from
+`story_writing_agents.conversation_storage`, not from the 120-name package-root
+facade. The subpackage has an exact 64-name `__all__`; the archive addition is
+the archive module's 22-name surface plus the filesystem adapter's two-name
+surface:
+
+```python
+from story_writing_agents.conversation_storage import (
+    ConversationArchive,
+    FilesystemConversationArchiveAdapter,
+    compose_filesystem_conversation_archive,
+    deserialize_conversation_archive,
+    serialize_conversation_archive,
+)
+```
+
+These imports add no CLI command and perform no scan or mutation. Exact
+constants, value fields, callable signatures, error hierarchy, bounds, wire
+format, lease usage, and filesystem behavior are in
+[Canonical conversation archives](conversation-archives.md#public-archive-api).
+
+The filesystem adapter captures a private immutable root/key rather than
+retaining the caller's `Workspace` or public catalog/event-store collaborators.
+After pure payload validation where applicable, each call validates its lease
+before creating one private operation-local collaborator set. This archive
+topology is independent of composed conversation services and SQLite's database
+owner; it changes neither root-facade exports nor ordinary runtime defaults.
 
 The export inventory and public signatures are unchanged by runtime diagnostics.
 Public `AgentBackend` and `StoryRuntime` operations use an internal
@@ -381,12 +416,15 @@ aliases. See [Backend and sessions](backend-and-sessions.md#lifecycle-value-cont
 - [Canonical writing artifacts](writing-artifacts.md)
 - [Conversation catalog](conversation-catalog.md)
 - [Conversation transcripts](conversation-transcripts.md)
+- [Canonical conversation archives](conversation-archives.md)
 - [Conversation search and cited transcript pages](conversation-search.md)
 - [Bounded conversation retrieval](conversation-retrieval.md)
 - [Interactive command parser](interactive-command-parser.md)
 - [Identifiers and errors](configuration/identifiers-and-errors.md)
 
-Lower-level modules may contain implementation helpers. The package facade and
-the explicitly documented SQLite owning module are the supported public import
-surfaces; both match their own `__all__` values and neither re-exports the
-other.
+Lower-level modules may contain implementation helpers. The package-root facade
+matches its `__all__`; archive names are supported only through the explicitly
+documented conversation-storage subpackage and its owning-module surfaces.
+The explicitly documented SQLite owning module is also a supported public
+surface, matches its own `__all__`, and neither it nor the package facade
+re-exports the other.

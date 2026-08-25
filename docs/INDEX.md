@@ -28,6 +28,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Show registry help or shell status | Global in the installed shell |
 | Apply directives; safely inspect sessions or debates | Current attachment; no conversation focus required |
 | Create, list, resume, rename, or archive subject conversations | Installed shell after session attachment; catalog Python API |
+| Serialize or transfer canonical conversation-only archives | Direct `story_writing_agents.conversation_storage` Python API; serialization is pure, while filesystem export/import require a caller-held mutation lease. No shell command, complete backup, or migration workflow. |
 | Use the optional SQLite conversation catalog, transcript store, and reference search | Direct Python API after readiness preflight and, when absent, explicit provisioning; not selected by the shell or default runtime composition |
 | List or target agents; send ordinary, `@AGENT`, or `/say` turns | Installed shell; an active conversation must have current focus |
 | Read durable/access facts and perform exact session transitions | Python API; used by the installed shell and runtime |
@@ -72,6 +73,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 - [Package API and exports](reference/package-api.md)
 - [Conversation catalog](reference/conversation-catalog.md)
 - [Conversation transcripts](reference/conversation-transcripts.md)
+- [Canonical conversation archives and filesystem transfer](reference/conversation-archives.md)
 - [Conversation search and cited transcript pages](reference/conversation-search.md)
 - [Bounded agent-directed conversation retrieval](reference/conversation-retrieval.md)
 - [Interactive command parser](reference/interactive-command-parser.md)
@@ -90,7 +92,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 
 - [Overview](design/overview.md)
 - [Interactive CLI design system contract](design/interactive-cli-design-system.md)
-- [Canonical Python module inventory (61 production units)](../PYTHON_MODULE_INDEX.md)
+- [Canonical Python module inventory (63 production units)](../PYTHON_MODULE_INDEX.md)
 - [Prompts and provider boundary](design/prompts-and-provider.md)
 - [Session lifecycle](design/session-lifecycle.md)
 - [Consensus workflow](design/consensus-workflow.md)

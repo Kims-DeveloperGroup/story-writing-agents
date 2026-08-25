@@ -3,7 +3,9 @@
 > **Availability:** filesystem persistence covers configuration, sessions,
 > conversations, debates, optional debate-context sidecars, canonical writing
 > artifacts, content-free explicit-reference authorization evidence, and
-> bounded runtime debug-log infrastructure. A separate optional SQLite
+> bounded runtime debug-log infrastructure. Direct Python callers can also
+> construct canonical conversation-only archive bytes and use the privileged
+> filesystem transfer adapter. A separate optional SQLite
 > conversation store is available only through a direct Python module.
 > `StoryRuntime` creates and finalizes reference evidence for inline referenced
 > operations; Python callers can inspect it by operation ID.
@@ -25,12 +27,56 @@ select the runtime files automatically.
 | Provider manifest and access claim | `AgentBackend` |
 | Session/conversation defaults | CLI context helpers |
 | Conversation metadata and transcript | Filesystem catalog/event-store adapters by default; optional SQLite adapters by direct composition |
+| Canonical conversation archive value and bytes | `conversation_storage.archive`; caller owns any stored or transmitted bytes |
 | Bounded runtime diagnostics | Internal `debug_log` writer |
 | Retrieval actions, observations, progress, sources | Process/terminal only |
 | Current conversation and agent focus | Controller memory only |
 | Canonical writing artifacts and provenance | `WritingArtifactRepository` |
 | Explicit-reference operation and invocation evidence | `WritingArtifactRepository`; content-free create-only records |
 | Explicit-reference selected content | Transient repository/backend carriers and one immediate provider payload; no workspace evidence field |
+
+<a id="conversation-archive-persistence"></a>
+
+## Conversation archive persistence boundary
+
+`conversation_storage.archive` owns immutable version-1 archive, session,
+conversation, and event values. It canonicalizes logical ordering and emits one
+strict-UTF-8 JSON byte image with a SHA-256 integrity digest. The pure value and
+serialization layer performs no filesystem I/O and owns no archive file;
+storage, transmission, retention, and access control for returned bytes belong
+to the calling application.
+
+`conversation_storage.filesystem_archive` owns this canonical archive's
+layout-aware filesystem transfer. Its adapter captures one private immutable
+construction-time root/key, retains no caller `Workspace` or public mutable
+catalog/event-store collaborator, and creates one operation-local collaborator
+set only after validating the operation's lease. This pinning is archive-owned,
+not the composed-service topology or SQLite database owner. Under a
+caller-held workspace mutation lease, export reads addressed exact metadata and
+complete transcripts from the fixed
+`discussion_logs/<session>/interactive/conversations/` namespace. It requires
+an already quiescent source and returns only after two complete canonical
+archive images agree. The lease and double scan detect unsafe or changed
+conversation state, but are neither authorization nor a linearizable snapshot
+for ordinary catalog/event-store writers.
+
+Import canonicalizes and bounds the whole payload, scans and classifies the
+complete destination-plus-payload union, builds its exact planned files,
+projects every count/path/byte bound, and checks all target ancestors before
+mutation. Create-only metadata-first installation accepts exact domain state,
+adds absent identities, preserves unrelated complete conversations and
+excluded workspace channels, rejects divergence, and verifies the expected
+destination afterward. It makes no rollback or deletion claim: an operational
+failure may leave only recognized exact prefixes that the same payload can
+complete under a fresh valid lease.
+
+This boundary neither persists an archive automatically nor combines
+conversation files with debates, defaults, provider state, prompts,
+manuscripts, artifacts, diagnostics, or configuration. It is not a complete
+workspace transaction, backup, restore, storage migration, checkpoint, parity,
+activation, or dual-write mechanism. See the exact
+[archive reference](../reference/conversation-archives.md) and
+[filesystem boundary](../operations/filesystem-safety.md#conversation-archive-filesystem-safety).
 
 <a id="optional-sqlite-conversation-persistence"></a>
 
