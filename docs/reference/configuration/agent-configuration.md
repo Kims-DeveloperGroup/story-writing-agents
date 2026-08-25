@@ -121,11 +121,14 @@ Codex. Allowed backend names are exactly `codex` and `antigravity`. A legacy
 `backend 'gemini' is no longer supported; use 'antigravity'`. Unknown agent IDs,
 fields, or backend names are errors.
 
-The `/settings` Providers editor follows canonical roster order. It first
+The `/settings` Agents editor follows canonical roster order. It first
 selects an agent, then offers Provider, Model, and Effort. Both Codex
 and Antigravity are selectable. Provider assignment freshly checks status and,
 when needed, completes native authentication before mutating the candidate.
-Failed or cancelled authentication leaves that route unchanged.
+Authentication is subordinate and returns to Provider; a successful selection
+changes only the pending in-memory route. Failed or cancelled authentication
+leaves that route unchanged, and any missing workspace default also remains
+pending in memory before confirmed Save.
 
 Only entering Model or Effort performs one fresh bounded discovery for the
 pending effective provider; Effort also uses the pending effective model.
@@ -147,16 +150,22 @@ model/effort token or null, and the active backend keeps its snapshot until the
 next shell/backend construction.
 
 Opening `/settings` captures exact bytes for both configuration documents, a
-fully validated immutable pair, and the safe persona catalog. Save revalidates
-every distinct effective provider before the file transaction, then revalidates
-the complete pending pair and requires all three opening facts to remain exact.
+fully validated immutable pair, and the safe persona catalog. No configuration
+value is persisted before Save is confirmed; Escape or cancellation leaves the
+captured configuration bytes unchanged. After Save confirmation, Save
+revalidates every distinct effective provider before the file transaction, then
+revalidates the complete pending pair and requires all three opening facts to
+remain exact.
 It writes only changed documents, canonically, in system-defaults then
 agent-configs order. A failed write triggers reverse-order restoration of every
 attempted target, including the failing target, from its exact opening bytes;
 rollback uncertainty is reported separately. This is guarded coordination of
 two atomic per-file replacements, not a public API or cross-file transaction.
-Authentication and missing-default writes happen outside this candidate
-transaction and remain durable if the pending settings workflow later cancels.
+Save-time authentication may durably establish a missing workspace default
+outside and before this candidate transaction. That completed post-confirmation
+default is not rolled back if later Save gating or transaction work stops.
+Startup authentication and explicit global `/auth` remain outside `/settings`
+and retain their immediate absent-default durability policy.
 
 ## Role prompts
 

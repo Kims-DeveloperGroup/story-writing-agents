@@ -72,9 +72,12 @@ only the four preferred prompt aliases—`lead`, `plot`, `character`, and
 possible provider/artifact use, not shell gates. Parsing performs no I/O.
 `/auth` has `may_call_provider=True` because it invokes native authentication
 commands, and `may_write_artifacts=True` because fresh authentication may fill
-a missing workspace default. `/settings` has both flags: provider selection and
-Save can authenticate, while default establishment or an explicit Save can
-replace configuration documents.
+a missing workspace default immediately under the established global `/auth`
+policy. `/settings` has both flags: provider selection and confirmed Save can
+authenticate, but Provider-editor authentication alone persists neither its
+route nor a missing workspace default. Only after Save is confirmed may
+save-time authentication establish a durable missing default or the guarded
+settings transaction replace configuration documents.
 
 For `/run`, `--output` must be first, or immediately after `--fresh`. The parser
 recognizes only ASCII space or tab between `--output`, its `PART/PATH.md`, and

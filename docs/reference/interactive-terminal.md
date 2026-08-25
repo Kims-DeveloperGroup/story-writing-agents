@@ -40,7 +40,10 @@
 > API; downstream agent-read enforcement remains runtime-owned.
 > The Settings editor exposes provider-neutral Provider, Model, and Effort
 > fields; entering Model or Effort performs one fresh bounded discovery for the
-> pending effective provider.
+> pending effective provider. Within `/settings` only, valid value commits keep
+> the active editor open with updated selection/default and one replacing inline
+> completed success result; resume pickers and Save/Cancel confirmations remain
+> one-shot.
 
 ## Public API
 
@@ -494,10 +497,14 @@ identities are control state and are never rendered.
 
 Settings custom-model and numeric values use a separate context-free semantic
 `Prompt`. That route is history- and completion-free. Enter commits the exact
-line, Escape cancels only the nested editor, and Ctrl-C or EOF cancels the whole
-settings workflow. In fallback an exact ESC line cancels, while `/cancel`
-remains literal input. The same sole driver owns raw input, redraw, cleanup,
-and restoration.
+line for validation. A valid commit applies the pending value and immediately
+reopens the same prompt with its default updated and one inline `Notice` using
+`SemanticRole.SUCCESS` and `ViewState.COMPLETED`; a later valid commit replaces
+that result. The prompt remains `ViewState.FOCUSED`. Escape returns one settings
+level without undoing applied pending values, while Ctrl-C or EOF cancels the
+whole settings transaction. In fallback an exact ESC line returns one level,
+while `/cancel` remains literal input. The same sole driver owns raw input,
+redraw, cleanup, and restoration.
 
 One permanent input latch now serves every input route on a stream-backed
 terminal. Construction is resource-free; the first actual input read makes the
@@ -560,8 +567,9 @@ Save and Cancel each show a transient selectable confirmation with highlighted
 `YES` and `NO` choices. Its preceding context contains only fields whose
 Current and Pending values differ, and both displayed values carry the
 `(Changed)` cue; an unchanged state shows only `No pending settings changes.`
-without empty Current or Pending sections. Selecting `YES` commits the
-requested action, while `NO` or nested Escape returns to the settings picker.
+without empty Current or Pending sections. These confirmations are one-shot:
+selecting `YES` commits and closes the requested action, while `NO` or nested
+Escape closes the confirmation and returns to the settings picker.
 Top-level Escape, Ctrl-C, and EOF cancel without writing and do not imply a
 snapshot was rendered.
 
@@ -574,11 +582,27 @@ Provider, Model, and Effort. Current/Pending confirmations remain
 provider-qualified—Codex model/reasoning and Antigravity model/effort rows—so
 inactive persisted values remain unambiguous.
 
-Only entering Model or Effort starts discovery. Opening Settings or Providers,
+The visible top-level roster choice and roster picker are both named Agents.
+Selecting an agent opens Agent settings; Provider remains the field-level
+configuration concept rather than the roster name.
+
+Only entering Model or Effort starts discovery. Opening Settings or Agents,
 selecting an agent, navigating providers, and editing Provider launch no
 catalog command. Each entry runs one fresh command for the pending effective
-provider; Effort additionally resolves the pending effective model from the
-agent value and then workspace fallback.
+provider. Valid retained commits and redraws within that editor do not run
+discovery again; leaving and re-entering does. Effort additionally resolves the
+pending effective model from the agent value and then workspace fallback.
+
+Language, Persona, Maximum debate rounds, Provider, Model, Custom model, and
+Effort remain active after a valid Enter. A picker reopens in `ViewState.OPEN`
+with its prompt focused and selection updated; a prompt reopens in
+`ViewState.FOCUSED` with its default updated. The latest applied value appears
+as the only visible inline `SemanticRole.SUCCESS`/`ViewState.COMPLETED` notice,
+replacing the previous result. Escape returns one level through Custom model >
+Model > Agent settings > Agents > Settings; Provider and Effort return directly
+to Agent settings. Authentication launched while choosing Provider is a
+subordinate action and returns to Provider after its result. Ctrl-C or EOF at
+any level cancels the whole settings transaction.
 
 Model choices are ordered Inherit, discovered models in provider order,
 Current custom when the pending value is not in that projection, and Custom
@@ -961,6 +985,14 @@ read. A successful read with eligible rows opens this picker live on a capable
 stream or numbered in fallback; an empty or failed read does not open it. A
 caller supplies one semantic prompt and immutable choices whose opaque
 identities are returned on commit but never rendered as picker identities.
+
+The generic picker remains commit-once. `/settings` alone may consume that
+commit and immediately open a new value-editor read with updated state and an
+inline success notice. This is not global navigation policy. Save/Cancel
+confirmations and context-changing consumers remain one-shot, especially
+`/session resume` and `/conversation resume`: after selection the picker is no
+longer active, its capable frame is cleared, and fallback text may remain only
+as inactive scrollback.
 
 Initialization highlights an explicit enabled choice, otherwise an enabled
 selection, otherwise the first enabled choice. Empty and all-disabled choice

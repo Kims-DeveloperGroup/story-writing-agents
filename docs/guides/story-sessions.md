@@ -124,31 +124,45 @@ any default already established.
 
 `/settings` is global, alias-free, and works in the lobby or while attached. It
 shows separate Current and Pending values for Language,
-Persona, Maximum debate rounds, and Providers. The top-level choices are those
-four rows followed by Save and Cancel. Choose Providers to select an agent in
-canonical roster order, then choose Provider, Model, or Effort for
-that agent. Provider choices are Codex and Antigravity. Changing the route does
-not erase the inactive provider's saved model or effort.
+Persona, Maximum debate rounds, and Agents. The top-level choices are those
+four rows followed by Save and Cancel. Choose Agents to select an agent in
+canonical roster order, then use Agent settings to choose Provider, Model, or
+Effort for that agent. Provider remains the field-level configuration concept;
+its choices are Codex and Antigravity. Changing the route does not erase the
+inactive provider's saved model or effort.
 Editor labels are provider-neutral; Current/Pending confirmation remains
 provider-qualified so both providers' inactive values stay identifiable.
 
-On a capable terminal, Up/Down moves the current picker highlight and Enter
-opens or commits it. Escape from a nested picker or prompt restores that
-field's prior pending value and returns to its parent. Escape at the top level,
-Cancel, Ctrl-C, or EOF cancels the whole workflow without saving. Plain
-fallback uses the picker's numbered grammar. In the per-agent active-provider
-Custom model prompt, blank means inherit that provider's workspace system model
-and `/cancel` is literal model text rather than a command.
+On a capable terminal, Up/Down moves the current picker highlight. Enter opens
+a selected settings level or applies a pending value. Language, Persona,
+Maximum debate rounds, Provider, Model, Custom model, and Effort stay active
+after a valid Enter: the picker selection or prompt default updates immediately,
+and the editor shows one inline completed success result for the latest value,
+replacing the previous result. Guidance states that Enter applies the pending
+value and keeps the editor open. Escape returns one level through Custom model
+> Model > Agent settings > Agents > Settings; Provider and Effort return
+directly to Agent settings. Escape at Settings, Ctrl-C, or EOF cancels the whole
+transaction without saving. Plain fallback uses the picker's numbered grammar
+and the same level hierarchy. In the per-agent active-provider Custom model
+prompt, blank means inherit that provider's workspace system model and
+`/cancel` is literal model text rather than a command.
+
+This retained-editor behavior is specific to `/settings`, not a global picker
+or navigation rule. Save and Cancel confirmation stays one-shot. Context-changing
+pickers also close after commit, especially `/session resume` and
+`/conversation resume`; a selected resume picker is no longer active, capable
+mode clears it, and fallback may leave only inactive prompt text in scrollback.
 
 Language offers `KO`, `EN`, `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, and `RU`.
 Persona uses the safe lexical template catalog. Debate rounds accept a
-nonnegative ASCII integer, including audit-only `0`. Providers are edited per
-agent in roster order: Codex and Antigravity are available, with the workspace
+nonnegative ASCII integer, including audit-only `0`. Provider routes are edited
+per agent in roster order: Codex and Antigravity are available, with the workspace
 default and final Codex fallback used by nullable agent routes.
 
-Only entering Model or Effort discovers a catalog; opening Settings or
-Providers and navigating Provider do not launch provider commands. Each editor
-entry discovers the pending effective provider afresh. Model choices are
+Only entering Model or Effort discovers a catalog; opening Settings or Agents
+and navigating Provider do not launch provider commands. Each editor entry
+discovers the pending effective provider afresh; retained commits and redraws
+within that entry do not repeat discovery. Model choices are
 ordered Inherit, provider-order discovered models, Current custom when the
 pending model is absent, and Custom model. Effort choices are ordered Inherit,
 the pending effective Codex model's exact efforts or Antigravity's global
@@ -172,10 +186,17 @@ remains exactly `low`, `medium`, or `high`. The legacy backend name `gemini` is
 rejected; use `antigravity`.
 
 Selecting a provider freshly authenticates it before changing that pending
-route. Save freshly gates every distinct effective provider before the guarded
-file update; a stale or failed status prevents Save. A default established by
-completed authentication is durable even if the remaining settings edit is
-cancelled.
+route. Authentication is subordinate to the Provider editor and returns there
+after its result. The provider route and any missing workspace default remain
+pending in memory; Escape or cancellation before confirmed Save leaves both
+configuration files byte-for-byte unchanged. No configuration value is
+persisted before Save is confirmed.
+
+After Save is confirmed, Save freshly gates every distinct effective provider
+before the guarded file update; a stale or failed status prevents the settings
+file transaction. Save-time authentication may durably establish a missing
+workspace default before that transaction. The completed post-confirmation
+default is not rolled back if later Save gating or transaction work stops.
 
 Save fails closed if either configuration file or the persona catalog changed
 after opening. A successful save affects only the next shell/backend
