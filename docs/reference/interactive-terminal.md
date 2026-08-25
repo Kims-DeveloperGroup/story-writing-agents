@@ -20,11 +20,12 @@
 > capable streams and numbered in fallback, while empty or failed reads report
 > without opening it. Every capable input frame clears before return; fallback
 > input remains visible without a synthetic final control frame. #274 adds an
-> unlisted mode-gated accepted-input projection operation: it can restore one
-> semantic record after capable cleanup while remaining silent for callback and
-> ordinary-line fallback input. Controller advisory, consensus, and
-> query/filter consumers remain pending #275, so end-to-end informative-content
-> retention is not yet available. Advisory and
+> unlisted mode-gated accepted-input projection operation, and #275 uses it for
+> accepted advisory and consensus prompt content. Capable streams render one
+> exact-body attributed message after input cleanup and before progress;
+> callback and ordinary-line fallback input remain visible without a duplicate.
+> Consensus and local-read request records add safe result-defining context.
+> Advisory and
 > consensus turns additionally use
 > one unlisted terminal-owned rolling indicator on capable raw streams;
 > callback and incapable paths remain silent, and these waits emit no
@@ -379,6 +380,26 @@ and performs no stream observation or resource acquisition.
   continuation hint; and
 - positioned focused-history events followed by one context-accounting record.
 
+#275 completes the informative-content consumers:
+
+- accepted ordinary, `/say`, and one-shot routed advisory text becomes one
+  exact-body `Message` attributed as `you → ALIAS`, where `ALIAS` is
+  the resolved preferred prompt alias;
+- accepted inline, fresh, and committed multiline consensus prompt text becomes
+  one `you → consensus` `Message` followed by a `Consensus request` record;
+- every consensus request names its validated `Output`, while `/draft-file`
+  names only its validated `Source` path and never projects the file bytes;
+- search and filtered conversation-list requests name their normalized `Query`
+  and `Scope`; unfiltered lists add no request record; and
+- transcript requests name the resolved visible `Conversation` handle plus
+  effective `Start` and `Count` before the memory read.
+
+The controller writes these components after acceptance and before coroutine
+construction, progress, catalog/service work, or result output as applicable.
+They remain visible through later success, handled failure, cancellation, or
+post-acceptance interrupt. They are call-local terminal presentation and add no
+storage, transcript-retention, provider-history, or audit guarantee.
+
 The controller composes typed components and sends one component through the
 adapter for each established callback record. The plain form preserves the
 established facts, copy, order, and callback boundaries while adding explicit
@@ -388,6 +409,12 @@ ANSI; `NO_COLOR` removes only that decoration. Callback construction renders
 the same structure in plain text at its fixed width.
 
 ### Consensus progress records
+
+Before consensus progress, an accepted prompt run emits its attributed user
+`Message` and every run emits its request record. Draft input emits the request
+record without a user-message copy of its source bytes. These records precede
+coroutine construction, so a later cancellation, provider failure, deadlock, or
+other handled outcome does not erase them.
 
 Consensus-phase rendering now emits per-event metadata as fields (`Event`,
 `Round`, `Revision`, `Handoff`, and `Action`, with optional `Conflicts`) in
@@ -501,8 +528,9 @@ after the complete live frame has been cleaned up. `FALLBACK` deliberately
 writes nothing because its ordinary prompt and submitted input already remain
 visible. `UNDECIDED` raises before output because projection cannot choose a
 mode. The driver interprets no component, stores no accepted payload or token,
-and owns no additional cleanup. #275 remains responsible for deciding which
-controller inputs are accepted informative content and invoking this operation.
+and owns no additional cleanup. #275 invokes this operation only after
+attachment, focus, collaborator, runner, and accepted prompt validation; the
+controller still cannot inspect or alter terminal mode.
 
 Every successful capable input operation clears its complete live frame before returning:
 semantic context and prompt, editable text, suggestions or choices, validation,
@@ -622,6 +650,38 @@ ALIAS [completed]> FIRST LINE
 [run DEBATE_ID]
   CONTENT
 ```
+
+Accepted user-to-agent content uses the same message boundary. Command
+envelopes and options are excluded from the body:
+
+```text
+you → lead [completed]> EXACT ADVISORY BODY
+you → consensus [completed]> EXACT CONSENSUS PROMPT
+```
+
+The sender label uses the resolved preferred advisory alias or `consensus`.
+Embedded LF, wrapping, visible control escaping, and narrow continuation
+indentation follow the ordinary safe `Message` renderer; “exact” refers to the
+accepted semantic body, not unsanitized terminal bytes.
+
+Request-defining context uses completed `Record` values. Consensus field order
+is `Output`, then `Source` only for draft input. Search and filtered-list field
+order is `Query`, `Scope`; transcript field order is `Conversation`, `Start`,
+`Count`. For example:
+
+```text
+[context] Consensus request [completed]
+  Output: part-01/opening.md
+
+[context] Search request [completed]
+  Query: opening scene
+  Scope: active
+```
+
+`Conversation list request` uses `Scope: active` or `Scope: all`.
+`Transcript request` uses the resolved visible handle and the effective page
+values, including defaults. `/draft-file` adds its safe source path to the
+consensus record but never renders its loaded bytes.
 
 Agent replies receive a presentation-only JSON projection before the semantic
 message or record is rendered. The projection runs only when the entire
@@ -1190,6 +1250,15 @@ byte is never guessed into a live key role.
 <a id="exact-search-and-transcript-records"></a>
 
 ## Dense search, transcript, and history records
+
+Before search catalog/service work, one completed `Search request` record names
+the NFKC-normalized, case-folded, whitespace-collapsed query and `active` scope.
+A filtered `/conversation list` similarly emits `Conversation list request`
+with its normalized query and `active` or `all` scope before its catalog read;
+an unfiltered list emits no request record. After transcript identity resolution
+and before its memory read, `Transcript request` names the visible handle and
+effective start/count. Each accepted request record remains visible if later
+work is empty, fails safely, or is cancelled.
 
 Search rows retain these fields in exact order: `Status`, `Match`, `Subject`,
 `Citation`, `Snippet`. A conversation-level citation is

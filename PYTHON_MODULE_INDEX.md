@@ -1048,8 +1048,22 @@ every intermediate arrow. The current runtime graph is acyclic.
   directive, routing, advisory, retrieval, consensus, focused-history, list,
   search, and transcript records through the terminal facade's unlisted
   `InteractiveSemanticOutput`; it retains that adapter alongside the same
-  terminal used for input and terminal-owned semantic writers. Advisory turns
-  and consensus waits retain the facade's unlisted
+  terminal used for input and terminal-owned semantic writers. After
+  attachment, focus, collaborator, Runner, and payload validation, accepted
+  ordinary or routed advisory text is projected as one exact-body user
+  `Message` attributed to its resolved prompt alias, while accepted inline,
+  fresh, or composed prompt consensus text is projected as one exact-body user
+  `Message` attributed to consensus. Both use the adapter's mode-gated
+  accepted-input writer before coroutine construction or progress; the
+  controller neither observes terminal mode nor projects draft-file bytes.
+  Consensus requests also emit one persistent context record containing the
+  validated output path and, for draft input, only its source path. Validated
+  active search, filtered conversation-list, and resolved transcript requests
+  emit persistent context records containing their normalized query and scope,
+  or their visible conversation handle and effective page parameters, before
+  the corresponding provider-free catalog or memory operation. Unfiltered
+  lists add no request record. Advisory turns and consensus waits retain the
+  facade's unlisted
   `InteractiveAdvisoryProgress` and `InteractiveDebateProgress` adapters and
   wrap exactly the runtime awaitables instead of emitting persistent routing
   and waiting notices; the controller owns no indicator glyph, cursor control,
@@ -1194,9 +1208,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   constructs its changed-only
   confirmation context, and delegates exact-byte conflict detection and guarded
   persistence to `interactive_settings`; cancellation or failed saves do not
-  mutate the active backend or runtime snapshot. Through public collaborators
-  the controller reads and parses terminal input, submits typed presentation
-  facts, invokes terminal-owned semantic writers, and sequences nested
+  mutate the active backend or runtime snapshot. Accepted user-message and
+  request-context values remain call-local terminal presentation: the
+  controller retains no rendered payload, adds no transcript or provider call,
+  and leaves fallback duplication policy and persistent stream writing to the
+  terminal boundary. Through public collaborators the controller reads and
+  parses terminal input, submits typed presentation facts, invokes
+  terminal-owned semantic writers, and sequences nested
   conversation transitions. A session destination proceeds through
   configuration validation, lifecycle pre-read, create/acquire or durable
   reopen, correlated post-read, destination focus load, destination-default

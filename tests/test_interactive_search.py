@@ -261,6 +261,26 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
         )
 
         rendered = "".join(callbacks.records)
+        self.assertIn(
+            "[context] Search request [completed]\n"
+            "  Query: council vessel\n"
+            "  Scope: active\n",
+            rendered,
+        )
+        self.assertIn(
+            "[context] Transcript request [completed]\n"
+            f"  Conversation: {transcript.conversation_id[:12]}\n"
+            "  Start: 2\n"
+            "  Count: 1\n",
+            rendered,
+        )
+        self.assertIn(
+            "[context] Transcript request [completed]\n"
+            f"  Conversation: {archived.conversation_id[:12]}\n"
+            "  Start: 1\n"
+            "  Count: 24\n",
+            rendered,
+        )
         exact_row = (
             "Search results (1/2) [completed]\n"
             f"  [search {exact.conversation_id[:12]}] [completed]\n"
@@ -358,7 +378,19 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
             )
 
         memory.search.assert_called_once_with(query)
-        self.assertEqual(callbacks.records, [])
+        accepted_context = terminal_module.Record(
+            "context",
+            title="Search request",
+            fields=(
+                terminal_module.Field("Query", "council"),
+                terminal_module.Field("Scope", "active"),
+            ),
+            state=terminal_module.ViewState.COMPLETED,
+        )
+        self.assertEqual(
+            callbacks.records,
+            [f"{render_plain(accepted_context, width=240).text}\n"],
+        )
 
     def test_resolution_is_case_sensitive_and_includes_archived_collisions(
         self,

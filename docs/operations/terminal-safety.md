@@ -5,8 +5,9 @@
 > supplied-text ranged viewer. Provider-bound `$`/`$$` editing now invokes that
 > private viewer through the controller, without adding a standalone command or
 > public API. #274 also adds an unlisted mode-gated accepted-input projection
-> seam; its controller consumers remain pending #275. These rules do not make
-> scrollback or process memory private.
+> seam, and #275 uses it for accepted advisory and consensus prompts plus safe
+> result-defining request context. These rules do not make scrollback or process
+> memory private.
 
 Key terms: **TTY guard**—check for interactive streams; **typed error**—trusted
 public code instead of exception prose; **display escaping**—showing a control
@@ -269,7 +270,18 @@ and one ordinary component write. The separate
 then delegates the complete LF-terminated string to a no-op callback sink or
 the stream driver's mode-gated sink. It neither reads input nor owns a second
 stream, raw mode, cursor, width, restoration lifecycle, payload store, or
-commit token. #275 remains responsible for controller classification and use.
+commit token. #275 supplies only validated controller call sites: exact-body
+advisory messages use a resolved prompt alias, prompt-based consensus uses the
+fixed consensus target, and request records use validated paths, normalized
+queries/scopes, or resolved transcript page facts.
+
+All such values pass through the established semantic renderer, so hostile
+controls and format characters become visible escapes before any eligible ANSI
+styling. The projection includes no draft-file bytes, referenced source bytes,
+settings/configuration values merely because they were edited, picker choices,
+confirmations, credentials, provider-native input, raw diagnostics, or commit
+token. It creates no separate storage, transcript-retention, provider-history,
+or audit record.
 
 Dense list commands preserve callback granularity by rendering each row as one
 positioned, one-record `ListView`. If search, transcript, or history rendering
@@ -489,12 +501,21 @@ so its frame remains active and no history entry exists yet. See the exact
 [composition](../reference/interactive-terminal.md#composition-live-suggestions)
 tokens.
 
-Once that cleanup and restoration have completed, a controller consumer may
-use the accepted-input seam to emit one new persistent semantic record. That
-record is outside the erased frame and uses the existing progress-aware writer.
-The seam does not retain or recover the editable frame, and #274 alone does not
-add any advisory, consensus, search, or filtered-list caller; those remain
-pending #275.
+Once that cleanup and restoration have completed, #275 uses the accepted-input
+seam to emit one new persistent semantic record for validated ordinary,
+`/say`, and routed advisory text or inline, fresh, and committed composer
+consensus prompts. That record is outside the erased frame and uses the
+existing progress-aware writer before coroutine construction or progress. It
+therefore remains visible through later success, handled provider failure,
+cancellation, deadlock, or post-acceptance interrupt. The seam does not retain
+or recover the editable frame. `FALLBACK` and callback construction remain
+silent so already visible ordinary input is not duplicated.
+
+Separate ordinary semantic request records identify safe context without
+reprinting a raw submitted snapshot: consensus output and optional draft-source
+paths, normalized search and filtered-list queries with scope, and resolved
+transcript handle/start/count. They are written before the corresponding later
+work as applicable and remain visible through its handled outcomes.
 
 Main palette projection, filtering, highlight, replacement, snapshot restore,
 and dismissal call no parser, story provider, runtime, filesystem, persistence,
