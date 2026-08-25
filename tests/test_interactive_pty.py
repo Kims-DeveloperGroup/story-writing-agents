@@ -2150,10 +2150,32 @@ print(
                 )
                 self.assertIn("Language [focused] [open]", language_result)
                 self.assertIn(expected_language, language_result)
+                self.assertIn(
+                    "Enteredchangesremainpendinginmemoryandarenotsaved;"
+                    "chooseSaveinSettingstopersistthem.",
+                    "".join(
+                        re.sub(
+                            r"\x1b\[[0-9;]*[A-Za-z]",
+                            "",
+                            process.normalized_text,
+                        ).split()
+                    ),
+                )
                 process.send_text("\x1b")
                 returned_settings = process.wait_for_text(
-                    "Choose a setting to edit, save, or cancel.",
+                    "[save required]",
                     after=language_mark,
+                )
+                self.assertIn(
+                    "Pendingchangesareinmemoryonlyandarenotsaved."
+                    "ChooseSavetopersistthem.",
+                    "".join(
+                        re.sub(
+                            r"\x1b\[[0-9;]*[A-Za-z]",
+                            "",
+                            process.normalized_text,
+                        ).split()
+                    ),
                 )
                 self.assertEqual(
                     returned_settings.count("Settings [focused] [open]"),
@@ -2323,13 +2345,34 @@ print(
             process.text_after(mark),
             r"\x1b\[(?:0|1|3[1-7])m",
         )
+        model_result_mark = process.output_mark()
+        process.send_text("\x1b[B\n")
+        process.wait_for_text(
+            "[entered] Pending Model entered:",
+            after=model_result_mark,
+        )
+        normalized = "".join(process.normalized_text.split())
+        self.assertIn(
+            "Enteredchangesremainpendinginmemoryandarenotsaved;"
+            "chooseSaveinSettingstopersistthem.",
+            normalized,
+        )
         returned_mark = process.output_mark()
         process.send_text("\x1b")
         process.wait_for_text("Agent settings", after=returned_mark)
         process.send_text("\x1b")
         process.wait_for_text("Agents [focused] [open]", after=returned_mark)
         process.send_text("\x1b")
-        process.wait_for_text("Settings [focused] [open]", after=returned_mark)
+        returned_settings = process.wait_for_text(
+            "[save required]",
+            after=returned_mark,
+        )
+        self.assertIn("[save required]", returned_settings)
+        self.assertIn(
+            "Pendingchangesareinmemoryonlyandarenotsaved."
+            "ChooseSavetopersistthem.",
+            "".join(process.normalized_text.split()),
+        )
         cancelled_mark = process.output_mark()
         process.send_text("\x1b")
         process.wait_for_text("[cancelled] Settings", after=cancelled_mark)
@@ -2424,6 +2467,11 @@ print(
             "[entered]PendingCustommodelentered:/cancel.",
             "".join(entered.split()),
         )
+        self.assertIn(
+            "Enteredchangesremainpendinginmemoryandarenotsaved;"
+            "chooseSaveinSettingstopersistthem.",
+            "".join(entered.split()),
+        )
         process.send_text("\x1b\n")
         process.wait_for_text("Model [Plot & Structure Architect", after=model_mark)
         process.send_line("/cancel")
@@ -2431,7 +2479,16 @@ print(
         process.send_line("/cancel")
         process.wait_for_text("Agents > ", after=model_mark)
         process.send_line("/cancel")
-        process.wait_for_text("6. [available] Cancel", after=model_mark)
+        returned_settings = process.wait_for_text(
+            "6. [available] Cancel",
+            after=model_mark,
+        )
+        self.assertIn("[save required]", returned_settings)
+        self.assertIn(
+            "Pendingchangesareinmemoryonlyandarenotsaved."
+            "ChooseSavetopersistthem.",
+            "".join(returned_settings.split()),
+        )
         process.send_line("5")
         process.send_line("1")
         process.wait_for_text("Settings saved", after=mark)

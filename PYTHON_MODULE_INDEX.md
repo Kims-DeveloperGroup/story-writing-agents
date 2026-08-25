@@ -1103,7 +1103,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   owns result counts and interruption boundaries without any remaining
   `write_status` or specialized dense-row call.
   The settings editor exposes the exact six-row top level Language, Persona,
-  Maximum debate rounds, Providers, Save, and Cancel; Providers selects one
+  Maximum debate rounds, Agents, Save, and Cancel; Agents selects one
   roster agent, enables Codex or Antigravity selection, and exposes the exact
   provider-neutral Provider, Model, and Effort fields. Model and Effort discover
   one fresh pending-effective-provider catalog only when selected; use opaque
@@ -1112,6 +1112,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   provider values or auto-persisting model defaults. Codex effort choices come
   from the exact pending effective model, while Antigravity effort choices stay
   globally low, medium, and high without slug inference. The summary projection
+  gives every settings value editor pending, not-saved, and top-level Save
+  guidance. The top-level Settings projection uses the existing notice semantics
+  to expose a save-required warning only when the pending configuration differs
+  from its opening baseline; the warning is absent initially, after a complete
+  revert, and from nested editors and Save/Cancel confirmations. The projection
   names both providers' model/effort
   rows, so changed-only confirmations can identify changes to either without
   changing the active backend or runtime snapshot. Editors contain no repeated

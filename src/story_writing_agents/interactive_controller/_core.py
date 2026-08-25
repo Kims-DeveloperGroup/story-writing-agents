@@ -237,6 +237,10 @@ _SETTINGS_CURRENT_CUSTOM_MODEL_ID = "settings:model:current-custom"
 _SETTINGS_CUSTOM_MODEL_ID = "settings:model:custom"
 _SETTINGS_EFFORT_ID_PREFIX = "settings:effort:"
 _SETTINGS_CURRENT_EFFORT_ID = "settings:effort:current-compatibility"
+_SETTINGS_VALUE_SAVE_GUIDANCE = (
+    "Entered changes remain pending in memory and are not saved; choose Save in "
+    "Settings to persist them."
+)
 
 
 _ExceptionState = tuple[BaseException, TracebackType | None]
@@ -343,6 +347,26 @@ def _settings_entered_notice(field: str, display_value: str) -> Notice:
         label="entered",
         role=SemanticRole.SUCCESS,
         state=ViewState.COMPLETED,
+    )
+
+
+def _settings_value_instruction(instruction: str) -> str:
+    """Append save guidance to one retained settings value editor."""
+
+    return f"{instruction} {_SETTINGS_VALUE_SAVE_GUIDANCE}"
+
+
+def _settings_pending_save_notice(state: SettingsState) -> Notice | None:
+    """Project unsaved pending changes onto the top-level Settings picker."""
+
+    if state.pending == state.baseline.configuration:
+        return None
+    return Notice(
+        "Pending changes are in memory only and are not saved. Choose Save to "
+        "persist them.",
+        label="save required",
+        role=SemanticRole.WARNING,
+        state=ViewState.IDLE,
     )
 
 
@@ -2104,6 +2128,7 @@ class InteractiveController:
                 ),
                 choices,
                 highlighted_id=top_highlight,
+                notice=_settings_pending_save_notice(state),
                 transient=True,
             )
             if outcome.kind in {
@@ -2330,7 +2355,7 @@ class InteractiveController:
             outcome = self._picker_input.read_picker(
                 Prompt(
                     "Language",
-                    instruction=(
+                    instruction=_settings_value_instruction(
                         "Choose the workspace language. Enter applies the value "
                         "and keeps this editor open; press Esc to return to "
                         "Settings."
@@ -2373,7 +2398,7 @@ class InteractiveController:
             outcome = self._picker_input.read_picker(
                 Prompt(
                     "Persona",
-                    instruction=(
+                    instruction=_settings_value_instruction(
                         "Choose a persona template. Enter applies the value and "
                         "keeps this editor open; press Esc to return to Settings."
                     ),
@@ -2404,7 +2429,7 @@ class InteractiveController:
                 Prompt(
                     "Maximum debate rounds",
                     scope="settings",
-                    instruction=(
+                    instruction=_settings_value_instruction(
                         "Enter a nonnegative integer; 0 is audit-only. Enter "
                         "applies the value and keeps this editor open; press Esc "
                         "to return to Settings."
@@ -2533,7 +2558,7 @@ class InteractiveController:
                 Prompt(
                     "Provider",
                     scope=AGENT_SPECS[agent_id].display_name,
-                    instruction=(
+                    instruction=_settings_value_instruction(
                         "Choose Codex or Antigravity. Enter applies the value "
                         "and keeps this editor open; press Esc to return to "
                         "Agent settings."
@@ -2602,7 +2627,7 @@ class InteractiveController:
                 Prompt(
                     "Provider",
                     scope=AGENT_SPECS[agent_id].display_name,
-                    instruction=(
+                    instruction=_settings_value_instruction(
                         "Choose an authenticated provider, or select an available "
                         "provider to authenticate it first. Enter applies the "
                         "value and keeps this editor open; press Esc to return "
@@ -2740,7 +2765,7 @@ class InteractiveController:
                     scope=(
                         f"{AGENT_SPECS[agent_id].display_name} · {provider_name}"
                     ),
-                    instruction=(
+                    instruction=_settings_value_instruction(
                         f"Choose a model for the pending {provider_name} "
                         "provider. Enter applies a value and keeps Model open; "
                         "Custom model opens its editor. Press Esc to return to "
@@ -2825,7 +2850,7 @@ class InteractiveController:
                     scope=(
                         f"{AGENT_SPECS[agent_id].display_name} · {provider_name}"
                     ),
-                    instruction=(
+                    instruction=_settings_value_instruction(
                         f"Enter an exact {provider_name} model, or leave blank "
                         "to inherit the workspace setting. Enter applies the "
                         "value and keeps this editor open; press Esc to return "
@@ -3011,7 +3036,7 @@ class InteractiveController:
                         f"{AGENT_SPECS[agent_id].display_name} · "
                         f"{provider_name}"
                     ),
-                    instruction=(
+                    instruction=_settings_value_instruction(
                         f"Choose effort for the pending {provider_name} "
                         "provider and effective model. Enter applies the value "
                         "and keeps this editor open; press Esc to return to "

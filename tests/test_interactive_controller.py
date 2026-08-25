@@ -3284,6 +3284,27 @@ class ControllerAuthTests(ControllerTestCase):
 class ControllerSettingsTests(ControllerTestCase):
     """Verify isolated settings UI, validation, persistence, and cancellation."""
 
+    VALUE_SAVE_GUIDANCE = (
+        "Entered changes remain pending in memory and are not saved; choose Save in "
+        "Settings to persist them."
+    )
+
+    def assert_value_save_guidance(self, instruction: str) -> None:
+        """Require one exact terminal-visible persistence warning."""
+
+        self.assertEqual(instruction.count(self.VALUE_SAVE_GUIDANCE), 1)
+        self.assertTrue(instruction.endswith(self.VALUE_SAVE_GUIDANCE))
+
+    @staticmethod
+    def expected_pending_save_notice() -> terminal_module.Notice:
+        return terminal_module.Notice(
+            "Pending changes are in memory only and are not saved. Choose Save to "
+            "persist them.",
+            label="save required",
+            role=terminal_module.SemanticRole.WARNING,
+            state=terminal_module.ViewState.IDLE,
+        )
+
     @staticmethod
     def expected_panel(state) -> object:
         """Return the exact public semantic tree for one settings snapshot."""
@@ -3814,6 +3835,68 @@ class ControllerSettingsTests(ControllerTestCase):
             rendered,
         )
 
+    def test_top_level_pending_notice_tracks_actual_diff_and_full_revert(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        before = _tree_snapshot(workspace.root)
+        baseline = settings_module.load_settings_state(
+            workspace
+        ).pending.system_defaults.language
+        changed = "JA" if baseline != "JA" else "EN"
+        controller, _backend, _callbacks = self.make_controller(workspace)
+
+        def commit(value: str) -> terminal_module.ControlOutcome:
+            return terminal_module.ControlOutcome(
+                terminal_module.ControlOutcomeKind.COMMIT,
+                text=value,
+            )
+
+        cancel = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.CANCEL
+        )
+        with mock.patch.object(
+            terminal_module.InteractivePickerInput,
+            "read_picker",
+            autospec=True,
+            side_effect=(
+                commit("language"),
+                commit(changed),
+                cancel,
+                commit("language"),
+                commit(baseline),
+                cancel,
+                cancel,
+            ),
+        ) as picker:
+            controller._run_settings()
+
+        pending_notice = self.expected_pending_save_notice()
+        top_level_calls = [
+            call
+            for call in picker.call_args_list
+            if call.args[1].name == "Settings"
+        ]
+        self.assertEqual(
+            tuple(call.kwargs.get("notice") for call in top_level_calls),
+            (None, pending_notice, None),
+        )
+        self.assertEqual(
+            sum(
+                call.kwargs.get("notice") == pending_notice
+                for call in picker.call_args_list
+            ),
+            1,
+        )
+        self.assertTrue(
+            all(
+                call.kwargs.get("notice") != pending_notice
+                for call in picker.call_args_list
+                if call.args[1].name != "Settings"
+            )
+        )
+        self.assertEqual(_tree_snapshot(workspace.root), before)
+
     def test_settings_panel_qualifies_current_and_pending_provider_routes(
         self,
     ) -> None:
@@ -3896,6 +3979,7 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         settings_call = picker.call_args_list[0]
         self.assertEqual(settings_call.args[1].name, "Settings")
+        self.assertIsNone(settings_call.kwargs["notice"])
         self.assertEqual(
             tuple(choice.identity for choice in settings_call.args[2]),
             (
@@ -3999,6 +4083,9 @@ class ControllerSettingsTests(ControllerTestCase):
                 self.assertEqual(picker.call_count, 3)
                 self.assertIn("Enter applies", picker.call_args_list[0].args[1].instruction)
                 self.assertIn("press Esc", picker.call_args_list[0].args[1].instruction)
+                self.assert_value_save_guidance(
+                    picker.call_args_list[0].args[1].instruction
+                )
                 self.assertEqual(
                     picker.call_args_list[1].kwargs["notice"],
                     self.expected_entered_notice(field, values[0]),
@@ -4045,6 +4132,9 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertEqual(prompt.call_count, 4)
         self.assertIn("Enter applies", prompt.call_args_list[0].args[1].instruction)
         self.assertIn("press Esc", prompt.call_args_list[0].args[1].instruction)
+        self.assert_value_save_guidance(
+            prompt.call_args_list[0].args[1].instruction
+        )
         self.assertEqual(
             prompt.call_args_list[1].kwargs["context"],
             (self.expected_entered_notice("Maximum debate rounds", "2"),),
@@ -4093,6 +4183,9 @@ class ControllerSettingsTests(ControllerTestCase):
             updated.pending.agent_configs[PLOT_ARCHITECT].backend,
             "codex",
         )
+        self.assert_value_save_guidance(
+            picker.call_args_list[0].args[1].instruction
+        )
         self.assertEqual(
             picker.call_args_list[1].kwargs["notice"],
             self.expected_entered_notice("Provider", "Antigravity"),
@@ -4107,6 +4200,35 @@ class ControllerSettingsTests(ControllerTestCase):
                 picker.call_args_list[2].kwargs["selected_id"],
             ),
             ("codex", "codex"),
+        )
+
+        codex_only = _auth_snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.UNAUTHENTICATED,
+        )
+        authenticated_controller, _backend, _callbacks = self.make_controller(
+            workspace,
+            auth_coordinator=ScriptedAuthCoordinator(snapshots=(codex_only,)),
+        )
+        with mock.patch.object(
+            terminal_module.InteractivePickerInput,
+            "read_picker",
+            autospec=True,
+            return_value=cancel,
+        ) as authenticated_picker:
+            unchanged, whole_cancel = (
+                authenticated_controller._edit_settings_agent_provider(
+                    settings_module.load_settings_state(workspace),
+                    PLOT_ARCHITECT,
+                )
+            )
+        self.assertFalse(whole_cancel)
+        self.assertEqual(
+            unchanged,
+            settings_module.load_settings_state(workspace),
+        )
+        self.assert_value_save_guidance(
+            authenticated_picker.call_args.args[1].instruction
         )
 
     def test_nested_agent_editors_return_one_level_and_retain_highlights(
@@ -4268,6 +4390,7 @@ class ControllerSettingsTests(ControllerTestCase):
         choices = call.args[2]
         self.assertEqual(prompt.name, "Model")
         self.assertIn("Codex", prompt.scope)
+        self.assert_value_save_guidance(prompt.instruction)
         self.assertEqual(
             tuple(choice.identity for choice in choices),
             (
@@ -4464,6 +4587,9 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertEqual(catalog.events, ["codex"])
         self.assertEqual(picker.call_count, 2)
         self.assertEqual(prompt.call_count, 5)
+        self.assert_value_save_guidance(
+            prompt.call_args_list[0].args[1].instruction
+        )
         self.assertEqual(
             prompt.call_args_list[1].kwargs["context"],
             (self.expected_entered_notice("Custom model", "first-custom"),),
@@ -4548,6 +4674,9 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertFalse(whole_cancel)
         self.assertEqual(catalog.events, ["codex"])
         choices = picker.call_args_list[0].args[2]
+        self.assert_value_save_guidance(
+            picker.call_args_list[0].args[1].instruction
+        )
         self.assertEqual(
             tuple(choice.identity for choice in choices),
             ("settings:inherit", "settings:effort:0", "settings:effort:1"),
@@ -4946,6 +5075,7 @@ class ControllerSettingsTests(ControllerTestCase):
 
         self.assertGreaterEqual(len(picker.call_args_list), 3)
         picker_call = picker.call_args_list[-1]
+        self.assertIsNone(picker_call.kwargs.get("notice"))
         self.assertEqual(
             picker_call.args[2],
             (terminal_module.Choice("yes", "YES"), terminal_module.Choice("no", "NO")),

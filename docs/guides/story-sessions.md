@@ -147,6 +147,21 @@ and the same level hierarchy. In the per-agent active-provider Custom model
 prompt, blank means inherit that provider's workspace system model and
 `/cancel` is literal model text rather than a command.
 
+Every retained value editor always says `Entered changes remain pending in
+memory and are not saved; choose Save in Settings to persist them.` This stays
+visible when the editor first opens, after a valid value is entered, and while
+fixing validation. Entering a value changes only the pending in-memory settings;
+the completed result confirms that pending change, not a file save.
+
+When you return to the top-level Settings picker, it shows `[save required]
+Pending changes are in memory only and are not saved. Choose Save to persist
+them.` exactly while the complete pending settings differ from the values at
+opening. Reverting every change removes the warning. Nested Agents, Agent
+settings, value editors, and Save/Cancel confirmations do not show it. Narrow,
+`NO_COLOR`, and fallback terminals keep the full guidance; fallback may leave
+an older prompt in scrollback, but the newest top-level prompt reports the
+current state.
+
 This retained-editor behavior is specific to `/settings`, not a global picker
 or navigation rule. Save and Cancel confirmation stays one-shot. Context-changing
 pickers also close after commit, especially `/session resume` and
