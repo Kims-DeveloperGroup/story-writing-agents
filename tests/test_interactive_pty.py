@@ -4724,6 +4724,9 @@ print(
         process.send_line("ordinary sticky turn")
         process.wait_for_text("plot [completed]> deterministic advisory reply", after=mark)
         process.wait_for_text("story[alpha:plot]> ", after=mark)
+        ordinary_output = process.text_after(mark)
+        self.assertNotIn("you → plot", ordinary_output)
+        self.assertEqual(ordinary_output.count("ordinary sticky turn"), 1)
 
         mark = process.output_mark()
         process.send_line("@character one-shot turn")
@@ -4733,6 +4736,9 @@ print(
         )
         process.wait_for_text("story[alpha:plot]> ", after=mark)
         self.assertNotIn("[routing] One-shot route", routed)
+        routed_output = process.text_after(mark)
+        self.assertNotIn("you → character", routed_output)
+        self.assertEqual(routed_output.count("@character one-shot turn"), 1)
 
         mark = process.output_mark()
         process.send_line("show visible controls")
@@ -5004,6 +5010,17 @@ print(
         process.send_line("harbor beacon beside the vessel")
         process.wait_for_text("lead [completed]> deterministic advisory reply", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
+        advisory_output = process.text_after(mark)
+        accepted_message = (
+            "you → lead [completed]> harbor beacon beside the vessel"
+        )
+        self.assertEqual(advisory_output.count(accepted_message), 1)
+        self.assertLess(
+            advisory_output.index(accepted_message),
+            advisory_output.index(
+                "lead [completed]> deterministic advisory reply"
+            ),
+        )
         provider_calls_before_reads = len(
             [
                 record
@@ -5029,6 +5046,17 @@ print(
             after=mark,
         )
         process.wait_for_text("story[alpha:lead]> ", after=mark)
+        search_output = process.text_after(mark)
+        search_context = (
+            "[context] Search request [completed]\n"
+            "  Query: harbor beacon\n"
+            "  Scope: active"
+        )
+        self.assertEqual(search_output.count(search_context), 1)
+        self.assertLess(
+            search_output.index(search_context),
+            search_output.index("Search results (1/1) [completed]"),
+        )
         self.assertIn("Citation: conversation", search_output)
         self.assertIn(selected.subject, " ".join(search_output.split()))
 
@@ -5044,6 +5072,18 @@ print(
             after=mark,
         )
         process.wait_for_text("story[alpha:lead]> ", after=mark)
+        transcript_output = process.text_after(mark)
+        transcript_context = (
+            "[context] Transcript request [completed]\n"
+            f"  Conversation: {selected.conversation_id[:12]}\n"
+            "  Start: 1\n"
+            "  Count: 2"
+        )
+        self.assertEqual(transcript_output.count(transcript_context), 1)
+        self.assertLess(
+            transcript_output.index(transcript_context),
+            transcript_output.index("Transcript (1/2) [completed]"),
+        )
         self.assertIn("deterministic advisory reply", transcript_output)
         self.assertEqual(
             len(
@@ -5172,6 +5212,19 @@ print(
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         successful_output = process.text_after(mark)
         collapsed = "".join(successful_output.split())
+        accepted_prompt = (
+            "you→consensus[completed]>/send/cancelfinalliteralline"
+        )
+        self.assertEqual(collapsed.count(accepted_prompt), 1)
+        self.assertLess(
+            collapsed.index(accepted_prompt),
+            collapsed.index("Startedpromptconsensus."),
+        )
+        self.assertIn(
+            "[context]Consensusrequest[completed]"
+            "Output:part-01/composed.md",
+            collapsed,
+        )
         self.assertIn(
             "[compose]Sending4lines,33characterstoconsensus.",
             collapsed,
@@ -5248,6 +5301,7 @@ print(
             _durable_tree_without_access(self.workspace.root),
             durable_after_success,
         )
+        self.assertEqual(process.normalized_text.count("you → consensus"), 1)
 
         inspection = self.workspace.inspect_session("alpha")
         self.assertEqual(len(inspection["debates"]), 1)

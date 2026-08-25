@@ -45,6 +45,10 @@
 > application color-default semantics.
 > #252 adds provider-neutral Model and Effort pickers backed by fresh, bounded
 > native-provider catalog discovery.
+> #273 defines the informative-content-retention policy, #274 supplies its
+> package-internal mode-gated accepted-input projection, and #275 installs the
+> controller consumers for attributed advisory and consensus messages plus
+> result-defining request context.
 
 This contract governs every human-facing interactive view and control in the
 installed shell. It preserves scrollback and the established command/runtime
@@ -85,7 +89,7 @@ current production behavior.
 | #127 leading routed-agent suggestions | Implemented: the capable main prompt projects `@lead`, `@plot`, `@character`, and `@execution` for a cursor-active first leading token, using canonical preferred route aliases and the existing completion controls. |
 | #142 live resume choices and transient input | Implemented: interactive session and conversation selection use only `/session resume [NAME]` and `/conversation resume [ID]`; exact omitted commands show controller-owned choices before submission on capable streams when a disposable read yields eligible rows. A submitted omitted command uses the generic picker—live on a capable stream and numbered in fallback—only after its fresh read succeeds with eligible rows; empty and failed reads report without a picker. Dynamic-choice Enter submits an explicit identity directly. Every capable input read clears its complete live frame before returning and attempts the same cleanup on failure, while persistent semantic results remain in scrollback. |
 | #274 mode-gated accepted-input projection | Implemented package-internally: the unlisted semantic-output adapter renders one accepted-input component and delegates it to a terminal-owned projection sink. Stream construction binds that sink to the sole driver's already selected input mode: `LIVE` writes once through the existing persistent/progress-safe path, `FALLBACK` writes nothing because ordinary input remains visible, and `UNDECIDED` rejects the call. Callback construction also remains silent. The seam retains no submitted payload or commit token and changes no supported public API. |
-| Informative-content retention policy | Specified and partially enabled: control presentation remains transient, while accepted advisory/routed messages, consensus prompts, and result-defining domain values require one informative scrollback representation. #274 supplies only the terminal mode-gated projection seam; controller advisory, consensus, and query/filter consumers and end-to-end acceptance coverage remain pending #275. |
+| #273 informative-content retention | Implemented through #274 and #275: control presentation remains transient, while accepted ordinary, `/say`, and routed advisory messages plus inline, fresh, and composed consensus prompts retain one attributed scrollback representation. Capable streams render the exact semantic body after input cleanup and before progress; fallback retains its original visible input without a duplicate. Consensus, search, filtered-list, and transcript requests identify their safe validated or normalized context without echoing draft-file or referenced source bytes. |
 | #209 provider OAuth onboarding | Implemented: a four-frame accessible welcome precedes native Codex/Antigravity status and sign-in; startup hard-gates every distinct effective route, `/auth` exposes the same global workflow, settings authenticates before route assignment and Save, and absent-only workspace defaults preserve explicit routing. Provider output, URLs, accounts, tokens, credentials, and native persistence remain provider-owned. |
 | #249 completion-aware native login | Implemented: while an inherited-terminal Codex or Antigravity login child remains open, silent bounded selected-provider probes use null streams. Fresh authenticated status stops and reaps only that exact child and returns automatically to startup, `/auth`, or Settings; Story adds no exit, confirmation, extra Enter, or second authorization-code paste. |
 | #237 high-visibility startup welcome | Implemented: the bounded four-frame startup lifecycle precedes native Codex/Antigravity authentication, preserves scrollback, and keeps provider output outside the terminal-owned presentation. |
@@ -359,11 +363,13 @@ a normalized domain field when needed, but must not print a second verbatim
 submitted snapshot. Informative output is never included in a later control's
 erase region, and redraw around such output must preserve it.
 
-**Availability:** #274 implements only the package-internal mode-gated
-accepted-input projection seam described below. It does not classify input or
-invoke that seam from advisory, consensus, search, or filtered-list controller
-paths. Those consumers and their end-to-end acceptance coverage remain pending
-#275, so the complete content-retention policy is not yet available.
+**Availability:** #274 implements the package-internal mode-gated
+accepted-input projection seam described below, and #275 invokes it after
+controller acceptance for ordinary, `/say`, and routed advisory text plus
+inline, fresh, and composed consensus prompts. #275 also emits safe request
+context for consensus, search, filtered conversation lists, and transcript
+pages. Together these slices implement the #273 policy without changing
+storage, transcript retention, provider history, or audit guarantees.
 
 ### Permanent input-mode lifecycle
 
@@ -417,7 +423,8 @@ own cleanup. Its consumer must call it only after controller acceptance. The
 adapter retains only the terminal's two bound writer capabilities, and the
 driver retains no accepted-input state. The supported `InteractiveTerminal`
 constructor, methods, facade `__all__`, root exports, and noninteractive CLI
-contracts are unchanged. Controller use of this seam remains pending #275.
+contracts are unchanged. #275 uses this seam only after controller acceptance
+and leaves the mode decision and nonduplication policy terminal-owned.
 
 ### Submitted-input lifecycle
 
@@ -1604,14 +1611,14 @@ and 218 edges remain canonical in the module index.
 | Shell scaffold | `Panel`, `Section`, `Prompt`, `Notice` | Idle/focused scope, plain structure, scrollback preserved | #83 (implemented output scaffold; main/subject prompts remain established input, composer/confirmation input implemented by #86) |
 | Lobby/session/conversation orientation | `Panel`, `Section`, `Field`, `Notice` | Current workspace, attachment, focus, and next action remain textual | #83 (implemented) |
 | Help and command reference | `Panel`, `Section`, `Field`, `ListView`, `Record` | Grouping, syntax, aliases, effects, examples, empty/error | #84 (implemented) |
-| Session/conversation/agent lists and rosters | `ListView`, `Record`, `Field`, `Notice` | Counts, active/focused/archived/empty meaning and stable order | #84 (implemented) |
-| Search results | `ListView`, `Record`, `Field`, `Notice` | Citation, snippet, active/archive state, truncation, empty/error | #84 (implemented) |
-| Transcript | `ListView`, `Record`, `Field`, `Notice` | Event identity/order and LF content boundaries remain intact | #84 (implemented) |
+| Session/conversation/agent lists and rosters | `ListView`, `Record`, `Field`, `Notice` | Counts, active/focused/archived/empty meaning and stable order; a filtered conversation list first names its normalized query and active/all scope | #84 result views and #275 filtered-request context (implemented) |
+| Search results | `ListView`, `Record`, `Field`, `Notice` | Normalized query and active scope before catalog/service work; citation, snippet, active/archive state, truncation, empty/error | #84 result views and #275 request context (implemented) |
+| Transcript | `ListView`, `Record`, `Field`, `Notice` | Resolved visible conversation handle and effective start/count before memory work; event identity/order and LF content boundaries remain intact | #84 result views and #275 request context (implemented) |
 | Focused history | `ListView`, `Record`, `Field`, `Notice` | Snapshot order, context accounting, empty/cancelled/error | #84 (implemented) |
-| Accepted user-to-agent content | `Message`, optionally `Field` for target/scope | One persistent, attributed representation of ordinary, `/say`, routed, inline consensus, fresh consensus, and committed composer prompt content after capable cleanup; no command-envelope echo, draft-file byte echo, fallback duplicate, or false sent state after pre-acceptance rejection | #274 projection seam implemented; controller consumers pending #275 |
-| Advisory turns | `Message`, `Notice`, `Field` | Accepted user message before progress; agent result, cancelled/completed/error; optional capable-only indicator during advisory/consensus wait; no `[routing]`/`[waiting]` record | #83 and #111 implemented result views; user-message retention pending #275 |
+| Accepted user-to-agent content | `Message`, optionally `Field` for target/scope | One persistent, attributed representation of ordinary, `/say`, routed, inline consensus, fresh consensus, and committed composer prompt content after capable cleanup; no command-envelope echo, draft-file byte echo, fallback duplicate, or false sent state after pre-acceptance rejection | #274 projection seam and #275 controller consumers (implemented) |
+| Advisory turns | `Message`, `Notice`, `Field` | Accepted exact-body user message with resolved prompt-alias target before progress; agent result, cancelled/completed/error; optional capable-only indicator during advisory/consensus wait; no `[routing]`/`[waiting]` record | #83 and #111 result views; #275 user-message retention (implemented) |
 | Retrieval progress and summaries | `Notice`, `Record`, `ListView`, `Field` | Loading, citations/context accounting, result/error/cancelled | #83 (implemented accepted views) |
-| Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field`, `Message` | Accepted user prompt before progress; loading, debate identity, handoff/action metadata, agent messages, result/cancelled/completed/error | #83 and #119 implemented progress/result views; user-prompt retention pending #275 |
+| Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field`, `Message` | Accepted exact-body inline/fresh/composed user prompt before request context and progress; validated output path; draft source path without source bytes; loading, debate identity, handoff/action metadata, agent messages, result/cancelled/completed/error | #83 and #119 progress/result views; #275 prompt and request context (implemented) |
 | Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics; post-workspace application errors supply one fixed sanitized debug-log availability notice, while pre-workspace errors include no debug-log path | #83, #131 terminal seam, and #132 application wiring (implemented) |
 | Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Exact top-level order; provider-neutral Provider/Model/Effort editors; provider-qualified summary rows; field-triggered bounded model/effort choices with inherit/custom/compatibility paths; changed-only Current/Pending confirmation context with `(Changed)` cues and explicit no-diff notice; nested Escape silent; transient cleanup and fallback honesty; fixed safe discovery failure guidance; guarded two-file Save boundary | #93, #106, #115, and #252 (implemented) |
 | Welcome and provider authentication | Private startup wordmark renderer, `Prompt`, `Picker`, `Choice`, `Notice` | Four bounded capable welcome frames with physical-width wide/compact/narrow projections; clean prefix-free ASCII wordmark; static accessibility fallback; four explicit provider states; disabled unavailable choice; transient guidance/result; completion-aware exact-child return; no provider-controlled content | #209, #237, #241, #249 (implemented) |
@@ -1689,8 +1696,11 @@ unchanged public/internal action identities.
 Issue #274 adds the unlisted accepted-input operation to the existing semantic
 adapter, terminal-core rendering and stream/callback binding, and selected-mode
 driver projection. It preserves one raw owner, stores no submitted payload or
-commit token, and changes no public API. Controller classification and use for
-advisory, consensus, and result-defining values remain pending #275.
+commit token, and changes no public API. Issue #275 invokes that seam after
+controller acceptance for advisory and consensus prompt content, and adds
+ordinary persistent request records for consensus, normalized search and
+filtered-list context, and resolved transcript page context. It neither stores
+the projected values nor changes runtime/provider/noninteractive contracts.
 Issue #162 covers strict pre-I/O supplied-text validation, independent source,
 logical-line, and complete-fallback capacities, LF-only line derivation,
 immutable active/anchor state, ordinary and reverse anchored navigation,
@@ -1713,7 +1723,7 @@ privacy, and the bounded/static startup presentation matrix.
 | Rendering safety | Hostile ESC/OSC/control/bidi-format content is visibly sanitized before ANSI; local resets prevent bleed; removing decorative SGR exactly recovers the plain structure; ANSI is zero-width; wide/combining content and cursor positions use physical columns. |
 | Semantic output | Every general view group uses only the closed vocabulary; documented purpose-bound components such as `StartupWelcome` and the ranged viewer retain their dedicated projections and lifecycles; status remains understandable without color; one semantic record uses one callback write unless an explicit live-control exception is tested. |
 | Mode-gated accepted-input projection | The unlisted semantic adapter validates and renders one closed component before delegating its complete LF-terminated output; callback construction stays silent; stream `LIVE` writes exactly once after capable cleanup through the progress-safe persistent path; stream `FALLBACK` stays silent; `UNDECIDED` rejects without output; render/write failures propagate; no accepted payload or token is retained; public exports, constructor, actions, and supported method signatures remain exact. |
-| Informative-content retention | Pending #275: capable ordinary, `/say`, and routed advisory turns clear the editable frame then render one exact-body attributed user `Message` before progress/reply; inline, fresh, and composer consensus prompts receive the same one-record treatment; accepted content remains through success, provider failure, cancellation, and post-acceptance interrupt; pre-acceptance rejection never claims a send; search/filter and other result-defining values appear once in result context when otherwise ambiguous; fallback retains one visible representation without verbatim duplication; draft-file bytes, settings/configuration fields, picker choices, confirmations, credentials, provider-native input, and raw diagnostics receive no automatic echo; later input cleanup cannot erase existing informative output. |
+| Informative-content retention | Capable ordinary, `/say`, and routed advisory turns clear the editable frame then render one exact-body attributed user `Message` before progress/reply; inline, fresh, and composer consensus prompts receive the same one-record treatment followed by safe output/source context; accepted content remains through success, provider failure, cancellation, and post-acceptance interrupt; pre-acceptance rejection never claims a send; normalized search/filter context and resolved transcript page context appear before their operations; fallback retains one visible representation without verbatim duplication; draft-file and referenced-source bytes, settings/configuration fields, picker choices, confirmations, credentials, provider-native input, and raw diagnostics receive no automatic echo; later input cleanup cannot erase existing informative output; no projection adds a storage, transcript-retention, provider-history, or audit guarantee. |
 | Panel framing | Every semantic `Panel` entry path uses the ASCII top-title and bottom splitters in plain, ANSI, and `NO_COLOR` output; wide, narrow, wrapped-title/state, and physical-cell widths preserve content and omit side borders; non-Panel components remain unframed; one Panel remains one callback write. |
 | Agent reply presentation | Complete strict JSON object/array formatting only; two-space indentation; preserved key order and Unicode; unchanged fallback for malformed, embedded-prose, scalar, duplicate-key, non-finite, or unserializable content; direct/retrieval/transcript/history presentation only; stored/provider bytes unchanged; bold terminal-default `AGENT` styling with no background detection. |
 | State transitions | Pure tests cover idle/focused/open/highlighted/selected/disabled/loading/empty/error/cancelled/completed states and invalid or boundary transitions. |
