@@ -394,6 +394,57 @@ assert all(name not in package.__all__ for name in public.__all__)
         self.assertEqual(storage_snapshot(workspace), before)
         self.assertFalse(database_path(workspace).exists())
 
+    def test_live_journal_blocks_fresh_composition_but_not_existing_reads(
+        self,
+    ) -> None:
+        workspace, services = provisioned_services(self)
+        metadata = services.catalog.create("session_a", "Committed subject")
+        journal = Path(f"{database_path(workspace)}-journal")
+
+        with raw_connection(workspace) as connection:
+            self.assertEqual(
+                connection.execute("PRAGMA journal_mode=DELETE").fetchone()[0], "delete"
+            )
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "UPDATE conversations SET subject = ?, normalized_subject = ? "
+                "WHERE session_id = ? AND conversation_id = ?",
+                (
+                    "Uncommitted subject",
+                    "uncommitted subject",
+                    metadata.session_id,
+                    metadata.conversation_id,
+                ),
+            )
+            self.assertTrue(journal.is_file())
+            self.assertEqual(
+                services.catalog.get(
+                    metadata.session_id,
+                    metadata.conversation_id,
+                ).subject,
+                "Committed subject",
+            )
+            before = storage_snapshot(workspace)
+
+            with self.assertRaises(WorkspaceFormatError) as caught:
+                compose_sqlite_conversation_storage(workspace)
+
+            self.assertEqual(
+                str(caught.exception),
+                "invalid SQLite conversation storage",
+            )
+            self.assertIsNone(caught.exception.__cause__)
+            self.assertEqual(storage_snapshot(workspace), before)
+            connection.execute("COMMIT")
+
+        self.assertFalse(journal.exists())
+        self.assertEqual(
+            compose_sqlite_conversation_storage(workspace)
+            .catalog.get(metadata.session_id, metadata.conversation_id)
+            .subject,
+            "Uncommitted subject",
+        )
+
     def test_fresh_composition_and_injected_runtime_observe_persisted_context(
         self,
     ) -> None:
