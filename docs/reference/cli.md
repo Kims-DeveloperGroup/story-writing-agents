@@ -426,6 +426,22 @@ nested canonical-agent picker, then a provider-neutral Provider/Model/Effort
 picker. Current/Pending confirmations retain provider-qualified rows for both
 providers so inactive values remain identifiable.
 
+Every retained Language, Persona, Maximum debate rounds, Provider, Model,
+Custom model, and Effort editor always shows `Entered changes remain pending in
+memory and are not saved; choose Save in Settings to persist them.` The text is
+present on initial entry, after a valid Enter reopens the editor, and during
+validation. The established entered-value success result remains unchanged and
+is still the only inline completed result.
+
+The top-level Settings picker shows `[save required] Pending changes are in
+memory only and are not saved. Choose Save to persist them.` if and only if the
+complete pending configuration differs structurally from its opening baseline.
+This is recomputed on every top-level read, so the warning is absent initially
+and after a complete revert. It is also absent from Agents, Agent settings,
+value editors, and Save/Cancel confirmations. Capable, narrow, `NO_COLOR`, and
+fallback views expose the complete text. Fallback cannot erase historical
+scrollback, but the current prompt reflects the current comparison.
+
 Only entering Model or Effort runs discovery. Each entry uses the pending
 effective provider; Effort also uses the pending effective model. Model order
 is Inherit, provider-order discovered models, Current custom when the pending
@@ -480,6 +496,13 @@ reported separately. Success returns to the main prompt and applies to the next
 shell/backend construction only. It does not refresh the active backend or
 runtime, invoke a story-model turn, alter session/explicit overrides, or add
 credentials, persisted catalog data, or automatic save.
+
+Entering or validating a value remains in-memory only; no configuration value
+is persisted before confirmed Save. This does not change global `/auth` default
+persistence or the separately documented post-confirmation Save-time default
+persistence. It adds no terminal primitive, public API, or global picker rule;
+the #270 one-level Escape and one-shot Save, Cancel, and resume contracts remain
+unchanged.
 
 On capable real-CLI streams, orientation/current context, `/status`, `/inspect`,
 central errors/recovery, and accepted management, advisory, retrieval, and

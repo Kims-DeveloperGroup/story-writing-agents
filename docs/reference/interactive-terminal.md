@@ -604,6 +604,24 @@ to Agent settings. Authentication launched while choosing Provider is a
 subordinate action and returns to Provider after its result. Ctrl-C or EOF at
 any level cancels the whole settings transaction.
 
+Every one of those retained value editors also always renders the instruction
+`Entered changes remain pending in memory and are not saved; choose Save in
+Settings to persist them.` It remains present on initial entry, after a valid
+commit reopens the editor, and during validation. It does not replace, duplicate,
+or become the exact entered-value success result, which remains the only inline
+completed result.
+
+Each read of the top-level Settings picker structurally compares the complete
+pending configuration with the opening baseline. Only a difference adds
+`[save required] Pending changes are in memory only and are not saved. Choose
+Save to persist them.` as a `SemanticRole.WARNING`/`ViewState.IDLE` notice. The
+notice is absent initially, after a complete revert, and in Agents, Agent
+settings, every value editor, and Save/Cancel confirmations. Capable, narrow,
+`NO_COLOR`, and fallback projections keep the complete text. Fallback may retain
+an older prompt in historical scrollback, but the current top-level prompt is
+recomputed and truthful. Existing instruction and `Notice` semantics are used;
+there is no new terminal primitive or global picker policy.
+
 Model choices are ordered Inherit, discovered models in provider order,
 Current custom when the pending value is not in that projection, and Custom
 model. Effort choices are ordered Inherit, the exact effort rows for the
