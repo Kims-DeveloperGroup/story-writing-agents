@@ -4856,6 +4856,7 @@ print(
         ordinary_output = process.text_after(mark)
         self.assertNotIn("you → plot", ordinary_output)
         self.assertEqual(ordinary_output.count("ordinary sticky turn"), 1)
+        self.assertNotIn("--- Conversation scope ", ordinary_output)
 
         mark = process.output_mark()
         process.send_line("@character one-shot turn")
@@ -4868,6 +4869,7 @@ print(
         routed_output = process.text_after(mark)
         self.assertNotIn("you → character", routed_output)
         self.assertEqual(routed_output.count("@character one-shot turn"), 1)
+        self.assertNotIn("--- Conversation scope ", routed_output)
 
         mark = process.output_mark()
         process.send_line("show visible controls")
@@ -4884,6 +4886,10 @@ print(
         process.wait_for_text("story[alpha:plot]> ", after=mark)
         process.send_line("/quit")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(
+            process.normalized_text.count("--- Conversation scope "),
+            7,
+        )
 
         catalog = FilesystemConversationCatalog(self.workspace)
         conversations = catalog.list("alpha", include_archived=True)
@@ -5263,6 +5269,10 @@ print(
         )
         process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(
+            process.normalized_text.count("--- Conversation scope "),
+            1,
+        )
 
         catalog = FilesystemConversationCatalog(self.workspace)
         events = FilesystemConversationEventStore(

@@ -536,6 +536,16 @@ documented availability line is the sole additive noninteractive stderr
 contract for a caught exception after CLI workspace initialization or discovery
 succeeds, independently of whether a diagnostic handle or file is available.
 
+After attachment, `Conversation scope` appears before the first prompt and is
+then repeated only when its session ID, visible conversation handle, subject,
+or sticky agent changes. An unchanged panel is suppressed, but the controller
+still revalidates any current focus against a fresh complete-catalog read before
+every attached prompt. External rename, archive, deletion, and prefix-collision
+changes are therefore detected at the same boundary. Detaching resets only
+this presentation snapshot, so a later attachment presents scope again. This
+controller-local cadence changes no command grammar, terminal API, persisted
+selection, conversation storage, or capable/fallback semantics.
+
 Before local result work, accepted request context keeps output interpretable.
 `/search` shows its normalized query and active scope; a filtered
 `/conversation list` shows its normalized query and active/all scope, while an

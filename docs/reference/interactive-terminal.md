@@ -700,6 +700,16 @@ use records headed by stable bracketed identities such as `[session]`,
 `[conversation]`, `[context]`, and `[run DEBATE_ID]`. Values stack under their
 labels at narrow widths instead of being dropped.
 
+An attached controller presents `Conversation scope` initially, then only when
+the semantic tuple `(session ID, visible conversation handle, subject, sticky
+agent)` changes. It still revalidates any current focus against a complete
+conversation-catalog read before every attached prompt, so an external rename,
+archive, deletion, or handle-collision change can produce a new scope even
+without a local focus command. Detachment discards the controller's loop-local
+presented tuple, and reattachment therefore presents scope again. The terminal
+remains stateless: `write_conversation_scope()` renders every call, retains no
+tuple, and does not cache a failed write.
+
 Agent and run output preserve content boundaries:
 
 ```text

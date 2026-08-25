@@ -1555,14 +1555,23 @@ class InteractiveController:
 
         Main Ctrl-C clears only the current input operation. Main EOF, quit, or
         EOF during a call-local subject or confirmation read returns 0. Each
-        attached input is preceded immediately by its current conversation
-        scope; advisory turns run sequentially, and fatal transition or turn
-        uncertainty reaches the outer backend cleanup boundary.
+        attached input revalidates its current conversation scope and presents
+        it only when its semantic snapshot changed. Advisory turns run
+        sequentially, and fatal transition or turn uncertainty reaches the
+        outer backend cleanup boundary.
         """
 
+        unpresented_scope = object()
+        last_presented_scope: (
+            object | tuple[str, str | None, str | None, str]
+        ) = unpresented_scope
         while True:
-            if self._attached_session_id is not None:
-                self._write_attached_conversation_scope()
+            if self._attached_session_id is None:
+                last_presented_scope = unpresented_scope
+            else:
+                last_presented_scope = self._write_attached_conversation_scope(
+                    last_presented_scope
+                )
             terminal_action = self._main_input.read_main_with_references(
                 self._main_resume_choices,
                 self._main_reference_scope,
@@ -5256,77 +5265,79 @@ class InteractiveController:
             self._confirm_attachment_after_command_failure()
         self._write_error(error)
 
-    def _write_attached_conversation_scope(self) -> None:
-        """Render the effective current focus immediately before main input.
+    def _write_attached_conversation_scope(
+        self,
+        last_presented: object | tuple[str, str | None, str | None, str],
+    ) -> tuple[str, str | None, str | None, str]:
+        """Revalidate current focus and present it only when semantically changed.
 
         The current metadata is revalidated against the complete catalog so a
         unique display handle can be derived across active and archived IDs.
         Missing or archived external state drops only in-memory focus and
         reports its typed category; the durable default is not rewritten here.
+        The returned snapshot is produced only after any required terminal
+        write succeeds, so callers never remember a failed presentation.
         """
 
         session_id = self._attached_session_id
         assert session_id is not None
         focused = self._focused_conversation
         if focused is None:
+            handle = None
+            subject = None
+        else:
+            try:
+                entries = self._catalog_entries(session_id)
+            except Exception as exc:
+                self._present_conversation_failure(exc)
+                handle = focused.conversation_id
+                subject = focused.subject
+            else:
+                current = next(
+                    (
+                        entry
+                        for entry in entries
+                        if entry.conversation_id == focused.conversation_id
+                    ),
+                    None,
+                )
+                if current is None:
+                    self._focused_conversation = None
+                    self._write_error(
+                        InteractiveError(
+                            InteractiveErrorCode.CONVERSATION_NOT_FOUND
+                        )
+                    )
+                    handle = None
+                    subject = None
+                elif current.status is ConversationStatus.ARCHIVED:
+                    self._focused_conversation = None
+                    self._write_error(
+                        InteractiveError(
+                            InteractiveErrorCode.CONVERSATION_ARCHIVED
+                        )
+                    )
+                    handle = None
+                    subject = None
+                else:
+                    self._focused_conversation = current
+                    handle = visible_conversation_handle(current, entries)
+                    subject = current.subject
+
+        current_scope = (
+            session_id,
+            handle,
+            subject,
+            self._target_agent_id,
+        )
+        if current_scope != last_presented:
             self._terminal.write_conversation_scope(
                 session_id=session_id,
-                conversation_handle=None,
-                conversation_subject=None,
+                conversation_handle=handle,
+                conversation_subject=subject,
                 agent_id=self._target_agent_id,
             )
-            return
-
-        try:
-            entries = self._catalog_entries(session_id)
-        except Exception as exc:
-            self._present_conversation_failure(exc)
-            handle = focused.conversation_id
-        else:
-            current = next(
-                (
-                    entry
-                    for entry in entries
-                    if entry.conversation_id == focused.conversation_id
-                ),
-                None,
-            )
-            if current is None:
-                self._focused_conversation = None
-                self._write_error(
-                    InteractiveError(
-                        InteractiveErrorCode.CONVERSATION_NOT_FOUND
-                    )
-                )
-                self._terminal.write_conversation_scope(
-                    session_id=session_id,
-                    conversation_handle=None,
-                    conversation_subject=None,
-                    agent_id=self._target_agent_id,
-                )
-                return
-            if current.status is ConversationStatus.ARCHIVED:
-                self._focused_conversation = None
-                self._write_error(
-                    InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
-                )
-                self._terminal.write_conversation_scope(
-                    session_id=session_id,
-                    conversation_handle=None,
-                    conversation_subject=None,
-                    agent_id=self._target_agent_id,
-                )
-                return
-            self._focused_conversation = current
-            focused = current
-            handle = visible_conversation_handle(current, entries)
-
-        self._terminal.write_conversation_scope(
-            session_id=session_id,
-            conversation_handle=handle,
-            conversation_subject=focused.subject,
-            agent_id=self._target_agent_id,
-        )
+        return current_scope
 
     def _create_subject_conversation(self, subject: str | None) -> bool:
         """Create and focus one active conversation, returning EOF exit intent.

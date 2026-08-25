@@ -275,6 +275,15 @@ advisory messages use a resolved prompt alias, prompt-based consensus uses the
 fixed consensus target, and request records use validated paths, normalized
 queries/scopes, or resolved transcript page facts.
 
+Conversation-scope deduplication is also controller-owned. Before each attached
+prompt, the controller freshly validates any current focus against the complete
+catalog, then compares one loop-local tuple of session ID, visible handle,
+subject, and sticky agent. It caches the tuple only after the semantic write
+succeeds, drops it on detach, and therefore never treats a failed write as
+presented; reattachment also presents again. The terminal owns no comparison
+snapshot, catalog state, payload, token, or storage; its existing scope
+operation remains a stateless one-call render.
+
 All such values pass through the established semantic renderer, so hostile
 controls and format characters become visible escapes before any eligible ANSI
 styling. The projection includes no draft-file bytes, referenced source bytes,

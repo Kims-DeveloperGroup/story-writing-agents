@@ -1101,7 +1101,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   conversation, search, transcript, and focused-history rows use one positioned
   `ListView` containing one `Record` per established callback, so the controller
   owns result counts and interruption boundaries without any remaining
-  `write_status` or specialized dense-row call.
+  `write_status` or specialized dense-row call. Before every attached main
+  prompt, it freshly revalidates any current focus and its visible handle
+  against the complete conversation catalog, then presents conversation scope
+  initially or when the semantic tuple of session ID, visible handle, subject,
+  or sticky agent changes. Detachment resets that comparison, so a later
+  attachment presents its scope again even when its values match the earlier
+  attachment.
   The settings editor exposes the exact six-row top level Language, Persona,
   Maximum debate rounds, Agents, Save, and Cancel; Agents selects one
   roster agent, enables Codex or Antigravity selection, and exposes the exact
@@ -1226,7 +1232,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   request-context values remain call-local terminal presentation: the
   controller retains no rendered payload, adds no transcript or provider call,
   and leaves fallback duplication policy and persistent stream writing to the
-  terminal boundary. Through public collaborators the controller reads and
+  terminal boundary. The lobby loop also retains one call-local last-
+  successfully-presented conversation-scope tuple containing session ID,
+  visible handle, subject, and sticky agent. It advances that tuple only after
+  any required terminal write succeeds and resets it while detached; the
+  terminal retains no comparison state, and the tuple adds no storage or
+  provider effect. Through public collaborators the controller reads and
   parses terminal input, submits typed presentation facts, invokes
   terminal-owned semantic writers, and sequences nested
   conversation transitions. A session destination proceeds through
