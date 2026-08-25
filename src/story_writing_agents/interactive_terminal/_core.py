@@ -1354,7 +1354,7 @@ class InteractiveTerminal:
 
 
 class InteractiveSemanticOutput:
-    """Retain only one terminal's package-internal semantic write capability."""
+    """Bind one terminal's ordinary and mode-gated semantic write paths."""
 
     __slots__ = ("_write", "_write_accepted")
 

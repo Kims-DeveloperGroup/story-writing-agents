@@ -409,7 +409,7 @@ class RawTerminalDriver:
         self._write_raw_text(text)
 
     def write_accepted_input(self, text: str) -> None:
-        """Write one rendered accepted input only after live-mode selection."""
+        """Project rendered accepted input according to the selected input mode."""
 
         if type(text) is not str:
             raise TypeError("accepted input output must be a string")
