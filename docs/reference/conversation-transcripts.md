@@ -115,14 +115,21 @@ and whitespace stays visible; empty is normal. Its same-tuple summary reports
 displayed/total events, canonical turns/bytes/truncation, and fixed caps. It has
 no cursor, pager, search, provider, or write.
 
-Each event renders once while storage stays exact. For presentation, an
-`agent_reply` event attempts strict complete-object/array JSON formatting with
-two-space indentation, preserved key order, and Unicode output; malformed,
-scalar, duplicate-key, non-finite, embedded-prose, or otherwise unserializable
-content is displayed unchanged. This projection is not persisted and does not
-alter search or context data. Ctrl-C during history stops after completed event
-records, emits its fixed cancellation instead of the summary, and performs no
-second read or write. See
+Each event renders once as a speaker-aware chat block while storage stays exact.
+The surrounding ListView supplies its position/total, and the block uses a human
+direction header: `You → Agent`, `Agent → You`, or `Runtime → You`. Sequence is
+always present. With Message details On, the same metadata line also includes
+Turn, Kind, and the canonical sender-to-recipient IDs. The full body is visible
+in both modes; Off is compact presentation, not content deletion.
+
+For presentation, an `agent_reply` event attempts strict complete-object/array
+JSON formatting with two-space indentation, preserved key order, and Unicode
+output; malformed, scalar, duplicate-key, non-finite, embedded-prose, or
+otherwise unserializable content is displayed unchanged. User messages and
+runtime errors are never JSON-projected. This projection is not persisted and
+does not alter search or context data. Ctrl-C during history stops after
+completed message blocks, emits its fixed cancellation instead of the summary,
+and performs no second read or write. See
 [terminal presentation](interactive-terminal.md) and [page/search limits](conversation-search.md).
 
 ## Context-window derivation and failure evidence

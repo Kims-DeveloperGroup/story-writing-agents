@@ -124,10 +124,12 @@ any default already established.
 
 `/settings` is global, alias-free, and works in the lobby or while attached. It
 shows Current and Pending values for Language, Persona, Maximum debate rounds,
-Conversation storage, and Agents. A clean top level contains exactly those five
-choices in that order. Dirty state appends `Apply Changes (*Required)` and
-`Discard Changes`. Conversation storage offers Filesystem and SQLite as an
-independent next-shell workspace choice; it is not an agent provider route.
+Conversation storage, Message details, and Agents. A clean top level contains
+exactly those six choices in that order. Dirty state appends `Apply Changes
+(*Required)` and `Discard Changes`. Conversation storage offers Filesystem and
+SQLite as an independent next-shell workspace choice; it is not an agent
+provider route. Message details offers Off and On. Off is the default compact
+presentation; it never removes stored message content.
 
 Choose Agents to select an agent in canonical roster order. Each agent shows
 its effective `(Provider/model/effort)` values beside its name. Agent settings
@@ -161,9 +163,9 @@ so both providers' inactive values stay identifiable.
 
 On a capable terminal, Up/Down moves the current picker highlight. Enter opens
 a selected settings level or applies a pending value. Language, Persona,
-Maximum debate rounds, Conversation storage, Provider, Model, Custom model,
-and Effort stay active after a valid Enter: the picker selection or prompt
-default updates immediately, and the editor shows one inline completed success
+Maximum debate rounds, Conversation storage, Message details, Provider, Model,
+Custom model, and Effort stay active after a valid Enter: the picker selection
+or prompt default updates immediately, and the editor shows one inline completed success
 result for the latest value, replacing the previous result. Guidance states
 that Enter applies the pending value and keeps the editor open. A second
 consecutive valid Enter with the same normalized value returns one level
@@ -175,7 +177,7 @@ raw-key timing gesture.
 
 Escape returns one level through Custom model > Model > Agent settings > Agents
 > Settings; Provider and Effort return directly to Agent settings, while
-Conversation storage returns directly to Settings. At root,
+Conversation storage and Message details return directly to Settings. At root,
 Escape invokes the same action as explicit Discard Changes: clean settings exit
 immediately, while dirty settings open the existing YES/NO discard confirmation.
 NO or Escape there returns to Settings. Ctrl-C or EOF still cancels the whole
@@ -249,13 +251,17 @@ pending in memory; Escape or cancellation before confirmed Apply Changes leaves 
 configuration files byte-for-byte unchanged. No configuration value is
 persisted before Apply Changes is confirmed.
 
-After Apply Changes is confirmed, it freshly gates every distinct effective provider
-before the guarded file update; a stale or failed status prevents the settings
-file transaction. A missing workspace default learned during that gate remains
-in the pending candidate and becomes durable only through the same complete
-Apply Changes action. Conversation-storage readiness and selection are
-provider-free, but the whole Settings apply retains this
-provider-authentication gate.
+After Apply Changes is confirmed, every mixed candidate freshly gates every
+distinct effective provider before the guarded file update; a stale or failed
+status prevents the settings file transaction. A missing workspace default
+learned during that gate remains in the pending candidate and becomes durable
+only through the same complete Apply Changes action. Conversation-storage
+readiness and selection are provider-free, but a mixed Settings apply retains
+the provider-authentication gate. If Message details is the only change, Story
+instead prepares, verifies, and commits that exact configuration candidate. It
+skips authentication, storage readiness, backend/runtime activation, route
+generation, and provider/thread work, then changes the active presentation flag
+only after commit succeeds.
 
 Selecting SQLite records only a pending next-shell choice. During Apply Changes, Story
 checks workspace coordination and the active Python interpreter's functional
@@ -282,9 +288,10 @@ complete prepared snapshot. Provider, Model, or Effort fixed by a launch
 override is disabled and read-only because that override remains higher
 precedence.
 
-A confirmed Apply Changes applies non-storage runtime changes, including
-provider/model/effort, to this running shell without a restart. A storage-only
-apply selecting SQLite instead reports `Restart is required for sqlite.`
+A confirmed mixed Apply Changes applies non-storage runtime changes, including
+provider/model/effort and Message details, to this running shell without a
+restart. A Message-details-only Apply uses the smaller path described above. A
+storage-only apply selecting SQLite instead reports `Restart is required for sqlite.`
 without claiming live activation (`filesystem` appears on the reverse change).
 A mixed apply reports both the current-shell runtime success and storage
 restart notices. The desired storage backend applies to the next shell; the
@@ -320,7 +327,13 @@ the profile the backend selected and passed to the provider CLI. A missing
 model or effort is shown as `provider default`: Story omitted that process
 flag and does not claim to know the vendor's server-side choice.
 
-A capable input frame follows the active sticky agent, or a valid leading
+Message details Off makes the live runtime header show only the target display
+name and leaves direct replies compact. On makes the header show the resolved
+provider/model/effort and confirmation, and adds one compact reply metadata
+line with Provider, Model, and Effort sources plus Confirmation and Thread.
+`/agents` and `/status` remain fully diagnostic in both modes.
+
+With Message details On, a capable input frame follows the active sticky agent, or a valid leading
 `@agent` one-shot route, as the buffer changes:
 
 ```text
@@ -328,16 +341,13 @@ A capable input frame follows the active sticky agent, or a valid leading
 story[novel:lead]> Who is answering?
 ```
 
-The corresponding reply keeps the execution evidence outside the reply body:
+With Message details On, the corresponding reply keeps the execution evidence
+in its speaker header and outside the reply body:
 
 ```text
-[lead] Lead Orchestrator [completed]
-  Provider [info]: Antigravity [agent config]
-  Model: agy-model-id [agent config]
-  Effort: high [agent config]
-  Confirmation [success]: confirmed
-  Thread [warning]: fresh after provider switch
-  <agent reply>
+Lead Orchestrator → You · Provider: Antigravity [agent config] · Model: agy-model-id [agent config] · Effort: high [agent config] · Confirmation: confirmed · Thread: fresh after provider switch [completed]
+
+│ <agent reply>
 ```
 
 `pending` means the changed profile is active for the next invocation but has
@@ -435,12 +445,15 @@ batch; a previous agent's read cannot satisfy the next turn. See
 [Canonical artifact references](artifact-references.md).
 
 After attachment, focus, target, and runner validation, an accepted ordinary,
-`/say`, or `@agent` turn appears as `you → ALIAS [completed]> BODY` before
-retrieval progress or the reply. `ALIAS` is the resolved preferred prompt
-alias, and `BODY` is the exact semantic message text without `/say` or route
-syntax. The record remains visible through later success, handled provider
-failure, cancellation, or post-acceptance interrupt. It is terminal context;
-the conversation runtime remains the authority for durable user/outcome events.
+`/say`, or `@agent` turn on a capable live stream appears as a `You → DISPLAY
+NAME` chat block before retrieval progress or the reply. Its railed body is the
+exact semantic message text without `/say` or route syntax. Ordinary-line
+fallback retains its already-echoed input as the sole submission representation
+and renders the reply through semantic plain output; it promises complete,
+nonduplicated meaning, not identical topology. The accepted content remains
+visible through later success, handled provider failure, cancellation, or
+post-acceptance interrupt. It is terminal context; the conversation runtime
+remains the authority for durable user/outcome events.
 
 Artifact controls require all three of: an attached session, a focused active
 conversation, and a cursor in provider-bound prompt text. Shell orientation and
@@ -502,8 +515,12 @@ count after identity resolution but before the page read. These records remain
 if later work is empty, fails safely, or is cancelled.
 
 Agent retrieval is conditional. The shell shows `[context]` progress, reply,
-and sources. Only user and outcome enter the transcript; local reads never call
-a provider or alter defaults/focus.
+and sources. Subject and Conversation are always present on each source;
+event-level sources always add Sequence, while Message details On also adds Turn
+and Kind. History and transcript rows always show position, Sequence, a human
+sender/recipient header, and the full body. On additionally shows canonical IDs,
+Turn, and Kind. Only user and outcome enter the transcript; local reads never
+call a provider or alter defaults/focus.
 
 ## Turn the current focus into consensus
 
@@ -528,15 +545,22 @@ Normal `/run` includes one bounded focus snapshot. `/run --fresh --output
 PART/PATH.md PROMPT` retains the story-session owner/core facts and focused
 conversation identity but omits the focused transcript; `/draft-file PATH`
 reads strict UTF-8, includes the snapshot, and prompts for the required output
-path. After validation, inline, fresh, and
-committed composer prompts appear once as
-`you → consensus [completed]> PROMPT`, followed by `Consensus request` with the
+path. After validation, inline, fresh, and committed composer prompts appear
+once as a `You → Consensus` chat block with the full prompt body, followed by
+`Consensus request` with the
 safe output path, before debate progress. `/draft-file` emits no message copy of
 its bytes; its request record names only the validated source and output paths.
 Capable streams use the post-cleanup message, while fallback keeps its already
 visible prompt without a duplicate. These terminal records survive later
 success, deadlock, handled failure, cancellation, or post-acceptance interrupt
 but add no separate storage guarantee. Runs do not change conversations.
+
+Each accepted progress event then appears as one `Debate phase` panel with its
+fixed status fields and any newly persisted contiguous speech sections. Full
+non-error speech remains visible. Message details On adds Handoff and speech
+Kind; Off removes only those diagnostics. Successful consensus receives a
+separate final `Consensus` Record after terminal progress; deadlock and failed
+outcomes instead use typed error presentation.
 
 ## Inspect outcomes and recover
 
