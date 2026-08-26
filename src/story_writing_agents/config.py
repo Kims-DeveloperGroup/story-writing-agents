@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from dataclasses import dataclass
+from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, Mapping
 
 from .agents import AGENT_SPECS, ROSTER
-from .errors import ConfigurationError
+from .errors import ConfigurationError, WorkspaceFormatError
 from .workspace import Workspace
 
 
@@ -17,6 +19,9 @@ _LANGUAGE = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,15}")
 _CODEX_REASONING_EFFORT = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 _ANTIGRAVITY_EFFORTS: tuple[str, ...] = ("low", "medium", "high")
 KNOWN_AGENT_BACKENDS: tuple[str, ...] = ("codex", "antigravity")
+KNOWN_CONVERSATION_STORAGE_BACKENDS: tuple[str, ...] = ("filesystem", "sqlite")
+_SYSTEM_DEFAULTS_PATH = "config/system_defaults.json"
+_AGENT_CONFIGS_PATH = "config/agent_configs.json"
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +34,7 @@ class SystemDefaults:
     antigravity_model: str | None = None
     antigravity_effort: str | None = None
     default_backend: str | None = None
+    conversation_storage_backend: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +87,42 @@ class ConfigurationSnapshot:
         )
 
 
+class ConfigurationCommitFailure(StrEnum):
+    """Fixed failure categories for one complete configuration CAS."""
+
+    VALIDATION = "validation"
+    CONFLICT = "conflict"
+    WRITE = "write"
+    ROLLBACK = "rollback"
+
+
+class ConfigurationCommitError(Exception):
+    """Carry one sanitized complete-configuration commit failure."""
+
+    def __init__(self, failure: ConfigurationCommitFailure) -> None:
+        if type(failure) is not ConfigurationCommitFailure:
+            raise TypeError("failure must be a ConfigurationCommitFailure")
+        self.failure = failure
+        super().__init__(f"configuration commit failed: {failure.value}")
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigurationBaseline:
+    """Retain exact persisted bytes and their validated complete value."""
+
+    system_defaults_bytes: bytes
+    agent_configs_bytes: bytes
+    configuration: ConfigurationSnapshot
+
+    def __post_init__(self) -> None:
+        if type(self.system_defaults_bytes) is not bytes:
+            raise TypeError("system_defaults_bytes must be bytes")
+        if type(self.agent_configs_bytes) is not bytes:
+            raise TypeError("agent_configs_bytes must be bytes")
+        if type(self.configuration) is not ConfigurationSnapshot:
+            raise TypeError("configuration must be a ConfigurationSnapshot")
+
+
 class ConfigManager:
     """Loads configuration on demand so filesystem changes are immediately visible."""
 
@@ -108,6 +150,26 @@ class ConfigManager:
         if not isinstance(value, str) or value not in KNOWN_AGENT_BACKENDS:
             expected = ", ".join(KNOWN_AGENT_BACKENDS)
             raise ConfigurationError(f"backend must be one of: {expected}")
+        return value
+
+    @staticmethod
+    def validate_conversation_storage_backend(
+        value: Any,
+        *,
+        allow_none: bool = False,
+    ) -> str | None:
+        """Validate storage independently from agent provider routing."""
+
+        if value is None and allow_none:
+            return None
+        if (
+            not isinstance(value, str)
+            or value not in KNOWN_CONVERSATION_STORAGE_BACKENDS
+        ):
+            expected = ", ".join(KNOWN_CONVERSATION_STORAGE_BACKENDS)
+            raise ConfigurationError(
+                f"conversation_storage_backend must be one of: {expected}"
+            )
         return value
 
     @staticmethod
@@ -174,7 +236,7 @@ class ConfigManager:
 
     def load_system_defaults(self) -> SystemDefaults:
         return self._validate_system_defaults(
-            self.workspace.read_json("config/system_defaults.json")
+            self.workspace.read_json(_SYSTEM_DEFAULTS_PATH)
         )
 
     def _validate_system_defaults(self, value: Any) -> SystemDefaults:
@@ -192,6 +254,7 @@ class ConfigManager:
                 "antigravity_model",
                 "antigravity_effort",
                 "default_backend",
+                "conversation_storage_backend",
             }
         )
         if unknown:
@@ -216,6 +279,10 @@ class ConfigManager:
         default_backend = self.validate_backend(
             value.get("default_backend"), allow_none=True
         )
+        conversation_storage_backend = self.validate_conversation_storage_backend(
+            value.get("conversation_storage_backend"),
+            allow_none=True,
+        )
         return SystemDefaults(
             language=language,
             persona=persona,
@@ -225,6 +292,7 @@ class ConfigManager:
             antigravity_model=antigravity_model,
             antigravity_effort=antigravity_effort,
             default_backend=default_backend,
+            conversation_storage_backend=conversation_storage_backend,
         )
 
     def load_agent_configs(self) -> dict[str, AgentConfig]:
@@ -314,10 +382,182 @@ class ConfigManager:
     def load_configuration_snapshot(self) -> ConfigurationSnapshot:
         """Read and validate one immutable persisted configuration pair."""
 
-        return self.validate_configuration(
-            self.workspace.read_json("config/system_defaults.json"),
-            self.workspace.read_json("config/agent_configs.json"),
+        return self.load_configuration_baseline().configuration
+
+    def load_configuration_baseline(self) -> ConfigurationBaseline:
+        """Read exact bytes once and validate their complete document pair."""
+
+        system_bytes = self._read_exact_bytes(_SYSTEM_DEFAULTS_PATH)
+        agent_bytes = self._read_exact_bytes(_AGENT_CONFIGS_PATH)
+        configuration = self.validate_configuration(
+            self._decode_json(system_bytes, _SYSTEM_DEFAULTS_PATH),
+            self._decode_json(agent_bytes, _AGENT_CONFIGS_PATH),
         )
+        return ConfigurationBaseline(
+            system_defaults_bytes=system_bytes,
+            agent_configs_bytes=agent_bytes,
+            configuration=configuration,
+        )
+
+    def commit_configuration(
+        self,
+        baseline: ConfigurationBaseline,
+        configuration: ConfigurationSnapshot,
+    ) -> bool:
+        """Compare exact bytes and publish both canonical complete documents.
+
+        ``True`` means at least one canonical document was written. A conflict
+        or failed write preserves the caller's baseline whenever rollback can
+        be completed; every failure is content-free.
+        """
+
+        if type(baseline) is not ConfigurationBaseline:
+            raise TypeError("baseline must be a ConfigurationBaseline")
+        if type(configuration) is not ConfigurationSnapshot:
+            raise TypeError("configuration must be a ConfigurationSnapshot")
+        system_value = self.system_defaults_value(configuration.system_defaults)
+        agent_value = self.agent_configs_value(configuration)
+        try:
+            self.validate_configuration(system_value, agent_value)
+        except ConfigurationError as exc:
+            raise ConfigurationCommitError(
+                ConfigurationCommitFailure.VALIDATION
+            ) from exc
+
+        try:
+            system_before = self._read_exact_bytes(_SYSTEM_DEFAULTS_PATH)
+            agent_before = self._read_exact_bytes(_AGENT_CONFIGS_PATH)
+        except Exception as exc:
+            raise ConfigurationCommitError(
+                ConfigurationCommitFailure.CONFLICT
+            ) from exc
+        if (
+            system_before != baseline.system_defaults_bytes
+            or agent_before != baseline.agent_configs_bytes
+        ):
+            raise ConfigurationCommitError(
+                ConfigurationCommitFailure.CONFLICT
+            )
+
+        system_bytes = self._canonical_json(system_value).encode("utf-8")
+        agent_bytes = self._canonical_json(agent_value).encode("utf-8")
+        writes = tuple(
+            (relative, current, replacement)
+            for relative, current, replacement in (
+                (_SYSTEM_DEFAULTS_PATH, system_before, system_bytes),
+                (_AGENT_CONFIGS_PATH, agent_before, agent_bytes),
+            )
+            if current != replacement
+        )
+        if not writes:
+            return False
+
+        attempted: list[tuple[str, bytes]] = []
+        try:
+            for relative, current, replacement in writes:
+                attempted.append((relative, current))
+                self.workspace.write_text(
+                    relative,
+                    replacement.decode("utf-8", errors="strict"),
+                )
+        except Exception as write_failure:
+            rollback_failure: Exception | None = None
+            for relative, original in reversed(attempted):
+                try:
+                    self.workspace.write_text(
+                        relative,
+                        original.decode("utf-8", errors="strict"),
+                    )
+                except Exception as failure:
+                    if rollback_failure is None:
+                        rollback_failure = failure
+            if rollback_failure is not None:
+                raise ConfigurationCommitError(
+                    ConfigurationCommitFailure.ROLLBACK
+                ) from rollback_failure
+            raise ConfigurationCommitError(
+                ConfigurationCommitFailure.WRITE
+            ) from write_failure
+        return True
+
+    @staticmethod
+    def system_defaults_value(defaults: SystemDefaults) -> dict[str, Any]:
+        """Project one system-default value to the canonical nine-key shape."""
+
+        if type(defaults) is not SystemDefaults:
+            raise TypeError("defaults must be a SystemDefaults")
+        storage_backend = defaults.conversation_storage_backend or "filesystem"
+        return {
+            "language": defaults.language,
+            "persona": defaults.persona,
+            "max_debate_rounds": defaults.max_debate_rounds,
+            "codex_model": defaults.codex_model,
+            "codex_reasoning_effort": defaults.codex_reasoning_effort,
+            "antigravity_model": defaults.antigravity_model,
+            "antigravity_effort": defaults.antigravity_effort,
+            "default_backend": defaults.default_backend,
+            "conversation_storage_backend": storage_backend,
+        }
+
+    @staticmethod
+    def agent_configs_value(
+        snapshot: ConfigurationSnapshot,
+    ) -> dict[str, dict[str, Any]]:
+        """Project one roster-complete agent candidate to its JSON shape."""
+
+        if type(snapshot) is not ConfigurationSnapshot:
+            raise TypeError("snapshot must be a ConfigurationSnapshot")
+        return {
+            agent_id: {
+                "backend": snapshot.agent_configs[agent_id].backend,
+                "language": snapshot.agent_configs[agent_id].language,
+                "persona": snapshot.agent_configs[agent_id].persona,
+                "codex_model": snapshot.agent_configs[agent_id].codex_model,
+                "codex_reasoning_effort": (
+                    snapshot.agent_configs[agent_id].codex_reasoning_effort
+                ),
+                "antigravity_model": (
+                    snapshot.agent_configs[agent_id].antigravity_model
+                ),
+                "antigravity_effort": (
+                    snapshot.agent_configs[agent_id].antigravity_effort
+                ),
+            }
+            for agent_id in ROSTER
+        }
+
+    def _read_exact_bytes(self, relative: str) -> bytes:
+        """Read one strict-UTF-8 configuration file without normalizing bytes."""
+
+        try:
+            value = self.workspace.path(relative).read_bytes()
+        except OSError as exc:
+            raise WorkspaceFormatError(f"cannot read file: {relative}") from exc
+        try:
+            value.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise WorkspaceFormatError(
+                f"file is not valid UTF-8: {relative}"
+            ) from exc
+        return value
+
+    @staticmethod
+    def _decode_json(value: bytes, relative: str) -> Any:
+        try:
+            return json.loads(value.decode("utf-8", errors="strict"))
+        except json.JSONDecodeError as exc:
+            raise WorkspaceFormatError(
+                f"file is not valid JSON: {relative}: {exc.msg}"
+            ) from exc
+
+    @staticmethod
+    def _canonical_json(value: Any) -> str:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        ) + "\n"
 
     def validate_runtime_overrides(
         self, value: Mapping[str, Any] | Any

@@ -25,6 +25,9 @@ from story_writing_agents.cli_context import (
     save_default_conversation,
     save_default_session,
 )
+from story_writing_agents.conversation_storage import (
+    CONVERSATION_STORAGE_MUTATION_GUARD_PATH,
+)
 from story_writing_agents.conversations import (
     ConversationEventAppend,
     ConversationEventKind,
@@ -2355,7 +2358,7 @@ print(
                     1,
                 )
                 returned_mark = process.output_mark()
-                process.send_text(("\x1b[B" * 4) + "\n")
+                process.send_text(("\x1b[B" * 5) + "\n")
                 process.send_text("\n")
                 saved = process.wait_for_text(
                     "[saved] Settings saved.",
@@ -2413,7 +2416,7 @@ print(
             after=mark,
         )
 
-        process.send_text(("\x1b[B" * 3) + "\n")
+        process.send_text(("\x1b[B" * 4) + "\n")
         process.wait_for_text("Select an agent to configure", after=mark)
         process.send_text("\x1b[B\n")
         process.wait_for_text(
@@ -2508,7 +2511,7 @@ print(
         mark = process.output_mark()
         process.send_text("/settings\n\n")
         process.wait_for_text("[highlighted] Language", after=mark)
-        process.send_text(("\x1b[B" * 3) + "\n")
+        process.send_text(("\x1b[B" * 4) + "\n")
         process.wait_for_text("Agents [focused] [open]", after=mark)
         process.send_text("\x1b[B\n")
         process.wait_for_text("Agent settings", after=mark)
@@ -2635,8 +2638,8 @@ print(
         process.wait_for_text("story[lobby]> ")
         mark = process.output_mark()
         process.send_line("/settings")
-        process.wait_for_text("6. [available] Cancel", after=mark)
-        process.send_line("4")
+        process.wait_for_text("7. [available] Cancel", after=mark)
+        process.send_line("5")
         process.wait_for_text("Agents > ", after=mark)
         process.send_line("2")
         process.wait_for_text("Agent settings", after=mark)
@@ -2667,16 +2670,16 @@ print(
         process.wait_for_text("Agents > ", after=model_mark)
         process.send_line("/cancel")
         returned_settings = process.wait_for_text(
-            "6. [available] Cancel",
+            "7. [available] Cancel",
             after=model_mark,
         )
         self.assertIn("[save required]", returned_settings)
-        self.assertIn("5. [available] Save (*Required)", returned_settings)
+        self.assertIn("6. [available] Save (*Required)", returned_settings)
         self.assertIn(
             "ChooseSavetopersistpendingchanges",
             "".join(returned_settings.split()),
         )
-        process.send_line("5")
+        process.send_line("6")
         process.send_line("1")
         process.wait_for_text("Settings saved", after=mark)
         process.wait_for_text("story[lobby]> ", after=mark)
@@ -2705,11 +2708,13 @@ print(
             antigravity="indeterminate",
         )
         before = _durable_tree(self.workspace.root)
+        coordinated = dict(before)
+        coordinated[CONVERSATION_STORAGE_MUTATION_GUARD_PATH] = b""
         process = self._spawn_cli(())
         process.wait_for_text("Provider authentication")
 
         self.assertFalse(self.provider_log.exists())
-        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertEqual(_durable_tree(self.workspace.root), coordinated)
         self.assertEqual(
             [
                 (record["provider"], record["operation"], record["argv"])
@@ -2723,7 +2728,7 @@ print(
 
         process.send_interrupt()
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertEqual(_durable_tree(self.workspace.root), coordinated)
         self.assertFalse(self.provider_log.exists())
         self.assertNotIn(
             "PTY_TEST_CREDENTIAL_MUST_NOT_APPEAR",
@@ -2904,9 +2909,9 @@ print(
 
         settings_mark = process.output_mark()
         process.send_line("/settings")
-        process.wait_for_text("6. [available] Cancel", after=settings_mark)
+        process.wait_for_text("7. [available] Cancel", after=settings_mark)
         self._set_auth_state(codex="unauthenticated")
-        process.send_line("5")
+        process.send_line("6")
         process.wait_for_text("Save settings?", after=settings_mark)
         process.send_line("1")
         process.wait_for_text("Provider authentication", after=settings_mark)
@@ -6145,7 +6150,9 @@ asyncio.run(main())
         process.wait_for_text("Provider authentication")
         process.send_interrupt()
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        self.assertEqual(_durable_tree(self.workspace.root), before)
+        coordinated = dict(before)
+        coordinated[CONVERSATION_STORAGE_MUTATION_GUARD_PATH] = b""
+        self.assertEqual(_durable_tree(self.workspace.root), coordinated)
         self.assertFalse(self.provider_log.exists())
 
         combined = "\n".join(

@@ -11,7 +11,6 @@ import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError, fields, replace
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import get_type_hints
 from unittest import mock
@@ -41,6 +40,9 @@ from story_writing_agents.agents import (
     LEAD_ORCHESTRATOR,
     PLOT_ARCHITECT,
     ROSTER,
+)
+from story_writing_agents.conversation_storage import (
+    compose_filesystem_conversation_storage,
 )
 
 from tests.conversation_event_store_contract import (
@@ -569,11 +571,9 @@ class FilesystemConversationEventStoreContractTests(
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.workspace = Workspace(temporary.name).initialize()
-        self.catalog = FilesystemConversationCatalog(self.workspace)
-        return FilesystemConversationEventStore(
-            self.workspace,
-            catalog=self.catalog,
-        )
+        self.services = compose_filesystem_conversation_storage(self.workspace)
+        self.catalog = self.services.catalog
+        return self.services.event_store
 
     def create_conversation(self, session_id: str, subject: str) -> str:
         return self.catalog.create(session_id, subject).conversation_id

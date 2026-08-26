@@ -14,6 +14,7 @@ from story_writing_agents import (
     ConversationMemoryService,
     ConversationMetadata,
     ConversationNotFoundError,
+    ConversationSearch,
     ConversationSearchMatchKind,
     ConversationSearchQuery,
     ConversationSearchScope,
@@ -290,6 +291,13 @@ class ConversationSearchContractMixin:
     def make_adapters(self) -> tuple[CatalogLike, EventStoreLike]:
         raise NotImplementedError
 
+    def make_search(
+        self,
+        catalog: CatalogLike,
+        store: EventStoreLike,
+    ) -> ConversationSearch | None:
+        return None
+
     def setUp(self) -> None:
         super().setUp()  # type: ignore[misc]
         self.catalog, self.store = self.make_adapters()
@@ -302,6 +310,7 @@ class ConversationSearchContractMixin:
             ConversationSearchScope(self.session_id),
             self.catalog,
             self.store,
+            search=self.make_search(self.catalog, self.store),
         )
 
     def test_subject_tiers_precede_one_cited_transcript_hit(self) -> None:

@@ -21,6 +21,9 @@ from unittest import mock
 import story_writing_agents
 from story_writing_agents import cli as cli_module
 from story_writing_agents import workspace as workspace_module
+from story_writing_agents.conversation_storage import (
+    selection as storage_selection_module,
+)
 from story_writing_agents import (
     AGENT_SPECS,
     ConversationEventStore,
@@ -47,6 +50,18 @@ from story_writing_agents import (
 from story_writing_agents.cli import build_parser, main
 from story_writing_agents.cli_context import CliContext
 from story_writing_agents.debug_log import WorkspaceDebugLog
+from story_writing_agents.conversation_storage import (
+    CONVERSATION_STORAGE_ACTIVATION_STATE_PATH,
+    ConversationStorageBackend,
+    ConversationStorageCapability,
+    ConversationStoragePreflight,
+    ConversationStorageServices,
+    compose_filesystem_conversation_storage,
+    load_conversation_storage_activation_state,
+)
+from story_writing_agents.conversation_storage.selection import (
+    ConversationStorageStartup,
+)
 from story_writing_agents.errors import (
     BackendProtocolError,
     ConfigurationError,
@@ -73,6 +88,7 @@ from story_writing_agents.provider_auth import (
 from story_writing_agents.workspace import DEFAULT_AGENT_PROMPTS
 
 from tests.helpers import initialized_workspace
+from tests.sqlite_conversation_storage_fixture import database_path, provision
 
 
 class TtyStringIO(io.StringIO):
@@ -226,18 +242,20 @@ def expected_interactive_error(
     code: InteractiveErrorCode,
     *,
     debug_log_available: bool = False,
+    summary: str | None = None,
+    hint: str | None = None,
 ) -> str:
     """Return the exact callback-profile semantic startup error record."""
 
     spec = INTERACTIVE_ERROR_SPECS[code]
     notices = [
         terminal_module.Notice(
-            spec.summary,
+            spec.summary if summary is None else summary,
             label=f"error {code.value}",
             role=terminal_module.SemanticRole.ERROR,
             state=terminal_module.ViewState.ERROR,
         ),
-        terminal_module.Notice(spec.hint, label="hint"),
+        terminal_module.Notice(spec.hint if hint is None else hint, label="hint"),
     ]
     if debug_log_available:
         notices.append(
@@ -833,7 +851,12 @@ class PublicApiTests(unittest.TestCase):
         constructor = inspect.signature(StoryRuntime)
         self.assertEqual(
             tuple(constructor.parameters),
-            ("workspace", "backend", "conversation_event_store"),
+            (
+                "workspace",
+                "backend",
+                "conversation_event_store",
+                "conversation_storage_services",
+            ),
         )
         self.assertIs(
             constructor.parameters["workspace"].kind,
@@ -851,6 +874,35 @@ class PublicApiTests(unittest.TestCase):
             get_type_hints(StoryRuntime.__init__)["conversation_event_store"],
             ConversationEventStore | None,
         )
+        services = constructor.parameters["conversation_storage_services"]
+        self.assertIs(services.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIsNone(services.default)
+        self.assertEqual(
+            get_type_hints(StoryRuntime.__init__)[
+                "conversation_storage_services"
+            ],
+            ConversationStorageServices | None,
+        )
+
+        workspace = initialized_workspace(self)
+        bundle = compose_filesystem_conversation_storage(workspace)
+        runtime = StoryRuntime(
+            workspace,
+            conversation_storage_services=bundle,
+        )
+        self.assertIs(runtime.conversation_storage_services, bundle)
+        self.assertIs(runtime.conversation_event_store, bundle.event_store)
+        legacy = StoryRuntime(workspace)
+        self.assertIsInstance(
+            legacy.conversation_storage_services,
+            ConversationStorageServices,
+        )
+        with self.assertRaises(TypeError):
+            StoryRuntime(
+                workspace,
+                conversation_event_store=bundle.event_store,
+                conversation_storage_services=bundle,
+            )
 
         cases = (
             (
@@ -1082,6 +1134,7 @@ class CliTests(unittest.TestCase):
             "run",
             "inspect",
             "session",
+            "storage",
             "smoke",
         ):
             with self.subTest(command=command):
@@ -1178,6 +1231,10 @@ class CliTests(unittest.TestCase):
             ["session", "create", "--help"],
             ["session", "reopen", "--help"],
             ["session", "pause", "--help"],
+            ["storage", "--help"],
+            ["storage", "migrate", "--help"],
+            ["storage", "verify", "--help"],
+            ["storage", "use", "--help"],
         ):
             with self.subTest(arguments=arguments):
                 completed = subprocess.run(
@@ -1741,6 +1798,12 @@ class CliTests(unittest.TestCase):
                     controller_args[:3],
                     (workspace, cli_context, backend_value),
                 )
+                self.assertIsInstance(
+                    controller_factory.call_args.kwargs[
+                        "conversation_storage_services"
+                    ],
+                    ConversationStorageServices,
+                )
                 terminal = controller_args[3]
                 self.assertIsInstance(terminal, InteractiveTerminal)
                 self.assertIs(
@@ -1787,6 +1850,8 @@ class CliTests(unittest.TestCase):
             cli_module.ConfigManager.load_configuration_snapshot
         )
         original_routes = cli_module._effective_interactive_providers
+        original_activate = cli_module.activate_configured_conversation_storage
+        storage_startups: list[ConversationStorageStartup] = []
 
         def validate_executable(value: object) -> str:
             events.append(("validation", value))
@@ -1804,9 +1869,19 @@ class CliTests(unittest.TestCase):
             events.append(("routes", None))
             return original_routes(*args, **kwargs)  # type: ignore[arg-type]
 
+        def activate(current_workspace: Workspace) -> ConversationStorageStartup:
+            events.append(("storage", None))
+            startup = original_activate(current_workspace)
+            storage_startups.append(startup)
+            return startup
+
         def controller_factory(*args: object, **kwargs: object) -> object:
             events.append(("controller", None))
             self.assertIs(kwargs["auth_coordinator"], coordinator)
+            self.assertIs(
+                kwargs["conversation_storage_services"],
+                storage_startups[0].services,
+            )
             self.assertIs(kwargs["provider_catalog"], catalog_service)
             return controller
 
@@ -1831,6 +1906,11 @@ class CliTests(unittest.TestCase):
                 side_effect=lambda option: (
                     events.append(("workspace", option)) or workspace
                 ),
+            ),
+            mock.patch.object(
+                cli_module,
+                "activate_configured_conversation_storage",
+                side_effect=activate,
             ),
             mock.patch.object(
                 cli_module,
@@ -1922,6 +2002,8 @@ class CliTests(unittest.TestCase):
             [
                 "validation",
                 "workspace",
+                "storage",
+                "snapshot",
                 "terminal",
                 "auth_service",
                 "catalog_service",
@@ -1938,10 +2020,154 @@ class CliTests(unittest.TestCase):
                 "lobby",
             ],
         )
-        self.assertEqual(events[3][1], workspace.root)
-        self.assertEqual(events[4][1], workspace.root)
+        self.assertEqual(events[5][1], workspace.root)
+        self.assertEqual(events[6][1], workspace.root)
         backend.close.assert_not_called()
         self.assertEqual(stderr.getvalue(), "")
+
+    def test_desired_sqlite_startup_failures_are_provider_free_and_preserving(
+        self,
+    ) -> None:
+        custom_summary = "Conversation storage activation could not be completed."
+        custom_hint = (
+            "Run story storage use, migrate, or verify as appropriate, then "
+            "retry after concurrent workspace storage work finishes."
+        )
+        cases = (
+            (
+                "missing_database",
+                False,
+                False,
+                InteractiveErrorCode.CONFIGURATION_INVALID,
+                True,
+            ),
+            (
+                "runtime_unavailable",
+                False,
+                True,
+                InteractiveErrorCode.CONFIGURATION_INVALID,
+                True,
+            ),
+            (
+                "invalid_database",
+                True,
+                False,
+                InteractiveErrorCode.WORKSPACE_INVALID,
+                False,
+            ),
+        )
+        for (
+            name,
+            invalid_database,
+            runtime_unavailable,
+            expected_code,
+            custom_copy,
+        ) in cases:
+            with self.subTest(case=name):
+                workspace = initialized_workspace(self)
+                database = database_path(workspace)
+                if invalid_database:
+                    database.write_bytes(b"invalid-database-private-secret")
+                system = workspace.read_json("config/system_defaults.json")
+                system["conversation_storage_backend"] = "sqlite"
+                workspace.write_json("config/system_defaults.json", system)
+
+                configuration_paths = (
+                    workspace.path("config/system_defaults.json"),
+                    workspace.path("config/agent_configs.json"),
+                )
+                configuration_before = tuple(
+                    path.read_bytes() for path in configuration_paths
+                )
+                database_before = database.read_bytes() if database.exists() else None
+                activation_path = workspace.path(
+                    CONVERSATION_STORAGE_ACTIVATION_STATE_PATH
+                )
+                activation_before = (
+                    activation_path.read_bytes() if activation_path.exists() else None
+                )
+
+                unavailable_preflight = ConversationStoragePreflight(
+                    ConversationStorageBackend.SQLITE,
+                    ConversationStorageCapability.UNAVAILABLE,
+                )
+                runtime_probe_context = (
+                    mock.patch.object(
+                        storage_selection_module,
+                        "probe_sqlite_conversation_storage_runtime",
+                        return_value=unavailable_preflight,
+                    )
+                    if runtime_unavailable
+                    else contextlib.nullcontext(None)
+                )
+                stdin = TtyStringIO(is_terminal=True)
+                stdout = TtyStringIO(is_terminal=True)
+                stderr = io.StringIO()
+                self.provider_auth_factory.reset_mock()
+                self.auth_coordinator_factory.reset_mock()
+                with (
+                    mock.patch.object(sys, "stdin", stdin),
+                    mock.patch.object(sys, "stdout", stdout),
+                    mock.patch.object(sys, "stderr", stderr),
+                    mock.patch.object(
+                        cli_module,
+                        "resolve_workspace",
+                        return_value=workspace,
+                    ),
+                    runtime_probe_context as runtime_probe,
+                    mock.patch.object(
+                        cli_module,
+                        "build_stream_terminal",
+                    ) as terminal_factory,
+                    mock.patch.object(cli_module, "load_cli_context") as context,
+                    mock.patch.object(cli_module, "AgentBackend") as backend,
+                    mock.patch.object(
+                        cli_module,
+                        "InteractiveController",
+                    ) as controller,
+                ):
+                    self.assertEqual(
+                        main(["chat", "--workspace", str(workspace.root)]),
+                        2,
+                    )
+
+                if runtime_probe is not None:
+                    runtime_probe.assert_called_once_with()
+                terminal_factory.assert_not_called()
+                self.provider_auth_factory.assert_not_called()
+                self.auth_coordinator_factory.assert_not_called()
+                context.assert_not_called()
+                backend.assert_not_called()
+                controller.assert_not_called()
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertEqual(
+                    stderr.getvalue(),
+                    expected_interactive_error(
+                        expected_code,
+                        debug_log_available=True,
+                        summary=custom_summary if custom_copy else None,
+                        hint=custom_hint if custom_copy else None,
+                    ),
+                )
+                self.assertNotIn("private-secret", stderr.getvalue())
+                self.assertEqual(
+                    tuple(path.read_bytes() for path in configuration_paths),
+                    configuration_before,
+                )
+                self.assertEqual(
+                    database.read_bytes() if database.exists() else None,
+                    database_before,
+                )
+                self.assertEqual(
+                    activation_path.read_bytes() if activation_path.exists() else None,
+                    activation_before,
+                )
+                self.assertEqual(
+                    workspace.read_json("config/system_defaults.json")[
+                        "conversation_storage_backend"
+                    ],
+                    "sqlite",
+                )
 
     def test_every_interactive_argument_failure_precedes_workspace_and_auth(
         self,
@@ -2058,6 +2284,70 @@ class CliTests(unittest.TestCase):
                     [name for name, _value in events],
                     ["welcome", "probe_all", "run"],
                 )
+
+    def test_storage_activation_cas_remains_after_later_provider_interrupt(self) -> None:
+        workspace = initialized_workspace(self)
+        provision(workspace)
+        system = workspace.read_json("config/system_defaults.json")
+        system["conversation_storage_backend"] = "sqlite"
+        workspace.write_json("config/system_defaults.json", system)
+        marker = workspace.path(CONVERSATION_STORAGE_ACTIVATION_STATE_PATH)
+        self.assertFalse(marker.exists())
+        none = provider_snapshot(
+            ProviderAuthState.UNAUTHENTICATED,
+            ProviderAuthState.UNAVAILABLE,
+        )
+        coordinator = ScriptedCliCoordinator(
+            [],
+            snapshots=(none,),
+            results=(
+                InteractiveAuthResult(
+                    InteractiveAuthResultKind.INTERRUPT,
+                    none,
+                ),
+            ),
+        )
+        stdin = TtyStringIO(is_terminal=True)
+        stdout = TtyStringIO(is_terminal=True)
+        stderr = io.StringIO()
+        terminal = InteractiveTerminal(lambda _prompt: "", lambda _text: None)
+        with (
+            mock.patch.object(sys, "stdin", stdin),
+            mock.patch.object(sys, "stdout", stdout),
+            mock.patch.object(sys, "stderr", stderr),
+            mock.patch.object(
+                cli_module,
+                "resolve_workspace",
+                return_value=workspace,
+            ),
+            mock.patch.object(
+                cli_module,
+                "build_stream_terminal",
+                return_value=terminal,
+            ),
+            mock.patch.object(
+                cli_module,
+                "ProviderAuthService",
+                return_value=object(),
+            ),
+            mock.patch.object(
+                cli_module,
+                "InteractiveAuthCoordinator",
+                return_value=coordinator,
+            ),
+            mock.patch.object(cli_module, "AgentBackend") as backend,
+            mock.patch.object(cli_module, "InteractiveController") as controller,
+        ):
+            self.assertEqual(
+                main(["chat", "--workspace", str(workspace.root)]),
+                0,
+            )
+        backend.assert_not_called()
+        controller.assert_not_called()
+        activation = load_conversation_storage_activation_state(workspace)
+        self.assertIs(activation.backend, ConversationStorageBackend.SQLITE)
+        self.assertEqual(activation.generation, 1)
+        self.assertTrue(marker.is_file())
 
     def test_mixed_effective_routes_are_freshly_gated_once_before_backend(
         self,

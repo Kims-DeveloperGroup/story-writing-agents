@@ -3,15 +3,24 @@
 > **Availability:** filesystem persistence covers configuration, sessions,
 > conversations, debates, optional debate-context sidecars, canonical writing
 > artifacts, content-free explicit-reference authorization evidence, and
-> bounded runtime debug-log infrastructure. `StoryRuntime` creates and
-> finalizes reference evidence for inline referenced operations; Python callers
-> can inspect it by operation ID.
+> bounded runtime debug-log infrastructure. Direct Python callers can also
+> construct canonical conversation-only archive bytes and use the privileged
+> filesystem transfer adapter. A separate optional SQLite conversation store is
+> available through direct Python modules and as an explicitly selected
+> next-shell bundle. Provider-free storage commands can select desired storage
+> or migrate and verify two already-ready stores in one workspace.
+> `StoryRuntime` creates and finalizes reference evidence for inline referenced
+> operations; Python callers can inspect it by operation ID.
 
 Key terms: **blackboard**—public debate JSONL; **sidecar**—context stored apart
 from established debate records; **create-only**—never replaces an existing
 path; **context-omitted run**—a debate created without a context request.
 
-The workspace uses separate inspectable files rather than a database:
+The installed runtime defaults to separate inspectable conversation files. An
+explicitly prepared and selected SQLite database can instead serve the next
+shell's complete conversation catalog, event-store, and reference-search
+bundle. Direct Python callers may also compose it explicitly. Neither database
+provisioning nor migration alone selects runtime authority.
 
 | Channel | Owner |
 | --- | --- |
@@ -20,13 +29,290 @@ The workspace uses separate inspectable files rather than a database:
 | Per-agent history | Its owning agent |
 | Provider manifest and access claim | `AgentBackend` |
 | Session/conversation defaults | CLI context helpers |
-| Conversation metadata and transcript | Catalog and event-store adapters |
+| Conversation metadata, transcript, and search | One composed active filesystem or SQLite services bundle; filesystem is the missing/legacy default |
+| Canonical conversation archive value and bytes | `conversation_storage.archive`; caller owns any stored or transmitted bytes |
+| Same-workspace conversation migration and checkpoints | `conversation_storage.migration`; canonical archive adapters remain the data boundary |
+| Desired storage, readiness, and startup activation | Configuration owns desired value; `conversation_storage.selection` owns preparation/parity and next-shell marker CAS |
 | Bounded runtime diagnostics | Internal `debug_log` writer |
 | Retrieval actions, observations, progress, sources | Process/terminal only |
 | Current conversation and agent focus | Controller memory only |
 | Canonical writing artifacts and provenance | `WritingArtifactRepository` |
 | Explicit-reference operation and invocation evidence | `WritingArtifactRepository`; content-free create-only records |
 | Explicit-reference selected content | Transient repository/backend carriers and one immediate provider payload; no workspace evidence field |
+
+<a id="conversation-archive-persistence"></a>
+
+## Conversation archive persistence boundary
+
+`conversation_storage.archive` owns immutable version-1 archive, session,
+conversation, and event values. It canonicalizes logical ordering and emits one
+strict-UTF-8 JSON byte image with a SHA-256 integrity digest. The pure value and
+serialization layer performs no filesystem I/O and owns no archive file;
+storage, transmission, retention, and access control for returned bytes belong
+to the calling application.
+
+`conversation_storage.filesystem_archive` owns this canonical archive's
+layout-aware filesystem transfer. Its adapter captures one private immutable
+construction-time root/key, retains no caller `Workspace` or public mutable
+catalog/event-store collaborator, and creates one operation-local collaborator
+set only after validating the operation's lease. This pinning is archive-owned,
+not the composed-service topology or SQLite database owner. Under a
+caller-held workspace mutation lease, export reads addressed exact metadata and
+complete transcripts from the fixed
+`discussion_logs/<session>/interactive/conversations/` namespace. It requires
+an already quiescent source and returns only after two complete canonical
+archive images agree. The lease and double scan detect unsafe or changed
+conversation state, but are neither authorization nor a linearizable snapshot
+for ordinary catalog/event-store writers.
+
+Import canonicalizes and bounds the whole payload, scans and classifies the
+complete destination-plus-payload union, builds its exact planned files,
+projects every count/path/byte bound, and checks all target ancestors before
+mutation. Create-only metadata-first installation accepts exact domain state,
+adds absent identities, preserves unrelated complete conversations and
+excluded workspace channels, rejects divergence, and verifies the expected
+destination afterward. It makes no rollback or deletion claim: an operational
+failure may leave only recognized exact prefixes that the same payload can
+complete under a fresh valid lease.
+
+This archive boundary neither persists an archive automatically nor combines
+conversation files with debates, defaults, provider state, prompts,
+manuscripts, artifacts, diagnostics, or configuration. It is not a complete
+workspace transaction, backup, arbitrary restore, activation, or dual-write
+mechanism. The separate migration coordinator described below composes the
+archive adapters for one same-workspace copy/parity workflow. See the exact
+[archive reference](../reference/conversation-archives.md) and
+[filesystem boundary](../operations/filesystem-safety.md#conversation-archive-filesystem-safety).
+
+<a id="optional-sqlite-conversation-persistence"></a>
+
+## Optional SQLite conversation persistence
+
+The optional adapter owns one fixed contained file:
+`discussion_logs/conversation_storage.sqlite3`. Its database identity is schema
+version `1`, SQLite application ID `0x53574143` (`SWAC`), UTF-8 encoding, and a
+fixed schema cookie and schema-manifest fingerprint. The internal database
+owner reads the canonical `Workspace.root` once at construction and pins both
+its workspace key and database path. Later mutation of the supplied
+`Workspace.root` cannot retarget database I/O. That capture is path arithmetic
+only: the SQLite layer performs no database I/O and does not load `sqlite3`
+during direct adapter/database construction. Resolving a string or path-like
+argument still follows ordinary `Workspace` construction, and public
+composition still performs its documented readiness preflight.
+
+Strict preflight and composition readiness, plus new, existing, recovered, and
+race-winner provisioning paths, verify the exact table, index, and trigger
+manifest, run `PRAGMA integrity_check` and a global foreign-key check, reject
+orphan events, and reconstruct every domain row. That authoritative readiness
+boundary does not require, inspect, or repair the derived FTS companion.
+Routine adapter calls instead verify bounded database/schema identity and
+validate only the rows involved in the requested operation; they do not scan
+unrelated database contents.
+
+Schema v1 has ten explicit application-owned objects: three authoritative
+tables, four indexes, and three insert triggers. The tables hold one singleton
+storage identity with a nonnegative lexical generation, catalog rows keyed by
+`(session_id, conversation_id)`, and ordered event rows keyed by
+`(session_id, conversation_id, sequence)`. The two catalog indexes serve
+active/all creation ordering, the unique turn-slot index serves addressed turn
+lookup and uniqueness, and the recent-outcome index serves bounded context
+selection. Event ordering still uses SQLite's composite-primary-key autoindex,
+so there is no redundant explicit event-order index.
+
+Catalog rows retain exact public metadata plus required canonical
+`normalized_subject`; event rows retain the exact public event plus required
+canonical `searchable_content` and `turn_slot`. Verification rejects divergence
+between source text and either lexical projection. The slot, constraints, and
+triggers enforce contiguous history, one user/outcome slot, addressed replies,
+and catalog ownership. These database-only values do not change the public
+catalog, transcript, context, search, or citation contracts. FTS and its shadow
+objects never enter this authoritative database.
+
+Every ordinary adapter read owns a read-only `mode=ro` connection and explicit
+`BEGIN`/`COMMIT` transaction. Bounded identity verification and the requested
+row validation observe one stable snapshot; the connection is then closed.
+That boundary is one catalog, event-store, or search operation.
+`SQLiteConversationSearch` performs its complete bounded literal search in one
+main-database read transaction. It preserves the public normalization, ranking,
+citations, snippets, counters, limits, and result order of
+`ReferenceConversationSearch` while reading authoritative rows directly.
+
+Every supported mutation acquires the workspace conversation-storage
+coordinator before opening its `mode=rw` connection. It verifies the database
+and active workspace/owner-thread lease, uses `BEGIN IMMEDIATE`, performs the
+operation with operation-local row validation and database constraints, and
+advances the required lexical generation for an effective change. It then
+reverifies schema identity plus the lease, commits, checks the named database
+identity, and closes. A required lexical-state failure rolls back the
+authoritative mutation; an already-effective archive or unarchive is a no-op
+and leaves the generation unchanged. The connection policy is DELETE journal
+mode,
+`synchronous=FULL`, foreign keys enabled and enforced, a fixed five-second
+SQLite busy timeout, and strict UTF-8 decoding for database `TEXT`. Malformed
+stored text encountered by verification or the requested operation fails
+closed through a content-free storage-format error; a
+caller-originated `UnicodeDecodeError` is not silently reclassified as stored
+corruption.
+
+The fixed private `discussion_logs/.conversation_storage_fts5.sqlite3`
+companion is derived and disposable. It stores normalized non-runtime visible
+event text and stable event coordinates, and records the committed source
+generation plus exact normalization, schema, tokenizer, and SQLite-runtime
+identities. Authoritative normalized subjects remain in the main database and
+retain subject-match precedence.
+
+After an effective main mutation commits, the adapter may refresh the
+companion under the same workspace lease. A refresh failure cannot roll back
+the already committed main transaction. Search treats every FTS candidate as a
+hint and still applies exact literal comparison over the full bounded
+main-database scan. Missing, stale, busy, malformed, unsafe,
+capability-mismatched, or otherwise failed companion state is preserved and
+falls back without changing results; search performs no repair.
+
+This serializes supported writers through the workspace guard but is not a
+transaction with filesystem conversations, defaults, sessions, debates,
+artifacts, provider state, or other workspace channels. Routine writes do not
+run the exhaustive preflight scan over unrelated rows. In particular, append
+uses the indexed maximum sequence and reads at most the addressed turn's one
+user row and one outcome row; it does not reconstruct the full transcript.
+`read_context()` obtains an exact complete-turn count and materializes at most
+the newest 25 addressed complete pairs—50 events—to retain the fixed 24-turn
+window and detect its boundary. A full `read()` still validates and returns the
+complete history.
+
+Database provisioning builds and verifies one private temporary database,
+installs it create-only, and synchronizes the installed file and containing
+directory. That operation does not install a host SQLite prerequisite or
+ingest the filesystem store. It may initialize the
+derived FTS companion after the main database is ready, but FTS absence or
+failure is not a provisioning or readiness failure. The privileged archive
+adapter round-trips the public canonical `ConversationArchive` value under an
+explicit lease. Export globally reconstructs all metadata and event rows and
+rejects every orphan event. Import validates the complete destination before
+mutation and again after mutation in the same transaction, so an orphan,
+malformed row, or divergent existing identity cannot be silently adopted or
+dropped; failure rolls back the whole import.
+
+Without POSIX `fcntl`, a valid existing database can still be preflighted and
+read observationally. Supported coordinator acquisition, installation through
+selection, provisioning, configuration save, activation, and mutations fail
+closed without changing conversation state.
+
+`story init` and direct `StoryRuntime` construction do not provision or select
+this database. `/settings` and `story storage use` may explicitly prepare it
+and save SQLite as desired storage, but neither activates or migrates it. The
+explicit migration coordinator can copy canonical conversations between an
+already-ready database and the filesystem, but it does not install, provision,
+or activate SQLite. Shell startup never installs or provisions. There is no
+live switch, dual write, source deletion, RAG, MySQL, or FTS-dependent search
+behavior in this adapter. See the
+[direct API](../reference/package-api.md#optional-sqlite-conversation-storage),
+[filesystem boundary](../operations/filesystem-safety.md#sqlite-conversation-storage-safety),
+and [recovery table](../operations/recovery-and-limitations.md#sqlite-conversation-storage-recovery).
+
+<a id="conversation-storage-selection-and-activation"></a>
+
+## Conversation storage selection and activation
+
+Configuration owns only the desired `conversation_storage_backend`. New
+workspaces save `filesystem`; missing or null legacy values resolve to that same
+effective default without read-time rewriting. The independent strict schema-v1
+`config/conversation_storage_state.json` owns active backend and CAS generation;
+its absence is filesystem generation zero.
+
+`conversation_storage.selection` is a direct-only workflow module above
+configuration, provisioning, canonical archives, and backend composition. It
+does not import migration or consume migration checkpoints. `story storage use`
+dispatches to it before debug logging and provider/runtime construction.
+`/settings` supplies its complete pending configuration plus the
+settings-owned fresh persona-catalog guard. Storage choice is independent from
+the Agents editor and provider routing, although the complete Settings Save
+retains provider authentication before selection begins.
+
+Selection first briefly proves the workspace coordinator, then releases it
+during any consent interaction and host installer. For SQLite it functionally
+probes the active Python interpreter, optionally executes one explicitly
+authorized allowlisted host command, and reprobes the same interpreter. It then
+holds the coordinator while it provisions an absent empty database, composes
+the requested backend, reads active state, and compares fresh source/target
+canonical archive bytes. Same-backend or empty-source selection needs no
+parity; a nonempty source requires exact equality. Lease validation, the
+optional Settings guard, another lease validation, and the config-owned exact-
+byte complete-document CAS form the final publication boundary.
+
+Successful selection changes desired configuration only. The current process
+retains its construction-time bundle. Host installation and an empty provisioned
+database intentionally survive a later parity or configuration failure; source
+conversations and active state do not change.
+
+Interactive startup runs after workspace/configuration loading but before
+terminal construction and provider authentication. It holds one outer lease
+while it reloads configuration, composes the current active bundle, freshly
+checks desired-target readiness and canonical parity, composes the complete
+target bundle, and compare-and-set advances the activation marker. Any pre-CAS
+failure aborts startup and preserves the prior marker without a silent
+fallback. A successful CAS is not rolled back by later terminal,
+authentication, backend, or session failure. The resulting immutable bundle is
+injected into controller, runtime, and memory; no live switch or dual write is
+owned. Exact user commands, reports, installation policy, and recovery links
+are centralized in the
+[CLI reference](../reference/cli.md#conversation-storage-selection).
+
+<a id="conversation-storage-migration"></a>
+
+## Conversation storage migration
+
+`conversation_storage.migration` owns one provider-free, same-workspace
+coordinator over the canonical filesystem and SQLite archive adapters. The
+installed `story storage migrate` and `story storage verify` commands dispatch
+to it before debug logging, broader CLI context, authentication, provider,
+runtime, settings, or session construction. Importing the module performs no
+I/O and keeps `sqlite3` lazy until an operation needs an adapter.
+
+One outer workspace conversation-storage lease spans active-backend validation,
+SQLite readiness, fresh source and destination exports, deterministic planning,
+transfer, checkpoint publication, fresh final exports, and exact canonical-byte
+parity. The source and destination must be distinct; `--from` must equal the
+persisted active backend (an absent activation record means filesystem), and
+SQLite must already be provisioned and ready. The coordinator never installs or
+provisions SQLite, changes activation/configuration, deletes source data, or
+dual-writes later mutations.
+
+Planning classifies every `(session_id, conversation_id)` as `create`,
+`identical`, `conflict`, `unsupported`, or `destination_only`. Any conflict or
+SQLite-unrepresentable canonical integer blocks every transfer. Destination-only
+state also blocks migration because copying must not silently accept asymmetric
+authority. Verification treats otherwise valid create or destination-only
+state as a parity mismatch. Exact comparison includes active and archived
+metadata, empty histories, and every event kind including `runtime_error`; the
+derived FTS companion is outside both transfer and parity.
+
+Filesystem-to-SQLite import is one complete SQLite transaction. A failed
+uncommitted import rolls back all destination rows. SQLite-to-filesystem import
+first preflights the complete global destination and then publishes complete
+conversations create-only. After each conversation is reread and proved exact,
+the coordinator atomically advances a per-direction checkpoint. If publication
+or checkpointing is interrupted, a retry freshly exports both stores and
+accepts only exact completed records before resuming.
+
+Checkpoints are retained beneath
+`agent_states/orchestrator_state/conversation_storage_migrations/` as
+`filesystem-to-sqlite.json` and `sqlite-to-filesystem.json`. Strict schema v1
+contains only direction, a SHA-256 source fingerprint, aggregate counts,
+completed conversation identities, and progress counts. It contains no subject,
+event, error, or FTS content. A successful migration retains a terminal complete
+checkpoint as audit state. Dry-run never writes one; verify neither reads nor
+writes one. Either read-only workflow may still create the empty
+`config/.conversation_storage.lock` guard required to acquire its outer lease.
+
+After transfer, fresh canonical exports must still equal the original source.
+A source change or final mismatch can be reported after complete destination
+state was committed or published; the coordinator makes no cross-store rollback
+claim. Recovery therefore starts with both stores quiescent and fresh
+verification, not activation or source deletion. See the
+[CLI report and exit contract](../reference/cli.md#conversation-storage-migration),
+[checkpoint layout](../reference/configuration/session-storage.md#conversation-migration-checkpoints),
+and [recovery procedure](../operations/recovery-and-limitations.md#conversation-storage-migration-recovery).
 
 <a id="workspace-runtime-debug-log"></a>
 

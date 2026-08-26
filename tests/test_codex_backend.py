@@ -1076,13 +1076,13 @@ class CodexBackendDefaultsTests(unittest.TestCase):
 
     def test_full_persisted_schema_precedes_explicit_model_validation(self) -> None:
         expected_effort = (
-            "codex_reasoning_effort must be null or one of: "
-            "minimal, low, medium, high, xhigh"
+            "codex_reasoning_effort must be null or match "
+            "[a-z][a-z0-9_-]{0,31}"
         )
         cases = (
             (
                 "valid-persisted",
-                "ultra",
+                "ULTRA",
                 {},
                 "-invalid-explicit",
                 expected_effort,

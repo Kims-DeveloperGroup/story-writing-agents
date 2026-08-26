@@ -45,6 +45,10 @@ from story_writing_agents.conversation_retrieval import (
     ConversationRetrievalSource,
 )
 from story_writing_agents.conversation_search import ConversationCitation
+from story_writing_agents.conversation_storage import (
+    ConversationStorageServices,
+    compose_filesystem_conversation_storage,
+)
 from story_writing_agents.errors import (
     BackendProtocolError,
     ConfigurationError,
@@ -415,8 +419,12 @@ class InteractiveConversationTestCase(unittest.TestCase):
             width=width,
         )
         keywords: dict[str, object] = {}
+        storage_services: ConversationStorageServices | None = None
         if catalog is not None:
             keywords["conversation_catalog"] = catalog
+        elif runtime is not _REAL_RUNTIME:
+            storage_services = compose_filesystem_conversation_storage(workspace)
+            keywords["conversation_storage_services"] = storage_services
 
         if runtime is _REAL_RUNTIME:
             controller = InteractiveController(
@@ -442,7 +450,18 @@ class InteractiveConversationTestCase(unittest.TestCase):
             )
         call = runtime_factory.call_args
         assert call is not None
-        store = call.kwargs["conversation_event_store"]
+        if storage_services is not None:
+            self.assertIs(
+                call.kwargs["conversation_storage_services"],
+                storage_services,
+            )
+            self.assertIs(
+                controller._conversation_storage_services,
+                storage_services,
+            )
+            store = storage_services.event_store
+        else:
+            store = call.kwargs["conversation_event_store"]
         return controller, selected_backend, callbacks, store, runtime_factory
 
     def prepared_selected_controller(
@@ -498,62 +517,49 @@ class RuntimeWiringAndGateTests(InteractiveConversationTestCase):
         backend = self.make_backend(workspace)
         callbacks = ScriptedTerminalCallbacks("/quit")
         terminal = InteractiveTerminal(callbacks.read_line, callbacks.write_text)
-        default_catalog = FilesystemConversationCatalog(workspace)
-        runtime = ScriptedRuntime()
         before = tuple(workspace.root.rglob("*"))
-        with (
-            mock.patch.object(
-                controller_core_module,
-                "FilesystemConversationCatalog",
-                return_value=default_catalog,
-            ) as catalog_factory,
-            mock.patch.object(
-                controller_core_module,
-                "StoryRuntime",
-                return_value=runtime,
-            ) as runtime_factory,
-        ):
-            InteractiveController(
-                workspace,
-                CliContext(),
-                backend,
-                terminal,
-            )
-        catalog_factory.assert_called_once_with(workspace)
-        runtime_factory.assert_called_once()
-        default_store = runtime_factory.call_args.kwargs[
-            "conversation_event_store"
-        ]
-        self.assertIsInstance(default_store, FilesystemConversationEventStore)
-        self.assertIs(default_store.catalog, default_catalog)
+        controller = InteractiveController(
+            workspace,
+            CliContext(),
+            backend,
+            terminal,
+        )
+        storage_services = controller._conversation_storage_services
+        self.assertIsInstance(storage_services, ConversationStorageServices)
+        assert storage_services is not None
+        self.assertIs(controller._conversation_catalog, storage_services.catalog)
+        self.assertIs(
+            controller._conversation_event_store,
+            storage_services.event_store,
+        )
+        self.assertIs(
+            controller._runtime.conversation_storage_services,
+            storage_services,
+        )
         self.assertEqual(tuple(workspace.root.rglob("*")), before)
 
         injected = FilesystemConversationCatalog(workspace)
         runtime = ScriptedRuntime()
-        with (
-            mock.patch.object(
-                controller_core_module,
-                "FilesystemConversationCatalog",
-            ) as catalog_factory,
-            mock.patch.object(
-                controller_core_module,
-                "StoryRuntime",
-                return_value=runtime,
-            ) as runtime_factory,
-        ):
-            InteractiveController(
+        with mock.patch.object(
+            controller_core_module,
+            "StoryRuntime",
+            return_value=runtime,
+        ) as runtime_factory:
+            controller = InteractiveController(
                 workspace,
                 CliContext(),
                 backend,
                 terminal,
                 conversation_catalog=injected,
             )
-        catalog_factory.assert_not_called()
         runtime_factory.assert_called_once()
         injected_store = runtime_factory.call_args.kwargs[
             "conversation_event_store"
         ]
         self.assertIs(injected_store.catalog, injected)
+        self.assertIsNone(controller._conversation_storage_services)
+        self.assertIs(controller._conversation_catalog, injected)
+        self.assertIs(controller._conversation_event_store, injected_store)
         self.assertEqual(
             runtime_factory.call_args.args,
             (workspace, backend),

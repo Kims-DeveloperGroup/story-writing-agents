@@ -86,13 +86,13 @@ persisted before Save is confirmed. Model and effort then edit that agent's
 active provider settings. Switching providers preserves the inactive provider's
 saved settings.
 
-After Save is confirmed, save-time authentication may durably establish a
-missing workspace default before the guarded settings-file transaction. That
-completed post-confirmation default is not rolled back if later Save gating or
-transaction work stops. This does not change startup authentication or explicit
-global `/auth`, which retain immediate absent-default durability. Direct JSON
-editing is also supported; this excerpt routes only the plot architect and
-leaves omitted agents to inherit the workspace default:
+After Save is confirmed, save-time authentication may rebase a missing
+workspace default only in the pending candidate. It becomes durable only when
+conversation-storage readiness, parity, and the final guarded settings write
+complete. This does not change startup authentication or explicit global
+`/auth`, which retain immediate absent-default durability. Direct JSON editing
+is also supported; this excerpt routes only the plot architect and leaves
+omitted agents to inherit the workspace default:
 
 ```json
 {

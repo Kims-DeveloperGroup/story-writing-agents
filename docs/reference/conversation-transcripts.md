@@ -1,8 +1,11 @@
 # Conversation transcripts
 
-> **Availability:** interactive turns append transcripts and consume bounded
-> context. `/transcript` reads bounded pages; focused `/history` shows one full
-> snapshot with context accounting; `/search` cites active events.
+> **Availability:** interactive turns use the startup-selected filesystem or
+> SQLite event store, append transcripts, and consume bounded context.
+> `/transcript` reads bounded pages; focused `/history` shows one full snapshot
+> with context accounting; `/search` cites active events. Both adapters remain
+> available through their documented Python imports; direct runtime
+> construction defaults to filesystem unless supplied a complete bundle.
 
 Key terms: **event**—one visible stored record; **complete turn**—one user event
 plus one outcome; **unmatched turn**—a user event without an outcome;
@@ -45,13 +48,33 @@ read_context(session_id: str, conversation_id: str) -> ConversationContextWindow
 `story_writing_agents.conversations`, not the package facade. It validates/selects
 from one exact tuple; the store protocol, facade exports, and schemas are unchanged.
 
+The optional adapter implements the same event-store contract:
+
+```python
+from story_writing_agents.conversation_storage.sqlite import (
+    SQLiteConversationEventStore,
+)
+
+store = SQLiteConversationEventStore(
+    workspace,
+    mutation_coordinator=None,
+    mutation_timeout_seconds=5.0,
+)
+```
+
+Construction does not provision the database. Use the explicit flow in the
+[package API](package-api.md#optional-sqlite-conversation-storage) before an
+operation, or the [next-shell selection workflow](cli.md#conversation-storage-selection)
+for the installed shell.
+
 `append()` assigns schema version, a one-based contiguous `sequence`, and a
 canonical UTC timestamp. Sequence is authoritative ordering; wall-clock
 timestamps may be equal or move backward.
 
 ## Event meaning
 
-Each `transcript.jsonl` line is one JSON object with exactly ten keys:
+In the filesystem adapter, each `transcript.jsonl` line is one JSON object with
+exactly ten keys:
 
 ```json
 {"schema_version":1,"session_id":"novel","conversation_id":"c_opening","turn_id":"turn_1","sequence":1,"timestamp":"2026-08-15T10:00:00+00:00","sender":"user","recipient":"plot_architect","kind":"user_message","content":"Should the reveal happen here?"}
@@ -71,6 +94,16 @@ An outcome cannot precede its user event, and one turn cannot have two
 outcomes. Runtime-error text is visible content. Direct callers must sanitize
 their own values; `StoryRuntime` applies the
 [runtime diagnostic policy](../operations/privacy-and-provider.md#runtime-error-diagnostics).
+
+The SQLite adapter stores those same ten public values as normalized event
+rows. Required canonical `searchable_content` supports exact literal search;
+private `turn_slot` and database constraints enforce one user event and at most
+one outcome for a turn, contiguous sequence, addressed reply ownership, and the
+catalog foreign key. Neither derived value is a public event field. Reads
+reconstruct the exact `ConversationEvent` values and ordering and reject a
+stored lexical projection that differs from the public content. Stored `TEXT`
+is decoded as strict UTF-8; malformed bytes fail closed through a content-free
+`WorkspaceFormatError`.
 
 ## Interactive read bridge
 
@@ -95,10 +128,15 @@ second read or write. See
 ## Context-window derivation and failure evidence
 
 A complete turn is one `user_message` plus one `agent_reply` or
-`runtime_error`. The store and pure selector walk complete turns newest to
-oldest and retain at most 24 turns and 32,768 combined content bytes. Derivation
-stops at the first turn that would exceed either cap, never splits a turn, and
-restores retained events to storage order.
+`runtime_error`. The pure selector and filesystem store walk complete turns
+newest to oldest and retain at most 24 turns and 32,768 combined content bytes.
+The SQLite store returns the identical projection from one read transaction:
+it obtains the exact complete-turn total, materializes at most the newest 25
+indexed outcomes and their addressed users—50 events—and uses the extra pair
+to detect the 24-turn boundary. Derivation stops at the first turn that would
+exceed either cap, never splits a turn, and restores retained events to storage
+order. Its count, ordered-limit, and addressed lookup queries remain compatible
+with the documented SQLite 3.7.16 minimum and require no window functions.
 
 After an advisory user append, `asyncio` cancellation best-effort adds
 `runtime_error` content `CancelledError: conversation turn was cancelled`;
@@ -114,15 +152,31 @@ rewrites, or deletes events.
 
 ## Storage and validation boundary
 
-The path is
+For the filesystem adapter, the path is
 `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/transcript.jsonl`.
 The catalog identity must exist but may be archived. A missing transcript reads
 as empty without creating a file. A present empty, malformed,
 noncontiguous-sequence, invalidly paired, or path-mismatched file fails closed
 with `WorkspaceFormatError`.
 
-The adapter validates complete history before read, context derivation, or
-append. It never invokes a provider, changes defaults/focus, searches, migrates
-old data, or deletes events. See [Filesystem safety](../operations/filesystem-safety.md)
-for mutation and locking and [Privacy](../operations/privacy-and-provider.md)
-for exposure.
+The SQLite adapter stores all sessions and conversations in the fixed optional
+`discussion_logs/conversation_storage.sqlite3` database. A conversation with
+no event rows reads as empty. Each ordinary read uses one explicit stable
+read-only transaction; each append uses one coordinator-first write
+transaction. These guarantees cover one adapter operation, not multiple service
+calls as one database-wide snapshot.
+
+Both adapters validate the addressed complete history for a full `read()`.
+Filesystem context derivation also validates that complete tuple. SQLite
+`read_context()` instead uses its exact aggregate count and addressed indexed
+queries described above; it never materializes more than 25 complete pairs.
+SQLite append likewise remains history-bounded inside its write transaction: it
+obtains one plus the indexed maximum sequence and reads at most the addressed
+turn's user/outcome pair through the unique turn-slot index. Constraints and
+triggers enforce the stored sequence, pairing, addressed reply, and catalog
+ownership without a full-transcript scan. Explicit SQLite preflight and archive
+boundaries retain their documented global validation. Neither adapter invokes
+a provider, changes defaults/focus, searches, migrates old data, or deletes
+events. See
+[Filesystem safety](../operations/filesystem-safety.md) for mutation and
+locking and [Privacy](../operations/privacy-and-provider.md) for exposure.
