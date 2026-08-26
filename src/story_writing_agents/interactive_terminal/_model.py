@@ -654,6 +654,7 @@ class Choice:
     _: KW_ONLY
     warning_suffix: str | None = None
     description: str | None = None
+    description_role: SemanticRole = SemanticRole.DEFAULT
     enabled: bool = True
     disabled_reason: str | None = None
 
@@ -662,6 +663,8 @@ class Choice:
         _require_text("label", self.label)
         _require_optional_text("warning_suffix", self.warning_suffix)
         _require_optional_text("description", self.description)
+        if not isinstance(self.description_role, SemanticRole):
+            raise TypeError("description_role must be a SemanticRole")
         if type(self.enabled) is not bool:
             raise TypeError("enabled must be a bool")
         _require_optional_text("disabled_reason", self.disabled_reason)
