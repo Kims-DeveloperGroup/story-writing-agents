@@ -43,9 +43,10 @@
 > pending effective provider. Within `/settings` only, valid value commits keep
 > the active editor open with updated selection/default and one replacing inline
 > completed success result; a second consecutive commit of the same normalized
-> value returns one level. The controller also marks dirty Save labels and
-> unifies explicit Cancel with root Settings Escape. Generic picker/prompt reads,
-> resume pickers, and Save/Cancel confirmations remain one-shot.
+> value returns one level. A clean Settings root exposes no persistence action;
+> dirty state alone appends Apply Changes and Discard Changes. Root Settings
+> Escape retains its cancellation behavior. Generic picker/prompt reads, resume
+> pickers, and dirty Apply/Discard confirmations remain one-shot.
 
 ## Public API
 
@@ -567,10 +568,10 @@ semantic reads. Under `FALLBACK` it keeps the ordinary callback appearance.
 The submitted subject text and its controller meaning are unchanged. The
 normative lifecycle is in the [design contract](../design/interactive-cli-design-system.md#submitted-input-lifecycle).
 
-Save shows a transient selectable confirmation with highlighted `YES` and `NO`
-choices. Explicit Cancel and root Settings Escape invoke the same controller
-action: clean state exits immediately without a confirmation, while dirty state
-shows the existing transient Cancel confirmation. Its preceding context
+Apply Changes shows a transient selectable confirmation with highlighted `YES`
+and `NO` choices. Discard Changes and root Settings Escape share the existing
+controller discard action: clean Escape exits immediately without a
+confirmation, while dirty state shows the transient discard confirmation. Its preceding context
 contains only fields whose Current and Pending values differ, and both
 displayed values carry the `(Changed)` cue; unchanged Save confirmation shows
 only `No pending settings changes.` without empty Current or Pending sections.
@@ -617,16 +618,16 @@ Provider is a subordinate action and returns to Provider after its result.
 Ctrl-C or EOF at any level cancels the whole settings transaction.
 
 Every one of those retained value editors also always renders the instruction
-`Entered changes remain pending in memory and are not saved; choose Save in
-Settings to persist them.` It remains present on initial entry, after a valid
+`Entered changes remain pending in memory and are not saved; choose Apply
+Changes in Settings to persist them.` It remains present on initial entry, after a valid
 commit reopens the editor, and during validation. It does not replace, duplicate,
 or become the exact entered-value success result, which remains the only inline
 completed result.
 
 Each read of the top-level Settings picker structurally compares the complete
 pending configuration with the opening baseline. Only a difference adds
-`[save required] Pending changes are in memory only and are not saved. Choose
-Save to persist them.` as a `SemanticRole.WARNING`/`ViewState.IDLE` notice. The
+`[save required] Choose Apply Changes to persist pending changes` as a
+`SemanticRole.WARNING`/`ViewState.IDLE` notice. The
 notice is absent initially, after a complete revert, and in Agents, Agent
 settings, every value editor, and Save/Cancel confirmations. Capable, narrow,
 `NO_COLOR`, and fallback projections keep the complete text. Fallback may retain
@@ -634,12 +635,13 @@ an older prompt in historical scrollback, but the current top-level prompt is
 recomputed and truthful. Existing instruction and `Notice` semantics are used;
 there is no new terminal primitive or global picker policy.
 
-The same comparison projects the Save label as exact plain `Save` when clean
-and exact plain `Save (*Required)` when dirty. Fixed ANSI warning decoration,
-when eligible, is limited to `(*Required)`; the preceding separator space and
-`Save` prefix stay ordinary. Plain, `NO_COLOR`, narrow, and fallback projections
-preserve the exact plain label. The label does not replace the existing warning
-`Notice`.
+Clean state projects no persistence action. Dirty state appends exact plain
+`Apply Changes (*Required)` followed by `Discard Changes`. Fixed ANSI warning
+decoration, when eligible, is limited to `(*Required)`; the preceding separator
+space and `Apply Changes` prefix stay ordinary. Discard has exact description
+`Pending changes will be discarded.` Plain, `NO_COLOR`, narrow, and fallback
+projections preserve the labels, order, description, and guidance. The suffix
+does not replace the warning `Notice`.
 
 Model choices are ordered Inherit, discovered models in provider order,
 Current custom when the pending value is not in that projection, and Custom
@@ -1033,11 +1035,23 @@ stream or numbered in fallback; an empty or failed read does not open it. A
 caller supplies one semantic prompt and immutable choices whose opaque
 identities are returned on commit but never rendered as picker identities.
 
+`Choice` has an additive package-internal `description_role` field whose
+default is `SemanticRole.DEFAULT`. Existing callers therefore retain their
+output unless they opt into another role. The role applies only to explicit
+description text and reinforces meaning already carried by words such as
+`Pending`; color is never the only state cue, and plain and `NO_COLOR`
+projections retain the same text. The warning suffix and description are
+independent inline spans and keep their own roles through wrapping. Disabled
+styling takes precedence over selected styling, selected over highlighted, and
+those interaction states over suffix or description roles. `Choice` and this
+field remain unlisted internal contracts, with no supported package or root
+export added.
+
 The generic picker remains commit-once. `/settings` alone may consume that
 commit, immediately open a new value-editor read with updated state and an
 inline success notice, then interpret a consecutive commit of the same
 normalized value as a silent parent return. The generic Picker has no retained
-state, second-Enter rule, or raw-key timing window. Save/Cancel confirmations
+state, second-Enter rule, or raw-key timing window. Apply/Discard confirmations
 and context-changing consumers remain one-shot, especially
 `/session resume` and `/conversation resume`: after selection the picker is no
 longer active, its capable frame is cleared, and fallback text may remain only

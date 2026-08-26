@@ -1989,8 +1989,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   and prompt adapters for its call-local edit flow. When the optional
   coordinator is supplied, global `/auth`, provider-status choices,
   authenticated route assignment, missing-default coordination, and a fresh
-  effective-route authentication gate before settings Save use that borrowed
-  collaborator. The controller owns no native authentication child, cursor
+  effective-route authentication gate before dirty settings Apply Changes use
+  that borrowed collaborator. The controller owns no native authentication child, cursor
   sequence, or terminal geometry.
   Retrieval results and persisted `agent_reply`
   history/transcript rows use the facade's pure `format_agent_reply_content`
@@ -2006,15 +2006,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   or sticky agent changes. Detachment resets that comparison, so a later
   attachment presents its scope again even when its values match the earlier
   attachment.
-  The settings editor exposes the exact seven-row top level Language, Persona,
-  Maximum debate rounds, Conversation storage, Agents, Save, and Cancel.
-  Conversation storage edits only the pending desired next-shell backend; Save
-  retains provider-default rebasing in memory, completes any provider auth,
-  then delegates readiness, explicit installer confirmation, provisioning,
-  fresh parity, and the one complete configuration CAS to the selection owner.
-  It supplies the settings-owned fresh persona-catalog validator as selection's
-  precommit guard so a changed catalog becomes a configuration conflict before
-  that CAS, and it never activates or migrates storage. Agents selects one
+  The clean settings editor exposes the exact five-row top level Language,
+  Persona, Maximum debate rounds, Conversation storage, and Agents. A
+  structurally dirty candidate appends `Apply Changes (*Required)` and `Discard
+  Changes` while retaining the stable internal `save` and `cancel` routing
+  identities; a previously retained action highlight normalizes when its row
+  becomes hidden. Conversation storage edits only the pending desired
+  next-shell backend; Apply Changes retains provider-default rebasing in memory,
+  completes any provider auth, then delegates readiness, explicit installer
+  confirmation, provisioning, fresh parity, and the one complete configuration
+  CAS to the selection owner. It supplies the settings-owned fresh
+  persona-catalog validator as selection's precommit guard so a changed catalog
+  becomes a configuration conflict before that CAS, and it never activates or
+  migrates storage. Agents selects one
   roster agent, enables Codex or Antigravity selection, and exposes the exact
   provider-neutral Provider, Model, and Effort fields. Model and Effort discover
   one fresh pending-effective-provider catalog only when selected; use opaque
@@ -2023,29 +2027,46 @@ every intermediate arrow. The current runtime graph is acyclic.
   provider values or auto-persisting model defaults. Codex effort choices come
   from the exact pending effective model, while Antigravity effort choices stay
   globally low, medium, and high without slug inference. The settings flow
-  gives every value editor pending, not-saved, and top-level Save guidance. One
+  gives every value editor pending, not-saved, and dirty-only Apply Changes
+  guidance. One
   private ordered settings projection supplies root Current/Pending
   descriptions, the nested Agents pending-change count, and changed-only
-  confirmation fields in stable settings and roster order. On every top-level
-  read, structural inequality between the pending configuration and opening
-  baseline adds `(*Required)` to the Save label and retains the existing
-  save-required warning notice; both are absent initially and after a complete
-  revert, while the notice remains absent from nested editors and Save/Cancel
-  confirmations. The shared projection names conversation storage plus both
-  providers' model/effort rows, so root visibility and changed-only
-  confirmations identify pending changes without changing the active backend or
-  runtime snapshot. Editors contain no repeated Current/Pending context panel.
-  Explicit Save uses one selectable YES/NO confirmation whose preceding context
-  contains only changed Current/Pending properties in stable settings and roster
-  order; each changed value has an explicit text cue and warning role, and an
-  unchanged candidate contains only an explicit no-changes notice without empty
-  sections. Explicit Cancel and root Settings Escape share one action: an
-  unchanged candidate exits immediately, while a structurally changed candidate
-  uses the same selectable confirmation context. Any whole-flow cancellation is
-  silent for a clean candidate and emits exactly one discard report for a dirty
-  candidate; persistence remains exclusive to Save. Confirmation NO or nested
-  Escape returns to the settings menu, while Ctrl-C or EOF preserves whole-flow
-  cancellation. Provider-bound routes pass the submitted text
+  confirmation fields in stable settings and roster order. Structurally
+  unchanged root values, including Conversation storage, retain explicit
+  `Current:` descriptions with default semantic roles; changed root values
+  retain explicit `Pending:` descriptions with warning roles. A clean Agents
+  row has no description, while its nonzero pending-change count has a warning
+  role. On every top-level read, structural inequality between the pending
+  configuration and opening baseline exposes the two persistence actions and
+  retains both `(*Required)` on Apply Changes and the exact warning-styled
+  `Choose Apply Changes to persist pending changes` notice; all are absent
+  initially and after a complete revert, while the notice remains absent from
+  nested editors and Apply/Discard confirmations. The shared projection names
+  conversation storage plus both providers' model/effort rows, so root
+  visibility and changed-only confirmations identify pending changes without
+  changing the active backend or runtime snapshot. Editors contain no repeated
+  Current/Pending context panel. The clean root contains no persistence action
+  to confirm, authenticate, persist, report, or exit through. Dirty Apply
+  Changes uses the stable `save` route and one selectable YES/NO confirmation
+  whose preceding context contains only changed Current/Pending properties in
+  stable settings and roster order; Current fields use default styling and
+  Pending fields use warning styling, with the explicit changed text cues
+  preserved. After authentication and any provider-default rebase, the
+  controller rechecks structural dirtiness at the final persistence boundary
+  and loops silently when clean. A still-dirty candidate delegates storage
+  readiness, installer consent, baseline-checked configuration persistence,
+  the fresh persona-catalog guard, and storage failure reporting to
+  `select_conversation_storage`. Exactly one saved event follows only a
+  successful dirty persistence and a completed storage-selection report;
+  failed, cancelled, or rejected apply attempts emit none. Explicit Discard
+  Changes uses the stable `cancel` route and root Settings Escape shares the
+  same action: an unchanged candidate exits immediately, while a structurally
+  changed candidate uses the same selectable confirmation context. Any
+  whole-flow cancellation is silent for a clean candidate and emits exactly
+  one discard report for a dirty candidate; persistence remains exclusive to
+  the internal save action. Confirmation NO or nested Escape returns to the
+  settings menu, while Ctrl-C or EOF preserves whole-flow cancellation.
+  Provider-bound routes pass the submitted text
   unchanged to `StoryRuntime`; reference UI therefore emits only ordinary
   `${path}` or `${path}#Lx-Ly` tokens for the existing runtime parser and never
   authorizes a read. The controller borrows the filesystem-authoritative
@@ -2472,10 +2493,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ControlOutcomeKind` bindings provide one resource-free generic picker input
   boundary without exposing opaque choice identities, terminal leaves, or a
   new package-supported API. Existing `Choice` values may carry one optional
-  validated plain warning suffix; capable ANSI decorates only that suffix when
-  no disabled, selected, or highlighted role supersedes it, while plain,
-  `NO_COLOR`, and fallback projections retain the exact same text. This adds no
-  facade export. Unlisted `InteractivePromptInput` binds one
+  validated plain warning suffix plus an additive keyword-only validated
+  semantic description role whose default preserves established construction
+  and rendering. Capable ANSI independently decorates the warning suffix and
+  description across wrapped rows only when no disabled, selected, or
+  highlighted role supersedes them, while plain, `NO_COLOR`, and fallback
+  projections retain the exact same text. The exact 12-name `__all__` remains
+  unchanged, and this adds no supported facade export. Unlisted
+  `InteractivePromptInput` binds one
   resource-free semantic cancellable-line capability for nested settings input;
   callback and stream factories respectively provide deterministic plain and
   sole-driver-backed implementations without changing the exact public
@@ -2548,7 +2573,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   design-component contract outside the general `Component` union, the closed
   `Prompt`, `Panel`, `Section`, `Field`, `Notice`, `Message`, `Record`,
   `ListView`, `SuggestionPalette`, and `Picker` component vocabulary, shared
-  `Choice` with its optional keyword-only validated plain `warning_suffix`,
+  `Choice` with its optional keyword-only validated plain `warning_suffix` and
+  additive keyword-only validated `SemanticRole` description metadata,
   `RenderedFrame`, internal `InputPromptView` with an optional keyword-only
   exact one-line initial value, and
   `RenderedInputFrame` transfer contracts outside the closed component
@@ -2566,8 +2592,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   validated semantic picker and its
   call-local window origin, while viewport values carry one contiguous
   at-most-seven-choice slice; stable choice identities remain internal
-  correlation keys. A choice owns its immutable warning-suffix semantics but
-  no styling or control precedence. Composer values retain exact accepted lines
+  correlation keys. A choice owns its immutable warning-suffix and description-
+  role semantics but no styling or control precedence. Composer values retain exact accepted lines
   and derive joined content and code-point counts without mutation. Startup
   welcome values carry only one validated semantic stage and no terminal,
   presentation, provider, or authentication data. Models create no ANSI and own
@@ -2674,11 +2700,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   and an ordinal/label-only selected-outside-window summary;
   `render_picker_fallback` renders the complete numbered list and semantic input
   prompt. Both keep opaque identities internal and preserve equivalent
-  sanitized plain and fixed-ANSI meaning. Their segment-aware physical-cell
-  wrapping preserves an optional choice warning suffix across narrow lines;
-  fixed ANSI decorates only suffix characters on otherwise available rows,
-  while disabled, selected, and highlighted roles retain precedence and every
-  rich projection strips to the exact plain, `NO_COLOR`, and fallback text.
+  sanitized plain and fixed-ANSI meaning. Their generalized segment-aware
+  physical-cell wrapping projects ordered non-overlapping semantic spans across
+  narrow rows, independently preserving an optional warning suffix and an
+  optional role-bearing description. Fixed ANSI decorates each span only on
+  otherwise available rows; disabled, selected, and highlighted whole-row roles
+  retain precedence, with selected winning simultaneous selected/highlighted
+  state, and every rich projection strips to the exact plain, `NO_COLOR`, and
+  fallback text.
   `format_agent_reply_content`
   recognizes only a complete strict JSON object or array, rejects duplicate
   object keys and non-finite constants, and preserves key order and Unicode in
