@@ -13,7 +13,13 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import TextIO
 
-from ..agents import AGENT_SPECS
+from ..agents import (
+    AGENT_SPECS,
+    CHARACTER_CUSTODIAN,
+    EXECUTION_SPECIALIST,
+    LEAD_ORCHESTRATOR,
+    PLOT_ARCHITECT,
+)
 from ..interactive_commands import (
     AGENT_ROUTES,
     COMMANDS,
@@ -63,6 +69,7 @@ from ._model import (
     MainInputControlState as MainInputControlState,
     MainInputHistoryState as MainInputHistoryState,
     Message,
+    MessagePresentation,
     Notice,
     Panel,
     Picker,
@@ -73,6 +80,7 @@ from ._model import (
     Section,
     SemanticRole,
     SlashCommandSuggestion,
+    SpeakerAccent,
     StartupWelcome,
     StartupWelcomeStage,
     SuggestionPalette,
@@ -468,6 +476,14 @@ _AGENT_ALIASES: Mapping[str, str] = MappingProxyType(
 )
 _AGENT_DISPLAY_NAMES: Mapping[str, str] = MappingProxyType(
     {agent_id: AGENT_SPECS[agent_id].display_name for agent_id in _AGENT_ALIASES}
+)
+_AGENT_SPEAKER_ACCENTS: Mapping[str, SpeakerAccent] = MappingProxyType(
+    {
+        LEAD_ORCHESTRATOR: SpeakerAccent.CYAN,
+        PLOT_ARCHITECT: SpeakerAccent.YELLOW,
+        CHARACTER_CUSTODIAN: SpeakerAccent.GREEN,
+        EXECUTION_SPECIALIST: SpeakerAccent.BLUE,
+    }
 )
 _TRUNCATION_SUFFIX = " ...[truncated]"
 _SUMMARY_LIMIT = 512
@@ -1127,6 +1143,8 @@ class InteractiveTerminal:
                 format_agent_reply_content(_required_text("text", text)),
                 role=SemanticRole.AGENT,
                 state=ViewState.COMPLETED,
+                presentation=MessagePresentation.CHAT_BLOCK,
+                accent=_AGENT_SPEAKER_ACCENTS[agent_id],
             )
         )
 

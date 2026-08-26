@@ -9,7 +9,9 @@ from unittest import mock
 import story_writing_agents
 from story_writing_agents import (
     AGENT_SPECS,
+    CHARACTER_CUSTODIAN,
     COMMANDS,
+    EXECUTION_SPECIALIST,
     LEAD_ORCHESTRATOR,
     PLOT_ARCHITECT,
 )
@@ -22,11 +24,13 @@ from story_writing_agents.interactive_terminal import (
     InteractiveTerminal,
     ListView,
     Message,
+    MessagePresentation,
     Notice,
     Panel,
     Record,
     Section,
     SemanticRole,
+    SpeakerAccent,
     ViewState,
 )
 from story_writing_agents.interactive_terminal import _core, _model
@@ -125,6 +129,34 @@ def _dense_view() -> ListView:
     )
 
 
+def _physical_width(text: str) -> int:
+    """Measure one already-sanitized row using the terminal cell contract."""
+
+    return sum(_model.display_character_width(character) for character in text)
+
+
+def _chat_block_message(
+    content: str,
+    *,
+    sender: str = "plot",
+    metadata: str | None = "Plot & Structure Architect",
+    role: SemanticRole = SemanticRole.AGENT,
+    state: ViewState = ViewState.COMPLETED,
+    accent: SpeakerAccent = SpeakerAccent.YELLOW,
+) -> Message:
+    """Build one explicit speaker-rail fixture without changing INLINE defaults."""
+
+    return Message(
+        sender,
+        content,
+        role=role,
+        state=state,
+        presentation=MessagePresentation.CHAT_BLOCK,
+        metadata=metadata,
+        accent=accent,
+    )
+
+
 class InteractiveSemanticOutputTests(unittest.TestCase):
     """Lock the internal adapter boundary and deterministic view fixtures."""
 
@@ -134,11 +166,13 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             "Field": _model.Field,
             "ListView": _model.ListView,
             "Message": _model.Message,
+            "MessagePresentation": _model.MessagePresentation,
             "Notice": _model.Notice,
             "Panel": _model.Panel,
             "Record": _model.Record,
             "Section": _model.Section,
             "SemanticRole": _model.SemanticRole,
+            "SpeakerAccent": _model.SpeakerAccent,
             "ViewState": _model.ViewState,
         }
         for name, defining_object in expected.items():
@@ -230,6 +264,289 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
         self.assertTrue(ansi.text.startswith("\x1b[1mplot [completed]> {"))
         self.assertNotIn("\x1b", plain.text)
         self.assertIn('  "message": "界"', plain.text)
+
+    def test_chat_block_plain_snapshots_cover_supported_widths_and_geometry(
+        self,
+    ) -> None:
+        message = _chat_block_message(
+            "Keep each returning vessel visible while the harbor lantern "
+            "guides the final approach safely."
+        )
+        snapshots = {
+            20: (
+                "plot · Plot & \n"
+                "Structure Architect \n"
+                "[completed]\n"
+                "\n"
+                "│ Keep each \n"
+                "│ returning vessel \n"
+                "│ visible while the \n"
+                "│ harbor lantern \n"
+                "│ guides the final \n"
+                "│ approach safely."
+            ),
+            24: (
+                "plot · Plot & Structure \n"
+                "Architect [completed]\n"
+                "\n"
+                "│ Keep each returning \n"
+                "│ vessel visible while \n"
+                "│ the harbor lantern \n"
+                "│ guides the final \n"
+                "│ approach safely."
+            ),
+            40: (
+                "plot · Plot & Structure Architect \n"
+                "[completed]\n"
+                "\n"
+                "│ Keep each returning vessel visible \n"
+                "│ while the harbor lantern guides the \n"
+                "│ final approach safely."
+            ),
+            80: (
+                "plot · Plot & Structure Architect [completed]\n"
+                "\n"
+                "│ Keep each returning vessel visible while the harbor "
+                "lantern guides the final \n"
+                "│ approach safely."
+            ),
+            120: (
+                "plot · Plot & Structure Architect [completed]\n"
+                "\n"
+                "│ Keep each returning vessel visible while the harbor "
+                "lantern guides the final approach safely."
+            ),
+        }
+        for width, expected in snapshots.items():
+            with self.subTest(width=width):
+                frame = render_plain(message, width=width)
+                self.assertEqual(frame.text, expected)
+                self.assertEqual(frame.width, width)
+                self.assertEqual(frame.line_count, expected.count("\n") + 1)
+                for line in frame.text.split("\n"):
+                    self.assertLessEqual(_physical_width(line), width)
+
+        geometry = _chat_block_message(
+            "ab",
+            sender="u",
+            metadata=None,
+            role=SemanticRole.DEFAULT,
+            state=ViewState.IDLE,
+            accent=SpeakerAccent.MAGENTA,
+        )
+        self.assertEqual(render_plain(geometry, width=1).text, "u\n\na\nb")
+        self.assertEqual(render_plain(geometry, width=2).text, "u\n\nab")
+        self.assertEqual(render_plain(geometry, width=3).text, "u\n\n│ a\n│ b")
+        self.assertEqual(render_plain(geometry, width=4).text, "u\n\n│ ab")
+
+        row_local_wide = _chat_block_message(
+            "a界b",
+            sender="u",
+            metadata=None,
+            role=SemanticRole.DEFAULT,
+            state=ViewState.IDLE,
+            accent=SpeakerAccent.MAGENTA,
+        )
+        wide_frame = render_plain(row_local_wide, width=3)
+        self.assertEqual(wide_frame.text, "u\n\n│ a\n界\n│ b")
+        self.assertTrue(
+            all(_physical_width(line) <= 3 for line in wide_frame.text.split("\n"))
+        )
+
+    def test_chat_block_preserves_words_tokens_and_exact_whitespace(self) -> None:
+        cases = (
+            (
+                10,
+                "alpha beta abcdefghijk",
+                "u\n\n│ alpha \n│ beta \n│ abcdefgh\n│ ijk",
+            ),
+            (
+                12,
+                "  indented  words  here  ",
+                "u\n\n│   indented\n│   words  \n│ here  ",
+            ),
+            (
+                10,
+                "first\n\n  second\n",
+                "u\n\n│ first\n│\n│   second\n│",
+            ),
+        )
+        for width, content, expected in cases:
+            with self.subTest(width=width, content=repr(content)):
+                message = _chat_block_message(
+                    content,
+                    sender="u",
+                    metadata=None,
+                    role=SemanticRole.DEFAULT,
+                    state=ViewState.IDLE,
+                    accent=SpeakerAccent.MAGENTA,
+                )
+                frame = render_plain(message, width=width)
+                self.assertEqual(frame.text, expected)
+                self.assertEqual(frame.line_count, expected.count("\n") + 1)
+                self.assertTrue(
+                    all(
+                        _physical_width(line) <= width
+                        for line in frame.text.split("\n")
+                    )
+                )
+
+    def test_chat_block_unicode_json_and_hostile_controls_are_safe(self) -> None:
+        unicode_message = _chat_block_message(
+            "界界界 e\u0301 🌊 x",
+            sender="u",
+            metadata=None,
+            role=SemanticRole.DEFAULT,
+            state=ViewState.IDLE,
+            accent=SpeakerAccent.MAGENTA,
+        )
+        unicode_frame = render_plain(unicode_message, width=10)
+        self.assertEqual(unicode_frame.text, "u\n\n│ 界界界 \n│ e\u0301 🌊 x")
+        self.assertNotIn("\n│ \u0301", unicode_frame.text)
+        self.assertTrue(
+            all(
+                _physical_width(line) <= 10
+                for line in unicode_frame.text.split("\n")
+            )
+        )
+
+        json_message = _chat_block_message(
+            format_agent_reply_content('{"z":"界","a":[1,true]}'),
+            sender="u",
+            metadata=None,
+            role=SemanticRole.DEFAULT,
+            state=ViewState.IDLE,
+            accent=SpeakerAccent.MAGENTA,
+        )
+        self.assertEqual(
+            render_plain(json_message, width=20).text,
+            "u\n"
+            "\n"
+            "│ {\n"
+            '│   "z": "界",\n'
+            '│   "a": [\n'
+            "│     1,\n"
+            "│     true\n"
+            "│   ]\n"
+            "│ }",
+        )
+
+        hostile = _chat_block_message(
+            "safe\x07 \x1b]8;;owned\x07 \u202e",
+            sender="u\x1b",
+            metadata="m\u202e",
+            role=SemanticRole.DEFAULT,
+            state=ViewState.IDLE,
+            accent=SpeakerAccent.MAGENTA,
+        )
+        hostile_plain = render_plain(hostile, width=80).text
+        self.assertEqual(
+            hostile_plain,
+            "u\\x1b · m\\u202e\n"
+            "\n"
+            "│ safe\\x07 \\x1b]8;;owned\\x07 \\u202e",
+        )
+        self.assertNotIn("\x1b", hostile_plain)
+        self.assertNotIn("\x07", hostile_plain)
+        self.assertNotIn("\u202e", hostile_plain)
+
+    def test_chat_block_accents_only_headers_and_profiles_share_topology(
+        self,
+    ) -> None:
+        expected_sgr = {
+            SpeakerAccent.MAGENTA: "\x1b[1;35m",
+            SpeakerAccent.CYAN: "\x1b[1;36m",
+            SpeakerAccent.YELLOW: "\x1b[1;33m",
+            SpeakerAccent.GREEN: "\x1b[1;32m",
+            SpeakerAccent.BLUE: "\x1b[1;34m",
+        }
+        plain_text = "you · metadata [completed]\n\n│ first\n│ second"
+        for accent, sgr in expected_sgr.items():
+            with self.subTest(accent=accent):
+                message = _chat_block_message(
+                    "first\nsecond",
+                    sender="you",
+                    metadata="metadata",
+                    accent=accent,
+                )
+                ansi = render_component(
+                    message,
+                    _capability(CapabilityProfile.ANSI, width=80),
+                )
+                plain = render_component(
+                    message,
+                    _capability(CapabilityProfile.PLAIN, width=80),
+                )
+                line = render_component(
+                    message,
+                    _capability(CapabilityProfile.LINE, width=80),
+                )
+                self.assertEqual(
+                    ansi.text,
+                    f"{sgr}you · metadata [completed]\x1b[0m\n"
+                    "\n"
+                    "│ first\n"
+                    "│ second",
+                )
+                self.assertEqual(strip_decorative_sgr(ansi.text), plain_text)
+                self.assertEqual(plain.text, plain_text)
+                self.assertEqual(plain, line)
+                self.assertNotIn("\x1b", ansi.text.split("\n\n", 1)[1])
+
+        wrapped = render_component(
+            _chat_block_message(
+                "body",
+                metadata="Plot & Structure Architect",
+                accent=SpeakerAccent.YELLOW,
+            ),
+            _capability(CapabilityProfile.ANSI, width=20),
+        )
+        header, body = wrapped.text.split("\n\n", 1)
+        for line in header.split("\n"):
+            self.assertTrue(line.startswith("\x1b[1;33m"))
+            self.assertTrue(line.endswith("\x1b[0m"))
+        self.assertEqual(body, "│ body")
+        self.assertNotIn("\x1b", body)
+
+    def test_list_view_renders_inline_and_chat_block_messages_in_order(
+        self,
+    ) -> None:
+        view = ListView(
+            "Messages",
+            (
+                Field("Before", "field"),
+                Message("inline", "old", state=ViewState.IDLE),
+                _chat_block_message(
+                    "one two",
+                    sender="you",
+                    metadata=None,
+                    role=SemanticRole.DEFAULT,
+                    state=ViewState.IDLE,
+                    accent=SpeakerAccent.MAGENTA,
+                ),
+                Record("after", content="record"),
+            ),
+            total_count=4,
+            state=ViewState.COMPLETED,
+        )
+        frame = render_plain(view, width=40)
+        self.assertEqual(
+            frame.text,
+            "Messages (4) [completed]\n"
+            "  Before:\n"
+            "   field\n"
+            "  inline> old\n"
+            "  you\n"
+            "\n"
+            "  │ one two\n"
+            "  [after]\n"
+            "   record",
+        )
+        self.assertEqual(frame.line_count, 9)
+        self.assertEqual(
+            tuple(type(item) for item in view.items),
+            (Field, Message, Message, Record),
+        )
 
     def test_adapter_construction_is_resource_free_and_each_call_writes_once(
         self,
@@ -527,6 +844,8 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
                     "reply",
                     role=SemanticRole.AGENT,
                     state=ViewState.COMPLETED,
+                    presentation=MessagePresentation.CHAT_BLOCK,
+                    accent=SpeakerAccent.YELLOW,
                 ),
             ),
             (
@@ -565,6 +884,53 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
                     call()
                     self.assertEqual(render.call_count, before + 1)
                     self.assertEqual(render.call_args.args[0], expected)
+
+    def test_write_agent_maps_every_identity_once_and_formats_json_first(
+        self,
+    ) -> None:
+        records: list[str] = []
+        terminal = InteractiveTerminal(lambda prompt: "", records.append)
+        agent_cases = (
+            (LEAD_ORCHESTRATOR, "lead", SpeakerAccent.CYAN),
+            (PLOT_ARCHITECT, "plot", SpeakerAccent.YELLOW),
+            (CHARACTER_CUSTODIAN, "character", SpeakerAccent.GREEN),
+            (EXECUTION_SPECIALIST, "execution", SpeakerAccent.BLUE),
+        )
+        expected_content = '{\n  "answer": "界"\n}'
+        with mock.patch.object(
+            _core,
+            "render_component",
+            wraps=render_component,
+        ) as render:
+            for agent_id, alias, accent in agent_cases:
+                with self.subTest(agent_id=agent_id):
+                    prior_renders = render.call_count
+                    prior_records = len(records)
+                    terminal.write_agent(agent_id, '{"answer":"界"}')
+                    self.assertEqual(render.call_count, prior_renders + 1)
+                    self.assertEqual(len(records), prior_records + 1)
+                    self.assertEqual(
+                        render.call_args.args[0],
+                        Message(
+                            alias,
+                            expected_content,
+                            role=SemanticRole.AGENT,
+                            state=ViewState.COMPLETED,
+                            presentation=MessagePresentation.CHAT_BLOCK,
+                            accent=accent,
+                        ),
+                    )
+                    self.assertEqual(
+                        records[-1],
+                        f"{alias} [completed]\n"
+                        "\n"
+                        "│ {\n"
+                        '│   "answer": "界"\n'
+                        "│ }\n",
+                    )
+
+        self.assertEqual(render.call_count, 4)
+        self.assertEqual(len(records), 4)
 
     def test_dense_terminal_writers_build_exact_semantic_trees(self) -> None:
         terminal = InteractiveTerminal(lambda prompt: "", lambda text: None)

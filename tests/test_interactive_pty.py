@@ -2106,6 +2106,127 @@ print("RESULT=" + outcome.kind.value)
         self.assertEqual(_durable_tree(self.workspace.root), before)
         self.assertFalse(self.provider_log.exists())
 
+    def test_speaker_rails_match_ansi_no_color_and_dumb_profiles(self) -> None:
+        """Keep one exact rail topology while styling only speaker headers."""
+
+        source = r'''
+import sys
+
+from story_writing_agents import (
+    CHARACTER_CUSTODIAN,
+    EXECUTION_SPECIALIST,
+    LEAD_ORCHESTRATOR,
+    PLOT_ARCHITECT,
+)
+from story_writing_agents.interactive_terminal import (
+    InteractiveSemanticOutput,
+    Message,
+    MessagePresentation,
+    SpeakerAccent,
+    build_stream_terminal,
+)
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+InteractiveSemanticOutput(terminal).write_component(
+    Message(
+        "you",
+        "user body",
+        presentation=MessagePresentation.CHAT_BLOCK,
+        accent=SpeakerAccent.MAGENTA,
+    )
+)
+for agent_id in (
+    LEAD_ORCHESTRATOR,
+    PLOT_ARCHITECT,
+    CHARACTER_CUSTODIAN,
+    EXECUTION_SPECIALIST,
+):
+    terminal.write_agent(agent_id, "agent body")
+print("RESULT=done")
+'''
+        before = _durable_tree(self.workspace.root)
+        profiles = (
+            (
+                "ansi",
+                {"TERM": "xterm-256color"},
+                True,
+            ),
+            (
+                "no_color",
+                {"TERM": "xterm-256color", "NO_COLOR": "1"},
+                False,
+            ),
+            (
+                "dumb",
+                {"TERM": "dumb"},
+                False,
+            ),
+        )
+        captures: dict[str, str] = {}
+        for name, environment, decorative_color in profiles:
+            with self.subTest(profile=name):
+                process = self._spawn_python(
+                    source,
+                    environment_overrides=environment,
+                    terminal_columns=40,
+                    decorative_color=decorative_color,
+                )
+                process.wait_for_text("RESULT=done")
+                self.assertEqual(
+                    process.wait_for_exit(),
+                    0,
+                    process.normalized_text,
+                )
+                captures[name] = process.normalized_text
+                self.assertEqual(
+                    process.final_terminal_attributes,
+                    process.original_terminal_attributes,
+                )
+
+        expected_plain = (
+            "you [completed]\n"
+            "\n"
+            "│ user body\n"
+            "lead [completed]\n"
+            "\n"
+            "│ agent body\n"
+            "plot [completed]\n"
+            "\n"
+            "│ agent body\n"
+            "character [completed]\n"
+            "\n"
+            "│ agent body\n"
+            "execution [completed]\n"
+            "\n"
+            "│ agent body\n"
+            "RESULT=done\n"
+        )
+        styled_headers = (
+            ("\x1b[1;35m", "you [completed]"),
+            ("\x1b[1;36m", "lead [completed]"),
+            ("\x1b[1;33m", "plot [completed]"),
+            ("\x1b[1;32m", "character [completed]"),
+            ("\x1b[1;34m", "execution [completed]"),
+        )
+        ansi = captures["ansi"]
+        header_stripped = ansi
+        for sgr, header in styled_headers:
+            decorated = f"{sgr}{header}\x1b[0m"
+            self.assertEqual(ansi.count(decorated), 1)
+            header_stripped = header_stripped.replace(decorated, header, 1)
+        self.assertNotIn("\x1b", header_stripped)
+        self.assertEqual(header_stripped, expected_plain)
+        self.assertEqual(
+            _ANSI_SGR_BYTES.sub(b"", ansi.encode("utf-8")).decode("utf-8"),
+            expected_plain,
+        )
+        self.assertEqual(captures["no_color"], expected_plain)
+        self.assertEqual(captures["dumb"], expected_plain)
+        self.assertNotIn("\x1b", captures["no_color"])
+        self.assertNotIn("\x1b", captures["dumb"])
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+
     def test_internal_main_dynamic_choices_focus_commit_clear_and_restore(self) -> None:
         """Exercise call-local live choices without exposing opaque identities."""
 

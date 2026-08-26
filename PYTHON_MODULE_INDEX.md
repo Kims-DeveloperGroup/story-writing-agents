@@ -2600,8 +2600,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   use, and the existing `Field`, `ListView`,
   `Message`, `Notice`, `Panel`, `Record`, `Section`, `SemanticRole`, and
   `ViewState` contracts are likewise facade-bound but omitted from `__all__`.
-  These bindings support count-aware dense semantic views without changing the
-  package-supported surface. Callback construction discards accepted-input
+  Unlisted `MessagePresentation` and `SpeakerAccent` additionally bind the
+  internal inline/chat-block layout and fixed speaker-accent contracts without
+  becoming supported exports. `Message` retains exact inline compatibility and
+  accepts only additive keyword-only presentation, optional metadata, and
+  accent values; `ListView` accepts messages alongside its established record
+  and field rows. These bindings support count-aware dense semantic and
+  attributed-message views without changing the package-supported surface.
+  Callback construction discards accepted-input
   projections because its ordinary reader already owns the visible echo, while
   stream construction routes them through the sole driver's selected input
   mode without exposing that mode. The adapter and contracts add no
@@ -2718,7 +2724,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   unlisted purpose-bound `StartupWelcomeStage` and stage-only `StartupWelcome`
   design-component contract outside the general `Component` union, the closed
   `Prompt`, `Panel`, `Section`, `Field`, `Notice`, `Message`, `Record`,
-  `ListView`, `SuggestionPalette`, and `Picker` component vocabulary, shared
+  `ListView`, `SuggestionPalette`, and `Picker` component vocabulary, internal
+  `MessagePresentation` inline/chat-block and `SpeakerAccent`
+  magenta/cyan/yellow/green/blue enums, additive keyword-only message
+  presentation, optional metadata, and accent values whose defaults preserve
+  exact inline construction and rendering, message-capable list rows, shared
   `Choice` with its optional keyword-only validated plain `warning_suffix` and
   additive keyword-only validated `SemanticRole` description metadata,
   `RenderedFrame`, internal `InputPromptView` with an optional keyword-only
@@ -2738,7 +2748,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   validated semantic picker and its
   call-local window origin, while viewport values carry one contiguous
   at-most-seven-choice slice; stable choice identities remain internal
-  correlation keys. A choice owns its immutable warning-suffix and description-
+  correlation keys. A message owns only validated attributed text and immutable
+  presentation metadata; it performs no sanitization or layout and its default
+  cyan accent has no effect under the default inline presentation. A choice
+  owns its immutable warning-suffix and description-
   role semantics but no styling or control precedence. Composer values retain exact accepted lines
   and derive joined content and code-point counts without mutation. Startup
   welcome values carry only one validated semantic stage and no terminal,
@@ -2860,6 +2873,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   a two-space-indented projection; malformed JSON, scalars, embedded prose, and
   every other string return exactly unchanged. The fixed `AGENT` role is bold
   terminal-default foreground with the same plain meaning and local reset.
+  Messages preserve the exact established inline branch by default. Opted-in
+  chat blocks render a sanitized speaker header with optional compact metadata
+  and the visible state cue, one blank separator row, then every explicit body
+  line beneath a default-styled `│ ` rail. A private fixed style carrier makes
+  only the header bold plus its magenta, cyan, yellow, green, or blue accent;
+  separator, rail, and body remain terminal-default in every profile. The
+  message-specific word wrapper preserves whitespace and explicit blank or
+  trailing-LF rows, prefers word boundaries without normalizing content,
+  measures physical cells for combining and wide text, hard-splits long tokens,
+  and safely removes the rail when the remaining width or a wide glyph cannot
+  coexist with it. `ListView` delegates message rows through that same renderer.
   `render_advisory_progress_frame` projects one fixed text-free sixteen-cell
   block-shade shimmer whose graded bright point travels out and back, without
   ANSI, cursor controls, dynamic content, or state. Package-internal
@@ -3313,7 +3337,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   closed component vocabulary through the terminal, while the latter delegates
   its completed rendering to a mode-aware callback without exposing terminal
   mode to the controller. The specialized agent writer applies the pure
-  strict-JSON reply projection before constructing its semantic message, and
+  strict-JSON reply projection before constructing exactly one chat-block
+  semantic message. It maps the canonical lead, plot, character, and execution
+  IDs to cyan, yellow, green, and blue speaker accents respectively without
+  changing its supported signature or write cardinality, and
   the core binds that formatter through the facade for controller-owned
   retrieval and persisted reply records. Composition opening, rejection, send,
   and discard events plus invalid-confirmation hints use the semantic component
