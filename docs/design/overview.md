@@ -6,8 +6,10 @@
 > for `$`/`$$` prompt editing; the viewer still has no standalone command or
 > supported public API. Optional conversation RAG currently has direct Python
 > contracts, a deterministic local provider, a disposable generation store, and
-> explicit composition plus programmatic runtime/agent integration; shell and
-> settings integration remain planned.
+> explicit composition plus programmatic runtime/agent integration. Six
+> noninteractive local lifecycle/search commands are implemented; interactive
+> `/settings`, automatic eligible-turn wiring, and one-turn `/rag QUERY` are
+> also available.
 
 Key terms: **controller**—owner of interactive transition order;
 **adapter**—provider-specific process/protocol implementation;
@@ -52,8 +54,9 @@ conversation without deleting prior data. See the
 | `conversation_rag_local` | Pure fixed local embedding and deterministic vector ranking; no generic package, filesystem, network, credential, subprocess, environment, or lifecycle ownership |
 | `conversation_rag_store` | Identity-bound disposable per-session generation construction, full verification, active/status pointers, reader contexts, and confirmed derived-only purge |
 | `generic_rag_adapter` | Sole production translation boundary that imports story contracts and the exact optional `generic-rag` API |
-| `conversation_rag_composition` | Import-safe deferred generic/local composition, fixed `local` allowlist, version/capability checks, store-aware fallback, and sanitized diagnostics |
-| `conversation_rag_runtime` | Provider/store-neutral authoritative projection, literal-first merge, current reread, citations, bounded agent context, and restart-safe state coordination |
+| `conversation_rag_composition` | Import-safe deferred generic/local composition, fixed `local` allowlist, version/capability inspection, concrete local store/state/runtime bundle, store-aware fallback, and sanitized diagnostics |
+| `conversation_rag_runtime` | Provider/store-neutral no-write inspection, authoritative projection, literal-first merge, direct authorized search, current reread, citations, bounded agent context, and restart-safe state coordination |
+| `conversation_rag_cli` | Direct-only immutable request/report vocabulary and six local configuration/lifecycle/search workflows; no interactive controller or storage-adapter ownership |
 
 `generic-rag` has no dependency on this project. The package root does not
 re-export these modules, the base install does not need the generic package,
@@ -66,9 +69,17 @@ complete visible turns, schedules projection, reauthorizes stable references,
 rereads exact current bytes, and constructs bounded cited agent context.
 Provider fragment text and every derived generation remain non-authoritative.
 Callers own their workspace, store, lexical collaborator, low-level service,
-and restart-safe runtime-state-port lifecycles. See
+and restart-safe runtime-state-port lifecycles; fixed local composition can
+instead construct and retain those concrete resources for the CLI or another
+application. Configuration owns only nullable provider/exact automatic values,
+the noninteractive CLI owns its compare-and-set workflow, and interactive
+Settings owns one pending guarded edit transaction. The controller reads the
+backend construction snapshot once, composes Local exactly once beside a
+complete storage bundle, and owns only the process-local pending `/rag` query.
+See
 [Optional conversation RAG](../guides/conversation-rag.md) for installation,
-the current weak-local/persistence/runtime boundary, and the planned user flow.
+the weak-local/persistence/runtime boundary, current commands, and interactive
+flow.
 
 `Workspace` owns generic path-safe persistence, inspection, and atomic
 replacement. Its retained root identity is a narrower internal

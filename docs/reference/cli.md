@@ -8,6 +8,11 @@
 > interactive prompt spans, `$`, `$${path}`, and `$$` discover and attach them
 > without submitting. Separate provider-free `story storage` commands select a
 > desired next-shell backend or migrate and verify already-ready stores.
+> Noninteractive `story rag` commands inspect and operate the optional fixed
+> local conversation-RAG projection without authenticating a story-agent
+> provider. Interactive `/settings` persists the next-shell local/automatic
+> policy, and `/rag QUERY` privately arms one forced preflight for the next
+> eligible focused story-agent turn.
 
 `story` and `story-writing-agents` are aliases for
 `story_writing_agents.cli:main`.
@@ -27,6 +32,12 @@
 | Storage use | `story storage use BACKEND [--install-missing --yes] [--workspace PATH]` |
 | Storage migrate | `story storage migrate --from BACKEND --to BACKEND [--dry-run] [--workspace PATH]` |
 | Storage verify | `story storage verify --from BACKEND --to BACKEND [--workspace PATH]` |
+| RAG status | `story rag status [--workspace PATH] [--session ID]` |
+| RAG enable | `story rag enable --provider PROVIDER [--workspace PATH]` |
+| RAG rebuild | `story rag rebuild [--yes] [--workspace PATH] [--session ID]` |
+| RAG search | `story rag search QUERY [--workspace PATH] [--session ID]` |
+| RAG disable | `story rag disable [--workspace PATH]` |
+| RAG purge | `story rag purge [--yes] [--workspace PATH] [--session ID]` |
 | Smoke | `story smoke [--workspace PATH]` |
 
 Lifecycle commands have no `--session`. Omitted reopen/pause uses the default;
@@ -275,6 +286,107 @@ both stores. See [Conversation storage migration recovery](../operations/recover
 before retrying and [Session storage](configuration/session-storage.md#conversation-migration-checkpoints)
 for checkpoint contents.
 
+<a id="conversation-rag-operations"></a>
+
+## Conversation RAG operations
+
+The installed `story rag` family operates only the fixed network-free `local`
+provider. It performs no story-agent authentication, provider call, external
+provider discovery, or optional-package installation. The base installation
+can inspect status; enable, rebuild, and search require the exact-pinned
+`generic-rag` 0.1.0 distribution and capability manifest. Installing that
+extra does not change workspace configuration.
+
+The operation scopes are exact:
+
+| Operation | Scope and effect |
+| --- | --- |
+| `status` | Session-scoped. Uses `--session ID` or the saved default. Optimistically reads the persisted active filesystem/SQLite authority and derived state twice. It does not acquire/create the conversation-storage mutation lock, create the RAG subtree, rewrite configuration, activate desired storage, or clean orphans. Every valid observation—including non-ready state—has outcome `completed` and exit `0`. |
+| `enable` | Workspace-scoped. Requires exact `--provider local`; no session is accepted. It checks the optional distribution/version/capabilities before a complete configuration compare-and-set. Success saves provider `local` or reports configuration `unchanged`; it preserves the current automatic boolean and builds nothing. |
+| `rebuild` | Session-scoped. Without `--yes`, returns `confirmation_required` before storage activation. With confirmation, it runs configured-storage startup/activation, requires enabled compatible local RAG, rebuilds the complete authorized active target from the beginning, verifies publication while the mutation lease remains held, then returns the same inspection shape as status. It never provisions or migrates storage. |
+| `search` | Session-scoped. Requires one nonblank strict-UTF-8 positional `QUERY`, runs configured-storage startup/activation, requires enabled compatible local RAG, and performs bounded literal-first plus local-vector retrieval. Every retained range is reauthorized and reread from the current authoritative store. It invokes no story agent and never echoes the query. Quote multiword shell input. |
+| `disable` | Workspace-scoped. Accepts no session. A complete configuration compare-and-set clears the provider and sets automatic to `false`; derived and authoritative data remain. |
+| `purge` | Session-scoped. Requires `--yes` and removes only the addressed session's validated derived active/status/generation contents. It does not require provider enablement, compose authoritative storage, or alter configuration; authoritative conversations and other sessions remain. |
+
+Status composes only the persisted active backend. Confirmed rebuild and search
+instead call the normal desired-storage activation workflow before RAG
+dispatch, so a ready and canonically equal next-shell selection can advance the
+active marker. Neither operation installs/provisions SQLite, migrates data,
+falls back to another backend, or couples the derived generation store to a
+storage adapter. Purge does not consult either backend.
+
+Valid command grammar writes exactly one compact key-sorted schema-v1 JSON
+object plus LF to standard output, writes nothing to standard error, and
+creates no runtime debug record. Every report has this exact top-level key set:
+
+```text
+automatic, authoritative_checkpoint, compatibility, configuration, counts,
+excerpts, failure, indexed_checkpoint, operation, outcome, provider, purged,
+rebuild_required, retrieval_outcome, retrieval_reason, schema_version, state,
+truncated
+```
+
+`schema_version` is `1`; `operation` is `status`, `enable`, `rebuild`, `search`,
+`disable`, or `purge`; and `outcome` is `completed` or `failed`. `provider` is
+`"local"` or `null`. `automatic` reports the persisted boolean when applicable.
+`configuration` is `not_applicable`, `saved`, `unchanged`, or `preserved`.
+`state` is `disabled`, `unavailable`, `missing`, `ready`, `stale`, `failed`,
+`corrupt`, `incompatible`, or `null`. Compatibility is `compatible`, one of
+`provider_unsupported`, `dependency_missing`, `version_incompatible`, and
+`capability_incompatible`, or `null` when inapplicable.
+
+`counts` always contains exact `authoritative` and `indexed` objects:
+
+```text
+authoritative: conversations, documents, events, source_utf8_bytes
+indexed:       conversations, documents, events, fragments, generation_bytes,
+               generations, orphan_generations, payload_bytes,
+               source_utf8_bytes
+```
+
+Status and successful rebuild populate the counts plus SHA-256 authoritative
+and optional indexed checkpoints and `rebuild_required`. Enable/disable leave
+those payload fields empty. Purge reports only nonnegative `generations` and
+`orphan_generations` in the always-present `purged` object, sets state to
+`missing`, and sets `rebuild_required:true`.
+
+Search sets `retrieval_outcome` to `complete`, `partial`, or
+`literal_fallback`; `retrieval_reason` is `none`, `partial`, `disabled`,
+`unavailable`, `stale`, `corrupt`, `incompatible`, or `failed`; and `truncated`
+is a boolean. `excerpts` is ordered with contiguous `g1` through `g20`
+citations. Each item has exactly `citation_id`, `content`, `source`, and
+`reference`; `source` has `conversation_id`, `event_kind`, `sequence`,
+`session_id`, and `turn_id`; `reference` has `document_id`, `end_codepoint`,
+`fragment_id`, `revision_id`, and `start_codepoint`. Content is the bounded
+authoritative reread, not provider-returned text. Query text, subject, score,
+workspace path, credential, exception, and provider diagnostic are absent.
+
+`failure` is `null` on completion. A failed report keeps state/checkpoint/
+retrieval fields null and its counts, purge counts, and excerpt list empty; it
+uses exactly one of:
+
+```text
+invalid_request workspace_invalid session_invalid provider_disabled
+provider_unsupported dependency_missing version_incompatible
+capability_incompatible configuration_invalid configuration_conflict
+configuration_write_failed storage_unavailable coordination_failed
+confirmation_required unsafe corrupt incompatible provider_failed
+operation_failed
+```
+
+A semantic/precondition failure exits `2` with that single JSON line. Argparse
+syntax errors also exit `2`, but argparse owns their usage text on standard
+error and emits no report. Completed status/search results exit `0` even when
+state is non-ready or retrieval used an explicit literal fallback. There is no
+RAG exit `1`. `KeyboardInterrupt` and `SystemExit` remain process controls.
+
+The persisted keys, defaults, and compatibility invariant are in
+[Agent configuration](configuration/agent-configuration.md#system-defaults).
+The trust and output boundary is in
+[Privacy and provider exposure](../operations/privacy-and-provider.md#conversation-rag-command-privacy),
+and safe recovery is in
+[Recovery and limitations](../operations/recovery-and-limitations.md#conversation-rag-recovery).
+
 <a id="smoke-report"></a>
 
 ## Smoke report
@@ -304,12 +416,14 @@ unexpected failure. See the [smoke guide](../guides/smoke-test.md).
 
 ## Runtime debug logs and failure hints
 
-Installed commands best-effort append fixed operational records to
-`debug_logs/runtime.jsonl` only after workspace initialization or discovery
-succeeds. This includes successful commands and operations that are read-only
-with respect to story/session state, such as inspection, status, help, search,
-transcript, history, and lifecycle reads. The bounded log is a separate side
-effect; those operations retain their domain-state contract.
+Workspace-aware installed commands best-effort append fixed operational records
+to `debug_logs/runtime.jsonl` only after workspace initialization or discovery
+succeeds. This includes successful interactive operations that are read-only
+with respect to story/session state, such as inspection, shell status, help,
+literal shell search, transcript, history, and lifecycle reads. The bounded log
+is a separate side effect; those operations retain their domain-state contract.
+The compact machine workflows under `story storage` and `story rag` dispatch
+before debug-log construction and never create or append this log.
 
 After that successful workspace boundary, the CLI marks later application
 errors as hint-eligible before attempting to construct an optional diagnostic
@@ -572,7 +686,7 @@ completion-only Enter, Escape dismissal, cancel, interrupt, EOF, and input
 failure add nothing.
 
 Main matching is exact and case-sensitive at the cursor, with ASCII space/tab
-token boundaries. Root offers 22 main-available registry tokens, help offers 25
+token boundaries. Root offers 23 main-available registry tokens, help offers 26
 including the composition-only commands, and agent-valued positions offer the
 four preferred prompt aliases—`lead`, `plot`, `character`, and `execution`—in
 route order. The parser still accepts all ten declared route aliases; runtime
@@ -656,20 +770,24 @@ text so the invoking shell does not expand `$`.
 `/auth` and `/settings` are alias-free, take no argument, and are available with
 or without an attached session. `/auth` follows the authentication contract
 above. `/settings` edits isolated Current and Pending snapshots for
-Language, Persona, Maximum debate rounds, Conversation storage, and Agents
-through a seven-choice editor in this exact order: those five fields, Save,
-Cancel. Conversation storage independently offers Filesystem and SQLite for
-the next shell; it is not an agent-provider route. `Agents` opens a
+Language, Persona, Maximum debate rounds, Conversation storage, Conversation
+RAG, and Agents through an eight-choice editor in that exact order followed by
+Save and Cancel. Conversation storage independently offers Filesystem and
+SQLite for the next shell; it is not an agent-provider route. Conversation RAG
+opens Provider Disabled/Local and Automatic Off/On with explicit Current or
+Pending summaries. Disabled forces Automatic Off, selecting Local does not
+enable Automatic, and On requires pending Local. `Agents` opens a
 nested canonical-agent picker, then a provider-neutral Provider/Model/Effort
 picker. Current/Pending confirmations retain provider-qualified rows for both
 providers so inactive values remain identifiable.
 
 Every retained Language, Persona, Maximum debate rounds, Conversation storage,
-Provider, Model, Custom model, and Effort editor always shows `Entered changes
-remain pending in memory and are not saved; choose Save in Settings to persist
-them.` The text is present on initial entry, after a valid Enter reopens the
-editor, and during validation. The established entered-value success result
-remains unchanged and is still the only inline completed result.
+Conversation RAG Provider, Conversation RAG Automatic, agent Provider, Model,
+Custom model, and Effort editor always shows `Entered changes remain pending in
+memory and are not saved; choose Save in Settings to persist them.` The text is
+present on initial entry, after a valid Enter reopens the editor, and during
+validation. The established entered-value success result remains unchanged and
+is still the only inline completed result.
 
 The top-level Settings picker shows `[save required] Pending changes are in
 memory only and are not saved. Choose Save to persist them.` if and only if the
@@ -706,14 +824,14 @@ Settings pickers and prompts follow the same transient input
 lifecycle as all capable input; fallback readers retain printed input and add no
 synthetic final picker frame. Nested Escape returns to
 the parent silently without a Current/Pending snapshot or cancellation record.
-In Language, Persona, Maximum debate rounds, Conversation storage, Provider,
-Model, Custom model, and Effort, the first valid commit applies the normalized
-pending value and keeps the editor active. The next valid commit of that same
-normalized value returns one level silently; a different valid value applies,
-stays active, and re-arms the comparison. Invalid input, authentication
-failure, Custom model navigation, and editor re-entry reset it. This is
-consecutive semantic commit policy in the `/settings` controller, not raw-key
-timing or generic Picker/Prompt behavior.
+In Language, Persona, Maximum debate rounds, Conversation storage,
+Conversation RAG Provider/Automatic, agent Provider, Model, Custom model, and
+Effort, the first valid commit applies the normalized pending value and keeps
+the editor active. The next valid commit of that same normalized value returns
+one level silently; a different valid value applies, stays active, and re-arms
+the comparison. Invalid input, authentication failure, Custom model navigation,
+and editor re-entry reset it. This is consecutive semantic commit policy in the
+`/settings` controller, not raw-key timing or generic Picker/Prompt behavior.
 
 Save always opens its transient yes/no confirmation. Explicit Cancel and root
 Settings Escape share one action: clean settings exit immediately without a
@@ -754,6 +872,17 @@ It does not refresh the active backend, runtime, or conversation-storage
 bundle; migrate or activate storage; invoke a story-model turn; alter
 session/explicit overrides; or add credentials, persisted catalog data, or
 automatic save.
+
+Conversation RAG editing itself performs no optional-package probe, import,
+installation, network request, or credential prompt. At the next shell, the
+controller reads the backend construction snapshot once. Disabled skips local
+composition without writing. Local composes exactly once with the persisted
+automatic policy when the complete conversation-storage bundle is available.
+A missing or incompatible pinned extra leaves configuration unchanged, emits
+one fixed warning, and keeps a RAG-free shell and `/settings` usable. Reinstall
+the reviewed dependency with `python -m pip install --editable '.[rag]'`, then
+restart; startup never installs it. The current shell never adopts a setting
+saved after construction.
 
 Entering or validating a value remains in-memory only; no configuration value
 is persisted before the complete Save. This does not change startup or global
@@ -907,6 +1036,19 @@ attachment. Advisory turns, `/history`, `/run`, and `/draft-file` also need
 current focus on an active conversation. Search is active-only; transcript
 reads can include archives. See [grammar](interactive-command-parser.md) and
 [lifecycle mapping](../design/session-lifecycle.md).
+
+`/rag QUERY` is alias-free and requires attachment plus an active current
+focus. Its query is nonblank, control/format-free, and at most 200 codepoints.
+The command performs no retrieval and emits no query text; it replaces one
+process-local pending query for that exact session/conversation. The next
+ordinary, `/say`, or routed `@agent` turn consumes it and forces one preflight,
+overriding automatic policy only for that turn. Ineligible commands retain it;
+scope change, pause/detach, quit, or cleanup clears it. Cancellation before the
+runtime coroutine enters retains it, while entry consumes it even if the turn
+then fails or is cancelled. The query is not provider-bound text, so artifact
+activation is inert there; put `${path}` or `${path}#Lx-Ly` references in the
+following eligible story message. Literal `/search` remains a separate
+immediate local read.
 
 <a id="interactive-consensus"></a>
 

@@ -1,16 +1,13 @@
 # Optional conversation RAG integration
 
-> **Current availability:** Issues #262, #283, and #263 provide a direct Python
-> boundary, a fixed pure local provider, a disposable per-session generation
-> store, and provider/store-neutral runtime authorization, projection, and
-> agent-context integration. Explicit local composition still needs the pinned
-> `generic-rag` package, and an application must inject the low-level service
-> plus its restart-safe state port. There is no RAG CLI command, `/rag`, or RAG
-> field in `/settings`. Existing literal `/search` is unchanged.
->
-> **Planned availability:** Issue #264 adds user commands and storage-backed
-> provider/settings selection. Commands and flows labeled **planned** below are
-> delivery contracts, not current behavior.
+> **Current availability:** Issues #262, #283, #263, #348, and #349 provide a direct
+> Python boundary, a fixed pure local provider, a disposable per-session
+> generation store, provider/store-neutral runtime authorization, and six
+> noninteractive `story rag` lifecycle/search commands. The shell also provides
+> storage-backed `/settings` provider/automatic controls, next-startup local
+> composition, eligible automatic preflight, and private one-turn `/rag QUERY`
+> arming. Local provider use needs the pinned `generic-rag` package and explicit
+> workspace opt-in. Existing literal `/search` is unchanged.
 
 Key terms: **authoritative source**—the current conversation store whose bytes
 must be reread before use; **derived projection**—disposable fragments and
@@ -54,9 +51,9 @@ The submodule is review/development evidence; pip resolves the VCS URL rather
 than using `vendor/generic-rag` as its dependency source. A populated local
 Git/pip cache can avoid a new fetch, but an offline install from an empty cache
 is not supported. Installing the extra does not enable runtime RAG by itself.
-Direct local composition still requires an explicit caller-owned store and
-lexical retriever; runtime use additionally requires an injected restart-safe
-state port and `ConversationRagRuntimeService`. See the
+The noninteractive CLI composes its own local store, state, and runtime only
+after an operation needs them; low-level direct composition can still use a
+caller-owned store and lexical retriever. See the
 [direct-module API](../reference/package-api.md#optional-conversation-rag-boundary).
 
 ## Verify the pin offline
@@ -113,8 +110,9 @@ Commit the gitlink, `pyproject.toml`, and generated lock change together.
 | `story_writing_agents.conversation_rag_local` | Pure deterministic local embedding and vector ranking | Imports only story contracts/literal normalization; no generic package, workspace, I/O, network, credentials, subprocess, or environment discovery |
 | `story_writing_agents.conversation_rag_store` | Identity-bound disposable generation construction, verification, active/status pointers, reading, and confirmed purge | Imports no provider or generic package; construction performs no I/O |
 | `story_writing_agents.generic_rag_adapter` | Exact translation to/from `generic-rag` 0.1.0 | Sole production module importing both projects; direct import needs the optional package |
-| `story_writing_agents.conversation_rag_composition` | Deferred generic composition plus fixed local-provider/store composition, capability checks, fallback mapping, and sanitized diagnostics | Safe to import without the optional package; an explicit composition call performs the version check and adapter import |
-| `story_writing_agents.conversation_rag_runtime` | Active-turn projection, literal-first merge, authoritative reread, citation construction, bounded context, and restart-safe runtime-state coordination | Imports only story-owned contracts and conversation-storage ports; owns no store, provider, settings, network, or credentials |
+| `story_writing_agents.conversation_rag_composition` | Deferred generic composition plus fixed local-provider/store/runtime-state composition, capability checks, fallback mapping, and sanitized diagnostics | Safe to import without the optional package; compatibility or explicit composition performs the version/capability check |
+| `story_writing_agents.conversation_rag_runtime` | Read-only authorized inspection, active-turn projection, literal-first merge, direct authorized search, authoritative reread, citations, bounded context, and restart-safe runtime-state coordination | Imports only story-owned contracts and conversation-storage ports; owns no store, provider, settings, network, or credentials |
+| `story_writing_agents.conversation_rag_cli` | Immutable six-operation request/report domain and local lifecycle/search dispatch | Direct-only module; owns no interactive controller, SQLite adapter, network provider, or generic package source |
 
 The root facade remains unchanged at 120 exports. The provider allowlist is
 exactly `("local",)`. Composition does not discover plugins, inspect provider
@@ -258,23 +256,48 @@ present state inspects against that checkpoint's schema. A different stored
 schema becomes an `incompatible` literal fallback, while drift from the same
 schema checkpoint becomes a `stale` fallback.
 Missing/incompatible optional-package state raises the sanitized composition
-error before storage is touched. Composition alone does not register the
-service with a runtime or expose it to the shell.
+error before storage is touched. The concrete local runtime bundle is also
+available when the caller wants the fixed store-backed state adapter:
+
+```python
+from story_writing_agents.conversation_rag_composition import (
+    compose_local_conversation_rag_runtime,
+)
+
+bundle = compose_local_conversation_rag_runtime(
+    workspace,
+    automatic_enabled=False,
+)
+runtime = StoryRuntime(
+    workspace,
+    conversation_storage_services=conversation_storage_services,
+    conversation_rag_service=bundle.service,
+)
+```
+
+The bundle retains its service, generation store, and local state adapter.
+Construction checks the exact optional package and capabilities but neither
+changes persisted opt-in settings nor projects a session by itself. Direct
+applications still own this composition. The installed shell independently
+uses the persisted construction snapshot described below.
 
 ## Use the current programmatic runtime integration
 
-The direct runtime boundary exports seven names and remains outside the
+The direct runtime boundary exports ten names and remains outside the
 120-name package-root facade:
 
 ```python
 from story_writing_agents.conversation_rag_runtime import (
     CONVERSATION_RAG_RUNTIME_POLICY,
     CONVERSATION_RAG_RUNTIME_SCHEMA_ID,
+    ConversationRagRuntimeInspection,
+    ConversationRagRuntimeInspectionStatus,
     ConversationRagRuntimeError,
     ConversationRagRuntimePolicy,
     ConversationRagRuntimeService,
     ConversationRagRuntimeState,
     ConversationRagRuntimeStateSnapshot,
+    inspect_authorized_conversation_rag,
 )
 ```
 
@@ -283,9 +306,10 @@ state_port, automatic_enabled=False)`. The low-level object implements the four
 `ConversationRagService` operations. The application-owned state port exposes
 the same workspace key and embedding identity plus synchronous
 `inspect_projection_state(session_id)` and
-`mark_projection_stale(session_id)` operations. This release does not provide
-a settings-owned state-port factory; the application must explicitly compose
-and retain that collaborator.
+`mark_projection_stale(session_id)` operations. An application may provide its
+own state port or retain the concrete local bundle above. The installed shell
+uses the fixed concrete local bundle; it does not make that composition a
+package-root API.
 
 `StoryRuntime(..., conversation_rag_service=service)` accepts only that exact
 runtime-service type. It uses the default composed filesystem
@@ -317,14 +341,19 @@ only when constructing the runtime service with `automatic_enabled=True`; the
 normalized current turn is then capped at 200 codepoints for the query.
 
 `ConversationRagRuntimeService.project_authorized()` is also available for an
-explicit programmatic projection or rebuild. A configured `StoryRuntime`
-automatically calls it after each successfully committed ordinary or retrieval
-reply, even when that turn did not run a preflight. Ordinary projection failure
-is isolated from the committed reply and marks state stale best-effort;
+explicit programmatic projection or rebuild, and `search_authorized()` runs one
+forced bounded search without consulting automatic policy.
+`inspect_authorized_conversation_rag()` performs an optimistic double read of
+the authoritative target and indexed state and reports their relationship
+without acquiring the mutation coordinator or creating storage/RAG paths.
+A configured `StoryRuntime` automatically calls it after each successfully
+committed ordinary or retrieval reply, even when that turn did not run a
+preflight. Ordinary projection failure is isolated from the committed reply and
+marks state stale best-effort;
 `KeyboardInterrupt`, `SystemExit`, and cancellation controls propagate after
 the reply commit.
 
-## Current runtime and agent utilization
+## Runtime and agent utilization
 
 The programmatic integration uses RAG as a bounded preflight, never as memory
 authority:
@@ -363,30 +392,191 @@ The initial retrieval-provider request receives attempted `rag_context` with a
 content-free outcome/reason and bounded authoritative excerpts explicitly
 labeled as untrusted story data. Continuation requests omit that context. The
 Python result carries the optional content-free `rag_outcome`; no-attempt turns
-leave it `None`. See the exact
+leave it `None`. Its ordered `rag_sources` is the exact subset of final sources
+that the same preflight authorized. A RAG-only citation needs no literal-search
+progress; every non-RAG source still requires completed, correlated search or
+read progress. Mixed answers preserve both rules. See the exact
 [payload and citation contract](../reference/conversation-retrieval.md#optional-conversation-rag-preflight).
 
-## Planned user utilization
+## Use the current noninteractive workflows
 
-Planned Issue #264 will expose the completed integration:
+RAG starts disabled in every new workspace. These six commands are installed;
+`--workspace PATH` may name an initialized workspace and otherwise the nearest
+ancestor is used. Status, rebuild, search, and purge take optional
+`--session ID`; without it they use the saved default session. Enable and
+disable are workspace-scoped and accept no session.
 
-| User action | Planned behavior |
+| Command | Current behavior |
 | --- | --- |
-| `story rag status` | Inspect enable/provider state, versions, checkpoints, stale/error counts, and rebuild need without source text or credentials |
-| `story rag enable --provider local` | Opt in to the allowlisted network-free local provider |
-| `story rag rebuild --yes` | Rebuild and verify an inactive derived generation, then atomically publish it; interrupted builds restart |
-| `story rag search QUERY` | Run bounded hybrid retrieval, authoritative rereads, and cited output without an agent |
-| `/rag QUERY` | Force one cited preflight for the next eligible story-agent turn |
-| `/settings` | Persist the allowlisted provider and default-off automatic policy through the storage-backed settings owner; never persist credentials |
-| `story rag disable` | Stop semantic retrieval without deleting authoritative conversations |
-| `story rag purge --yes` | Delete only derived generations after authorization and confirmation |
+| `story rag status [--session ID] [--workspace PATH]` | Compare one session's authoritative active-store target with its derived generation. This is a genuinely no-write optimistic inspection: it does not create the storage-coordinator lock, RAG directories, or configuration bytes. Disabled, unavailable, missing, stale, failed, corrupt, and incompatible observations are successful status results, not command failures. |
+| `story rag enable --provider local [--workspace PATH]` | Check the exact installed package version and capability manifest before atomically saving the allowlisted provider. A missing or incompatible dependency leaves configuration bytes unchanged. Enabling does not build data, enable automatic shell use, authenticate an agent provider, or make a network call. |
+| `story rag rebuild --yes [--session ID] [--workspace PATH]` | Require explicit confirmation, run the established desired-storage activation check, then rebuild the complete authorized active target into an inactive generation and publish only after verification. It restarts rather than resumes partial work. |
+| `story rag search QUERY [--session ID] [--workspace PATH]` | Run one forced bounded literal-first/local-vector search through the freshly activated configured authority, reauthorize and reread every retained range, and return citations plus authoritative excerpt text without invoking a story agent. Quote a query containing spaces; empty or whitespace-only text is invalid. |
+| `story rag disable [--workspace PATH]` | Atomically clear the provider and force the persisted automatic flag to `false`. It does not delete derived generations or authoritative conversations. |
+| `story rag purge --yes [--session ID] [--workspace PATH]` | Require explicit confirmation and remove only the addressed session's validated derived active/status/generation contents. It works independently of provider enablement and authoritative-storage activation. |
 
-The `/settings` choice will be durable configuration, independent of
-filesystem/SQLite conversation-storage selection. Literal `/search` remains
-unchanged. External providers, arbitrary plugin discovery, silent network
-transmission, credential storage, SQLite coupling, and MySQL are excluded.
-Generic algorithm changes remain owned by the independent `generic-rag`
-repository rather than this integration.
+A typical explicit local workflow is:
+
+```bash
+story rag status --session novel
+story rag enable --provider local
+story rag rebuild --session novel --yes
+story rag search 'the lighthouse bargain' --session novel
+story rag disable
+# Optional, separate deletion of disposable derived state:
+story rag purge --session novel --yes
+```
+
+Confirmed rebuild and search use the same configured-storage activation
+preflight as a new shell. They never install/provision SQLite or migrate data;
+a desired backend must already be ready and canonically equal before activation
+can advance. Status instead reads only the persisted active backend and repeats
+both authority and RAG-state reads to reject drift. Purge touches no
+authoritative storage. See the exact machine contract in
+[CLI reference](../reference/cli.md#conversation-rag-operations).
+
+`config/system_defaults.json` persists `conversation_rag_provider` as `null` or
+`"local"` and `conversation_rag_automatic` as an exact boolean. Both default to
+disabled (`null`/`false`), and `true` is valid only with provider `local`.
+Commands can enable/disable the provider but intentionally provide no automatic
+toggle. Interactive `/settings` supplies that toggle as described below. A
+legacy configuration missing either key reads as disabled without a rewrite;
+the next successful complete configuration save emits both keys in the
+canonical eleven-key object.
+
+Every valid invocation writes one compact, key-sorted schema-v1 JSON line to
+standard output and creates no runtime debug record. Successful operations exit
+`0`; sanitized semantic/precondition failures and argparse errors exit `2`.
+Search is the intentional content-bearing exception: its output can contain
+bounded authoritative excerpt text and stable source/reference coordinates.
+It never echoes the query, provider text or score, subject, path, credential,
+or exception. Protect search output and terminal scrollback as conversation
+data.
+
+The runtime provider is fixed, local, and network-free. There is no external
+provider discovery, silent transmission, credential persistence, SQLite/MySQL
+adapter coupling, or MySQL implementation. Installing the optional VCS extra
+can itself require network/repository access as described above; running the
+installed local provider does not. Generic algorithm changes remain owned by
+the independent `generic-rag` repository rather than this integration.
+
+<a id="interactive-conversation-rag"></a>
+
+## Use RAG in the interactive shell
+
+### Persist the next-shell policy in `/settings`
+
+`config/system_defaults.json`, edited through the existing guarded `/settings`
+workflow, is the shell's storage-backed source of truth. Choose **Conversation
+RAG**, then edit these independent Current/Pending values:
+
+| Field | Choices and invariant |
+| --- | --- |
+| Provider | **Disabled** persists `null` and forces Automatic **Off**. **Local** persists `"local"` but does not turn Automatic on. |
+| Automatic | **Off** is the default. **On** is accepted only while the pending provider is **Local**. |
+
+Values remain pending until the top-level **Save** confirmation. **Discard** by
+reverting values, or **Cancel**, Escape, Ctrl-C, or EOF according to the existing
+Settings transaction; an unsaved exit leaves the captured configuration bytes
+unchanged. Save uses the same exact-byte compare-and-set guard and canonical
+atomic replacement as every other setting. A concurrent byte change fails
+closed instead of merging an old RAG choice.
+
+Opening or editing the Conversation RAG fields never probes or installs the
+optional package, uses the network, or prompts for a credential. The full
+Settings Save retains its existing, independent agent-provider authentication
+and conversation-storage readiness gates. A saved RAG change affects only the
+next shell: the current backend, runtime, active storage bundle, and automatic
+policy remain unchanged.
+
+### What happens at the next shell startup
+
+After configured conversation storage has produced one complete authority
+bundle, the controller reads the backend construction-time configuration
+snapshot once:
+
+- **Disabled** creates no RAG factory, performs no optional-package probe or
+  import, and writes no RAG/configuration state.
+- **Local** composes exactly one local runtime service with the persisted
+  Automatic value and injects it beside that complete storage bundle.
+- A missing, wrong-version, or capability-incompatible optional package leaves
+  configuration unchanged and opens a usable RAG-free shell, including
+  `/settings`. It emits exactly one fixed actionable warning: verify the pinned
+  `rag` extra and restart. Reinstall the reviewed pin with
+  `python -m pip install --editable '.[rag]'`; startup never installs it.
+
+The legacy Python controller path that supplies only a raw conversation catalog
+has no complete catalog/search/provenance/coordinator authority and therefore
+does not compose RAG. Normal installed-shell construction supplies the complete
+bundle.
+
+### Choose automatic or one-turn preflight
+
+With Automatic **Off**, ordinary focused turns keep their established behavior.
+With Automatic **On**, each eligible ordinary, `/say`, or routed `@agent` turn
+may run the existing bounded authorized preflight once before the addressed
+story agent. This does not add retrieval to `/run`, debate, consensus, local
+management commands, or any other scope.
+
+To override automatic policy for one turn, first arm a private query:
+
+```text
+/rag council vessel
+@plot Which earlier decision constrains ${core_documents/global_outline.md} and ${manuscript/part-01/opening.md}#L20-L32?
+```
+
+`/rag QUERY` is alias-free. `QUERY` must be nonblank, free of Unicode control or
+format characters, and no longer than 200 codepoints before and after the
+established normalization. The command requires an attached session and a
+focused active conversation. It performs no retrieval itself, does not change
+the saved Automatic value, does not echo or persist the query, and does not
+replace literal `/search`.
+
+The pending query is process-local and bound to the exact session/conversation:
+
+- arming again replaces the older query;
+- local and otherwise ineligible commands retain it;
+- the next eligible ordinary, `/say`, or routed turn consumes it once;
+- changing session or conversation scope, pausing/detaching, quitting, or
+  controller cleanup clears it;
+- cancellation before the runtime coroutine enters retains it for the next
+  eligible turn; once that coroutine enters, the query is consumed even if the
+  turn later fails or is cancelled.
+
+Artifact references belong in the subsequent eligible story message, never in
+the `/rag` control. A whole-file reference and a line-range reference to
+distinct paths can coexist with the forced preflight; their artifact
+authorization identities and the RAG citation identities remain independent.
+The existing parser still rejects a whole-file and ranged reference to the same
+path, exact duplicates, and overlapping same-path ranges.
+
+### What agents and users receive
+
+Agents receive only the fixed bounded, reauthorized excerpt bodies and stable
+`g1` through `g20` citations on the initial substantive request. Provider text,
+scores, vector handles, credentials, and permission to expand the active
+session are absent. The user sees the story reply, the content-free RAG
+outcome/reason, and exact cited sources. Excerpt bodies are not exposed as
+diagnostics or copied into the semantic result; Python callers can distinguish
+the exact preflight-authorized subset through `rag_sources`.
+
+The `/rag` query, excerpt/source text bodies, credentials, and raw provider or
+composition diagnostics are absent from configuration, conversation
+transcripts, runtime debug records, and semantic result output. The subsequent
+ordinary story message and agent reply retain their established transcript
+persistence. While entering `/rag`, the terminal editor necessarily displays
+the typed line; its process-local command history may recall it, and ordinary
+line fallback or terminal infrastructure may retain visible input in
+scrollback. Those local terminal surfaces are not durable story storage or a
+secrecy boundary.
+
+The fixed local provider makes no runtime network call and has no credential
+flow. Existing commands, `/search`, provider/model overrides, storage adapters,
+debate/consensus, provider-free imports, package-root exports, and the generic
+repository source remain unchanged. This interactive slice adds no SQLite or
+MySQL behavior. `generic-rag` remains an independently packaged pinned submodule
+with zero imports from this story project; story-specific composition and
+authorization stay in this repository.
 
 ## Redistribution restriction
 

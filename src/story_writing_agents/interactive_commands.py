@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from dataclasses import KW_ONLY, dataclass
+from dataclasses import KW_ONLY, dataclass, field
 from enum import StrEnum
 
 from .agents import (
@@ -14,6 +14,7 @@ from .agents import (
     PLOT_ARCHITECT,
     ROSTER,
 )
+from .conversation_search import ConversationSearchQuery
 
 
 class ActionKind(StrEnum):
@@ -30,6 +31,7 @@ class ActionKind(StrEnum):
     RUN = "run"
     RUN_FRESH = "run_fresh"
     DRAFT_FILE = "draft_file"
+    RAG = "rag"
     SEARCH = "search"
     TRANSCRIPT = "transcript"
     INSPECT = "inspect"
@@ -187,6 +189,7 @@ class InteractiveAction:
 
     kind: ActionKind
     _: KW_ONLY
+    rag_query: str | None = field(default=None, repr=False)
     text: str | None = None
     agent_id: str | None = None
     argument: str | None = None
@@ -203,6 +206,7 @@ class InteractiveAction:
             raise TypeError("kind must be an ActionKind")
 
         values = {
+            "rag_query": self.rag_query,
             "text": self.text,
             "agent_id": self.agent_id,
             "argument": self.argument,
@@ -213,6 +217,7 @@ class InteractiveAction:
             "suggestion": self.suggestion,
         }
         for field_name in (
+            "rag_query",
             "text",
             "agent_id",
             "argument",
@@ -246,6 +251,15 @@ class InteractiveAction:
 
         if self.text is not None and _is_ascii_blank(self.text):
             raise ValueError("text must contain non-whitespace content")
+        if self.rag_query is not None:
+            try:
+                ConversationSearchQuery(
+                    text=self.rag_query,
+                    limit=20,
+                    include_archived=False,
+                )
+            except (TypeError, ValueError) as exc:
+                raise ValueError("rag_query must be a valid bounded query") from exc
         if self.count is not None and self.count <= 0:
             raise ValueError("count must be positive")
         if self.start_sequence is not None and self.start_sequence <= 0:
@@ -288,6 +302,7 @@ _ACTION_FIELD_RULES: dict[
         frozenset({"argument", "output_path"}),
         frozenset({"argument"}),
     ),
+    ActionKind.RAG: (frozenset({"rag_query"}), frozenset({"rag_query"})),
     ActionKind.SEARCH: (frozenset({"text"}), frozenset({"text"})),
     ActionKind.TRANSCRIPT: (
         frozenset({"argument", "count", "start_sequence"}),
@@ -417,6 +432,14 @@ COMMANDS: tuple[CommandSpec, ...] = (
         False,
         "/say /run is literal text",
     ),
+    CommandSpec(
+        "Conversation",
+        "/rag QUERY",
+        (),
+        False,
+        False,
+        "/rag council vessel",
+    ),
     CommandSpec("Agents", "/to NAME", ("/agent",), False, False, "/to plot"),
     CommandSpec("Agents", "/agents", (), False, False, "/agents"),
     CommandSpec("Agents", "/auth", (), True, True, "/auth"),
@@ -536,6 +559,7 @@ _COMMAND_ALIASES: dict[str, str] = {
     "send": "/send",
     "cancel": "/cancel",
     "say": "/say",
+    "rag": "/rag",
     "to": "/to",
     "agent": "/to",
     "agents": "/agents",
@@ -938,6 +962,8 @@ def _parse_slash_command(line: str) -> InteractiveAction:
         if text is None:
             return _parse_error("/say requires text")
         return InteractiveAction(ActionKind.MESSAGE, text=text)
+    if command == "rag":
+        return _parse_rag(tail)
     if command in {"to", "agent"}:
         return _parse_target(tail, command)
     if command == "agents":
@@ -1297,6 +1323,25 @@ def _parse_search(tail: str | None) -> InteractiveAction:
     if query is None:
         return _parse_error("/search requires a query")
     return InteractiveAction(ActionKind.SEARCH, text=query)
+
+
+def _parse_rag(tail: str | None) -> InteractiveAction:
+    """Return one private next-turn RAG control from exact bounded text."""
+
+    query = _required_remainder(tail)
+    if query is None:
+        return _parse_error("/rag requires a query")
+    try:
+        ConversationSearchQuery(
+            text=query,
+            limit=20,
+            include_archived=False,
+        )
+    except (TypeError, ValueError):
+        return _parse_error(
+            "/rag query must be control-free text of 1 to 200 characters"
+        )
+    return InteractiveAction(ActionKind.RAG, rag_query=query)
 
 
 def _parse_transcript(tail: str | None) -> InteractiveAction:

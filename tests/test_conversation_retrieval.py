@@ -519,8 +519,12 @@ class ConversationRetrievalContractTests(unittest.TestCase):
             (ConversationRetrievalResult, result, (
                 "session_id", "conversation_id", "turn_id", "agent_id",
                 "content", "context", "sources", "reference_operation_id",
-                "rag_outcome",
-            ), (("reference_operation_id", None), ("rag_outcome", None))),
+                "rag_outcome", "rag_sources",
+            ), (
+                ("reference_operation_id", None),
+                ("rag_outcome", None),
+                ("rag_sources", ()),
+            )),
             (ConversationRetrievalProgressEvent, progress, (
                 "session_id", "conversation_id", "turn_id", "agent_id",
                 "action_index", "phase", "search_hit_count",
@@ -675,6 +679,57 @@ class ConversationRetrievalContractTests(unittest.TestCase):
                 context=_empty_context(),
                 sources=(),
                 rag_outcome=object(),  # type: ignore[arg-type]
+            )
+
+    def test_result_rag_sources_are_an_exact_ordered_authorized_subset(self) -> None:
+        first = _source(subject="first")
+        second = _source(
+            _conversation_citation("second_conversation"),
+            subject="second",
+        )
+        outcome = ConversationRagAttemptOutcome(
+            outcome=ConversationRagOutcome.COMPLETE,
+            reason=ConversationRagReason.NONE,
+        )
+        values = dict(
+            session_id=_SESSION,
+            conversation_id="selected_conversation",
+            turn_id=_FIXED_TURN,
+            agent_id=PLOT_ARCHITECT,
+            content="answer",
+            context=_empty_context(),
+            sources=(first, second),
+        )
+        result = ConversationRetrievalResult(
+            **values,
+            rag_outcome=outcome,
+            rag_sources=(second,),
+        )
+        self.assertEqual(result.rag_sources, (second,))
+
+        with self.assertRaisesRegex(ValueError, "require an attempted outcome"):
+            ConversationRetrievalResult(**values, rag_sources=(first,))
+        with self.assertRaisesRegex(ValueError, "ordered result subset"):
+            ConversationRetrievalResult(
+                **values,
+                rag_outcome=outcome,
+                rag_sources=(second, first),
+            )
+        foreign = _source(
+            _conversation_citation(session_id="foreign_session"),
+            subject="foreign",
+        )
+        with self.assertRaisesRegex(ValueError, "crossed its session"):
+            ConversationRetrievalResult(
+                **values,
+                rag_outcome=outcome,
+                rag_sources=(foreign,),
+            )
+        with self.assertRaisesRegex(TypeError, "sources must be a tuple"):
+            ConversationRetrievalResult(
+                **values,
+                rag_outcome=outcome,
+                rag_sources=[first],  # type: ignore[arg-type]
             )
 
     def test_unions_handler_signatures_exports_and_error_facade_are_exact(self) -> None:

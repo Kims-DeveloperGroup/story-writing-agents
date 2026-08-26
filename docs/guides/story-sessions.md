@@ -124,11 +124,14 @@ any default already established.
 
 `/settings` is global, alias-free, and works in the lobby or while attached. It
 shows separate Current and Pending values for Language,
-Persona, Maximum debate rounds, Conversation storage, and Agents. The exact
+Persona, Maximum debate rounds, Conversation storage, Conversation RAG, and
+Agents. The exact
 top-level order is Language, Persona, Maximum debate rounds, Conversation
-storage, Agents, Save, Cancel. Conversation storage offers Filesystem and
-SQLite as an independent next-shell workspace choice; it is not an agent
-provider route. Choose Agents to select an agent in
+storage, Conversation RAG, Agents, Save, Cancel. Conversation storage offers
+Filesystem and SQLite as an independent next-shell workspace choice; it is not
+an agent provider route. Conversation RAG offers Provider Disabled/Local and
+Automatic Off/On. Disabled also forces Off; selecting Local keeps Off; On
+requires pending Local. Choose Agents to select an agent in
 canonical roster order, then use Agent settings to choose Provider, Model, or
 Effort for that agent. Provider remains the field-level configuration concept;
 its choices are Codex and Antigravity. Changing the route does not erase the
@@ -139,7 +142,8 @@ provider-qualified so both providers' inactive values stay identifiable.
 On a capable terminal, Up/Down moves the current picker highlight. Enter opens
 a selected settings level or applies a pending value. Language, Persona,
 Maximum debate rounds, Conversation storage, Provider, Model, Custom model,
-and Effort stay active after a valid Enter: the picker selection or prompt
+Conversation RAG Provider/Automatic, and Effort stay active after a valid
+Enter: the picker selection or prompt
 default updates immediately, and the editor shows one inline completed success
 result for the latest value, replacing the previous result. Guidance states
 that Enter applies the pending value and keeps the editor open. A second
@@ -152,7 +156,8 @@ raw-key timing gesture.
 
 Escape returns one level through Custom model > Model > Agent settings > Agents
 > Settings; Provider and Effort return directly to Agent settings, while
-Conversation storage returns directly to Settings. At root,
+Conversation RAG Provider/Automatic return to Conversation RAG, and
+Conversation RAG or Conversation storage returns directly to Settings. At root,
 Escape invokes the same action as explicit Cancel: clean settings exit
 immediately, while dirty settings open the existing YES/NO Cancel confirmation.
 NO or Escape there returns to Settings. Ctrl-C or EOF still cancels the whole
@@ -161,7 +166,8 @@ and the same level hierarchy. In the per-agent active-provider Custom model
 prompt, blank means inherit that provider's workspace system model and
 `/cancel` is literal model text rather than a command.
 
-Every retained value editor, including Conversation storage, always says
+Every retained value editor, including Conversation storage and both
+Conversation RAG fields, always says
 `Entered changes remain pending in
 memory and are not saved; choose Save in Settings to persist them.` This stays
 visible when the editor first opens, after a valid value is entered, and while
@@ -259,6 +265,41 @@ session or explicit overrides still take precedence. See
 [Filesystem safety](../operations/filesystem-safety.md). Antigravity setup and
 provider-specific precedence are in the
 [Antigravity guide](antigravity.md).
+
+Conversation RAG field editing does not probe or install the optional package,
+use the network, or prompt for credentials. At the next shell startup,
+Disabled skips optional-package work. Local composes one runtime service beside
+the complete active conversation-storage bundle with the saved Automatic
+value. Missing or incompatible pinned dependencies leave configuration
+unchanged, emit one fixed warning, and keep a RAG-free shell and `/settings`
+usable. Install or restore the reviewed pin with
+`python -m pip install --editable '.[rag]'`, then restart.
+
+## Arm one private RAG preflight
+
+`/rag QUERY` does not retrieve immediately. It privately arms one forced
+preflight for the next eligible ordinary, `/say`, or routed `@agent` turn in
+the exact attached session and focused active conversation:
+
+```text
+/rag lighthouse bargain
+@plot Reconcile it with ${core_documents/global_outline.md} and ${manuscript/part-01/opening.md}#L20-L32.
+```
+
+The command is alias-free; its nonblank control-free query is limited to 200
+codepoints. Rearming replaces the pending query. Ineligible commands retain it;
+changing scope, pausing/detaching, quitting, or cleanup clears it. A
+cancellation before the runtime coroutine enters retains it, while entry
+consumes it even if the turn fails or is cancelled. The command does not echo
+or persist the query, alter Automatic, or replace literal `/search`.
+
+Artifact references belong in the following story message, as in the example.
+Distinct-path whole-file and line-range references can coexist with that one
+RAG attempt. The existing same-path whole/range rejection remains. The agent
+receives bounded reauthorized excerpts and stable citations; the shell shows
+only the content-free RAG outcome/reason, reply, and cited sources—not excerpt
+bodies as diagnostics. Automatic On applies the same preflight to eligible
+focused advisory turns only; debate and consensus remain unchanged.
 
 ## Manage conversations and routing
 
@@ -384,6 +425,7 @@ prompt submission.
 | --- | --- |
 | `/history [COUNT]` | Local snapshot of current focus plus context accounting; no provider. |
 | `/search QUERY` | Bounded literal search over active subjects/events; no focus required. |
+| `/rag QUERY` | Privately arm one forced preflight for the next eligible focused advisory turn; no immediate read. |
 | `/transcript ID [COUNT] [--from N]` | Fresh bounded page from active or archived identity; focus unchanged. |
 | One advisory question | Agent may answer or request bounded active same-session search/read actions. |
 

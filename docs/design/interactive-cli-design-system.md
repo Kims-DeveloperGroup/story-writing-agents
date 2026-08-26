@@ -96,7 +96,7 @@ current production behavior.
 | #86 composer/confirmation integration | Implemented: RUN/CHAT composition and yes/no confirmation build ordered semantic input views, render equivalent plain/fixed-ANSI projections at the active width, and use pure history-free controls. Established results, signatures, `/send`, `/cancel`, `/say`, defaults, Ctrl-C, EOF, callback cardinality, and controller/runtime behavior remain unchanged. |
 | #79 selectable completion | Implemented: capable main input projects canonical root, subcommand, and finite fixed-option candidates into a semantic palette. Up/Down moves its clamped highlight, Tab applies the highlighted candidate, Escape restores the first pre-completion snapshot when present and dismisses the exact state, and closed-palette Up/Down retains history behavior. Shift-Tab has no action. |
 | #87 picker foundation | Implemented: package-internal immutable picker/control/viewport state, pure initialization/reconciliation/live/fallback transitions, responsive live/full-list rendering, a dedicated history-free sole-driver lifecycle, and an unlisted resource-free adapter. #93 supplies its first installed consumer. |
-| #94 workspace Codex defaults | Implemented: the original slice added optional workspace fallback Codex model and reasoning values. The current closed nine-field system schema also contains Antigravity model/effort, nullable `default_backend`, and independent desired `conversation_storage_backend`; new workspaces initialize provider fields to null and storage to filesystem, legacy files remain valid and byte-preserved until a successful canonical save, and each backend validates and snapshots effective invocation values at construction. |
+| #94 workspace Codex defaults | Implemented: the original slice added optional workspace fallback Codex model and reasoning values. The current closed eleven-field system schema also contains Antigravity model/effort, nullable `default_backend`, independent desired `conversation_storage_backend`, and default-disabled local conversation-RAG provider/automatic values; new workspaces initialize provider fields to null, automatic RAG to false, and storage to filesystem, legacy files remain valid and byte-preserved until a successful canonical save, and each backend validates and snapshots effective invocation values at construction. |
 | #93 settings UI | Implemented: global alias-free `/settings` edits isolated current/pending snapshots of workspace defaults and per-agent provider, model, and reasoning choices through shared picker and prompt controls. Save validates an exact opening baseline and persona catalog, writes only changed configuration documents in deterministic order, and attempts reverse exact-byte rollback after a write failure. The workflow adds no supported public save API. |
 | #252 provider-discovered settings | Implemented: the per-agent editor exposes provider-neutral Provider, Model, and Effort fields. Entering Model or Effort performs one fresh, bounded discovery for the pending effective provider; model choices preserve provider order and custom/inherit compatibility, while effort choices use the pending effective model for Codex and the fixed Antigravity vocabulary. Raw catalogs and diagnostics are never persisted. |
 | #261 conversation storage selection | Implemented: `/settings` adds independent Filesystem/SQLite desired storage, explicit allowlisted prerequisite consent, create-only empty-database preparation, fresh canonical parity, and a final guarded complete configuration CAS; the current shell remains immutable and next-shell startup activates one complete ready bundle before provider authentication. Provider-free `story storage use` exposes the same desired-only workflow through an exact counts-free report. |
@@ -687,8 +687,8 @@ the same content.
 > contracts.
 
 A leading slash automatically opens `SuggestionPalette` at a recognized
-grammar position. Root candidates are the 22 main-available command tokens in
-registry order. Help offers those 22 plus `/compose`, `/send`, and `/cancel`;
+grammar position. Root candidates are the 23 main-available command tokens in
+registry order. Help offers those 23 plus `/compose`, `/send`, and `/cancel`;
 agent-valued slash positions expose the four preferred prompt aliases `lead`,
 `plot`, `character`, and `execution` in route order. Other implemented finite
 positions expose their static subcommands or options. Runtime values such as
@@ -840,13 +840,15 @@ persistence, subprocess, storage, or network code.
 
 ### Persisted provider and storage defaults
 
-> **Implemented:** `config/system_defaults.json` has a closed nine-field
+> **Implemented:** `config/system_defaults.json` has a closed eleven-field
 > schema: required `language` and `persona`, optional `max_debate_rounds`, and
 > optional `codex_model`, `codex_reasoning_effort`, `antigravity_model`, and
 > `antigravity_effort`, plus nullable `default_backend` and independent nullable
-> `conversation_storage_backend`. New workspaces include null values for both
-> provider families and explicit filesystem storage; existing valid files with
-> omitted or null storage resolve to filesystem while initialization and reads
+> `conversation_storage_backend`, `conversation_rag_provider`, and exact boolean
+> `conversation_rag_automatic`. New workspaces include null values for both
+> agent-provider families and RAG provider, false automatic RAG, and explicit
+> filesystem storage. Existing valid files with omitted RAG/storage fields
+> resolve to disabled RAG and filesystem while initialization and reads
 > preserve their exact bytes.
 
 A non-null explicit `AgentBackend(model=...)` or CLI `--codex-model` wins over
@@ -874,9 +876,16 @@ explicit agent routes are never rewritten by this policy.
 Conversation storage resolves independently from provider routing. Its desired
 value is exactly filesystem or SQLite, and affects only the next shell. The
 active shell retains its construction-time storage bundle. A successful
-settings or `storage use` save canonicalizes the complete nine-field system
-object; loading, cancellation, decline, readiness/parity failure, conflict, or
-write failure does not rewrite legacy bytes.
+settings, `storage use`, or RAG enable/disable save canonicalizes the complete
+eleven-field system object; loading, cancellation, decline, readiness/parity
+failure, conflict, or write failure does not rewrite legacy bytes.
+
+Conversation-RAG provider/automatic values are independent of agent-provider
+routing and conversation-storage selection. `/settings` exposes one nested
+Conversation RAG editor with Provider Disabled/Local and Automatic Off/On,
+using the same Current/Pending and guarded Save/Cancel transaction. Editing
+does not probe the optional package; a successful save applies to the next
+shell, whose controller composes Local once with the exact automatic value.
 
 Every backend validates the complete persisted schema before applying explicit
 provider settings and snapshots effective values at construction. Provider
@@ -903,9 +912,10 @@ per-agent provider, model, and effort selections in
 `config/agent_configs.json`. The system snapshot contains required `language`
 and `persona`, optional `max_debate_rounds`, and the optional workspace Codex
 and Antigravity fallback model/effort values plus independent desired
-conversation storage. Provider, active-provider model, and active-provider
-effort selection is per agent. A successful save writes the canonical
-nine-field system object and canonical seven-field entries for each agent. The
+conversation storage and preserved conversation-RAG provider/automatic values.
+Provider, active-provider model, and active-provider effort selection is per
+agent. A successful save writes the canonical
+eleven-field system object and canonical seven-field entries for each agent. The
 view preserves the inactive provider's settings and does not change identity, thread
 ownership, configuration precedence, or either implemented schema.
 
@@ -1818,7 +1828,7 @@ commit/cancel/interrupt/EOF outcomes, exact numbered fallback, responsive
 plain/ANSI rendering, restoration, failure cleanup, and history/completion
 isolation. #93 covers its implemented settings interaction, persistence, and
 lifecycle snapshot contract. #94 covers the original five-key and legacy
-schema handling; current coverage also requires the nine-field system and
+schema handling; current coverage also requires the eleven-field system and
 per-agent schemas, provider-specific safe model/effort validation,
 full-schema-first failure, precedence, backend-lifetime snapshots, exact
 fresh/resume invocation arguments, initialization preservation, and unchanged

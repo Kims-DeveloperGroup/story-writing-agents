@@ -69,6 +69,7 @@ from tests.test_codex_backend import _FAKE_CODEX
 from tests.test_interactive_conversation import (
     _REAL_RUNTIME,
     InteractiveConversationTestCase,
+    ScriptedRuntime,
     ScriptedTerminalCallbacks,
     _capture_semantic_method,
     _conversation_result,
@@ -290,10 +291,11 @@ class ResidualAdvisoryRuntime:
         *,
         memory_service: object,
         progress_sink: object = None,
+        rag_query: str | None = None,
     ) -> ConversationRetrievalResult:
         """Create residual loop resources and return one correlated result."""
 
-        del memory_service, progress_sink
+        del memory_service, progress_sink, rag_query
         self.loops.append(asyncio.get_running_loop())
 
         async def pending() -> None:
@@ -344,10 +346,19 @@ class BlockingAdvisoryRuntime:
         *,
         memory_service: object,
         progress_sink: object = None,
+        rag_query: str | None = None,
     ) -> ConversationRetrievalResult:
         """Wait forever until the recording Runner cancels this operation."""
 
-        del session_id, conversation_id, agent_id, text, memory_service, progress_sink
+        del (
+            session_id,
+            conversation_id,
+            agent_id,
+            text,
+            memory_service,
+            progress_sink,
+            rag_query,
+        )
         self.entered = True
         try:
             await asyncio.Event().wait()
@@ -596,6 +607,103 @@ class InteractiveCancellationTestCase(InteractiveConversationTestCase):
 
 class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
     """Verify Runner lifetime and advisory cancellation through real boundaries."""
+
+    def test_preentry_cancellation_retains_rag_query_for_next_entered_turn(
+        self,
+    ) -> None:
+        private = "PRIVATE_RAG_PREENTRY_SENTINEL"
+        runtime = ScriptedRuntime("recovered reply")
+        callbacks = ScriptedTerminalCallbacks(
+            f"/rag {private}",
+            "cancel before coroutine entry",
+            "visible retry",
+            "/quit",
+        )
+        (
+            _workspace,
+            _catalog,
+            _entries,
+            controller,
+            _backend,
+            _store,
+        ) = self.selected_controller_with_callbacks(callbacks, runtime=runtime)
+        runner_factory = RunnerFactory(
+            asyncio.Runner,
+            interruptions={1: "before_entry"},
+        )
+
+        with mock.patch.object(
+            controller_core_module.asyncio,
+            "Runner",
+            runner_factory,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        self.assertEqual(runtime.rag_queries, [private])
+        self.assertEqual(
+            [call[3] for call in runtime.calls],
+            ["visible retry"],
+        )
+        self.assertIsNone(controller._pending_rag_query)
+        rendered = "".join(callbacks.records)
+        self.assertIn("turn was interrupted", rendered)
+        self.assertNotIn(private, rendered)
+
+    def test_joined_entered_cancellation_consumes_rag_query_once(self) -> None:
+        private = "PRIVATE_RAG_JOINED_CANCEL_SENTINEL"
+
+        async def block_until_cancelled() -> object:
+            await asyncio.Event().wait()
+            raise AssertionError("blocking advisory unexpectedly resumed")
+
+        def blocking_outcome(
+            _session_id: str,
+            _conversation_id: str,
+            _agent_id: str,
+            _text: str,
+        ) -> object:
+            return block_until_cancelled()
+
+        runtime = ScriptedRuntime(blocking_outcome, "recovered reply")
+        callbacks = ScriptedTerminalCallbacks(
+            f"/rag {private}",
+            "cancel after coroutine entry",
+            "visible retry",
+            "/quit",
+        )
+        (
+            _workspace,
+            _catalog,
+            _entries,
+            controller,
+            _backend,
+            _store,
+        ) = self.selected_controller_with_callbacks(callbacks, runtime=runtime)
+        runner_factory = RunnerFactory(
+            asyncio.Runner,
+            interruptions={1: "joined"},
+            predicates={1: lambda: runtime.rag_queries == [private]},
+        )
+
+        with mock.patch.object(
+            controller_core_module.asyncio,
+            "Runner",
+            runner_factory,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        self.assertEqual(runtime.rag_queries, [private, None])
+        self.assertEqual(
+            [call[3] for call in runtime.calls],
+            ["cancel after coroutine entry", "visible retry"],
+        )
+        self.assertIsNone(controller._pending_rag_query)
+        runner = runner_factory.instances[0]
+        self.assertTrue(runner.closed)
+        self.assertTrue(all(task.done() for task in runner.operation_tasks))
+        rendered = "".join(callbacks.records)
+        self.assertIn("turn was interrupted", rendered)
+        self.assertNotIn(private, rendered)
 
     def test_runner_starts_with_lifecycle_and_closes_residual_work_before_backend(
         self,

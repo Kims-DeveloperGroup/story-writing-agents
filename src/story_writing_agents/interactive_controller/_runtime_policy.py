@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..conversation_retrieval import (
+    ConversationRagAttemptOutcome,
     ConversationRetrievalProgressEvent,
     ConversationRetrievalProgressPhase,
     ConversationRetrievalResult,
@@ -596,6 +597,26 @@ def validate_conversation_retrieval_progress(
     return canonical
 
 
+def _canonical_retrieval_source(value: object) -> ConversationRetrievalSource:
+    """Deeply reconstruct one exact retrieval source without external work."""
+
+    if type(value) is not ConversationRetrievalSource:
+        raise TypeError("retrieval result source is invalid")
+    citation = value.citation
+    if type(citation) is not ConversationCitation:
+        raise TypeError("retrieval result citation is invalid")
+    return ConversationRetrievalSource(
+        subject=value.subject,
+        citation=ConversationCitation(
+            session_id=citation.session_id,
+            conversation_id=citation.conversation_id,
+            turn_id=citation.turn_id,
+            sequence=citation.sequence,
+            event_kind=citation.event_kind,
+        ),
+    )
+
+
 def validate_conversation_retrieval_result(
     value: object,
     *,
@@ -606,10 +627,11 @@ def validate_conversation_retrieval_result(
 ) -> ConversationRetrievalResult:
     """Return one exact correlated result after pure deep reconstruction.
 
-    Sources and citations are copied into exact built-in contracts, progress
-    must end on a completed pair when present, and its turn must match the
-    result. No output, provider state, controller state, or transcript is
-    mutated; invalid collaborator values raise ``TypeError`` or ``ValueError``.
+    Sources, RAG provenance, and citations are copied into exact built-in
+    contracts. Sources outside the preflight-authorized RAG subset require
+    progress ending on a completed pair whose turn matches the result. No
+    output, provider state, controller state, or transcript is mutated; invalid
+    collaborator values raise ``TypeError`` or ``ValueError``.
     """
 
     if type(value) is not ConversationRetrievalResult:
@@ -618,22 +640,19 @@ def validate_conversation_retrieval_result(
     if type(value.sources) is not tuple:
         raise TypeError("retrieval result sources must be a tuple")
     for source in value.sources:
-        if type(source) is not ConversationRetrievalSource:
-            raise TypeError("retrieval result source is invalid")
-        citation = source.citation
-        if type(citation) is not ConversationCitation:
-            raise TypeError("retrieval result citation is invalid")
-        sources.append(
-            ConversationRetrievalSource(
-                subject=source.subject,
-                citation=ConversationCitation(
-                    session_id=citation.session_id,
-                    conversation_id=citation.conversation_id,
-                    turn_id=citation.turn_id,
-                    sequence=citation.sequence,
-                    event_kind=citation.event_kind,
-                ),
-            )
+        sources.append(_canonical_retrieval_source(source))
+    rag_sources: list[ConversationRetrievalSource] = []
+    if type(value.rag_sources) is not tuple:
+        raise TypeError("retrieval result RAG sources must be a tuple")
+    for source in value.rag_sources:
+        rag_sources.append(_canonical_retrieval_source(source))
+    rag_outcome: ConversationRagAttemptOutcome | None = None
+    if value.rag_outcome is not None:
+        if type(value.rag_outcome) is not ConversationRagAttemptOutcome:
+            raise TypeError("retrieval result RAG outcome is invalid")
+        rag_outcome = ConversationRagAttemptOutcome(
+            outcome=value.rag_outcome.outcome,
+            reason=value.rag_outcome.reason,
         )
     canonical = ConversationRetrievalResult(
         session_id=value.session_id,
@@ -644,6 +663,8 @@ def validate_conversation_retrieval_result(
         context=value.context,
         sources=tuple(sources),
         reference_operation_id=value.reference_operation_id,
+        rag_outcome=rag_outcome,
+        rag_sources=tuple(rag_sources),
     )
     if (
         canonical.session_id != expected_session_id
@@ -656,7 +677,10 @@ def validate_conversation_retrieval_result(
             canonical.reference_operation_id,
             session_id=expected_session_id,
         )
-    if canonical.sources and not progress_events:
+    rag_source_set = set(canonical.rag_sources)
+    if any(
+        source not in rag_source_set for source in canonical.sources
+    ) and not progress_events:
         raise ValueError("retrieval sources require completed search progress")
     if progress_events:
         final_progress = progress_events[-1]

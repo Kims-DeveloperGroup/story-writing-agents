@@ -9,9 +9,11 @@
 > available through direct Python modules and as an explicitly selected
 > next-shell bundle. Provider-free storage commands can select desired storage
 > or migrate and verify two already-ready stores in one workspace.
-> Optional conversation RAG has a separate direct-Python disposable generation
-> store and an injectable runtime authorization/projection path; no CLI or
-> settings path selects it yet.
+> Optional conversation RAG has a separate disposable generation store, an
+> injectable runtime authorization/projection path, persisted default-disabled
+> local provider/automatic values, and noninteractive lifecycle/search
+> commands. Interactive `/settings` persists next-shell selection, while the
+> controller retains any armed one-turn query only in process memory.
 > `StoryRuntime` creates and finalizes reference evidence for inline referenced
 > operations; Python callers can inspect it by operation ID.
 
@@ -36,7 +38,9 @@ provisioning nor migration alone selects runtime authority.
 | Canonical conversation archive value and bytes | `conversation_storage.archive`; caller owns any stored or transmitted bytes |
 | Same-workspace conversation migration and checkpoints | `conversation_storage.migration`; canonical archive adapters remain the data boundary |
 | Desired storage, readiness, and startup activation | Configuration owns desired value; `conversation_storage.selection` owns preparation/parity and next-shell marker CAS |
-| Disposable conversation RAG generations | `conversation_rag_store`; derived per-session state only, never conversation authority; an injected runtime service schedules and verifies use through its application-owned state port |
+| Disposable conversation RAG generations | `conversation_rag_store`; derived per-session state only, never conversation authority; the local composition or an injected runtime service schedules and verifies use through an explicit state port |
+| Conversation RAG opt-in defaults and CLI reports | Configuration owns nullable provider/exact automatic values; `conversation_rag_cli` owns complete noninteractive CAS workflows and ephemeral schema-v1 reports; interactive Settings reuses its guarded configuration transaction |
+| Pending one-turn RAG query | Controller memory only; exact session/conversation scope, never configuration or transcript persistence |
 | Bounded runtime diagnostics | Internal `debug_log` writer |
 | Retrieval actions, observations, progress, sources | Process/terminal only |
 | Current conversation and agent focus | Controller memory only |
@@ -172,10 +176,20 @@ does not remove the session locks/directories or touch authoritative
 conversations, storage activation, configuration, SQLite, manuscripts,
 artifacts, provider state, or another RAG session. Derived state remains
 rebuildable from separately authorized authoritative sources through the
-programmatic `conversation_rag_runtime` orchestration. See the
+programmatic `conversation_rag_runtime` orchestration or confirmed CLI rebuild.
+
+`story rag status` is observational across configuration, the persisted active
+conversation backend, and this derived subtree. It uses a bounded optimistic
+double read and creates no storage coordinator lock, RAG directory, or rewritten
+configuration. Confirmed rebuild holds the authoritative mutation lease across
+target construction, derived publication, and final target revalidation. Search
+may activate an already-ready desired authoritative backend but does not write a
+generation; purge consults no authoritative backend. Enable/disable modify only
+the canonical system-default configuration through exact-byte compare-and-set.
+See the
 [direct API](../reference/package-api.md#optional-conversation-rag-boundary),
 [filesystem guarantees](../operations/filesystem-safety.md#conversation-rag-generation-store-safety),
-and [current runtime/planned user workflow](../guides/conversation-rag.md).
+and [current commands, runtime, and interactive workflow](../guides/conversation-rag.md).
 
 <a id="optional-sqlite-conversation-persistence"></a>
 

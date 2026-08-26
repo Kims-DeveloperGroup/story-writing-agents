@@ -682,6 +682,22 @@ def _compose_active_services(
     return compose_sqlite_conversation_storage(workspace)
 
 
+def compose_active_conversation_storage(
+    workspace: Workspace,
+    /,
+) -> ConversationStorageServices:
+    """Read-only compose the persisted active backend after optimistic recheck."""
+
+    topology = _SelectionTopology.capture(workspace)
+    operation_workspace = topology.workspace()
+    before = load_conversation_storage_activation_state(operation_workspace)
+    services = _compose_active_services(operation_workspace, before.backend)
+    after = load_conversation_storage_activation_state(operation_workspace)
+    if before != after or services.backend is not after.backend:
+        raise ConversationStorageCoordinationError()
+    return services
+
+
 def activate_configured_conversation_storage(
     workspace: Workspace,
     *,
@@ -748,5 +764,6 @@ __all__ = [
     "ConversationStorageStartup",
     "inspect_conversation_storage_parity",
     "select_conversation_storage",
+    "compose_active_conversation_storage",
     "activate_configured_conversation_storage",
 ]

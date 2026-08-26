@@ -5,7 +5,7 @@
 > archive additions to the supported `story_writing_agents.conversation_storage`
 > subpackage, pure literal-search mechanics, and the optional SQLite owning
 > modules plus direct-only conversation migration, provisioning, and selection;
-> optional conversation RAG also uses five supported direct modules, with the
+> optional conversation RAG also uses seven supported direct modules, with the
 > generic adapter available only through its pinned extra. None is a
 > package-root facade export. Context and progress types are Python
 > APIs; an export does not imply a CLI command.
@@ -159,8 +159,11 @@ See [Conversation search](conversation-search.md#search-contract).
 > contracts, deterministic local provider, disposable generation store, generic
 > adapter, and explicit local composition. Issue #263 adds the direct
 > provider/store-neutral runtime service and its additive `StoryRuntime`
-> integration. No RAG CLI command, `/rag`, or `/settings` field exists yet;
-> existing literal `/search` is unchanged.
+> integration. Issue #348 adds concrete local runtime composition, persisted
+> default-disabled provider/automatic fields, and six noninteractive lifecycle
+> and authorized-search workflows. Issue #349 adds `/settings` RAG editors,
+> next-shell local/automatic composition, private one-turn `/rag QUERY`, and
+> exact RAG-source provenance; existing literal `/search` is unchanged.
 
 Provider-neutral story contracts live in
 `story_writing_agents.conversation_rag`. The module imports only the standard
@@ -379,7 +382,7 @@ derived source-map file contains plaintext fragments. See
 [Persistence](../design/persistence.md#optional-conversation-rag-derived-persistence)
 and [Filesystem safety](../operations/filesystem-safety.md#conversation-rag-generation-store-safety).
 
-Deferred composition is safe to import without `generic-rag` and exports six
+Deferred composition is safe to import without `generic-rag` and exports ten
 names:
 
 ```python
@@ -388,8 +391,12 @@ from story_writing_agents.conversation_rag_composition import (
     ConversationRagCompositionError,
     ConversationRagCompositionFailure,
     LocalConversationRagComposition,
+    LocalConversationRagRuntimeComposition,
+    LocalConversationRagRuntimeState,
     compose_conversation_rag,
     compose_local_conversation_rag,
+    compose_local_conversation_rag_runtime,
+    inspect_conversation_rag_compatibility,
 )
 ```
 
@@ -418,18 +425,44 @@ storage/provider state also returns `literal_fallback` with a fixed content-free
 reason. A missing or incompatible optional package at initial composition
 raises the sanitized composition error before store I/O.
 
-The separate runtime boundary is direct-module-only and exports exactly seven
+`inspect_conversation_rag_compatibility(provider, /)` runs the same fixed
+allowlist, installed-version, deferred adapter-import, and capability checks
+without constructing a service. `LocalConversationRagRuntimeState(store)` is
+the concrete local adapter for the provider-neutral runtime-state port; it binds
+the store's workspace key and fixed embedding identity, inspects against the
+runtime projection schema, and can mark one session stale.
+
+```python
+compose_local_conversation_rag_runtime(
+    workspace: Workspace,
+    /,
+    *,
+    automatic_enabled: bool = False,
+) -> LocalConversationRagRuntimeComposition
+```
+
+That convenience composition constructs and retains one generation store,
+local runtime-state adapter, and `ConversationRagRuntimeService`; its result
+exposes exact `service`, `store`, and `state` fields. It uses an explicit empty
+low-level lexical collaborator because the runtime authorization layer owns
+authoritative literal fusion. The call validates the optional package and
+capabilities but performs no projection and reads or writes no configuration.
+
+The separate runtime boundary is direct-module-only and exports exactly ten
 names:
 
 ```python
 from story_writing_agents.conversation_rag_runtime import (
     CONVERSATION_RAG_RUNTIME_POLICY,
     CONVERSATION_RAG_RUNTIME_SCHEMA_ID,
+    ConversationRagRuntimeInspection,
+    ConversationRagRuntimeInspectionStatus,
     ConversationRagRuntimeError,
     ConversationRagRuntimePolicy,
     ConversationRagRuntimeService,
     ConversationRagRuntimeState,
     ConversationRagRuntimeStateSnapshot,
+    inspect_authorized_conversation_rag,
 )
 ```
 
@@ -463,6 +496,12 @@ service.preflight(
     *,
     forced_query: str | None = None,
 ) -> ConversationRagContext | None
+service.search_authorized(
+    conversation_storage_services: ConversationStorageServices,
+    session_id: str,
+    query: str,
+    /,
+) -> ConversationRagContext
 service.project_authorized(
     conversation_storage_services: ConversationStorageServices,
     session_id: str,
@@ -470,28 +509,44 @@ service.project_authorized(
     *,
     rebuild: bool = False,
 ) -> ConversationRagProjectionResult
+inspect_authorized_conversation_rag(
+    conversation_storage_services: ConversationStorageServices,
+    state_port: ConversationRagRuntimeState,
+    session_id: str,
+    /,
+) -> ConversationRagRuntimeInspection
 ```
 
 The application-owned `ConversationRagRuntimeState` port supplies
 `workspace_key`, `embedding`, synchronous
 `inspect_projection_state(session_id)`, and synchronous
-`mark_projection_stale(session_id)`. This release supplies the protocol, not a
-settings-owned factory or a public store-to-state adapter. The runtime service
-owns authorization and orchestration, but no authoritative store, generation
-store, provider lifecycle, settings, network, or credentials.
+`mark_projection_stale(session_id)`. The composition module supplies the
+fixed-local concrete adapter described above; applications may still implement
+the provider-neutral protocol. There is no interactive settings-owned factory.
+The runtime service owns authorization and orchestration, but no authoritative
+store, generation store, provider lifecycle, settings, network, or credentials.
 
 Only active conversations and complete visible user/reply pairs enter the
 fixed projection. Each document contains exact `Subject`, `User`, and addressed
 `Agent` framing; fixed length-framed SHA-256 domains bind its session,
 conversation, turn, metadata revision, event values, and source text.
-Projection holds one bounded conversation-storage mutation lease while it
-enumerates the target, then verifies the published checkpoint and repeats the
-authoritative read to reject drift. Preflight performs active-only literal
-search, uses semantic state only when ready, rereads the complete current target
-under the same authority, drops provider text, validates every stable reference
+Projection holds one bounded conversation-storage mutation lease across target
+enumeration, provider/generation work, publication, persisted-checkpoint
+verification, and the repeated authoritative read that rejects drift. Preflight
+performs active-only literal search, uses semantic state only when ready, and
+rereads the complete current target under the same authority. It drops provider
+text, validates every stable reference
 and range, keeps literal candidates first, and retains at most one excerpt per
 document within the fixed budgets. Ordinary boundary failures are content-free;
 process-control exceptions propagate.
+
+`search_authorized()` forces one preflight with the supplied query and ignores
+the service's automatic policy. `inspect_authorized_conversation_rag()` is a
+separate no-write optimistic comparison: it reads indexed state, the complete
+authorized target twice, and indexed state again, rejects drift, and returns
+status `missing`, `ready`, `stale`, `failed`, `corrupt`, or `incompatible` plus
+content-free checkpoints/counts and `rebuild_required`. It acquires no mutation
+lease and creates no storage lock or RAG path.
 
 The additive runtime-owned provider values remain direct-module-only from
 `story_writing_agents.conversation_retrieval`:
@@ -506,12 +561,52 @@ Attempted contexts use contiguous `g1` through `g20` citation IDs and expose
 authoritative excerpt text only through the explicit provider dictionary;
 dataclass representations omit it. `ConversationRetrievalRequest.rag_context`
 and `ConversationRetrievalResult.rag_outcome` are additive and default to
-`None`. None of the three RAG values joins the unchanged 120-name package-root
-facade.
+`None`; `ConversationRetrievalResult.rag_sources` is an additive empty-tuple
+default and exact ordered subset of result sources. None of these direct-module
+RAG values joins the unchanged 120-name package-root facade.
+
+The command-domain boundary is direct-module-only and exports exactly seven
+names:
+
+```python
+from story_writing_agents.conversation_rag_cli import (
+    CONVERSATION_RAG_CLI_SCHEMA_VERSION,
+    ConversationRagCliFailure,
+    ConversationRagCliOperation,
+    ConversationRagCliReport,
+    ConversationRagCliRequest,
+    ConversationRagCliState,
+    dispatch_conversation_rag,
+)
+```
+
+The schema version is `1`; operations are `status`, `enable`, `rebuild`,
+`search`, `disable`, and `purge`; states are `disabled`, `unavailable`,
+`missing`, `ready`, `stale`, `failed`, `corrupt`, and `incompatible`.
+`ConversationRagCliRequest` is frozen/slotted and hides its optional query from
+representation. The direct workflow signature is:
+
+```python
+dispatch_conversation_rag(
+    workspace: Workspace,
+    request: ConversationRagCliRequest,
+    /,
+    *,
+    conversation_storage_services: ConversationStorageServices | None = None,
+) -> ConversationRagCliReport
+```
+
+It returns one frozen report and sanitizes ordinary boundary failures;
+process-control exceptions propagate. The CLI
+adapter, rather than this dispatch function, resolves workspace/default-session
+scope and activates configured authoritative storage for confirmed rebuild or
+search. Report fields, failure vocabulary, JSON, privacy, and exit behavior are
+the [conversation RAG CLI contract](cli.md#conversation-rag-operations).
 
 Installation, immutable-pin verification, caller ownership, the redistribution
-restriction, persistence boundary, current agent flow, and planned user flow
-are in [Optional conversation RAG](../guides/conversation-rag.md).
+restriction, persistence boundary, current agent/command flow, and planned
+interactive flow are in
+[Optional conversation RAG](../guides/conversation-rag.md).
 
 <a id="conversation-storage-subpackage"></a>
 
@@ -751,7 +846,7 @@ timeout, retry, privilege escalation, or automatic flag. `ensure_ready()`
 preflights and, only when absent, provisions one empty database under the
 caller's lease; it never installs host packages or migrates conversations.
 
-Selection exports exactly seven names:
+Selection exports exactly eight names:
 
 ```python
 from story_writing_agents.conversation_storage.selection import (
@@ -760,6 +855,7 @@ from story_writing_agents.conversation_storage.selection import (
     ConversationStorageSelectionReport,
     ConversationStorageStartup,
     activate_configured_conversation_storage,
+    compose_active_conversation_storage,
     inspect_conversation_storage_parity,
     select_conversation_storage,
 )
@@ -796,6 +892,10 @@ activate_configured_conversation_storage(
     configuration: ConfigurationSnapshot | None = None,
     mutation_timeout_seconds: float = 30.0,
 ) -> ConversationStorageStartup
+compose_active_conversation_storage(
+    workspace: Workspace,
+    /,
+) -> ConversationStorageServices
 ```
 
 `select_conversation_storage()` prepares readiness, optionally obtains explicit
@@ -821,6 +921,13 @@ bundle to its activation outcome. Pre-CAS failure preserves activation and
 does not fall back; later unrelated shell failure does not undo a successful
 CAS. Neither workflow imports migration, consumes its report/checkpoint, deletes
 a source, or establishes live switching or dual write.
+
+`compose_active_conversation_storage()` is the read-only active-backend seam.
+It reads the persisted activation state, composes that exact ready filesystem
+or SQLite bundle, and repeats the activation read; drift or a backend mismatch
+raises the existing coordination failure. It does not consult desired
+configuration, acquire/create the mutation lock, provision, migrate, or advance
+activation. Conversation-RAG status uses this seam to remain truly no-write.
 
 <a id="optional-sqlite-conversation-storage"></a>
 
@@ -1207,7 +1314,7 @@ aliases. See [Backend and sessions](backend-and-sessions.md#lifecycle-value-cont
 - [Canonical conversation archives and storage migration](conversation-archives.md)
 - [Conversation search and cited transcript pages](conversation-search.md)
 - [Bounded conversation retrieval](conversation-retrieval.md)
-- [Optional conversation RAG setup and delivery plan](../guides/conversation-rag.md)
+- [Optional conversation RAG setup, commands, and interactive use](../guides/conversation-rag.md)
 - [Interactive command parser](interactive-command-parser.md)
 - [Identifiers and errors](configuration/identifiers-and-errors.md)
 
@@ -1222,6 +1329,7 @@ None is re-exported by the package-root or conversation-storage facade.
 The exact current inventories are package root `120`, conversation storage
 `64`, conversation search `13`, SQLite database owner `12`, SQLite adapter
 `14`, literal-search mechanics `6`, SQLite companion owner `5`, conversation
-migration `7`, provisioning `4`, selection `7`, conversation RAG contracts
+migration `7`, provisioning `4`, selection `8`, conversation RAG contracts
 `35`, generic RAG adapter `3`, local RAG provider `5`, RAG generation store `8`,
-and RAG composition `6`. The production module inventory is `74`.
+RAG composition `10`, RAG runtime `10`, and RAG CLI `7`. The production module
+inventory is `76`.

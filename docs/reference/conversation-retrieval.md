@@ -5,7 +5,10 @@
 > the optional conversation-RAG runtime service and force a preflight query.
 > Inline canonical references in either form are captured by `StoryRuntime` and
 > enforced through the optional `BoundAgent` reference coordinator before the
-> unchanged retrieval loop. RAG commands and `/settings` selection are deferred.
+> unchanged retrieval loop. Noninteractive `story rag search` exposes the same
+> bounded authorized excerpt/citation boundary without an agent. The shell
+> composes saved `/settings` policy at startup; Automatic On and private
+> one-turn `/rag QUERY` apply only to eligible focused advisory turns.
 
 Key terms: **retrieval turn**—one message, action loop, and answer; **action**—a
 correlated provider request; **observation**—authorized untrusted story data;
@@ -28,7 +31,9 @@ serialize_conversation_retrieval_observation(observation) -> str  # module only
 
 ConversationRetrievalRequest(*, session_id, conversation_id, turn_id, agent_id, content, context)
 ConversationRetrievalReply(*, session_id, conversation_id, turn_id, content, sources)
-ConversationRetrievalResult(*, session_id, conversation_id, turn_id, agent_id, content, context, sources)
+ConversationRetrievalResult(*, session_id, conversation_id, turn_id, agent_id,
+    content, context, sources, reference_operation_id=None,
+    rag_outcome=None, rag_sources=())
 ConversationRetrievalSource(*, subject, citation)
 ConversationRagAttemptOutcome(*, outcome, reason)
 ConversationRagExcerpt(*, citation_id, source, reference, content)
@@ -40,6 +45,8 @@ ConversationRetrievalProgressEvent(*, session_id, conversation_id, turn_id,
 ```
 
 Requests/results retain pre-turn context; replies/results carry ordered sources.
+`rag_sources` is the exact ordered preflight-authorized subset of result
+`sources`; it is empty when no such citation was selected.
 Value objects are frozen, slotted, and keyword-only. See [facade exports](package-api.md).
 
 Every action carries `kind`, three correlated IDs, and sequential `action_index`:
@@ -106,6 +113,15 @@ data, not instructions. The agent may cite those IDs in the same answer as
 later `s...` or `r...` sources; the runtime resolves all of them through its
 existing supplied-source authorization map.
 
+The final result preserves the content-free attempt in `rag_outcome` and the
+exact selected `g...` provenance in `rag_sources`. The latter must be an
+ordered subset of `sources` and requires an attempted outcome. An answer that
+cites only preflight-authorized RAG sources is valid without literal retrieval
+progress. Any `s...`/`r...`-derived source outside that subset still requires
+completed, turn-correlated search/read progress. Merely having a RAG outcome
+cannot authorize a foreign or unproved source; mixed answers satisfy both
+rules independently.
+
 Only active conversations and complete visible user/reply pairs participate.
 The runtime merges literal candidates first, accepts at most one semantic
 excerpt per current projected document, rejects provider text, and rereads the
@@ -122,6 +138,14 @@ content. When canonical writing-artifact references and RAG are both present,
 the separate reference prelude remains first, and the initial substantive
 payload carries both independently authorized contexts. Neither context appears
 on a continuation. The preflight itself adds no story-agent provider call.
+
+In the installed shell, Automatic Off leaves ordinary turns unchanged.
+Automatic On permits one such preflight on an eligible ordinary, `/say`, or
+routed `@agent` turn. `/rag QUERY` arms the next eligible turn without
+retrieving immediately or changing durable policy. Its private query is absent
+from the later provider payload and result; the story message itself remains
+the normal persisted user event. Debate and consensus do not enter this
+retrieval path.
 
 After a successful reply append, a configured runtime projects all current
 active complete visible turns under schema
@@ -184,6 +208,18 @@ synchronous sink returns `None`. Later observer failure stores a safe error.
   Sequence: N
   Kind: KIND
 ```
+
+An attempted shell RAG preflight adds one content-free record before the agent
+reply:
+
+```text
+[context] [completed]
+  Conversation RAG: complete|partial|literal_fallback
+  Reason: none|partial|disabled|unavailable|stale|corrupt|incompatible|failed
+```
+
+The cited sources remain the established source records after the reply.
+Neither the query nor excerpt body appears in this diagnostic presentation.
 
 These are the structured plain shapes; capable interactive output may add only
 fixed decorative ANSI, and `NO_COLOR` removes that decoration without changing

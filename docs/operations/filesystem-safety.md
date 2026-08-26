@@ -14,10 +14,11 @@
 > lease. Explicit next-shell filesystem/SQLite selection and optional direct
 > Python SQLite conversation storage use one workspace coordinator; SQLite has
 > its own fixed database, derived search companion, transaction, and sidecar
-> boundary. Direct Python conversation RAG also has a separate identity-bound,
-> disposable per-session generation store. An explicitly injected runtime
-> service can authorize and schedule its use; no shell or settings path selects
-> it yet.
+> boundary. Conversation RAG also has a separate identity-bound, disposable
+> per-session generation store. An explicitly injected runtime service or the
+> noninteractive local lifecycle/search commands can authorize and schedule its
+> use; interactive `/settings` persists next-shell policy, and startup composes
+> Local only beside a complete authoritative storage bundle.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -630,6 +631,17 @@ artifacts, provider state, or another session. Advisory locks coordinate only
 supported store participants; they are not authorization or protection against
 an actively hostile same-user process.
 
+The installed command adapter preserves those boundaries. `story rag status`
+uses a no-write optimistic active-storage composition and repeated authority,
+derived-state, and configuration reads; it creates neither the coordinator lock
+nor this subtree. Confirmed rebuild holds the authoritative storage mutation
+lease through target construction, derived publication, and final source
+revalidation. Search rereads every retained range from the freshly activated
+configured authority but writes no generation. Confirmed purge calls only this
+session-contained derived owner and does not activate or inspect authoritative
+storage. Enable/disable write only canonical configuration through its separate
+compare-and-set owner.
+
 Status/snapshot/error values and diagnostic records are content-free and do not
 include source or query text. The verified source-map file does contain derived
 plaintext fragments, so filesystem permissions do not replace workspace-level
@@ -638,7 +650,7 @@ injected runtime service reauthorizes stable references and rereads conversation
 bytes before use. See the
 [persistence design](../design/persistence.md#optional-conversation-rag-derived-persistence),
 [direct API](../reference/package-api.md#optional-conversation-rag-boundary),
-and [current/planned workflow](../guides/conversation-rag.md).
+and [current commands plus interactive workflow](../guides/conversation-rag.md).
 
 <a id="sqlite-conversation-storage-safety"></a>
 

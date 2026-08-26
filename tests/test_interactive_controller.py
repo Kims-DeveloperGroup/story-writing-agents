@@ -15,6 +15,7 @@ import unittest
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import get_type_hints
 from unittest import mock
 
@@ -45,6 +46,10 @@ from story_writing_agents.conversation_search import (
     ConversationSearchScope,
     ConversationTranscriptCursor,
     ConversationTranscriptPage,
+)
+from story_writing_agents.conversation_rag_composition import (
+    ConversationRagCompositionError,
+    ConversationRagCompositionFailure,
 )
 from story_writing_agents.conversation_storage import (
     CONVERSATION_STORAGE_ACTIVATION_STATE_PATH,
@@ -1153,6 +1158,7 @@ class ControllerContractTests(ControllerTestCase):
                 "backend",
                 "cli_context",
                 "conversation_retrieval",
+                "conversation_rag_composition",
                 "conversation_search",
                 "conversation_storage.contracts",
                 "conversation_storage.selection",
@@ -1443,8 +1449,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 75)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 288)
+        self.assertEqual(len(modules), 76)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 307)
         self.assertTrue(
             {
                 "story_writing_agents.conversation_storage.archive",
@@ -1454,6 +1460,7 @@ class ControllerContractTests(ControllerTestCase):
                 "story_writing_agents.conversation_storage.sqlite",
                 "story_writing_agents.conversation_storage.sqlite_search_index",
                 "story_writing_agents.conversation_literal_search",
+                "story_writing_agents.conversation_rag_cli",
                 "story_writing_agents.conversation_rag_runtime",
                 "story_writing_agents.provider_catalog",
             }
@@ -1699,6 +1706,202 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
 
 class ControllerStartupTests(ControllerTestCase):
     """Verify explicit, defaulted, confirmed, and failed startup paths."""
+
+    def test_disabled_rag_startup_skips_optional_composition_and_injects_none(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        storage = compose_filesystem_conversation_storage(workspace)
+        backend = self.make_backend(workspace)
+        before = _tree_snapshot(workspace.root)
+        runtime = SimpleNamespace()
+
+        with (
+            mock.patch.object(
+                controller_core_module,
+                "compose_local_conversation_rag_runtime",
+            ) as compose_rag,
+            mock.patch.object(
+                controller_core_module,
+                "StoryRuntime",
+                return_value=runtime,
+            ) as runtime_factory,
+        ):
+            controller, _backend, _callbacks = self.make_controller(
+                workspace,
+                backend=backend,
+                conversation_storage_services=storage,
+            )
+
+        compose_rag.assert_not_called()
+        runtime_factory.assert_called_once_with(
+            workspace,
+            backend,
+            conversation_storage_services=storage,
+            conversation_rag_service=None,
+        )
+        self.assertIs(controller._runtime, runtime)
+        self.assertFalse(controller._conversation_rag_startup_unavailable)
+        self.assertEqual(_tree_snapshot(workspace.root), before)
+
+    def test_local_rag_startup_composes_once_with_exact_automatic_policy(
+        self,
+    ) -> None:
+        for automatic in (False, True):
+            with self.subTest(automatic=automatic):
+                workspace = self.make_workspace()
+                state = settings_module.update_conversation_rag_provider(
+                    settings_module.load_settings_state(workspace),
+                    "local",
+                )
+                state = settings_module.update_conversation_rag_automatic(
+                    state,
+                    automatic,
+                )
+                settings_module.save_settings_state(workspace, state)
+                storage = compose_filesystem_conversation_storage(workspace)
+                backend = self.make_backend(workspace)
+                service = object()
+                runtime = SimpleNamespace()
+
+                with (
+                    mock.patch.object(
+                        controller_core_module,
+                        "compose_local_conversation_rag_runtime",
+                        return_value=SimpleNamespace(service=service),
+                    ) as compose_rag,
+                    mock.patch.object(
+                        controller_core_module,
+                        "StoryRuntime",
+                        return_value=runtime,
+                    ) as runtime_factory,
+                ):
+                    controller, _backend, _callbacks = self.make_controller(
+                        workspace,
+                        backend=backend,
+                        conversation_storage_services=storage,
+                    )
+
+                compose_rag.assert_called_once_with(
+                    workspace,
+                    automatic_enabled=automatic,
+                )
+                runtime_factory.assert_called_once_with(
+                    workspace,
+                    backend,
+                    conversation_storage_services=storage,
+                    conversation_rag_service=service,
+                )
+                self.assertIs(controller._runtime, runtime)
+                self.assertFalse(controller._conversation_rag_startup_unavailable)
+
+    def test_unavailable_local_rag_warns_safely_and_keeps_settings_usable(
+        self,
+    ) -> None:
+        failures = (
+            ConversationRagCompositionFailure.DEPENDENCY_MISSING,
+            ConversationRagCompositionFailure.CAPABILITY_INCOMPATIBLE,
+        )
+        for failure in failures:
+            with self.subTest(failure=failure):
+                workspace = self.make_workspace()
+                state = settings_module.update_conversation_rag_provider(
+                    settings_module.load_settings_state(workspace),
+                    "local",
+                )
+                settings_module.save_settings_state(workspace, state)
+                defaults_path = workspace.path("config/system_defaults.json")
+                defaults_before = defaults_path.read_bytes()
+                storage = compose_filesystem_conversation_storage(workspace)
+                backend = self.make_backend(workspace)
+                callbacks = ScriptedTerminalCallbacks("/settings", "8", "/quit")
+                terminal = InteractiveTerminal(
+                    callbacks.read_line,
+                    callbacks.write_text,
+                    width=200,
+                )
+                raw_secret = "raw-optional-provider-secret"
+                composition_error = ConversationRagCompositionError(failure)
+                composition_error.__cause__ = RuntimeError(raw_secret)
+
+                with (
+                    mock.patch.object(
+                        controller_core_module,
+                        "compose_local_conversation_rag_runtime",
+                        side_effect=composition_error,
+                    ) as compose_rag,
+                    mock.patch.object(
+                        controller_core_module,
+                        "StoryRuntime",
+                        return_value=SimpleNamespace(),
+                    ),
+                ):
+                    controller = InteractiveController(
+                        workspace,
+                        load_cli_context(workspace),
+                        backend,
+                        terminal,
+                        conversation_storage_services=storage,
+                    )
+                    self.assertEqual(controller.run_session_lobby(), 0)
+
+                compose_rag.assert_called_once_with(
+                    workspace,
+                    automatic_enabled=False,
+                )
+                rendered = "".join(callbacks.records)
+                warning = (
+                    "Conversation RAG is unavailable for this shell. Verify the "
+                    "pinned rag extra and restart; settings remain available and "
+                    "configuration was not changed."
+                )
+                self.assertEqual(rendered.count(warning), 1)
+                self.assertNotIn(raw_secret, rendered)
+                self.assertIn("Settings", "".join(callbacks.prompts))
+                self.assertEqual(defaults_path.read_bytes(), defaults_before)
+
+    def test_legacy_catalog_path_never_composes_configured_local_rag(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        state = settings_module.update_conversation_rag_provider(
+            settings_module.load_settings_state(workspace),
+            "local",
+        )
+        settings_module.save_settings_state(workspace, state)
+        defaults_before = workspace.path("config/system_defaults.json").read_bytes()
+        catalog = MemoryConversationCatalog()
+        runtime = SimpleNamespace()
+
+        with (
+            mock.patch.object(
+                controller_core_module,
+                "compose_local_conversation_rag_runtime",
+            ) as compose_rag,
+            mock.patch.object(
+                controller_core_module,
+                "StoryRuntime",
+                return_value=runtime,
+            ),
+        ):
+            controller, _backend, callbacks = self.make_controller(
+                workspace,
+                "/settings",
+                "8",
+                "/quit",
+                conversation_catalog=catalog,
+                terminal_width=200,
+            )
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        compose_rag.assert_not_called()
+        rendered = "".join(callbacks.records)
+        self.assertEqual(rendered.count("Conversation RAG is unavailable"), 1)
+        self.assertIn("Settings", "".join(callbacks.prompts))
+        self.assertEqual(
+            workspace.path("config/system_defaults.json").read_bytes(),
+            defaults_before,
+        )
 
     def test_unselected_lobby_is_read_only(self) -> None:
         workspace = self.make_workspace()
@@ -3367,6 +3570,95 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertEqual(instruction.count(self.VALUE_SAVE_GUIDANCE), 1)
         self.assertTrue(instruction.endswith(self.VALUE_SAVE_GUIDANCE))
 
+    def test_rag_provider_and_automatic_save_as_one_unprobed_transaction(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        storage = compose_filesystem_conversation_storage(workspace)
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "/settings",
+            "5",
+            "1",
+            "2",
+            "2",
+            "2",
+            "2",
+            "2",
+            "/cancel",
+            "7",
+            "1",
+            "/quit",
+            conversation_storage_services=storage,
+            terminal_width=180,
+        )
+
+        with (
+            mock.patch.object(
+                controller_core_module,
+                "compose_local_conversation_rag_runtime",
+            ) as compose_rag,
+            mock.patch.object(subprocess, "Popen") as popen,
+            mock.patch.object(subprocess, "run") as run,
+            mock.patch.object(socket, "create_connection") as connect,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        compose_rag.assert_not_called()
+        popen.assert_not_called()
+        run.assert_not_called()
+        connect.assert_not_called()
+        persisted = settings_module.load_settings_state(workspace).pending
+        self.assertEqual(persisted.system_defaults.conversation_rag_provider, "local")
+        self.assertTrue(persisted.system_defaults.conversation_rag_automatic)
+        prompts = "".join(callbacks.prompts)
+        self.assertIn("Current: Provider Disabled; Automatic Off", prompts)
+        self.assertIn("Pending: Provider Local; Automatic On", prompts)
+        rendered = "".join(callbacks.records)
+        self.assertEqual(rendered.count("Settings saved"), 1)
+
+    def test_rag_provider_and_automatic_cancel_discards_exact_bytes(self) -> None:
+        workspace = self.make_workspace()
+        storage = compose_filesystem_conversation_storage(workspace)
+        defaults_path = workspace.path("config/system_defaults.json")
+        agents_path = workspace.path("config/agent_configs.json")
+        before = (defaults_path.read_bytes(), agents_path.read_bytes())
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "/settings",
+            "5",
+            "1",
+            "2",
+            "2",
+            "2",
+            "2",
+            "2",
+            "/cancel",
+            "8",
+            "1",
+            "/quit",
+            conversation_storage_services=storage,
+            terminal_width=180,
+        )
+
+        with mock.patch.object(
+            controller_core_module,
+            "compose_local_conversation_rag_runtime",
+        ) as compose_rag:
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        compose_rag.assert_not_called()
+        self.assertEqual(
+            (defaults_path.read_bytes(), agents_path.read_bytes()),
+            before,
+        )
+        persisted = settings_module.load_settings_state(workspace).pending
+        self.assertIsNone(persisted.system_defaults.conversation_rag_provider)
+        self.assertFalse(persisted.system_defaults.conversation_rag_automatic)
+        rendered = "".join(callbacks.records)
+        self.assertEqual(rendered.count("Pending changes discarded"), 1)
+        self.assertNotIn("Settings saved", rendered)
+
     @staticmethod
     def expected_pending_save_notice() -> terminal_module.Notice:
         return terminal_module.Notice(
@@ -3389,6 +3681,18 @@ class ControllerSettingsTests(ControllerTestCase):
                 (
                     "Conversation storage",
                     defaults.conversation_storage_backend or "filesystem",
+                ),
+                (
+                    "Conversation RAG provider",
+                    (
+                        "Local"
+                        if defaults.conversation_rag_provider == "local"
+                        else "Disabled"
+                    ),
+                ),
+                (
+                    "Conversation RAG automatic",
+                    "On" if defaults.conversation_rag_automatic else "Off",
                 ),
             ]
             for agent_id in ROSTER:
@@ -3504,14 +3808,14 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(
             workspace,
             "/settings",
-            "5",
+            "6",
             "2",
             "1",
             "2",
             "/cancel",
             "/cancel",
             "/cancel",
-            "6",
+            "7",
             "1",
             "/quit",
             auth_coordinator=coordinator,
@@ -3568,14 +3872,14 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(
             workspace,
             "/settings",
-            "5",
+            "6",
             "2",
             "1",
             "2",
             "/cancel",
             "/cancel",
             "/cancel",
-            "7",
+            "8",
             "1",
             "/quit",
             auth_coordinator=coordinator,
@@ -3661,7 +3965,7 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(
             workspace,
             "/settings",
-            "5",
+            "6",
             "2",
             "1",
             "1",
@@ -3670,7 +3974,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "1",
             "/cancel",
             "/cancel",
-            "7",
+            "8",
             "1",
             "/quit",
             auth_coordinator=coordinator,
@@ -3718,7 +4022,7 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(
             workspace,
             "/settings",
-            "5",
+            "6",
             "2",
             "1",
             "1",
@@ -3727,7 +4031,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "1",
             "/cancel",
             "/cancel",
-            "7",
+            "8",
             "1",
             "/quit",
             auth_coordinator=coordinator,
@@ -3834,7 +4138,7 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(
             workspace,
             "/settings",
-            "6",
+            "7",
             "1",
             "/quit",
             auth_coordinator=coordinator,
@@ -3866,9 +4170,9 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(
             second_workspace,
             "/settings",
-            "6",
-            "1",
             "7",
+            "1",
+            "8",
             "1",
             "/quit",
             auth_coordinator=coordinator,
@@ -3981,6 +4285,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "Current: default_kim_eun_hee",
                     "Current: 1",
                     "Current: filesystem",
+                    "Current: Provider Disabled; Automatic Off",
                     None,
                     None,
                     None,
@@ -3990,6 +4295,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "Current: default_kim_eun_hee",
                     "Current: 1",
                     "Current: filesystem",
+                    "Current: Provider Disabled; Automatic Off",
                     None,
                     None,
                     "Pending changes will be discarded.",
@@ -3999,6 +4305,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "Current: default_kim_eun_hee",
                     "Current: 1",
                     "Current: filesystem",
+                    "Current: Provider Disabled; Automatic Off",
                     None,
                     None,
                     None,
@@ -4154,7 +4461,7 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertIn("codex(Changed)", compact)
         self.assertIn("pending-codex-model(Changed)", compact)
 
-    def test_settings_open_is_exact_seven_item_discovery_free_snapshot(self) -> None:
+    def test_settings_open_is_exact_eight_item_discovery_free_snapshot(self) -> None:
         workspace = self.make_workspace()
         before = _tree_snapshot(workspace.root)
         catalog = ScriptedProviderCatalog(
@@ -4166,7 +4473,7 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, backend, callbacks = self.make_controller(
             workspace,
             "/settings",
-            "7",
+            "8",
             "/quit",
             provider_catalog=catalog,
             terminal_width=120,
@@ -4204,14 +4511,15 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertIsNone(settings_call.kwargs["notice"])
         self.assertEqual(
             callbacks.prompts[1],
-            "Choices (highlighted 1/7) [open]\n"
+            "Choices (highlighted 1/8) [open]\n"
             "  1. [highlighted] Language — Current: KO\n"
             "  2. [available] Persona — Current: default_kim_eun_hee\n"
             "  3. [available] Maximum debate rounds — Current: 1\n"
             "  4. [available] Conversation storage — Current: filesystem\n"
-            "  5. [available] Agents\n"
-            "  6. [available] Save\n"
-            "  7. [available] Cancel\n"
+            "  5. [available] Conversation RAG — Current: Provider Disabled; Automatic Off\n"
+            "  6. [available] Agents\n"
+            "  7. [available] Save\n"
+            "  8. [available] Cancel\n"
             "[input] Enter a choice number, press Enter for the highlighted choice, or enter /cancel.\n"
             "Choose a setting to edit, save, or cancel.\n"
             "Settings > ",
@@ -4223,6 +4531,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 "persona",
                 "max_debate_rounds",
                 "conversation_storage",
+                "conversation_rag",
                 "providers",
                 "save",
                 "cancel",
@@ -4235,6 +4544,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 "Persona",
                 "Maximum debate rounds",
                 "Conversation storage",
+                "Conversation RAG",
                 "Agents",
                 "Save",
                 "Cancel",
@@ -4247,6 +4557,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 "Current: default_kim_eun_hee",
                 "Current: 1",
                 "Current: filesystem",
+                "Current: Provider Disabled; Automatic Off",
                 None,
                 None,
                 None,
@@ -4274,14 +4585,14 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, _callbacks = self.make_controller(
             workspace,
             "/settings",
-            "5",
+            "6",
             "2",
             "1",
             "1",
             "/cancel",
             "/cancel",
             "/cancel",
-            "7",
+            "8",
             "1",
             "/quit",
             provider_catalog=catalog,
@@ -5523,12 +5834,12 @@ class ControllerSettingsTests(ControllerTestCase):
         self,
     ) -> None:
         paths = {
-            "agents": ("5",),
-            "agent-settings": ("5", "2"),
-            "provider": ("5", "2", "1"),
-            "model": ("5", "2", "2"),
-            "effort": ("5", "2", "3"),
-            "custom-model": ("5", "2", "2", "3"),
+            "agents": ("6",),
+            "agent-settings": ("6", "2"),
+            "provider": ("6", "2", "1"),
+            "model": ("6", "2", "2"),
+            "effort": ("6", "2", "3"),
+            "custom-model": ("6", "2", "2", "3"),
         }
         for dirty in (False, True):
             for failure_type in (KeyboardInterrupt, EOFError):
@@ -5591,7 +5902,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "3",
             "0",
             "\x1b",
-            "6",
+            "7",
             "1",
             "/quit",
             terminal_width=120,
@@ -5664,7 +5975,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "1",
             "2",
             "/cancel",
-            "6",
+            "7",
             "1",
             "/quit",
             terminal_width=48,
@@ -5715,19 +6026,19 @@ class ControllerSettingsTests(ControllerTestCase):
         cases = (
             (
                 "save-no-then-clean-cancel",
-                ("/settings", "6", "2", "7", "/quit"),
+                ("/settings", "7", "2", "8", "/quit"),
                 1,
                 False,
                 0,
             ),
             (
                 "save-fallback-cancel-then-clean-cancel",
-                ("/settings", "6", "/cancel", "7", "/quit"),
+                ("/settings", "7", "/cancel", "8", "/quit"),
                 1,
                 False,
                 0,
             ),
-            ("clean-explicit-cancel", ("/settings", "7", "/quit"), 0, False, 0),
+            ("clean-explicit-cancel", ("/settings", "8", "/quit"), 0, False, 0),
             ("clean-root-escape", ("/settings", "/cancel", "/quit"), 0, False, 0),
             (
                 "clean-root-interrupt",
@@ -5750,9 +6061,9 @@ class ControllerSettingsTests(ControllerTestCase):
                     "1",
                     "2",
                     "/cancel",
-                    "7",
+                    "8",
                     "2",
-                    "7",
+                    "8",
                     "1",
                     "/quit",
                 ),
@@ -5769,7 +6080,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "/cancel",
                     "/cancel",
                     "/cancel",
-                    "7",
+                    "8",
                     "1",
                     "/quit",
                 ),
@@ -5784,7 +6095,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "1",
                     "2",
                     "/cancel",
-                    "7",
+                    "8",
                     KeyboardInterrupt(),
                     "/quit",
                 ),
@@ -5823,14 +6134,14 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
             (
                 "save-interrupt",
-                ("/settings", "6", KeyboardInterrupt(), "/quit"),
+                ("/settings", "7", KeyboardInterrupt(), "/quit"),
                 1,
                 False,
                 0,
             ),
             (
                 "save-eof",
-                ("/settings", "6", EOFError(), "/quit"),
+                ("/settings", "7", EOFError(), "/quit"),
                 1,
                 False,
                 0,
@@ -5936,21 +6247,21 @@ class ControllerSettingsTests(ControllerTestCase):
             "bad",
             "0",
             "\x1b",
-            "5",
+            "6",
             "2",
             "2",
             "3",
             "/cancel",
             "/cancel",
             "/cancel",
-            "5",
+            "6",
             "2",
             "3",
             "3",
             "/cancel",
             "/cancel",
             "/cancel",
-            "5",
+            "6",
             "2",
             "2",
             "4",
@@ -5959,7 +6270,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "/cancel",
             "/cancel",
             "/cancel",
-            "6",
+            "7",
             "1",
             "/quit",
             provider_catalog=catalog,
@@ -6062,14 +6373,14 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(
             workspace,
             "/settings",
-            "5",
+            "6",
             "2",
             "1",
             "2",
             "/cancel",
             "/cancel",
             "/cancel",
-            "5",
+            "6",
             "2",
             "2",
             "4",
@@ -6079,14 +6390,14 @@ class ControllerSettingsTests(ControllerTestCase):
             "/cancel",
             "/cancel",
             "/cancel",
-            "5",
+            "6",
             "2",
             "3",
             "4",
             "/cancel",
             "/cancel",
             "/cancel",
-            "6",
+            "7",
             "1",
             "/quit",
             provider_catalog=catalog,
@@ -6147,13 +6458,13 @@ class ControllerSettingsTests(ControllerTestCase):
             (
                 (
                     "/settings",
-                    "5",
+                    "6",
                     "2",
                     "2",
                     "/cancel",
                     "/cancel",
                     "/cancel",
-                    "7",
+                    "8",
                     "1",
                     "/quit",
                 ),
@@ -6198,7 +6509,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "4",
             "2",
             "2",
-            "6",
+            "7",
             "1",
             "/quit",
             terminal_width=160,
@@ -6241,9 +6552,9 @@ class ControllerSettingsTests(ControllerTestCase):
             "1",
             "2",
             "/cancel",
-            "6",
-            "1",
             "7",
+            "1",
+            "8",
             "1",
             "/quit",
             terminal_width=160,
@@ -6300,9 +6611,9 @@ class ControllerSettingsTests(ControllerTestCase):
                 controller, _backend, callbacks = self.make_controller(
                     workspace,
                     "/settings",
-                    "6",
-                    "1",
                     "7",
+                    "1",
+                    "8",
                     "1",
                     "/quit",
                     terminal_width=160,

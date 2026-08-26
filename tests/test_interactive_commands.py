@@ -77,6 +77,7 @@ COMMAND_NAMES = {
     "send": "/send",
     "cancel": "/cancel",
     "say": "/say",
+    "rag": "/rag",
     "to": "/to",
     "agent": "/to",
     "agents": "/agents",
@@ -101,6 +102,7 @@ COMMAND_NAMES = {
 }
 
 ACTION_FIELDS = (
+    "rag_query",
     "text",
     "agent_id",
     "argument",
@@ -112,6 +114,7 @@ ACTION_FIELDS = (
 )
 
 FIELD_SAMPLES = {
+    "rag_query": "private retrieval query",
     "text": "text",
     "agent_id": PLOT_ARCHITECT,
     "argument": "argument",
@@ -137,6 +140,7 @@ ACTION_RULES = {
     ActionKind.RUN: ({"text", "output_path"}, set()),
     ActionKind.RUN_FRESH: ({"text", "output_path"}, {"text"}),
     ActionKind.DRAFT_FILE: ({"argument", "output_path"}, {"argument"}),
+    ActionKind.RAG: ({"rag_query"}, {"rag_query"}),
     ActionKind.SEARCH: ({"text"}, {"text"}),
     ActionKind.TRANSCRIPT: (
         {"argument", "count", "start_sequence"},
@@ -230,6 +234,7 @@ class ParserAssertions:
         if suggestion is not _UNSPECIFIED:
             self.assertEqual(action.suggestion, suggestion)
         self.assertIsNone(action.text)
+        self.assertIsNone(action.rag_query)
         self.assertIsNone(action.agent_id)
         self.assertIsNone(action.argument)
         self.assertIsNone(action.count)
@@ -252,6 +257,7 @@ class ActionContractTests(unittest.TestCase):
             "RUN": "run",
             "RUN_FRESH": "run_fresh",
             "DRAFT_FILE": "draft_file",
+            "RAG": "rag",
             "SEARCH": "search",
             "TRANSCRIPT": "transcript",
             "INSPECT": "inspect",
@@ -431,11 +437,11 @@ class ActionContractTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             COMMANDS[0] = COMMANDS[0]  # type: ignore[index]
         with self.assertRaises(TypeError):
-            COMMANDS[4].aliases[0] = "/changed"  # type: ignore[index]
+            COMMANDS[5].aliases[0] = "/changed"  # type: ignore[index]
 
 
 class CommandRegistryTests(unittest.TestCase):
-    def test_registry_is_the_exact_ordered_twenty_two_row_contract(self) -> None:
+    def test_registry_is_the_exact_ordered_twenty_three_row_contract(self) -> None:
         expected = (
             CommandSpec("Conversation", "/compose", (), False, False, "/compose"),
             CommandSpec("Conversation", "/send", (), False, False, "/send"),
@@ -447,6 +453,14 @@ class CommandRegistryTests(unittest.TestCase):
                 True,
                 False,
                 "/say /run is literal text",
+            ),
+            CommandSpec(
+                "Conversation",
+                "/rag QUERY",
+                (),
+                False,
+                False,
+                "/rag council vessel",
             ),
             CommandSpec(
                 "Agents",
@@ -677,6 +691,13 @@ class SuccessfulParsingTests(unittest.TestCase):
                 InteractiveAction(ActionKind.DRAFT_FILE, argument="draft.md"),
             ),
             (
+                "/rag council vessel",
+                InteractiveAction(
+                    ActionKind.RAG,
+                    rag_query="council vessel",
+                ),
+            ),
+            (
                 "/search council vessel",
                 InteractiveAction(ActionKind.SEARCH, text="council vessel"),
             ),
@@ -818,6 +839,31 @@ class SuccessfulParsingTests(unittest.TestCase):
             for line, expected in cases:
                 with self.subTest(alias=alias, line=line):
                     self.assertEqual(parse_interactive_line(line), expected)
+
+    def test_rag_query_is_exact_bounded_alias_free_and_repr_private(self) -> None:
+        sentinel = "private-rag-query-${artifact}"
+        action = parse_interactive_line(f"/rag {sentinel}")
+        self.assertEqual(action.kind, ActionKind.RAG)
+        self.assertEqual(action.rag_query, sentinel)
+        self.assertIsNone(action.text)
+        self.assertNotIn(sentinel, repr(action))
+
+        maximum = "한" * 200
+        self.assertEqual(
+            parse_interactive_line(f"/rag {maximum}"),
+            InteractiveAction(ActionKind.RAG, rag_query=maximum),
+        )
+        for line in ("/rag", "/rag ", "/rag\t", f"/rag {'x' * 201}", "/rag bad\x1bquery"):
+            with self.subTest(line=repr(line)):
+                self.assertEqual(parse_interactive_line(line).kind, ActionKind.PARSE_ERROR)
+
+        rag_spec = next(spec for spec in COMMANDS if spec.syntax == "/rag QUERY")
+        self.assertEqual(rag_spec.aliases, ())
+        self.assertEqual(parse_interactive_line("/semantic query").kind, ActionKind.PARSE_ERROR)
+        self.assertEqual(
+            parse_interactive_line("/search council vessel"),
+            InteractiveAction(ActionKind.SEARCH, text="council vessel"),
+        )
 
     def test_command_aliases_and_help_references_normalize_to_canonical(
         self,
@@ -1417,7 +1463,7 @@ class PreservationAndPrecedenceTests(ParserAssertions, unittest.TestCase):
 class SuggestionTests(ParserAssertions, unittest.TestCase):
     def test_threshold_ties_case_and_candidate_namespaces_are_exact(self) -> None:
         cases = (
-            ("/rnx", "/run"),
+            ("/rnx", None),
             ("/ruunx", "/run"),
             ("/rxxxx", None),
             ("/agens", None),
@@ -1427,7 +1473,7 @@ class SuggestionTests(ParserAssertions, unittest.TestCase):
             ("@plto text", "@plot"),
             ("@plxxx text", None),
             ("@lat text", None),
-            ("/help rnx", "/run"),
+            ("/help rnx", None),
             ("/help agens", None),
             ("/session lest", "/session list"),
         )
@@ -1579,7 +1625,7 @@ class ParserBoundaryTests(unittest.TestCase):
             for node in ast.walk(tree)
             if isinstance(node, ast.ImportFrom) and node.level > 0
         }
-        self.assertEqual(internal_dependencies, {"agents"})
+        self.assertEqual(internal_dependencies, {"agents", "conversation_search"})
 
     def test_parsing_does_not_use_process_network_or_filesystem_writes(self) -> None:
         cwd_before = Path.cwd()
@@ -1656,6 +1702,7 @@ class CommandCompletionProjectionTests(unittest.TestCase):
 
     ROOT = (
         "/say",
+        "/rag",
         "/to",
         "/agent",
         "/agents",
@@ -1939,6 +1986,7 @@ class ProviderTextSpanProjectionTests(unittest.TestCase):
     def test_ineligible_commands_options_routes_and_inactive_cursors_are_none(self) -> None:
         cases = (
             ("/status", 7),
+            ("/rag private query", 8),
             ("/help ${x}", 9),
             ("/say revise", 2),
             ("@unknown revise", 10),
