@@ -1916,6 +1916,76 @@ print("RESULT=" + outcome.kind.value)
                     process.original_terminal_attributes,
                 )
 
+    def test_prefilled_prompt_live_controls_edit_and_restore_in_one_process(
+        self,
+    ) -> None:
+        """Exercise seeded Enter, editing, Escape, VINTR, and VEOF on a real PTY."""
+
+        source = r'''
+import json
+import sys
+
+from story_writing_agents.interactive_terminal import (
+    InteractivePromptInput,
+    Prompt,
+    build_stream_terminal,
+)
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+reader = InteractivePromptInput(terminal)
+results = []
+for label in ("Enter", "Edit", "Escape", "Interrupt", "EOF"):
+    outcome = reader.read_prompt(
+        Prompt(label, instruction="Keep or edit the current value."),
+        initial_value="seed",
+    )
+    text = outcome.text or ""
+    results.append([outcome.kind.value, text])
+    print(
+        "STEP=" + label + ":" + outcome.kind.value + ":" + text,
+        flush=True,
+    )
+print("RESULT=" + json.dumps(results, separators=(",", ":")))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=36,
+            decorative_color=True,
+        )
+
+        opened = process.wait_for_text("Enter >")
+        self.assertIn("Current value", opened)
+        self.assertIn("seed", opened)
+        process.send_line("")
+        process.wait_for_text("STEP=Enter:commit:seed")
+
+        process.wait_for_text("Edit >")
+        process.send_line("X")
+        process.wait_for_text("STEP=Edit:commit:seedX")
+
+        process.wait_for_text("Escape >")
+        process.send_text("\x1b")
+        process.wait_for_text("STEP=Escape:cancel:")
+
+        process.wait_for_text("Interrupt >")
+        process.send_interrupt()
+        process.wait_for_text("STEP=Interrupt:interrupt:")
+
+        process.wait_for_text("EOF >")
+        process.send_eof()
+        result = process.wait_for_text(
+            'RESULT=[["commit","seed"],["commit","seedX"],'
+            '["cancel",""],["interrupt",""],["eof",""]]'
+        )
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertIn("STEP=EOF:eof:", result)
+        self.assertIn("\x1b[J", result)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
     def test_live_accepted_input_follows_cleanup_once_and_restores(self) -> None:
         """Project one accepted message only after the capable frame is gone."""
 

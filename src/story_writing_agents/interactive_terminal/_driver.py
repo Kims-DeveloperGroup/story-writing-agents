@@ -1195,12 +1195,17 @@ class RawTerminalDriver:
             if rendered_input.width != observed_capabilities.width:
                 raise ValueError("rendered input width must match current capabilities")
             capabilities, configuration = self._prepare_input(observed_capabilities)
+            initial_state = (
+                LineInputState()
+                if view.initial_value is None
+                else LineInputState(view.initial_value, len(view.initial_value))
+            )
             try:
                 line = (
                     self._read_control_line(
                         rendered_input.plain_text,
                         _empty_suggestion_preview,
-                        LineInputState(),
+                        initial_state,
                         transition,
                         configuration=configuration,
                         rendered_input=rendered_input,
@@ -1225,6 +1230,8 @@ class RawTerminalDriver:
             raise ValueError("read_line must return one line without CR or LF")
         if line == "\x1b":
             return ControlOutcome(ControlOutcomeKind.CANCEL)
+        if line == "" and view.initial_value is not None:
+            line = view.initial_value
         return ControlOutcome(ControlOutcomeKind.COMMIT, text=line)
 
     def read_main_line(
