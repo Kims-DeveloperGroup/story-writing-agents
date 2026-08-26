@@ -99,10 +99,11 @@ line fallback. The driver observes bounded output width and height before the
 first viewer frame and after every nonexit key. It installs no `SIGWINCH`
 handler or background resize loop, and it never hides or shows the cursor.
 
-For startup storage activation, authenticated runtime preparation, advisory
-and consensus turns, and Settings option preparation, the same capability
-result also gates the narrow terminal-owned progress indicator. A capable raw
-stream may show the fixed
+For startup storage activation, authenticated runtime preparation, native
+authentication probes, persisted omitted-resume preparation, advisory and
+consensus turns, and Settings option preparation, the same capability result
+also gates the narrow terminal-owned progress indicator. A capable raw stream
+may show the fixed
 text-free eight-cell block-shade shimmer with a fixed ANSI color cycle;
 `NO_COLOR` preserves the same spatial motion without SGR.
 Callback construction and non-TTY, `TERM=dumb`, non-POSIX, missing, or
@@ -323,9 +324,11 @@ The same private indicator wraps one awaitable at a time and is not a semantic
 record, callback, status event, or general animation service. Startup uses it
 first for conversation-storage activation before the welcome, then for one
 continuous post-authentication span covering CLI-context, backend, and
-controller construction before the lobby. These spans add no text. Advisory,
-consensus, and Settings consumers retain their established boundaries. The raw
-driver owns the active row, advances the fixed shimmer cycle, serializes
+controller construction before the lobby. Native-status probes and persisted
+session/conversation reads before omitted resume pickers use the same lifecycle
+and add no text. Advisory, consensus, and Settings consumers retain their
+established boundaries. The raw driver owns the active row, advances the fixed
+shimmer cycle, serializes
 clear/redraw around semantic retrieval/progress or result writes, and creates
 no OS thread or import-time task. It joins both the operation and indicator
 tasks, then clears the row before final, cancellation, or error presentation;
