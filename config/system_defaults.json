@@ -1,4 +1,6 @@
 {
+  "conversation_rag_automatic": false,
+  "conversation_rag_provider": null,
   "language": "KO",
   "max_debate_rounds": 1,
   "persona": "default_kim_eun_hee"

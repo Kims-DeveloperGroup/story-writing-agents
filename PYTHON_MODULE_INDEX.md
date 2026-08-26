@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 75.
+Importable production units indexed: 76.
 
-Direct internal dependency edges indexed: 288.
+Direct internal dependency edges indexed: 305.
 
 ## Current Dependency Direction
 
@@ -26,7 +26,8 @@ The current graph flows from entry points and orchestration toward provider,
 configuration, prompt, persistence, and stable contract modules:
 
 ```text
-__main__ -> cli -> conversation_storage.migration/selection
+__main__ -> cli -> conversation_rag_cli
+                 -> conversation_storage.contracts/migration/selection
                  -> interactive_controller -> interactive_controller._core
                  -> interactive_terminal -> interactive_terminal._core
                  -> interactive_auth -> interactive_terminal/provider_auth
@@ -113,11 +114,18 @@ conversation_rag_store -> conversation_rag/workspace
 generic_rag_adapter -> conversation_rag
                     -> generic-rag 0.1.0 (optional external package)
 conversation_rag_composition -> conversation_rag
-                             -> conversation_rag_local/conversation_rag_store
+                             -> conversation_rag_local/conversation_rag_runtime
+                             -> conversation_rag_store/workspace
                              -> generic_rag_adapter (deferred until composition)
 conversation_rag_runtime -> conversation_literal_search/conversation_rag
                          -> conversation_retrieval/conversation_search
                          -> conversation_storage.contracts/conversations
+conversation_rag_cli -> config/conversation_rag/conversation_rag_composition
+                     -> conversation_rag_local/conversation_rag_runtime
+                     -> conversation_rag_store/conversation_retrieval
+                     -> conversation_search/conversations
+                     -> conversation_storage.contracts/selection
+                     -> errors/workspace
 story_writing_agents facade -> interactive_commands
                             -> conversation_retrieval
                             |  -> agents/conversation_rag/conversation_search
@@ -625,8 +633,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   `BACKEND` is `filesystem` or `sqlite`, plus the existing
   `storage migrate --from BACKEND --to BACKEND [--dry-run] [--workspace PATH]`
   and `storage verify --from BACKEND --to BACKEND [--workspace PATH]`, where
-  both backend arguments are restricted to `filesystem` or `sqlite`.
+  both backend arguments are restricted to `filesystem` or `sqlite`. The
+  additive local-RAG grammar is exactly `rag status`,
+  `rag enable --provider PROVIDER`, `rag rebuild [--yes]`,
+  `rag search QUERY`, `rag disable`, and `rag purge [--yes]`, with
+  `--workspace` on every operation and `--session` only on status, rebuild,
+  search, and purge.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`, `config`,
+  `conversation_rag_cli`, `conversation_storage.contracts`,
   `conversation_storage.migration`, `conversation_storage.selection`,
   `debug_log`, `errors`, `interactive_auth`, `interactive_controller`,
   `interactive_settings`, `interactive_terminal`, `models`, `orchestrator`,
@@ -692,7 +706,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   counts-only report. Each workflow returns its fixed report exit code, and
   workspace-discovery failure uses the corresponding fixed content-free
   schema. Importing the CLI and its selection boundary does not load
-  `sqlite3` or perform readiness, filesystem, installer, or database I/O.
+  `sqlite3` or perform readiness, filesystem, installer, or database I/O. RAG
+  routing resolves workspace/session through the established helpers, skips
+  debug-log construction and hint prose, activates configured authoritative
+  conversation storage only for confirmed rebuild and search, delegates every
+  workflow decision to `conversation_rag_cli`, and writes exactly one compact
+  sorted schema-v1 JSON line. Status, enable, disable, unconfirmed rebuild,
+  and purge do not activate conversation storage; argparse alone owns syntax
+  exit 2.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_conversation_storage_migration_cli.py`,
   `tests/test_conversation_storage_selection_cli.py`,
@@ -741,24 +762,30 @@ every intermediate arrow. The current runtime graph is acyclic.
   `AgentConfig`, `ResolvedAgentConfig`, immutable roster-complete
   `ConfigurationSnapshot`, exact `KNOWN_AGENT_BACKENDS` value
   `("codex", "antigravity")`, and independent exact
-  `KNOWN_CONVERSATION_STORAGE_BACKENDS` value `("filesystem", "sqlite")`;
+  `KNOWN_CONVERSATION_STORAGE_BACKENDS` value `("filesystem", "sqlite")`
+  plus independent exact `KNOWN_CONVERSATION_RAG_PROVIDERS` value
+  `("local",)`;
   legacy `gemini` values receive fixed migration guidance. Package-internal
   `ConfigurationBaseline`, `ConfigurationCommitFailure`, and
   `ConfigurationCommitError` define one exact-byte complete-configuration
   compare-and-set boundary. `SystemDefaults` retains all established positional
-  fields and adds only a trailing optional nullable
-  `conversation_storage_backend` after the trailing optional workspace
-  `default_backend`; old positional construction remains valid.
+  fields and adds trailing optional nullable `conversation_storage_backend`
+  and `conversation_rag_provider` fields plus trailing
+  `conversation_rag_automatic=False`; old positional construction remains
+  valid.
   `AgentConfig` retains its seven-field order while allowing its leading
   backend route to be null. `ConfigManager` owns both complete persisted schemas
   plus provider-specific safe-model validators, an additive forward-compatible
   lowercase Codex effort-token validator, and the exact Antigravity
   low/medium/high effort validator, together with the independent exact
-  filesystem/SQLite storage validator. Provider-catalog membership is not a
+  filesystem/SQLite storage validator, independent nullable allowlisted local
+  RAG-provider validation, and exact automatic boolean validation. Automatic
+  retrieval requires the local provider. Provider-catalog membership is not a
   persisted-schema requirement. Missing legacy storage selection is interpreted
-  as filesystem when projecting a saved canonical document, while missing
-  default and agent backend keys remain null; reads do not rewrite either
-  document. Package-internal
+  as filesystem when projecting a saved canonical document; missing or null
+  RAG provider and missing automatic policy load as null/false without a
+  rewrite, while missing default and agent backend keys remain null.
+  Package-internal
   `validate_configuration` validates both persisted documents as one complete
   candidate, `load_configuration_baseline` captures exact bytes and one
   immutable value, `commit_configuration` validates and compare-and-sets both
@@ -769,7 +796,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   signatures and delegate to the same validation and resolution rules.
 - **Direct internal dependencies:** `agents`, `errors`, and `workspace`.
 - **State, resources, and side effects:** Owns strict-UTF-8 reads, complete
-  schema validation, deterministic projection of canonical nine-key system
+  schema validation, deterministic projection of canonical eleven-key system
   defaults and roster-complete agent configuration, and the configuration CAS
   lifecycle. Commit first compares both exact baseline byte strings, writes
   only changed complete documents through `Workspace` in system-then-agent
@@ -782,6 +809,68 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_settings.py`,
   `docs/reference/configuration/agent-configuration.md`, and
   `docs/reference/configuration/runtime-overrides.md`.
+
+### `story_writing_agents.conversation_rag_cli`
+
+- **Source:** `src/story_writing_agents/conversation_rag_cli.py`
+- **Responsibility:** Own fixed local conversation-RAG command requests,
+  workflows, privacy projection, and schema-v1 reports independently of
+  argparse and interactive control.
+- **Supported surface:** Exactly seven direct-module names in `__all__`:
+  `CONVERSATION_RAG_CLI_SCHEMA_VERSION`, `ConversationRagCliFailure`,
+  `ConversationRagCliOperation`, `ConversationRagCliReport`,
+  `ConversationRagCliRequest`, `ConversationRagCliState`, and
+  `dispatch_conversation_rag`. Operations are exactly status, enable, rebuild,
+  search, disable, and purge; states are disabled, unavailable, missing, ready,
+  stale, failed, corrupt, and incompatible. Frozen requests bind workspace- or
+  session-scoped arguments, validate those scopes and the exact provider
+  through their established owners, reject blank or invalid-UTF-8 queries
+  before dispatch, hide valid search queries from representations, and require
+  explicit confirmation only for rebuild/purge. Frozen reports retain one
+  stable compact sorted JSON key set, capped and correlated authoritative/
+  indexed/purge counts, content-free compatibility/configuration/failure facts,
+  exact checkpoint tokens, rebuild need, and optional retrieval facts. Their
+  construction enforces operation-specific success/failure payloads. Search
+  reports alone may carry bounded authorized excerpt text plus revalidated
+  citation identities, event correlation, source identities, and half-open
+  ranges; they omit query text, subjects, provider scores/candidates, paths,
+  credentials, exception text, and generation identities. No name is
+  re-exported by the 120-name package-root facade.
+- **Direct internal dependencies:** `config`, `conversation_rag`,
+  `conversation_rag_composition`, `conversation_rag_local`,
+  `conversation_rag_runtime`, `conversation_rag_store`,
+  `conversation_retrieval`, `conversation_search`,
+  `conversation_storage.contracts`, `conversation_storage.selection`,
+  `conversations`, `errors`, and `workspace`.
+- **State, resources, and side effects:** The module retains no process-global
+  state or resource and performs no import-time I/O, dependency probe, provider
+  construction, or dynamic discovery. Status loads validated configuration,
+  asks selection for an optimistically stable read-only active conversation-
+  storage bundle, probes local-package compatibility without service
+  construction, and double-checks both the verified derived-store snapshot and
+  runtime's full optimistic authoritative/indexed observation. A successful
+  non-ready observation is a completed exit-zero report. Enable validates and
+  probes the exact local provider before the config-owned complete-document
+  CAS and preserves an existing valid automatic policy. Disable atomically
+  writes provider null/automatic false without touching derived data. Confirmed
+  rebuild/search consume an explicitly injected active authoritative service
+  bundle and the composition-owned local service/store/state bundle; direct
+  search uses the runtime's fixed budgets and returns only re-authorized
+  excerpts. Confirmed purge delegates exact session containment and deletion
+  to `conversation_rag_store`; disable never purges. Ordinary failures map to
+  fixed content-free report categories with nonzero exit, while
+  `KeyboardInterrupt` and `SystemExit` propagate. The module owns no argparse,
+  controller, interactive, provider/network, SQLite implementation,
+  authoritative storage, config serialization, or derived-store resource.
+- **Primary verification/documentation:** Primary command-domain coverage is in
+  `tests/test_conversation_rag_cli.py`; related boundary and owner coverage is
+  in `tests/test_public_api_and_cli.py`,
+  `tests/test_conversation_rag_runtime.py`,
+  `tests/test_conversation_rag_composition.py`,
+  `tests/test_conversation_rag_store.py`, and
+  `tests/test_workspace_and_config.py`; current design references are
+  `docs/guides/conversation-rag.md`, `docs/reference/cli.md`, and
+  `docs/reference/configuration/agent-configuration.md`.
 
 ### `story_writing_agents.conversation_rag`
 
@@ -964,11 +1053,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   `src/story_writing_agents/conversation_rag_composition.py`
 - **Responsibility:** Compose allowlisted generic and fixed local
   conversation-RAG services after exact compatibility validation.
-- **Supported surface:** Exactly six direct-module names in `__all__`:
+- **Supported surface:** Exactly ten direct-module names in `__all__`:
   `CONVERSATION_RAG_PROVIDER_ALLOWLIST`,
   `ConversationRagCompositionFailure`, `ConversationRagCompositionError`,
-  `LocalConversationRagComposition`, `compose_conversation_rag`, and
-  `compose_local_conversation_rag`. A local composition exposes the provider-
+  `LocalConversationRagComposition`, `LocalConversationRagRuntimeComposition`,
+  `LocalConversationRagRuntimeState`, `compose_conversation_rag`,
+  `compose_local_conversation_rag`,
+  `compose_local_conversation_rag_runtime`, and
+  `inspect_conversation_rag_compatibility`. A local composition exposes the provider-
   neutral service as itself through read-only `service` and its retained,
   caller-owned generation store through read-only `store`. The supported import
   path is `story_writing_agents.conversation_rag_composition`; none is
@@ -977,7 +1069,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `dependency_missing`, `version_incompatible`, and
   `capability_incompatible`.
 - **Direct internal dependencies:** `conversation_rag`,
-  `conversation_rag_local`, `conversation_rag_store`, and the deferred
+  `conversation_rag_local`, `conversation_rag_runtime`,
+  `conversation_rag_store`, `workspace`, and the deferred
   `generic_rag_adapter` import.
 - **State, resources, and side effects:** Import defines immutable policy and
   error metadata and loads only standard-library support plus the provider-
@@ -1001,7 +1094,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   resource acquisition. Ordinary metadata, import, capability, and
   construction failures become fixed sanitized composition errors without
   dependency details or chaining; `KeyboardInterrupt` and `SystemExit`
-  propagate.
+  propagate. The compatibility probe performs the same deferred exact
+  distribution-version/import/capability checks without constructing a
+  provider service or writing. The concrete runtime state maps verified local
+  store status/checkpoints to the provider-neutral port and owns stale marking;
+  the frozen runtime composition explicitly exposes its correlated service,
+  store, and state for command and later orchestration reuse. Its factory
+  constructs only that fixed network-free local bundle with an explicit
+  automatic policy.
 - **Primary verification/documentation:**
   `tests/test_conversation_rag_composition.py`,
   `tests/test_rag_module_and_packaging_boundary.py`,
@@ -1013,16 +1113,19 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/conversation_rag_runtime.py`
 - **Responsibility:** Authorize provider-neutral conversation-RAG projection
   and retrieval against current authoritative conversation state.
-- **Supported surface:** Exactly seven direct-module names in `__all__`:
+- **Supported surface:** Exactly ten direct-module names in `__all__`:
   `CONVERSATION_RAG_RUNTIME_POLICY`,
-  `CONVERSATION_RAG_RUNTIME_SCHEMA_ID`, `ConversationRagRuntimeError`,
+  `CONVERSATION_RAG_RUNTIME_SCHEMA_ID`,
+  `ConversationRagRuntimeInspection`,
+  `ConversationRagRuntimeInspectionStatus`, `ConversationRagRuntimeError`,
   `ConversationRagRuntimePolicy`, `ConversationRagRuntimeService`,
-  `ConversationRagRuntimeState`, and
-  `ConversationRagRuntimeStateSnapshot`. The fixed schema is
+  `ConversationRagRuntimeState`, `ConversationRagRuntimeStateSnapshot`, and
+  `inspect_authorized_conversation_rag`. The fixed schema is
   `story-conversation-rag-visible-turn-v1`. The stateful service accepts one
   provider-neutral low-level `ConversationRagService`, one persistent
   runtime-state port, and optional `automatic_enabled=False`; it exposes
-  bounded `preflight(..., forced_query=None)` and
+  bounded `preflight(..., forced_query=None)`, explicit
+  `search_authorized(...)`, and
   `project_authorized(..., rebuild=False)` operations. None is re-exported by
   the 120-name package-root facade.
 - **Direct internal dependencies:** `conversation_literal_search`,
@@ -1034,10 +1137,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   retrieval first proves exact workspace provenance, runs at most one
   active-only literal search and one eligible semantic call, then freshly
   enumerates ACTIVE metadata and authoritative transcripts under one bounded
-  mutation-coordinator borrow. Every target snapshot validates the exact
+  mutation-coordinator borrow. Every lease-backed target snapshot validates the exact
   workspace-bound lease, permits at most 256 conversations, 10,000 events, and
-  32 MiB of aggregate role-framed source UTF-8, and releases the lease before
-  provider, embedding, or generation work. Dynamic awaitable and async-
+  32 MiB of aggregate role-framed source UTF-8. Retrieval releases its target
+  lease before excerpt construction; projection retains its outer lease as
+  described below. Dynamic awaitable and async-
   generator collaborator results are rejected synchronously; returned
   coroutines are closed. Only committed complete visible user/reply pairs
   become role-framed documents. Fixed length-framed SHA-256 identities bind
@@ -1056,12 +1160,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   citation, with framing-only ranges using a conversation citation. Rejected
   semantic identities/ranges and failed target reconstruction after semantic
   state use best-effort mark the derived projection stale without replacing
-  the content-free attempted outcome. Projection enumerates the complete
+  the content-free attempted outcome. Explicit search bypasses automatic
+  policy while retaining the same fixed query, literal, semantic, excerpt,
+  reread, and citation authorization budgets. Read-only inspection constructs
+  the same complete target through two full optimistic reads bracketed by two
+  persistent-state reads, uses no mutation-coordinator borrow or provider
+  service, creates no lock/RAG namespace, marks nothing stale, and writes
+  nothing. Any drift fails content-free rather than reporting a false ready
+  state. A stable observation reports only safe counts, target/checkpoint
+  tokens, rebuild need, and missing/ready/stale/failed/corrupt/incompatible.
+  Projection enumerates the complete
   current ACTIVE target, selects incremental or full rebuild from persistent
   state, requires the published checkpoint to match the schema/embedding/
   document target, re-inspects exact persisted state, and then repeats the
-  authoritative enumeration so drift after publication is marked stale and
-  rejected. Ordinary projection failure best-effort marks persistent state
+  authoritative enumeration. One authoritative mutation lease now spans
+  target capture, provider/generation work, publication, persisted validation,
+  and final target validation, so supported authoritative writers cannot race
+  the publication. Ordinary projection failure best-effort marks persistent state
   stale; injected control exceptions propagate. The module owns no
   authoritative storage, generation store, provider, network, credential,
   controller/settings, SQLite, MySQL, or import-time resource.
@@ -1617,11 +1732,12 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/conversation_storage/selection.py`
 - **Responsibility:** Own desired conversation-storage selection and
   coordinated startup activation.
-- **Supported surface:** Exactly seven names in `__all__`:
+- **Supported surface:** Exactly eight names in `__all__`:
   `CONVERSATION_STORAGE_SELECTION_SCHEMA_VERSION`,
   `ConversationStorageSelectionFailure`,
   `ConversationStorageSelectionReport`, `ConversationStorageStartup`,
   `inspect_conversation_storage_parity`, `select_conversation_storage`, and
+  `compose_active_conversation_storage` plus
   `activate_configured_conversation_storage`. This direct workflow surface is
   absent from both facades. The schema-v1 selection report is counts-free and
   uses only `not_required|completed|not_run|failed` installation/provisioning,
@@ -1669,7 +1785,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   verifies readiness/parity, composes the complete target service bundle, and
   compare-and-sets activation. An unchanged desired backend returns the active
   bundle without writing. Pre-CAS failure preserves activation; successful CAS
-  is not rolled back by unrelated later shell failure. Import is I/O-free,
+  is not rolled back by unrelated later shell failure.
+  The separate read-only active composer reads the persisted activation,
+  composes the already-active established filesystem or SQLite service bundle
+  without borrowing the coordinator, then rereads and requires the complete
+  activation value and composed backend to remain identical. Drift raises the
+  fixed coordination failure; a stable call does not change activation,
+  configuration, the mutation lock, or either backend.
+  Import is I/O-free,
   launches no process, and does not load `sqlite3`; installer policy/execution,
   configuration persistence, archive serialization, backend composition, and
   activation publication remain with their named owners.
@@ -2724,7 +2847,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   candidate; authentication and default choice remain caller-owned and Cancel
   preserves the exact opening bytes. Saving revalidates the opening persona
   catalog and delegates complete schema validation, exact-byte conflict
-  detection, canonical nine-key system defaults, changed-document publication,
+  detection, canonical eleven-key system defaults, changed-document publication,
   and rollback to the configuration owner. Configuration commit failures map
   to the established settings categories. Its cross-module persona validator
   freshly compares the safe catalog with the opening baseline and raises the
@@ -3964,10 +4087,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   existing initialized workspaces need neither directory until the corresponding
   owning feature first creates it lazily. `debug_log`, not `Workspace`, owns the
   files, lock, schema, append, and rotation inside the diagnostic directory. New
-  workspaces also receive the canonical nine-key system-default document with
+  workspaces also receive the canonical eleven-key system-default document with
   null Codex model/reasoning, Antigravity model/effort, and workspace
-  `default_backend` values plus desired `conversation_storage_backend` set to
-  `filesystem`; canonical seven-key per-agent entries retain a null backend,
+  `default_backend` and `conversation_rag_provider` values, automatic RAG set
+  to false, plus desired `conversation_storage_backend` set to `filesystem`;
+  canonical seven-key per-agent entries retain a null backend,
   language, persona, and both providers' model/effort values.
   Existing configuration bytes are never migrated or rewritten by
   initialization. `cli_context` owns
@@ -4702,10 +4826,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   construction emits no record. All five consumers use only the internal append
   surface; none assumes ownership of diagnostic files, locks, schema, or
   rotation.
-- `Workspace` initializes the canonical nine-key system and seven-key per-agent
-  configuration shapes with desired conversation storage set to filesystem and
-  nullable workspace/agent provider routes, but never rewrites existing
-  documents. `ConfigManager` owns full system and per-agent schema validation,
+- `Workspace` initializes the canonical eleven-key system and seven-key per-agent
+  configuration shapes with desired conversation storage set to filesystem,
+  nullable local RAG provider, automatic RAG false, and nullable
+  workspace/agent provider routes, but never rewrites existing documents.
+  `ConfigManager` owns full system and per-agent schema validation,
   the independent filesystem/SQLite desired-storage vocabulary, the exact
   Codex/Antigravity backend vocabulary with legacy Gemini guidance, nullable
   default and explicit route handling, both providers' model/effort validators,

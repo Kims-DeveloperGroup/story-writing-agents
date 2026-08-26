@@ -3,8 +3,10 @@
 > **Availability:** `StoryRuntime` provides unchanged one-step and additive
 > bounded-retrieval turns, optional programmatic conversation-RAG preflight and
 > projection, plus context-aware debates. Interactive `$`/`$$` discovery is a
-> controller/terminal workflow and adds no runtime method. RAG shell commands
-> and `/settings` selection are not implemented yet.
+> controller/terminal workflow and adds no runtime method. Separate
+> noninteractive `story rag` lifecycle/search commands are implemented without
+> adding a `StoryRuntime` method; interactive `/settings` selection, automatic
+> shell wiring, and `/rag QUERY` are not implemented yet.
 
 Key terms: **context-omitted run**—no `conversation_context`; **included
 snapshot**—one transcript window reused for a debate; **progress
@@ -66,7 +68,10 @@ catalog/search/coordinator provenance.
 ordinary construction compose the default filesystem bundle. Pairing RAG with
 the legacy raw `conversation_event_store` raises `TypeError` before conversation
 use. The service is application-composed; construction does not read a RAG
-setting, select a provider, or import the optional generic package.
+setting, select a provider, or import the optional generic package. The direct
+composition module provides a concrete fixed-local store/state/service bundle,
+but a caller must still pass its service explicitly. The noninteractive CLI
+uses that helper only after its own configuration and compatibility gates.
 
 The installed shell does not ask `StoryRuntime` to read desired or active
 storage configuration. Before provider authentication it completes the

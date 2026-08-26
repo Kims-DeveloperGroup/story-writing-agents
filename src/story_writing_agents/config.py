@@ -20,6 +20,7 @@ _CODEX_REASONING_EFFORT = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 _ANTIGRAVITY_EFFORTS: tuple[str, ...] = ("low", "medium", "high")
 KNOWN_AGENT_BACKENDS: tuple[str, ...] = ("codex", "antigravity")
 KNOWN_CONVERSATION_STORAGE_BACKENDS: tuple[str, ...] = ("filesystem", "sqlite")
+KNOWN_CONVERSATION_RAG_PROVIDERS: tuple[str, ...] = ("local",)
 _SYSTEM_DEFAULTS_PATH = "config/system_defaults.json"
 _AGENT_CONFIGS_PATH = "config/agent_configs.json"
 
@@ -35,6 +36,8 @@ class SystemDefaults:
     antigravity_effort: str | None = None
     default_backend: str | None = None
     conversation_storage_backend: str | None = None
+    conversation_rag_provider: str | None = None
+    conversation_rag_automatic: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +176,31 @@ class ConfigManager:
         return value
 
     @staticmethod
+    def validate_conversation_rag_provider(
+        value: Any,
+        *,
+        allow_none: bool = False,
+    ) -> str | None:
+        """Validate the persisted RAG provider independently of composition."""
+
+        if value is None and allow_none:
+            return None
+        if not isinstance(value, str) or value not in KNOWN_CONVERSATION_RAG_PROVIDERS:
+            expected = ", ".join(KNOWN_CONVERSATION_RAG_PROVIDERS)
+            raise ConfigurationError(
+                f"conversation_rag_provider must be null or one of: {expected}"
+            )
+        return value
+
+    @staticmethod
+    def validate_conversation_rag_automatic(value: Any) -> bool:
+        """Require the exact persisted opt-in boolean."""
+
+        if type(value) is not bool:
+            raise ConfigurationError("conversation_rag_automatic must be a boolean")
+        return value
+
+    @staticmethod
     def validate_codex_model(value: Any) -> str | None:
         if value is None:
             return None
@@ -255,6 +283,8 @@ class ConfigManager:
                 "antigravity_effort",
                 "default_backend",
                 "conversation_storage_backend",
+                "conversation_rag_provider",
+                "conversation_rag_automatic",
             }
         )
         if unknown:
@@ -283,6 +313,17 @@ class ConfigManager:
             value.get("conversation_storage_backend"),
             allow_none=True,
         )
+        conversation_rag_provider = self.validate_conversation_rag_provider(
+            value.get("conversation_rag_provider"),
+            allow_none=True,
+        )
+        conversation_rag_automatic = self.validate_conversation_rag_automatic(
+            value.get("conversation_rag_automatic", False)
+        )
+        if conversation_rag_automatic and conversation_rag_provider != "local":
+            raise ConfigurationError(
+                "conversation_rag_automatic requires the local RAG provider"
+            )
         return SystemDefaults(
             language=language,
             persona=persona,
@@ -293,6 +334,8 @@ class ConfigManager:
             antigravity_effort=antigravity_effort,
             default_backend=default_backend,
             conversation_storage_backend=conversation_storage_backend,
+            conversation_rag_provider=conversation_rag_provider,
+            conversation_rag_automatic=conversation_rag_automatic,
         )
 
     def load_agent_configs(self) -> dict[str, AgentConfig]:
@@ -482,7 +525,7 @@ class ConfigManager:
 
     @staticmethod
     def system_defaults_value(defaults: SystemDefaults) -> dict[str, Any]:
-        """Project one system-default value to the canonical nine-key shape."""
+        """Project one system-default value to the canonical eleven-key shape."""
 
         if type(defaults) is not SystemDefaults:
             raise TypeError("defaults must be a SystemDefaults")
@@ -497,6 +540,8 @@ class ConfigManager:
             "antigravity_effort": defaults.antigravity_effort,
             "default_backend": defaults.default_backend,
             "conversation_storage_backend": storage_backend,
+            "conversation_rag_provider": defaults.conversation_rag_provider,
+            "conversation_rag_automatic": defaults.conversation_rag_automatic,
         }
 
     @staticmethod

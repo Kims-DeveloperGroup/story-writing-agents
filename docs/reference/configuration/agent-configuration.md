@@ -3,8 +3,11 @@
 > **Availability:** JSON defaults, per-agent routing, interactive guarded
 > settings, editable role prompts, and persona templates are implemented for
 > Codex and Antigravity. Desired filesystem/SQLite conversation storage is an
-> independent system default. Interactive authentication establishes a missing
-> provider default; Codex is the final route fallback.
+> independent system default. Optional local conversation RAG has separate
+> provider/automatic system defaults operated by noninteractive `story rag`
+> commands; interactive Settings does not edit them yet. Interactive
+> authentication establishes a missing agent-provider default; Codex is the
+> final route fallback.
 
 Key terms: **system default**—the workspace fallback below an agent-specific
 value; **agent configuration**—
@@ -13,8 +16,8 @@ agent's static instructions; **persona template**—a reusable behavior document
 
 ## System defaults
 
-`config/system_defaults.json` uses a closed nine-field schema. New workspaces are
-initialized with:
+`config/system_defaults.json` uses a closed eleven-field schema. New workspaces
+are initialized with:
 
 ```json
 {
@@ -22,6 +25,8 @@ initialized with:
   "antigravity_model": null,
   "codex_model": null,
   "codex_reasoning_effort": null,
+  "conversation_rag_automatic": false,
+  "conversation_rag_provider": null,
   "conversation_storage_backend": "filesystem",
   "default_backend": null,
   "language": "KO",
@@ -41,21 +46,25 @@ initialized with:
 | `antigravity_effort` | Optional Antigravity workspace fallback; absent or `null` inherits the provider default. The only string values are exactly `low`, `medium`, and `high`. |
 | `default_backend` | Optional workspace provider fallback; absent or `null` falls through to Codex. A value is exactly `codex` or `antigravity`. Interactive authentication fills a missing value once and does not replace an existing value. |
 | `conversation_storage_backend` | Independent desired conversation storage for the next shell. A non-null value is exactly `filesystem` or `sqlite`; missing or `null` is read as the effective filesystem default. |
+| `conversation_rag_provider` | Independent optional conversation-RAG provider. Missing or `null` means disabled; the only non-null value is exactly `local`. `story rag enable --provider local` preflights the pinned optional package before saving it. |
+| `conversation_rag_automatic` | Exact boolean; missing means `false`. `true` is valid only when `conversation_rag_provider` is `local`. The installed interactive shell does not consume this setting yet; automatic turn wiring remains planned. |
 
 Unknown fields are rejected. The complete object is validated before a backend
 accepts any explicit model/effort override, so malformed persisted fields are
 never hidden by CLI or `AgentBackend` constructor values.
 
-Existing three-key and eight-key files remain valid: all missing
-provider-specific keys and `default_backend` resolve as `null`, providing no
-workspace model/effort or provider fallback beyond Codex. Missing or null
-`conversation_storage_backend` resolves to filesystem. Loading does not rewrite
-legacy bytes; the next successful complete settings or `story storage use`
-save emits the canonical nine-key object with an explicit storage value.
+Existing legacy files remain valid: all missing provider-specific keys and
+`default_backend` resolve as `null`, providing no workspace model/effort or
+agent-provider fallback beyond Codex. Missing or null
+`conversation_storage_backend` resolves to filesystem; missing RAG keys resolve
+to `null`/`false`. Loading does not rewrite legacy bytes. The next successful
+complete `/settings`, `story storage use`, or `story rag enable|disable` save
+emits the canonical eleven-key object with explicit storage and RAG values.
 Running `story init` again, including with `--overwrite-prompts`, does not
 rewrite or migrate existing system-default bytes. Global `/settings` edits this
-canonical nine-field object and the per-agent object through an isolated
-current/pending view; it adds no supported public save API. The ten language
+canonical eleven-field object and the per-agent object through an isolated
+current/pending view; it preserves, but does not offer editors for, the two RAG
+keys and adds no supported public save API. The ten language
 choices are exactly `KO`, `EN`,
 `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, and `RU`. Persona choices come from
 the safe lexical catalog with top-level-template precedence. An existing
@@ -68,6 +77,15 @@ and offers Filesystem or SQLite as a pending next-shell value. Selection
 readiness, installation consent, provisioning, parity, and activation are
 described by the
 [CLI storage contract](../cli.md#conversation-storage-selection).
+
+Conversation RAG is independent of both agent-provider routing and desired
+conversation storage. `story rag enable --provider local` preserves the
+current automatic boolean; `story rag disable` clears the provider and forces
+automatic to `false`. Neither operation edits agent configurations. Direct
+validated JSON may set automatic to `true` only beside provider `local`, but
+that persisted value does not wire interactive turns until the planned
+`/settings`/startup integration is delivered. Exact command behavior is in the
+[conversation RAG CLI contract](../cli.md#conversation-rag-operations).
 
 At interactive startup, `default_backend` is written only when missing. A
 provider authenticated by that immediate interaction wins; otherwise a sole

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol, TypeVar, cast, runtime_checkable
 
 from .conversation_literal_search import (
@@ -62,6 +64,8 @@ _MAX_QUERY_CODEPOINTS = 200
 _MAX_CONTEXT_UTF8_BYTES = 32_768
 _MAX_PROJECTED_SOURCE_UTF8_BYTES = 32 * 1_024 * 1_024
 _SNAPSHOT_MUTATION_TIMEOUT_SECONDS = 30.0
+_PROJECTION_MUTATION_TIMEOUT_SECONDS = 3_600.0
+_AUTHORIZED_TARGET_TOKEN_DOMAIN = "story-conversation-rag-authorized-target-v1"
 
 _SyncResultT = TypeVar("_SyncResultT")
 
@@ -123,12 +127,18 @@ class ConversationRagRuntimeStateSnapshot:
             if availability is not ConversationRagProjectionStateAvailability.MISSING:
                 raise ValueError("unavailable runtime state must be missing")
             return
-        if self.reason in (
-            ConversationRagReason.CORRUPT,
-            ConversationRagReason.INCOMPATIBLE,
-        ):
+        if self.reason is ConversationRagReason.CORRUPT:
             if availability is not ConversationRagProjectionStateAvailability.CORRUPT:
-                raise ValueError("invalid runtime state must be corrupt")
+                raise ValueError("corrupt runtime state must be corrupt")
+            return
+        if self.reason is ConversationRagReason.INCOMPATIBLE:
+            if availability not in (
+                ConversationRagProjectionStateAvailability.PRESENT,
+                ConversationRagProjectionStateAvailability.CORRUPT,
+            ):
+                raise ValueError(
+                    "incompatible runtime state must retain observed state"
+                )
             return
         if self.reason in (
             ConversationRagReason.STALE,
@@ -166,6 +176,83 @@ class ConversationRagRuntimeError(ConversationRagError):
         Exception.__init__(self, "conversation RAG runtime operation failed")
 
 
+class ConversationRagRuntimeInspectionStatus(StrEnum):
+    """Content-free comparison of one indexed state with its live target."""
+
+    MISSING = "missing"
+    READY = "ready"
+    STALE = "stale"
+    FAILED = "failed"
+    CORRUPT = "corrupt"
+    INCOMPATIBLE = "incompatible"
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationRagRuntimeInspection:
+    """One read-only, content-free authoritative/indexed comparison."""
+
+    session_id: str
+    status: ConversationRagRuntimeInspectionStatus
+    authoritative_checkpoint: str
+    indexed_checkpoint: str | None
+    authoritative_conversations: int
+    authoritative_events: int
+    authoritative_documents: int
+    authoritative_source_utf8_bytes: int
+    indexed_documents: int
+    rebuild_required: bool
+
+    def __post_init__(self) -> None:
+        _validate_identifier(self.session_id, label="session ID")
+        if type(self.status) is not ConversationRagRuntimeInspectionStatus:
+            raise TypeError("runtime inspection status must use the exact enum")
+        if (
+            type(self.authoritative_checkpoint) is not str
+            or not self.authoritative_checkpoint.startswith("sha256:")
+            or len(self.authoritative_checkpoint) != 71
+        ):
+            raise ValueError("authoritative checkpoint is invalid")
+        if self.indexed_checkpoint is not None and (
+            type(self.indexed_checkpoint) is not str or not self.indexed_checkpoint
+        ):
+            raise ValueError("indexed checkpoint is invalid")
+        for label, value, maximum in (
+            (
+                "authoritative conversation count",
+                self.authoritative_conversations,
+                CONVERSATION_RAG_POLICY.max_conversations,
+            ),
+            (
+                "authoritative event count",
+                self.authoritative_events,
+                CONVERSATION_RAG_POLICY.max_events,
+            ),
+            (
+                "authoritative document count",
+                self.authoritative_documents,
+                CONVERSATION_RAG_POLICY.max_events,
+            ),
+            (
+                "authoritative source byte count",
+                self.authoritative_source_utf8_bytes,
+                CONVERSATION_RAG_RUNTIME_POLICY.max_projected_source_utf8_bytes,
+            ),
+            (
+                "indexed document count",
+                self.indexed_documents,
+                CONVERSATION_RAG_POLICY.max_events,
+            ),
+        ):
+            if type(value) is not int or value < 0 or value > maximum:
+                raise ValueError(f"{label} is invalid")
+        if type(self.rebuild_required) is not bool:
+            raise TypeError("rebuild_required must be a boolean")
+        if self.rebuild_required != (
+            self.status is not ConversationRagRuntimeInspectionStatus.READY
+        ):
+            raise ValueError("rebuild requirement is inconsistent with status")
+
+
 @dataclass(frozen=True, slots=True)
 class _VisibleTurnDocument:
     metadata: ConversationMetadata
@@ -175,6 +262,15 @@ class _VisibleTurnDocument:
     subject_range: tuple[int, int]
     user_range: tuple[int, int]
     reply_range: tuple[int, int]
+
+
+@dataclass(frozen=True, slots=True)
+class _AuthorizedTarget:
+    request: ConversationRagProjectionRequest
+    documents: dict[str, _VisibleTurnDocument]
+    conversation_count: int
+    event_count: int
+    source_utf8_bytes: int
 
 
 def _validate_identifier(value: object, *, label: str) -> str:
@@ -405,20 +501,21 @@ def _validate_snapshot_lease(lease: object, *, workspace_key: str) -> None:
         raise TypeError("conversation storage lease validation must return None")
 
 
-def _authorized_target_under_lease(
+def _read_authorized_target(
     services: ConversationStorageServices,
     session_id: str,
     embedding: ConversationRagEmbeddingIdentity,
     *,
-    lease: object,
-    workspace_key: str,
-) -> tuple[ConversationRagProjectionRequest, dict[str, _VisibleTurnDocument]]:
-    _validate_snapshot_lease(lease, workspace_key=workspace_key)
+    validate_snapshot: Callable[[], None],
+) -> _AuthorizedTarget:
+    """Build one target while a caller-defined observation remains valid."""
+
+    validate_snapshot()
     raw_metadata = _synchronous_result(
         services.catalog.list(session_id, include_archived=False),
         operation="conversation catalog list",
     )
-    _validate_snapshot_lease(lease, workspace_key=workspace_key)
+    validate_snapshot()
     if type(raw_metadata) is not tuple:
         raise TypeError("catalog list must return a tuple")
     if len(raw_metadata) > CONVERSATION_RAG_POLICY.max_conversations:
@@ -444,7 +541,7 @@ def _authorized_target_under_lease(
             services.event_store.read(session_id, item.conversation_id),
             operation="conversation event read",
         )
-        _validate_snapshot_lease(lease, workspace_key=workspace_key)
+        validate_snapshot()
         if type(raw_events) is not tuple:
             raise TypeError("event store read must return a tuple")
         event_count += len(raw_events)
@@ -465,7 +562,7 @@ def _authorized_target_under_lease(
         documents.extend(visible)
     if len(documents) > CONVERSATION_RAG_POLICY.max_events:
         raise ValueError("authorized projection exceeds the document budget")
-    _validate_snapshot_lease(lease, workspace_key=workspace_key)
+    validate_snapshot()
     ordered = tuple(
         sorted(documents, key=lambda value: value.source.identity.key.document_id)
     )
@@ -475,17 +572,45 @@ def _authorized_target_under_lease(
         embedding=embedding,
         documents=tuple(document.source for document in ordered),
     )
-    return projection, {
-        document.source.identity.key.document_id: document for document in ordered
-    }
+    return _AuthorizedTarget(
+        request=projection,
+        documents={
+            document.source.identity.key.document_id: document for document in ordered
+        },
+        conversation_count=len(metadata),
+        event_count=event_count,
+        source_utf8_bytes=source_utf8_bytes,
+    )
 
 
-def _authorized_target(
+def _authorized_target_under_lease(
     services: ConversationStorageServices,
     session_id: str,
     embedding: ConversationRagEmbeddingIdentity,
-) -> tuple[ConversationRagProjectionRequest, dict[str, _VisibleTurnDocument]]:
-    """Read one coherent authoritative target under a bounded mutation lease."""
+    *,
+    lease: object,
+    workspace_key: str,
+) -> _AuthorizedTarget:
+    return _read_authorized_target(
+        services,
+        session_id,
+        embedding,
+        validate_snapshot=lambda: _validate_snapshot_lease(
+            lease,
+            workspace_key=workspace_key,
+        ),
+    )
+
+
+@contextmanager
+def _authorized_target_lease(
+    services: ConversationStorageServices,
+    session_id: str,
+    embedding: ConversationRagEmbeddingIdentity,
+    *,
+    timeout_seconds: float,
+) -> Iterator[tuple[_AuthorizedTarget, object, str]]:
+    """Yield one target while retaining its bounded mutation lease."""
 
     workspace_key = services.provenance.workspace_key
     coordinator = services.mutation_coordinator
@@ -501,7 +626,7 @@ def _authorized_target(
         operation="conversation storage coordinator borrow",
     )
     manager = _synchronous_result(
-        borrow(timeout_seconds=_SNAPSHOT_MUTATION_TIMEOUT_SECONDS),
+        borrow(timeout_seconds=timeout_seconds),
         operation="conversation storage coordinator borrow",
     )
     enter = _synchronous_member(
@@ -519,13 +644,14 @@ def _authorized_target(
         operation="conversation storage coordinator enter",
     )
     try:
-        result = _authorized_target_under_lease(
+        target = _authorized_target_under_lease(
             services,
             session_id,
             embedding,
             lease=lease,
             workspace_key=workspace_key,
         )
+        yield target, lease, workspace_key
     except BaseException as body_error:
         try:
             exit_outcome = _synchronous_result(
@@ -559,7 +685,23 @@ def _authorized_target(
     )
     if exit_outcome is not None and exit_outcome is not False:
         raise TypeError("conversation storage coordinator exit returned a value")
-    return result
+
+
+def _authorized_target(
+    services: ConversationStorageServices,
+    session_id: str,
+    embedding: ConversationRagEmbeddingIdentity,
+) -> _AuthorizedTarget:
+    """Read one coherent authoritative target under a bounded mutation lease."""
+
+    with _authorized_target_lease(
+        services,
+        session_id,
+        embedding,
+        timeout_seconds=_SNAPSHOT_MUTATION_TIMEOUT_SECONDS,
+    ) as leased:
+        target, _lease, _workspace_key = leased
+        return target
 
 
 def _citation_for_range(
@@ -831,6 +973,167 @@ def _context(
     )
 
 
+def _state_embedding_for(
+    services: ConversationStorageServices,
+    state_port: ConversationRagRuntimeState,
+) -> ConversationRagEmbeddingIdentity:
+    if type(services) is not ConversationStorageServices:
+        raise TypeError("conversation RAG runtime requires ConversationStorageServices")
+    workspace_key = _synchronous_result(
+        state_port.workspace_key,
+        operation="conversation RAG state workspace",
+    )
+    embedding = _synchronous_result(
+        state_port.embedding,
+        operation="conversation RAG state embedding",
+    )
+    if (
+        type(workspace_key) is not str
+        or workspace_key != services.provenance.workspace_key
+        or type(embedding) is not ConversationRagEmbeddingIdentity
+    ):
+        raise TypeError("conversation RAG state crossed its workspace")
+    return embedding
+
+
+def _runtime_state_snapshot(
+    state_port: ConversationRagRuntimeState,
+    session_id: str,
+) -> ConversationRagRuntimeStateSnapshot:
+    inspector = _synchronous_member(
+        state_port,
+        "inspect_projection_state",
+        operation="conversation RAG state inspection",
+    )
+    raw = _synchronous_result(
+        inspector(session_id),
+        operation="conversation RAG state inspection",
+    )
+    if type(raw) is not ConversationRagRuntimeStateSnapshot:
+        raise TypeError("conversation RAG state port returned an invalid snapshot")
+    canonical = ConversationRagRuntimeStateSnapshot(
+        session_id=raw.session_id,
+        state=raw.state,
+        reason=raw.reason,
+    )
+    if canonical.session_id != session_id:
+        raise ValueError("conversation RAG state crossed its session")
+    return canonical
+
+
+def _authorized_target_checkpoint(target: _AuthorizedTarget) -> str:
+    fields: list[str] = [
+        target.request.session_id,
+        target.request.schema_id,
+        target.request.embedding.model_id,
+        str(target.request.embedding.dimensions),
+        str(CONVERSATION_RAG_POLICY.max_fragment_codepoints),
+        str(CONVERSATION_RAG_POLICY.fragment_overlap_codepoints),
+    ]
+    for source in target.request.documents:
+        identity = source.identity
+        fields.extend(
+            (
+                identity.key.document_id,
+                identity.conversation_id,
+                identity.start_turn_id,
+                identity.end_turn_id,
+                str(identity.start_sequence),
+                str(identity.end_sequence),
+                identity.revision_id,
+            )
+        )
+    return "sha256:" + _length_framed_sha256(
+        _AUTHORIZED_TARGET_TOKEN_DOMAIN,
+        *fields,
+    )
+
+
+def _inspection_status(
+    snapshot: ConversationRagRuntimeStateSnapshot,
+    target: _AuthorizedTarget,
+) -> ConversationRagRuntimeInspectionStatus:
+    if snapshot.reason is ConversationRagReason.UNAVAILABLE:
+        return ConversationRagRuntimeInspectionStatus.MISSING
+    if snapshot.reason is ConversationRagReason.STALE:
+        return ConversationRagRuntimeInspectionStatus.STALE
+    if snapshot.reason is ConversationRagReason.FAILED:
+        return ConversationRagRuntimeInspectionStatus.FAILED
+    if snapshot.reason is ConversationRagReason.CORRUPT:
+        return ConversationRagRuntimeInspectionStatus.CORRUPT
+    if snapshot.reason is ConversationRagReason.INCOMPATIBLE:
+        return ConversationRagRuntimeInspectionStatus.INCOMPATIBLE
+    if snapshot.reason is not ConversationRagReason.NONE:
+        raise ValueError("runtime state reason cannot be inspected")
+    checkpoint = snapshot.state.checkpoint
+    if checkpoint is None:
+        raise ValueError("ready runtime state omitted its checkpoint")
+    if (
+        checkpoint.session_id != target.request.session_id
+        or checkpoint.schema_id != target.request.schema_id
+        or checkpoint.embedding != target.request.embedding
+        or checkpoint.max_fragment_codepoints
+        != CONVERSATION_RAG_POLICY.max_fragment_codepoints
+        or checkpoint.fragment_overlap_codepoints
+        != CONVERSATION_RAG_POLICY.fragment_overlap_codepoints
+    ):
+        return ConversationRagRuntimeInspectionStatus.INCOMPATIBLE
+    if tuple(entry.document for entry in checkpoint.entries) != tuple(
+        document.identity for document in target.request.documents
+    ):
+        return ConversationRagRuntimeInspectionStatus.STALE
+    return ConversationRagRuntimeInspectionStatus.READY
+
+
+def inspect_authorized_conversation_rag(
+    conversation_storage_services: ConversationStorageServices,
+    state_port: ConversationRagRuntimeState,
+    session_id: str,
+    /,
+) -> ConversationRagRuntimeInspection:
+    """Optimistically compare one stable live target without mutating storage."""
+
+    session = _validate_identifier(session_id, label="session ID")
+    try:
+        embedding = _state_embedding_for(conversation_storage_services, state_port)
+        indexed_before = _runtime_state_snapshot(state_port, session)
+        target_before = _read_authorized_target(
+            conversation_storage_services,
+            session,
+            embedding,
+            validate_snapshot=lambda: None,
+        )
+        target_after = _read_authorized_target(
+            conversation_storage_services,
+            session,
+            embedding,
+            validate_snapshot=lambda: None,
+        )
+        indexed_after = _runtime_state_snapshot(state_port, session)
+        if target_before != target_after or indexed_before != indexed_after:
+            raise ValueError("conversation RAG inspection changed while observed")
+        status = _inspection_status(indexed_after, target_after)
+        checkpoint = indexed_after.state.checkpoint
+        return ConversationRagRuntimeInspection(
+            session_id=session,
+            status=status,
+            authoritative_checkpoint=_authorized_target_checkpoint(target_after),
+            indexed_checkpoint=None if checkpoint is None else checkpoint.token,
+            authoritative_conversations=target_after.conversation_count,
+            authoritative_events=target_after.event_count,
+            authoritative_documents=len(target_after.request.documents),
+            authoritative_source_utf8_bytes=target_after.source_utf8_bytes,
+            indexed_documents=0 if checkpoint is None else len(checkpoint.entries),
+            rebuild_required=(
+                status is not ConversationRagRuntimeInspectionStatus.READY
+            ),
+        )
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:
+        raise ConversationRagRuntimeError() from None
+
+
 class ConversationRagRuntimeService:
     """Stateful authorization wrapper over one provider-neutral RAG service."""
 
@@ -878,49 +1181,18 @@ class ConversationRagRuntimeService:
         self,
         services: ConversationStorageServices,
     ) -> ConversationRagEmbeddingIdentity:
-        if type(services) is not ConversationStorageServices:
-            raise TypeError(
-                "conversation RAG runtime requires ConversationStorageServices"
-            )
         try:
-            workspace_key = _synchronous_result(
-                self._state_port.workspace_key,
-                operation="conversation RAG state workspace",
-            )
-            embedding = _synchronous_result(
-                self._state_port.embedding,
-                operation="conversation RAG state embedding",
-            )
+            return _state_embedding_for(services, self._state_port)
         except (KeyboardInterrupt, SystemExit):
             raise
         except Exception:  # noqa: BLE001 - translate arbitrary injected port failures
             raise ConversationRagRuntimeError() from None
-        if (
-            type(workspace_key) is not str
-            or workspace_key != services.provenance.workspace_key
-            or type(embedding) is not ConversationRagEmbeddingIdentity
-        ):
-            raise ConversationRagRuntimeError() from None
-        return embedding
 
     def _inspect_state(
         self,
         session_id: str,
     ) -> ConversationRagRuntimeStateSnapshot:
-        raw = _synchronous_result(
-            self._state_port.inspect_projection_state(session_id),
-            operation="conversation RAG state inspection",
-        )
-        if type(raw) is not ConversationRagRuntimeStateSnapshot:
-            raise TypeError("conversation RAG state port returned an invalid snapshot")
-        canonical = ConversationRagRuntimeStateSnapshot(
-            session_id=raw.session_id,
-            state=raw.state,
-            reason=raw.reason,
-        )
-        if canonical.session_id != session_id:
-            raise ValueError("conversation RAG state crossed its session")
-        return canonical
+        return _runtime_state_snapshot(self._state_port, session_id)
 
     def _mark_stale(self, session_id: str) -> None:
         marker: Callable[[str], object] = self._state_port.mark_projection_stale
@@ -1041,11 +1313,12 @@ class ConversationRagRuntimeService:
             semantic_reason = ConversationRagReason.FAILED
 
         try:
-            _projection, documents = _authorized_target(
+            target = _authorized_target(
                 conversation_storage_services,
                 session,
                 embedding,
             )
+            documents = target.documents
             literal_selected: list[
                 tuple[
                     ConversationRagSourceReference,
@@ -1126,6 +1399,27 @@ class ConversationRagRuntimeService:
             )
         return _context(attempt, selected, truncated=truncated)
 
+    def search_authorized(
+        self,
+        conversation_storage_services: ConversationStorageServices,
+        session_id: str,
+        query: str,
+        /,
+    ) -> ConversationRagContext:
+        """Run one explicit bounded search without consulting automatic policy."""
+
+        if type(query) is not str:
+            raise TypeError("conversation RAG search query must be a string")
+        context = self.preflight(
+            conversation_storage_services,
+            session_id,
+            query,
+            forced_query=query,
+        )
+        if context is None:
+            raise ConversationRagRuntimeError() from None
+        return context
+
     def project_authorized(
         self,
         conversation_storage_services: ConversationStorageServices,
@@ -1145,66 +1439,73 @@ class ConversationRagRuntimeService:
             )
         try:
             embedding = self._embedding_for(conversation_storage_services)
-            request, _documents = _authorized_target(
+            with _authorized_target_lease(
                 conversation_storage_services,
                 session,
                 embedding,
-            )
-            before = self._inspect_state(session)
-            force_rebuild = rebuild or before.reason in (
-                ConversationRagReason.CORRUPT,
-                ConversationRagReason.INCOMPATIBLE,
-            )
-            result = _synchronous_result(
-                (
-                    self._low_level_service.rebuild_projection(
-                        request,
-                        before.state,
-                    )
-                    if force_rebuild
-                    else self._low_level_service.project_documents(
-                        request,
-                        before.state,
-                    )
-                ),
-                operation="conversation RAG projection",
-            )
-            if type(result) is not ConversationRagProjectionResult:
-                raise TypeError(
-                    "conversation RAG projection returned an invalid result"
+                timeout_seconds=_PROJECTION_MUTATION_TIMEOUT_SECONDS,
+            ) as leased:
+                target, lease, workspace_key = leased
+                request = target.request
+                before = self._inspect_state(session)
+                force_rebuild = rebuild or before.reason in (
+                    ConversationRagReason.CORRUPT,
+                    ConversationRagReason.INCOMPATIBLE,
                 )
-            canonical = ConversationRagProjectionResult(
-                status_before=result.status_before,
-                outcome=result.outcome,
-                attempted_documents=result.attempted_documents,
-                completed_documents=result.completed_documents,
-                checkpoint=result.checkpoint,
-            )
-            checkpoint = canonical.checkpoint
-            if (
-                checkpoint.session_id != session
-                or checkpoint.schema_id != CONVERSATION_RAG_RUNTIME_SCHEMA_ID
-                or checkpoint.embedding != embedding
-                or tuple(entry.document for entry in checkpoint.entries)
-                != tuple(document.identity for document in request.documents)
-            ):
-                raise ValueError("conversation RAG checkpoint crossed its target")
-            after = self._inspect_state(session)
-            if (
-                after.reason is not ConversationRagReason.NONE
-                or after.state.availability
-                is not ConversationRagProjectionStateAvailability.PRESENT
-                or after.state.checkpoint != checkpoint
-            ):
-                raise ValueError("conversation RAG publication was not persisted")
-            current, _current_documents = _authorized_target(
-                conversation_storage_services,
-                session,
-                embedding,
-            )
-            if current != request:
-                raise ValueError("conversation RAG source changed during publication")
-            return canonical
+                result = _synchronous_result(
+                    (
+                        self._low_level_service.rebuild_projection(
+                            request,
+                            before.state,
+                        )
+                        if force_rebuild
+                        else self._low_level_service.project_documents(
+                            request,
+                            before.state,
+                        )
+                    ),
+                    operation="conversation RAG projection",
+                )
+                if type(result) is not ConversationRagProjectionResult:
+                    raise TypeError(
+                        "conversation RAG projection returned an invalid result"
+                    )
+                canonical = ConversationRagProjectionResult(
+                    status_before=result.status_before,
+                    outcome=result.outcome,
+                    attempted_documents=result.attempted_documents,
+                    completed_documents=result.completed_documents,
+                    checkpoint=result.checkpoint,
+                )
+                checkpoint = canonical.checkpoint
+                if (
+                    checkpoint.session_id != session
+                    or checkpoint.schema_id != CONVERSATION_RAG_RUNTIME_SCHEMA_ID
+                    or checkpoint.embedding != embedding
+                    or tuple(entry.document for entry in checkpoint.entries)
+                    != tuple(document.identity for document in request.documents)
+                ):
+                    raise ValueError("conversation RAG checkpoint crossed its target")
+                after = self._inspect_state(session)
+                if (
+                    after.reason is not ConversationRagReason.NONE
+                    or after.state.availability
+                    is not ConversationRagProjectionStateAvailability.PRESENT
+                    or after.state.checkpoint != checkpoint
+                ):
+                    raise ValueError("conversation RAG publication was not persisted")
+                current = _authorized_target_under_lease(
+                    conversation_storage_services,
+                    session,
+                    embedding,
+                    lease=lease,
+                    workspace_key=workspace_key,
+                )
+                if current.request != request:
+                    raise ValueError(
+                        "conversation RAG source changed during publication"
+                    )
+                return canonical
         except (KeyboardInterrupt, SystemExit):
             raise
         except Exception:  # noqa: BLE001 - projection collaborators are injected
@@ -1215,9 +1516,12 @@ class ConversationRagRuntimeService:
 __all__ = [
     "CONVERSATION_RAG_RUNTIME_POLICY",
     "CONVERSATION_RAG_RUNTIME_SCHEMA_ID",
+    "ConversationRagRuntimeInspection",
+    "ConversationRagRuntimeInspectionStatus",
     "ConversationRagRuntimeError",
     "ConversationRagRuntimePolicy",
     "ConversationRagRuntimeService",
     "ConversationRagRuntimeState",
     "ConversationRagRuntimeStateSnapshot",
+    "inspect_authorized_conversation_rag",
 ]

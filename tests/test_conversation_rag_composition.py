@@ -91,8 +91,12 @@ class ConversationRagCompositionTests(unittest.TestCase):
                 "ConversationRagCompositionError",
                 "ConversationRagCompositionFailure",
                 "LocalConversationRagComposition",
+                "LocalConversationRagRuntimeComposition",
+                "LocalConversationRagRuntimeState",
                 "compose_conversation_rag",
                 "compose_local_conversation_rag",
+                "compose_local_conversation_rag_runtime",
+                "inspect_conversation_rag_compatibility",
             ],
         )
         self.assertEqual(composition.CONVERSATION_RAG_PROVIDER_ALLOWLIST, ("local",))
@@ -143,7 +147,7 @@ class ConversationRagCompositionTests(unittest.TestCase):
             importlib.metadata.version = forbidden_version
             import story_writing_agents.conversation_rag_composition as module
             assert module.CONVERSATION_RAG_PROVIDER_ALLOWLIST == ("local",)
-            assert len(module.__all__) == 6
+            assert len(module.__all__) == 10
             assert calls == []
             assert not any(
                 name == "generic_rag" or name.startswith("generic_rag.")
@@ -765,6 +769,202 @@ class ConversationRagCompositionTests(unittest.TestCase):
                 )
             with self.assertRaisesRegex(TypeError, "provide search"):
                 composition.LocalConversationRagComposition(store, object())  # type: ignore[arg-type]
+
+    def test_compatibility_probe_is_deferred_sanitized_and_resource_free(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Workspace(temporary).initialize()
+            rag_root = workspace.root / "agent_states/orchestrator_state/conversation_rag"
+            cases = (
+                (
+                    metadata.PackageNotFoundError("PRIVATE_PACKAGE_PATH"),
+                    composition.ConversationRagCompositionFailure.DEPENDENCY_MISSING,
+                ),
+                (
+                    None,
+                    composition.ConversationRagCompositionFailure.VERSION_INCOMPATIBLE,
+                ),
+            )
+            for failure, expected in cases:
+                with self.subTest(expected=expected):
+                    side_effect = failure if failure is not None else None
+                    return_value = "9.9.9" if failure is None else None
+                    with mock.patch.object(
+                        composition.metadata,
+                        "version",
+                        side_effect=side_effect,
+                        return_value=return_value,
+                    ):
+                        observed = composition.inspect_conversation_rag_compatibility(
+                            "local"
+                        )
+                    self.assertIs(observed, expected)
+                    self.assertFalse(rag_root.exists())
+            self.assertIs(
+                composition.inspect_conversation_rag_compatibility("remote"),
+                composition.ConversationRagCompositionFailure.PROVIDER_UNSUPPORTED,
+            )
+            for control in (KeyboardInterrupt(), SystemExit("control")):
+                with (
+                    self.subTest(control=type(control).__name__),
+                    mock.patch.object(
+                        composition.metadata,
+                        "version",
+                        side_effect=control,
+                    ),
+                    self.assertRaises(type(control)),
+                ):
+                    composition.inspect_conversation_rag_compatibility("local")
+            self.assertFalse(rag_root.exists())
+
+    def test_concrete_runtime_state_maps_every_store_status_and_marks_stale(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Workspace(temporary).initialize()
+            store = rag_store.ConversationRagGenerationStore(workspace)
+            state = composition.LocalConversationRagRuntimeState(store)
+            request = _projection_request()
+            entry = rag.ConversationRagProjectionCheckpointEntry(
+                document=request.documents[0].identity,
+                source_digest="sha256:" + "1" * 64,
+                fragment_count=1,
+            )
+            checkpoint = rag.ConversationRagProjectionCheckpoint(
+                session_id="session-a",
+                schema_id=_VISIBLE_TURN_SCHEMA_ID,
+                embedding=state.embedding,
+                max_fragment_codepoints=(
+                    rag.CONVERSATION_RAG_POLICY.max_fragment_codepoints
+                ),
+                fragment_overlap_codepoints=(
+                    rag.CONVERSATION_RAG_POLICY.fragment_overlap_codepoints
+                ),
+                entries=(entry,),
+                token="sha256:" + "2" * 64,
+            )
+            present = rag.ConversationRagProjectionState(
+                rag.ConversationRagProjectionStateAvailability.PRESENT,
+                checkpoint,
+            )
+            missing = _missing_state()
+            corrupt = rag.ConversationRagProjectionState(
+                rag.ConversationRagProjectionStateAvailability.CORRUPT,
+                None,
+            )
+            cases = (
+                (
+                    rag_store.ConversationRagStoreStatus.MISSING,
+                    missing,
+                    rag.ConversationRagReason.UNAVAILABLE,
+                ),
+                (
+                    rag_store.ConversationRagStoreStatus.READY,
+                    present,
+                    rag.ConversationRagReason.NONE,
+                ),
+                (
+                    rag_store.ConversationRagStoreStatus.STALE,
+                    present,
+                    rag.ConversationRagReason.STALE,
+                ),
+                (
+                    rag_store.ConversationRagStoreStatus.PROVIDER_FAILED,
+                    present,
+                    rag.ConversationRagReason.FAILED,
+                ),
+                (
+                    rag_store.ConversationRagStoreStatus.CORRUPT,
+                    corrupt,
+                    rag.ConversationRagReason.CORRUPT,
+                ),
+                (
+                    rag_store.ConversationRagStoreStatus.INCOMPATIBLE,
+                    present,
+                    rag.ConversationRagReason.INCOMPATIBLE,
+                ),
+            )
+            for status, projected, reason in cases:
+                snapshot = rag_store.ConversationRagStoreSnapshot(
+                    session_id="session-a",
+                    status=status,
+                    state=projected,
+                    provider_id=("local" if projected is present else None),
+                    generation_id=(
+                        "gen-" + "a" * 64 if projected is present else None
+                    ),
+                    counts=rag_store.ConversationRagStoreCounts(),
+                )
+                with (
+                    self.subTest(status=status),
+                    mock.patch.object(
+                        rag_store.ConversationRagGenerationStore,
+                        "inspect",
+                        return_value=snapshot,
+                    ) as inspect_store,
+                ):
+                    observed = state.inspect_projection_state("session-a")
+                self.assertIs(observed.reason, reason)
+                self.assertIs(observed.state, projected)
+                inspect_store.assert_called_once_with(
+                    "session-a",
+                    local.LOCAL_CONVERSATION_RAG_PROVIDER_ID,
+                    state.embedding,
+                    expected_projection_schema_id=_VISIBLE_TURN_SCHEMA_ID,
+                )
+            with mock.patch.object(
+                rag_store.ConversationRagGenerationStore, "set_status"
+            ) as set_status:
+                self.assertIsNone(state.mark_projection_stale("session-a"))
+            set_status.assert_called_once_with(
+                "session-a", rag_store.ConversationRagStoreStatus.STALE
+            )
+            self.assertEqual(state.workspace_key, str(workspace.root))
+            self.assertIs(state.store, store)
+            with self.assertRaisesRegex(TypeError, "exact store type"):
+                composition.LocalConversationRagRuntimeState(object())  # type: ignore[arg-type]
+
+    def test_concrete_runtime_bundle_is_correlated_and_construction_has_no_io(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Workspace(temporary).initialize()
+            rag_root = workspace.root / "agent_states/orchestrator_state/conversation_rag"
+
+            class LowLevel:
+                def project_documents(self, *args):  # type: ignore[no-untyped-def]
+                    del args
+
+                def rebuild_projection(self, *args):  # type: ignore[no-untyped-def]
+                    del args
+
+                def retrieve_semantic(self, *args):  # type: ignore[no-untyped-def]
+                    del args
+
+                def retrieve_hybrid(self, *args):  # type: ignore[no-untyped-def]
+                    del args
+
+            with mock.patch.object(
+                composition,
+                "compose_local_conversation_rag",
+                return_value=LowLevel(),
+            ) as compose_local:
+                bundle = composition.compose_local_conversation_rag_runtime(
+                    workspace,
+                    automatic_enabled=True,
+                )
+            self.assertIsInstance(
+                bundle, composition.LocalConversationRagRuntimeComposition
+            )
+            self.assertIs(bundle.state.store, bundle.store)
+            self.assertTrue(bundle.service.automatic_enabled)
+            self.assertFalse(rag_root.exists())
+            compose_local.assert_called_once()
+            with self.assertRaisesRegex(TypeError, "Workspace"):
+                composition.compose_local_conversation_rag_runtime(object())  # type: ignore[arg-type]
+            with self.assertRaisesRegex(TypeError, "boolean"):
+                composition.compose_local_conversation_rag_runtime(  # type: ignore[arg-type]
+                    workspace, automatic_enabled=1
+                )
 
 
 if __name__ == "__main__":
