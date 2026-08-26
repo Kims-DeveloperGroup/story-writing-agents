@@ -3036,6 +3036,16 @@ class ControllerCommandTests(ControllerTestCase):
             backend=backend,
             terminal_width=120,
         )
+        progress_events: list[str] = []
+
+        async def observe_progress(operation):
+            progress_events.append("started")
+            try:
+                return await operation
+            finally:
+                progress_events.append("completed")
+
+        controller._advisory_progress._run = observe_progress
         original_picker = terminal_module.InteractivePickerInput.read_picker
 
         with (
@@ -3054,6 +3064,7 @@ class ControllerCommandTests(ControllerTestCase):
             self.assertEqual(controller.run_session_lobby(), 0)
 
         list_lifecycles.assert_called_once_with()
+        self.assertEqual(progress_events, ["started", "completed"])
         picker.assert_called_once()
         picker_call = picker.call_args
         self.assertEqual(
@@ -9169,6 +9180,16 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 selected_id=_COLLIDING_A,
             )
         )
+        progress_events: list[str] = []
+
+        async def observe_progress(operation):
+            progress_events.append("started")
+            try:
+                return await operation
+            finally:
+                progress_events.append("completed")
+
+        controller._advisory_progress._run = observe_progress
         original_picker = terminal_module.InteractivePickerInput.read_picker
         with mock.patch.object(
             terminal_module.InteractivePickerInput,
@@ -9179,6 +9200,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
             self.assertEqual(controller.run_session_lobby(), 0)
 
         picker.assert_called_once()
+        self.assertEqual(progress_events, ["started", "completed"])
         picker_call = picker.call_args
         self.assertEqual(
             picker_call.args[1],

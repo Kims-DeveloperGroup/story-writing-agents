@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol
+from typing import Protocol, TypeVar, cast
 
 from .interactive_terminal import (
     Choice,
     ControlOutcomeKind,
+    InteractiveAdvisoryProgress,
     InteractivePickerInput,
     InteractiveStartupPresentation,
     InteractiveTerminal,
@@ -26,6 +28,9 @@ from .provider_auth import (
     ProviderAuthStatus,
     ProviderLoginResult,
 )
+
+
+_AuthProbeT = TypeVar("_AuthProbeT")
 
 
 class InteractiveAuthResultKind(StrEnum):
@@ -118,7 +123,7 @@ def select_default_provider(
 class InteractiveAuthCoordinator:
     """Coordinate one provider-neutral auth picker and native-login handoff."""
 
-    __slots__ = ("_auth", "_picker", "_presentation")
+    __slots__ = ("_auth", "_picker", "_presentation", "_progress")
 
     def __init__(
         self,
@@ -138,6 +143,7 @@ class InteractiveAuthCoordinator:
             raise TypeError("sleeper must be callable")
         self._auth: _ProviderAuth = auth_service
         self._picker = InteractivePickerInput(terminal)
+        self._progress = InteractiveAdvisoryProgress(terminal)
         self._presentation = InteractiveStartupPresentation(
             terminal,
             sleeper=sleeper,
@@ -151,10 +157,27 @@ class InteractiveAuthCoordinator:
     def probe_all(self) -> ProviderAuthSnapshot:
         """Return one explicitly probed status for each supported provider."""
 
-        snapshot = self._auth.probe_all()
+        snapshot = self._run_probe_progress(self._auth.probe_all)
         if not isinstance(snapshot, ProviderAuthSnapshot):
             raise TypeError("auth service must return a ProviderAuthSnapshot")
         return snapshot
+
+    def _run_probe_progress(
+        self,
+        operation: Callable[[], _AuthProbeT],
+    ) -> _AuthProbeT:
+        """Run one blocking native-status probe under terminal progress."""
+
+        if not callable(operation):
+            raise TypeError("auth probe operation must be callable")
+
+        async def probe() -> object:
+            """Keep terminal animation responsive while the probe blocks."""
+
+            return await self._progress.run(asyncio.to_thread(operation))
+
+        with asyncio.Runner() as runner:
+            return cast(_AuthProbeT, runner.run(probe()))
 
     def choices(
         self,
@@ -244,7 +267,9 @@ class InteractiveAuthCoordinator:
         if current.state is ProviderAuthState.UNAUTHENTICATED:
             return self._login(provider)
         if current.state is ProviderAuthState.INDETERMINATE:
-            refreshed = self._auth.probe(provider)
+            refreshed = self._run_probe_progress(
+                lambda: self._auth.probe(provider)
+            )
             _require_status(refreshed, provider)
             refreshed_snapshot = _snapshot_with_status(snapshot, refreshed)
             return _provider_result(refreshed_snapshot, refreshed)

@@ -62,6 +62,12 @@ _PROCESS_DEADLINE_SECONDS = 12.0
 _PROCESS_POLL_QUANTUM_SECONDS = 0.02
 _TEARDOWN_DEADLINE_SECONDS = 3.0
 _ANSI_SGR_BYTES = re.compile(rb"\x1b\[[0-9;]*m")
+_VISIBLE_PROGRESS_FRAMES = (
+    "[█▓▒░░░░░]",
+    "[▓█▓▒░░░░]",
+    "[▒▓█▓▒░░░]",
+    "[░▒▓█▓▒░░]",
+)
 
 
 _FAKE_CODEX = r'''#!/usr/bin/env python3
@@ -2630,12 +2636,12 @@ print(
             process.send_text(navigation)
             output = process.wait_for_text(expected_picker, after=mark)
             positions = tuple(
-                output.index(frame) for frame in ("◐", "◓", "◑", "◒")
+                output.index(frame) for frame in _VISIBLE_PROGRESS_FRAMES
             )
             self.assertEqual(positions, tuple(sorted(positions)))
             self.assertLess(max(positions), output.index(expected_picker))
             self.assertIn("\r\x1b[K", output)
-            self.assertNotRegex(output, r"[◐◓◑◒]\n")
+            self.assertNotIn(f"{_VISIBLE_PROGRESS_FRAMES[0]}\n", output)
             return output
 
         provider = open_delayed_picker(
@@ -3187,7 +3193,9 @@ print(
             b"Provider authentication",
             maxsplit=1,
         )[0]
-        self.assertTrue(raw_before_auth.startswith(b"\x1b[1;36mS\x1b[0m"))
+        welcome_start = b"\x1b[1;36mS\x1b[0m"
+        self.assertIn(welcome_start, raw_before_auth)
+        self.assertGreater(raw_before_auth.index(welcome_start), 0)
         for sgr in (
             b"\x1b[1;36m",
             b"\x1b[1;35m",
@@ -3219,6 +3227,187 @@ print(
             process.final_terminal_attributes,
             process.original_terminal_attributes,
         )
+
+    def test_delayed_startup_storage_and_context_each_animate_until_ready(
+        self,
+    ) -> None:
+        """Keep startup visibly active before welcome and lobby rendering."""
+
+        source = r'''
+import time
+
+from story_writing_agents import cli
+
+
+activate = cli.activate_configured_conversation_storage
+load_context = cli.load_cli_context
+
+
+def delayed_activate(workspace):
+    time.sleep(0.36)
+    return activate(workspace)
+
+
+def delayed_context(workspace):
+    time.sleep(0.36)
+    return load_context(workspace)
+
+
+cli.activate_configured_conversation_storage = delayed_activate
+cli.load_cli_context = delayed_context
+raise SystemExit(cli.main([]))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=64,
+        )
+        output = process.wait_for_text("story[lobby]> ")
+        welcome = "Next: checking Codex + Antigravity access."
+        welcome_position = output.index(welcome)
+        first_positions = tuple(
+            output.index(frame) for frame in _VISIBLE_PROGRESS_FRAMES
+        )
+        self.assertEqual(first_positions, tuple(sorted(first_positions)))
+        self.assertLess(max(first_positions), welcome_position)
+
+        after_welcome = output[welcome_position + len(welcome) :]
+        second_positions = tuple(
+            after_welcome.index(frame) for frame in _VISIBLE_PROGRESS_FRAMES
+        )
+        self.assertEqual(second_positions, tuple(sorted(second_positions)))
+        self.assertLess(
+            max(second_positions),
+            after_welcome.index("story[lobby]> "),
+        )
+        self.assertGreaterEqual(output.count("\r\x1b[K"), 2)
+        self.assertNotIn(f"{_VISIBLE_PROGRESS_FRAMES[0]}\n", output)
+
+        process.send_text("/quit\n\n")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertFalse(self.provider_log.exists())
+
+    def test_delayed_auth_session_and_conversation_reads_animate_to_picker(
+        self,
+    ) -> None:
+        """Keep each blocking data-to-picker transition visibly active."""
+
+        source = r'''
+import time
+
+from story_writing_agents import cli
+from story_writing_agents.backend import AgentBackend
+from story_writing_agents.interactive_controller import InteractiveController
+from story_writing_agents.provider_auth import ProviderAuthService
+from story_writing_agents.workspace import FilesystemConversationCatalog
+
+
+probe_all = ProviderAuthService.probe_all
+list_sessions = AgentBackend.list_session_lifecycles
+list_conversations = FilesystemConversationCatalog.list
+
+
+def delayed_probe_all(self):
+    time.sleep(0.36)
+    return probe_all(self)
+
+
+def delayed_list_sessions(self):
+    time.sleep(0.36)
+    return list_sessions(self)
+
+
+def delayed_list_conversations(self, session_id, *, include_archived=False):
+    time.sleep(0.36)
+    return list_conversations(
+        self,
+        session_id,
+        include_archived=include_archived,
+    )
+
+
+ProviderAuthService.probe_all = delayed_probe_all
+AgentBackend.list_session_lifecycles = delayed_list_sessions
+FilesystemConversationCatalog.list = delayed_list_conversations
+InteractiveController._main_resume_choices = lambda self, buffer, cursor: None
+raise SystemExit(cli.main([]))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=64,
+        )
+        process.wait_for_text("story[lobby]> ")
+
+        def assert_progress_before_picker(output: str, prompt: str) -> None:
+            """Require ordered spatial frames before one completed picker."""
+
+            positions = tuple(
+                output.index(frame) for frame in _VISIBLE_PROGRESS_FRAMES
+            )
+            self.assertEqual(positions, tuple(sorted(positions)))
+            self.assertLess(max(positions), output.index(prompt, positions[0]))
+
+        auth_mark = process.output_mark()
+        process.send_text("/auth\n\n")
+        auth_output = process.wait_for_text(
+            "1. [highlighted] Codex",
+            after=auth_mark,
+        )
+        assert_progress_before_picker(
+            auth_output,
+            "1. [highlighted] Codex",
+        )
+        cancel_mark = process.output_mark()
+        process.send_interrupt()
+        process.wait_for_text("story[lobby]> ", after=cancel_mark)
+
+        create_mark = process.output_mark()
+        process.send_line("/session create alpha")
+        process.wait_for_text("story[alpha:lead]> ", after=create_mark)
+        session_mark = process.output_mark()
+        process.send_text("/session resume\n\n")
+        session_output = process.wait_for_text(
+            "1. [highlighted] alpha",
+            after=session_mark,
+        )
+        assert_progress_before_picker(
+            session_output,
+            "1. [highlighted] alpha",
+        )
+        cancel_mark = process.output_mark()
+        process.send_interrupt()
+        process.wait_for_text("story[alpha:lead]> ", after=cancel_mark)
+
+        conversation_mark = process.output_mark()
+        process.send_line("/conversation new Delayed Subject")
+        process.wait_for_text("Subject: Delayed Subject", after=conversation_mark)
+        process.wait_for_text("story[alpha:lead]> ", after=conversation_mark)
+        resume_mark = process.output_mark()
+        process.send_text("/conversation resume\n\n")
+        conversation_output = process.wait_for_text(
+            "1. [highlighted] Delayed Subject",
+            after=resume_mark,
+        )
+        assert_progress_before_picker(
+            conversation_output,
+            "1. [highlighted] Delayed Subject",
+        )
+        cancel_mark = process.output_mark()
+        process.send_interrupt()
+        process.wait_for_text("story[alpha:lead]> ", after=cancel_mark)
+
+        process.send_text("/quit\n\n")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertFalse(self.provider_log.exists())
 
     def test_startup_welcome_scales_wide_and_narrow_without_provider_leakage(
         self,
@@ -5937,18 +6126,22 @@ asyncio.run(main())
                     source,
                     environment_overrides={"TERM": "xterm-256color"},
                     terminal_columns=40,
+                    decorative_color=True,
                 )
                 mark = process.output_mark()
                 output = process.wait_for_text("RESULT=two", after=mark)
                 self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
                 positions = tuple(
-                    output.index(frame) for frame in ("◐", "◓", "◑", "◒")
+                    output.index(frame) for frame in _VISIBLE_PROGRESS_FRAMES
                 )
                 self.assertEqual(positions, tuple(sorted(positions)))
                 self.assertIn("answer-one", output)
                 self.assertIn("answer-two", output)
                 self.assertNotIn("[routing]", output)
                 self.assertNotIn("[waiting]", output)
+                raw_output = bytes(process.raw_bytes)
+                for color in (36, 34, 35, 31):
+                    self.assertIn(f"\x1b[1;{color}m".encode(), raw_output)
                 self.assertGreaterEqual(output.count("\x1b[K"), 4)
                 self.assertNotIn("Task was destroyed", process.normalized_text)
 
@@ -5978,7 +6171,7 @@ asyncio.run(main())
         process = self._spawn_python(source, environment_overrides={"TERM": "dumb"})
         output = process.wait_for_text("RESULT=done")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        self.assertNotRegex(output, r"[◐◓◑◒]")
+        self.assertNotIn(_VISIBLE_PROGRESS_FRAMES[0], output)
         self.assertNotIn("\x1b[K", output)
 
     def test_advisory_vintr_terminates_provider_taints_then_restarts_thread(
@@ -6018,7 +6211,10 @@ asyncio.run(main())
         records_before_cancel = len(self._provider_records())
         mark = process.output_mark()
         process.send_line("cancel advisory")
-        progress_output = process.wait_for_text("◐", after=mark)
+        progress_output = process.wait_for_text(
+            _VISIBLE_PROGRESS_FRAMES[0],
+            after=mark,
+        )
         self.assertNotIn("responding; Ctrl-C", progress_output)
         self.assertNotIn("[routing] ", progress_output)
 
@@ -6177,7 +6373,7 @@ asyncio.run(main())
             "/run --output part-01/cancel-consensus.md cancel consensus"
         )
         process.wait_for_text("Started prompt consensus.", after=mark)
-        process.wait_for_text("◐", after=mark)
+        process.wait_for_text(_VISIBLE_PROGRESS_FRAMES[0], after=mark)
 
         def is_blocked_consensus_draft(record: dict[str, Any]) -> bool:
             """Identify the blocked execution draft for the cancellation run."""

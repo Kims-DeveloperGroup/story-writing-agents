@@ -71,8 +71,24 @@ _DEFAULT_TERMINAL_WIDTH = 80
 _MAX_ESCAPE_SEQUENCE_LENGTH = 64
 _ESCAPE_LOOKAHEAD_SECONDS = 0.05
 _DEFAULT_TERMIOS = object()
-_PROGRESS_FRAME_COUNT = 4
+_PROGRESS_FRAME_COUNT = 14
 _PROGRESS_INTERVAL_SECONDS = 0.08
+_PROGRESS_SGR_FRAMES = (
+    "\x1b[1;36m",
+    "\x1b[1;34m",
+    "\x1b[1;35m",
+    "\x1b[1;31m",
+    "\x1b[1;33m",
+    "\x1b[1;32m",
+    "\x1b[1;36m",
+    "\x1b[1;34m",
+    "\x1b[1;36m",
+    "\x1b[1;32m",
+    "\x1b[1;33m",
+    "\x1b[1;31m",
+    "\x1b[1;35m",
+    "\x1b[1;34m",
+)
 _STARTUP_WELCOME_FRAME_COUNT = 4
 _STARTUP_WELCOME_INTERVAL_SECONDS = 0.4
 _STARTUP_NOTICE_DURATION_SECONDS = 0.8
@@ -434,7 +450,7 @@ class RawTerminalDriver:
         self._output_stream.flush()
 
     def _clear_progress_frame(self) -> None:
-        """Clear the current one-cell indicator without adding a row."""
+        """Clear the current one-row indicator without adding a row."""
 
         self._write_raw_text("\r\x1b[K")
 
@@ -442,7 +458,7 @@ class RawTerminalDriver:
         self,
         frame_renderer: Callable[[int], str] | None = None,
     ) -> None:
-        """Draw the current fixed indicator frame at the cursor cell."""
+        """Draw the current fixed indicator frame on the active row."""
 
         frame_renderer = (
             self._progress_renderer if frame_renderer is None else frame_renderer
@@ -450,8 +466,17 @@ class RawTerminalDriver:
         if not callable(frame_renderer):
             raise TypeError("frame_renderer must be callable")
         frame = frame_renderer(self._progress_frame)
-        if type(frame) is not str or len(frame) != 1:
-            raise TypeError("frame_renderer must return one display cell")
+        if type(frame) is not str:
+            raise TypeError("frame_renderer must return a string")
+        plain_frame = frame
+        for prefix in _PROGRESS_SGR_FRAMES:
+            if frame.startswith(prefix) and frame.endswith(_SGR_RESET):
+                plain_frame = frame[len(prefix) : -len(_SGR_RESET)]
+                break
+        if sanitize_terminal_text(plain_frame) != plain_frame or any(
+            character in plain_frame for character in ("\r", "\n", "\x1b")
+        ) or (plain_frame is frame and "\x1b" in frame):
+            raise ValueError("progress frame must be safe single-row text")
         self._write_raw_text(f"\r{frame}")
 
     async def run_advisory_progress(
@@ -469,11 +494,37 @@ class RawTerminalDriver:
         if not capabilities.raw_mode:
             return await operation
 
+        def fitted_frame_renderer(frame: int) -> str:
+            """Reserve the rightmost cell while retaining fixed safe copy."""
+
+            rendered = frame_renderer(frame)
+            if type(rendered) is not str:
+                raise TypeError("frame_renderer must return a string")
+            if sanitize_terminal_text(rendered) != rendered or any(
+                character in rendered for character in ("\r", "\n", "\x1b")
+            ):
+                raise ValueError("progress frame must be safe single-row text")
+            available_width = max(0, capabilities.width - 1)
+            fitted: list[str] = []
+            fitted_width = 0
+            for character in rendered:
+                character_width = display_character_width(character)
+                if fitted_width + character_width > available_width:
+                    break
+                fitted.append(character)
+                fitted_width += character_width
+            fitted_text = "".join(fitted)
+            if not fitted_text or not capabilities.decorative_sgr:
+                return fitted_text
+            return (
+                f"{_PROGRESS_SGR_FRAMES[frame]}{fitted_text}{_SGR_RESET}"
+            )
+
         self._progress_active = True
         self._progress_frame = 0
-        self._progress_renderer = frame_renderer
+        self._progress_renderer = fitted_frame_renderer
         try:
-            self._draw_progress_frame(frame_renderer)
+            self._draw_progress_frame(fitted_frame_renderer)
         except BaseException as exc:
             self._progress_active = False
             self._progress_renderer = None
@@ -489,7 +540,9 @@ class RawTerminalDriver:
             ) from exc
 
         operation_task = asyncio.ensure_future(operation)
-        progress_task = asyncio.create_task(self._run_progress_frames(frame_renderer))
+        progress_task = asyncio.create_task(
+            self._run_progress_frames(fitted_frame_renderer)
+        )
         operation_failure: BaseException | None = None
         progress_failure: BaseException | None = None
         result: _T | None = None

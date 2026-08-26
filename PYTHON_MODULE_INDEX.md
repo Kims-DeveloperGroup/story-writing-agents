@@ -665,8 +665,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   reads are history-free; an incapable first read permanently retains ordinary
   callback input. Interactive startup validates TTY and all
   arguments before workspace discovery. After workspace discovery and
-  configuration validation it coordinates desired conversation-storage
-  activation and injects the resulting immutable service bundle into the
+  configuration validation it constructs the terminal and coordinates desired
+  conversation-storage activation beneath one terminal-owned text-free
+  progress span. It injects the resulting immutable service bundle into the
   controller before constructing one workspace-root-bound
   `ProviderAuthService` and `InteractiveAuthCoordinator`. It sequences the
   welcome, an initial hard gate until at least one provider is exactly
@@ -676,7 +677,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   distinct effective provider. It treats cancellation, interrupt, and EOF as
   clean pre-backend exits and delays CLI-context loading, backend and controller
   construction, initial session attachment, and lobby work until both gates
-  pass. It injects the same borrowed coordinator into the controller for later
+  pass. CLI-context, backend, and controller preparation share a second
+  continuous terminal-owned progress span that clears before lobby transfer.
+  It injects the same borrowed coordinator into the controller for later
   `/auth` and authenticated settings work. Native subprocess, terminal, and
   configuration-persistence ownership remain with `provider_auth`,
   `interactive_terminal`, and `interactive_settings` respectively. The
@@ -1853,7 +1856,9 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `interactive_terminal` and `provider_auth`.
 - **State, resources, and side effects:** The coordinator retains borrowed
   authentication and terminal collaborators plus a resource-free picker and
-  startup-presentation adapter. It projects stable Codex and Antigravity rows
+  startup-presentation adapter. Each full or selected native-status probe runs
+  in a bounded local Runner/default-executor span under terminal-owned progress;
+  callback and incapable terminals remain silent. It projects stable Codex and Antigravity rows
   with explicit authenticated, unauthenticated, unavailable, and indeterminate
   text; disabled state and current selection remain meaningful without color.
   Before login it displays sanitized fixed guidance and completes that terminal
@@ -2019,12 +2024,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   emit persistent context records containing their normalized query and scope,
   or their visible conversation handle and effective page parameters, before
   the corresponding provider-free catalog or memory operation. Unfiltered
-  lists add no request record. Advisory turns, consensus waits, and bounded
-  Settings Provider/Model/Effort option reads retain the facade's unlisted
+  lists add no request record. Omitted session/conversation resume preparation,
+  advisory turns, consensus waits, and bounded Settings Provider/Model/Effort
+  option reads retain the facade's unlisted
   `InteractiveAdvisoryProgress` and `InteractiveDebateProgress` adapters. The
   runtime paths wrap exactly their awaitables instead of emitting persistent
-  routing and waiting notices; Settings moves its synchronous bounded reads to
-  the Runner thread while the same terminal lifecycle remains active. Capable
+  routing and waiting notices; picker and Settings preparation move their
+  synchronous bounded reads to the Runner thread while the same terminal
+  lifecycle remains active. Capable
   stream terminals show bounded progress, while callback and ordinary-line
   fallback remain visually silent. The controller owns no indicator glyph,
   cursor control, or animation task. It
@@ -2623,10 +2630,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   opt out of that lifecycle. These adapters do not expand the exact public
   `__all__` or `InteractiveTerminal` method surface.
   Unlisted `InteractiveAdvisoryProgress`, `InteractiveDebateProgress`, and
-  `AdvisoryProgressError` bind advisory, consensus, and Settings option-read
-  async progress lifecycles through the same facade: callback and incapable
-  terminals await silently,
-  while stream construction injects the pure fixed-glyph renderer into the sole
+  `AdvisoryProgressError` bind startup, advisory, consensus, and Settings
+  option-read async progress lifecycles through the same facade: callback and
+  incapable terminals await silently,
+  while stream construction injects the pure fixed-row renderer into the sole
   driver. They do not expand the public `__all__` or expose terminal leaves to
   the controller.
   Unlisted package-internal `InteractiveTextViewer`, `TextViewerExitKind`, and
@@ -2825,9 +2832,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   a two-space-indented projection; malformed JSON, scalars, embedded prose, and
   every other string return exactly unchanged. The fixed `AGENT` role is bold
   terminal-default foreground with the same plain meaning and local reset.
-  `render_advisory_progress_frame` projects the fixed one-cell `◐`, `◓`,
-  `◑`, and `◒` cycle without ANSI, cursor controls, dynamic content, or
-  state. Package-internal `render_startup_welcome_frame` separately consumes one
+  `render_advisory_progress_frame` projects one fixed text-free eight-cell
+  block-shade shimmer whose graded bright point travels out and back, without
+  ANSI, cursor controls, dynamic content, or state. Package-internal
+  `render_startup_welcome_frame` separately consumes one
   exact purpose-bound `StartupWelcome`, never a raw stage index, and projects
   its validated stage without entering the general `Component` vocabulary. It
   selects its prefix-free wide, compact, or narrow layout from the supplied
@@ -3065,10 +3073,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   per-read transient flags, while the installed facade adapters always request
   this lifecycle. Line fallback cannot erase printed prompts or input and emits
   no synthetic `completed` or `cancelled` control frame. Supported
-  package-internal `run_advisory_progress` accepts one advisory, consensus, or
-  Settings option-read awaitable and an injected fixed-glyph renderer, awaits
+  package-internal `run_advisory_progress` accepts one startup, advisory,
+  consensus, or Settings option-read awaitable and an injected fixed-row
+  renderer, awaits
   silently without raw cursor capability, and on a capable stream joins the
-  operation with one indicator task. Internal
+  operation with one indicator task. The row is fitted to a freshly observed
+  width while reserving the rightmost cell, cleared as a unit around semantic
+  writes, and leaves no completed loading record. A fixed bold ANSI palette
+  cycles by frame when decorative SGR is enabled; `NO_COLOR` retains the same
+  spatial frames without SGR. Internal
   `AdvisoryProgressError` distinguishes indicator failure from provider failure
   for controller cleanup. Purpose-bound `run_startup_welcome`,
   `run_startup_notice`, and `run_startup_result_notice` accept injected pure
@@ -3342,9 +3355,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   components use a no-op callback sink and the driver's selected-mode sink for
   callback and stream construction respectively. Resource-free
   `InteractiveAdvisoryProgress` and
-  `InteractiveDebateProgress` bind the terminal's advisory, consensus, and
-  Settings option-read awaitable wrappers: callback construction remains
-  visually silent, and stream construction injects the pure fixed-glyph
+  `InteractiveDebateProgress` bind the terminal's startup, picker preparation,
+  advisory, consensus, and Settings option-read awaitable wrappers: callback construction remains
+  visually silent, and stream construction injects the pure fixed-row
   renderer into the sole driver without exposing capabilities or streams.
   Resource-free
   `InteractiveStartupPresentation` similarly binds the fixed, prefix-free
@@ -4636,10 +4649,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   one-byte decoder, bounded decoded suffix, stable EOF, poisoning, interrupt
   reset, and synchronous input exclusion; `_driver` retains the fixed
   50-millisecond Escape readiness select and checks decoded suffixes first. For
-  advisory progress it also
-  exclusively owns the active glyph state, operation/animation task joining,
-  cursor clear/redraw writes, and cleanup; `_render` supplies only the pure
-  injected four-glyph projection, and incapable or callback terminals remain
+  startup, advisory, consensus, and Settings progress it also
+  exclusively owns the active row state, operation/animation task joining,
+  cursor clear/redraw writes, rightmost-cell-safe fitting, and cleanup;
+  `_render` supplies only the pure injected text-free shimmer row,
+  and incapable or callback terminals remain
   visually silent. For the separate fixed startup/auth presentation it alone
   owns capability and reduced-motion selection, guarded noncanonical/no-echo
   activation, atomic type-ahead discard, exact restoration before native login,
@@ -4700,11 +4714,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   exposes an unlisted typed semantic-output adapter and closed component
   bindings, including `ListView`, for package consumers without expanding
   `__all__`; controller code imports only that facade, never a terminal leaf.
-  The same facade exposes unlisted advisory progress and error bindings: the
-  controller brackets exactly one advisory runtime awaitable without owning
-  animation mechanics, and the driver removes the indicator before result,
-  cancellation, or failure presentation. Persistent advisory routing and
-  waiting records are intentionally absent.
+  The same facade exposes unlisted progress and error bindings: CLI startup,
+  authentication, controller picker preparation, and controller runtime waits
+  each bracket exactly one awaitable without owning animation mechanics. The
+  driver removes the indicator before the next view, result, cancellation, or
+  failure presentation. Persistent advisory routing and waiting records are
+  intentionally absent.
   Counted session, conversation, search, transcript, and history output uses
   one positioned one-record list and one component write for each established
   row callback, preserving partial-output and cancellation boundaries.

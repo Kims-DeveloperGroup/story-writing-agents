@@ -99,9 +99,13 @@ line fallback. The driver observes bounded output width and height before the
 first viewer frame and after every nonexit key. It installs no `SIGWINCH`
 handler or background resize loop, and it never hides or shows the cursor.
 
-For one advisory turn, the same capability result also gates the narrow
-terminal-owned progress indicator. A capable raw stream may show the fixed
-four-glyph `◐`/`◓`/`◑`/`◒` cycle; `NO_COLOR` leaves those plain glyphs enabled.
+For startup storage activation, authenticated runtime preparation, native
+authentication probes, persisted omitted-resume preparation, advisory and
+consensus turns, and Settings option preparation, the same capability result
+also gates the narrow terminal-owned progress indicator. A capable raw stream
+may show the fixed
+text-free eight-cell block-shade shimmer with a fixed ANSI color cycle;
+`NO_COLOR` preserves the same spatial motion without SGR.
 Callback construction and non-TTY, `TERM=dumb`, non-POSIX, missing, or
 uncertain-capability paths await the operation silently and emit no indicator.
 The installed CLI's earlier TTY guard still rejects non-TTY shell entry before
@@ -314,15 +318,21 @@ alternate-screen enter, home-and-clear redraw, and alternate-screen exit
 sequences surround only sanitized, bounded renderer output. Caller text and
 display metadata can never supply these functional sequences.
 
-## Advisory progress boundary
+## Startup and advisory progress boundary
 
-The indicator is advisory-only: it wraps exactly one runtime awaitable for one
-advisory turn and is not a semantic record, callback, status event, or general
-animation service. The raw driver owns the active glyph, advances the fixed
-four-frame cycle, serializes clear/redraw around semantic retrieval/progress or
-result writes, and creates no OS thread or import-time task. It joins both the
-operation and indicator tasks, then clears the cell before final, cancellation,
-or error presentation; the wrapper returns after this cleanup.
+The same private indicator wraps one awaitable at a time and is not a semantic
+record, callback, status event, or general animation service. Startup uses it
+first for conversation-storage activation before the welcome, then for one
+continuous post-authentication span covering CLI-context, backend, and
+controller construction before the lobby. Native-status probes and persisted
+session/conversation reads before omitted resume pickers use the same lifecycle
+and add no text. Advisory, consensus, and Settings consumers retain their
+established boundaries. The raw driver owns the active row, advances the fixed
+shimmer cycle, serializes
+clear/redraw around semantic retrieval/progress or result writes, and creates
+no OS thread or import-time task. It joins both the operation and indicator
+tasks, then clears the row before final, cancellation, or error presentation;
+the wrapper returns after this cleanup.
 
 An underlying operation failure takes precedence over a simultaneous indicator
 failure. If only the indicator or its final clear fails, the driver raises the
