@@ -25,6 +25,7 @@ from story_writing_agents import (
 )
 from story_writing_agents.agents import CHARACTER_CUSTODIAN
 from story_writing_agents.conversation_retrieval import (
+    ConversationRagContext,
     ConversationRetrievalActionKind,
     ConversationRetrievalAnswerAction,
     ConversationRetrievalReply,
@@ -508,6 +509,36 @@ class RuntimeReferenceIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 expected_agent_id=PLOT_ARCHITECT,
                 progress_events=(),
             )
+
+    async def test_mixed_whole_and_range_references_coexist_with_forced_rag(
+        self,
+    ) -> None:
+        retrieval = await self.runtime.converse_with_retrieval(
+            _SESSION,
+            self.selected.conversation_id,
+            PLOT_ARCHITECT,
+            _SOURCE_TEXT,
+            memory_service=self.memory,
+            rag_query="Reference source",
+        )
+        self.assertIsNotNone(retrieval.reference_operation_id)
+        rag_context = self.backend.retrieval_requests[0].rag_context
+        self.assertEqual(rag_context, ConversationRagContext.disabled())
+        assert rag_context is not None
+        self.assertEqual(retrieval.rag_outcome, rag_context.outcome)
+        self.assertEqual(len(self.backend.reads), 1)
+        self.assert_read_batch(self.backend.reads)
+        references = self.backend.reads[0].request.references  # type: ignore[attr-defined]
+        self.assertEqual(
+            tuple(
+                None
+                if reference.line_range is None
+                else (reference.line_range.start, reference.line_range.end)
+                for reference in references
+            ),
+            (None, (2, 2), None, None),
+        )
+        self.assert_content_free_history(retrieval.reference_operation_id, 1)
 
     async def test_every_debate_provider_phase_reads_fresh_batch_before_modification(self) -> None:
         progress: list[DebateProgressEvent] = []

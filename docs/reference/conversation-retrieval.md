@@ -1,9 +1,11 @@
 # Bounded conversation retrieval
 
 > **Availability:** focused shell conversations use bounded retrieval. Python
-> callers opt in; `converse()` remains one-step. Inline canonical references in
-> either form are captured by `StoryRuntime` and enforced through the optional
-> `BoundAgent` reference coordinator before the unchanged retrieval loop.
+> callers opt in; `converse()` remains one-step. Python callers may also inject
+> the optional conversation-RAG runtime service and force a preflight query.
+> Inline canonical references in either form are captured by `StoryRuntime` and
+> enforced through the optional `BoundAgent` reference coordinator before the
+> unchanged retrieval loop. RAG commands and `/settings` selection are deferred.
 
 Key terms: **retrieval turn**—one message, action loop, and answer; **action**—a
 correlated provider request; **observation**—authorized untrusted story data;
@@ -13,9 +15,11 @@ correlated provider request; **observation**—authorized untrusted story data;
 
 ```python
 await StoryRuntime.converse_with_retrieval(session_id, conversation_id,
-    agent_id, text, *, memory_service, progress_sink=None) -> ConversationRetrievalResult
+    agent_id, text, *, memory_service, progress_sink=None,
+    rag_query=None) -> ConversationRetrievalResult
 await RuntimeSession.converse_with_retrieval(conversation_id, agent_id, text,
-    *, memory_service, progress_sink=None) -> ConversationRetrievalResult
+    *, memory_service, progress_sink=None,
+    rag_query=None) -> ConversationRetrievalResult
 await BoundAgent.converse_with_retrieval(request, handler, *,
     reference_read: ReferenceReadInvocation | None = None) -> ConversationRetrievalReply
 handler.handle_conversation_retrieval_action(action) -> ConversationRetrievalObservation | ConversationRetrievalReply
@@ -26,6 +30,9 @@ ConversationRetrievalRequest(*, session_id, conversation_id, turn_id, agent_id, 
 ConversationRetrievalReply(*, session_id, conversation_id, turn_id, content, sources)
 ConversationRetrievalResult(*, session_id, conversation_id, turn_id, agent_id, content, context, sources)
 ConversationRetrievalSource(*, subject, citation)
+ConversationRagAttemptOutcome(*, outcome, reason)
+ConversationRagExcerpt(*, citation_id, source, reference, content)
+ConversationRagContext(*, outcome, excerpts, retained_utf8_bytes, truncated)
 ConversationRetrievalProgressEvent(*, session_id, conversation_id, turn_id,
     agent_id, action_index, phase, search_hit_count=0,
     transcript_turn_count=0, transcript_event_count=0,
@@ -56,9 +63,10 @@ IDs are `s{action}h{ordinal}` and `r{action}e{ordinal}`.
 ## Payload, trust, and fixed budgets
 
 The initial payload has `operation`, session/conversation/turn/agent IDs,
-`content`, `context`, and `retrieval`. Continuations omit content/context and
-add one `observation`. Retrieval control has index, allowed actions, policy,
-and rules. Without references, existing conversation/debate payloads stay
+`content`, `context`, and `retrieval`, plus `rag_context` only after an attempted
+RAG preflight. Continuations omit content, context, and RAG context and add one
+`observation`. Retrieval control has index, allowed actions, policy, and rules.
+Without references or an attempted RAG preflight, established payloads stay
 unchanged. With an internal reference coordinator, one separate content-free
 prelude runs first and `untrusted_writing_artifact_context` appears only on this
 initial retrieval payload, never on a continuation.
@@ -76,6 +84,51 @@ observations may contain subject/visible-event snippets, never `runtime_error`.
 Reads contain only complete `user_message`/`agent_reply` pairs, never unmatched
 events or `runtime_error`. Prompts/private state/diagnostics are excluded. Empty
 reads are framed: zero turns/events.
+
+<a id="optional-conversation-rag-preflight"></a>
+
+## Optional conversation RAG preflight
+
+`StoryRuntime` accepts an application-composed
+`ConversationRagRuntimeService`. Its default automatic policy is off. A
+non-`None` `rag_query` forces exactly one preflight and overrides automatic
+query derivation. With no configured service, a forced query yields an empty
+`literal_fallback`/`disabled` context; with no query, no attempt occurs and both
+the request's `rag_context` and result's `rag_outcome` remain `None`.
+
+An attempted context has the exact top-level fields `outcome`, `reason`,
+`excerpts`, `retained_utf8_bytes`, and `truncated`. Outcomes are `complete`,
+`partial`, or `literal_fallback`; fallback reasons are `disabled`,
+`unavailable`, `stale`, `corrupt`, `incompatible`, or `failed`. Excerpts use
+contiguous `g1` through `g20` citation IDs and carry an authoritative `source`,
+stable `reference`, and reread `content`. They are explicitly untrusted story
+data, not instructions. The agent may cite those IDs in the same answer as
+later `s...` or `r...` sources; the runtime resolves all of them through its
+existing supplied-source authorization map.
+
+Only active conversations and complete visible user/reply pairs participate.
+The runtime merges literal candidates first, accepts at most one semantic
+excerpt per current projected document, rejects provider text, and rereads the
+complete current authoritative target before retaining any range. A context
+holds at most 20 excerpts, each at most 800 codepoints, and at most 32,768 UTF-8
+bytes. Candidate omission or stale identities/ranges makes the outcome partial
+or fallback. Rejected semantic identities or ranges also mark derived state
+stale best-effort. Citation ranges map to the earliest intersected subject,
+user, or reply interval.
+
+`rag_context` is present only on the initial substantive retrieval payload;
+continuations retain the RAG-specific citation/trust rules but repeat no RAG
+content. When canonical writing-artifact references and RAG are both present,
+the separate reference prelude remains first, and the initial substantive
+payload carries both independently authorized contexts. Neither context appears
+on a continuation. The preflight itself adds no story-agent provider call.
+
+After a successful reply append, a configured runtime projects all current
+active complete visible turns under schema
+`story-conversation-rag-visible-turn-v1`. Ordinary projection failures cannot
+alter the committed reply; process-control exceptions propagate after commit.
+The fixed projection, state-port, and composition contracts are in
+[Package API](package-api.md#optional-conversation-rag-boundary).
 
 | Retrieval-loop limit | Exact maximum |
 | --- | ---: |

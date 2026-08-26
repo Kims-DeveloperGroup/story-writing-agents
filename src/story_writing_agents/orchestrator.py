@@ -24,8 +24,13 @@ from .backend import (
     release_bound_agent,
 )
 from .config import ConfigManager
+from .conversation_rag_runtime import (
+    ConversationRagRuntimeError,
+    ConversationRagRuntimeService,
+)
 from .conversation_retrieval import (
     CONVERSATION_RETRIEVAL_POLICY,
+    ConversationRagContext,
     ConversationRetrievalAction,
     ConversationRetrievalActionKind,
     ConversationRetrievalAnswerAction,
@@ -264,7 +269,15 @@ class _RuntimeConversationRetrievalHandler:
         self._has_read = False
         self._completed = False
         self._search_sources: dict[str, ConversationRetrievalSource] = {}
-        self._supplied_sources: dict[str, ConversationRetrievalSource] = {}
+        self._supplied_sources = {
+            excerpt.citation_id: excerpt.source
+            for excerpt in (
+                () if request.rag_context is None else request.rag_context.excerpts
+            )
+        }
+        if request.rag_context is not None:
+            for excerpt in request.rag_context.excerpts:
+                self._record_text_diagnostics(excerpt.content)
         self._final_reply: ConversationRetrievalReply | None = None
 
     def handle_conversation_retrieval_action(
@@ -1069,6 +1082,7 @@ class StoryRuntime:
         *,
         conversation_event_store: ConversationEventStore | None = None,
         conversation_storage_services: ConversationStorageServices | None = None,
+        conversation_rag_service: ConversationRagRuntimeService | None = None,
     ) -> None:
         workspace_literal = (
             str(workspace.root) if isinstance(workspace, Workspace) else str(workspace)
@@ -1094,6 +1108,19 @@ class StoryRuntime:
             raise TypeError(
                 "conversation_storage_services must be ConversationStorageServices"
             )
+        if conversation_rag_service is not None and (
+            type(conversation_rag_service) is not ConversationRagRuntimeService
+        ):
+            raise TypeError(
+                "conversation_rag_service must be ConversationRagRuntimeService"
+            )
+        if (
+            conversation_rag_service is not None
+            and conversation_event_store is not None
+        ):
+            raise TypeError(
+                "conversation_rag_service requires conversation_storage_services"
+            )
         if (
             conversation_storage_services is None
             and conversation_event_store is None
@@ -1102,6 +1129,7 @@ class StoryRuntime:
                 compose_filesystem_conversation_storage(self.workspace)
             )
         self.conversation_storage_services = conversation_storage_services
+        self.conversation_rag_service = conversation_rag_service
         self.conversation_event_store = (
             conversation_storage_services.event_store
             if conversation_storage_services is not None
@@ -1611,6 +1639,12 @@ class StoryRuntime:
                 if reference_failure is not None:
                     raise reference_failure from exc
                 raise
+            self._project_conversation_rag_after_append(
+                session,
+                operation=DebugOperation.ADVISORY_TURN,
+                conversation_id=conversation,
+                agent_id=agent,
+            )
             self._trace_debug(
                 DebugOperation.ADVISORY_TURN,
                 DebugPhase.SUCCEEDED,
@@ -1630,6 +1664,7 @@ class StoryRuntime:
         *,
         memory_service: ConversationMemoryService,
         progress_sink: ConversationRetrievalProgressSink | None = None,
+        rag_query: str | None = None,
     ) -> ConversationRetrievalResult:
         """Run one durable advisory turn with bounded agent-directed retrieval.
 
@@ -1653,6 +1688,14 @@ class StoryRuntime:
         if agent not in ROSTER:
             raise ValueError(f"conversation agent is not canonical: {agent}")
         content = self._validate_conversation_text(text)
+        if rag_query is not None:
+            if type(rag_query) is not str:
+                raise TypeError("rag_query must be a string or None")
+            ConversationSearchQuery(
+                text=rag_query,
+                limit=20,
+                include_archived=False,
+            )
         scoped_memory = self._validate_conversation_retrieval_memory_service(
             memory_service,
             session_id=session,
@@ -1682,6 +1725,25 @@ class StoryRuntime:
                 text=content,
             )
             try:
+                if self.conversation_rag_service is not None:
+                    storage_services = self.conversation_storage_services
+                    assert storage_services is not None
+                    rag_context = self.conversation_rag_service.preflight(
+                        storage_services,
+                        session,
+                        reference_operation.source_text,
+                        forced_query=rag_query,
+                    )
+                elif rag_query is not None:
+                    rag_context = ConversationRagContext.disabled()
+                else:
+                    rag_context = None
+            except Exception as exc:
+                reference_failure = reference_operation.failure(exc)
+                if reference_failure is not None:
+                    raise reference_failure from exc
+                raise
+            try:
                 request = ConversationRetrievalRequest(
                     session_id=session,
                     conversation_id=conversation,
@@ -1689,6 +1751,7 @@ class StoryRuntime:
                     agent_id=agent,
                     content=reference_operation.provider_text,
                     context=context,
+                    rag_context=rag_context,
                 )
             except Exception as exc:
                 failure = BackendProtocolError(
@@ -1745,6 +1808,8 @@ class StoryRuntime:
                     progress,
                     diagnostic_values,
                 )
+                if rag_query is not None:
+                    handler._record_text_diagnostics(rag_query)
                 user_event = ConversationEventAppend(
                     session_id=session,
                     conversation_id=conversation,
@@ -1811,6 +1876,11 @@ class StoryRuntime:
                     context=request.context,
                     sources=reply.sources,
                     reference_operation_id=reference_operation.operation_id,
+                    rag_outcome=(
+                        None
+                        if request.rag_context is None
+                        else request.rag_context.outcome
+                    ),
                 )
                 reference_operation.finish()
             except asyncio.CancelledError as cancellation_error:
@@ -1909,6 +1979,12 @@ class StoryRuntime:
                 if reference_failure is not None:
                     raise reference_failure from exc
                 raise
+            self._project_conversation_rag_after_append(
+                session,
+                operation=DebugOperation.RETRIEVAL_TURN,
+                conversation_id=conversation,
+                agent_id=agent,
+            )
             self._trace_debug(
                 DebugOperation.RETRIEVAL_TURN,
                 DebugPhase.SUCCEEDED,
@@ -3522,6 +3598,34 @@ class StoryRuntime:
             )
         return canonical
 
+    def _project_conversation_rag_after_append(
+        self,
+        session_id: str,
+        *,
+        operation: DebugOperation,
+        conversation_id: str,
+        agent_id: str,
+    ) -> None:
+        """Best-effort project after a committed reply without altering it."""
+
+        service = self.conversation_rag_service
+        if service is None:
+            return
+        services = self.conversation_storage_services
+        assert services is not None
+        try:
+            service.project_authorized(services, session_id)
+        except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
+            raise
+        except Exception:  # noqa: BLE001 - projection is explicitly isolated
+            self._record_debug_error(
+                operation,
+                ConversationRagRuntimeError(),
+                session_id=session_id,
+                conversation_id=conversation_id,
+                agent_id=agent_id,
+            )
+
     @staticmethod
     def _validated_conversation_reply(
         reply: Any,
@@ -4512,6 +4616,7 @@ class RuntimeSession:
         *,
         memory_service: ConversationMemoryService,
         progress_sink: ConversationRetrievalProgressSink | None = None,
+        rag_query: str | None = None,
     ) -> ConversationRetrievalResult:
         """Delegate one bounded retrieval turn through this bound session.
 
@@ -4528,6 +4633,7 @@ class RuntimeSession:
             text,
             memory_service=memory_service,
             progress_sink=progress_sink,
+            rag_query=rag_query,
         )
 
     async def run_prompt(

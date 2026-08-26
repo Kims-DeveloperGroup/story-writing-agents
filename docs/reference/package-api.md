@@ -157,9 +157,10 @@ See [Conversation search](conversation-search.md#search-contract).
 
 > **Availability:** these are direct Python APIs. Issues #262/#283 provide the
 > contracts, deterministic local provider, disposable generation store, generic
-> adapter, and explicit local composition. They are not connected to
-> `StoryRuntime`, authoritative conversation stores, agents, the CLI, `/rag`,
-> or `/settings`; existing literal retrieval and `/search` are unchanged.
+> adapter, and explicit local composition. Issue #263 adds the direct
+> provider/store-neutral runtime service and its additive `StoryRuntime`
+> integration. No RAG CLI command, `/rag`, or `/settings` field exists yet;
+> existing literal `/search` is unchanged.
 
 Provider-neutral story contracts live in
 `story_writing_agents.conversation_rag`. The module imports only the standard
@@ -212,8 +213,8 @@ retrieve_hybrid(request, state) -> ConversationRagRetrievalResult
 Projection input can contain authorized source text, but public retrieval
 output does not. `ConversationRagCandidate` carries only a stable source
 reference and contiguous rank. Provider fragment text is non-authoritative
-adapter input and is dropped after identity/range validation. A future runtime
-must reauthorize and reread the current range before display or agent use.
+adapter input and is dropped after identity/range validation. The configured
+runtime reauthorizes and rereads the current range before agent use.
 
 The exact generic translation surface requires the optional package and
 exports three names:
@@ -417,12 +418,100 @@ storage/provider state also returns `literal_fallback` with a fixed content-free
 reason. A missing or incompatible optional package at initial composition
 raises the sanitized composition error before store I/O.
 
-These modules implement only direct local provider and disposable derived-state
-behavior. They do not authorize sources, schedule projection, reread or cite
-authoritative content, inject agent context, or implement the user interface.
+The separate runtime boundary is direct-module-only and exports exactly seven
+names:
+
+```python
+from story_writing_agents.conversation_rag_runtime import (
+    CONVERSATION_RAG_RUNTIME_POLICY,
+    CONVERSATION_RAG_RUNTIME_SCHEMA_ID,
+    ConversationRagRuntimeError,
+    ConversationRagRuntimePolicy,
+    ConversationRagRuntimeService,
+    ConversationRagRuntimeState,
+    ConversationRagRuntimeStateSnapshot,
+)
+```
+
+The fixed schema is `"story-conversation-rag-visible-turn-v1"`.
+`ConversationRagRuntimePolicy` is immutable at these exact values:
+
+| Field | Exact value |
+| --- | ---: |
+| `max_query_codepoints` | `200` |
+| `max_literal_candidates`, `max_semantic_candidates`, `max_excerpts` | `20` each |
+| `max_excerpt_codepoints` | `800` |
+| `max_context_utf8_bytes` | `32_768` |
+| `max_projected_source_utf8_bytes` | `33_554_432` |
+
+The stateful service surface is:
+
+```python
+ConversationRagRuntimeService(
+    low_level_service: ConversationRagService,
+    state_port: ConversationRagRuntimeState,
+    /,
+    *,
+    automatic_enabled: bool = False,
+)
+service.automatic_enabled -> bool
+service.preflight(
+    conversation_storage_services: ConversationStorageServices,
+    session_id: str,
+    turn_text: str,
+    /,
+    *,
+    forced_query: str | None = None,
+) -> ConversationRagContext | None
+service.project_authorized(
+    conversation_storage_services: ConversationStorageServices,
+    session_id: str,
+    /,
+    *,
+    rebuild: bool = False,
+) -> ConversationRagProjectionResult
+```
+
+The application-owned `ConversationRagRuntimeState` port supplies
+`workspace_key`, `embedding`, synchronous
+`inspect_projection_state(session_id)`, and synchronous
+`mark_projection_stale(session_id)`. This release supplies the protocol, not a
+settings-owned factory or a public store-to-state adapter. The runtime service
+owns authorization and orchestration, but no authoritative store, generation
+store, provider lifecycle, settings, network, or credentials.
+
+Only active conversations and complete visible user/reply pairs enter the
+fixed projection. Each document contains exact `Subject`, `User`, and addressed
+`Agent` framing; fixed length-framed SHA-256 domains bind its session,
+conversation, turn, metadata revision, event values, and source text.
+Projection holds one bounded conversation-storage mutation lease while it
+enumerates the target, then verifies the published checkpoint and repeats the
+authoritative read to reject drift. Preflight performs active-only literal
+search, uses semantic state only when ready, rereads the complete current target
+under the same authority, drops provider text, validates every stable reference
+and range, keeps literal candidates first, and retains at most one excerpt per
+document within the fixed budgets. Ordinary boundary failures are content-free;
+process-control exceptions propagate.
+
+The additive runtime-owned provider values remain direct-module-only from
+`story_writing_agents.conversation_retrieval`:
+
+```python
+ConversationRagAttemptOutcome(*, outcome, reason)
+ConversationRagExcerpt(*, citation_id, source, reference, content)
+ConversationRagContext(*, outcome, excerpts, retained_utf8_bytes, truncated)
+```
+
+Attempted contexts use contiguous `g1` through `g20` citation IDs and expose
+authoritative excerpt text only through the explicit provider dictionary;
+dataclass representations omit it. `ConversationRetrievalRequest.rag_context`
+and `ConversationRetrievalResult.rag_outcome` are additive and default to
+`None`. None of the three RAG values joins the unchanged 120-name package-root
+facade.
+
 Installation, immutable-pin verification, caller ownership, the redistribution
-restriction, persistence boundary, and planned agent/user flow are in
-[Optional conversation RAG](../guides/conversation-rag.md).
+restriction, persistence boundary, current agent flow, and planned user flow
+are in [Optional conversation RAG](../guides/conversation-rag.md).
 
 <a id="conversation-storage-subpackage"></a>
 

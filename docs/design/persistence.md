@@ -9,8 +9,9 @@
 > available through direct Python modules and as an explicitly selected
 > next-shell bundle. Provider-free storage commands can select desired storage
 > or migrate and verify two already-ready stores in one workspace.
-> Optional conversation RAG now has a separate direct-Python disposable
-> generation store; no runtime, agent, CLI, or settings path uses it yet.
+> Optional conversation RAG has a separate direct-Python disposable generation
+> store and an injectable runtime authorization/projection path; no CLI or
+> settings path selects it yet.
 > `StoryRuntime` creates and finalizes reference evidence for inline referenced
 > operations; Python callers can inspect it by operation ID.
 
@@ -35,7 +36,7 @@ provisioning nor migration alone selects runtime authority.
 | Canonical conversation archive value and bytes | `conversation_storage.archive`; caller owns any stored or transmitted bytes |
 | Same-workspace conversation migration and checkpoints | `conversation_storage.migration`; canonical archive adapters remain the data boundary |
 | Desired storage, readiness, and startup activation | Configuration owns desired value; `conversation_storage.selection` owns preparation/parity and next-shell marker CAS |
-| Disposable conversation RAG generations | `conversation_rag_store`; derived per-session state only, never conversation authority |
+| Disposable conversation RAG generations | `conversation_rag_store`; derived per-session state only, never conversation authority; an injected runtime service schedules and verifies use through its application-owned state port |
 | Bounded runtime diagnostics | Internal `debug_log` writer |
 | Retrieval actions, observations, progress, sources | Process/terminal only |
 | Current conversation and agent focus | Controller memory only |
@@ -170,11 +171,11 @@ first, then removes only advisory status and derived generation contents. It
 does not remove the session locks/directories or touch authoritative
 conversations, storage activation, configuration, SQLite, manuscripts,
 artifacts, provider state, or another RAG session. Derived state remains
-rebuildable from separately authorized authoritative sources once #263 supplies
-that orchestration. See the
+rebuildable from separately authorized authoritative sources through the
+programmatic `conversation_rag_runtime` orchestration. See the
 [direct API](../reference/package-api.md#optional-conversation-rag-boundary),
 [filesystem guarantees](../operations/filesystem-safety.md#conversation-rag-generation-store-safety),
-and [current/planned workflow](../guides/conversation-rag.md).
+and [current runtime/planned user workflow](../guides/conversation-rag.md).
 
 <a id="optional-sqlite-conversation-persistence"></a>
 

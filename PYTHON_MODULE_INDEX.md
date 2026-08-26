@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 74.
+Importable production units indexed: 75.
 
-Direct internal dependency edges indexed: 280.
+Direct internal dependency edges indexed: 288.
 
 ## Current Dependency Direction
 
@@ -35,8 +35,13 @@ __main__ -> cli -> conversation_storage.migration/selection
                  -> provider_catalog -> (standard library only)
                  -> run_inputs -> errors
                  -> debug_log -> agents/workspace
-                 -> orchestrator -> conversation_retrieval -> agents/conversation_search
-                 |               |                           -> conversations/errors
+                 -> orchestrator -> conversation_rag_runtime
+                 |               |  -> conversation_literal_search/conversation_rag
+                 |               |  -> conversation_retrieval/conversation_search
+                 |               |  -> conversation_storage.contracts/conversations
+                 |               -> conversation_retrieval
+                 |               |  -> agents/conversation_rag/conversation_search
+                 |               |  -> conversations/errors
                  |               -> conversation_search -> conversation_literal_search
                  |                                      -> conversations/errors
                  |               -> prompts -> agents/config/conversations/models
@@ -110,9 +115,13 @@ generic_rag_adapter -> conversation_rag
 conversation_rag_composition -> conversation_rag
                              -> conversation_rag_local/conversation_rag_store
                              -> generic_rag_adapter (deferred until composition)
+conversation_rag_runtime -> conversation_literal_search/conversation_rag
+                         -> conversation_retrieval/conversation_search
+                         -> conversation_storage.contracts/conversations
 story_writing_agents facade -> interactive_commands
-                            -> conversation_retrieval -> agents/conversation_search
-                            |                          -> conversations/errors
+                            -> conversation_retrieval
+                            |  -> agents/conversation_rag/conversation_search
+                            |  -> conversations/errors
                             -> conversation_search -> conversation_literal_search
                             |                      -> conversations/errors
                             -> session_lifecycle
@@ -140,7 +149,8 @@ conversation_storage.sqlite -> conversation_literal_search/conversation_search
                             -> conversation_storage.sqlite_database
                             -> conversation_storage.sqlite_search_index
                             -> conversation_storage.composition/contracts
-orchestrator -> conversation_storage.composition/contracts
+orchestrator -> conversation_rag_runtime
+             -> conversation_storage.composition/contracts
 models -> conversations/agents/errors
 provider_adapter -> models
 provider_auth -> (standard library only)
@@ -352,7 +362,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   result-received and acceptance callbacks succeed. Direct and debate work add
   one physical prelude call; retrieval places that prelude outside its unchanged
   one-to-five-call action budget and supplies the frame only to retrieval call
-  one. Malformed, mismatched, broadened, partial, repeated, provider, drift,
+  one. An attempted authorized conversation-RAG preflight adds one exact
+  `rag_context` object only to retrieval call one, frames its excerpts as
+  untrusted story data, and permits their deterministic `g1` through `g20`
+  citation identities in the existing answer action. Continuations omit that
+  context while retaining its citation authorization through the provider
+  thread. A request with no RAG attempt preserves the exact established
+  payload keys and retrieval rules. Malformed, mismatched, broadened, partial,
+  repeated, provider, drift,
   workflow, interruption, and cancellation failures terminate with content-free
   outcomes; any failure after a persisted successful prelude best-effort taints
   the provider thread without replacing the primary exception. Debate requests
@@ -991,13 +1008,80 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/reference/package-api.md`, `docs/guides/conversation-rag.md`, and
   `docs/design/overview.md`.
 
+### `story_writing_agents.conversation_rag_runtime`
+
+- **Source:** `src/story_writing_agents/conversation_rag_runtime.py`
+- **Responsibility:** Authorize provider-neutral conversation-RAG projection
+  and retrieval against current authoritative conversation state.
+- **Supported surface:** Exactly seven direct-module names in `__all__`:
+  `CONVERSATION_RAG_RUNTIME_POLICY`,
+  `CONVERSATION_RAG_RUNTIME_SCHEMA_ID`, `ConversationRagRuntimeError`,
+  `ConversationRagRuntimePolicy`, `ConversationRagRuntimeService`,
+  `ConversationRagRuntimeState`, and
+  `ConversationRagRuntimeStateSnapshot`. The fixed schema is
+  `story-conversation-rag-visible-turn-v1`. The stateful service accepts one
+  provider-neutral low-level `ConversationRagService`, one persistent
+  runtime-state port, and optional `automatic_enabled=False`; it exposes
+  bounded `preflight(..., forced_query=None)` and
+  `project_authorized(..., rebuild=False)` operations. None is re-exported by
+  the 120-name package-root facade.
+- **Direct internal dependencies:** `conversation_literal_search`,
+  `conversation_rag`, `conversation_retrieval`, `conversation_search`,
+  `conversation_storage.contracts`, and `conversations`.
+- **State, resources, and side effects:** Construction retains the injected
+  service and restart-safe state/status capability without I/O or resource
+  acquisition and rejects declared-async collaborators. Every attempted
+  retrieval first proves exact workspace provenance, runs at most one
+  active-only literal search and one eligible semantic call, then freshly
+  enumerates ACTIVE metadata and authoritative transcripts under one bounded
+  mutation-coordinator borrow. Every target snapshot validates the exact
+  workspace-bound lease, permits at most 256 conversations, 10,000 events, and
+  32 MiB of aggregate role-framed source UTF-8, and releases the lease before
+  provider, embedding, or generation work. Dynamic awaitable and async-
+  generator collaborator results are rejected synchronously; returned
+  coroutines are closed. Only committed complete visible user/reply pairs
+  become role-framed documents. Fixed length-framed SHA-256 identities bind
+  schema, session, conversation, turn, metadata revision, exact event fields,
+  and authoritative source text. Provider candidate text is ignored; stable
+  references are checked against current document identity and range, merged
+  with literal precedence, and deduplicated to the first stable excerpt per
+  complete-turn document. Deduplication alone is not truncation. The resulting
+  context contains at most 20 cited excerpts of at most 800 code points and
+  32,768 aggregate UTF-8 bytes. Literal transcript windows use the deterministic
+  prefix of the exact cited event-content interval; subject hits use the prefix
+  of the newest complete turn's exact subject-content interval. Literal
+  fragment identities use the fixed
+  `story-conversation-rag-visible-turn-literal-v1` hash domain. Fragment ranges
+  map to the earliest intersected authoritative subject, user, or reply
+  citation, with framing-only ranges using a conversation citation. Rejected
+  semantic identities/ranges and failed target reconstruction after semantic
+  state use best-effort mark the derived projection stale without replacing
+  the content-free attempted outcome. Projection enumerates the complete
+  current ACTIVE target, selects incremental or full rebuild from persistent
+  state, requires the published checkpoint to match the schema/embedding/
+  document target, re-inspects exact persisted state, and then repeats the
+  authoritative enumeration so drift after publication is marked stale and
+  rejected. Ordinary projection failure best-effort marks persistent state
+  stale; injected control exceptions propagate. The module owns no
+  authoritative storage, generation store, provider, network, credential,
+  controller/settings, SQLite, MySQL, or import-time resource.
+- **Primary verification/documentation:** `tests/test_conversation_rag_runtime.py`,
+  `tests/test_conversation_rag.py`, `tests/test_conversation_retrieval.py`,
+  `tests/test_conversation_runtime.py`,
+  `docs/guides/conversation-rag.md`,
+  `docs/reference/conversation-retrieval.md`,
+  `docs/reference/package-api.md`, and
+  `docs/reference/runtime-api.md`.
+
 ### `story_writing_agents.conversation_retrieval`
 
 - **Source:** `src/story_writing_agents/conversation_retrieval.py`
 - **Responsibility:** Define immutable provider-neutral bounded conversation-
   retrieval actions, observations, results, progress, fixed policy, canonical
   untrusted-data framing, and the synchronous runtime/backend handler port.
-- **Supported surface:** Module-supported `CONVERSATION_RETRIEVAL_POLICY`,
+- **Supported surface:** Exactly 24 direct-module names:
+  `CONVERSATION_RETRIEVAL_POLICY`, `ConversationRagAttemptOutcome`,
+  `ConversationRagContext`, `ConversationRagExcerpt`,
   `ConversationRetrievalAction`, `ConversationRetrievalActionHandler`,
   `ConversationRetrievalActionKind`, `ConversationRetrievalAnswerAction`,
   `ConversationRetrievalObservation`, `ConversationRetrievalPolicy`,
@@ -1008,18 +1092,27 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ConversationRetrievalResult`, `ConversationRetrievalSearchAction`,
   `ConversationRetrievalSearchItem`, `ConversationRetrievalSearchObservation`,
   `ConversationRetrievalSource`, `ConversationRetrievalTranscriptEvent`, and
-  `serialize_conversation_retrieval_observation`. The package facade exports
-  every listed name except the serializer. `ConversationRetrievalResult`
+  `serialize_conversation_retrieval_observation`. The original retrieval
+  contract names remain package-facade exports; the three RAG values and the
+  serializer are supported only from this direct module, preserving the exact
+  120-name root facade. `ConversationRetrievalRequest` carries additive
+  optional `rag_context`; `ConversationRetrievalResult`
+  carries additive optional `rag_outcome`. Both default to `None`, so no-attempt
+  construction and provider payloads omit RAG context exactly. Attempted
+  context always includes outcome/reason, canonical `g1` through `g20`
+  authoritative excerpts, exact retained UTF-8 bytes, and truncation.
+  `ConversationRetrievalResult`
   carries an additive optional, content-free `reference_operation_id`; its
   default remains `None`, and construction validates any supplied safe
   identity without importing artifact-runtime ownership.
-- **Direct internal dependencies:** `agents`, `conversation_search`,
-  `conversations`, and `errors`.
+- **Direct internal dependencies:** `agents`, `conversation_rag`,
+  `conversation_search`, `conversations`, and `errors`.
 - **State, resources, and side effects:** Frozen, slotted contracts, immutable
   policy metadata, exact validators, and pure canonical serialization only.
-  The module performs no I/O and owns no storage, provider, process, thread,
-  filesystem, or mutable runtime state and has no operational import side
-  effect.
+  Authoritative excerpt content is excluded from dataclass representations but
+  remains present in the explicitly framed provider dictionary. The module
+  performs no I/O and owns no storage, provider, process, thread, filesystem,
+  or mutable runtime state and has no operational import side effect.
 - **Primary verification/documentation:**
   `tests/test_conversation_retrieval.py`, `tests/test_public_api_and_cli.py`,
   and `docs/reference/conversation-retrieval.md`.
@@ -3534,11 +3627,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   method signatures consume inline artifact-reference directives without new
   parameters, and their result contracts expose an optional content-free
   reference-operation identity. `StoryRuntime` retains its positional
-  construction and raw keyword-only `conversation_event_store` seam and adds a
-  keyword-only immutable `conversation_storage_services` seam; supplying both
-  forms is rejected.
+  construction and raw keyword-only `conversation_event_store` seam plus the
+  immutable `conversation_storage_services` seam, and accepts an additive
+  optional keyword-only `conversation_rag_service`. A RAG service requires the
+  complete storage-services form; the legacy raw event-store form remains
+  compatible when RAG is absent. `converse_with_retrieval()` on both runtime
+  forms accepts additive optional `rag_query`; a supplied query forces one
+  attempt, while an absent query follows the injected service's
+  default-disabled automatic policy. Supplying no service and no query
+  preserves no-attempt behavior; forcing without a service yields an explicit
+  disabled fallback.
 - **Direct internal dependencies:** `agents`, `backend`, `config`,
-  `conversation_retrieval`, `conversation_search`,
+  `conversation_rag_runtime`, `conversation_retrieval`, `conversation_search`,
   `conversation_storage.composition`, `conversation_storage.contracts`,
   `debug_log`, `directives`, `conversations`, `errors`, `models`, `prompts`,
   `session_lifecycle`, and `workspace`; plus `writing_artifacts`,
@@ -3630,6 +3730,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   transcript reads; the event store, `Workspace`, and backend retain their
   persistence and provider resources. Retrieval creates no debate, artifact,
   catalog, owner-state, or control/progress/source persistence.
+  When configured, exactly one nonrecursive RAG preflight runs before the user
+  append and supplies its optional context only to the initial provider
+  request. The call-local handler preauthorizes its `g` citations alongside
+  later search/read citations. After a successful agent-reply append in either
+  advisory path, the runtime synchronously requests one isolated full-target
+  projection. Ordinary projection or stale-marking failure records only a
+  fixed safe diagnostic and cannot change the committed reply or append an
+  error; cancellation, `KeyboardInterrupt`, and `SystemExit` propagate after
+  commit. No projection runs after a user-append, provider/runtime-error, or
+  reply-append failure. The authorization service owns RAG state decisions;
+  orchestration imports no provider, generation store, settings, SQLite, or
+  MySQL implementation.
   Consensus owns a `WritingArtifactRepository` built from the resolved
   workspace root. The execution specialist authors every revision-zero
   candidate, including supplied-draft requests; the lead orchestrator owns
