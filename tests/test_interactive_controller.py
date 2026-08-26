@@ -6840,7 +6840,8 @@ class ControllerSettingsTests(ControllerTestCase):
             workspace.path(CONVERSATION_STORAGE_ACTIVATION_STATE_PATH).exists()
         )
         self.assertIn(
-            "Changes apply to the next shell",
+            "Settings saved. Desired conversation storage is sqlite and applies to "
+            "the next shell.",
             "".join(callbacks.records),
         )
 

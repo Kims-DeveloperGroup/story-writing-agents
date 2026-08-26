@@ -2820,7 +2820,7 @@ class InteractiveController:
                 Notice(
                     (
                         "Settings saved. Desired conversation storage is "
-                        f"{storage_after}. Changes apply to the next shell."
+                        f"{storage_after} and applies to the next shell."
                     ),
                     label="saved",
                     role=SemanticRole.SUCCESS,
