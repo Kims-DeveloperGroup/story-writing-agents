@@ -291,8 +291,14 @@ class SemanticInputModelTests(unittest.TestCase):
         self.assertEqual((state.line_count, state.character_count), (2, 12))
         self.assertEqual(
             tuple(field.name for field in fields(InputPromptView)),
-            ("context", "prompt"),
+            ("context", "prompt", "initial_value"),
         )
+        initial_value = inspect.signature(InputPromptView).parameters[
+            "initial_value"
+        ]
+        self.assertIs(initial_value.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIsNone(initial_value.default)
+        self.assertIsNone(view.initial_value)
         self.assertEqual(
             tuple(field.name for field in fields(RenderedInputFrame)),
             ("text", "plain_text", "width", "line_count"),
