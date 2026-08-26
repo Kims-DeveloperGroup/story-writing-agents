@@ -1415,6 +1415,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_sqlite_database.py`,
   `tests/test_conversation_storage.py`,
   `tests/test_conversation_catalog.py`,
+  `tests/conversation_catalog_contract.py`,
   `tests/conversation_event_store_contract.py`,
   `tests/conversation_search_contract.py`,
   `docs/design/persistence.md`,
@@ -1524,6 +1525,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_conversation_storage_migration.py`,
   `tests/test_conversation_storage.py`,
   `tests/test_conversation_catalog.py`,
+  `tests/conversation_catalog_contract.py`,
   `tests/conversation_event_store_contract.py`,
   `tests/conversation_search_contract.py`,
   `README.md`,
@@ -1617,6 +1619,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   selection, and identity-bound context-window validation only; owns no
   mutable state or external resource.
 - **Primary verification/documentation:**
+  `tests/conversation_catalog_contract.py`,
   `tests/conversation_event_store_contract.py`,
   `tests/test_conversation_catalog.py`,
   `tests/test_conversation_event_store.py`,
@@ -3492,7 +3495,9 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:** `tests/test_workspace_and_config.py`,
   `tests/test_debug_log.py`, `tests/test_agent_state.py`,
   `tests/test_lifecycle_atomicity.py`,
-  `tests/test_public_api_and_cli.py`, `tests/test_conversation_catalog.py`,
+  `tests/test_public_api_and_cli.py`,
+  `tests/conversation_catalog_contract.py`,
+  `tests/test_conversation_catalog.py`,
   `tests/conversation_event_store_contract.py`,
   `tests/test_conversation_event_store.py`,
   `docs/reference/workspace-api.md`,
@@ -4563,7 +4568,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   defaults. No lifecycle alias, projection, old callable, fallback, migration,
   automatic deletion, or second lifecycle abstraction remains. Version-1
   lifecycle/default artifacts are unsupported inputs and are never rewritten.
-- `tests/conversation_event_store_contract.py` is reusable test-only adapter
-  conformance support; it is not a production module or supported package API.
+- `tests/conversation_catalog_contract.py` and
+  `tests/conversation_event_store_contract.py` are reusable test-only adapter
+  conformance support; neither is a production module or supported package API.
 - Direct imports of internal configuration, prompt, workspace-constant, or CLI
   helpers in tests do not add them to the supported package API.

@@ -132,11 +132,27 @@ class FilesystemConversationSearchContractTests(
         self,
     ) -> tuple[FilesystemConversationCatalog, FilesystemConversationEventStore]:
         self.workspace = initialized_workspace(self)
-        catalog = FilesystemConversationCatalog(self.workspace)
-        return catalog, FilesystemConversationEventStore(
-            self.workspace,
-            catalog=catalog,
-        )
+        self.services = compose_filesystem_conversation_storage(self.workspace)
+        if not isinstance(self.services.catalog, FilesystemConversationCatalog):
+            raise AssertionError("filesystem composition returned the wrong catalog")
+        if not isinstance(
+            self.services.event_store,
+            FilesystemConversationEventStore,
+        ):
+            raise AssertionError(
+                "filesystem composition returned the wrong event store"
+            )
+        return self.services.catalog, self.services.event_store
+
+    def make_search(
+        self,
+        catalog: object,
+        store: object,
+    ) -> ReferenceConversationSearch:
+        del catalog, store
+        if not isinstance(self.services.search, ReferenceConversationSearch):
+            raise AssertionError("filesystem composition returned the wrong search")
+        return self.services.search
 
 
 class ConversationSearchValueContractTests(unittest.TestCase):

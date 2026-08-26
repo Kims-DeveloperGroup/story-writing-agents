@@ -24,6 +24,7 @@ from story_writing_agents.conversation_storage import (
     ConversationStorageActivationState,
     ConversationStorageBackend,
     ConversationStorageParity,
+    FilesystemConversationArchiveAdapter,
     WorkspaceConversationStorageMutationCoordinator,
     compose_filesystem_conversation_archive,
     compose_filesystem_conversation_storage,
@@ -51,6 +52,7 @@ from tests.conversation_archive_fixture import (
     archive_from_conversations,
 )
 from tests.conversation_storage_migration_fixture import (
+    NamespaceEntry,
     checkpoint_path,
     checkpoint_relative,
     export_backend,
@@ -583,6 +585,255 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
         self.assertFalse(
             checkpoint_path(workspace, ConversationStorageBackend.FILESYSTEM).exists()
         )
+
+    def test_filesystem_to_sqlite_control_interrupt_rolls_back_and_retries_exactly(
+        self,
+    ) -> None:
+        payload = representative_archive()
+        for control_type in (KeyboardInterrupt, SystemExit):
+            with self.subTest(control=control_type.__name__):
+                workspace = migration_workspace(self)
+                import_backend(
+                    workspace,
+                    ConversationStorageBackend.FILESYSTEM,
+                    payload,
+                )
+                activation = workspace.path(CONVERSATION_STORAGE_ACTIVATION_STATE_PATH)
+                activation_before = (
+                    activation.read_bytes() if activation.exists() else None
+                )
+                configuration = (
+                    workspace.path("config/system_defaults.json"),
+                    workspace.path("config/agent_configs.json"),
+                )
+                configuration_before = tuple(
+                    path.read_bytes() for path in configuration
+                )
+                before = namespace_snapshot(workspace.root)
+                original_insert = sqlite_module._insert_event
+                calls = 0
+
+                def interrupt_second_event(connection, event):  # type: ignore[no-untyped-def]
+                    nonlocal calls
+                    calls += 1
+                    if calls == 2:
+                        raise control_type()
+                    return original_insert(connection, event)
+
+                with (
+                    mock.patch.object(
+                        sqlite_module,
+                        "_insert_event",
+                        new=interrupt_second_event,
+                    ),
+                    self.assertRaises(control_type),
+                ):
+                    _migrate(workspace, ConversationStorageBackend.FILESYSTEM)
+
+                self.assertEqual(calls, 2)
+                self.assertEqual(namespace_snapshot(workspace.root), before)
+                self.assertEqual(
+                    activation.read_bytes() if activation.exists() else None,
+                    activation_before,
+                )
+                self.assertEqual(
+                    tuple(path.read_bytes() for path in configuration),
+                    configuration_before,
+                )
+                self.assertEqual(
+                    export_backend(workspace, ConversationStorageBackend.FILESYSTEM),
+                    payload,
+                )
+                with raw_connection(workspace) as connection:
+                    self.assertEqual(
+                        connection.execute("SELECT * FROM conversations").fetchall(),
+                        [],
+                    )
+                    self.assertEqual(
+                        connection.execute(
+                            "SELECT * FROM conversation_events"
+                        ).fetchall(),
+                        [],
+                    )
+                checkpoint = checkpoint_path(
+                    workspace,
+                    ConversationStorageBackend.FILESYSTEM,
+                )
+                self.assertFalse(checkpoint.exists())
+
+                retried = _migrate(
+                    workspace,
+                    ConversationStorageBackend.FILESYSTEM,
+                )
+                self.assertIs(
+                    retried.outcome,
+                    ConversationStorageMigrationOutcome.COMPLETED,
+                )
+                self.assertIs(retried.parity, ConversationStorageParity.VERIFIED)
+                self.assertEqual(retried.checkpoint, "completed")
+                self.assertEqual(
+                    export_backend(workspace, ConversationStorageBackend.SQLITE),
+                    payload,
+                )
+                self.assertEqual(
+                    export_backend(workspace, ConversationStorageBackend.FILESYSTEM),
+                    payload,
+                )
+                self.assertEqual(
+                    activation.read_bytes() if activation.exists() else None,
+                    activation_before,
+                )
+                self.assertEqual(
+                    tuple(path.read_bytes() for path in configuration),
+                    configuration_before,
+                )
+
+    def test_sqlite_to_filesystem_control_interrupt_keeps_prefix_and_resumes_exactly(
+        self,
+    ) -> None:
+        payload = representative_archive()
+        first = payload.sessions[0].conversations[0]
+        expected_prefix = archive_from_conversations(first)
+
+        def sqlite_namespace(workspace: Workspace) -> dict[str, NamespaceEntry]:
+            return {
+                relative: entry
+                for relative, entry in namespace_snapshot(workspace.root).items()
+                if relative.startswith("discussion_logs/conversation_storage.sqlite3")
+                or relative.startswith(
+                    "discussion_logs/.conversation_storage_fts5.sqlite3"
+                )
+            }
+
+        for control_type in (KeyboardInterrupt, SystemExit):
+            with self.subTest(control=control_type.__name__):
+                workspace = migration_workspace(
+                    self,
+                    active_backend=ConversationStorageBackend.SQLITE,
+                )
+                import_backend(
+                    workspace,
+                    ConversationStorageBackend.SQLITE,
+                    payload,
+                )
+                activation = workspace.path(CONVERSATION_STORAGE_ACTIVATION_STATE_PATH)
+                activation_before = activation.read_bytes()
+                configuration = (
+                    workspace.path("config/system_defaults.json"),
+                    workspace.path("config/agent_configs.json"),
+                )
+                configuration_before = tuple(
+                    path.read_bytes() for path in configuration
+                )
+                source_before = sqlite_namespace(workspace)
+                original_import = FilesystemConversationArchiveAdapter.import_archive
+                callbacks: list[tuple[str, str]] = []
+
+                def interrupt_after_first_completion(
+                    adapter: FilesystemConversationArchiveAdapter,
+                    lease: object,
+                    archive: object,
+                    *,
+                    on_conversation_completed=None,  # type: ignore[no-untyped-def]
+                ):
+                    if on_conversation_completed is None:
+                        raise AssertionError(
+                            "migration omitted its completion callback"
+                        )
+
+                    def record_then_interrupt(
+                        session_id: str,
+                        conversation_id: str,
+                    ) -> None:
+                        on_conversation_completed(session_id, conversation_id)
+                        callbacks.append((session_id, conversation_id))
+                        if len(callbacks) == 1:
+                            raise control_type()
+
+                    return original_import(
+                        adapter,
+                        lease,  # type: ignore[arg-type]
+                        archive,  # type: ignore[arg-type]
+                        on_conversation_completed=record_then_interrupt,
+                    )
+
+                with (
+                    mock.patch.object(
+                        FilesystemConversationArchiveAdapter,
+                        "import_archive",
+                        new=interrupt_after_first_completion,
+                    ),
+                    self.assertRaises(control_type),
+                ):
+                    _migrate(workspace, ConversationStorageBackend.SQLITE)
+
+                self.assertEqual(
+                    callbacks,
+                    [(first.session_id, first.conversation_id)],
+                )
+                self.assertEqual(
+                    export_backend(workspace, ConversationStorageBackend.FILESYSTEM),
+                    expected_prefix,
+                )
+                self.assertEqual(
+                    export_backend(workspace, ConversationStorageBackend.SQLITE),
+                    payload,
+                )
+                source_after = sqlite_namespace(workspace)
+                self.assertEqual(source_after, source_before)
+                self.assertEqual(activation.read_bytes(), activation_before)
+                self.assertEqual(
+                    tuple(path.read_bytes() for path in configuration),
+                    configuration_before,
+                )
+
+                checkpoint = checkpoint_path(
+                    workspace,
+                    ConversationStorageBackend.SQLITE,
+                )
+                checkpoint_value = json.loads(checkpoint.read_bytes())
+                self.assertEqual(
+                    checkpoint_value["progress"],
+                    {"completed_conversations": 1, "total_conversations": 3},
+                )
+                self.assertEqual(
+                    checkpoint_value["completed"],
+                    [
+                        {
+                            "session_id": first.session_id,
+                            "conversation_id": first.conversation_id,
+                        }
+                    ],
+                )
+
+                retried = _migrate(
+                    workspace,
+                    ConversationStorageBackend.SQLITE,
+                )
+                self.assertIs(
+                    retried.outcome,
+                    ConversationStorageMigrationOutcome.COMPLETED,
+                )
+                self.assertIs(retried.parity, ConversationStorageParity.VERIFIED)
+                self.assertEqual(retried.checkpoint, "completed")
+                self.assertEqual(
+                    export_backend(workspace, ConversationStorageBackend.FILESYSTEM),
+                    payload,
+                )
+                self.assertEqual(
+                    export_backend(workspace, ConversationStorageBackend.SQLITE),
+                    payload,
+                )
+                self.assertEqual(activation.read_bytes(), activation_before)
+                self.assertEqual(
+                    tuple(path.read_bytes() for path in configuration),
+                    configuration_before,
+                )
+                terminal_checkpoint = json.loads(checkpoint.read_bytes())
+                self.assertEqual(
+                    terminal_checkpoint["progress"],
+                    {"completed_conversations": 3, "total_conversations": 3},
+                )
 
     def test_fts_is_excluded_from_sqlite_source_transfer_and_reports(self) -> None:
         workspace = migration_workspace(

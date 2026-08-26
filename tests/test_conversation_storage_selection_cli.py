@@ -15,12 +15,16 @@ from unittest import mock
 
 from story_writing_agents import cli as cli_module
 from story_writing_agents.cli import build_parser, main
+from story_writing_agents.conversation_storage import (
+    CONVERSATION_STORAGE_ACTIVATION_STATE_PATH,
+)
 from story_writing_agents.conversation_storage.selection import (
     ConversationStorageSelectionFailure,
     ConversationStorageSelectionReport,
 )
 
 from tests.helpers import initialized_workspace
+from tests.sqlite_conversation_storage_fixture import database_path
 
 
 def _completed(backend: str) -> ConversationStorageSelectionReport:
@@ -276,6 +280,84 @@ class ConversationStorageSelectionCliTests(unittest.TestCase):
                 "workspace_invalid",
             )
             self.assertFalse(missing.exists())
+
+    def test_process_use_sqlite_invalid_database_is_exact_and_preserving(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        database = database_path(workspace)
+        database_before = b"invalid-sqlite-private-secret"
+        database.write_bytes(database_before)
+        configuration_paths = (
+            workspace.path("config/system_defaults.json"),
+            workspace.path("config/agent_configs.json"),
+        )
+        configuration_before = tuple(path.read_bytes() for path in configuration_paths)
+        activation = workspace.path(CONVERSATION_STORAGE_ACTIVATION_STATE_PATH)
+        self.assertFalse(activation.exists())
+
+        repository_root = Path(__file__).resolve().parents[1]
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(repository_root / "src")
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        environment["CI"] = "1"
+        arguments = [
+            sys.executable,
+            "-m",
+            "story_writing_agents",
+            "storage",
+            "use",
+            "sqlite",
+            "--workspace",
+            str(workspace.root),
+        ]
+        self.assertNotIn("--install-missing", arguments)
+        self.assertNotIn("--yes", arguments)
+        completed = subprocess.run(
+            arguments,
+            cwd=repository_root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(completed.stderr, "")
+        lines = completed.stdout.splitlines()
+        self.assertEqual(len(lines), 1)
+        value = json.loads(lines[0])
+        self.assertEqual(
+            value,
+            {
+                "activation": "unchanged",
+                "configuration": "preserved",
+                "desired_backend": "sqlite",
+                "failure": "provisioning_failed",
+                "installation": "not_required",
+                "operation": "use",
+                "outcome": "failed",
+                "parity": "unverified",
+                "provisioning": "failed",
+                "schema_version": 1,
+            },
+        )
+        self.assertEqual(
+            lines[0],
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        )
+        self.assertNotIn("private-secret", completed.stdout)
+        self.assertEqual(
+            tuple(path.read_bytes() for path in configuration_paths),
+            configuration_before,
+        )
+        self.assertEqual(database.read_bytes(), database_before)
+        self.assertFalse(activation.exists())
 
 
 if __name__ == "__main__":
