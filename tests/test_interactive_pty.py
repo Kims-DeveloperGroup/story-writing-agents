@@ -2557,7 +2557,7 @@ print(
         delay_marker.write_text("ready", encoding="utf-8")
 
         process.send_text("/settings\n\n")
-        process.wait_for_text("Choose a setting to edit, save, or cancel.")
+        process.wait_for_text("Choose a setting to edit.")
         process.send_text(("\x1b[B" * 4) + "\n")
         process.wait_for_text("Select an agent to configure")
         process.send_text("\x1b[B\n")
