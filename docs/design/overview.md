@@ -1,8 +1,8 @@
 # System design overview
 
 > **Availability:** this page describes implemented runtime ownership,
-> dependency direction, filesystem adapters, and the installed interactive
-> controller. The controller now uses the package-internal supplied-text viewer
+> dependency direction, filesystem/SQLite conversation selection, and the
+> installed interactive controller. The controller now uses the package-internal supplied-text viewer
 > for `$`/`$$` prompt editing; the viewer still has no standalone command or
 > supported public API.
 
@@ -115,7 +115,7 @@ revision; all must approve. Blackboard and owner-isolated history stay separate.
 | `interactive_controller._session_policy` | Pure lifecycle validation, next actions, and typed failure classification |
 | `interactive_controller._conversation_policy` | Pure catalog, reference, search, transcript, and failure interpretation |
 | `interactive_controller._runtime_policy` | Pure progress, result, failure interpretation, and frozen validated inspection facts |
-| `interactive_settings` | Package-internal immutable current/pending configuration snapshots, safe persona catalog, exact conflict detection, and guarded changed-only persistence with reverse exact-byte rollback |
+| `interactive_settings` | Package-internal immutable current/pending configuration snapshots, pending desired storage, safe persona catalog and fresh conflict guard; final complete persistence remains configuration-owned and storage selection coordinates Settings Save |
 | `cli_context`, catalog, memory service, event store | Defaults, identity, scoped reads, and authoritative events |
 | `interactive_terminal` | Stable package-supported facade, package-internal real-CLI factory, and unlisted internal semantic output, controller-main-input, picker, cancellable-prompt, and supplied-text viewer adapters and identities |
 | `interactive_terminal._core` | Established terminal API behavior, explicit ordinary/main/composition/confirmation routing, canonical static/dynamic main-choice adaptation, semantic input-view and lifecycle-event construction, call-local reference scope/source-list/text binding, resource-free semantic output/main/picker/prompt/viewer adapters, and terminal-leaf coordination |
@@ -230,11 +230,13 @@ callback after `FALLBACK`; submitted subject semantics are unchanged.
 
 The controller owns settings focus and semantic presentation. It delegates the
 call-local immutable baseline, pending candidate, persona catalog, exact
-stale-state checks, deterministic changed-only writes, and rollback to the
-package-internal `interactive_settings` module. The active backend and runtime
-retain their construction-time configuration snapshot, while session and
-explicit runtime overrides remain live. A save affects only a later shell or
-backend construction.
+stale-state checks, and pending edits to the package-internal
+`interactive_settings` module. Conversation-storage selection coordinates
+readiness, optional explicit installation, provisioning, parity, the fresh
+settings-owned persona guard, and the config-owned complete-document CAS. The
+active backend and runtime retain their construction-time configuration
+snapshot and storage bundle, while session and explicit runtime overrides
+remain live. A save affects only a later shell or backend construction.
 
 The core gives immutable facts to policy validators and receives validated
 values, typed failures/errors, actions, or safe summaries. Leaves retain
@@ -243,7 +245,10 @@ nothing, perform no I/O, and have no sibling or core back-reference.
 ```mermaid
 flowchart LR
     accTitle: Interactive conversation ownership
-    accDescr: The controller passes its current-session memory service to the runtime, which alone authorizes provider-requested reads.
+    accDescr: One startup-selected storage bundle supplies the controller, runtime, and current-session memory service; runtime alone authorizes provider-requested reads.
+    S[Active storage services bundle] --> C
+    S --> R
+    S --> M
     C[Stateful controller core] --> R[Retained StoryRuntime]
     C --> M[Current-session memory service]
     C --> K[Conversation catalog]
@@ -254,14 +259,17 @@ flowchart LR
     M --> K
 ```
 
-The core shares one filesystem event store with the retained runtime and builds
-attachment-scoped memory over it. Runtime alone authorizes provider-requested
-search/read; backend receives only the handler and framed observations. The core
-builds destination memory before switch commit and clears it on pause, abort,
-or cleanup. Direct search/transcript stays local. The core reads the store only
-for history/status; it never appends, calls `read_context`, or calls a bound
-agent. Lower layers retain storage, runtime, terminal, session, thread, and
-provider ownership.
+The CLI resolves one filesystem or SQLite storage bundle before provider
+authentication and injects that immutable active bundle through the core,
+retained runtime, and attachment-scoped memory. Direct Python runtime
+construction still defaults to a filesystem bundle unless its caller supplies
+another complete bundle. Runtime alone authorizes provider-requested
+search/read; backend receives only the handler and framed observations. The
+core builds destination memory before session switch commit and clears it on
+pause, abort, or cleanup. Direct search/transcript stays local. The core reads
+the active event store only for history/status; it never appends, calls
+`read_context`, or calls a bound agent. Lower layers retain storage, runtime,
+terminal, session, thread, and provider ownership.
 
 ## Dependency direction
 

@@ -11,9 +11,10 @@
 > write path. Bounded fail-open debug logging uses a separate identity-bound
 > storage path. Privileged filesystem conversation archive transfer is
 > available only through a direct Python adapter under a caller-held mutation
-> lease. Optional direct Python SQLite conversation storage has its own
-> fixed database, derived search companion, transaction, sidecar, and
-> coordinator boundary.
+> lease. Explicit next-shell filesystem/SQLite selection and optional direct
+> Python SQLite conversation storage use one workspace coordinator; SQLite has
+> its own fixed database, derived search companion, transaction, and sidecar
+> boundary.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -435,6 +436,13 @@ from one construction-pinned canonical absolute root. Changing the caller's
 cannot split root A provenance from root B I/O. This does not make the general
 `Workspace` type immutable.
 
+The composed filesystem catalog's create, rename, archive, and unarchive plus
+the composed event store's append borrow this same coordinator. Their reads
+remain observational. Direct standalone filesystem adapters retain their
+uncoordinated compatibility behavior and therefore do not participate in
+selection, startup, or migration safety unless their caller stops or otherwise
+coordinates them.
+
 A separately constructed
 `WorkspaceConversationStorageMutationCoordinator` also pins its root at
 construction without opening a file. Its in-process coordination key refers to
@@ -502,6 +510,47 @@ destination transaction, and a final mismatch can follow create-only
 filesystem publication; neither condition triggers destructive rollback. See
 [migration recovery](recovery-and-limitations.md#conversation-storage-migration-recovery)
 before retrying.
+
+<a id="conversation-storage-selection-and-startup-safety"></a>
+
+## Conversation storage selection and startup safety
+
+Desired selection captures one canonical workspace root and first borrows the
+workspace coordinator only long enough to prove safe mutation is available. It
+releases that proof lease before interactive consent or a host installer, so a
+long-running native package manager does not retain the conversation-storage
+guard. The installer receives only one allowlisted argument tuple, runs without
+a shell at the captured workspace root, and inherits stdin/environment; its
+stdout and stderr use the caller's diagnostic stream. No timeout, retry,
+privilege escalation, automatic flag, or arbitrary command is introduced.
+
+After installation, selection reacquires the coordinator and reprobes SQLite
+through the same active Python interpreter. That lease then spans create-only
+empty-database provisioning when needed, requested-backend composition, active-
+state read, fresh canonical source/target parity, and final configuration
+publication. Immediately before publication it validates the lease, invokes an
+optional caller guard, validates the lease again, and runs the config-owned
+exact-byte complete-document CAS. Settings supplies its fresh persona-catalog
+guard at this point. Guard, byte, validation, or write failure preserves prior
+configuration whenever the config rollback contract completes; an installed
+host package or empty database is deliberately outside that rollback.
+
+Selection never writes `config/conversation_storage_state.json`. Interactive
+startup owns that marker and holds one outer coordinator lease while it reloads
+configuration, composes current active services, freshly checks target
+readiness/parity, composes the complete target services, validates the lease,
+and compare-and-sets the expected generation. Failure before CAS preserves the
+marker and aborts without fallback. A completed CAS is the durable activation
+boundary and is not compensated if later terminal or provider startup fails.
+The current process never replaces its bundle live.
+
+Neither workflow is a transaction spanning host packages, both conversation
+stores, configuration, activation, sessions, providers, or other workspace
+channels. The advisory guard serializes only supported participants; direct
+standalone filesystem adapters and external file/database editors remain
+outside it. See the exact
+[CLI contract](../reference/cli.md#conversation-storage-selection) and
+[selection recovery](recovery-and-limitations.md#conversation-storage-selection-and-activation-recovery).
 
 <a id="sqlite-conversation-storage-safety"></a>
 
@@ -662,8 +711,9 @@ On a host without POSIX `fcntl`, existing valid storage remains available to
 observational preflight and reads. The supported coordinator cannot acquire a
 mutation lease, so provisioning and supported writes fail with
 `ConversationStorageCoordinationError` before any database or conversation
-domain change. The lazy guard file retains its separately documented lifecycle.
-Non-POSIX coordinator and activation readiness remain deferred to Issue #261.
+domain change. Explicit installation through selection, configuration save,
+and activation also fail closed because coordination is required. The lazy
+guard file retains its separately documented lifecycle.
 
 The guard serializes supported writers but does not authenticate a caller,
 acquire a story-session claim, or protect against an actively hostile same-user
@@ -758,9 +808,13 @@ default after any reported save failure. See
 `/settings` coordinates `config/system_defaults.json` and
 `config/agent_configs.json` more narrowly. Opening captures both files' exact
 strict-UTF-8 bytes, their fully validated values, and the safe persona catalog.
-Save validates the complete pending pair before rereading anything, then
-requires both byte snapshots and the catalog to match the opening baseline.
-Any mismatch or read failure reports a conflict and performs no write.
+Save first completes its provider gate in memory, then delegates desired
+storage readiness, optional explicit installation, provisioning, and fresh
+parity to the selection owner. Under that workflow's active lease, the
+settings-owned precommit guard requires the persona catalog to match the
+opening baseline; the config owner then revalidates the complete pending pair
+and requires both exact byte snapshots to match. Any mismatch or read failure
+reports a conflict and performs no configuration or activation write.
 
 An unchanged candidate performs no write. Otherwise, only changed documents
 are serialized as canonical sorted, indented JSON and atomically replaced,
@@ -773,7 +827,10 @@ requires inspection of both files.
 
 This is guarded optimistic coordination, not one cross-file transaction. Each
 replacement is atomic, but an abrupt process, operating-system, hardware,
-filesystem, or power failure can still leave the pair partially durable.
+filesystem, or power failure can still leave the pair partially durable. Host
+installation and an empty SQLite database prepared before the config boundary
+are not rolled back. A successful Save changes desired storage only; startup
+owns later active-marker CAS.
 
 Invalid identifiers raise `SessionIdError`; unsafe paths or symlinks raise
 `WorkspaceSecurityError`; malformed or path-mismatched persisted data raises

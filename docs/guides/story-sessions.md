@@ -119,11 +119,14 @@ any default already established.
 
 `/settings` is global, alias-free, and works in the lobby or while attached. It
 shows separate Current and Pending values for Language,
-Persona, Maximum debate rounds, and Providers. The top-level choices are those
-four rows followed by Save and Cancel. Choose Providers to select an agent in
-canonical roster order, then choose Provider, Model, or Reasoning effort for
-that agent. Provider choices are Codex and Antigravity. Changing the route does
-not erase the inactive provider's saved model or effort.
+Persona, Maximum debate rounds, Conversation storage, and Providers. The exact
+top-level order is Language, Persona, Maximum debate rounds, Conversation
+storage, Providers, Save, Cancel. Conversation storage offers Filesystem and
+SQLite as an independent workspace choice; it is not an agent provider route.
+Choose Providers to select an agent in canonical roster order, then choose
+Provider, Model, or Reasoning effort for that agent. Provider choices are Codex
+and Antigravity. Changing the route does not erase the inactive provider's
+saved model or effort.
 
 On a capable terminal, Up/Down moves the current picker highlight and Enter
 opens or commits it. Escape from a nested picker or prompt restores that
@@ -148,13 +151,33 @@ use `antigravity`.
 Selecting a provider freshly authenticates it before changing that pending
 route. Save freshly gates every distinct effective provider before the guarded
 file update; a stale or failed status prevents Save. A default established by
-completed authentication is durable even if the remaining settings edit is
-cancelled.
+completed authentication is rebased into the pending candidate rather than
+written through an intermediate settings save. Conversation-storage readiness
+and selection itself are provider-free, but the whole settings Save retains
+this provider-authentication gate.
+
+Selecting SQLite records only a pending next-shell choice. On Save, Story
+checks workspace coordination and the active Python interpreter's functional
+`sqlite3` support. The standalone `sqlite3` executable and FTS5 are not
+readiness gates. If a supported host prerequisite is missing, Settings first
+shows the one exact command and warns that it changes host packages with the
+real terminal attached. The separate confirmation highlights NO and runs the
+command only after exact YES. Decline, recognized CI, unsupported platform,
+installation failure, failed same-interpreter reprobe, provisioning failure,
+or migration/parity failure leaves configuration unchanged.
+
+An explicit SQLite choice may create the fixed empty database, but it never
+copies conversations. If Save says migration is required, leave the current
+shell, run the provider-free migration and verification commands in the active
+direction, reopen `/settings`, select SQLite again, save, and start a new shell.
+The same sequence applies in reverse when returning to filesystem. See the
+[exact selection workflow](../reference/cli.md#conversation-storage-selection).
 
 Save fails closed if either configuration file or the persona catalog changed
 after opening. A successful save affects only the next shell/backend
-construction; the active shell keeps its construction-time configuration
-snapshot, and live session or explicit overrides still take precedence. See
+construction; it does not migrate or activate storage. The active shell keeps
+its construction-time configuration and conversation-storage bundle, and live
+session or explicit overrides still take precedence. See
 [Agent configuration](../reference/configuration/agent-configuration.md) and
 [Filesystem safety](../operations/filesystem-safety.md). Antigravity setup and
 provider-specific precedence are in the

@@ -69,11 +69,13 @@ story smoke
 story
 ```
 
-After the welcome, authentication is the first interactive gate. At least one
-provider must pass a fresh native status check, and every distinct provider
-selected by the effective agent routes must pass again before the runtime
-constructs a story backend or session controller. Press Ctrl-C or send EOF to
-leave without starting the shell; cancelling the picker keeps the gate open.
+After workspace and configuration loading, startup first resolves the desired
+conversation-storage backend into one ready active service bundle. The welcome
+then precedes the first interactive gate: at least one provider must pass a
+fresh native status check, and every distinct provider selected by the
+effective agent routes must pass again before the runtime constructs a story
+backend or session controller. Press Ctrl-C or send EOF to leave without
+starting the shell; cancelling the picker keeps the gate open.
 
 At `story[lobby]>`, create a session and focus a subject conversation:
 
@@ -147,14 +149,49 @@ complete workspace backup, or arbitrary restore workflow. See
 [Conversation archives](docs/reference/conversation-archives.md).
 
 Conversation catalog, transcript, and reference-search ports also have an
-optional SQLite implementation for direct Python composition. It is not
-selected by the installed shell or `StoryRuntime`; start with the
-[package API](docs/reference/package-api.md#optional-sqlite-conversation-storage)
-before provisioning its separate database. Its `SQLiteConversationSearch`
-keeps the public literal-search contract exact; a private disposable FTS5
-companion can supply hints but never determines a result.
+optional SQLite implementation for direct Python composition. The installed
+shell can select the complete filesystem or SQLite bundle for its next launch;
+direct `StoryRuntime` construction still defaults to filesystem unless the
+caller supplies a composed bundle. Start with the
+[package API](docs/reference/package-api.md#optional-sqlite-conversation-storage).
+`SQLiteConversationSearch` keeps the public literal-search contract exact; a
+private disposable FTS5 companion can supply hints but never determines a
+result or readiness.
 
-Already-provisioned filesystem and SQLite stores in the same workspace can be
+Select desired storage without a provider:
+
+```bash
+story storage use sqlite
+```
+
+The command checks SQLite through the active Python interpreter and may
+explicitly provision an absent empty database. If it reports
+`installation_required`, rerun it only after reviewing the supported host
+command and authorizing both automation flags:
+
+```bash
+story storage use sqlite --install-missing --yes
+```
+
+If the active filesystem store is nonempty, selection can instead report
+`migration_required`. The ready SQLite destination can then be copied and
+verified before selection is retried:
+
+```bash
+story storage migrate --from filesystem --to sqlite --dry-run
+story storage migrate --from filesystem --to sqlite
+story storage verify --from filesystem --to sqlite
+story storage use sqlite
+story
+```
+
+Selection changes only the desired backend. It never migrates, deletes, or
+activates data; a successful choice applies when the next shell freshly checks
+readiness and exact canonical parity. The current shell keeps its original
+bundle. See the
+[storage selection contract](docs/reference/cli.md#conversation-storage-selection).
+
+Ready filesystem and SQLite stores in the same workspace can be
 planned, copied, and compared without a provider:
 
 ```bash
@@ -179,15 +216,14 @@ See the [CLI contract](docs/reference/cli.md#conversation-storage-migration).
 - Writing-artifact publication is journaled and catalog-last, and rolls forward
   on the next catalog or publication access after an interruption. It is not
   one transaction with debate logs, lifecycle state, or result files.
-- The installed shell and runtime continue to use filesystem conversation
-  storage. SQLite is an explicit, optional Python API. Provider-free
-  `story storage migrate` and `story storage verify` operate only on two
-  already-ready same-workspace stores and never activate one. There is no
-  `/settings` selection, installation, automatic provisioning, default switch,
-  RAG, or MySQL adapter. Its derived FTS5 companion does not change readiness,
-  exact literal results, migration parity, or default selection. Issue #261
-  owns integrating detection, installation, and selection into the user-facing
-  settings/runtime flow; direct preflight here only reports capability.
+- Conversation storage defaults to filesystem. `/settings` and provider-free
+  `story storage use` can save filesystem or SQLite as the desired backend for
+  the next shell. SQLite host installation requires explicit confirmation, and
+  startup never installs or provisions it. Migration remains a separate
+  provider-free copy/parity workflow over two ready same-workspace stores and
+  never activates or deletes one. There is no live switch, dual write, RAG, or
+  MySQL adapter. The derived FTS5 companion does not change readiness, exact
+  literal results, migration parity, or selection.
 - Smoke's explicit workspace is not read-only and retains bounded plaintext
   diagnostics when they can be written; abrupt termination can interrupt
   cleanup. A pass does not validate provider/model, terminal behavior,

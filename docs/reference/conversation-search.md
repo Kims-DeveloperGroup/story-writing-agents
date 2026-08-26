@@ -2,9 +2,10 @@
 
 > **Availability:** the installed shell exposes active-only `/search` and fresh
 > `/transcript` pages after story-session attachment. The same provider-free
-> capabilities are package-supported Python APIs. An optional direct-module
-> `SQLiteConversationSearch` implements the same exact contract without
-> changing shell or default-runtime selection.
+> capabilities are package-supported Python APIs. The shell uses its
+> startup-selected filesystem or SQLite bundle; the direct-module
+> `SQLiteConversationSearch` implements the same exact contract. Direct runtime
+> construction still defaults to filesystem unless supplied a complete bundle.
 
 Key terms: **scope**—one authorized story session; **hit**—the strongest match
 from one conversation; **citation**—stable identity plus an optional exact
@@ -66,20 +67,21 @@ workspace = swa.Workspace("/path/to/initialized-story")
 services = compose_sqlite_conversation_storage(workspace)
 memory = swa.ConversationMemoryService(
     swa.ConversationSearchScope("novel"),
-    services.catalog,
-    services.event_store,
-    search=services.search,
+    conversation_storage_services=services,
 )
 result = memory.search(swa.ConversationSearchQuery("council vessel"))
 ```
 
 The composed bundle exposes a raw `SQLiteConversationSearch`, whose
 `search(scope, query)` port requires an explicit scope. Wrapping that raw port
-with its same-provenance catalog and event store creates the authorized
-one-argument memory service used above. This does not select SQLite for the
-shell or `StoryRuntime`. See the
+through `conversation_storage_services` creates the authorized one-argument
+memory service used above while preserving the bundle's catalog, event-store,
+search, and coordinator provenance. Direct composition does not change desired
+or active shell state. See the
 [preflight and provisioning example](package-api.md#optional-sqlite-conversation-storage)
-before composition.
+before composition, or the
+[next-shell workflow](cli.md#conversation-storage-selection) for installed
+selection.
 
 ## Search contract
 
