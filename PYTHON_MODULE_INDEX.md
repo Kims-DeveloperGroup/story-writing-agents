@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 66.
+Importable production units indexed: 68.
 
-Direct internal dependency edges indexed: 253.
+Direct internal dependency edges indexed: 269.
 
 ## Current Dependency Direction
 
@@ -26,7 +26,7 @@ The current graph flows from entry points and orchestration toward provider,
 configuration, prompt, persistence, and stable contract modules:
 
 ```text
-__main__ -> cli -> conversation_storage.migration
+__main__ -> cli -> conversation_storage.migration/selection
                  -> interactive_controller -> interactive_controller._core
                  -> interactive_terminal -> interactive_terminal._core
                  -> interactive_auth -> interactive_terminal/provider_auth
@@ -59,6 +59,7 @@ interactive_controller._core -> interactive_controller._session_policy
                              -> interactive_controller._runtime_policy
                              -> agents/backend/cli_context/debug_log
                              -> conversation_retrieval/conversation_search
+                             -> conversation_storage.contracts/selection
                              -> conversations/errors/interactive_commands
                              -> interactive_auth/interactive_settings/interactive_terminal
                              -> models/orchestrator/provider_auth/run_inputs
@@ -118,6 +119,10 @@ conversation_storage.filesystem_archive -> conversation_storage.archive/contract
 conversation_storage.migration -> conversation_storage.archive/composition/contracts
                                -> conversation_storage.filesystem_archive/sqlite
                                -> errors/workspace
+conversation_storage.provisioning -> conversation_storage.contracts/sqlite/workspace
+conversation_storage.selection -> config/workspace
+                               -> conversation_storage.archive/composition/contracts
+                               -> conversation_storage.filesystem_archive/provisioning/sqlite
 conversation_storage.sqlite_database -> workspace
 conversation_storage.sqlite_search_index -> (standard library only)
 conversation_storage.sqlite -> conversation_literal_search/conversation_search
@@ -126,6 +131,7 @@ conversation_storage.sqlite -> conversation_literal_search/conversation_search
                             -> conversation_storage.sqlite_database
                             -> conversation_storage.sqlite_search_index
                             -> conversation_storage.composition/contracts
+orchestrator -> conversation_storage.composition/contracts
 models -> conversations/agents/errors
 provider_adapter -> models
 provider_auth -> (standard library only)
@@ -554,15 +560,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   sorted, indented JSON containing only `access_state`, `durable_state`, and
   `session_id`. Noninteractive `run` requires `--output PART/PATH.md`; the
   runtime publishes it create-only beneath `manuscript/PART/`. The provider-
-  free storage grammar is exactly
+  free storage grammar additionally includes
+  `storage use BACKEND [--install-missing --yes] [--workspace PATH]`, where
+  `BACKEND` is `filesystem` or `sqlite`, plus the existing
   `storage migrate --from BACKEND --to BACKEND [--dry-run] [--workspace PATH]`
   and `storage verify --from BACKEND --to BACKEND [--workspace PATH]`, where
   both backend arguments are restricted to `filesystem` or `sqlite`.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`, `config`,
-  `conversation_storage.migration`, `debug_log`, `errors`, `interactive_auth`,
-  `interactive_controller`, `interactive_settings`, `interactive_terminal`,
-  `models`, `orchestrator`, `provider_auth`, `run_inputs`,
-  `session_lifecycle`, and `workspace`; imports both `smoke` and
+  `conversation_storage.migration`, `conversation_storage.selection`,
+  `debug_log`, `errors`, `interactive_auth`, `interactive_controller`,
+  `interactive_settings`, `interactive_terminal`, `models`, `orchestrator`,
+  `provider_auth`, `run_inputs`, `session_lifecycle`, and `workspace`; imports
+  both `smoke` and
   `conversation_storage.migration` lazily in their owning command branches.
 - **State, resources, and side effects:** Reads terminal input and delegates
   caller-selected draft-file reads to `run_inputs`; writes JSON, plain-text
@@ -575,9 +584,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   existing `input` callback. Capable subject, composition, and confirmation
   reads are history-free; an incapable first read permanently retains ordinary
   callback input. Interactive startup validates TTY and all
-  arguments before workspace discovery, then constructs one workspace-root-
-  bound `ProviderAuthService` and `InteractiveAuthCoordinator`. It sequences
-  the welcome, an initial hard gate until at least one provider is exactly
+  arguments before workspace discovery. After workspace discovery and
+  configuration validation it coordinates desired conversation-storage
+  activation and injects the resulting immutable service bundle into the
+  controller before constructing one workspace-root-bound
+  `ProviderAuthService` and `InteractiveAuthCoordinator`. It sequences the
+  welcome, an initial hard gate until at least one provider is exactly
   authenticated, missing-default selection and persistence, immutable
   configuration loading, effective-route resolution in CLI-override, explicit
   agent, workspace-default, then Codex order, and a fresh hard gate for every
@@ -607,14 +619,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   terminal notice independently of handle availability. Existing sanitized
   error text and exit behavior are otherwise unchanged, and `debug_log`
   retains storage ownership. A valid storage command resolves its workspace
-  and dispatches through the migration owner before debug-log creation, CLI-
-  context loading, authentication, provider/backend/runtime/settings/session
-  composition, or `sqlite3` import. It writes exactly one compact sorted
-  counts-only migration report plus LF to standard output and returns that
-  report's fixed exit code; workspace-discovery failure uses the same fixed
-  content-free report schema.
+  and dispatches migration/verification through the migration owner or desired
+  selection through the selection owner before debug-log creation, CLI-context
+  loading, authentication, provider/backend/runtime/settings/session
+  composition, or `sqlite3` import. Selection keeps standard output reserved
+  for one compact sorted counts-free schema-v1 report and routes native
+  installer output to standard error; migration retains its compact sorted
+  counts-only report. Each workflow returns its fixed report exit code, and
+  workspace-discovery failure uses the corresponding fixed content-free
+  schema. Importing the CLI and its selection boundary does not load
+  `sqlite3` or perform readiness, filesystem, installer, or database I/O.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_conversation_storage_migration_cli.py`,
+  `tests/test_conversation_storage_selection_cli.py`,
   `tests/test_cli_context.py`, `tests/test_smoke_cli.py`, and
   `tests/test_interactive_pty.py` for primary process-level POSIX PTY
   verification; `docs/reference/cli.md`, `docs/reference/package-api.md`,
@@ -654,28 +671,44 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.config`
 
 - **Source:** `src/story_writing_agents/config.py`
-- **Responsibility:** Validate and resolve cascading runtime configuration.
+- **Responsibility:** Validate, resolve, and publish complete runtime
+  configuration.
 - **Supported surface:** Internal `ConfigManager`, `SystemDefaults`,
   `AgentConfig`, `ResolvedAgentConfig`, immutable roster-complete
-  `ConfigurationSnapshot`, and exact `KNOWN_AGENT_BACKENDS` value
-  `("codex", "antigravity")`; legacy `gemini` values receive fixed migration
-  guidance. `SystemDefaults` retains its established positional fields and
-  trailing optional Codex model/reasoning plus Antigravity model/effort fields.
-  It adds the trailing optional nullable workspace `default_backend` field.
+  `ConfigurationSnapshot`, exact `KNOWN_AGENT_BACKENDS` value
+  `("codex", "antigravity")`, and independent exact
+  `KNOWN_CONVERSATION_STORAGE_BACKENDS` value `("filesystem", "sqlite")`;
+  legacy `gemini` values receive fixed migration guidance. Package-internal
+  `ConfigurationBaseline`, `ConfigurationCommitFailure`, and
+  `ConfigurationCommitError` define one exact-byte complete-configuration
+  compare-and-set boundary. `SystemDefaults` retains all established positional
+  fields and adds only a trailing optional nullable
+  `conversation_storage_backend` after the trailing optional workspace
+  `default_backend`; old positional construction remains valid.
   `AgentConfig` retains its seven-field order while allowing its leading
   backend route to be null. `ConfigManager` owns both complete persisted schemas
   plus provider-specific safe-model and fixed-effort validators. Missing legacy
-  default and agent backend keys are interpreted as null without rewriting
-  their documents. Package-internal
+  storage selection is interpreted as filesystem when projecting a saved
+  canonical document, while missing default and agent backend keys remain null;
+  reads do not rewrite either document. Package-internal
   `validate_configuration` validates both persisted documents as one complete
-  candidate, `load_configuration_snapshot` reads and publishes one immutable
-  pair, and `resolve_from_snapshot` applies live runtime values while resolving
+  candidate, `load_configuration_baseline` captures exact bytes and one
+  immutable value, `commit_configuration` validates and compare-and-sets both
+  complete documents, `load_configuration_snapshot` projects the baseline's
+  value, and `resolve_from_snapshot` applies live runtime values while resolving
   providers in exact CLI override, explicit agent route, workspace default,
   then Codex order. Existing on-demand loaders and `resolve` retain their
   signatures and delegate to the same validation and resolution rules.
 - **Direct internal dependencies:** `agents`, `errors`, and `workspace`.
-- **State, resources, and side effects:** Reads workspace configuration and
-  owns no persistence.
+- **State, resources, and side effects:** Owns strict-UTF-8 reads, complete
+  schema validation, deterministic projection of canonical nine-key system
+  defaults and roster-complete agent configuration, and the configuration CAS
+  lifecycle. Commit first compares both exact baseline byte strings, writes
+  only changed complete documents through `Workspace` in system-then-agent
+  order, and attempts reverse-order restoration of every attempted target on
+  failure. Validation, conflict, write, and rollback failures are fixed and
+  content-free. It owns no conversation-storage readiness, installer,
+  provisioning, parity, activation, provider, or import-time resource.
 - **Primary verification/documentation:** `tests/test_workspace_and_config.py`,
   `tests/test_prompts.py`, `tests/test_codex_backend.py`,
   `tests/test_interactive_settings.py`,
@@ -754,7 +787,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ConversationSearchResult`, `ConversationSearchScope`,
   `ConversationTranscriptCursor`, `ConversationTranscriptPage`, and
   `ReferenceConversationSearch`. `ConversationMemoryService.scope` is an
-  additive read-only projection of its immutable authorized session scope.
+  additive read-only projection of its immutable authorized session scope. Its
+  established positional catalog/event-store construction remains valid, and
+  an additive keyword-only structural `conversation_storage_services` input
+  accepts one complete bundle only when raw catalog, event-store, and search
+  collaborators are all absent.
 - **Direct internal dependencies:** `conversation_literal_search`,
   `conversations`, and `errors`.
 - **State, resources, and side effects:** Immutable value contracts and fixed
@@ -762,11 +799,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   adapter delegates normalization, subject classification, snippet
   construction, and result sorting to the supported pure literal module while
   retaining its established bounded catalog/event-store scan semantics.
-  Service and reference-search instances retain explicitly supplied
-  `ConversationCatalog` and `ConversationEventStore` collaborators, plus their
-  validated scope and optional search adapter; the scope property performs no
-  catalog, store, or search access. Instances perform reads only and have no
-  import-time operational side effects.
+  Reference-search instances retain explicitly supplied `ConversationCatalog`
+  and `ConversationEventStore` collaborators. A memory service retains either
+  the established raw collaborators or the supplied immutable bundle plus its
+  validated catalog, event-store, and search ports; private structural
+  validation avoids a dependency from this provider-neutral module back into
+  conversation storage. Conflicting or incomplete injection fails at
+  construction. The scope property performs no catalog, store, search, or
+  coordinator access. Instances perform reads only and have no import-time
+  operational side effects.
 - **Primary verification/documentation:**
   `tests/conversation_search_contract.py`,
   `tests/test_conversation_search.py`, and
@@ -829,7 +870,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   direct integration surface in
   `story_writing_agents.conversation_storage.sqlite_search_index`, have their
   own supported surfaces. The seven-name direct integration surface in
-  `story_writing_agents.conversation_storage.migration` is likewise excluded;
+  `story_writing_agents.conversation_storage.migration`, four-name direct
+  integration surface in `story_writing_agents.conversation_storage.provisioning`,
+  and seven-name direct integration surface in
+  `story_writing_agents.conversation_storage.selection` are likewise excluded;
   none of these optional or workflow modules is re-exported by this package or
   the root facade.
 - **Direct internal dependencies:** `conversation_storage.archive`,
@@ -837,8 +881,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `conversation_storage.filesystem_archive`.
 - **State, resources, and side effects:** Owns no state or resource; importing
   the package loads exactly its archive, composition, contracts, and filesystem
-  archive modules, but does not import any SQLite adapter, database-owner, or
-  search-index module or load the standard-library `sqlite3` module. Import
+  archive modules, but does not import selection, provisioning, migration, any
+  SQLite adapter, database-owner, or search-index module or load the standard-
+  library `sqlite3` module. Import
   performs no filesystem access, lock-file open, thread creation, archive scan,
   database access, or adapter construction.
 - **Primary verification/documentation:**
@@ -922,8 +967,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   The subclasses materialize operation-local `Workspace` instances from that
   topology and retain their construction-pinned collaborators, so later caller
   root mutation or inherited collaborator rebinding cannot redirect composed
-  I/O. Direct standalone filesystem adapters retain their established borrowed-
-  `Workspace` behavior. The coordinator retains no caller `Workspace`; its
+  I/O. The composed catalog's create/rename/archive/unarchive operations and
+  event store's append operation borrow the exact coordinator returned in the
+  same service bundle. Direct standalone filesystem adapters retain their
+  established borrowed-`Workspace` and uncoordinated mutation behavior. The
+  coordinator retains no caller `Workspace`; its
   canonical key, fixed guard, and every issued lease derive from its
   construction-pinned topology. Activation load and compare-and-set capture one
   canonical root per whole call. Compare-and-set rejects a wrong-root lease
@@ -1145,6 +1193,130 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/operations/privacy-and-provider.md`, and
   `docs/operations/recovery-and-limitations.md`.
 
+### `story_writing_agents.conversation_storage.provisioning`
+
+- **Source:**
+  `src/story_writing_agents/conversation_storage/provisioning.py`
+- **Responsibility:** Own explicit SQLite runtime-readiness, allowlisted host-
+  installation, and storage-provisioning orchestration.
+- **Supported surface:** Exactly four names in `__all__`:
+  `ConversationStorageInstallationPlan`,
+  `ConversationStorageProvisioningFailure`,
+  `ConversationStorageProvisioningResult`, and
+  `ConversationStorageProvisioner`. This direct integration surface is absent
+  from both the package-root and conversation-storage facades. The frozen plan
+  accepts only one of the exact commands `brew install sqlite`,
+  `apt-get install sqlite3 libsqlite3-dev`, or
+  `dnf install sqlite sqlite-devel`. The result exposes only the fixed
+  `not_required`, `completed`, `not_run`, or `failed` installation and
+  provisioning states plus a content-free typed failure and optional storage
+  preflight.
+- **Direct internal dependencies:** `conversation_storage.contracts`,
+  `conversation_storage.sqlite`, and `workspace`.
+- **State, resources, and side effects:** Import defines immutable policy,
+  values, and the adapter class only; it performs no platform probe, environment
+  read, executable lookup, subprocess execution, filesystem access, database
+  operation, or `sqlite3` import. Construction retains injectable platform,
+  exact `/etc/os-release`, environment, executable-lookup, and process-runner
+  seams without invoking them. Planning matches only Darwin with a discoverable
+  Homebrew executable or exact Linux IDs `debian`, `ubuntu`, `fedora`, and
+  `rhel`; a nonempty `CI`, `GITHUB_ACTIONS`, `GITLAB_CI`, `CIRCLECI`,
+  `BUILDKITE`, `TF_BUILD`, `JENKINS_URL`, `TEAMCITY_VERSION`, `TRAVIS`,
+  `APPVEYOR`, `BITBUCKET_BUILD_NUMBER`, `CODEBUILD_BUILD_ID`, or `DRONE`
+  marker disallows installation. Explicit
+  installation runs one exact argument tuple in the caller's operation-local
+  workspace root with
+  `shell=False`, inherited stdin, and both native output streams routed to the
+  caller's diagnostic stream. It supplies no custom environment, timeout,
+  retry, shell, privilege escalation, or automatic consent and propagates
+  process-control exceptions. Readiness delegates the active-interpreter probe
+  and lease-bound SQLite provision operation to their public owners; this
+  module owns no coordinator lease, configuration, parity, activation, schema,
+  CLI report, provider, FTS, or import-time resource.
+- **Primary verification/documentation:**
+  `tests/test_conversation_storage_provisioning.py` verifies this orchestration
+  boundary; existing lower-level boundaries are verified by
+  `tests/test_sqlite_database.py`,
+  `tests/test_sqlite_conversation_storage.py`, and
+  `tests/test_conversation_storage.py`; operational context is documented in
+  `docs/reference/configuration/session-storage.md`,
+  `docs/operations/filesystem-safety.md`, and
+  `docs/operations/privacy-and-provider.md`.
+
+### `story_writing_agents.conversation_storage.selection`
+
+- **Source:** `src/story_writing_agents/conversation_storage/selection.py`
+- **Responsibility:** Own desired conversation-storage selection and
+  coordinated startup activation.
+- **Supported surface:** Exactly seven names in `__all__`:
+  `CONVERSATION_STORAGE_SELECTION_SCHEMA_VERSION`,
+  `ConversationStorageSelectionFailure`,
+  `ConversationStorageSelectionReport`, `ConversationStorageStartup`,
+  `inspect_conversation_storage_parity`, `select_conversation_storage`, and
+  `activate_configured_conversation_storage`. This direct workflow surface is
+  absent from both facades. The schema-v1 selection report is counts-free and
+  uses only `not_required|completed|not_run|failed` installation/provisioning,
+  `not_required|verified|unverified|mismatch` parity,
+  `saved|unchanged|preserved` configuration, and
+  `next_shell|unchanged` activation states. Its fixed sanitized failure enum is
+  exactly `invalid_request`, `workspace_invalid`, `coordination_failed`,
+  `installation_required`, `installation_unsupported`,
+  `installation_disallowed`, `installation_failed`,
+  `interpreter_unavailable`, `provisioning_failed`, `migration_required`,
+  `parity_mismatch`, `configuration_invalid`, `configuration_conflict`, or
+  `configuration_write_failed`; its outcome is `completed|failed` and its exit
+  code is zero only for a completed report.
+- **Direct internal dependencies:** `config`, `workspace`,
+  `conversation_storage.archive`, `conversation_storage.composition`,
+  `conversation_storage.contracts`,
+  `conversation_storage.filesystem_archive`,
+  `conversation_storage.provisioning`, and `conversation_storage.sqlite`.
+- **State, resources, and side effects:** Each call captures one immutable
+  absolute workspace root and constructs operation-local public collaborators;
+  it retains no caller-mutable workspace binding. Desired selection first
+  proves coordinator acquisition, releases that proof before any optional host
+  installation, then reacquires the same coordinator for runtime reprobe,
+  explicit SQLite provisioning or filesystem composition, active-state read,
+  fresh canonical source/target archive parity, and the config-owned exact-byte
+  complete-document CAS. CLI selection changes only desired storage, while the
+  settings caller may supply its complete validated pending configuration for
+  the same final CAS and an optional caller-owned precommit guard; neither path
+  performs migration or changes activation. After fresh parity succeeds,
+  selection validates the lease, invokes that guard, propagates process-control
+  exceptions, maps an ordinary guard failure to configuration conflict, and
+  revalidates the lease immediately before the final configuration CAS. A
+  successful CAS is the last fallible body operation, with no post-CAS lease
+  validation.
+  Every failure before the final configuration CAS and every cancellation
+  preserves configuration bytes; the config owner applies its fixed rollback
+  contract to write failures. An installed host package or empty
+  provisioned database intentionally survives a later parity/configuration
+  failure. Parity treats an empty canonical source or same backend as not
+  required, otherwise compares exact canonical archive wire bytes; it knows no
+  migration report or checkpoint.
+
+  Startup holds one outer workspace coordinator lease while it reloads exact
+  configuration, resolves the current marker and desired backend, freshly
+  verifies readiness/parity, composes the complete target service bundle, and
+  compare-and-sets activation. An unchanged desired backend returns the active
+  bundle without writing. Pre-CAS failure preserves activation; successful CAS
+  is not rolled back by unrelated later shell failure. Import is I/O-free,
+  launches no process, and does not load `sqlite3`; installer policy/execution,
+  configuration persistence, archive serialization, backend composition, and
+  activation publication remain with their named owners.
+- **Primary verification/documentation:**
+  `tests/test_conversation_storage_selection.py` and
+  `tests/test_conversation_storage_selection_cli.py` verify this workflow and
+  its provider-free CLI dispatch; existing component and compatibility coverage
+  is in `tests/test_conversation_storage.py`,
+  `tests/test_conversation_storage_migration.py`,
+  `tests/test_sqlite_conversation_storage.py`,
+  `tests/test_workspace_and_config.py`, and
+  `tests/test_public_api_and_cli.py`; relevant current references are
+  `docs/reference/cli.md`, `docs/reference/package-api.md`,
+  `docs/reference/configuration/session-storage.md`, and
+  `docs/reference/conversation-archives.md`.
+
 ### `story_writing_agents.conversation_storage.sqlite_database`
 
 - **Source:**
@@ -1152,7 +1324,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Own the optional SQLite database identity,
   version-1 schema, fixed contained path, capability probe, connection and
   transaction lifecycle, verification, and create-only provisioning mechanics.
-- **Supported surface:** Exactly 11 names in `__all__`: fixed
+- **Supported surface:** Exactly 12 names in `__all__`: fixed
   `SQLITE_APPLICATION_ID`, `SQLITE_BUSY_TIMEOUT_SECONDS`,
   `SQLITE_DATABASE_PATH`, `SQLITE_MINIMUM_VERSION`, and
   `SQLITE_SCHEMA_VERSION` constants; `SQLiteDatabase`, whose supported
@@ -1160,15 +1332,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   `read`, `write`, and `provision`; and content-free
   `SQLiteDatabaseFormatError`, `SQLiteDatabaseMissingError`,
   `SQLiteDatabaseSecurityError`, `SQLiteDatabaseUnavailableError`, and
-  `SQLiteDatabaseVersionError`. The contained path property, callback aliases,
-  common error base, and connection helpers remain unsupported implementation
-  details. The sibling `conversation_storage.sqlite` adapter is the production
-  consumer of this owner interface.
+  `SQLiteDatabaseVersionError`; plus `probe_sqlite_runtime`, the explicit
+  active-interpreter functional readiness probe. The contained path property,
+  callback aliases, common error base, and connection helpers remain
+  unsupported implementation details. The sibling
+  `conversation_storage.sqlite` adapter is the production consumer of this
+  owner interface.
 - **Direct internal dependencies:** `workspace`.
 - **State, resources, and side effects:** Import defines immutable schema and
   policy metadata only and deliberately does not load `sqlite3`; each requested
   operation lazily loads and probes the standard-library module for SQLite
-  3.7.16 or newer. One `SQLiteDatabase` captures the supplied `Workspace`'s
+  3.7.16 or newer. The public runtime probe uses that same lazy owner to require
+  a successful in-memory connection, foreign-key enablement, one query, and
+  close without touching workspace storage or requiring FTS. One
+  `SQLiteDatabase` captures the supplied `Workspace`'s
   canonical root once and retains only its exact key and the fixed contained
   `discussion_logs/conversation_storage.sqlite3` path, so later mutation of the
   supplied `Workspace.root` cannot retarget database I/O. Construction performs
@@ -1253,10 +1430,10 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:** `src/story_writing_agents/conversation_storage/sqlite.py`
 - **Responsibility:** Provide the explicitly selected optional standard-library
-  SQLite catalog, event-store, exact literal-search, archive, preflight,
-  provisioning, and composition adapter boundary without changing filesystem
-  defaults or activation.
-- **Supported surface:** Exactly 13 names in `__all__`: fixed
+  SQLite catalog, event-store, exact literal-search, archive, runtime probe,
+  storage preflight, provisioning, and composition adapter boundary without
+  changing filesystem defaults or activation.
+- **Supported surface:** Exactly 14 names in `__all__`: fixed
   `SQLITE_CONVERSATION_STORAGE_APPLICATION_ID`,
   `SQLITE_CONVERSATION_STORAGE_BUSY_TIMEOUT_SECONDS`,
   `SQLITE_CONVERSATION_STORAGE_DATABASE_PATH`,
@@ -1266,7 +1443,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `SQLiteConversationEventStore`, and `SQLiteConversationSearch`; and
   `compose_sqlite_conversation_archive`,
   `compose_sqlite_conversation_storage`,
-  `preflight_sqlite_conversation_storage`, and
+  `preflight_sqlite_conversation_storage`,
+  `probe_sqlite_conversation_storage_runtime`, and
   `provision_sqlite_conversation_storage`. The archive adapter directly
   consumes and produces the canonical `ConversationArchive` values owned by
   the sibling `archive` module; it adds no private payload or record surface.
@@ -1287,8 +1465,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   authoritative main database and returns content-free capability while mapping
   unsupported, malformed, unsafe, and unavailable states to established
   storage/workspace failures. The optional companion is not a preflight or
-  readiness dependency. Provisioning requires an explicit active correct-
-  workspace lease.
+  readiness dependency. The separate runtime probe maps the database owner's
+  active-interpreter in-memory functional probe to ready or unavailable without
+  touching workspace storage and without an FTS or SQLite CLI gate.
+  Provisioning requires an explicit active correct-workspace lease.
 
   Catalog and event mutations borrow the workspace coordinator before opening
   the SQLite write transaction, so database revision, sequence, turn-slot,
@@ -1332,8 +1512,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   excluded from archive content, migration parity, and checkpoint identity.
   Valid existing storage remains available to observational preflight and reads
   when POSIX `fcntl` is unavailable, while provisioning and supported mutations
-  fail closed through the coordinator; full activation readiness remains owned
-  by Issue #261. Service composition preflights once and returns same-provenance
+  fail closed through the coordinator; selection/startup owns activation
+  readiness. Service composition preflights once and returns same-provenance
   catalog/event-store bindings plus a provider-free
   `SQLiteConversationSearch` binding, one shared pinned companion owner, and
   the shared coordinator; archive composition returns the separate privileged
@@ -1681,11 +1861,15 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Package-internal defining `InteractiveController`,
   re-exported only through `story_writing_agents.interactive_controller`, whose
   constructor accepts explicit workspace, CLI-context, backend, and terminal
-  collaborators plus optional keyword-only `ConversationCatalog` and borrowed
-  `InteractiveAuthCoordinator` collaborators, and whose single-use
+  collaborators plus optional keyword-only `ConversationCatalog`, immutable
+  `ConversationStorageServices`, and borrowed `InteractiveAuthCoordinator`
+  collaborators, and whose single-use
   `run_session_lobby` operation returns process status 0 or 2. An omitted
-  catalog uses `FilesystemConversationCatalog`; an omitted authentication
-  coordinator preserves direct legacy construction without native auth. The
+  catalog and bundle use the runtime's default composed filesystem services;
+  an explicitly supplied catalog retains the legacy raw-adapter path, while a
+  bundle conflicts with a separately supplied catalog. An omitted
+  authentication coordinator preserves direct legacy construction without
+  native auth. The
   shell dispatches
   the exact lifecycle commands `/session create`, `/session resume`,
   `/session pause`, and `/session list`; provider-free global status; attached
@@ -1755,8 +1939,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ListView` containing one `Record` per established callback, so the controller
   owns result counts and interruption boundaries without any remaining
   `write_status` or specialized dense-row call.
-  The settings editor exposes the exact six-row top level Language, Persona,
-  Maximum debate rounds, Providers, Save, and Cancel; Providers selects one
+  The settings editor exposes the exact seven-row top level Language, Persona,
+  Maximum debate rounds, Conversation storage, Providers, Save, and Cancel.
+  Conversation storage edits only the pending desired next-shell backend; Save
+  retains provider-default rebasing in memory, completes any provider auth,
+  then delegates readiness, explicit installer confirmation, provisioning,
+  fresh parity, and the one complete configuration CAS to the selection owner.
+  It supplies the settings-owned fresh persona-catalog validator as selection's
+  precommit guard so a changed catalog becomes a configuration conflict before
+  that CAS.
+  It never activates or migrates storage. Providers selects one
   roster agent, enables Codex or Antigravity selection, and edits only the
   active provider's model and effort vocabulary without discarding the inactive
   provider's values. The summary projection names both providers' model/effort
@@ -1782,7 +1974,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   interactive errors without presenting exception prose.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`,
   `conversation_retrieval`, `conversation_search`, `conversations`, `debug_log`,
-  `errors`, `interactive_auth`, `interactive_commands`,
+  `conversation_storage.contracts`, `conversation_storage.selection`, `errors`,
+  `interactive_auth`, `interactive_commands`,
   `interactive_controller._conversation_policy`,
   `interactive_controller._runtime_policy`,
   `interactive_controller._session_policy`, `interactive_settings`,
@@ -1790,12 +1983,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   `provider_auth`, `session_lifecycle`, `workspace`, and `writing_artifacts`.
 - **State, resources, and side effects:** Instances retain borrowed workspace,
   CLI-context, backend, terminal, and optional authentication-coordinator
-  collaborators plus either a borrowed injected catalog or a controller-
-  constructed default filesystem catalog. It
-  constructs and retains one `StoryRuntime` and one
-  `FilesystemConversationEventStore` bound to the resolved catalog. It shares
-  that exact event-store instance with the runtime and the attachment-scoped
-  `ConversationMemoryService`. The memory service is absent in lobby state,
+  collaborators plus either one immutable active storage bundle or the
+  established borrowed raw catalog path. It constructs and retains one
+  `StoryRuntime`; bundle mode shares the bundle's exact catalog, event store,
+  search, and coordinator through the runtime and attachment-scoped
+  `ConversationMemoryService`, while raw compatibility mode constructs the
+  established filesystem event store around the injected catalog. The memory
+  service is absent in lobby state,
   constructed for a validated destination before attachment commit, rebound on
   a successful switch, and cleared on pause, cleanup, and final close. The
   controller also owns its current attached-session identifier, current-focus
@@ -2072,39 +2266,39 @@ every intermediate arrow. The current runtime graph is acyclic.
   redacted `SettingsError`; the exact ordered `SETTINGS_LANGUAGES`,
   `SETTINGS_REASONING_EFFORTS`, and `SETTINGS_ANTIGRAVITY_EFFORTS`;
   `load_settings_state`, `update_language`, `update_persona`,
-  `update_max_debate_rounds`, `update_agent_backend`,
+  `update_max_debate_rounds`, `update_conversation_storage_backend`,
+  `update_agent_backend`,
   `establish_default_backend`, `establish_settings_default_backend`,
   `update_agent_codex_model`, `update_agent_codex_reasoning_effort`,
-  `update_agent_antigravity_model`, `update_agent_antigravity_effort`, and
-  `save_settings_state`. The module has no package-facade export.
+  `update_agent_antigravity_model`, `update_agent_antigravity_effort`,
+  `validate_settings_persona_catalog`, and `save_settings_state`. The module
+  has no package-facade export.
 - **Direct internal dependencies:** `agents`, `config`, `errors`, and
   `workspace`.
 - **State, resources, and side effects:** Loading captures the exact strict-
   UTF-8 bytes of both persisted configuration documents, one fully validated
   immutable configuration snapshot, and a safe lexical persona catalog with
   top-level-template precedence. Pure update operations replace only the
-  pending immutable candidate, including one agent's provider or one
-  provider-specific model/effort value at a time while preserving every
-  inactive-provider value. System-level provider model/effort values remain
-  unchanged fallback data rather than editable settings.
+  pending immutable candidate, including the independently validated desired
+  conversation-storage backend, one agent's provider, or one provider-specific
+  model/effort value at a time while preserving every inactive-provider value.
+  System-level provider model/effort values remain unchanged fallback data
+  rather than editable settings.
   `establish_default_backend` persists only a validated missing workspace
   default and never overwrites an existing value. Its settings-specific sibling
-  conflict-checks the opening exact bytes and persona catalog, writes one
-  default-only canonical system document, rereads and verifies that exact new
-  baseline, and replays every pending edit onto it; authentication and default
-  choice remain caller-owned. These completed default writes are durable
-  independently of whether the open pending transaction later saves or
-  cancels. Saving completely
-  validates and fully serializes that candidate,
-  rereads both documents and the catalog for exact stale-state detection, and
-  performs no write when the candidate is unchanged. Changed documents are
-  serialized canonically and atomically replaced through `Workspace` in system-
-  then-agent order; any attempted targets are restored from exact baseline text
-  in reverse order after a write failure, all restorations are attempted, and a
-  restoration failure produces the fixed rollback category. The module owns
-  configuration persistence and rebase but no authentication facts, terminal,
-  controller, backend, runtime, provider, network, subprocess, or import-time
-  operational resource.
+  rebases a validated missing provider default only in the pending in-memory
+  candidate; authentication and default choice remain caller-owned and Cancel
+  preserves the exact opening bytes. Saving revalidates the opening persona
+  catalog and delegates complete schema validation, exact-byte conflict
+  detection, canonical nine-key system defaults, changed-document publication,
+  and rollback to the configuration owner. Configuration commit failures map
+  to the established settings categories. Its cross-module persona validator
+  freshly compares the safe catalog with the opening baseline and raises the
+  fixed conflict failure without persisting anything. The module owns candidate
+  and persona-catalog validation, but no longer owns configuration serialization
+  or file publication and owns no authentication facts, readiness, installation,
+  provisioning, parity, activation, terminal, controller, backend, runtime,
+  provider, network, subprocess, or import-time operational resource.
 - **Primary verification/documentation:** `tests/test_interactive_settings.py`,
   `docs/design/interactive-cli-design-system.md`,
   `docs/reference/configuration/agent-configuration.md`, and
@@ -2962,14 +3156,22 @@ every intermediate arrow. The current runtime graph is acyclic.
   identities outside its embedded session scope. Existing provider-bound
   method signatures consume inline artifact-reference directives without new
   parameters, and their result contracts expose an optional content-free
-  reference-operation identity.
+  reference-operation identity. `StoryRuntime` retains its positional
+  construction and raw keyword-only `conversation_event_store` seam and adds a
+  keyword-only immutable `conversation_storage_services` seam; supplying both
+  forms is rejected.
 - **Direct internal dependencies:** `agents`, `backend`, `config`,
-  `conversation_retrieval`, `conversation_search`, `debug_log`, `directives`,
-  `conversations`, `errors`, `models`, `prompts`, `session_lifecycle`, and
-  `workspace`; plus `writing_artifacts`, `writing_artifacts.repository`, and
-  `writing_artifacts.runtime_references`.
-- **State, resources, and side effects:** Retains an injected or default
-  `ConversationEventStore` collaborator and owns each canonical agent's newest
+  `conversation_retrieval`, `conversation_search`,
+  `conversation_storage.composition`, `conversation_storage.contracts`,
+  `debug_log`, `directives`, `conversations`, `errors`, `models`, `prompts`,
+  `session_lifecycle`, and `workspace`; plus `writing_artifacts`,
+  `writing_artifacts.repository`, and `writing_artifacts.runtime_references`.
+- **State, resources, and side effects:** Retains an injected complete immutable
+  conversation-storage service bundle or the legacy raw event-store
+  collaborator. When neither is supplied, it composes the provider-free
+  filesystem bundle and exposes that same bundle for controller/memory-service
+  reuse; the runtime consumes its exact event-store port and does not mutate or
+  inspect bundle internals. It also owns each canonical agent's newest
   desired fingerprint, at most one current binding, same-fingerprint shielded
   bind task and waiter count, operation-use counts, retiring bindings, one
   binding-state lock, and per-session/conversation advisory-turn locks. A
@@ -3272,10 +3474,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   existing initialized workspaces need neither directory until the corresponding
   owning feature first creates it lazily. `debug_log`, not `Workspace`, owns the
   files, lock, schema, append, and rotation inside the diagnostic directory. New
-  workspaces also receive the canonical eight-key system-default document with
+  workspaces also receive the canonical nine-key system-default document with
   null Codex model/reasoning, Antigravity model/effort, and workspace
-  `default_backend` values, plus canonical seven-key per-agent entries with a
-  null backend, language, persona, and both providers' model/effort values.
+  `default_backend` values plus desired `conversation_storage_backend` set to
+  `filesystem`; canonical seven-key per-agent entries retain a null backend,
+  language, persona, and both providers' model/effort values.
   Existing configuration bytes are never migrated or rewritten by
   initialization. `cli_context` owns
   the schema stored
@@ -3820,25 +4023,32 @@ every intermediate arrow. The current runtime graph is acyclic.
   filesystem layout and depends inward on both. The package facade re-exports
   their additive supported surfaces. The CLI locally imports the separate
   direct-only `conversation_storage.migration` workflow only for explicit
-  `storage` commands; no runtime, controller, config, workspace, or root-facade
-  module depends on it or changes default selection.
+  migration/verification and directly consumes the distinct direct-only
+  `conversation_storage.selection` workflow for desired selection and startup.
+  `conversation_storage.provisioning` owns runtime/host readiness and explicit
+  provisioning beneath selection; selection imports public archive,
+  composition, contract, filesystem-archive, provisioning, and SQLite surfaces
+  and never depends on migration reports or checkpoints. Neither workflow is
+  re-exported by a facade, and importing either does not load `sqlite3`.
   `conversation_storage.composition` alone owns the weak workspace coordinator
   registry, contained POSIX advisory guard, activation marker I/O, and explicit
   filesystem binding. Its service bundle exposes
   concrete-`isinstance`-compatible construction-pinned filesystem collaborators
   under one explicit provenance, using operation-local workspaces without
   retaining caller-mutable bindings or adding external resource ownership.
-  Direct standalone adapters retain their borrowed-`Workspace` behavior.
-  Missing activation state remains the unwritten filesystem baseline. A
-  supported mutation borrows one exclusive, owner-thread-bound,
+  Its composed filesystem catalog mutations and event append borrow the same
+  coordinator included in their immutable bundle; direct standalone adapters
+  retain their borrowed-`Workspace`, uncoordinated behavior. Missing activation
+  state remains the unwritten filesystem baseline. A supported mutation borrows
+  one exclusive, owner-thread-bound,
   expiring lease first. Filesystem archive transfer validates that supplied
   outer lease throughout its privileged operation. SQLite catalog/event
   mutations borrow the same coordinator before their database transaction,
   while SQLite provisioning and its canonical archive operations validate a
-  caller-supplied outer lease. The migration owner is the explicit current
-  consumer: it captures one root, acquires one outer lease, composes both
-  canonical archive adapters, owns planning/checkpointing, and proves fresh
-  final parity without changing activation.
+  caller-supplied outer lease. The migration owner is the explicit copy and
+  checkpoint consumer: it captures one root, acquires one outer lease, composes
+  both canonical archive adapters, owns planning/checkpointing, and proves
+  fresh final parity without changing activation.
   Activation CAS likewise validates its supplied lease rather than acquiring
   one behind its caller. The pure `conversation_literal_search` module owns the
   shared versioned normalization/classification/snippet/order mechanics;
@@ -3851,8 +4061,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   generation-bound FTS companion under the same lease. Companion failure or
   capability absence cannot affect main readiness or exact one-snapshot search,
   and search never repairs it. The SQLite modules remain direct-only surfaces:
-  neither facade imports or re-exports them, and no runtime, controller, config,
-  workspace, or root-facade module selects SQLite by default.
+  neither facade imports or re-exports them. Config and Workspace own only the
+  desired/default value, while selection owns explicit readiness and next-shell
+  choice, startup owns activation, and runtime/controller consume only one
+  already-composed immutable active bundle; no facade or import changes the
+  filesystem default.
 
 - Writing-artifact directive parsing is a pure package-local boundary:
   `writing_artifacts.directives` scans only one supplied current input and
@@ -3980,13 +4193,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   construction emits no record. All five consumers use only the internal append
   surface; none assumes ownership of diagnostic files, locks, schema, or
   rotation.
-- `Workspace` initializes the canonical eight-key system and seven-key
-  per-agent configuration shapes with nullable workspace and agent provider
-  routes but never rewrites existing documents. `ConfigManager` owns full
-  system and per-agent schema validation, the exact Codex/Antigravity backend
-  vocabulary with legacy Gemini guidance, nullable default and explicit route
-  handling, both providers' model/effort validators, and immutable complete
-  snapshots. Each `AgentBackend` validates
+- `Workspace` initializes the canonical nine-key system and seven-key per-agent
+  configuration shapes with desired conversation storage set to filesystem and
+  nullable workspace/agent provider routes, but never rewrites existing
+  documents. `ConfigManager` owns full system and per-agent schema validation,
+  the independent filesystem/SQLite desired-storage vocabulary, the exact
+  Codex/Antigravity backend vocabulary with legacy Gemini guidance, nullable
+  default and explicit route handling, both providers' model/effort validators,
+  immutable complete snapshots, exact-byte baselines, and one canonical
+  complete-document compare-and-set with reverse-order rollback. Each
+  `AgentBackend` validates
   and snapshots those values once at construction, passes the complete snapshot
   to the Codex adapter, and projects only the Antigravity values into provider-
   specific primitives. Codex model resolution remains explicit-over-agent-
@@ -4000,26 +4216,29 @@ every intermediate arrow. The current runtime graph is acyclic.
   construction-time snapshot for provider routes, language, persona, and round
   defaults while session and explicit overrides remain live; settings saves
   affect only a later normal lifecycle.
-- `interactive_settings` alone owns one call-local exact-byte configuration
-  baseline, immutable pending candidate, safe persona catalog, missing-default
-  persistence, default-only exact-byte/catalog conflict checking and rebase,
-  complete candidate validation, exact stale-state detection, deterministic
-  system-then-agent writes, and continued reverse-order exact-text rollback.
-  Default choice and authentication facts remain outside it. The controller
-  owns focus and semantic interaction only and reaches this unit directly; the
-  settings unit has no controller, terminal, backend, runtime, auth, or parser
-  edge.
+- `interactive_settings` owns one call-local exact-byte configuration baseline,
+  immutable pending candidate, safe persona catalog, pending conversation-
+  storage choice, and in-memory missing-provider-default rebase. It delegates
+  final complete-document validation, byte conflict detection, serialization,
+  publication, and rollback to `ConfigManager`; Cancel therefore preserves the
+  opening files. Default choice and authentication facts remain outside it. The
+  controller owns focus and semantic interaction and delegates Save readiness,
+  installer consent, provisioning, parity, and the final configuration CAS to
+  `conversation_storage.selection`; the settings unit itself has no controller,
+  terminal, backend, runtime, auth, selection, or parser edge.
 - `provider_auth` is the sole authentication subprocess boundary: it probes
   only the exact native commands at the resolved workspace root, gives login
   the inherited real terminal, reaps its children, and exposes only immutable
   content-free states. `interactive_auth` depends one way on that service and
   the terminal facade to own status presentation, picker/login coordination,
   full refresh, sanitized outcomes, and default selection policy without
-  owning either resource. The CLI composes both private modules and sequences
-  welcome, initial/effective-provider hard gates, default persistence, then
-  delayed context/backend/controller construction; the controller only borrows
-  the same coordinator for `/auth` and authenticated settings and directly
-  consumes only `provider_auth`'s immutable snapshot facts. Credentials,
+  owning either resource. After workspace/config loading, the CLI first asks
+  selection to activate one ready immutable storage bundle, then composes both
+  auth modules and sequences welcome, initial/effective-provider hard gates,
+  default persistence, and delayed context/backend/controller construction.
+  The controller receives the active storage bundle and only borrows the auth
+  coordinator for `/auth` and authenticated settings while consuming only
+  `provider_auth`'s immutable snapshot facts. Credentials,
   provider output, browser/keyring behavior, terminal mode, and configuration
   files remain respectively provider-native, undisclosed, terminal-owned, and
   settings/config/workspace-owned. Both auth modules remain absent from the
@@ -4228,8 +4447,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ConversationMemoryService.search` and
   `ConversationMemoryService.read_transcript` boundaries. Provider-free
   focused `/history` and the transcript portion of `/status` each cross one
-  public `FilesystemConversationEventStore.read` boundary and derive context
-  facts from that exact immutable tuple through the pure module-supported
+  public active-bundle `ConversationEventStore.read` boundary and derive
+  context facts from that exact immutable tuple through the pure module-supported
   `select_bounded_conversation_context`; the controller never appends or calls
   event-store `read_context`. Ctrl-C during provider-free search, transcript,
   or history rendering stops further output without mutating those boundaries.
@@ -4242,13 +4461,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   `run_inputs.read_draft_file` and then `StoryRuntime.run_draft` with
   `InputKind.DRAFT`. Each route passes the exact validated output path, while
   `RUN_FRESH` is context-free and the other two routes include current focus.
-- The controller wires its resolved `ConversationCatalog` and one retained
-  `FilesystemConversationEventStore` into both `StoryRuntime` and the
-  attachment-scoped `ConversationMemoryService`, so injected and default
-  catalogs remain the same authority for metadata and transcript identity. It
-  prepares the destination service before attachment commit, rebinds it only
-  with the committed attachment, and clears it on switch, pause, cleanup, and
-  final close; changing current focus does not rebind it. Search defaults to
+- The controller normally injects one immutable active
+  `ConversationStorageServices` bundle into `StoryRuntime` and every
+  attachment-scoped `ConversationMemoryService`, so its catalog, event-store,
+  search, and mutation-coordinator ports retain one provenance. The additive
+  bundle conflicts with the legacy raw catalog injection; that raw compatibility
+  path retains its established filesystem event-store construction without
+  widening the storage contracts. The controller prepares the destination
+  memory service before attachment commit, rebinds it only with the committed
+  attachment, and clears it on switch, pause, cleanup, and final close;
+  changing current focus does not rebind it. Search defaults to
   active conversations, while transcript identifiers resolve across active and
   archived conversations for explicit provider-free terminal reads. For agent
   retrieval, `StoryRuntime` first validates that service's exact current-session

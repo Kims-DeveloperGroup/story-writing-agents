@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from types import TracebackType
 
 from ..agents import (
@@ -30,6 +31,11 @@ from ..conversation_retrieval import (
     ConversationRetrievalProgressPhase,
     ConversationRetrievalResult,
     ConversationRetrievalSource,
+)
+from ..conversation_storage.contracts import ConversationStorageServices
+from ..conversation_storage.selection import (
+    ConversationStorageSelectionFailure,
+    select_conversation_storage,
 )
 from ..debug_log import (
     DebugComponent,
@@ -85,15 +91,16 @@ from ..interactive_settings import (
     establish_default_backend,
     establish_settings_default_backend,
     load_settings_state,
-    save_settings_state,
     update_agent_antigravity_effort,
     update_agent_antigravity_model,
     update_agent_backend,
     update_agent_codex_model,
     update_agent_codex_reasoning_effort,
+    update_conversation_storage_backend,
     update_language,
     update_max_debate_rounds,
     update_persona,
+    validate_settings_persona_catalog,
 )
 from ..interactive_terminal import (
     AdvisoryProgressError,
@@ -149,7 +156,6 @@ from ..session_lifecycle import (
     provider_work_is_ready,
 )
 from ..workspace import (
-    FilesystemConversationCatalog,
     FilesystemConversationEventStore,
     Workspace,
 )
@@ -311,6 +317,7 @@ class InteractiveController:
         "_conversation_catalog",
         "_conversation_event_store",
         "_conversation_memory_service",
+        "_conversation_storage_services",
         "_composition_input",
         "_context",
         "_debug_log",
@@ -341,6 +348,7 @@ class InteractiveController:
         terminal: InteractiveTerminal,
         *,
         conversation_catalog: ConversationCatalog | None = None,
+        conversation_storage_services: ConversationStorageServices | None = None,
         auth_coordinator: InteractiveAuthCoordinator | None = None,
     ) -> None:
         """Bind collaborators and construct one shared transcript adapter.
@@ -383,28 +391,62 @@ class InteractiveController:
         self._debate_progress = InteractiveDebateProgress(terminal)
         self._composition_input = InteractiveCompositionInput(terminal)
         self._main_input = InteractiveMainInput(terminal)
+        if (
+            conversation_storage_services is not None
+            and conversation_catalog is not None
+        ):
+            raise TypeError(
+                "conversation_storage_services conflicts with conversation_catalog"
+            )
+        if (
+            conversation_storage_services is not None
+            and type(conversation_storage_services) is not ConversationStorageServices
+        ):
+            raise TypeError(
+                "conversation_storage_services must be ConversationStorageServices"
+            )
+        if conversation_storage_services is None and conversation_catalog is None:
+            self._runtime = StoryRuntime(workspace, backend)
+            conversation_storage_services = (
+                self._runtime.conversation_storage_services
+            )
+            if type(conversation_storage_services) is not ConversationStorageServices:
+                raise TypeError("runtime storage services are invalid")
+        elif conversation_storage_services is not None:
+            self._runtime = StoryRuntime(
+                workspace,
+                backend,
+                conversation_storage_services=conversation_storage_services,
+            )
         resolved_catalog = (
-            FilesystemConversationCatalog(workspace)
-            if conversation_catalog is None
+            conversation_storage_services.catalog
+            if conversation_storage_services is not None
             else conversation_catalog
         )
+        assert resolved_catalog is not None
         if any(
             not callable(getattr(resolved_catalog, operation, None))
             for operation in _CONVERSATION_CATALOG_OPERATIONS
         ):
             raise TypeError(
                 "conversation_catalog must implement ConversationCatalog"
-            )
+        )
+        self._conversation_storage_services = conversation_storage_services
         self._conversation_catalog = resolved_catalog
-        self._conversation_event_store = FilesystemConversationEventStore(
-            workspace,
-            catalog=resolved_catalog,
+        self._conversation_event_store = (
+            conversation_storage_services.event_store
+            if conversation_storage_services is not None
+            else FilesystemConversationEventStore(
+                workspace,
+                catalog=resolved_catalog,
+            )
         )
-        self._runtime = StoryRuntime(
-            workspace,
-            backend,
-            conversation_event_store=self._conversation_event_store,
-        )
+        if conversation_storage_services is None:
+            self._runtime = StoryRuntime(
+                workspace,
+                backend,
+                conversation_event_store=self._conversation_event_store,
+            )
         self._conversation_memory_service: (
             ConversationMemoryService | None
         ) = None
@@ -1180,10 +1222,19 @@ class InteractiveController:
             self._present_destination_conversation_failure(exc)
             return
         try:
-            memory_service = ConversationMemoryService(
-                ConversationSearchScope(session_id),
-                self._conversation_catalog,
-                self._conversation_event_store,
+            memory_service = (
+                ConversationMemoryService(
+                    ConversationSearchScope(session_id),
+                    conversation_storage_services=(
+                        self._conversation_storage_services
+                    ),
+                )
+                if self._conversation_storage_services is not None
+                else ConversationMemoryService(
+                    ConversationSearchScope(session_id),
+                    self._conversation_catalog,
+                    self._conversation_event_store,
+                )
             )
         except Exception:
             self._release_uncommitted_destination(session_id)
@@ -1928,7 +1979,7 @@ class InteractiveController:
         *,
         newly_authenticated_provider: str | None = None,
     ) -> SettingsState:
-        """Persist and replay a settings-local missing default exactly once."""
+        """Rebase a settings-local missing provider default in memory."""
 
         provider = select_default_provider(
             snapshot,
@@ -1990,6 +2041,7 @@ class InteractiveController:
             Choice("language", "Language"),
             Choice("persona", "Persona"),
             Choice("max_debate_rounds", "Maximum debate rounds"),
+            Choice("conversation_storage", "Conversation storage"),
             Choice("providers", "Providers"),
             Choice("save", "Save"),
             Choice("cancel", "Cancel"),
@@ -2038,10 +2090,24 @@ class InteractiveController:
                         return
                     if auth_outcome == "return":
                         continue
-                try:
-                    save_settings_state(self._workspace, state)
-                except SettingsError as failure:
-                    self._write_settings_error(failure.kind)
+                report = select_conversation_storage(
+                    self._workspace,
+                    (
+                        state.pending.system_defaults.conversation_storage_backend
+                        or "filesystem"
+                    ),
+                    installation_consent=self._confirm_storage_installation,
+                    diagnostic_stream=sys.stderr,
+                    configuration_baseline=state.baseline.configuration_baseline,
+                    configuration=state.pending,
+                    precommit_guard=lambda: validate_settings_persona_catalog(
+                        self._workspace,
+                        state.baseline,
+                    ),
+                )
+                if report.outcome != "completed":
+                    assert report.failure is not None
+                    self._write_storage_selection_error(report.failure)
                     continue
                 self._semantic_output.write_component(
                     Panel(
@@ -2210,6 +2276,8 @@ class InteractiveController:
             return self._edit_settings_persona(state)
         if selected == "max_debate_rounds":
             return self._edit_settings_rounds(state)
+        if selected == "conversation_storage":
+            return self._edit_settings_storage(state)
         if selected == "providers":
             return self._edit_settings_provider(state)
         raise _ControllerAbort(
@@ -2302,6 +2370,86 @@ class InteractiveController:
                 )
                 continue
             return update_max_debate_rounds(state, rounds), False
+
+    def _edit_settings_storage(
+        self,
+        state: SettingsState,
+    ) -> tuple[SettingsState, bool]:
+        """Select a desired next-shell storage backend without activating it."""
+
+        pending = (
+            state.pending.system_defaults.conversation_storage_backend
+            or "filesystem"
+        )
+        outcome = self._picker_input.read_picker(
+            Prompt(
+                "Conversation storage",
+                instruction="Choose the desired backend for the next shell.",
+            ),
+            (
+                Choice("filesystem", "Filesystem"),
+                Choice("sqlite", "SQLite"),
+            ),
+            highlighted_id=pending,
+            selected_id=pending,
+            transient=True,
+        )
+        value, whole_cancel = self._nested_settings_value(outcome)
+        if whole_cancel:
+            return state, True
+        if value is None:
+            return state, False
+        try:
+            return update_conversation_storage_backend(state, value), False
+        except ConfigurationError:
+            self._write_settings_validation(
+                "Conversation storage must be filesystem or sqlite."
+            )
+            return state, False
+
+    def _confirm_storage_installation(
+        self,
+        plan: object,
+    ) -> bool:
+        """Preview the literal installer and require a separate exact YES."""
+
+        command = getattr(plan, "command", None)
+        if command not in {
+            "brew install sqlite",
+            "apt-get install sqlite3 libsqlite3-dev",
+            "dnf install sqlite sqlite-devel",
+        }:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        self._semantic_output.write_component(
+            Panel(
+                "SQLite prerequisite installation",
+                (
+                    Field("Command", command),
+                    Notice(
+                        "This command changes host packages and runs in the "
+                        "workspace with the real terminal attached.",
+                        label="installation",
+                        role=SemanticRole.WARNING,
+                    ),
+                ),
+                state=ViewState.OPEN,
+            )
+        )
+        outcome = self._picker_input.read_picker(
+            Prompt(
+                "Install SQLite prerequisite?",
+                instruction="Choose the exact YES to run the command.",
+            ),
+            (Choice("YES", "YES"), Choice("NO", "NO")),
+            highlighted_id="NO",
+            transient=True,
+        )
+        return (
+            outcome.kind is ControlOutcomeKind.COMMIT
+            and outcome.text == "YES"
+        )
 
     def _edit_settings_provider(
         self,
@@ -2660,6 +2808,10 @@ class InteractiveController:
                 ("Language", defaults.language),
                 ("Persona", defaults.persona),
                 ("Maximum debate rounds", str(defaults.max_debate_rounds)),
+                (
+                    "Conversation storage",
+                    defaults.conversation_storage_backend or "filesystem",
+                ),
             ]
             for agent_id in ROSTER:
                 display_name = AGENT_SPECS[agent_id].display_name
@@ -2781,6 +2933,66 @@ class InteractiveController:
             Notice(
                 messages[kind],
                 label="settings error",
+                role=SemanticRole.ERROR,
+                state=ViewState.ERROR,
+            )
+        )
+
+    def _write_storage_selection_error(
+        self,
+        failure: ConversationStorageSelectionFailure,
+    ) -> None:
+        """Render one sanitized storage readiness or persistence recovery."""
+
+        messages = {
+            ConversationStorageSelectionFailure.INVALID_REQUEST: (
+                "The requested conversation storage selection is invalid."
+            ),
+            ConversationStorageSelectionFailure.WORKSPACE_INVALID: (
+                "Conversation storage could not inspect this workspace."
+            ),
+            ConversationStorageSelectionFailure.COORDINATION_FAILED: (
+                "Conversation storage coordination is unavailable or busy."
+            ),
+            ConversationStorageSelectionFailure.INSTALLATION_REQUIRED: (
+                "SQLite installation was not confirmed; settings were preserved."
+            ),
+            ConversationStorageSelectionFailure.INSTALLATION_UNSUPPORTED: (
+                "SQLite installation is not supported on this exact platform."
+            ),
+            ConversationStorageSelectionFailure.INSTALLATION_DISALLOWED: (
+                "SQLite host installation is disabled in this environment."
+            ),
+            ConversationStorageSelectionFailure.INSTALLATION_FAILED: (
+                "SQLite installation failed; inspect the installer diagnostics."
+            ),
+            ConversationStorageSelectionFailure.INTERPRETER_UNAVAILABLE: (
+                "This Python interpreter still lacks functional SQLite; "
+                "rebuild or reinstall Python with SQLite support."
+            ),
+            ConversationStorageSelectionFailure.PROVISIONING_FAILED: (
+                "SQLite conversation storage is unavailable or invalid."
+            ),
+            ConversationStorageSelectionFailure.MIGRATION_REQUIRED: (
+                "Migrate the active conversations to the requested backend first."
+            ),
+            ConversationStorageSelectionFailure.PARITY_MISMATCH: (
+                "Fresh conversation archive parity does not match."
+            ),
+            ConversationStorageSelectionFailure.CONFIGURATION_INVALID: (
+                "Pending settings are invalid; correct them before saving."
+            ),
+            ConversationStorageSelectionFailure.CONFIGURATION_CONFLICT: (
+                "Settings changed on disk; cancel and reopen /settings."
+            ),
+            ConversationStorageSelectionFailure.CONFIGURATION_WRITE_FAILED: (
+                "Settings could not be saved; prior configuration was preserved."
+            ),
+        }
+        self._semantic_output.write_component(
+            Notice(
+                messages[failure],
+                label="conversation storage",
                 role=SemanticRole.ERROR,
                 state=ViewState.ERROR,
             )

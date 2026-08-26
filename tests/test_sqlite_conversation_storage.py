@@ -1504,6 +1504,7 @@ class SQLiteBoundaryAndCompositionTests(unittest.TestCase):
             "compose_sqlite_conversation_archive",
             "compose_sqlite_conversation_storage",
             "preflight_sqlite_conversation_storage",
+            "probe_sqlite_conversation_storage_runtime",
             "provision_sqlite_conversation_storage",
         )
         self.assertEqual(tuple(sqlite_module.__all__), expected)
@@ -1570,6 +1571,7 @@ assert tuple(database_owner.__all__) == (
     'SQLiteDatabaseSecurityError',
     'SQLiteDatabaseUnavailableError',
     'SQLiteDatabaseVersionError',
+    'probe_sqlite_runtime',
 )
 assert tuple(index_owner.__all__) == (
     'SQLITE_CONVERSATION_SEARCH_INDEX_PATH',

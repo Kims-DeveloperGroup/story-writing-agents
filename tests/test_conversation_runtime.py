@@ -2776,6 +2776,7 @@ class ConversationRuntimeArtifactTests(_ConversationRuntimeCase):
             _changed_paths(before, after),
             {
                 _transcript_path("session_a", success_metadata.conversation_id),
+                "config/.conversation_storage.lock",
                 (
                     "agent_states/orchestrator_state/writing_artifacts/"
                     ".artifacts.lock"

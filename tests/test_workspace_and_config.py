@@ -12,7 +12,7 @@ import tempfile
 import traceback
 import unittest
 from collections.abc import Callable
-from dataclasses import FrozenInstanceError, fields
+from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import NoReturn
@@ -41,6 +41,8 @@ from story_writing_agents import workspace as workspace_module
 from story_writing_agents.agents import CORE_DOCUMENTS
 from story_writing_agents.config import (
     AgentConfig,
+    ConfigurationCommitError,
+    ConfigurationCommitFailure,
     ConfigurationSnapshot,
     ConfigManager,
     SystemDefaults,
@@ -2362,6 +2364,7 @@ class WorkspaceTests(unittest.TestCase):
                 "antigravity_model": None,
                 "antigravity_effort": None,
                 "default_backend": None,
+                "conversation_storage_backend": "filesystem",
             },
         )
         expected_agent = {
@@ -2388,6 +2391,7 @@ class WorkspaceTests(unittest.TestCase):
             '  "antigravity_model": null,\n'
             '  "codex_model": null,\n'
             '  "codex_reasoning_effort": null,\n'
+            '  "conversation_storage_backend": "filesystem",\n'
             '  "default_backend": null,\n'
             '  "language": "KO",\n'
             '  "max_debate_rounds": 1,\n'
@@ -2882,9 +2886,10 @@ class ConfigurationCascadeTests(unittest.TestCase):
                 "antigravity_model",
                 "antigravity_effort",
                 "default_backend",
+                "conversation_storage_backend",
             ),
         )
-        self.assertTrue(all(field.default is None for field in model_fields[-5:]))
+        self.assertTrue(all(field.default is None for field in model_fields[-6:]))
         legacy = SystemDefaults("KO", "global_persona", 1)
         self.assertEqual(
             legacy,
@@ -2897,6 +2902,7 @@ class ConfigurationCascadeTests(unittest.TestCase):
                 antigravity_model=None,
                 antigravity_effort=None,
                 default_backend=None,
+                conversation_storage_backend=None,
             ),
         )
         self.assertFalse(hasattr(legacy, "__dict__"))
@@ -3020,10 +3026,10 @@ class ConfigurationCascadeTests(unittest.TestCase):
     def test_complete_pair_is_read_once_and_snapshot_resolution_does_not_reread(
         self,
     ) -> None:
-        original_read = self.workspace.read_json
+        original_read = self.manager._read_exact_bytes
         with mock.patch.object(
-            self.workspace,
-            "read_json",
+            self.manager,
+            "_read_exact_bytes",
             wraps=original_read,
         ) as read:
             snapshot = self.manager.load_configuration_snapshot()
@@ -3492,6 +3498,164 @@ class DirectiveTests(unittest.TestCase):
 
         persisted = json.loads(state_path.read_text(encoding="utf-8"))
         self.assertEqual(persisted["language"], "EN")
+
+
+class ConversationStorageConfigurationTests(unittest.TestCase):
+    """Lock the ninth config key and exact-byte complete-document CAS."""
+
+    def setUp(self) -> None:
+        self.workspace = initialized_workspace(self)
+        self.manager = ConfigManager(self.workspace)
+
+    def test_legacy_eight_key_missing_and_null_storage_load_as_filesystem_default(
+        self,
+    ) -> None:
+        value = dict(DEFAULT_SYSTEM_CONFIG)
+        value.pop("conversation_storage_backend")
+        for include_null in (False, True):
+            with self.subTest(include_null=include_null):
+                legacy = dict(value)
+                if include_null:
+                    legacy["conversation_storage_backend"] = None
+                self.workspace.write_json("config/system_defaults.json", legacy)
+                before = self.workspace.path(
+                    "config/system_defaults.json"
+                ).read_bytes()
+                snapshot = self.manager.load_configuration_snapshot()
+                self.assertIsNone(
+                    snapshot.system_defaults.conversation_storage_backend
+                )
+                self.assertEqual(
+                    self.workspace.path("config/system_defaults.json").read_bytes(),
+                    before,
+                )
+                self.assertEqual(
+                    self.manager.system_defaults_value(snapshot.system_defaults)[
+                        "conversation_storage_backend"
+                    ],
+                    "filesystem",
+                )
+
+    def test_invalid_storage_values_are_rejected_without_normalization(self) -> None:
+        for value in ("", "SQLite", "mysql", 1, False, [], {}):
+            with self.subTest(value=value):
+                system = dict(DEFAULT_SYSTEM_CONFIG)
+                system["conversation_storage_backend"] = value
+                self.workspace.write_json("config/system_defaults.json", system)
+                before = self.workspace.path(
+                    "config/system_defaults.json"
+                ).read_bytes()
+                with self.assertRaises(ConfigurationError):
+                    self.manager.load_configuration_snapshot()
+                self.assertEqual(
+                    self.workspace.path("config/system_defaults.json").read_bytes(),
+                    before,
+                )
+
+    def test_commit_noop_and_agent_only_save_preserve_canonical_nine_key_bytes(
+        self,
+    ) -> None:
+        baseline = self.manager.load_configuration_baseline()
+        with mock.patch.object(
+            self.workspace,
+            "write_text",
+            wraps=self.workspace.write_text,
+        ) as write:
+            self.assertFalse(
+                self.manager.commit_configuration(
+                    baseline,
+                    baseline.configuration,
+                )
+            )
+        write.assert_not_called()
+
+        system_before = self.workspace.path(
+            "config/system_defaults.json"
+        ).read_bytes()
+        agents = dict(baseline.configuration.agent_configs)
+        agents[PLOT_ARCHITECT] = replace(
+            agents[PLOT_ARCHITECT],
+            backend="antigravity",
+        )
+        candidate = ConfigurationSnapshot(
+            baseline.configuration.system_defaults,
+            agents,
+        )
+        with mock.patch.object(
+            self.workspace,
+            "write_text",
+            wraps=self.workspace.write_text,
+        ) as write:
+            self.assertTrue(self.manager.commit_configuration(baseline, candidate))
+        self.assertEqual(
+            [call.args[0] for call in write.call_args_list],
+            ["config/agent_configs.json"],
+        )
+        self.assertEqual(
+            self.workspace.path("config/system_defaults.json").read_bytes(),
+            system_before,
+        )
+        self.assertEqual(
+            set(self.workspace.read_json("config/system_defaults.json")),
+            {
+                "language",
+                "persona",
+                "max_debate_rounds",
+                "codex_model",
+                "codex_reasoning_effort",
+                "antigravity_model",
+                "antigravity_effort",
+                "default_backend",
+                "conversation_storage_backend",
+            },
+        )
+
+    def test_exact_byte_conflict_and_write_failure_preserve_prior_pair(self) -> None:
+        baseline = self.manager.load_configuration_baseline()
+        candidate = ConfigurationSnapshot(
+            replace(
+                baseline.configuration.system_defaults,
+                conversation_storage_backend="sqlite",
+            ),
+            baseline.configuration.agent_configs,
+        )
+        system_path = self.workspace.path("config/system_defaults.json")
+        agent_path = self.workspace.path("config/agent_configs.json")
+        system_path.write_bytes(baseline.system_defaults_bytes + b" ")
+        conflicted = (system_path.read_bytes(), agent_path.read_bytes())
+        with self.assertRaises(ConfigurationCommitError) as caught:
+            self.manager.commit_configuration(baseline, candidate)
+        self.assertIs(
+            caught.exception.failure,
+            ConfigurationCommitFailure.CONFLICT,
+        )
+        self.assertEqual(
+            (system_path.read_bytes(), agent_path.read_bytes()),
+            conflicted,
+        )
+
+        system_path.write_bytes(baseline.system_defaults_bytes)
+        real_write = self.workspace.write_text
+        attempts = 0
+
+        def fail_first_write(relative: str, text: str) -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise OSError("private write detail")
+            real_write(relative, text)
+
+        with mock.patch.object(
+            self.workspace,
+            "write_text",
+            side_effect=fail_first_write,
+        ):
+            with self.assertRaises(ConfigurationCommitError) as caught:
+                self.manager.commit_configuration(baseline, candidate)
+        self.assertIs(caught.exception.failure, ConfigurationCommitFailure.WRITE)
+        self.assertNotIn("private", str(caught.exception))
+        self.assertEqual(system_path.read_bytes(), baseline.system_defaults_bytes)
+        self.assertEqual(agent_path.read_bytes(), baseline.agent_configs_bytes)
 
 
 if __name__ == "__main__":

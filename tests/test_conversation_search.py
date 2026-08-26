@@ -49,6 +49,9 @@ from story_writing_agents.conversation_literal_search import (
     normalize_conversation_literal_query,
     normalize_conversation_literal_text,
 )
+from story_writing_agents.conversation_storage import (
+    compose_filesystem_conversation_storage,
+)
 
 from tests.conversation_search_contract import (
     BASE_TIME,
@@ -447,13 +450,26 @@ class ConversationSearchValueContractTests(unittest.TestCase):
         service_parameters = inspect.signature(ConversationMemoryService).parameters
         self.assertEqual(
             tuple(service_parameters),
-            ("scope", "catalog", "event_store", "search"),
+            (
+                "scope",
+                "catalog",
+                "event_store",
+                "search",
+                "conversation_storage_services",
+            ),
         )
         self.assertIs(
             service_parameters["search"].kind,
             inspect.Parameter.KEYWORD_ONLY,
         )
         self.assertIsNone(service_parameters["search"].default)
+        self.assertIs(
+            service_parameters["conversation_storage_services"].kind,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+        self.assertIsNone(
+            service_parameters["conversation_storage_services"].default
+        )
         self.assertEqual(
             tuple(inspect.signature(ConversationSearch.search).parameters),
             ("self", "scope", "query"),
@@ -497,6 +513,35 @@ class ConversationSearchValueContractTests(unittest.TestCase):
             ),
             ("self", "cursor"),
         )
+
+    def test_service_bundle_identity_conflict_and_legacy_construction(self) -> None:
+        workspace = initialized_workspace(self)
+        bundle = compose_filesystem_conversation_storage(workspace)
+        scope = ConversationSearchScope("session_a")
+        bundled = ConversationMemoryService(
+            scope,
+            conversation_storage_services=bundle,
+        )
+        self.assertIs(bundled._conversation_storage_services, bundle)
+        self.assertIs(bundled._catalog, bundle.catalog)
+        self.assertIs(bundled._event_store, bundle.event_store)
+        self.assertIs(bundled._search, bundle.search)
+        with self.assertRaises(TypeError):
+            ConversationMemoryService(
+                scope,
+                bundle.catalog,
+                bundle.event_store,
+                conversation_storage_services=bundle,
+            )
+
+        legacy = ConversationMemoryService(
+            scope,
+            bundle.catalog,
+            bundle.event_store,
+            search=bundle.search,
+        )
+        self.assertIsNone(legacy._conversation_storage_services)
+        self.assertIs(legacy._catalog, bundle.catalog)
 
 
 class ConversationSearchBehaviorTests(unittest.TestCase):

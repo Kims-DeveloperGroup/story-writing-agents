@@ -18,6 +18,12 @@ from .cli_context import (
     save_default_session,
 )
 from .config import ConfigurationSnapshot, ConfigManager
+from .conversation_storage.selection import (
+    ConversationStorageSelectionFailure,
+    ConversationStorageSelectionReport,
+    activate_configured_conversation_storage,
+    select_conversation_storage,
+)
 from .debug_log import (
     DebugComponent,
     DebugOperation,
@@ -217,7 +223,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     storage = subcommands.add_parser(
         "storage",
-        help="migrate or verify authoritative conversation storage",
+        help="select, migrate, or verify authoritative conversation storage",
     )
     storage_actions = storage.add_subparsers(
         dest="storage_action",
@@ -240,6 +246,11 @@ def build_parser() -> argparse.ArgumentParser:
         action_parser.add_argument("--workspace", help=_WORKSPACE_HELP)
         if action == "migrate":
             action_parser.add_argument("--dry-run", action="store_true")
+    use = storage_actions.add_parser("use")
+    use.add_argument("backend", metavar="BACKEND")
+    use.add_argument("--install-missing", action="store_true")
+    use.add_argument("--yes", action="store_true")
+    use.add_argument("--workspace", help=_WORKSPACE_HELP)
 
     smoke = subcommands.add_parser(
         "smoke",
@@ -566,6 +577,29 @@ def _classify_interactive_gate_failure(
     return _classify_interactive_configuration_failure(failure)
 
 
+def _classify_conversation_storage_startup_failure(
+    failure: Exception,
+) -> InteractiveError:
+    """Map startup storage failures to sanitized, actionable recovery copy."""
+
+    if isinstance(failure, WorkspaceSecurityError):
+        return InteractiveError(InteractiveErrorCode.WORKSPACE_UNSAFE)
+    if isinstance(failure, WorkspaceVersionUnsupportedError):
+        return InteractiveError(InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED)
+    if isinstance(failure, (WorkspaceFormatError, OSError)):
+        return InteractiveError(InteractiveErrorCode.WORKSPACE_INVALID)
+    if isinstance(failure, ConfigurationError):
+        return InteractiveError(InteractiveErrorCode.CONFIGURATION_INVALID)
+    return InteractiveError(
+        InteractiveErrorCode.CONFIGURATION_INVALID,
+        summary="Conversation storage activation could not be completed.",
+        hint=(
+            "Run story storage use, migrate, or verify as appropriate, then "
+            "retry after concurrent workspace storage work finishes."
+        ),
+    )
+
+
 def _newly_authenticated_provider(
     before: ProviderAuthSnapshot,
     result: InteractiveAuthResult,
@@ -685,10 +719,11 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
     Both streams are checked before input, option validation, workspace access,
     or backend construction. All interactive values validate before workspace
     discovery. One workspace-bound authentication coordinator then owns the
-    welcome and hard gates for initial and effective providers. Configuration,
-    context, backend, and controller construction remain ordered behind those
-    gates. Once ``run_session_lobby`` is called, the controller owns backend
-    cleanup; before that transfer this adapter closes any constructed backend.
+    welcome and hard gates for initial and effective providers. Conversation
+    storage activates from validated configuration before provider auth;
+    context, backend, and controller construction remain behind auth. Once
+    ``run_session_lobby`` is called, the controller owns backend cleanup;
+    before that transfer this adapter closes any constructed backend.
     """
 
     if not _interactive_streams_are_terminals():
@@ -756,6 +791,24 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
         DebugOperation.CLI_COMMAND,
         DebugPhase.STARTED,
     )
+
+    try:
+        storage_startup = activate_configured_conversation_storage(workspace)
+    except KeyboardInterrupt:
+        _trace_cli(
+            debug_log,
+            DebugOperation.CLI_COMMAND,
+            DebugPhase.CANCELLED,
+            outcome=DebugOutcome.INTERRUPTED,
+        )
+        return 0
+    except Exception as exc:
+        _record_cli_error(debug_log, DebugOperation.CONFIGURATION, exc)
+        _write_interactive_cli_error(
+            _classify_conversation_storage_startup_failure(exc),
+            debug_log_available=True,
+        )
+        return 2
 
     try:
         terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
@@ -914,6 +967,7 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
             cli_context,
             backend,
             terminal,
+            conversation_storage_services=storage_startup.services,
             auth_coordinator=auth_coordinator,
         )
     except Exception as exc:
@@ -1020,6 +1074,49 @@ def main(argv: Sequence[str] | None = None) -> int:
             return exit_code
 
         if arguments.command == "storage":
+            if arguments.storage_action == "use":
+                try:
+                    desired = ConfigManager.validate_conversation_storage_backend(
+                        arguments.backend
+                    )
+                except Exception:
+                    use_report = ConversationStorageSelectionReport.failed(
+                        ConversationStorageSelectionFailure.INVALID_REQUEST
+                    )
+                else:
+                    assert desired is not None
+                    install_missing = arguments.install_missing
+                    yes = arguments.yes
+                    if (
+                        install_missing != yes
+                        or (
+                            desired != "sqlite"
+                            and (install_missing or yes)
+                        )
+                    ):
+                        use_report = ConversationStorageSelectionReport.failed(
+                            ConversationStorageSelectionFailure.INVALID_REQUEST,
+                            desired_backend=desired,
+                        )
+                    else:
+                        try:
+                            workspace = resolve_workspace(arguments.workspace)
+                        except Exception:
+                            use_report = ConversationStorageSelectionReport.failed(
+                                ConversationStorageSelectionFailure.WORKSPACE_INVALID,
+                                desired_backend=desired,
+                            )
+                        else:
+                            use_report = select_conversation_storage(
+                                workspace,
+                                desired,
+                                install_missing=install_missing,
+                                yes=yes,
+                                diagnostic_stream=sys.stderr,
+                            )
+                print(use_report.to_json())
+                return use_report.exit_code
+
             from .conversation_storage.migration import (
                 ConversationStorageMigrationOperation,
                 ConversationStorageMigrationReport,

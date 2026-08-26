@@ -47,6 +47,16 @@ from story_writing_agents import (
 from story_writing_agents.cli import build_parser, main
 from story_writing_agents.cli_context import CliContext
 from story_writing_agents.debug_log import WorkspaceDebugLog
+from story_writing_agents.conversation_storage import (
+    CONVERSATION_STORAGE_ACTIVATION_STATE_PATH,
+    ConversationStorageBackend,
+    ConversationStorageServices,
+    compose_filesystem_conversation_storage,
+    load_conversation_storage_activation_state,
+)
+from story_writing_agents.conversation_storage.selection import (
+    ConversationStorageStartup,
+)
 from story_writing_agents.errors import (
     BackendProtocolError,
     ConfigurationError,
@@ -73,6 +83,7 @@ from story_writing_agents.provider_auth import (
 from story_writing_agents.workspace import DEFAULT_AGENT_PROMPTS
 
 from tests.helpers import initialized_workspace
+from tests.sqlite_conversation_storage_fixture import provision
 
 
 class TtyStringIO(io.StringIO):
@@ -833,7 +844,12 @@ class PublicApiTests(unittest.TestCase):
         constructor = inspect.signature(StoryRuntime)
         self.assertEqual(
             tuple(constructor.parameters),
-            ("workspace", "backend", "conversation_event_store"),
+            (
+                "workspace",
+                "backend",
+                "conversation_event_store",
+                "conversation_storage_services",
+            ),
         )
         self.assertIs(
             constructor.parameters["workspace"].kind,
@@ -851,6 +867,35 @@ class PublicApiTests(unittest.TestCase):
             get_type_hints(StoryRuntime.__init__)["conversation_event_store"],
             ConversationEventStore | None,
         )
+        services = constructor.parameters["conversation_storage_services"]
+        self.assertIs(services.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIsNone(services.default)
+        self.assertEqual(
+            get_type_hints(StoryRuntime.__init__)[
+                "conversation_storage_services"
+            ],
+            ConversationStorageServices | None,
+        )
+
+        workspace = initialized_workspace(self)
+        bundle = compose_filesystem_conversation_storage(workspace)
+        runtime = StoryRuntime(
+            workspace,
+            conversation_storage_services=bundle,
+        )
+        self.assertIs(runtime.conversation_storage_services, bundle)
+        self.assertIs(runtime.conversation_event_store, bundle.event_store)
+        legacy = StoryRuntime(workspace)
+        self.assertIsInstance(
+            legacy.conversation_storage_services,
+            ConversationStorageServices,
+        )
+        with self.assertRaises(TypeError):
+            StoryRuntime(
+                workspace,
+                conversation_event_store=bundle.event_store,
+                conversation_storage_services=bundle,
+            )
 
         cases = (
             (
@@ -1182,6 +1227,7 @@ class CliTests(unittest.TestCase):
             ["storage", "--help"],
             ["storage", "migrate", "--help"],
             ["storage", "verify", "--help"],
+            ["storage", "use", "--help"],
         ):
             with self.subTest(arguments=arguments):
                 completed = subprocess.run(
@@ -1735,6 +1781,12 @@ class CliTests(unittest.TestCase):
                     controller_args[:3],
                     (workspace, cli_context, backend_value),
                 )
+                self.assertIsInstance(
+                    controller_factory.call_args.kwargs[
+                        "conversation_storage_services"
+                    ],
+                    ConversationStorageServices,
+                )
                 terminal = controller_args[3]
                 self.assertIsInstance(terminal, InteractiveTerminal)
                 action = terminal.read_main()
@@ -1775,6 +1827,8 @@ class CliTests(unittest.TestCase):
             cli_module.ConfigManager.load_configuration_snapshot
         )
         original_routes = cli_module._effective_interactive_providers
+        original_activate = cli_module.activate_configured_conversation_storage
+        storage_startups: list[ConversationStorageStartup] = []
 
         def validate_executable(value: object) -> str:
             events.append(("validation", value))
@@ -1792,9 +1846,19 @@ class CliTests(unittest.TestCase):
             events.append(("routes", None))
             return original_routes(*args, **kwargs)  # type: ignore[arg-type]
 
+        def activate(current_workspace: Workspace) -> ConversationStorageStartup:
+            events.append(("storage", None))
+            startup = original_activate(current_workspace)
+            storage_startups.append(startup)
+            return startup
+
         def controller_factory(*args: object, **kwargs: object) -> object:
             events.append(("controller", None))
             self.assertIs(kwargs["auth_coordinator"], coordinator)
+            self.assertIs(
+                kwargs["conversation_storage_services"],
+                storage_startups[0].services,
+            )
             return controller
 
         def run_lobby(*, requested_session: str | None = None) -> int:
@@ -1818,6 +1882,11 @@ class CliTests(unittest.TestCase):
                 side_effect=lambda option: (
                     events.append(("workspace", option)) or workspace
                 ),
+            ),
+            mock.patch.object(
+                cli_module,
+                "activate_configured_conversation_storage",
+                side_effect=activate,
             ),
             mock.patch.object(
                 cli_module,
@@ -1896,6 +1965,8 @@ class CliTests(unittest.TestCase):
             [
                 "validation",
                 "workspace",
+                "storage",
+                "snapshot",
                 "terminal",
                 "auth_service",
                 "auth_coordinator",
@@ -1911,7 +1982,7 @@ class CliTests(unittest.TestCase):
                 "lobby",
             ],
         )
-        self.assertEqual(events[3][1], workspace.root)
+        self.assertEqual(events[5][1], workspace.root)
         backend.close.assert_not_called()
         self.assertEqual(stderr.getvalue(), "")
 
@@ -2030,6 +2101,70 @@ class CliTests(unittest.TestCase):
                     [name for name, _value in events],
                     ["welcome", "probe_all", "run"],
                 )
+
+    def test_storage_activation_cas_remains_after_later_provider_interrupt(self) -> None:
+        workspace = initialized_workspace(self)
+        provision(workspace)
+        system = workspace.read_json("config/system_defaults.json")
+        system["conversation_storage_backend"] = "sqlite"
+        workspace.write_json("config/system_defaults.json", system)
+        marker = workspace.path(CONVERSATION_STORAGE_ACTIVATION_STATE_PATH)
+        self.assertFalse(marker.exists())
+        none = provider_snapshot(
+            ProviderAuthState.UNAUTHENTICATED,
+            ProviderAuthState.UNAVAILABLE,
+        )
+        coordinator = ScriptedCliCoordinator(
+            [],
+            snapshots=(none,),
+            results=(
+                InteractiveAuthResult(
+                    InteractiveAuthResultKind.INTERRUPT,
+                    none,
+                ),
+            ),
+        )
+        stdin = TtyStringIO(is_terminal=True)
+        stdout = TtyStringIO(is_terminal=True)
+        stderr = io.StringIO()
+        terminal = InteractiveTerminal(lambda _prompt: "", lambda _text: None)
+        with (
+            mock.patch.object(sys, "stdin", stdin),
+            mock.patch.object(sys, "stdout", stdout),
+            mock.patch.object(sys, "stderr", stderr),
+            mock.patch.object(
+                cli_module,
+                "resolve_workspace",
+                return_value=workspace,
+            ),
+            mock.patch.object(
+                cli_module,
+                "build_stream_terminal",
+                return_value=terminal,
+            ),
+            mock.patch.object(
+                cli_module,
+                "ProviderAuthService",
+                return_value=object(),
+            ),
+            mock.patch.object(
+                cli_module,
+                "InteractiveAuthCoordinator",
+                return_value=coordinator,
+            ),
+            mock.patch.object(cli_module, "AgentBackend") as backend,
+            mock.patch.object(cli_module, "InteractiveController") as controller,
+        ):
+            self.assertEqual(
+                main(["chat", "--workspace", str(workspace.root)]),
+                0,
+            )
+        backend.assert_not_called()
+        controller.assert_not_called()
+        activation = load_conversation_storage_activation_state(workspace)
+        self.assertIs(activation.backend, ConversationStorageBackend.SQLITE)
+        self.assertEqual(activation.generation, 1)
+        self.assertTrue(marker.is_file())
 
     def test_mixed_effective_routes_are_freshly_gated_once_before_backend(
         self,
