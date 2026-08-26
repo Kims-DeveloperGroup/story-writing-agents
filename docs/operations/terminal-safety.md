@@ -101,7 +101,8 @@ handler or background resize loop, and it never hides or shows the cursor.
 
 For one advisory turn, the same capability result also gates the narrow
 terminal-owned progress indicator. A capable raw stream may show the fixed
-four-glyph `◐`/`◓`/`◑`/`◒` cycle; `NO_COLOR` leaves those plain glyphs enabled.
+text-free eight-cell block-shade shimmer with a fixed ANSI color cycle;
+`NO_COLOR` preserves the same spatial motion without SGR.
 Callback construction and non-TTY, `TERM=dumb`, non-POSIX, missing, or
 uncertain-capability paths await the operation silently and emit no indicator.
 The installed CLI's earlier TTY guard still rejects non-TTY shell entry before

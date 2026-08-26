@@ -436,12 +436,13 @@ message includes the sender label and its phase/revision metadata.
 
 The controller brackets advisory and consensus runtime awaitables, plus each
 Settings Provider/Model/Effort option read, with the unlisted progress adapters.
-On a capable raw stream, the sole driver renders the fixed
-`◐`/`◓`/`◑`/`◒` cycle, clears the active cell around
+On a capable raw stream, the sole driver renders a text-free eight-cell
+block-shade shimmer that travels out and back, with a fixed bold color cycle on
+ANSI terminals. It clears the complete row around
 semantic retrieval/progress/result writes, and clears it before a final record
 or completed Settings picker. It joins the operation and indicator task on
-every exit. `NO_COLOR` leaves the glyphs unchanged because they are not SGR;
-the indicator has no dynamic text, alternate screen, background, or general
+every exit. `NO_COLOR` preserves the same spatial motion without SGR; the
+indicator has no text, alternate screen, background, or general
 animation API.
 
 Callback construction and incapable stream paths await the operation without
@@ -624,8 +625,8 @@ discovery again; leaving and re-entering does. Effort additionally resolves the
 pending effective model from the agent value and then workspace fallback.
 
 After the preceding capable picker is cleared, Provider authentication probing
-and Model/Effort catalog discovery run under the terminal-owned `◐`, `◓`, `◑`,
-`◒` progress cycle. The cell is cleared before the completed option picker is
+and Model/Effort catalog discovery run under the terminal-owned text-free
+shimmer. The row is cleared before the completed option picker is
 drawn, so loading adds no durable row. Callback, ordinary fallback,
 `TERM=dumb`, non-POSIX, missing-capability, and uncertain-capability paths run
 the same option read silently. The indicator changes neither read frequency nor

@@ -113,6 +113,23 @@ TERMINAL_EXPORTS = (
     "InteractiveTerminal",
 )
 
+PROGRESS_FRAMES = (
+    "[█▓▒░░░░░]",
+    "[▓█▓▒░░░░]",
+    "[▒▓█▓▒░░░]",
+    "[░▒▓█▓▒░░]",
+    "[░░▒▓█▓▒░]",
+    "[░░░▒▓█▓▒]",
+    "[░░░░▒▓█▓]",
+    "[░░░░░▒▓█]",
+    "[░░░░▒▓█▓]",
+    "[░░░▒▓█▓▒]",
+    "[░░▒▓█▓▒░]",
+    "[░▒▓█▓▒░░]",
+    "[▒▓█▓▒░░░]",
+    "[▓█▓▒░░░░]",
+)
+
 MODEL_EXPORTS = (
     "SemanticRole",
     "ViewState",
@@ -933,13 +950,16 @@ class PureControlFoundationTests(unittest.TestCase):
 class RenderingFoundationTests(unittest.TestCase):
     def test_advisory_progress_frames_are_fixed_and_strict(self) -> None:
         self.assertEqual(
-            tuple(render_advisory_progress_frame(index) for index in range(4)),
-            ("◐", "◓", "◑", "◒"),
+            tuple(
+                render_advisory_progress_frame(index)
+                for index in range(len(PROGRESS_FRAMES))
+            ),
+            PROGRESS_FRAMES,
         )
         for invalid in (True, 1.0, "0", None):
             with self.subTest(invalid=invalid), self.assertRaises(TypeError):
                 render_advisory_progress_frame(invalid)  # type: ignore[arg-type]
-        for invalid in (-1, 4):
+        for invalid in (-1, len(PROGRESS_FRAMES)):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 render_advisory_progress_frame(invalid)
 
@@ -1787,7 +1807,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                     )
                 self.assertEqual(result, "answer")
                 if profile is CapabilityProfile.PLAIN:
-                    self.assertIn("◐", output.getvalue())
+                    self.assertIn(PROGRESS_FRAMES[0], output.getvalue())
                     self.assertNotRegex(output.getvalue(), r"\x1b\[[0-9;]*m")
                 else:
                     self.assertEqual(output.getvalue(), "")
@@ -1831,10 +1851,56 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         self.assertEqual(result, "done")
         self.assertFalse(driver._progress_active)
         self.assertIsNone(driver._progress_renderer)
-        positions = tuple(rendered.index(frame) for frame in ("◐", "◓", "◑", "◒"))
+        frames = PROGRESS_FRAMES[:4]
+        positions = tuple(rendered.index(frame) for frame in frames)
         self.assertEqual(positions, tuple(sorted(positions)))
-        self.assertRegex(rendered, r"\r\x1b\[Kanswer\n\r[◐◓◑◒]")
+        color_positions = tuple(
+            rendered.index(color)
+            for color in (
+                "\x1b[1;36m",
+                "\x1b[1;34m",
+                "\x1b[1;35m",
+                "\x1b[1;31m",
+            )
+        )
+        self.assertEqual(color_positions, tuple(sorted(color_positions)))
+        self.assertIn("\r\x1b[Kanswer\n\r\x1b[1;", rendered)
+        plain_after_answer = strip_decorative_sgr(rendered).split(
+            "answer\n",
+            1,
+        )[1]
+        self.assertTrue(
+            any(frame in plain_after_answer for frame in PROGRESS_FRAMES)
+        )
         self.assertTrue(rendered.endswith("\r\x1b[K"))
+
+    def test_advisory_progress_fits_without_using_the_rightmost_cell(self) -> None:
+        async def operation() -> str:
+            return "done"
+
+        for width, expected in (
+            (10, "[█▓▒░░░░░"),
+            (7, "[█▓▒░░"),
+            (1, ""),
+        ):
+            with self.subTest(width=width):
+                driver, output = self._progress_driver()
+                with mock.patch.object(
+                    RawTerminalDriver,
+                    "capabilities",
+                    autospec=True,
+                    return_value=capability(
+                        CapabilityProfile.PLAIN,
+                        width=width,
+                    ),
+                ):
+                    result = asyncio.run(
+                        driver.run_advisory_progress(
+                            operation(), render_advisory_progress_frame
+                        )
+                    )
+                self.assertEqual(result, "done")
+                self.assertEqual(output.getvalue(), f"\r{expected}\r\x1b[K")
 
     def test_advisory_progress_preserves_operation_failure_and_wraps_worker_failure(
         self,
