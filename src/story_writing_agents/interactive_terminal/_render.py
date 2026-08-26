@@ -419,6 +419,14 @@ def render_input_prompt(
     lines: list[tuple[str, SemanticRole]] = []
     for item in view.context:
         lines.extend(_component_lines(item, capabilities.width, indent=0))
+    if view.initial_value is not None:
+        lines.extend(
+            _component_lines(
+                Field("Current value", view.initial_value),
+                capabilities.width,
+                indent=0,
+            )
+        )
     lines.extend(_input_prompt_lines(view.prompt, capabilities.width))
     plain = "\n".join(line for line, _role in lines)
     if not plain.endswith(" "):

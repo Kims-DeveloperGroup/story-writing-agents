@@ -1117,25 +1117,30 @@ every intermediate arrow. The current runtime graph is acyclic.
   paths; and edit only the active provider's values without discarding inactive
   provider values or auto-persisting model defaults. Codex effort choices come
   from the exact pending effective model, while Antigravity effort choices stay
-  globally low, medium, and high without slug inference. The summary projection
-  gives every settings value editor pending, not-saved, and top-level Save
-  guidance. On every top-level read, structural inequality between the pending
-  configuration and opening baseline adds `(*Required)` to the Save label and
-  retains the existing save-required warning notice; both are absent initially
-  and after a complete revert, while the notice remains absent from nested
-  editors and Save/Cancel confirmations. The projection
-  names both providers' model/effort
-  rows, so changed-only confirmations can identify changes to either without
-  changing the active backend or runtime snapshot. Editors contain no repeated
-  Current/Pending context panel. Explicit Save uses one selectable YES/NO
+  globally low, medium, and high without slug inference. The settings flow
+  gives every value editor pending, not-saved, and top-level Save guidance. One
+  private ordered settings projection supplies root Current/Pending
+  descriptions, the nested Agents pending-change count, and changed-only
+  confirmation fields in stable settings and roster order. On every top-level
+  read, structural inequality between the pending configuration and opening
+  baseline adds `(*Required)` to the Save label and retains the existing
+  save-required warning notice; both are absent initially and after a complete
+  revert, while the notice remains absent from nested editors and Save/Cancel
+  confirmations. The shared projection names both providers' model/effort rows,
+  so root visibility and changed-only confirmations identify pending changes
+  without changing the active backend or runtime snapshot. Editors contain no
+  repeated Current/Pending context panel. Explicit Save uses one selectable YES/NO
   confirmation whose preceding context contains only changed Current/Pending
   properties in stable settings and roster order; each changed value has an
   explicit text cue and warning role, and an unchanged candidate contains only
   an explicit no-changes notice without empty sections. Explicit Cancel and
   root Settings Escape share one action: an unchanged candidate exits
   immediately, while a structurally changed candidate uses the same selectable
-  confirmation context. Confirmation NO or nested Escape returns to the
-  settings menu, while Ctrl-C or EOF preserves whole-flow cancellation.
+  confirmation context. Any whole-flow cancellation is silent for a clean
+  candidate and emits exactly one discard report for a dirty candidate;
+  persistence remains exclusive to Save. Confirmation NO or nested Escape
+  returns to the settings menu, while Ctrl-C or EOF preserves whole-flow
+  cancellation.
   Provider-bound routes pass the submitted text
   unchanged to `StoryRuntime`; reference UI therefore emits only ordinary
   `${path}` or `${path}#Lx-Ly` tokens for the existing runtime parser and never
@@ -1633,7 +1638,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `Prompt`, `Panel`, `Section`, `Field`, `Notice`, `Message`, `Record`,
   `ListView`, `SuggestionPalette`, and `Picker` component vocabulary, shared
   `Choice` with its optional keyword-only validated plain `warning_suffix`,
-  `RenderedFrame`, internal `InputPromptView` and
+  `RenderedFrame`, internal `InputPromptView` with an optional keyword-only
+  exact one-line initial value, and
   `RenderedInputFrame` transfer contracts outside the closed component
   vocabulary, terminal-text sanitization, and deterministic physical-cell
   measurement.
@@ -1677,7 +1683,9 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Package-internal `transition_line_input` for existing
   insertion, deletion, cursor, commit, interrupt, and EOF semantics, plus
   `transition_prompt_input`, which reuses those line semantics while returning
-  a distinct cancel outcome for Escape without history or completion, plus
+  a distinct cancel outcome for Escape without history or completion, and the
+  private `transition_prefilled_prompt_input`, which additionally makes EOF an
+  unconditional typed exit for a seeded or edited prompt, plus
   `project_slash_suggestions` for exact registry-supplied prefix projection and
   `project_composition_suggestions` for fixed ordered `/send`, `/cancel`
   preview projection. `append_main_input_history` retains exact nonblank
@@ -1748,6 +1756,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   of the allowed decorative SGR vocabulary, semantic state labels, physical-cell
   wrapping, narrow-layout stacking, explicit empty/selection cues, and trusted
   semantic input rendering with equivalent plain and styled projections.
+  Opted-in prefilled prompts add one sanitized `Current value` field after all
+  supplied context and before the focused prompt in every layout and profile.
   `render_picker_viewport` renders at most seven numbered live choices with
   absolute position/range facts, simultaneous selected and highlighted cues,
   and an ordinal/label-only selected-outside-window summary;
@@ -1957,8 +1967,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   fallback for every later input method. Supported package-internal
   `read_prompt` accepts an injected
   trusted semantic renderer and pure transition for one cancellable, history-
-  free settings line; exact Escape cancels in raw or line-fallback mode, and
-  interrupt and EOF remain distinct outcomes. Supported package-internal
+  free settings line; opted-in values seed capable editing at their end, and
+  exact-empty fallback results reuse the supplied value only after Escape is
+  classified. Exact Escape cancels in raw or line-fallback mode, and interrupt
+  and EOF remain distinct outcomes. Supported package-internal
   `read_picker` accepts pure call-local
   transitions, viewport projection, and live/fallback renderers for a dedicated
   generic single-select lifecycle that does not reuse editable-line state.
@@ -2242,8 +2254,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   complete-list picker input, and stream construction binds the same adapter to
   the sole driver's dedicated picker lifecycle with pure control and rendering
   collaborators. Resource-free `InteractivePromptInput` constructs one existing
-  `InputPromptView` and returns typed commit, nested-cancel, interrupt, or EOF;
-  callback and stream construction bind it to plain or driver-owned input
+  `InputPromptView` and returns typed commit, nested-cancel, interrupt, or EOF.
+  Its optional keyword-only initial value preserves the unseeded route when
+  omitted, seeds capable editing, and substitutes only an exact-empty borrowed
+  fallback result; callback and stream construction bind it to plain or driver-owned input
   without adding a component kind or raw resource owner. The picker and prompt
   adapters validate a retained transient flag but always select the universal
   submitted-input lifecycle. Resource-free `InteractiveTextViewer` validates

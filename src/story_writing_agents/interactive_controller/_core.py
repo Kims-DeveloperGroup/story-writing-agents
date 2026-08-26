@@ -363,12 +363,101 @@ def _settings_pending_save_notice(state: SettingsState) -> Notice | None:
     if state.pending == state.baseline.configuration:
         return None
     return Notice(
-        "Pending changes are in memory only and are not saved. Choose Save to "
-        "persist them.",
+        "Choose Save to persist pending changes",
         label="save required",
         role=SemanticRole.WARNING,
         state=ViewState.IDLE,
     )
+
+
+def _settings_projection(
+    state: SettingsState,
+) -> tuple[tuple[str, str | None, str, str, str], ...]:
+    """Project ordered root and agent identities with current/pending values."""
+
+    current = state.baseline.configuration
+    pending = state.pending
+    rows: list[tuple[str, str | None, str, str, str]] = [
+        (
+            "language",
+            None,
+            "Language",
+            current.system_defaults.language,
+            pending.system_defaults.language,
+        ),
+        (
+            "persona",
+            None,
+            "Persona",
+            current.system_defaults.persona,
+            pending.system_defaults.persona,
+        ),
+        (
+            "max_debate_rounds",
+            None,
+            "Maximum debate rounds",
+            str(current.system_defaults.max_debate_rounds),
+            str(pending.system_defaults.max_debate_rounds),
+        ),
+    ]
+    for agent_id in ROSTER:
+        display_name = AGENT_SPECS[agent_id].display_name
+        current_agent = current.agent_configs[agent_id]
+        pending_agent = pending.agent_configs[agent_id]
+        current_provider = _effective_settings_provider(
+            state,
+            agent_id,
+            pending=False,
+        )
+        pending_provider = _effective_settings_provider(state, agent_id)
+        rows.extend(
+            (
+                (
+                    "providers",
+                    agent_id,
+                    f"{display_name} Provider",
+                    (
+                        current_provider
+                        if current_agent.backend is not None
+                        else f"{current_provider} (default)"
+                    ),
+                    (
+                        pending_provider
+                        if pending_agent.backend is not None
+                        else f"{pending_provider} (default)"
+                    ),
+                ),
+                (
+                    "providers",
+                    agent_id,
+                    f"{display_name} Codex model",
+                    current_agent.codex_model or "inherit",
+                    pending_agent.codex_model or "inherit",
+                ),
+                (
+                    "providers",
+                    agent_id,
+                    f"{display_name} Codex reasoning",
+                    current_agent.codex_reasoning_effort or "inherit",
+                    pending_agent.codex_reasoning_effort or "inherit",
+                ),
+                (
+                    "providers",
+                    agent_id,
+                    f"{display_name} Antigravity model",
+                    current_agent.antigravity_model or "inherit",
+                    pending_agent.antigravity_model or "inherit",
+                ),
+                (
+                    "providers",
+                    agent_id,
+                    f"{display_name} Antigravity effort",
+                    current_agent.antigravity_effort or "inherit",
+                    pending_agent.antigravity_effort or "inherit",
+                ),
+            )
+        )
+    return tuple(rows)
 
 
 def _remember_first_process_control(
@@ -2124,17 +2213,71 @@ class InteractiveController:
         top_highlight = "language"
         while True:
             dirty = state.pending != state.baseline.configuration
+            projection = _settings_projection(state)
+            root_values = {
+                root_id: (current_value, pending_value)
+                for root_id, agent_id, _label, current_value, pending_value in projection
+                if agent_id is None
+            }
+            agent_change_count = sum(
+                current_value != pending_value
+                for root_id, agent_id, _label, current_value, pending_value in projection
+                if root_id == "providers" and agent_id is not None
+            )
             choices = (
-                Choice("language", "Language"),
-                Choice("persona", "Persona"),
-                Choice("max_debate_rounds", "Maximum debate rounds"),
-                Choice("providers", "Agents"),
+                Choice(
+                    "language",
+                    "Language",
+                    description=(
+                        f"Pending: {root_values['language'][1]}"
+                        if root_values["language"][0] != root_values["language"][1]
+                        else f"Current: {root_values['language'][0]}"
+                    ),
+                ),
+                Choice(
+                    "persona",
+                    "Persona",
+                    description=(
+                        f"Pending: {root_values['persona'][1]}"
+                        if root_values["persona"][0] != root_values["persona"][1]
+                        else f"Current: {root_values['persona'][0]}"
+                    ),
+                ),
+                Choice(
+                    "max_debate_rounds",
+                    "Maximum debate rounds",
+                    description=(
+                        f"Pending: {root_values['max_debate_rounds'][1]}"
+                        if root_values["max_debate_rounds"][0]
+                        != root_values["max_debate_rounds"][1]
+                        else f"Current: {root_values['max_debate_rounds'][0]}"
+                    ),
+                ),
+                Choice(
+                    "providers",
+                    "Agents",
+                    description=(
+                        None
+                        if agent_change_count == 0
+                        else (
+                            "1 pending change"
+                            if agent_change_count == 1
+                            else f"{agent_change_count} pending changes"
+                        )
+                    ),
+                ),
                 Choice(
                     "save",
                     "Save",
                     warning_suffix="(*Required)" if dirty else None,
                 ),
-                Choice("cancel", "Cancel"),
+                Choice(
+                    "cancel",
+                    "Cancel",
+                    description=(
+                        "Pending changes will be discarded." if dirty else None
+                    ),
+                ),
             )
             outcome = self._picker_input.read_picker(
                 Prompt(
@@ -2150,19 +2293,19 @@ class InteractiveController:
                 ControlOutcomeKind.INTERRUPT,
                 ControlOutcomeKind.EOF,
             }:
-                self._write_settings_cancelled()
+                self._write_settings_cancelled(state)
                 return
             if outcome.kind is ControlOutcomeKind.CANCEL:
                 top_highlight = "cancel"
                 if self._settings_cancel_action(state):
-                    self._write_settings_cancelled()
+                    self._write_settings_cancelled(state)
                     return
                 continue
             selected = self._require_settings_commit(outcome)
             top_highlight = selected
             if selected == "cancel":
                 if self._settings_cancel_action(state):
-                    self._write_settings_cancelled()
+                    self._write_settings_cancelled(state)
                     return
                 continue
             if selected == "save":
@@ -2173,7 +2316,7 @@ class InteractiveController:
                 if confirmation == "return":
                     continue
                 if confirmation == "cancel":
-                    self._write_settings_cancelled()
+                    self._write_settings_cancelled(state)
                     return
                 if self._auth_coordinator is not None:
                     try:
@@ -2183,7 +2326,7 @@ class InteractiveController:
                     except _SettingsFlowAbort:
                         return
                     if auth_outcome == "cancel":
-                        self._write_settings_cancelled()
+                        self._write_settings_cancelled(state)
                         return
                     if auth_outcome == "return":
                         continue
@@ -2215,7 +2358,7 @@ class InteractiveController:
             except _SettingsFlowAbort:
                 return
             if cancelled:
-                self._write_settings_cancelled()
+                self._write_settings_cancelled(state)
                 return
 
     def _authenticate_settings_routes(
@@ -2475,11 +2618,11 @@ class InteractiveController:
                         "applies the value and keeps this editor open; press Esc "
                         "to return to Settings."
                     ),
-                    default=str(
-                        state.pending.system_defaults.max_debate_rounds
-                    ),
                 ),
                 context=(notice,) if notice is not None else (),
+                initial_value=str(
+                    state.pending.system_defaults.max_debate_rounds
+                ),
                 transient=True,
             )
             value, whole_cancel = self._nested_settings_value(outcome)
@@ -3240,78 +3383,30 @@ class InteractiveController:
     ) -> Panel:
         """Project a stable current/pending settings diff for confirmation."""
 
-        current = state.baseline.configuration
-        pending = state.pending
-
-        def values(*, pending_configuration: bool) -> tuple[tuple[str, str], ...]:
-            configuration = pending if pending_configuration else current
-            defaults = configuration.system_defaults
-            rows = [
-                ("Language", defaults.language),
-                ("Persona", defaults.persona),
-                ("Maximum debate rounds", str(defaults.max_debate_rounds)),
-            ]
-            for agent_id in ROSTER:
-                display_name = AGENT_SPECS[agent_id].display_name
-                agent = configuration.agent_configs[agent_id]
-                provider = _effective_settings_provider(
-                    state,
-                    agent_id,
-                    pending=pending_configuration,
-                )
-                provider_value = (
-                    provider
-                    if agent.backend is not None
-                    else f"{provider} (default)"
-                )
-                rows.extend(
-                    (
-                        (f"{display_name} Provider", provider_value),
-                        (
-                            f"{display_name} Codex model",
-                            agent.codex_model or "inherit",
-                        ),
-                        (
-                            f"{display_name} Codex reasoning",
-                            agent.codex_reasoning_effort or "inherit",
-                        ),
-                        (
-                            f"{display_name} Antigravity model",
-                            agent.antigravity_model or "inherit",
-                        ),
-                        (
-                            f"{display_name} Antigravity effort",
-                            agent.antigravity_effort or "inherit",
-                        ),
-                    )
-                )
-            return tuple(rows)
-
-        current_values = values(pending_configuration=False)
-        pending_values = values(pending_configuration=True)
-
-        changed_indices = tuple(
-            index
-            for index, (_current, pending_value) in enumerate(pending_values)
-            if pending_value != current_values[index][1]
+        changed_rows = tuple(
+            row
+            for row in _settings_projection(state)
+            if row[3] != row[4]
         )
         current_fields = tuple(
             Field(
-                current_values[index][0],
-                f"{current_values[index][1]} (Changed)",
+                label,
+                f"{current_value} (Changed)",
                 role=SemanticRole.WARNING,
             )
-            for index in changed_indices
+            for _root_id, _agent_id, label, current_value, _pending_value
+            in changed_rows
         )
         pending_fields = tuple(
             Field(
-                pending_values[index][0],
-                f"{pending_values[index][1]} (Changed)",
+                label,
+                f"{pending_value} (Changed)",
                 role=SemanticRole.WARNING,
             )
-            for index in changed_indices
+            for _root_id, _agent_id, label, _current_value, pending_value
+            in changed_rows
         )
-        if changed_indices:
+        if changed_rows:
             panel_items: list[Section | Notice] = [
                 Section("Current", current_fields),
                 Section("Pending", pending_fields),
@@ -3376,12 +3471,15 @@ class InteractiveController:
             )
         )
 
-    def _write_settings_cancelled(self) -> None:
-        """Render one semantic whole-settings cancellation notice."""
+    def _write_settings_cancelled(self, state: SettingsState) -> None:
+        """Render one cancellation notice only when pending changes are discarded."""
+
+        if state.pending == state.baseline.configuration:
+            return
 
         self._semantic_output.write_component(
             Notice(
-                "Settings cancelled; no pending changes were saved.",
+                "Pending changes discarded.",
                 label="cancelled",
                 role=SemanticRole.WARNING,
                 state=ViewState.CANCELLED,
