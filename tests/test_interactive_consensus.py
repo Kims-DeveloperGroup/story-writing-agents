@@ -663,6 +663,110 @@ class InteractiveConsensusDispatchTests(InteractiveConversationTestCase):
 class InteractiveConsensusResultTests(InteractiveConversationTestCase):
     """Verify safe terminal mappings, recovery, and tamper rejection."""
 
+    def test_progress_callbacks_are_atomic_and_final_result_is_separate(
+        self,
+    ) -> None:
+        runtime = ScriptedConsensusRuntime(ConsensusOutcome())
+        (
+            workspace,
+            _catalog,
+            _entries,
+            controller,
+            _backend,
+            callbacks,
+            _store,
+        ) = self.prepared_selected_controller(
+            "/run complete",
+            "/quit",
+            runtime=runtime,  # type: ignore[arg-type]
+        )
+        before = file_bytes(workspace)
+        components: list[object] = []
+        with _capture_semantic_method("write_component", components):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        phase_panels = [
+            component
+            for component in components
+            if type(component) is terminal_module.Panel
+            and component.title == "Debate phase"
+        ]
+        self.assertEqual(len(phase_panels), 6)
+        self.assertEqual(
+            [
+                next(
+                    item.value
+                    for item in panel.items
+                    if type(item) is terminal_module.Field
+                    and item.label == "Phase"
+                )
+                for panel in phase_panels
+            ],
+            [
+                "started",
+                "drafted",
+                "audit_started",
+                "audit_completed",
+                "artifacts_committed",
+                "consensus",
+            ],
+        )
+        self.assertEqual(
+            [panel.state for panel in phase_panels],
+            [
+                terminal_module.ViewState.LOADING,
+                terminal_module.ViewState.LOADING,
+                terminal_module.ViewState.LOADING,
+                terminal_module.ViewState.LOADING,
+                terminal_module.ViewState.LOADING,
+                terminal_module.ViewState.COMPLETED,
+            ],
+        )
+        self.assertTrue(
+            all(
+                "Handoff"
+                not in {
+                    item.label
+                    for item in panel.items
+                    if type(item) is terminal_module.Field
+                }
+                for panel in phase_panels
+            )
+        )
+        final_results = [
+            component
+            for component in components
+            if type(component) is terminal_module.Record
+            and component.title == "Consensus"
+        ]
+        self.assertEqual(len(final_results), 1)
+        final_result = final_results[0]
+        self.assertEqual(final_result.identity, "run debate_1")
+        self.assertIs(final_result.state, terminal_module.ViewState.COMPLETED)
+        self.assertIs(final_result.role, terminal_module.SemanticRole.SUCCESS)
+        self.assertLess(
+            components.index(phase_panels[-1]),
+            components.index(final_result),
+        )
+        self.assertTrue(
+            all(final_result not in panel.items for panel in phase_panels)
+        )
+        artifact_panel = phase_panels[-2]
+        self.assertIn(
+            "Artifacts committed for r0:",
+            next(
+                item.value
+                for item in artifact_panel.items
+                if type(item) is terminal_module.Field
+                and item.label == "Outcome"
+            ),
+        )
+        rendered = "".join(callbacks.records)
+        self.assertEqual(rendered.count("--- Debate phase"), 6)
+        self.assertEqual(rendered.count("Consensus [completed] [success]"), 1)
+        self.assertNotIn("RAW_RESULT_SECRET", rendered)
+        self.assertEqual(file_bytes(workspace), before)
+
     def test_valid_reference_operation_identity_is_not_presented(self) -> None:
         operation_id = "rr_07_session_" + "a" * 32
         runtime = ScriptedConsensusRuntime(
@@ -1195,6 +1299,7 @@ class RealRetainedConsensusRuntimeTests(InteractiveConversationTestCase):
             ),
             1,
         )
+        self.assertEqual(rendered.count("Phase: started"), 1)
         self.assertEqual(rendered.count("Started prompt consensus."), 1)
 
     def test_malformed_selected_transcript_is_not_a_workspace_failure(
@@ -1279,6 +1384,7 @@ class RealRetainedConsensusRuntimeTests(InteractiveConversationTestCase):
             rendered.count(_error_record(InteractiveErrorCode.TRANSCRIPT_INVALID)),
             1,
         )
+        self.assertNotIn("Phase: started", rendered)
         self.assertNotIn("Started prompt consensus.", rendered)
 
     def test_mixed_chat_included_fresh_and_draft_runs_remain_loop_safe(self) -> None:

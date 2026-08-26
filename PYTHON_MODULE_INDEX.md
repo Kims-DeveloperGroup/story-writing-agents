@@ -2038,8 +2038,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   lifecycle remains active. Capable
   stream terminals show bounded progress, while callback and ordinary-line
   fallback remain visually silent. The controller owns no indicator glyph,
-  cursor control, or animation task. It
-  also retains the facade's resource-free main-input,
+  cursor control, or animation task. Independently, each validated debate
+  progress callback constructs one `Debate phase` `Panel` and submits it in one
+  semantic write. Debate ID, phase, round, revision, action, outcome, conflicts,
+  and any applicable starting-context notice remain visible with message
+  details Off; details On additionally includes the phase handoff. The same
+  panel contains either a fixed debate-log-read warning or the unread
+  chronological suffix of persisted canonical-agent speeches, grouped by each
+  consecutive phase, round, and revision tuple. Non-error speeches retain their
+  complete formatted bodies as stable-accent chat-block `Message` values headed
+  by the full agent display name; agent-error prose remains redacted, and
+  details On alone adds each speech kind. `Workspace` remains the durable
+  debate-log owner. The controller also retains the facade's resource-free
+  main-input,
   generic-picker, and cancellable-prompt adapters. Omitted
   `/session resume` and `/conversation resume` pass a call-local provider of
   controller-built immutable `Picker` choices and opaque canonical command
@@ -2208,9 +2219,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   a successful switch, and cleared on pause, cleanup, and final close. The
   controller also owns its current attached-session identifier, current-focus
   conversation metadata, sticky target, current CLI-context snapshot,
-  process-local per-session latest accepted STARTED debate-ID map, the active
-  message-details presentation flag initialized from the backend's immutable
-  configuration snapshot, and one-run/closed state. It also retains a
+  process-local per-session latest accepted STARTED debate-ID map,
+  persisted-speech offsets and last-conflict tuples keyed by session and debate,
+  and the active message-details presentation flag initialized from the
+  backend's immutable configuration snapshot, and one-run/closed state. For each
+  trusted debate phase it derives a candidate speech offset and complete panel
+  from the current presentation state, then advances the offset,
+  phase-conflict state, accepted-event sequence, and applicable latest-STARTED
+  mapping only after its semantic panel write succeeds. A debate-log read
+  failure contributes the
+  fixed warning without advancing the speech offset, while a failed terminal
+  write advances none of that process-local progress state. These maps own no
+  durable debate bytes or external resource. The controller also retains a
   controller-private count of
   successfully rendered typed errors. Each submitted command snapshots that
   count before dispatch and independently records `failed`/`rejected` when a

@@ -22,7 +22,9 @@ from unittest import mock
 import story_writing_agents
 from story_writing_agents.agents import (
     AGENT_SPECS,
+    CHARACTER_CUSTODIAN,
     EXECUTION_SPECIALIST,
+    LEAD_ORCHESTRATOR,
     PLOT_ARCHITECT,
     ROSTER,
     SPECIALIST_IDS,
@@ -129,6 +131,8 @@ from story_writing_agents.interactive_terminal._reference_activation import (
     ReferenceInputScope,
 )
 from story_writing_agents.models import (
+    DebateContextMode,
+    DebateFailureKind,
     DebateMessage,
     DebateProgressEvent,
     DebateProgressPhase,
@@ -1663,6 +1667,13 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
         input_kind: InputKind = InputKind.PROMPT,
         revision_id: str | None = None,
         round_number: int = 0,
+        context_mode: DebateContextMode | None = None,
+        context_event_count: int = 0,
+        context_omitted_turns: int = 0,
+        conflicting_agents: tuple[str, ...] = (),
+        manuscript_path: str | None = None,
+        core_updates: tuple[str, ...] = (),
+        failure_kind: DebateFailureKind | None = None,
     ) -> DebateProgressEvent:
         """Build one valid event for direct visibility projections."""
 
@@ -1673,6 +1684,13 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
             phase=phase,
             revision_id=revision_id,
             round_number=round_number,
+            context_mode=context_mode,
+            context_event_count=context_event_count,
+            context_omitted_turns=context_omitted_turns,
+            conflicting_agents=conflicting_agents,
+            manuscript_path=manuscript_path,
+            core_updates=core_updates,
+            failure_kind=failure_kind,
         )
 
     def test_draft_and_synthesis_handoffs_match_runtime_flow(self) -> None:
@@ -1726,70 +1744,859 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
         self.assertEqual(synthesized[1], tuple(SPECIALIST_IDS))
         backend.close()
 
-    def test_agent_panel_filters_user_entries_and_redacts_errors(self) -> None:
+    def test_every_phase_writes_one_panel_with_always_visible_fields(self) -> None:
         workspace = self.make_workspace()
         controller, backend, callbacks = self.make_controller(workspace)
-        for message in (
+        controller._show_message_details = False
+        cases = (
+            (
+                self._event(
+                    DebateProgressPhase.STARTED,
+                    context_mode=DebateContextMode.INCLUDED,
+                    context_event_count=4,
+                    context_omitted_turns=1,
+                ),
+                "Started prompt consensus.",
+                terminal_module.SemanticRole.INFO,
+                terminal_module.ViewState.LOADING,
+            ),
+            (
+                self._event(DebateProgressPhase.DRAFTED, revision_id="r0"),
+                "Drafted revision r0.",
+                terminal_module.SemanticRole.INFO,
+                terminal_module.ViewState.LOADING,
+            ),
+            (
+                self._event(DebateProgressPhase.AUDIT_STARTED, revision_id="r0"),
+                "Audit started for r0 at round 0.",
+                terminal_module.SemanticRole.INFO,
+                terminal_module.ViewState.LOADING,
+            ),
+            (
+                self._event(
+                    DebateProgressPhase.AUDIT_COMPLETED,
+                    revision_id="r0",
+                    conflicting_agents=(PLOT_ARCHITECT,),
+                ),
+                "Audit completed for r0 at round 0; conflicts: plot_architect.",
+                terminal_module.SemanticRole.INFO,
+                terminal_module.ViewState.LOADING,
+            ),
+            (
+                self._event(
+                    DebateProgressPhase.SYNTHESIZED,
+                    revision_id="r1",
+                    round_number=1,
+                ),
+                "Synthesized r1 at round 1.",
+                terminal_module.SemanticRole.INFO,
+                terminal_module.ViewState.LOADING,
+            ),
+            (
+                self._event(
+                    DebateProgressPhase.ARTIFACTS_COMMITTED,
+                    revision_id="r1",
+                    round_number=1,
+                    manuscript_path="manuscript/part.md",
+                    core_updates=("global_outline.md",),
+                ),
+                (
+                    "Artifacts committed for r1: manuscript/part.md; "
+                    "core updates: global_outline.md."
+                ),
+                terminal_module.SemanticRole.INFO,
+                terminal_module.ViewState.LOADING,
+            ),
+            (
+                self._event(
+                    DebateProgressPhase.CONSENSUS,
+                    revision_id="r1",
+                    round_number=1,
+                ),
+                "Consensus reached on r1 after 1 revision rounds.",
+                terminal_module.SemanticRole.SUCCESS,
+                terminal_module.ViewState.COMPLETED,
+            ),
+            (
+                self._event(
+                    DebateProgressPhase.DEADLOCK,
+                    revision_id="r1",
+                    round_number=1,
+                ),
+                "Deadlock on r1 after 1 revision rounds.",
+                terminal_module.SemanticRole.ERROR,
+                terminal_module.ViewState.ERROR,
+            ),
+            (
+                self._event(
+                    DebateProgressPhase.FAILED,
+                    revision_id="r1",
+                    round_number=1,
+                    failure_kind=DebateFailureKind.INTERNAL,
+                ),
+                "Run failed (internal).",
+                terminal_module.SemanticRole.ERROR,
+                terminal_module.ViewState.ERROR,
+            ),
+            (
+                self._event(DebateProgressPhase.INTERRUPTED),
+                "Run interrupted after durable state transition.",
+                terminal_module.SemanticRole.WARNING,
+                terminal_module.ViewState.CANCELLED,
+            ),
+        )
+        components: list[object] = []
+        real_write_component = (
+            terminal_module.InteractiveSemanticOutput.write_component
+        )
+
+        def capture_component(output, component):
+            components.append(component)
+            return real_write_component(output, component)
+
+        with mock.patch.object(
+            terminal_module.InteractiveSemanticOutput,
+            "write_component",
+            autospec=True,
+            side_effect=capture_component,
+        ):
+            for event, expected_outcome, expected_role, expected_state in cases:
+                with self.subTest(phase=event.phase):
+                    component_start = len(components)
+                    record_start = len(callbacks.records)
+                    self.assertEqual(controller._render_debate_progress(event), 0)
+                    self.assertEqual(len(components), component_start + 1)
+                    self.assertEqual(len(callbacks.records), record_start + 1)
+                    panel = components[-1]
+                    self.assertIs(type(panel), terminal_module.Panel)
+                    assert isinstance(panel, terminal_module.Panel)
+                    self.assertEqual(panel.title, "Debate phase")
+                    self.assertIs(panel.state, expected_state)
+                    fields = tuple(
+                        item
+                        for item in panel.items
+                        if type(item) is terminal_module.Field
+                    )
+                    self.assertEqual(
+                        tuple(field.label for field in fields),
+                        (
+                            "Debate ID",
+                            "Phase",
+                            "Round",
+                            "Revision",
+                            "Action",
+                            "Outcome",
+                            "Conflicts",
+                        ),
+                    )
+                    self.assertEqual(fields[0].value, "debate")
+                    self.assertEqual(fields[1].value, event.phase.value)
+                    self.assertEqual(fields[2].value, str(event.round_number))
+                    self.assertEqual(fields[3].value, event.revision_id or "n/a")
+                    self.assertTrue(fields[4].value)
+                    self.assertEqual(
+                        fields[5],
+                        terminal_module.Field(
+                            "Outcome",
+                            expected_outcome,
+                            role=expected_role,
+                            state=expected_state,
+                        ),
+                    )
+                    self.assertNotIn("Handoff", tuple(field.label for field in fields))
+                    if event.phase is DebateProgressPhase.AUDIT_COMPLETED:
+                        self.assertEqual(
+                            fields[6].value,
+                            "Plot & Structure Architect",
+                        )
+                    else:
+                        self.assertEqual(fields[6].value, "none")
+                    context_notices = tuple(
+                        item
+                        for item in panel.items
+                        if type(item) is terminal_module.Notice
+                        and item.label == "context"
+                    )
+                    if event.phase is DebateProgressPhase.STARTED:
+                        self.assertEqual(
+                            context_notices,
+                            (
+                                terminal_module.Notice(
+                                    (
+                                        "Included 4 focused-conversation events; "
+                                        "1 earlier turns omitted."
+                                    ),
+                                    label="context",
+                                    state=terminal_module.ViewState.COMPLETED,
+                                ),
+                            ),
+                        )
+                    else:
+                        self.assertEqual(context_notices, ())
+        backend.close()
+
+    def test_phase_panel_groups_complete_speeches_and_gates_details(self) -> None:
+        long_speech = "opening " + ("x" * 1205) + " COMPLETE_TAIL"
+        raw_json = '{"verdict":"approve","score":1}'
+        formatted_json = '{\n  "verdict": "approve",\n  "score": 1\n}'
+        messages = (
             DebateMessage(
-                "user", "started", 0, "", "user", "private prompt", _CREATED
+                "user", "initiation", 0, "r0", "prompt", "private prompt", _CREATED
             ),
             DebateMessage(
-                PLOT_ARCHITECT,
-                "audit_completed",
+                EXECUTION_SPECIALIST,
+                "draft",
                 0,
                 "r0",
-                "critique",
-                "visible critique",
+                "candidate",
+                long_speech,
                 _CREATED,
             ),
             DebateMessage(
                 PLOT_ARCHITECT,
-                "failed",
+                "audit",
                 0,
                 "r0",
+                "critique",
+                raw_json,
+                _CREATED,
+            ),
+            DebateMessage(
+                EXECUTION_SPECIALIST,
+                "audit",
+                0,
+                "r0",
+                "verdict",
+                "same-group execution verdict",
+                _CREATED,
+            ),
+            DebateMessage(
+                CHARACTER_CUSTODIAN,
+                "audit",
+                1,
+                "r0",
+                "verdict",
+                "visible character verdict",
+                _CREATED,
+            ),
+            DebateMessage(
+                LEAD_ORCHESTRATOR,
+                "audit",
+                1,
+                "r1",
                 "error",
                 "provider secret details",
                 _CREATED,
             ),
-        ):
-            workspace.append_debate_message("session", "debate", message)
-
-        controller._render_debate_agent_sayings(
-            self._event(DebateProgressPhase.STARTED)
         )
-        rendered = "".join(callbacks.records)
-        self.assertIn("visible critique", rendered)
-        self.assertIn("Agent error details are unavailable.", rendered)
-        self.assertNotIn("private prompt", rendered)
-        self.assertNotIn("provider secret details", rendered)
-        agent_records = [
-            record for record in callbacks.records if "Agent saying" in record
-        ]
-        self.assertEqual(len(agent_records), 1)
-        self.assertTrue(agent_records[0].startswith("--- Agent saying [completed]"))
-        self.assertTrue(agent_records[0].endswith(f"{'-' * 80}\n"))
+        for details in (False, True):
+            with self.subTest(details=details):
+                workspace = self.make_workspace()
+                controller, backend, callbacks = self.make_controller(workspace)
+                controller._show_message_details = details
+                for message in messages:
+                    workspace.append_debate_message("session", "debate", message)
+                started = self._event(
+                    DebateProgressPhase.STARTED,
+                    context_mode=DebateContextMode.INCLUDED,
+                )
+                drafted = self._event(
+                    DebateProgressPhase.DRAFTED,
+                    revision_id="r0",
+                )
+                audit_started = self._event(
+                    DebateProgressPhase.AUDIT_STARTED,
+                    revision_id="r0",
+                )
+                events = [started, drafted, audit_started]
+                audit_completed = self._event(
+                    DebateProgressPhase.AUDIT_COMPLETED,
+                    revision_id="r0",
+                    conflicting_agents=(PLOT_ARCHITECT, CHARACTER_CUSTODIAN),
+                )
+                synthesized = self._event(
+                    DebateProgressPhase.SYNTHESIZED,
+                    revision_id="r1",
+                    round_number=1,
+                )
+                components: list[object] = []
+                real_write_component = (
+                    terminal_module.InteractiveSemanticOutput.write_component
+                )
 
-        callbacks.records.clear()
-        controller._render_debate_agent_sayings(
-            self._event(DebateProgressPhase.DRAFTED, revision_id="r0")
-        )
-        self.assertNotIn("Agent saying", "".join(callbacks.records))
-        backend.close()
+                def capture_component(output, component):
+                    components.append(component)
+                    return real_write_component(output, component)
 
-    def test_malformed_agent_log_emits_safe_warning(self) -> None:
+                with mock.patch.object(
+                    terminal_module.InteractiveSemanticOutput,
+                    "write_component",
+                    autospec=True,
+                    side_effect=capture_component,
+                ):
+                    controller._accept_debate_progress(
+                        audit_completed,
+                        expected_session_id="session",
+                        expected_input_kind=InputKind.PROMPT,
+                        expected_context_mode=DebateContextMode.INCLUDED,
+                        events=events,
+                    )
+                    controller._accept_debate_progress(
+                        synthesized,
+                        expected_session_id="session",
+                        expected_input_kind=InputKind.PROMPT,
+                        expected_context_mode=DebateContextMode.INCLUDED,
+                        events=events,
+                    )
+
+                handoff = (
+                    (
+                        terminal_module.Field(
+                            "Handoff",
+                            (
+                                "Plot & Structure Architect, "
+                                "Character & World Custodian -> Lead Orchestrator"
+                            ),
+                        ),
+                    )
+                    if details
+                    else ()
+                )
+                metadata = (lambda kind: f"Kind: {kind}") if details else (lambda _kind: None)
+                expected_audit = terminal_module.Panel(
+                    "Debate phase",
+                    (
+                        terminal_module.Field("Debate ID", "debate"),
+                        terminal_module.Field("Phase", "audit_completed"),
+                        terminal_module.Field("Round", "0"),
+                        terminal_module.Field("Revision", "r0"),
+                        *handoff,
+                        terminal_module.Field(
+                            "Action",
+                            "Conflicts found; return critiques to orchestrator.",
+                        ),
+                        terminal_module.Field(
+                            "Outcome",
+                            (
+                                "Audit completed for r0 at round 0; conflicts: "
+                                "plot_architect, character_custodian."
+                            ),
+                            role=terminal_module.SemanticRole.INFO,
+                            state=terminal_module.ViewState.LOADING,
+                        ),
+                        terminal_module.Field(
+                            "Conflicts",
+                            (
+                                "Plot & Structure Architect, "
+                                "Character & World Custodian"
+                            ),
+                        ),
+                        terminal_module.Section(
+                            "Speeches · draft · round 0 · revision r0",
+                            (
+                                terminal_module.Message(
+                                    "Tone & Execution Specialist",
+                                    long_speech,
+                                    role=terminal_module.SemanticRole.AGENT,
+                                    state=terminal_module.ViewState.COMPLETED,
+                                    presentation=(
+                                        terminal_module.MessagePresentation.CHAT_BLOCK
+                                    ),
+                                    metadata=metadata("candidate"),
+                                    accent=terminal_module.SpeakerAccent.BLUE,
+                                ),
+                            ),
+                        ),
+                        terminal_module.Section(
+                            "Speeches · audit · round 0 · revision r0",
+                            (
+                                terminal_module.Message(
+                                    "Plot & Structure Architect",
+                                    formatted_json,
+                                    role=terminal_module.SemanticRole.AGENT,
+                                    state=terminal_module.ViewState.COMPLETED,
+                                    presentation=(
+                                        terminal_module.MessagePresentation.CHAT_BLOCK
+                                    ),
+                                    metadata=metadata("critique"),
+                                    accent=terminal_module.SpeakerAccent.YELLOW,
+                                ),
+                                terminal_module.Message(
+                                    "Tone & Execution Specialist",
+                                    "same-group execution verdict",
+                                    role=terminal_module.SemanticRole.AGENT,
+                                    state=terminal_module.ViewState.COMPLETED,
+                                    presentation=(
+                                        terminal_module.MessagePresentation.CHAT_BLOCK
+                                    ),
+                                    metadata=metadata("verdict"),
+                                    accent=terminal_module.SpeakerAccent.BLUE,
+                                ),
+                            ),
+                        ),
+                        terminal_module.Section(
+                            "Speeches · audit · round 1 · revision r0",
+                            (
+                                terminal_module.Message(
+                                    "Character & World Custodian",
+                                    "visible character verdict",
+                                    role=terminal_module.SemanticRole.AGENT,
+                                    state=terminal_module.ViewState.COMPLETED,
+                                    presentation=(
+                                        terminal_module.MessagePresentation.CHAT_BLOCK
+                                    ),
+                                    metadata=metadata("verdict"),
+                                    accent=terminal_module.SpeakerAccent.GREEN,
+                                ),
+                            ),
+                        ),
+                        terminal_module.Section(
+                            "Speeches · audit · round 1 · revision r1",
+                            (
+                                terminal_module.Message(
+                                    "Lead Orchestrator",
+                                    "Agent error details are unavailable.",
+                                    role=terminal_module.SemanticRole.AGENT,
+                                    state=terminal_module.ViewState.COMPLETED,
+                                    presentation=(
+                                        terminal_module.MessagePresentation.CHAT_BLOCK
+                                    ),
+                                    metadata=metadata("error"),
+                                    accent=terminal_module.SpeakerAccent.CYAN,
+                                ),
+                            ),
+                        ),
+                    ),
+                    state=terminal_module.ViewState.LOADING,
+                )
+                synthesis_handoff = (
+                    (
+                        terminal_module.Field(
+                            "Handoff",
+                            (
+                                "Lead Orchestrator -> Plot & Structure Architect, "
+                                "Character & World Custodian, "
+                                "Tone & Execution Specialist"
+                            ),
+                        ),
+                    )
+                    if details
+                    else ()
+                )
+                expected_synthesis = terminal_module.Panel(
+                    "Debate phase",
+                    (
+                        terminal_module.Field("Debate ID", "debate"),
+                        terminal_module.Field("Phase", "synthesized"),
+                        terminal_module.Field("Round", "1"),
+                        terminal_module.Field("Revision", "r1"),
+                        *synthesis_handoff,
+                        terminal_module.Field(
+                            "Action",
+                            (
+                                "Synthesize revision from proposals and feedback; "
+                                "re-audit all specialists."
+                            ),
+                        ),
+                        terminal_module.Field(
+                            "Outcome",
+                            "Synthesized r1 at round 1.",
+                            role=terminal_module.SemanticRole.INFO,
+                            state=terminal_module.ViewState.LOADING,
+                        ),
+                        terminal_module.Field(
+                            "Conflicts",
+                            (
+                                "Plot & Structure Architect, "
+                                "Character & World Custodian"
+                            ),
+                        ),
+                    ),
+                    state=terminal_module.ViewState.LOADING,
+                )
+                self.assertEqual(components, [expected_audit, expected_synthesis])
+                self.assertEqual(
+                    [
+                        item.title
+                        for item in expected_audit.items
+                        if type(item) is terminal_module.Section
+                    ],
+                    [
+                        "Speeches · draft · round 0 · revision r0",
+                        "Speeches · audit · round 0 · revision r0",
+                        "Speeches · audit · round 1 · revision r0",
+                        "Speeches · audit · round 1 · revision r1",
+                    ],
+                )
+                self.assertEqual(
+                    [
+                        len(item.items)
+                        for item in expected_audit.items
+                        if type(item) is terminal_module.Section
+                    ],
+                    [1, 2, 1, 1],
+                )
+                self.assertEqual(len(callbacks.records), 2)
+                self.assertEqual(events[-2:], [audit_completed, synthesized])
+                key = ("session", "debate")
+                self.assertEqual(controller._debate_message_offsets[key], len(messages))
+                self.assertEqual(
+                    controller._debate_last_conflict_targets[key],
+                    (PLOT_ARCHITECT, CHARACTER_CUSTODIAN),
+                )
+                rendered = "".join(callbacks.records)
+                self.assertIn("COMPLETE_TAIL", rendered)
+                self.assertIn('"verdict": "approve"', rendered)
+                self.assertIn("Agent error details are unavailable.", rendered)
+                self.assertNotIn("[truncated]", rendered)
+                self.assertNotIn("private prompt", rendered)
+                self.assertNotIn("provider secret details", rendered)
+                plain = render_plain(expected_audit, width=80).text
+                self.assertIn("COMPLETE_TAIL", plain)
+                self.assertIn('"score": 1', plain)
+                backend.close()
+
+    def test_later_phase_read_failure_retries_from_nonzero_cursor(self) -> None:
         workspace = self.make_workspace()
         controller, backend, callbacks = self.make_controller(workspace)
-        with mock.patch.object(
-            workspace,
-            "read_debate_messages",
-            side_effect=WorkspaceFormatError("raw provider details"),
+        messages = (
+            DebateMessage(
+                EXECUTION_SPECIALIST,
+                "draft",
+                0,
+                "r0",
+                "candidate",
+                "OLD_CURSOR_ONE",
+                _CREATED,
+            ),
+            DebateMessage(
+                PLOT_ARCHITECT,
+                "audit",
+                0,
+                "r0",
+                "critique",
+                "OLD_CURSOR_TWO",
+                _CREATED,
+            ),
+            DebateMessage(
+                CHARACTER_CUSTODIAN,
+                "audit",
+                0,
+                "r0",
+                "verdict",
+                "NEW_CURSOR_ONE",
+                _CREATED,
+            ),
+            DebateMessage(
+                LEAD_ORCHESTRATOR,
+                "synthesize",
+                1,
+                "r1",
+                "candidate",
+                "NEW_CURSOR_TWO",
+                _CREATED,
+            ),
+        )
+        started = self._event(
+            DebateProgressPhase.STARTED,
+            context_mode=DebateContextMode.INCLUDED,
+        )
+        drafted = self._event(DebateProgressPhase.DRAFTED, revision_id="r0")
+        audit_started = self._event(
+            DebateProgressPhase.AUDIT_STARTED,
+            revision_id="r0",
+        )
+        audit_completed = self._event(
+            DebateProgressPhase.AUDIT_COMPLETED,
+            revision_id="r0",
+        )
+        synthesized = self._event(
+            DebateProgressPhase.SYNTHESIZED,
+            revision_id="r1",
+            round_number=1,
+        )
+        events = [started, drafted, audit_started]
+        key = ("session", "debate")
+        committed_offset = 2
+        controller._debate_message_offsets[key] = committed_offset
+        components: list[object] = []
+        real_write_component = (
+            terminal_module.InteractiveSemanticOutput.write_component
+        )
+
+        def capture_component(output, component):
+            components.append(component)
+            return real_write_component(output, component)
+
+        with (
+            mock.patch.object(
+                workspace,
+                "read_debate_messages",
+                side_effect=(
+                    WorkspaceFormatError("raw provider details"),
+                    messages,
+                ),
+            ) as read_messages,
+            mock.patch.object(
+                terminal_module.InteractiveSemanticOutput,
+                "write_component",
+                autospec=True,
+                side_effect=capture_component,
+            ),
         ):
-            controller._render_debate_agent_sayings(
-                self._event(DebateProgressPhase.STARTED)
+            controller._accept_debate_progress(
+                audit_completed,
+                expected_session_id="session",
+                expected_input_kind=InputKind.PROMPT,
+                expected_context_mode=DebateContextMode.INCLUDED,
+                events=events,
             )
+            self.assertEqual(
+                controller._debate_message_offsets[key],
+                committed_offset,
+            )
+            controller._accept_debate_progress(
+                synthesized,
+                expected_session_id="session",
+                expected_input_kind=InputKind.PROMPT,
+                expected_context_mode=DebateContextMode.INCLUDED,
+                events=events,
+            )
+
+        self.assertEqual(
+            read_messages.call_args_list,
+            [mock.call("session", "debate"), mock.call("session", "debate")],
+        )
+        self.assertEqual(len(components), 2)
+        self.assertTrue(
+            all(type(component) is terminal_module.Panel for component in components)
+        )
+        first = components[0]
+        second = components[1]
+        assert isinstance(first, terminal_module.Panel)
+        assert isinstance(second, terminal_module.Panel)
+        self.assertIn(
+            terminal_module.Notice(
+                "Agent sayings unavailable; the debate log could not be read.",
+                label="agent-saying",
+                role=terminal_module.SemanticRole.WARNING,
+                state=terminal_module.ViewState.ERROR,
+            ),
+            first.items,
+        )
+        self.assertFalse(
+            any(type(component) is terminal_module.Notice for component in components)
+        )
+        sections = tuple(
+            item for item in second.items if type(item) is terminal_module.Section
+        )
+        self.assertEqual(
+            tuple(section.title for section in sections),
+            (
+                "Speeches · audit · round 0 · revision r0",
+                "Speeches · synthesize · round 1 · revision r1",
+            ),
+        )
+        self.assertEqual(
+            tuple(section.items[0].content for section in sections),
+            ("NEW_CURSOR_ONE", "NEW_CURSOR_TWO"),
+        )
+        self.assertEqual(
+            controller._debate_message_offsets[key],
+            len(messages),
+        )
+        self.assertEqual(
+            events,
+            [started, drafted, audit_started, audit_completed, synthesized],
+        )
+        self.assertEqual(len(callbacks.records), 2)
         rendered = "".join(callbacks.records)
-        self.assertIn("Agent sayings unavailable; the debate log could not be read.", rendered)
+        self.assertNotIn("OLD_CURSOR_ONE", rendered)
+        self.assertNotIn("OLD_CURSOR_TWO", rendered)
+        self.assertEqual(rendered.count("NEW_CURSOR_ONE"), 1)
+        self.assertEqual(rendered.count("NEW_CURSOR_TWO"), 1)
         self.assertNotIn("raw provider details", rendered)
+        backend.close()
+
+    def test_phase_write_failure_rolls_back_state_event_and_cursor_for_retry(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        controller, backend, callbacks = self.make_controller(workspace)
+        workspace.append_debate_message(
+            "session",
+            "debate",
+            DebateMessage(
+                EXECUTION_SPECIALIST,
+                "draft",
+                0,
+                "r0",
+                "candidate",
+                "write-retry speech",
+                _CREATED,
+            ),
+        )
+        event = self._event(
+            DebateProgressPhase.STARTED,
+            context_mode=DebateContextMode.INCLUDED,
+        )
+        key = ("session", "debate")
+        controller._debate_message_offsets[key] = 7
+        controller._debate_last_conflict_targets[key] = (PLOT_ARCHITECT,)
+        controller._last_started_debate_by_session["session"] = "older_debate"
+        events: list[DebateProgressEvent] = []
+        attempted: list[object] = []
+        failure = OSError("terminal write secret")
+        real_write_component = (
+            terminal_module.InteractiveSemanticOutput.write_component
+        )
+
+        def fail_once(output, component):
+            attempted.append(component)
+            if len(attempted) == 1:
+                raise failure
+            return real_write_component(output, component)
+
+        with mock.patch.object(
+            terminal_module.InteractiveSemanticOutput,
+            "write_component",
+            autospec=True,
+            side_effect=fail_once,
+        ):
+            with self.assertRaises(OSError) as raised:
+                controller._accept_debate_progress(
+                    event,
+                    expected_session_id="session",
+                    expected_input_kind=InputKind.PROMPT,
+                    expected_context_mode=DebateContextMode.INCLUDED,
+                    events=events,
+                )
+            self.assertIs(raised.exception, failure)
+            self.assertEqual(controller._debate_message_offsets[key], 7)
+            self.assertEqual(
+                controller._debate_last_conflict_targets[key],
+                (PLOT_ARCHITECT,),
+            )
+            self.assertEqual(
+                controller._last_started_debate_by_session,
+                {"session": "older_debate"},
+            )
+            self.assertEqual(events, [])
+            self.assertEqual(callbacks.records, [])
+
+            controller._accept_debate_progress(
+                event,
+                expected_session_id="session",
+                expected_input_kind=InputKind.PROMPT,
+                expected_context_mode=DebateContextMode.INCLUDED,
+                events=events,
+            )
+
+        self.assertEqual(len(attempted), 2)
+        self.assertEqual(attempted[0], attempted[1])
+        self.assertEqual(controller._debate_message_offsets[key], 1)
+        self.assertEqual(controller._debate_last_conflict_targets[key], ())
+        self.assertEqual(
+            controller._last_started_debate_by_session,
+            {"session": "debate"},
+        )
+        self.assertEqual(events, [event])
+        self.assertEqual(len(callbacks.records), 1)
+        self.assertEqual("".join(callbacks.records).count("write-retry speech"), 1)
+        self.assertNotIn("terminal write secret", "".join(callbacks.records))
+        backend.close()
+
+    def test_audit_write_failure_keeps_prior_conflicts_until_retry(self) -> None:
+        workspace = self.make_workspace()
+        controller, backend, callbacks = self.make_controller(workspace)
+        for content in ("OLD_AUDIT_CURSOR", "NEW_AUDIT_CURSOR"):
+            workspace.append_debate_message(
+                "session",
+                "debate",
+                DebateMessage(
+                    CHARACTER_CUSTODIAN,
+                    "audit",
+                    0,
+                    "r0",
+                    "critique",
+                    content,
+                    _CREATED,
+                ),
+            )
+        started = self._event(
+            DebateProgressPhase.STARTED,
+            context_mode=DebateContextMode.INCLUDED,
+        )
+        drafted = self._event(DebateProgressPhase.DRAFTED, revision_id="r0")
+        audit_started = self._event(
+            DebateProgressPhase.AUDIT_STARTED,
+            revision_id="r0",
+        )
+        event = self._event(
+            DebateProgressPhase.AUDIT_COMPLETED,
+            revision_id="r0",
+            conflicting_agents=(CHARACTER_CUSTODIAN,),
+        )
+        events = [started, drafted, audit_started]
+        prior_events = list(events)
+        key = ("session", "debate")
+        controller._debate_message_offsets[key] = 1
+        controller._debate_last_conflict_targets[key] = (PLOT_ARCHITECT,)
+        attempted: list[object] = []
+        failure = OSError("audit write secret")
+        real_write_component = (
+            terminal_module.InteractiveSemanticOutput.write_component
+        )
+
+        def fail_once(output, component):
+            attempted.append(component)
+            if len(attempted) == 1:
+                raise failure
+            return real_write_component(output, component)
+
+        with mock.patch.object(
+            terminal_module.InteractiveSemanticOutput,
+            "write_component",
+            autospec=True,
+            side_effect=fail_once,
+        ):
+            with self.assertRaises(OSError) as raised:
+                controller._accept_debate_progress(
+                    event,
+                    expected_session_id="session",
+                    expected_input_kind=InputKind.PROMPT,
+                    expected_context_mode=DebateContextMode.INCLUDED,
+                    events=events,
+                )
+            self.assertIs(raised.exception, failure)
+            self.assertEqual(controller._debate_message_offsets[key], 1)
+            self.assertEqual(
+                controller._debate_last_conflict_targets[key],
+                (PLOT_ARCHITECT,),
+            )
+            self.assertEqual(events, prior_events)
+            self.assertEqual(callbacks.records, [])
+
+            controller._accept_debate_progress(
+                event,
+                expected_session_id="session",
+                expected_input_kind=InputKind.PROMPT,
+                expected_context_mode=DebateContextMode.INCLUDED,
+                events=events,
+            )
+
+        self.assertEqual(attempted[0], attempted[1])
+        self.assertEqual(controller._debate_message_offsets[key], 2)
+        self.assertEqual(
+            controller._debate_last_conflict_targets[key],
+            (CHARACTER_CUSTODIAN,),
+        )
+        self.assertEqual(events, [*prior_events, event])
+        self.assertEqual(len(callbacks.records), 1)
+        rendered = "".join(callbacks.records)
+        self.assertNotIn("OLD_AUDIT_CURSOR", rendered)
+        self.assertEqual(rendered.count("NEW_AUDIT_CURSOR"), 1)
+        self.assertNotIn("audit write secret", rendered)
         backend.close()
 
 
