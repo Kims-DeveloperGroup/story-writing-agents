@@ -313,6 +313,23 @@ def update_conversation_storage_backend(
     )
 
 
+def update_show_message_details(
+    state: SettingsState,
+    enabled: bool,
+) -> SettingsState:
+    """Return pending state with one strict message presentation preference."""
+
+    _require_state(state)
+    validated = ConfigManager.validate_show_message_details(enabled)
+    return _with_system_defaults(
+        state,
+        replace(
+            state.pending.system_defaults,
+            show_message_details=validated,
+        ),
+    )
+
+
 def update_agent_backend(
     state: SettingsState,
     agent_id: str,

@@ -765,19 +765,21 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ConfigurationBaseline`, `ConfigurationCommitFailure`, and
   `ConfigurationCommitError` define one exact-byte complete-configuration
   compare-and-set boundary. `SystemDefaults` retains all established positional
-  fields and adds only a trailing optional nullable
-  `conversation_storage_backend` after the trailing optional workspace
-  `default_backend`; old positional construction remains valid.
+  fields, keeps the optional nullable `conversation_storage_backend` after the
+  optional workspace `default_backend`, and adds only the trailing strict
+  boolean `show_message_details` with a false default; old positional
+  construction remains valid.
   `AgentConfig` retains its seven-field order while allowing its leading
   backend route to be null. `ConfigManager` owns both complete persisted schemas
   plus provider-specific safe-model validators, an additive forward-compatible
   lowercase Codex effort-token validator, and the exact Antigravity
   low/medium/high effort validator, together with the independent exact
-  filesystem/SQLite storage validator. Provider-catalog membership is not a
-  persisted-schema requirement. Missing legacy storage selection is interpreted
-  as filesystem when projecting a saved canonical document, while missing
-  default and agent backend keys remain null; reads do not rewrite either
-  document. Package-internal
+  filesystem/SQLite storage validator and the strict message-details boolean
+  validator. Provider-catalog membership is not a persisted-schema requirement.
+  Missing legacy storage selection is interpreted as filesystem when projecting
+  a saved canonical document, missing `show_message_details` is interpreted as
+  false, and missing default and agent backend keys remain null; reads do not
+  rewrite either document. Package-internal
   `validate_configuration` validates both persisted documents as one complete
   candidate, `load_configuration_baseline` captures exact bytes and one
   immutable value, `commit_configuration` validates and compare-and-sets both
@@ -788,7 +790,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   signatures and delegate to the same validation and resolution rules.
 - **Direct internal dependencies:** `agents`, `errors`, and `workspace`.
 - **State, resources, and side effects:** Owns strict-UTF-8 reads, complete
-  schema validation, deterministic projection of canonical nine-key system
+  schema validation, deterministic projection of canonical ten-key system
   defaults and roster-complete agent configuration, and the configuration CAS
   lifecycle. Commit first compares both exact baseline byte strings, writes
   only changed complete documents through `Workspace` in system-then-agent
@@ -2082,8 +2084,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   completed agent reply uses an existing `Record` with provider/model/effort,
   sources, confirmation, and thread status immediately above its exact body;
   neither projection adds transcript or session-manifest persistence.
-  The clean settings editor exposes the exact five-row top level Language,
-  Persona, Maximum debate rounds, Conversation storage, and Agents. A
+  The clean settings editor exposes the exact six-row top level Language,
+  Persona, Maximum debate rounds, Conversation storage, Message details, and
+  Agents. Message details selects the pending strict Off/On presentation
+  preference without changing the running shell before persistence. A
   structurally dirty candidate appends `Apply Changes (*Required)` and `Discard
   Changes` while retaining the stable internal `save` and `cancel` routing
   identities; a previously retained action highlight normalizes when its row
@@ -2122,23 +2126,30 @@ every intermediate arrow. The current runtime graph is acyclic.
   `Choose Apply Changes to persist pending changes` notice; all are absent
   initially and after a complete revert, while the notice remains absent from
   nested editors and Apply/Discard confirmations. The shared projection names
-  conversation storage plus both providers' model/effort rows, so root
-  visibility and changed-only confirmations identify pending changes without
-  changing the active backend or runtime snapshot. Editors contain no repeated
+  conversation storage, message details, and both providers' model/effort rows,
+  so root visibility and changed-only confirmations identify pending changes
+  without changing the active backend, runtime snapshot, or message-details flag.
+  Editors contain no repeated
   Current/Pending context panel. The clean root contains no persistence action
   to confirm, authenticate, persist, report, or exit through. Dirty Apply
   Changes uses the stable `save` route and one selectable YES/NO confirmation
   whose preceding context contains only changed Current/Pending properties in
   stable settings and roster order; Current fields use default styling and
   Pending fields use warning styling, with the explicit changed text cues
-  preserved. After authentication and any provider-default rebase, the
-  controller rechecks structural dirtiness at the final persistence boundary
-  and loops silently when clean. A still-dirty candidate delegates storage
-  readiness, installer consent, baseline-checked configuration persistence,
-  the fresh persona-catalog guard, and storage failure reporting to
-  `select_conversation_storage`. Exactly one saved event follows only a
-  successful dirty persistence and a completed storage-selection report;
-  failed, cancelled, or rejected apply attempts emit none. Explicit Discard
+  preserved. After confirmation, the controller rechecks structural dirtiness
+  at the final persistence boundary and loops silently when clean. An exact
+  message-details-only candidate uses the settings-owned prepare and commit
+  transaction, requires the prepared configuration to equal the pending
+  candidate with no switched agents, and updates the controller's active
+  presentation flag only after commit. That path skips authentication,
+  backend/runtime staging and activation, storage readiness, provider-route
+  switching, and provider-thread work. Every other still-dirty candidate first
+  completes authentication and any provider-default rebase, then delegates
+  storage readiness, installer consent, baseline-checked configuration
+  persistence, the fresh persona-catalog guard, and storage failure reporting
+  to `select_conversation_storage`. Exactly one saved result follows only a
+  successful dirty persistence; failed, cancelled, or rejected apply attempts
+  emit none. Explicit Discard
   Changes uses the stable `cancel` route and root Settings Escape shares the
   same action: an unchanged candidate exits immediately, while a structurally
   changed candidate uses the same selectable confirmation context. Any
@@ -2184,8 +2195,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   a successful switch, and cleared on pause, cleanup, and final close. The
   controller also owns its current attached-session identifier, current-focus
   conversation metadata, sticky target, current CLI-context snapshot,
-  process-local per-session latest accepted STARTED debate-ID map, and
-  one-run/closed state. It also retains a controller-private count of
+  process-local per-session latest accepted STARTED debate-ID map, the active
+  message-details presentation flag initialized from the backend's immutable
+  configuration snapshot, and one-run/closed state. It also retains a
+  controller-private count of
   successfully rendered typed errors. Each submitted command snapshots that
   count before dispatch and independently records `failed`/`rejected` when a
   normally returned path rendered a new typed error, or
@@ -2220,9 +2233,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   through `interactive_auth`, coordinate its default-selection policy, and
   delegate exact-byte default persistence and open-settings rebase to
   `interactive_settings`. Settings assignment requires a fresh exact
-  authenticated status for the selected provider, and dirty Apply Changes
-  freshly gates every distinct effective agent route with fixed unauthenticated,
-  unavailable, or indeterminate remediation. Outside Settings, completed
+  authenticated status for the selected provider, and every dirty Apply Changes
+  outside the presentation-only path freshly gates each distinct effective
+  agent route with fixed unauthenticated, unavailable, or indeterminate
+  remediation.
+  Outside Settings, completed
   authentication and missing-default effects remain durable. Within an open
   Settings flow, authentication rebases a missing default only in the pending
   candidate, so cancellation preserves the opening configuration bytes. This module owns only
@@ -2237,24 +2252,28 @@ every intermediate arrow. The current runtime graph is acyclic.
   native state and `provider_process` owns subprocess resources. The settings
   flow retains only one call-local immutable baseline and pending candidate. Each
   retained Language, Persona, Maximum debate rounds, Conversation storage,
-  Provider, Model, Custom model, and Effort editor owns one entry-local
+  Message details, Provider, Model, Custom model, and Effort editor owns one
+  entry-local
   normalized last-successful semantic commit: the first success arms it, a
   different success replaces it, and a second consecutive success of the same
   value returns silently to the parent. Invalid input, authentication failure,
   Custom-model navigation, and editor re-entry reset or recreate that state. The
-  flow constructs its changed-only confirmation context. Dirty Apply Changes
-  stages and provider-preflights one complete backend generation, quiesces and
-  stages the runtime prompt snapshot, delegates the persona-catalog guard,
-  storage readiness/parity, and complete configuration CAS to their named
-  owners,
+  flow constructs its changed-only confirmation context. Except for the exact
+  message-details-only transaction above, Dirty Apply Changes stages and
+  provider-preflights one complete backend generation, quiesces and stages the
+  runtime prompt snapshot, delegates the persona-catalog guard, storage
+  readiness/parity, and complete configuration CAS to their named owners,
   commits the prepared provider-route generation state, and then activates the
-  matching backend and prompt snapshots before returning to the prompt.
-  Provider/model/effort, language, persona, and round changes therefore apply
-  to the current shell, while a changed storage backend remains desired
-  next-shell state only. Preflight or persistence failure leaves active runtime
-  state unchanged; a verified post-persist pre-activation failure restores the
-  exact configuration and optional route bytes, while uncertain post-persist
-  activation reports recovery-required and never renders false success.
+  matching backend and prompt snapshots before returning to the prompt. A
+  message-details change mixed with any other change updates the active
+  presentation flag only after that full activation succeeds.
+  Provider/model/effort, language, persona, round, and message-details changes
+  therefore apply to the current shell, while a changed storage backend remains
+  desired next-shell state only. Preflight or persistence failure leaves active
+  runtime and presentation state unchanged; a verified post-persist failure
+  before activation restores the exact configuration and optional route bytes,
+  while uncertain post-persist activation reports recovery-required and never
+  renders false success.
   Launch-masked settings fields are read-only and show their explicit source.
   Successful activation renders the current-running-shell saved-and-applied
   notice for live changes, the desired-storage next-shell notice for storage
@@ -2497,7 +2516,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `SettingsError`; the exact ordered `SETTINGS_LANGUAGES`;
   `load_settings_state`, `update_language`, `update_persona`,
   `update_max_debate_rounds`, `update_conversation_storage_backend`,
-  `update_agent_backend`,
+  `update_show_message_details`, `update_agent_backend`,
   `establish_default_backend`, `establish_settings_default_backend`,
   `update_agent_codex_model`, `update_agent_codex_reasoning_effort`,
   `update_agent_antigravity_model`, `update_agent_antigravity_effort`,
@@ -2513,8 +2532,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   complete provider-route roster, and a safe lexical persona catalog with
   top-level-template precedence. Pure update operations replace only the
   pending immutable candidate, including the independently validated desired
-  conversation-storage backend, one agent's provider, or one provider-specific
-  model/effort value at a time while preserving every inactive-provider value.
+  conversation-storage backend, strict message-details boolean, one agent's
+  provider, or one provider-specific model/effort value at a time while
+  preserving every inactive-provider value.
   System-level provider model/effort values remain unchanged fallback data
   rather than editable settings.
   `establish_default_backend` persists only a validated missing workspace
@@ -2523,7 +2543,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   candidate; authentication and default choice remain caller-owned, and
   Discard Changes or a clean exit preserves the exact opening bytes.
   Preparation completely validates and
-  canonically serializes the nine-key system and seven-key agent candidate,
+  canonically serializes the ten-key system and seven-key agent candidate,
   rereads both documents, the optional route document, and the catalog for
   exact stale-state detection, and performs no mutation. It
   increments exactly one roster entry's monotonically increasing generation
@@ -3832,10 +3852,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   existing initialized workspaces need neither directory until the corresponding
   owning feature first creates it lazily. `debug_log`, not `Workspace`, owns the
   files, lock, schema, append, and rotation inside the diagnostic directory. New
-  workspaces also receive the canonical nine-key system-default document with
+  workspaces also receive the canonical ten-key system-default document with
   null Codex model/reasoning, Antigravity model/effort, and workspace
-  `default_backend` values plus desired `conversation_storage_backend` set to
-  `filesystem`; canonical seven-key per-agent entries retain a null backend,
+  `default_backend` values, desired `conversation_storage_backend` set to
+  `filesystem`, and `show_message_details` set to false; canonical seven-key
+  per-agent entries retain a null backend,
   language, persona, and both providers' model/effort values.
   Existing configuration bytes are never migrated or rewritten by
   initialization. `cli_context` owns
@@ -4553,9 +4574,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   construction emits no record. All five consumers use only the internal append
   surface; none assumes ownership of diagnostic files, locks, schema, or
   rotation.
-- `Workspace` initializes the canonical nine-key system and seven-key per-agent
-  configuration shapes with desired conversation storage set to filesystem and
-  nullable workspace/agent provider routes, but never rewrites existing
+- `Workspace` initializes the canonical ten-key system and seven-key per-agent
+  configuration shapes with desired conversation storage set to filesystem,
+  message details set to false, and nullable workspace/agent provider routes,
+  but never rewrites existing
   documents. `ConfigManager` owns full system and per-agent schema validation,
   the independent filesystem/SQLite desired-storage vocabulary, the exact
   Codex/Antigravity backend vocabulary with legacy Gemini guidance, nullable
@@ -4577,12 +4599,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   provider switch, making A-to-B-to-A fresh rather than reviving the earlier
   route. A backend-bound `StoryRuntime` and its `PromptAssembler` reuse the
   active immutable configuration and route-generation snapshot while session
-  and explicit overrides remain live. A successful `/settings` Apply Changes
-  stages and preflights isolated adapters, proves runtime quiescence, persists
-  its guarded configuration and route transaction, and hot-activates matching
-  backend, runtime, and prompt generations in the current shell. A changed desired
-  conversation-storage backend is the exception: it applies only when the next
-  shell freshly activates a ready bundle. Direct configuration-file edits have
+  and explicit overrides remain live. An exact message-details-only
+  `/settings` Apply Changes prepares and commits the guarded settings
+  transaction, then updates the controller-owned active presentation flag
+  without authentication, storage readiness, backend/runtime staging,
+  provider-route switching, or provider-thread work. Every other successful
+  Apply stages and preflights isolated adapters, proves runtime quiescence,
+  persists its guarded configuration and route transaction, and hot-activates matching
+  backend, runtime, and prompt generations in the current shell; a mixed
+  message-details change updates its active flag only after that activation. A
+  changed desired conversation-storage backend is the exception: it applies
+  only when the next shell freshly activates a ready bundle. Direct
+  configuration-file edits have
   no watcher, and other running shells retain their captured state until a new
   backend launch reconciles durable route generations and loads configuration.
 - `interactive_settings` owns one call-local exact-byte system, agent, and
@@ -4591,7 +4619,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   default rebase, complete candidate preparation, and exact stale-state
   detection. It owns provider-generation increments and startup reconciliation
   plus the three-file rollback/recovery contract; `ConfigManager` remains the
-  canonical nine-key/seven-key schema owner and owns the two-document CAS used
+  canonical ten-key/seven-key schema owner and owns the two-document CAS used
   by storage selection.
   Discard Changes or a clean exit preserves the opening files. Default choice
   and authentication facts remain outside it. The controller owns

@@ -52,6 +52,7 @@ from story_writing_agents.interactive_settings import (
     update_language,
     update_max_debate_rounds,
     update_persona,
+    update_show_message_details,
     validate_settings_persona_catalog,
 )
 from story_writing_agents.workspace import Workspace
@@ -162,6 +163,7 @@ class SettingsModelContractTests(SettingsTestCase):
             update_persona: ("state", "persona"),
             update_max_debate_rounds: ("state", "max_debate_rounds"),
             update_conversation_storage_backend: ("state", "backend"),
+            update_show_message_details: ("state", "enabled"),
             update_agent_backend: ("state", "agent_id", "backend"),
             establish_default_backend: ("workspace", "backend"),
             establish_settings_default_backend: (
@@ -375,6 +377,10 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
         write.assert_not_called()
         self.assertEqual(_files(self.workspace.root), before)
         self.assertEqual(state.baseline.system_defaults_bytes, system_bytes)
+        self.assertFalse(
+            state.baseline.configuration.system_defaults.show_message_details
+        )
+        self.assertFalse(state.pending.system_defaults.show_message_details)
         self.assertEqual(
             tuple(
                 (entry.name, entry.relative_path)
@@ -488,6 +494,11 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
                 ].antigravity_effort,
                 "high",
             ),
+            (
+                update_show_message_details(state, True),
+                lambda value: value.system_defaults.show_message_details,
+                True,
+            ),
         )
         for updated, project, expected in cases:
             with self.subTest(expected=expected):
@@ -540,6 +551,18 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
                 lambda: update_conversation_storage_backend(state, "mysql"),
                 ConfigurationError,
             ),
+            (
+                lambda: update_show_message_details(state, 1),
+                ConfigurationError,
+            ),
+            (
+                lambda: update_show_message_details(state, None),
+                ConfigurationError,
+            ),
+            (
+                lambda: update_show_message_details(state, "on"),
+                ConfigurationError,
+            ),
             (lambda: update_agent_codex_model(state, PLOT_ARCHITECT, "-unsafe"), ConfigurationError),
             (lambda: update_agent_codex_model(state, PLOT_ARCHITECT, "bad\x1b"), ConfigurationError),
             (
@@ -583,6 +606,7 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
                 ConfigurationError,
             ),
             (lambda: update_language(object(), "EN"), TypeError),
+            (lambda: update_show_message_details(object(), True), TypeError),
             (lambda: load_settings_state(object()), TypeError),
             (lambda: save_settings_state(object(), state), TypeError),
         )
@@ -622,6 +646,7 @@ class SettingsDefaultPersistenceTests(SettingsTestCase):
                     "antigravity_effort": None,
                     "default_backend": "codex",
                     "conversation_storage_backend": "filesystem",
+                    "show_message_details": False,
                 }
             ),
         )
@@ -736,6 +761,54 @@ class SettingsDefaultPersistenceTests(SettingsTestCase):
 
 class SettingsPersistenceTests(SettingsTestCase):
     """Exercise exact conflicts, deterministic writes, and complete rollback."""
+
+    def test_message_details_round_trip_is_system_only_and_canonical(
+        self,
+    ) -> None:
+        state = self.load()
+        agent_before = self.workspace.path(_AGENT_PATH).read_bytes()
+        self.assertFalse(self.workspace.path(_ROUTE_PATH).exists())
+        updated = update_show_message_details(state, True)
+        self.assertIs(updated.baseline, state.baseline)
+        self.assertFalse(state.pending.system_defaults.show_message_details)
+        self.assertTrue(updated.pending.system_defaults.show_message_details)
+
+        with mock.patch.object(
+            self.workspace,
+            "write_text",
+            wraps=self.workspace.write_text,
+        ) as write:
+            save_settings_state(self.workspace, updated)
+
+        self.assertEqual(
+            [call.args[0] for call in write.call_args_list],
+            [_SYSTEM_PATH],
+        )
+        self.assertEqual(
+            self.workspace.path(_AGENT_PATH).read_bytes(),
+            agent_before,
+        )
+        self.assertFalse(self.workspace.path(_ROUTE_PATH).exists())
+        self.assertEqual(
+            self.workspace.read_text(_SYSTEM_PATH),
+            _canonical(
+                {
+                    "language": "KO",
+                    "persona": "default_kim_eun_hee",
+                    "max_debate_rounds": 1,
+                    "codex_model": None,
+                    "codex_reasoning_effort": None,
+                    "antigravity_model": None,
+                    "antigravity_effort": None,
+                    "default_backend": None,
+                    "conversation_storage_backend": "filesystem",
+                    "show_message_details": True,
+                }
+            ),
+        )
+        self.assertTrue(
+            self.load().pending.system_defaults.show_message_details
+        )
 
     def test_route_generations_change_only_for_effective_provider_switches(
         self,
@@ -981,6 +1054,7 @@ class SettingsPersistenceTests(SettingsTestCase):
                     "antigravity_effort": None,
                     "default_backend": None,
                     "conversation_storage_backend": "filesystem",
+                    "show_message_details": False,
                 }
             ),
         )
@@ -1189,6 +1263,7 @@ class SettingsPersistenceTests(SettingsTestCase):
                     "antigravity_effort": None,
                     "default_backend": None,
                     "conversation_storage_backend": "filesystem",
+                    "show_message_details": False,
                 }
             ),
         )

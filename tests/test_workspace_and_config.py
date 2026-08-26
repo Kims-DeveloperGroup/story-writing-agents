@@ -2365,6 +2365,7 @@ class WorkspaceTests(unittest.TestCase):
                 "antigravity_effort": None,
                 "default_backend": None,
                 "conversation_storage_backend": "filesystem",
+                "show_message_details": False,
             },
         )
         expected_agent = {
@@ -2395,7 +2396,8 @@ class WorkspaceTests(unittest.TestCase):
             '  "default_backend": null,\n'
             '  "language": "KO",\n'
             '  "max_debate_rounds": 1,\n'
-            '  "persona": "default_kim_eun_hee"\n'
+            '  "persona": "default_kim_eun_hee",\n'
+            '  "show_message_details": false\n'
             "}\n",
         )
 
@@ -2411,6 +2413,16 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(
             workspace.read_text("config/system_defaults.json"),
             legacy,
+        )
+        legacy_before = workspace.path("config/system_defaults.json").read_bytes()
+        self.assertFalse(
+            ConfigManager(workspace)
+            .load_configuration_snapshot()
+            .system_defaults.show_message_details
+        )
+        self.assertEqual(
+            workspace.path("config/system_defaults.json").read_bytes(),
+            legacy_before,
         )
         workspace.initialize(overwrite_prompts=True)
         self.assertEqual(
@@ -2887,9 +2899,13 @@ class ConfigurationCascadeTests(unittest.TestCase):
                 "antigravity_effort",
                 "default_backend",
                 "conversation_storage_backend",
+                "show_message_details",
             ),
         )
-        self.assertTrue(all(field.default is None for field in model_fields[-6:]))
+        self.assertTrue(
+            all(field.default is None for field in model_fields[3:-1])
+        )
+        self.assertIs(model_fields[-1].default, False)
         legacy = SystemDefaults("KO", "global_persona", 1)
         self.assertEqual(
             legacy,
@@ -2903,6 +2919,7 @@ class ConfigurationCascadeTests(unittest.TestCase):
                 antigravity_effort=None,
                 default_backend=None,
                 conversation_storage_backend=None,
+                show_message_details=False,
             ),
         )
         self.assertFalse(hasattr(legacy, "__dict__"))
@@ -2932,6 +2949,33 @@ class ConfigurationCascadeTests(unittest.TestCase):
             pickle.loads(pickle.dumps(legacy_agent)),
             legacy_agent,
         )
+
+    def test_message_details_missing_defaults_false_and_non_boole_fail_closed(
+        self,
+    ) -> None:
+        system_path = self.workspace.path("config/system_defaults.json")
+        legacy_before = system_path.read_bytes()
+        self.assertFalse(self.manager.load_system_defaults().show_message_details)
+        self.assertEqual(system_path.read_bytes(), legacy_before)
+
+        for value in (None, 0, 1, "false", [], {}):
+            with self.subTest(value=value):
+                self.workspace.write_json(
+                    "config/system_defaults.json",
+                    {
+                        "language": "KO",
+                        "persona": "global_persona",
+                        "max_debate_rounds": 1,
+                        "show_message_details": value,
+                    },
+                )
+                before = system_path.read_bytes()
+                with self.assertRaisesRegex(
+                    ConfigurationError,
+                    "show_message_details must be a boolean",
+                ):
+                    self.manager.load_system_defaults()
+                self.assertEqual(system_path.read_bytes(), before)
 
     def test_nullable_default_and_effective_provider_precedence_are_exact(
         self,
@@ -3512,7 +3556,7 @@ class DirectiveTests(unittest.TestCase):
 
 
 class ConversationStorageConfigurationTests(unittest.TestCase):
-    """Lock the ninth config key and exact-byte complete-document CAS."""
+    """Lock extended config keys and exact-byte complete-document CAS."""
 
     def setUp(self) -> None:
         self.workspace = initialized_workspace(self)
@@ -3563,7 +3607,7 @@ class ConversationStorageConfigurationTests(unittest.TestCase):
                     before,
                 )
 
-    def test_commit_noop_and_agent_only_save_preserve_canonical_nine_key_bytes(
+    def test_commit_noop_and_agent_only_save_preserve_canonical_ten_key_bytes(
         self,
     ) -> None:
         baseline = self.manager.load_configuration_baseline()
@@ -3618,6 +3662,7 @@ class ConversationStorageConfigurationTests(unittest.TestCase):
                 "antigravity_effort",
                 "default_backend",
                 "conversation_storage_backend",
+                "show_message_details",
             },
         )
 

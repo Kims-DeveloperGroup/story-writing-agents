@@ -7,6 +7,7 @@ import inspect
 import uuid
 import sys
 from collections.abc import Callable
+from dataclasses import replace
 from types import TracebackType
 from typing import Mapping, TypeVar
 
@@ -17,7 +18,7 @@ from ..agents import (
     ROSTER,
     SPECIALIST_IDS,
 )
-from ..backend import AgentBackend
+from ..backend import AgentBackend, backend_configuration_snapshot
 from ..cli_context import (
     CliContext,
     load_default_conversation,
@@ -105,6 +106,7 @@ from ..interactive_settings import (
     update_language,
     update_max_debate_rounds,
     update_persona,
+    update_show_message_details,
 )
 from ..interactive_terminal import (
     AdvisoryProgressError,
@@ -478,6 +480,13 @@ def _settings_projection(
             current.system_defaults.conversation_storage_backend or "filesystem",
             pending.system_defaults.conversation_storage_backend or "filesystem",
         ),
+        (
+            "show_message_details",
+            None,
+            "Message details",
+            "On" if current.system_defaults.show_message_details else "Off",
+            "On" if pending.system_defaults.show_message_details else "Off",
+        ),
     ]
     for agent_id in ROSTER:
         display_name = AGENT_SPECS[agent_id].display_name
@@ -611,6 +620,7 @@ class InteractiveController:
         "_runner",
         "_runtime",
         "_semantic_output",
+        "_show_message_details",
         "_focused_conversation",
         "_debate_message_offsets",
         "_debate_last_conflict_targets",
@@ -675,6 +685,10 @@ class InteractiveController:
         self._error_write_count = 0
         self._context = context
         self._backend = backend
+        self._show_message_details = (
+            backend_configuration_snapshot(backend)
+            .system_defaults.show_message_details
+        )
         self._terminal = terminal
         self._auth_coordinator = auth_coordinator
         self._provider_catalog = resolved_provider_catalog
@@ -2485,6 +2499,20 @@ class InteractiveController:
                     ),
                 ),
                 Choice(
+                    "show_message_details",
+                    "Message details",
+                    description=(
+                        f"Pending: {root_values['show_message_details'][1]}"
+                        if root_changed["show_message_details"]
+                        else f"Current: {root_values['show_message_details'][0]}"
+                    ),
+                    description_role=(
+                        SemanticRole.WARNING
+                        if root_changed["show_message_details"]
+                        else SemanticRole.DEFAULT
+                    ),
+                ),
+                Choice(
                     "providers",
                     "Agents",
                     description=(
@@ -2564,6 +2592,15 @@ class InteractiveController:
                 if confirmation == "cancel":
                     self._write_settings_cancelled(state)
                     return
+                if state.pending == state.baseline.configuration:
+                    continue
+                if self._settings_change_is_message_details_only(state):
+                    save_outcome = self._save_message_details_setting(state)
+                    if save_outcome == "retry":
+                        continue
+                    if save_outcome != "applied":
+                        return
+                    return
                 if self._auth_coordinator is not None:
                     try:
                         state, auth_outcome = (
@@ -2594,6 +2631,64 @@ class InteractiveController:
             if cancelled:
                 self._write_settings_cancelled(state)
                 return
+
+    @staticmethod
+    def _settings_change_is_message_details_only(state: SettingsState) -> bool:
+        """Classify one exact immutable presentation-only candidate."""
+
+        baseline = state.baseline.configuration
+        pending = state.pending
+        expected = replace(
+            baseline,
+            system_defaults=replace(
+                baseline.system_defaults,
+                show_message_details=(
+                    pending.system_defaults.show_message_details
+                ),
+            ),
+        )
+        return pending != baseline and pending == expected
+
+    def _save_message_details_setting(self, state: SettingsState) -> str:
+        """Persist and activate only the message presentation preference."""
+
+        try:
+            prepared = prepare_settings_save(
+                self._workspace,
+                state,
+                provider_overrides=self._backend.backend_overrides,
+            )
+        except SettingsError as failure:
+            self._write_settings_error(failure.kind)
+            return "retry"
+        if prepared.configuration != state.pending or prepared.switched_agents:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        try:
+            commit_prepared_settings_save(self._workspace, prepared)
+        except SettingsError as failure:
+            self._write_settings_error(failure.kind)
+            return "retry"
+
+        self._show_message_details = (
+            prepared.configuration.system_defaults.show_message_details
+        )
+        self._semantic_output.write_component(
+            Panel(
+                "Settings",
+                (
+                    Notice(
+                        "Settings saved and applied to this running shell now.",
+                        label="saved and applied",
+                        role=SemanticRole.SUCCESS,
+                        state=ViewState.COMPLETED,
+                    ),
+                ),
+                state=ViewState.COMPLETED,
+            )
+        )
+        return "applied"
 
     def _save_and_apply_settings(self, state: SettingsState) -> str:
         """Persist and activate one staged snapshot without false success."""
@@ -2749,6 +2844,7 @@ class InteractiveController:
                 before_defaults.antigravity_model,
                 before_defaults.antigravity_effort,
                 before_defaults.default_backend,
+                before_defaults.show_message_details,
             )
             != (
                 active_defaults.language,
@@ -2759,8 +2855,10 @@ class InteractiveController:
                 active_defaults.antigravity_model,
                 active_defaults.antigravity_effort,
                 active_defaults.default_backend,
+                active_defaults.show_message_details,
             )
         )
+        self._show_message_details = active_defaults.show_message_details
         self._write_settings_applied_result(
             before_profiles,
             active_profiles,
@@ -3065,6 +3163,8 @@ class InteractiveController:
             return self._edit_settings_rounds(state)
         if selected == "conversation_storage":
             return self._edit_settings_storage(state)
+        if selected == "show_message_details":
+            return self._edit_settings_message_details(state)
         if selected == "providers":
             return self._edit_settings_provider(state)
         raise _ControllerAbort(
@@ -3262,6 +3362,56 @@ class InteractiveController:
             notice = _settings_entered_notice(
                 "conversation storage",
                 armed_value,
+            )
+
+    def _edit_settings_message_details(
+        self,
+        state: SettingsState,
+    ) -> tuple[SettingsState, bool]:
+        """Select compact or detailed message presentation for this shell."""
+
+        notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
+        while True:
+            pending = (
+                "on"
+                if state.pending.system_defaults.show_message_details
+                else "off"
+            )
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Message details",
+                    instruction=_settings_value_instruction(
+                        "Choose Off for compact messages or On for detailed "
+                        "messages. Enter applies the value and keeps this "
+                        "editor open; press Esc to return to Settings."
+                    ),
+                ),
+                (
+                    Choice("off", "Off"),
+                    Choice("on", "On"),
+                ),
+                highlighted_id=pending,
+                selected_id=pending,
+                notice=notice,
+                transient=True,
+            )
+            value, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel:
+                return state, True
+            if value is None:
+                return state, False
+            if value not in {"off", "on"}:
+                raise _ControllerAbort(
+                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                )
+            if armed_value == value:
+                return state, False
+            state = update_show_message_details(state, value == "on")
+            armed_value = value
+            notice = _settings_entered_notice(
+                "message details",
+                "On" if value == "on" else "Off",
             )
 
     def _confirm_storage_installation(
