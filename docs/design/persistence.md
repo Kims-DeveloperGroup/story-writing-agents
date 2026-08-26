@@ -6,8 +6,9 @@
 > bounded runtime debug-log infrastructure. Direct Python callers can also
 > construct canonical conversation-only archive bytes and use the privileged
 > filesystem transfer adapter. A separate optional SQLite conversation store is
-> available through direct Python modules, and provider-free storage commands
-> can migrate or verify two already-ready stores in one workspace.
+> available through direct Python modules and as an explicitly selected
+> next-shell bundle. Provider-free storage commands can select desired storage
+> or migrate and verify two already-ready stores in one workspace.
 > `StoryRuntime` creates and finalizes reference evidence for inline referenced
 > operations; Python callers can inspect it by operation ID.
 
@@ -15,10 +16,11 @@ Key terms: **blackboard**—public debate JSONL; **sidecar**—context stored ap
 from established debate records; **create-only**—never replaces an existing
 path; **context-omitted run**—a debate created without a context request.
 
-The installed runtime uses separate inspectable files by default. An explicitly
-provisioned SQLite database can instead serve direct Python conversation
-catalog, event-store, and reference-search composition; it does not replace or
-select the runtime files automatically.
+The installed runtime defaults to separate inspectable conversation files. An
+explicitly prepared and selected SQLite database can instead serve the next
+shell's complete conversation catalog, event-store, and reference-search
+bundle. Direct Python callers may also compose it explicitly. Neither database
+provisioning nor migration alone selects runtime authority.
 
 | Channel | Owner |
 | --- | --- |
@@ -27,9 +29,10 @@ select the runtime files automatically.
 | Per-agent history | Its owning agent |
 | Provider manifest and access claim | `AgentBackend` |
 | Session/conversation defaults | CLI context helpers |
-| Conversation metadata and transcript | Filesystem catalog/event-store adapters by default; optional SQLite adapters by direct composition |
+| Conversation metadata, transcript, and search | One composed active filesystem or SQLite services bundle; filesystem is the missing/legacy default |
 | Canonical conversation archive value and bytes | `conversation_storage.archive`; caller owns any stored or transmitted bytes |
 | Same-workspace conversation migration and checkpoints | `conversation_storage.migration`; canonical archive adapters remain the data boundary |
+| Desired storage, readiness, and startup activation | Configuration owns desired value; `conversation_storage.selection` owns preparation/parity and next-shell marker CAS |
 | Bounded runtime diagnostics | Internal `debug_log` writer |
 | Retrieval actions, observations, progress, sources | Process/terminal only |
 | Current conversation and agent focus | Controller memory only |
@@ -177,9 +180,10 @@ the newest 25 addressed complete pairs—50 events—to retain the fixed 24-turn
 window and detect its boundary. A full `read()` still validates and returns the
 complete history.
 
-Provisioning builds and verifies one private temporary database, installs it
-create-only, and synchronizes the installed file and containing directory. It
-does not install SQLite or ingest the filesystem store. It may initialize the
+Database provisioning builds and verifies one private temporary database,
+installs it create-only, and synchronizes the installed file and containing
+directory. That operation does not install a host SQLite prerequisite or
+ingest the filesystem store. It may initialize the
 derived FTS companion after the main database is ready, but FTS absence or
 failure is not a provisioning or readiness failure. The privileged archive
 adapter round-trips the public canonical `ConversationArchive` value under an
@@ -190,20 +194,69 @@ malformed row, or divergent existing identity cannot be silently adopted or
 dropped; failure rolls back the whole import.
 
 Without POSIX `fcntl`, a valid existing database can still be preflighted and
-read observationally. Supported coordinator acquisition, provisioning, and
-mutations fail closed without changing the SQLite database or conversation
-domain state. Full non-POSIX coordinator and activation readiness is deferred
-to Issue #261.
+read observationally. Supported coordinator acquisition, installation through
+selection, provisioning, configuration save, activation, and mutations fail
+closed without changing conversation state.
 
-`story init`, `/settings`, the installed shell, and `StoryRuntime` do not
-provision or select this database. The explicit migration coordinator can copy
-canonical conversations between an already-ready database and the filesystem,
-but it does not install, provision, or activate SQLite. There is no automatic
-installation, activation, RAG, MySQL, or FTS-dependent search behavior in this
-adapter. See the
+`story init` and direct `StoryRuntime` construction do not provision or select
+this database. `/settings` and `story storage use` may explicitly prepare it
+and save SQLite as desired storage, but neither activates or migrates it. The
+explicit migration coordinator can copy canonical conversations between an
+already-ready database and the filesystem, but it does not install, provision,
+or activate SQLite. Shell startup never installs or provisions. There is no
+live switch, dual write, source deletion, RAG, MySQL, or FTS-dependent search
+behavior in this adapter. See the
 [direct API](../reference/package-api.md#optional-sqlite-conversation-storage),
 [filesystem boundary](../operations/filesystem-safety.md#sqlite-conversation-storage-safety),
 and [recovery table](../operations/recovery-and-limitations.md#sqlite-conversation-storage-recovery).
+
+<a id="conversation-storage-selection-and-activation"></a>
+
+## Conversation storage selection and activation
+
+Configuration owns only the desired `conversation_storage_backend`. New
+workspaces save `filesystem`; missing or null legacy values resolve to that same
+effective default without read-time rewriting. The independent strict schema-v1
+`config/conversation_storage_state.json` owns active backend and CAS generation;
+its absence is filesystem generation zero.
+
+`conversation_storage.selection` is a direct-only workflow module above
+configuration, provisioning, canonical archives, and backend composition. It
+does not import migration or consume migration checkpoints. `story storage use`
+dispatches to it before debug logging and provider/runtime construction.
+`/settings` supplies its complete pending configuration plus the
+settings-owned fresh persona-catalog guard. Storage choice is independent from
+agent Providers, although the complete Settings Save retains provider
+authentication before selection begins.
+
+Selection first briefly proves the workspace coordinator, then releases it
+during any consent interaction and host installer. For SQLite it functionally
+probes the active Python interpreter, optionally executes one explicitly
+authorized allowlisted host command, and reprobes the same interpreter. It then
+holds the coordinator while it provisions an absent empty database, composes
+the requested backend, reads active state, and compares fresh source/target
+canonical archive bytes. Same-backend or empty-source selection needs no
+parity; a nonempty source requires exact equality. Lease validation, the
+optional Settings guard, another lease validation, and the config-owned exact-
+byte complete-document CAS form the final publication boundary.
+
+Successful selection changes desired configuration only. The current process
+retains its construction-time bundle. Host installation and an empty provisioned
+database intentionally survive a later parity or configuration failure; source
+conversations and active state do not change.
+
+Interactive startup runs after workspace/configuration loading but before
+terminal construction and provider authentication. It holds one outer lease
+while it reloads configuration, composes the current active bundle, freshly
+checks desired-target readiness and canonical parity, composes the complete
+target bundle, and compare-and-set advances the activation marker. Any pre-CAS
+failure aborts startup and preserves the prior marker without a silent
+fallback. A successful CAS is not rolled back by later terminal,
+authentication, backend, or session failure. The resulting immutable bundle is
+injected into controller, runtime, and memory; no live switch or dual write is
+owned. Exact user commands, reports, installation policy, and recovery links
+are centralized in the
+[CLI reference](../reference/cli.md#conversation-storage-selection).
 
 <a id="conversation-storage-migration"></a>
 

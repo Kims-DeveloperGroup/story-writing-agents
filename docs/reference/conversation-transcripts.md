@@ -1,11 +1,11 @@
 # Conversation transcripts
 
-> **Availability:** interactive turns use the filesystem store, append
-> transcripts, and consume bounded context. `/transcript` reads bounded pages;
-> focused `/history` shows one full snapshot with context accounting; `/search`
-> cites active events. An optional SQLite event store is available only through
-> its direct Python module and is not selected by the shell or default runtime
-> composition.
+> **Availability:** interactive turns use the startup-selected filesystem or
+> SQLite event store, append transcripts, and consume bounded context.
+> `/transcript` reads bounded pages; focused `/history` shows one full snapshot
+> with context accounting; `/search` cites active events. Both adapters remain
+> available through their documented Python imports; direct runtime
+> construction defaults to filesystem unless supplied a complete bundle.
 
 Key terms: **event**—one visible stored record; **complete turn**—one user event
 plus one outcome; **unmatched turn**—a user event without an outcome;
@@ -64,7 +64,8 @@ store = SQLiteConversationEventStore(
 
 Construction does not provision the database. Use the explicit flow in the
 [package API](package-api.md#optional-sqlite-conversation-storage) before an
-operation.
+operation, or the [next-shell selection workflow](cli.md#conversation-storage-selection)
+for the installed shell.
 
 `append()` assigns schema version, a one-based contiguous `sequence`, and a
 canonical UTC timestamp. Sequence is authoritative ordering; wall-clock

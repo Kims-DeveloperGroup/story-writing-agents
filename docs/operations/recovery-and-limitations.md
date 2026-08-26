@@ -5,12 +5,13 @@
 > Interactive `$`/`$$` artifact discovery and selection are available in
 > provider-bound prompt spans. Direct Python conversation archive operations
 > have content-free failures and recognized additive-import recovery. Optional
-> SQLite conversation storage also fails closed without automatic installation,
-> provisioning, activation, schema upgrade, general repair, or retry. Explicit
-> provider-free migration and parity verification are available between two
-> already-ready stores in one workspace. Automatic retry, general destructive
-> cleanup, event repair, automation picker UI, and Windows console emulation are
-> not available.
+> SQLite conversation storage also fails closed. Explicit `/settings` or
+> provider-free `story storage use` can prepare and save desired storage for the
+> next shell; host installation always requires explicit consent. Migration and
+> parity verification remain separate workflows between two already-ready
+> stores. Automatic retry, silent installation, general destructive cleanup,
+> event repair, live switching, automation picker UI, and Windows console
+> emulation are not available.
 > Explicit SQLite provisioning recognizes only one exact
 > interrupted-publication alias shape.
 
@@ -109,6 +110,45 @@ without accepting an incomplete transcript. It is not rollback across both
 stores. Exact command/report semantics are in the
 [CLI reference](../reference/cli.md#conversation-storage-migration).
 
+<a id="conversation-storage-selection-and-activation-recovery"></a>
+
+## Conversation storage selection and activation recovery
+
+Keep desired and active state distinct while diagnosing a failed switch.
+`config/system_defaults.json` stores desired
+`conversation_storage_backend`; missing or null means filesystem.
+`config/conversation_storage_state.json` stores strict schema-v1 active backend
+and generation; a missing marker means filesystem generation zero. A completed
+`storage use` or Settings Save changes desired only. Do not hand-edit either
+file or delete one store to manufacture agreement.
+
+| Report, startup result, or exit | Meaning | Safe response |
+| --- | --- | --- |
+| `completed`, exit `0`, `activation: next_shell` | Readiness/parity and the final configuration CAS succeeded. The current shell was not switched, even when `configuration` is `unchanged`. | Exit the old shell normally and start a new one. Do not delete the old store; startup performs another fresh check before marker CAS. |
+| `installation_required`, exit `2` | The active Python interpreter lacks functional SQLite, one exact supported host command exists, and installation was not authorized. | Review the command in the CLI reference. If host mutation is intended, rerun `story storage use sqlite --install-missing --yes`; `/settings` instead previews the command and requires exact YES. |
+| `installation_disallowed`, exit `2` | The user declined the Settings prompt or a recognized nonempty CI marker forbids host mutation. | Preserve configuration. Install outside this workflow only under the host's approved operations policy, clear a CI marker only when it is genuinely incorrect, then retry without assuming readiness. |
+| `installation_unsupported` or `installation_failed`, exit `2` | The exact OS/package-manager plan is unsupported, or the one authorized installer failed. | Inspect host/package-manager diagnostics. Do not substitute arbitrary arguments through Story. Complete approved host repair separately, then rerun selection. |
+| `interpreter_unavailable`, exit `2` | The installer may have exited zero, but the same Python interpreter still failed its complete SQLite probe. The report can show `installation: completed`. | Rebuild or reinstall that Python interpreter with functional SQLite support, then rerun. Installing only a standalone `sqlite3` binary is insufficient. |
+| `provisioning_failed`, exit `2` | The fixed SQLite database could not be safely proved ready or create-only provisioned. | Preserve the database, sidecars, and temporary residue. Run direct observational preflight or follow the SQLite recovery table; never delete suspect state to force an empty target. |
+| `migration_required`, exit `2` | The active canonical source is nonempty and the requested target is empty. An empty SQLite database created during selection can remain ready. | Run migrate dry-run, migrate, and verify from the active backend to the target; rerun `storage use`, then start a new shell. Selection itself never copies data. |
+| `parity_mismatch`, exit `2` | Both canonical stores are nonempty and differ. | Preserve both. Use `story storage verify` in the active direction and investigate conflicts or destination-only state offline. Do not overwrite, merge, truncate, or switch around the mismatch. |
+| `configuration_invalid`, `configuration_conflict`, or `configuration_write_failed`, exit `2` | Pending configuration was invalid, an opening config/persona fact changed, or publication/rollback could not be reported as a clean success. Host installation or an empty provisioned database can remain. | Preserve both config files and storage. Reopen Settings or rerun `storage use` from a fresh baseline. After write uncertainty, inspect both complete configuration files before another attempt. |
+| `coordination_failed`, `workspace_invalid`, or `invalid_request`, exit `2` | The workspace/lease/request boundary failed before a safe desired save. | Correct exact syntax/workspace, wait for supported work, and retry with a fresh invocation. Without POSIX `fcntl`, selection, provisioning, config save, and activation remain unavailable. |
+| Interactive startup aborts before the welcome | Desired and active state could not be safely reconciled; the active marker was preserved and there is no silent fallback. | Read the sanitized hint, quiesce unsupported writers, then run `storage use`, migrate, or verify as appropriate. Repair desired/readiness/parity rather than forcing the marker. |
+| Startup advanced the marker, then later terminal/auth/backend/session startup failed | Activation CAS already succeeded; unrelated later failure is not compensation for that durable switch. | Fix the later failure and start Story again. The new active backend must now be treated as authoritative; do not restore the old marker manually. |
+
+Selection proves coordination briefly, releases it during consent/installation,
+then reacquires it for same-process reprobe, database preparation, parity, the
+Settings persona guard, and configuration CAS. Host installation and empty
+database creation deliberately fall outside configuration rollback. Startup
+instead holds one outer lease through fresh active/target composition and
+marker CAS. Direct low-level filesystem adapters and external editors do not
+join this guard; stop or otherwise coordinate them before either workflow.
+
+The exact report schema, failure mapping, platform commands, CI marker set, and
+end-to-end command sequence are in the
+[CLI reference](../reference/cli.md#conversation-storage-selection).
+
 <a id="sqlite-conversation-storage-recovery"></a>
 
 ## SQLite conversation-storage recovery
@@ -122,7 +162,7 @@ for preflight, provisioning, composition, reads, or exact search.
 | Result or failure | Meaning | Safe response |
 | --- | --- | --- |
 | `provisioning_needed` | On a capable host, the fixed database is absent. | Provision only after deciding the SQLite destination is deliberately empty and acquiring the exact workspace mutation lease. Provisioning does not import filesystem conversations. |
-| `unavailable` or `ConversationStorageUnavailableError` | `sqlite3` is missing, older than 3.7.16, fails its runtime probe, the database is busy/locked, or an operational resource is unavailable. | Inspect the host/runtime and competing processes outside this API, then retry explicitly. Issue #261 owns integrating detection/installation into the user-facing flow; direct preflight only reports capability, this release installs nothing, and there is no automatic retry. |
+| `unavailable` or `ConversationStorageUnavailableError` | The active Python interpreter's `sqlite3` is missing, older than 3.7.16, fails its functional runtime probe, the database is busy/locked, or an operational resource is unavailable. | Direct preflight remains observational. For a missing runtime, use the explicit selection workflow only when one allowlisted host command and its consent policy apply; otherwise repair the interpreter outside Story. There is no automatic retry, and the standalone SQLite CLI is not readiness proof. |
 | `ConversationStorageProvisioningNeededError` | Composition or an adapter operation requires a database that has not been provisioned. | Run observational preflight and, only for an intended empty target, the explicit leased provisioning flow. |
 | `WorkspaceVersionUnsupportedError` | The file has the recognized application identity but an unsupported schema version. | Stop workspace processes, preserve and verify a complete backup, then use a compatible runtime or a separately approved schema upgrade. Conversation-data migration does not upgrade SQLite schemas. |
 | `WorkspaceFormatError` | Header, schema manifest/fingerprint/cookie, encoding, integrity, foreign keys, required lexical generation/searchable values, event structure, or strict sidecar state is invalid, or the stable database-name entry is nonregular without being a symlink. | Preserve the database and sidecars unchanged. Restore a known-good complete database or investigate offline; do not hand-edit or ask preflight to repair it. |
@@ -192,9 +232,9 @@ If POSIX `fcntl` is unavailable, a valid existing database can still be
 preflighted and read through the direct API. The supported coordinator cannot
 acquire its mutation lease, so provisioning and supported writes fail closed
 without changing the SQLite database or conversation domain state. The lazy
-coordination guard retains its documented lifecycle. Issue #261 owns full
-non-POSIX coordinator and activation readiness as well as the future confirmed
-detection, installation, and settings flow.
+coordination guard retains its documented lifecycle. Installation through
+selection, desired-config save, and startup activation also remain unavailable
+because each mutation requires that coordinator.
 
 Strict preflight, composition, provisioning, and write boundaries reject and
 preserve every `-journal`, `-wal`, or `-shm` sidecar. An ordinary adapter read
@@ -613,15 +653,14 @@ work; the newest desired definition is selected instead.
 - Advisory input is one line; `/run --output PART/PATH.md` without prompt text
   owns multiline composition. Bare `/run` first prompts for the output.
 - Conversation search is active-only; transcript reads retain no cursor.
-- Filesystem conversation storage remains selected by the installed shell and
-  runtime. SQLite is a direct optional Python API only; there is no `/settings`
-  storage choice, installer, automatic provisioning, default switch,
-  automatic activation, RAG, MySQL, or FTS-dependent search behavior. Explicit
-  provider-free migrate/verify commands operate on two already-ready stores but
-  do not select either one. Its private local FTS5 companion supplies
-  non-authoritative hints only. Issue #261 owns later user-facing integration
-  of detection, installation, and selection; direct preflight here only reports
-  capability.
+- Filesystem remains the missing/legacy conversation-storage default.
+  `/settings` and provider-free `story storage use` save a desired filesystem
+  or SQLite backend for the next shell; host installation is limited to one
+  explicitly confirmed allowlisted command, and startup never installs or
+  provisions. Migration/verification remain separate operations over two ready
+  stores and never select, activate, or delete one. There is no live switch,
+  dual write, automatic retry, RAG, MySQL, or FTS-dependent result behavior.
+  The private local FTS5 companion supplies non-authoritative hints only.
 - Parsing, repository authorization/evidence, top-level `StoryRuntime`
   propagation, and provider-enforced reads are active for inline canonical
   references. Provider-bound interactive spans add `$` completion and

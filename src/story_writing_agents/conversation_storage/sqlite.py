@@ -68,6 +68,7 @@ from .sqlite_database import (
     SQLiteDatabaseSecurityError,
     SQLiteDatabaseUnavailableError,
     SQLiteDatabaseVersionError,
+    probe_sqlite_runtime,
 )
 from .sqlite_search_index import (
     SQLiteConversationSearchIndex,
@@ -666,6 +667,21 @@ def preflight_sqlite_conversation_storage(
 
     database = SQLiteDatabase(_resolve_workspace(workspace))
     return _preflight_database(database)
+
+
+def probe_sqlite_conversation_storage_runtime() -> ConversationStoragePreflight:
+    """Map the active interpreter probe to content-free storage capability."""
+
+    try:
+        probe_sqlite_runtime()
+    except SQLiteDatabaseUnavailableError:
+        capability = ConversationStorageCapability.UNAVAILABLE
+    else:
+        capability = ConversationStorageCapability.READY
+    return ConversationStoragePreflight(
+        backend=ConversationStorageBackend.SQLITE,
+        capability=capability,
+    )
 
 
 def provision_sqlite_conversation_storage(
@@ -1847,5 +1863,6 @@ __all__ = [
     "compose_sqlite_conversation_archive",
     "compose_sqlite_conversation_storage",
     "preflight_sqlite_conversation_storage",
+    "probe_sqlite_conversation_storage_runtime",
     "provision_sqlite_conversation_storage",
 ]

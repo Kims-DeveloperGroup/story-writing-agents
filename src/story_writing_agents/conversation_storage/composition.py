@@ -63,6 +63,7 @@ _ACTIVATION_STATE_FIELDS = frozenset({
     "generation",
 })
 _MUTATION_LOCK_RETRY_SECONDS = 0.05
+_FILESYSTEM_MUTATION_TIMEOUT_SECONDS = 30.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,14 +96,16 @@ class _WorkspaceTopology:
 class _PinnedFilesystemConversationCatalog(FilesystemConversationCatalog):
     """Concrete catalog whose inherited operations use only a pinned topology."""
 
-    __slots__ = ("_topology",)
+    __slots__ = ("_coordinator", "_topology")
 
     def __init__(
         self,
         topology: _WorkspaceTopology,
         construction_workspace: Workspace,
+        coordinator: WorkspaceConversationStorageMutationCoordinator,
     ) -> None:
         self._topology = topology
+        self._coordinator = coordinator
         super().__init__(construction_workspace)
 
     @property
@@ -115,11 +118,48 @@ class _PinnedFilesystemConversationCatalog(FilesystemConversationCatalog):
     def workspace(self, _workspace: object) -> None:
         """Ignore mutable collaborator rebinding in favor of the pinned topology."""
 
+    def create(self, session_id: str, subject: str) -> Any:
+        with self._coordinator.borrow(
+            timeout_seconds=_FILESYSTEM_MUTATION_TIMEOUT_SECONDS
+        ):
+            return super().create(session_id, subject)
+
+    def rename(
+        self,
+        session_id: str,
+        conversation_id: str,
+        subject: str,
+    ) -> Any:
+        with self._coordinator.borrow(
+            timeout_seconds=_FILESYSTEM_MUTATION_TIMEOUT_SECONDS
+        ):
+            return super().rename(session_id, conversation_id, subject)
+
+    def archive(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> Any:
+        with self._coordinator.borrow(
+            timeout_seconds=_FILESYSTEM_MUTATION_TIMEOUT_SECONDS
+        ):
+            return super().archive(session_id, conversation_id)
+
+    def unarchive(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> Any:
+        with self._coordinator.borrow(
+            timeout_seconds=_FILESYSTEM_MUTATION_TIMEOUT_SECONDS
+        ):
+            return super().unarchive(session_id, conversation_id)
+
 
 class _PinnedFilesystemConversationEventStore(FilesystemConversationEventStore):
     """Concrete event store pinned to one topology and catalog collaborator."""
 
-    __slots__ = ("_pinned_catalog", "_topology")
+    __slots__ = ("_coordinator", "_pinned_catalog", "_topology")
 
     def __init__(
         self,
@@ -127,9 +167,11 @@ class _PinnedFilesystemConversationEventStore(FilesystemConversationEventStore):
         construction_workspace: Workspace,
         *,
         catalog: FilesystemConversationCatalog,
+        coordinator: WorkspaceConversationStorageMutationCoordinator,
     ) -> None:
         self._topology = topology
         self._pinned_catalog = catalog
+        self._coordinator = coordinator
         super().__init__(construction_workspace, catalog=catalog)
 
     @property
@@ -151,6 +193,12 @@ class _PinnedFilesystemConversationEventStore(FilesystemConversationEventStore):
     @catalog.setter
     def catalog(self, _catalog: object) -> None:
         """Ignore mutable catalog rebinding in favor of the pinned collaborator."""
+
+    def append(self, event: Any) -> Any:
+        with self._coordinator.borrow(
+            timeout_seconds=_FILESYSTEM_MUTATION_TIMEOUT_SECONDS
+        ):
+            return super().append(event)
 
 
 class _PinnedReferenceConversationSearch(ReferenceConversationSearch):
@@ -487,11 +535,19 @@ def compose_filesystem_conversation_storage(
         backend=ConversationStorageBackend.FILESYSTEM,
         workspace_key=topology.workspace_key,
     )
-    catalog = _PinnedFilesystemConversationCatalog(topology, resolved)
+    coordinator = WorkspaceConversationStorageMutationCoordinator._from_topology(
+        topology
+    )
+    catalog = _PinnedFilesystemConversationCatalog(
+        topology,
+        resolved,
+        coordinator,
+    )
     event_store = _PinnedFilesystemConversationEventStore(
         topology,
         resolved,
         catalog=catalog,
+        coordinator=coordinator,
     )
     search = _PinnedReferenceConversationSearch(catalog, event_store)
     return ConversationStorageServices(
@@ -507,9 +563,7 @@ def compose_filesystem_conversation_storage(
             provenance=provenance,
             component=search,
         ),
-        mutation_coordinator=(
-            WorkspaceConversationStorageMutationCoordinator._from_topology(topology)
-        ),
+        mutation_coordinator=coordinator,
     )
 
 

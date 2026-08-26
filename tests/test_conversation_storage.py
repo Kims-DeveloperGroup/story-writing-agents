@@ -663,6 +663,106 @@ class ConversationStorageServicesTests(unittest.TestCase):
         )
         self.assertFalse(_marker_path(workspace).exists())
 
+    def test_composed_filesystem_mutations_borrow_the_shared_bundle_coordinator(
+        self,
+    ) -> None:
+        workspace = _initialized_workspace(self)
+        services = compose_filesystem_conversation_storage(workspace)
+        original_borrow = WorkspaceConversationStorageMutationCoordinator.borrow
+        calls: list[tuple[object, float]] = []
+
+        def recording_borrow(coordinator, *, timeout_seconds):
+            calls.append((coordinator, timeout_seconds))
+            return original_borrow(
+                coordinator,
+                timeout_seconds=timeout_seconds,
+            )
+
+        with mock.patch.object(
+            WorkspaceConversationStorageMutationCoordinator,
+            "borrow",
+            new=recording_borrow,
+        ):
+            metadata = services.catalog.create("session_a", "Coordinated")
+            services.event_store.append(
+                make_append(
+                    session_id="session_a",
+                    conversation_id=metadata.conversation_id,
+                    turn_id="turn_a",
+                )
+            )
+            services.catalog.rename(
+                "session_a",
+                metadata.conversation_id,
+                "Renamed",
+            )
+            services.catalog.archive("session_a", metadata.conversation_id)
+            services.catalog.unarchive("session_a", metadata.conversation_id)
+
+        self.assertEqual(len(calls), 5)
+        self.assertTrue(
+            all(
+                coordinator is services.mutation_coordinator
+                and timeout == 30.0
+                for coordinator, timeout in calls
+            )
+        )
+
+    def test_composed_mutation_serializes_with_an_independent_workspace_lease(
+        self,
+    ) -> None:
+        workspace = _initialized_workspace(self)
+        services = compose_filesystem_conversation_storage(workspace)
+        blocker = WorkspaceConversationStorageMutationCoordinator(workspace)
+        attempted = threading.Event()
+        completed = threading.Event()
+        failures: list[BaseException] = []
+
+        def create() -> None:
+            attempted.set()
+            try:
+                services.catalog.create("session_a", "Serialized")
+            except BaseException as exc:
+                failures.append(exc)
+            finally:
+                completed.set()
+
+        with blocker.borrow(timeout_seconds=2.0):
+            thread = threading.Thread(target=create)
+            thread.start()
+            self.assertTrue(attempted.wait(timeout=1.0))
+            self.assertFalse(completed.wait(timeout=0.1))
+        self.assertTrue(completed.wait(timeout=2.0))
+        thread.join(timeout=2.0)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(failures, [])
+        self.assertEqual(len(services.catalog.list("session_a")), 1)
+
+    def test_raw_filesystem_adapters_remain_compatible_without_bundle_wrapping(
+        self,
+    ) -> None:
+        workspace = _initialized_workspace(self)
+        catalog = FilesystemConversationCatalog(workspace)
+        event_store = FilesystemConversationEventStore(
+            workspace,
+            catalog=catalog,
+        )
+        metadata = catalog.create("session_a", "Legacy raw adapter")
+        event = event_store.append(
+            make_append(
+                session_id="session_a",
+                conversation_id=metadata.conversation_id,
+                turn_id="turn_a",
+            )
+        )
+        self.assertEqual(
+            event_store.read("session_a", metadata.conversation_id),
+            (event,),
+        )
+        self.assertFalse(
+            workspace.path(CONVERSATION_STORAGE_MUTATION_GUARD_PATH).exists()
+        )
+
     def test_services_reject_distinct_provenance_tokens_and_wrong_coordinator(
         self,
     ) -> None:

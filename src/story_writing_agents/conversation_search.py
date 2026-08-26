@@ -813,20 +813,78 @@ class ReferenceConversationSearch:
         )
 
 
+class _ConversationStorageServicesLike(Protocol):
+    """Private structural view that avoids a storage-to-search import cycle."""
+
+    @property
+    def catalog(self) -> ConversationCatalog: ...
+
+    @property
+    def event_store(self) -> ConversationEventStore: ...
+
+    @property
+    def search(self) -> ConversationSearch: ...
+
+    @property
+    def mutation_coordinator(self) -> object: ...
+
+
+def _storage_service_components(
+    value: _ConversationStorageServicesLike,
+) -> tuple[ConversationCatalog, ConversationEventStore, ConversationSearch]:
+    """Validate the narrow immutable bundle surface without importing storage."""
+
+    try:
+        catalog = value.catalog
+        event_store = value.event_store
+        search = value.search
+        coordinator = value.mutation_coordinator
+    except AttributeError as exc:
+        raise TypeError("conversation storage services are invalid") from exc
+    if any(
+        not callable(getattr(catalog, name, None))
+        for name in ("create", "get", "list", "rename", "archive", "unarchive")
+    ):
+        raise TypeError("conversation storage catalog is invalid")
+    if any(
+        not callable(getattr(event_store, name, None))
+        for name in ("append", "read", "read_context")
+    ):
+        raise TypeError("conversation storage event store is invalid")
+    if not callable(getattr(search, "search", None)):
+        raise TypeError("conversation storage search is invalid")
+    if not callable(getattr(coordinator, "borrow", None)):
+        raise TypeError("conversation storage coordinator is invalid")
+    return catalog, event_store, search
+
+
 class ConversationMemoryService:
     """Authorize one session and coordinate search with bounded cited reads."""
 
     def __init__(
         self,
         scope: ConversationSearchScope,
-        catalog: ConversationCatalog,
-        event_store: ConversationEventStore,
+        catalog: ConversationCatalog | None = None,
+        event_store: ConversationEventStore | None = None,
         *,
         search: ConversationSearch | None = None,
+        conversation_storage_services: _ConversationStorageServicesLike | None = None,
     ) -> None:
         if type(scope) is not ConversationSearchScope:
             raise TypeError(
                 "conversation search scope must be a ConversationSearchScope"
+            )
+        if conversation_storage_services is not None:
+            if catalog is not None or event_store is not None or search is not None:
+                raise TypeError(
+                    "conversation_storage_services conflicts with raw collaborators"
+                )
+            catalog, event_store, search = _storage_service_components(
+                conversation_storage_services
+            )
+        elif catalog is None or event_store is None:
+            raise TypeError(
+                "catalog and event_store are required without storage services"
             )
         if not callable(getattr(catalog, "get", None)):
             raise TypeError("conversation catalog must provide get()")
@@ -835,6 +893,7 @@ class ConversationMemoryService:
         if search is not None and not callable(getattr(search, "search", None)):
             raise TypeError("conversation search adapter must provide search()")
         self._scope = scope
+        self._conversation_storage_services = conversation_storage_services
         self._catalog = catalog
         self._event_store = event_store
         self._search = (

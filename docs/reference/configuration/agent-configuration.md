@@ -2,8 +2,9 @@
 
 > **Availability:** JSON defaults, per-agent routing, interactive guarded
 > settings, editable role prompts, and persona templates are implemented for
-> Codex and Antigravity. Interactive authentication establishes a missing
-> workspace default; Codex is the final route fallback.
+> Codex and Antigravity. Desired filesystem/SQLite conversation storage is an
+> independent system default. Interactive authentication establishes a missing
+> provider default; Codex is the final route fallback.
 
 Key terms: **system default**—the workspace fallback below an agent-specific
 value; **agent configuration**—
@@ -12,7 +13,7 @@ agent's static instructions; **persona template**—a reusable behavior document
 
 ## System defaults
 
-`config/system_defaults.json` uses a closed eight-field schema. New workspaces are
+`config/system_defaults.json` uses a closed nine-field schema. New workspaces are
 initialized with:
 
 ```json
@@ -21,6 +22,7 @@ initialized with:
   "antigravity_model": null,
   "codex_model": null,
   "codex_reasoning_effort": null,
+  "conversation_storage_backend": "filesystem",
   "default_backend": null,
   "language": "KO",
   "max_debate_rounds": 1,
@@ -38,17 +40,21 @@ initialized with:
 | `antigravity_model` | Optional Antigravity workspace fallback with the same safe-text rule as `codex_model`; absent or `null` inherits the Antigravity provider default. |
 | `antigravity_effort` | Optional Antigravity workspace fallback; absent or `null` inherits the provider default. The only string values are exactly `low`, `medium`, and `high`. |
 | `default_backend` | Optional workspace provider fallback; absent or `null` falls through to Codex. A value is exactly `codex` or `antigravity`. Interactive authentication fills a missing value once and does not replace an existing value. |
+| `conversation_storage_backend` | Independent desired conversation storage for the next shell. A non-null value is exactly `filesystem` or `sqlite`; missing or `null` is read as the effective filesystem default. |
 
 Unknown fields are rejected. The complete object is validated before a backend
 accepts any explicit model/effort override, so malformed persisted fields are
 never hidden by CLI or `AgentBackend` constructor values.
 
-Existing three-key files remain valid: all missing provider-specific keys and
-`default_backend` resolve as `null`, providing no workspace model/effort or
-provider fallback beyond Codex.
+Existing three-key and eight-key files remain valid: all missing
+provider-specific keys and `default_backend` resolve as `null`, providing no
+workspace model/effort or provider fallback beyond Codex. Missing or null
+`conversation_storage_backend` resolves to filesystem. Loading does not rewrite
+legacy bytes; the next successful complete settings or `story storage use`
+save emits the canonical nine-key object with an explicit storage value.
 Running `story init` again, including with `--overwrite-prompts`, does not
 rewrite or migrate existing system-default bytes. Global `/settings` edits this
-canonical eight-field object and the per-agent object through an isolated
+canonical nine-field object and the per-agent object through an isolated
 current/pending view; it adds no supported public save API. The ten language
 choices are exactly `KO`, `EN`,
 `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, and `RU`. Persona choices come from
@@ -57,13 +63,18 @@ schema-valid language outside the UI list remains visible and preservable but
 is not synthesized as a choice. Maximum debate rounds accepts a nonnegative
 ASCII integer, including `0`. System-level provider model/effort values are
 preserved but are not edited by the UI; direct validated JSON edits may change
-them.
+them. Conversation storage is edited independently from Providers and offers
+Filesystem or SQLite as a pending next-shell value. Selection readiness,
+installation consent, provisioning, parity, and activation are in the
+[CLI storage contract](../cli.md#conversation-storage-selection).
 
 At interactive startup, `default_backend` is written only when missing. A
 provider authenticated by that immediate interaction wins; otherwise a sole
 authenticated provider wins; when both are already authenticated, Codex wins.
 The first durable default does not rewrite any explicit agent route. Later
-`/auth` or settings authentication follows the same absent-only rule.
+`/auth` or settings authentication follows the same absent-only rule. Within
+Settings, a newly authenticated missing default is rebased into the pending
+candidate and becomes durable only with the final complete save.
 
 ## Per-agent configuration
 
@@ -134,15 +145,17 @@ values.
 
 Opening `/settings` captures exact bytes for both configuration documents, a
 fully validated immutable pair, and the safe persona catalog. Save revalidates
-every distinct effective provider before the file transaction, then revalidates
-the complete pending pair and requires all three opening facts to remain exact.
+every distinct effective provider, completes conversation-storage readiness
+and parity, then revalidates the persona catalog and complete pending pair under
+the storage coordinator lease. Both byte snapshots and the opening persona
+catalog must remain exact before the final write.
 It writes only changed documents, canonically, in system-defaults then
 agent-configs order. A failed write triggers reverse-order restoration of every
 attempted target, including the failing target, from its exact opening bytes;
 rollback uncertainty is reported separately. This is guarded coordination of
 two atomic per-file replacements, not a public API or cross-file transaction.
-Authentication and missing-default writes happen outside this candidate
-transaction and remain durable if the pending settings workflow later cancels.
+Provider-native authentication can remain after cancellation, but Settings
+does not perform an intermediate durable provider-default write.
 
 ## Role prompts
 

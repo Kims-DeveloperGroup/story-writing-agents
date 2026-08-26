@@ -83,22 +83,59 @@ state is invalid and is not migrated or reconstructed. See
 
 ## Optional SQLite conversation storage
 
-The fixed `discussion_logs/conversation_storage.sqlite3` file belongs only to
-the optional direct Python adapter. `story init`, the installed shell,
-`StoryRuntime`, and `/settings` neither create nor select it. Importing the
-adapter also creates nothing and does not load `sqlite3`; the standard-library
-module is loaded and checked only when preflight, provisioning, composition, or
-an adapter or storage-migration operation requests it.
+The fixed `discussion_logs/conversation_storage.sqlite3` file is the optional
+authoritative SQLite conversation store. Importing its direct module creates
+nothing and does not load `sqlite3`; the standard-library module is loaded and
+checked only when a probe, preflight, provisioning, composition, adapter,
+selection, startup, or migration operation requests it. `story init` creates
+neither this database nor an active-state marker.
 
-Provisioning is an explicit create-only operation under an active
-workspace-matched conversation-storage lease. Supported mutations use the
-lazy `config/.conversation_storage.lock` coordinator guard; the guard is not a
-database, selection record, or settings file. The filesystem conversation
-paths remain the shell/runtime storage and can coexist with the SQLite file.
-There is no automatic synchronization or shared authority between those two
-stores. Explicit `story storage migrate` can copy one active canonical store
-into the other already-ready store, and `story storage verify` can compare
-them; neither command changes activation.
+Desired and active storage are separate records. The desired value is the
+`conversation_storage_backend` field in `config/system_defaults.json`; it is
+exactly `filesystem` or `sqlite`, and missing or `null` means filesystem. The
+active record is the strict schema-v1
+`config/conversation_storage_state.json`:
+
+```json
+{
+  "backend": "sqlite",
+  "generation": 1,
+  "schema_version": 1
+}
+```
+
+`backend` is exactly `filesystem` or `sqlite`; `generation` is a nonnegative
+integer. A missing record is the unwritten filesystem generation-zero baseline.
+Malformed, unsafe, or unsupported state fails closed. Do not edit this marker
+to switch stores.
+
+`story storage use` and `/settings` save only the desired value after checking
+readiness and exact canonical parity. They do not write the active marker.
+SQLite selection may explicitly provision the fixed absent database as an
+empty destination under a workspace-matched lease, but it does not copy
+filesystem conversations. A host package installed or empty database created
+during this preparation can remain after a later parity or configuration
+failure.
+
+The next interactive shell holds one outer lease while it reloads desired and
+active state, composes the current active bundle, freshly checks target
+readiness and parity, composes the complete target bundle, and compare-and-set
+advances this marker. A pre-CAS failure preserves it and aborts startup without
+fallback. A successful CAS remains durable even if later terminal, provider,
+backend, or session startup fails. The shell then supplies the one active
+catalog/event-store/search/coordinator bundle to its controller, runtime, and
+memory services. Direct `StoryRuntime` construction does not perform this
+startup selection and defaults to a composed filesystem bundle unless its
+caller supplies another complete bundle.
+
+Supported mutations use the lazy `config/.conversation_storage.lock`
+coordinator guard; the guard is not a database, desired setting, or activation
+record. The filesystem conversation paths can coexist with the SQLite file,
+but only the active backend is authoritative for the shell. There is no
+automatic synchronization or shared authority. Explicit
+`story storage migrate` can copy the active canonical store into the other
+already-ready store, and `story storage verify` can compare them; neither
+command changes desired or active state.
 
 The main database is authoritative. It includes required normalized subject
 and transcript-search values plus a lexical generation. The fixed private
@@ -121,13 +158,14 @@ through its validated publication API; ordinary application search should not
 manage hints. Do not hand-edit or remove an unsafe or malformed companion to
 force search behavior; the adapter preserves and ignores it.
 
-Issue #261 owns integrating detection, installation, and provider selection
-into the user-facing settings/runtime flow; the direct preflight here only
-reports capability. This release has no automatic installation or
-provisioning, default backend change, `/settings` storage field, MySQL adapter,
-RAG integration, or FTS-dependent result behavior. Explicit migration is a
-separate provider-free command/direct API over two already-ready stores; it
-never provisions or activates one. See the
+Host installation is available only through explicit selection consent; shell
+startup and direct preflight never install or provision. Readiness is the
+active Python interpreter's functional SQLite capability, not a standalone
+`sqlite3` binary or FTS5. There is no live switch, dual write, source deletion,
+MySQL adapter, RAG integration, or FTS-dependent result behavior. Explicit
+migration remains a separate provider-free command/direct API over two
+already-ready stores; it never provisions or activates one. See the
+[exact selection workflow](../cli.md#conversation-storage-selection),
 [direct package API](../package-api.md#optional-sqlite-conversation-storage)
 and [recovery guidance](../../operations/recovery-and-limitations.md#sqlite-conversation-storage-recovery).
 

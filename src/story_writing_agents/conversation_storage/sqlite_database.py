@@ -862,6 +862,16 @@ def _load_and_probe_sqlite() -> Any:
     return module
 
 
+def probe_sqlite_runtime() -> None:
+    """Exercise the active interpreter's minimum functional SQLite runtime.
+
+    Import remains lazy. Success returns ``None`` after an in-memory connection,
+    foreign-key enablement, and one query have all completed and closed.
+    """
+
+    _load_and_probe_sqlite()
+
+
 def _connect(module: Any, path: Path, *, read_only: bool) -> Any:
     """Open one bounded non-creating SQLite connection."""
 
@@ -1444,4 +1454,5 @@ __all__ = [
     "SQLiteDatabaseSecurityError",
     "SQLiteDatabaseUnavailableError",
     "SQLiteDatabaseVersionError",
+    "probe_sqlite_runtime",
 ]

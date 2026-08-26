@@ -4,9 +4,9 @@
 > implemented `story_writing_agents` package facade. Separate sections document
 > archive additions to the supported `story_writing_agents.conversation_storage`
 > subpackage, pure literal-search mechanics, and the optional SQLite owning
-> modules plus direct-only conversation migration; none is a package-root
-> facade export. Context and progress types are Python APIs; an export does not
-> imply a CLI command.
+> modules plus direct-only conversation migration, provisioning, and selection;
+> none is a package-root facade export. Context and progress types are Python
+> APIs; an export does not imply a CLI command.
 
 Key terms: **package facade**—the names re-exported at the package root;
 **public import**—a supported symbol imported from its documented owning
@@ -234,8 +234,14 @@ Activation functions pin one root per call. Compare-and-set validates its lease
 against that root before constructing an operation workspace or accessing a
 path, so a mismatch raises `ConversationStorageCoordinationError` without
 filesystem I/O. A valid call reads state, applies the existing checks,
-revalidates the lease, and writes only through that root. This does not add
-automatic selection or make activation transactional with other operations.
+revalidates the lease, and writes only through that root. Desired selection and
+coordinated startup are owned by the separate direct module below; these
+low-level functions do not read configuration or select a backend themselves.
+
+Composed filesystem catalog mutations and event append borrow the bundle's
+coordinator. Direct standalone filesystem adapters retain their established
+uncoordinated compatibility behavior, so callers must stop or otherwise
+coordinate those low-level writers around migration, selection, and startup.
 
 See [Filesystem safety](../operations/filesystem-safety.md#composed-conversation-storage-provenance)
 for the operational boundary.
@@ -325,6 +331,133 @@ See the [exact command/report contract](cli.md#conversation-storage-migration),
 [archive semantics](conversation-archives.md#conversation-storage-migration),
 and [checkpoint recovery](../operations/recovery-and-limitations.md#conversation-storage-migration-recovery).
 
+<a id="conversation-storage-selection-api"></a>
+
+## Conversation storage provisioning and selection
+
+Host/database preparation and desired-selection/startup coordination are two
+separate supported direct-module surfaces. Neither is re-exported by the
+120-name root or 64-name conversation-storage facade, and importing either
+module performs no I/O, launches no process, or loads `sqlite3`.
+
+Provisioning exports exactly four names:
+
+```python
+from story_writing_agents.conversation_storage.provisioning import (
+    ConversationStorageInstallationPlan,
+    ConversationStorageProvisioningFailure,
+    ConversationStorageProvisioningResult,
+    ConversationStorageProvisioner,
+)
+```
+
+`ConversationStorageInstallationPlan.argv` is exactly one allowlisted tuple;
+its `command` property is the literal display form. The provisioner exposes:
+
+```python
+ConversationStorageProvisioner(
+    *,
+    platform_system=platform.system,
+    os_release_reader=_read_os_release,
+    environment: Mapping[str, str] | None = None,
+    executable_lookup=shutil.which,
+    process_runner=subprocess.run,
+)
+ConversationStorageProvisioner.probe_runtime() -> ConversationStoragePreflight
+ConversationStorageProvisioner.plan_installation() -> ConversationStorageInstallationPlan | None
+ConversationStorageProvisioner.install(
+    workspace: Workspace,
+    plan: ConversationStorageInstallationPlan,
+    *,
+    diagnostic_stream: TextIO,
+) -> ConversationStorageProvisioningResult
+ConversationStorageProvisioner.ensure_ready(
+    workspace: Workspace,
+    *,
+    lease: ConversationStorageMutationLease,
+) -> ConversationStorageProvisioningResult
+```
+
+The constructor collaborators are deterministic integration/test seams, not an
+expanded installer policy. Planning recognizes only the exact platforms and
+commands in the [CLI contract](cli.md#conversation-storage-selection).
+`installation_disallowed` reports whether a recognized nonempty CI marker is
+present. Installation runs one exact tuple without a shell, custom environment,
+timeout, retry, privilege escalation, or automatic flag. `ensure_ready()`
+preflights and, only when absent, provisions one empty database under the
+caller's lease; it never installs host packages or migrates conversations.
+
+Selection exports exactly seven names:
+
+```python
+from story_writing_agents.conversation_storage.selection import (
+    CONVERSATION_STORAGE_SELECTION_SCHEMA_VERSION,
+    ConversationStorageSelectionFailure,
+    ConversationStorageSelectionReport,
+    ConversationStorageStartup,
+    activate_configured_conversation_storage,
+    inspect_conversation_storage_parity,
+    select_conversation_storage,
+)
+```
+
+The schema version is `1`. Its public workflow signatures are:
+
+```python
+inspect_conversation_storage_parity(
+    workspace: Workspace,
+    *,
+    lease: ConversationStorageMutationLease,
+    source_backend: ConversationStorageBackend | str,
+    target_backend: ConversationStorageBackend | str,
+    source_generation: int,
+) -> ConversationStorageMigrationReadiness
+select_conversation_storage(
+    workspace: Workspace,
+    desired_backend: ConversationStorageBackend | str,
+    *,
+    install_missing: bool = False,
+    yes: bool = False,
+    installation_consent: Callable[[ConversationStorageInstallationPlan], bool] | None = None,
+    diagnostic_stream: TextIO | None = None,
+    configuration_baseline: ConfigurationBaseline | None = None,
+    configuration: ConfigurationSnapshot | None = None,
+    precommit_guard: Callable[[], None] | None = None,
+    provisioner: ConversationStorageProvisioner | None = None,
+    mutation_timeout_seconds: float = 30.0,
+) -> ConversationStorageSelectionReport
+activate_configured_conversation_storage(
+    workspace: Workspace,
+    *,
+    configuration: ConfigurationSnapshot | None = None,
+    mutation_timeout_seconds: float = 30.0,
+) -> ConversationStorageStartup
+```
+
+`select_conversation_storage()` prepares readiness, optionally obtains explicit
+installation consent, provisions an absent empty SQLite database, freshly
+compares canonical archives, and performs the final exact-byte configuration
+CAS. It saves desired state only. `configuration_baseline` and `configuration`
+must be supplied together; the Settings integration uses them for its complete
+pending pair and uses `precommit_guard` for the settings-owned fresh persona
+catalog conflict check. Any guard failure becomes the content-free
+`configuration_conflict` report before the CAS.
+
+`ConversationStorageSelectionReport.to_dict()` returns the exact counts-free
+schema-v1 object, `to_json()` returns compact key-sorted JSON without a trailing
+LF, and `exit_code` is `0` or `2`. The complete fields, state and failure
+vocabularies, installer mappings, command workflow, and privacy boundary are
+centralized in the [CLI selection reference](cli.md#conversation-storage-selection).
+
+`activate_configured_conversation_storage()` is the next-shell owner. Under one
+outer lease it reloads configuration, composes the active bundle, proves fresh
+target readiness/parity, composes the target bundle, and compare-and-sets the
+activation marker. `ConversationStorageStartup` binds that complete services
+bundle to its activation outcome. Pre-CAS failure preserves activation and
+does not fall back; later unrelated shell failure does not undo a successful
+CAS. Neither workflow imports migration, consumes its report/checkpoint, deletes
+a source, or establishes live switching or dual write.
+
 <a id="optional-sqlite-conversation-storage"></a>
 
 ## Optional SQLite conversation storage
@@ -340,7 +473,7 @@ I/O and keeps `sqlite3` lazy; resolving a string or path-like argument still
 follows ordinary `Workspace` construction. The `compose_*` functions perform
 their documented readiness preflight.
 
-The owning module exports exactly 13 names:
+The owning module exports exactly 14 names:
 
 ```python
 from story_writing_agents.conversation_storage.sqlite import (
@@ -356,6 +489,7 @@ from story_writing_agents.conversation_storage.sqlite import (
     compose_sqlite_conversation_archive,
     compose_sqlite_conversation_storage,
     preflight_sqlite_conversation_storage,
+    probe_sqlite_conversation_storage_runtime,
     provision_sqlite_conversation_storage,
 )
 ```
@@ -421,6 +555,7 @@ preflight_sqlite_conversation_storage(
     workspace: Workspace | str | os.PathLike[str],
     /,
 ) -> ConversationStoragePreflight
+probe_sqlite_conversation_storage_runtime() -> ConversationStoragePreflight
 provision_sqlite_conversation_storage(
     workspace: Workspace | str | os.PathLike[str],
     /,
@@ -441,10 +576,13 @@ compose_sqlite_conversation_archive(
 ) -> SQLiteConversationArchiveAdapter
 ```
 
-Preflight is observational: it never creates or repairs storage. On a capable
-host a missing database reports `provisioning_needed`; an unavailable or
-too-old `sqlite3` runtime reports `unavailable`; a valid database reports
-`ready`. Unsupported schema versions, malformed storage, and unsafe paths raise
+The explicit runtime probe is observational and touches no workspace: it
+functionally exercises SQLite through the active Python interpreter without a
+standalone executable or FTS5 gate. Database preflight is also observational:
+it never creates or repairs storage. On a capable host a missing database
+reports `provisioning_needed`; an unavailable or too-old `sqlite3` runtime
+reports `unavailable`; a valid database reports `ready`. Unsupported schema
+versions, malformed storage, and unsafe paths raise
 `WorkspaceVersionUnsupportedError`, `WorkspaceFormatError`, and
 `WorkspaceSecurityError`. Calling `require_ready()` on a non-ready result
 raises the corresponding conversation-storage readiness error. Every returned
@@ -452,6 +590,22 @@ preflight has `backend == ConversationStorageBackend.SQLITE`, and successful
 provisioning returns `ready`. The private FTS companion is neither inspected nor
 required for main-database readiness; provisioning may attempt its initialization
 only after the authoritative database is ready.
+
+The separately supported direct database-owner module now has 12 exports and
+adds the lower-level equivalent probe:
+
+```python
+from story_writing_agents.conversation_storage.sqlite_database import (
+    probe_sqlite_runtime,
+)
+
+probe_sqlite_runtime() -> None
+```
+
+The lower probe returns normally on readiness and raises its content-free
+database-unavailable error otherwise. Use the adapter-level
+`probe_sqlite_conversation_storage_runtime()` for a typed capability result
+unless an integration already depends on the database-owner module.
 
 Existing-database preflight is exhaustive: it verifies database/schema
 identity, runs SQLite integrity and global foreign-key checks, rejects orphan
@@ -525,10 +679,31 @@ for the operator response.
 Composition verifies readiness but never provisions. It returns one
 same-provenance catalog, event store, `SQLiteConversationSearch`, and shared
 mutation coordinator. Direct adapters implement the catalog and transcript
-contracts documented on their reference pages. A caller may explicitly pass
-`services.event_store` to the existing `StoryRuntime` constructor for its
-transcript/context port; that does not select SQLite for the shell or wire the
-catalog and search services into the runtime.
+contracts documented on their reference pages. Pass the complete bundle when
+the runtime and memory service must share its catalog, events, search, and
+coordination provenance:
+
+```python
+from story_writing_agents import (
+    ConversationMemoryService,
+    ConversationSearchScope,
+    StoryRuntime,
+)
+
+runtime = StoryRuntime(
+    workspace,
+    conversation_storage_services=services,
+)
+memory = ConversationMemoryService(
+    ConversationSearchScope("novel"),
+    conversation_storage_services=services,
+)
+```
+
+Direct `StoryRuntime(workspace)` continues to compose filesystem services; it
+does not read desired or active selection itself. The installed shell performs
+the separate startup activation workflow and injects its resulting complete
+bundle.
 
 `SQLiteConversationSearch.search(scope, query)` owns one stable main-database
 read transaction for the complete public 256-conversation/10,000-event scan.
@@ -615,21 +790,20 @@ preflighted and read observationally. The supported mutation coordinator cannot
 acquire a lease, so provisioning and supported writes fail with
 `ConversationStorageCoordinationError` before changing the database or
 conversation domain state. The lazy coordinator guard keeps its separate
-documented lifecycle. Issue #261 owns full non-POSIX coordinator/activation
-readiness and the future confirmed detection, installation, and
-settings-selection flow.
+documented lifecycle. Desired selection, host installation through selection,
+configuration save, and startup activation also require that coordinator and
+therefore fail closed on those platforms.
 
 None of these names is re-exported by `story_writing_agents` or
-`story_writing_agents.conversation_storage`. The installed shell and runtime
-continue to use filesystem conversation storage. This module adds no
-`/settings` selection, automatic install or provisioning, default activation,
+`story_writing_agents.conversation_storage`. The installed shell uses SQLite
+only after the separate desired-selection and next-shell activation workflow;
+direct runtime construction remains filesystem by default. The adapter module
+itself adds no automatic installation, configuration selection, activation,
 RAG, MySQL, or new citation behavior. Explicit migration is owned by the
-separate direct migration module/CLI and operates only after SQLite is ready; it
-does not select the destination. The private local FTS5 companion supplies
+separate direct migration module/CLI and operates only after SQLite is ready;
+it does not select the destination. The private local FTS5 companion supplies
 non-authoritative hints only and is not a backend, readiness requirement,
-migration input, or FTS-only search mode. Issue #261 owns later integration of
-detection, installation, and provider selection into the user-facing
-settings/runtime flow; direct preflight here only reports capability.
+migration input, or FTS-only search mode.
 
 ## Enum values
 
@@ -675,12 +849,13 @@ aliases. See [Backend and sessions](backend-and-sessions.md#lifecycle-value-cont
 Lower-level modules may contain implementation helpers. The package-root facade
 matches its `__all__`; archive names are supported only through the explicitly
 documented conversation-storage subpackage and its owning-module surfaces.
-The explicitly documented literal-search, SQLite adapter, SQLite companion
-owner, and conversation-migration modules are also supported direct-module
-surfaces and match their own `__all__` values. None is re-exported by the
-package-root or conversation-storage facade.
+The explicitly documented literal-search, SQLite adapter, SQLite companion,
+conversation-migration, provisioning, and selection modules are also supported
+direct-module surfaces and match their own `__all__` values. None is
+re-exported by the package-root or conversation-storage facade.
 
 The exact current inventories are package root `120`, conversation storage
-`64`, conversation search `13`, SQLite database owner `11`, SQLite adapter
-`13`, literal-search mechanics `6`, SQLite companion owner `5`, and conversation
-migration `7`. The production module inventory is `66`.
+`64`, conversation search `13`, SQLite database owner `12`, SQLite adapter
+`14`, literal-search mechanics `6`, SQLite companion owner `5`, conversation
+migration `7`, provisioning `4`, and selection `7`. The production module
+inventory is `68`.

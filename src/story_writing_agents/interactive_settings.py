@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, replace
 from enum import StrEnum
-from typing import Any
 
 from .agents import ROSTER
 from .config import (
+    ConfigurationBaseline,
+    ConfigurationCommitError,
     ConfigurationSnapshot,
     ConfigManager,
     SystemDefaults,
@@ -45,10 +45,6 @@ SETTINGS_ANTIGRAVITY_EFFORTS: tuple[str, ...] = (
     "medium",
     "high",
 )
-_SYSTEM_DEFAULTS_PATH = "config/system_defaults.json"
-_AGENT_CONFIGS_PATH = "config/agent_configs.json"
-
-
 class SettingsErrorKind(StrEnum):
     """Fixed settings persistence failure categories."""
 
@@ -124,6 +120,16 @@ class SettingsBaseline:
         if type(self.configuration) is not ConfigurationSnapshot:
             raise TypeError("configuration must be a ConfigurationSnapshot")
 
+    @property
+    def configuration_baseline(self) -> ConfigurationBaseline:
+        """Return the config-owned exact-byte baseline for final persistence."""
+
+        return ConfigurationBaseline(
+            self.system_defaults_bytes,
+            self.agent_configs_bytes,
+            self.configuration,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class SettingsState:
@@ -143,21 +149,15 @@ def load_settings_state(workspace: Workspace) -> SettingsState:
     """Read exact configuration bytes and the safe persona catalog once."""
 
     _require_workspace(workspace)
-    system_bytes = _read_exact_bytes(workspace, _SYSTEM_DEFAULTS_PATH)
-    agent_bytes = _read_exact_bytes(workspace, _AGENT_CONFIGS_PATH)
+    configuration_baseline = ConfigManager(workspace).load_configuration_baseline()
     catalog = _persona_catalog(workspace)
-    manager = ConfigManager(workspace)
-    configuration = manager.validate_configuration(
-        _decode_json(system_bytes, _SYSTEM_DEFAULTS_PATH),
-        _decode_json(agent_bytes, _AGENT_CONFIGS_PATH),
-    )
     baseline = SettingsBaseline(
-        system_bytes,
-        agent_bytes,
+        configuration_baseline.system_defaults_bytes,
+        configuration_baseline.agent_configs_bytes,
         catalog,
-        configuration,
+        configuration_baseline.configuration,
     )
-    return SettingsState(baseline, configuration)
+    return SettingsState(baseline, configuration_baseline.configuration)
 
 
 def update_language(state: SettingsState, language: str) -> SettingsState:
@@ -212,6 +212,24 @@ def update_max_debate_rounds(
     )
 
 
+def update_conversation_storage_backend(
+    state: SettingsState,
+    backend: str,
+) -> SettingsState:
+    """Return pending state with one independently validated storage backend."""
+
+    _require_state(state)
+    validated = ConfigManager.validate_conversation_storage_backend(backend)
+    assert validated is not None
+    return _with_system_defaults(
+        state,
+        replace(
+            state.pending.system_defaults,
+            conversation_storage_backend=validated,
+        ),
+    )
+
+
 def update_agent_backend(
     state: SettingsState,
     agent_id: str,
@@ -261,13 +279,7 @@ def establish_settings_default_backend(
     state: SettingsState,
     backend: str,
 ) -> SettingsState:
-    """Persist a missing default and safely rebase one open settings edit.
-
-    Only the opening baseline's default is changed for the durable write. The
-    original exact bytes and persona catalog are conflict-checked first, then
-    the resulting canonical default-only baseline is verified exactly before
-    every pending edit is replayed onto it.
-    """
+    """Rebase a missing provider default in memory for the final settings CAS."""
 
     _require_workspace(workspace)
     _require_state(state)
@@ -276,40 +288,9 @@ def establish_settings_default_backend(
     baseline_configuration = state.baseline.configuration
     if baseline_configuration.system_defaults.default_backend is not None:
         return state
-    if state.pending.system_defaults.default_backend is not None:
-        raise SettingsError(SettingsErrorKind.CONFLICT)
-
-    persisted_defaults = replace(
-        baseline_configuration.system_defaults,
-        default_backend=validated,
-    )
-    persisted_configuration = ConfigurationSnapshot(
-        persisted_defaults,
-        baseline_configuration.agent_configs,
-    )
-    expected_system_bytes = _canonical_json(
-        _system_value(persisted_defaults)
-    ).encode("utf-8")
-    save_settings_state(
-        workspace,
-        SettingsState(state.baseline, persisted_configuration),
-    )
-
-    try:
-        fresh = load_settings_state(workspace)
-    except Exception as exc:
-        raise SettingsError(SettingsErrorKind.CONFLICT) from exc
-    if (
-        fresh.baseline.system_defaults_bytes != expected_system_bytes
-        or (
-            fresh.baseline.agent_configs_bytes
-            != state.baseline.agent_configs_bytes
-        )
-        or fresh.baseline.persona_catalog != state.baseline.persona_catalog
-        or fresh.baseline.configuration != persisted_configuration
-    ):
-        raise SettingsError(SettingsErrorKind.CONFLICT)
-
+    pending_default = state.pending.system_defaults.default_backend
+    if pending_default is not None:
+        return state
     rebased_pending = ConfigurationSnapshot(
         replace(
             state.pending.system_defaults,
@@ -317,7 +298,7 @@ def establish_settings_default_backend(
         ),
         state.pending.agent_configs,
     )
-    return SettingsState(fresh.baseline, rebased_pending)
+    return SettingsState(state.baseline, rebased_pending)
 
 
 def update_agent_codex_model(
@@ -410,75 +391,35 @@ def update_agent_antigravity_effort(
 
 
 def save_settings_state(workspace: Workspace, state: SettingsState) -> None:
-    """Validate, conflict-check, and atomically replace changed documents."""
+    """Delegate exact-byte complete-document CAS to configuration ownership."""
 
     _require_workspace(workspace)
     _require_state(state)
-    system_value = _system_value(state.pending.system_defaults)
-    agent_value = _agent_value(state.pending)
+    validate_settings_persona_catalog(workspace, state.baseline)
     try:
-        ConfigManager(workspace).validate_configuration(
-            system_value,
-            agent_value,
+        ConfigManager(workspace).commit_configuration(
+            state.baseline.configuration_baseline,
+            state.pending,
         )
-    except ConfigurationError as exc:
-        raise SettingsError(SettingsErrorKind.VALIDATION) from exc
+    except ConfigurationCommitError as exc:
+        raise SettingsError(SettingsErrorKind(exc.failure.value)) from exc
 
+
+def validate_settings_persona_catalog(
+    workspace: Workspace,
+    baseline: SettingsBaseline,
+) -> None:
+    """Raise the fixed conflict failure when the safe persona catalog changed."""
+
+    _require_workspace(workspace)
+    if type(baseline) is not SettingsBaseline:
+        raise TypeError("baseline must be a SettingsBaseline")
     try:
-        system_before = _read_exact_bytes(workspace, _SYSTEM_DEFAULTS_PATH)
-        agent_before = _read_exact_bytes(workspace, _AGENT_CONFIGS_PATH)
         catalog_before = _persona_catalog(workspace)
     except Exception as exc:
         raise SettingsError(SettingsErrorKind.CONFLICT) from exc
-    if (
-        system_before != state.baseline.system_defaults_bytes
-        or agent_before != state.baseline.agent_configs_bytes
-        or catalog_before != state.baseline.persona_catalog
-    ):
+    if catalog_before != baseline.persona_catalog:
         raise SettingsError(SettingsErrorKind.CONFLICT)
-
-    system_changed = (
-        state.pending.system_defaults
-        != state.baseline.configuration.system_defaults
-    )
-    agent_changed = (
-        state.pending.agent_configs
-        != state.baseline.configuration.agent_configs
-    )
-    if not system_changed and not agent_changed:
-        return
-
-    system_text = _canonical_json(system_value)
-    agent_text = _canonical_json(agent_value)
-    attempted: list[tuple[str, str]] = []
-    try:
-        if system_changed:
-            attempted.append(
-                (
-                    _SYSTEM_DEFAULTS_PATH,
-                    state.baseline.system_defaults_bytes.decode("utf-8"),
-                )
-            )
-            workspace.write_text(_SYSTEM_DEFAULTS_PATH, system_text)
-        if agent_changed:
-            attempted.append(
-                (
-                    _AGENT_CONFIGS_PATH,
-                    state.baseline.agent_configs_bytes.decode("utf-8"),
-                )
-            )
-            workspace.write_text(_AGENT_CONFIGS_PATH, agent_text)
-    except Exception as write_failure:
-        rollback_failure: Exception | None = None
-        for relative, original_text in reversed(attempted):
-            try:
-                workspace.write_text(relative, original_text)
-            except Exception as failure:
-                if rollback_failure is None:
-                    rollback_failure = failure
-        if rollback_failure is not None:
-            raise SettingsError(SettingsErrorKind.ROLLBACK) from rollback_failure
-        raise SettingsError(SettingsErrorKind.WRITE) from write_failure
 
 
 def _with_system_defaults(
@@ -507,31 +448,6 @@ def _require_state(state: object) -> SettingsState:
     if type(state) is not SettingsState:
         raise TypeError("state must be a SettingsState")
     return state
-
-
-def _read_exact_bytes(workspace: Workspace, relative: str) -> bytes:
-    """Read one safe strict-UTF-8 file while preserving its exact bytes."""
-
-    try:
-        value = workspace.path(relative).read_bytes()
-    except OSError as exc:
-        raise WorkspaceFormatError(f"cannot read file: {relative}") from exc
-    try:
-        value.decode("utf-8", errors="strict")
-    except UnicodeDecodeError as exc:
-        raise WorkspaceFormatError(f"file is not valid UTF-8: {relative}") from exc
-    return value
-
-
-def _decode_json(value: bytes, relative: str) -> Any:
-    """Decode one already-read strict-UTF-8 JSON document."""
-
-    try:
-        return json.loads(value.decode("utf-8"))
-    except json.JSONDecodeError as exc:
-        raise WorkspaceFormatError(
-            f"file is not valid JSON: {relative}: {exc.msg}"
-        ) from exc
 
 
 def _persona_catalog(workspace: Workspace) -> tuple[PersonaCatalogEntry, ...]:
@@ -563,46 +479,3 @@ def _persona_catalog(workspace: Workspace) -> tuple[PersonaCatalogEntry, ...]:
             if target.is_file() and name not in selected:
                 selected[name] = PersonaCatalogEntry(name, relative)
     return tuple(selected[name] for name in sorted(selected))
-
-
-def _system_value(defaults: SystemDefaults) -> dict[str, Any]:
-    """Project one system-default candidate to its complete JSON shape."""
-
-    return {
-        "language": defaults.language,
-        "persona": defaults.persona,
-        "max_debate_rounds": defaults.max_debate_rounds,
-        "codex_model": defaults.codex_model,
-        "codex_reasoning_effort": defaults.codex_reasoning_effort,
-        "antigravity_model": defaults.antigravity_model,
-        "antigravity_effort": defaults.antigravity_effort,
-        "default_backend": defaults.default_backend,
-    }
-
-
-def _agent_value(snapshot: ConfigurationSnapshot) -> dict[str, dict[str, Any]]:
-    """Project one roster-complete agent candidate to its JSON shape."""
-
-    return {
-        agent_id: {
-            "backend": snapshot.agent_configs[agent_id].backend,
-            "language": snapshot.agent_configs[agent_id].language,
-            "persona": snapshot.agent_configs[agent_id].persona,
-            "codex_model": snapshot.agent_configs[agent_id].codex_model,
-            "codex_reasoning_effort": snapshot.agent_configs[agent_id].codex_reasoning_effort,
-            "antigravity_model": snapshot.agent_configs[agent_id].antigravity_model,
-            "antigravity_effort": snapshot.agent_configs[agent_id].antigravity_effort,
-        }
-        for agent_id in ROSTER
-    }
-
-
-def _canonical_json(value: Any) -> str:
-    """Serialize one validated settings document deterministically."""
-
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        indent=2,
-        sort_keys=True,
-    ) + "\n"

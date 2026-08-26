@@ -6,8 +6,8 @@
 > Provider-bound prompt text accepts inline `${path}` and `${path}#Lx-Ly`
 > canonical artifact references. In eligible
 > interactive prompt spans, `$`, `$${path}`, and `$$` discover and attach them
-> without submitting. Separate `story storage` commands migrate or verify
-> already-ready conversation stores without a provider.
+> without submitting. Separate provider-free `story storage` commands select a
+> desired next-shell backend or migrate and verify already-ready stores.
 
 `story` and `story-writing-agents` are aliases for
 `story_writing_agents.cli:main`.
@@ -24,6 +24,7 @@
 | Session create | `story session create SESSION [--workspace PATH]` |
 | Session reopen | `story session reopen [SESSION] [--workspace PATH]` |
 | Session pause | `story session pause [SESSION] [--workspace PATH]` |
+| Storage use | `story storage use BACKEND [--install-missing --yes] [--workspace PATH]` |
 | Storage migrate | `story storage migrate --from BACKEND --to BACKEND [--dry-run] [--workspace PATH]` |
 | Storage verify | `story storage verify --from BACKEND --to BACKEND [--workspace PATH]` |
 | Smoke | `story smoke [--workspace PATH]` |
@@ -43,6 +44,150 @@ Pause retains the default. Success prints sorted, indented JSON with exactly:
 
 Pause prints `paused` instead of `ready`. Access is always `claimable` after a
 successful lifecycle process exits.
+
+<a id="conversation-storage-selection"></a>
+
+## Conversation storage selection
+
+`story storage use BACKEND [--install-missing --yes] [--workspace PATH]`
+accepts exactly `filesystem` or `sqlite`. It resolves `--workspace PATH` or the
+nearest initialized workspace and saves only the desired backend for the next
+shell. It never migrates conversations, deletes a source, changes the active
+marker, switches a running shell, dual-writes, or copies the derived FTS
+companion.
+
+The command is provider-free and dispatches before debug-log construction,
+broader CLI context, authentication, provider/backend/runtime, settings, or
+session construction. Import and request validation perform no SQLite or
+installer operation. Standard output is reserved for one compact key-sorted
+schema-v1 JSON object plus LF. Installer stdout and stderr, when an explicitly
+authorized installer runs, are both routed to the CLI's standard error.
+
+SQLite readiness means that the active Python interpreter can import its
+standard-library `sqlite3`, report SQLite 3.7.16 or newer, open and close an
+in-memory connection, enable foreign keys, and execute a query. The standalone
+`sqlite3` executable and FTS5 capability are not gates. Workspace coordination
+must be available before installation, provisioning, selection, or activation
+can mutate anything.
+
+When that interpreter probe is unavailable, Story recognizes only these exact
+host plans:
+
+| Host match | Exact command |
+| --- | --- |
+| Darwin with `brew` discoverable | `brew install sqlite` |
+| Linux with exact `/etc/os-release` `ID=debian` or `ID=ubuntu` | `apt-get install sqlite3 libsqlite3-dev` |
+| Linux with exact `/etc/os-release` `ID=fedora` or `ID=rhel` | `dnf install sqlite sqlite-devel` |
+
+Other operating systems, Linux IDs, and package-manager shapes are unsupported;
+`ID_LIKE` is not used. The command never adds a shell, `sudo`, `-y`, another
+argument, a custom environment, retry, or timeout. It executes the allowlisted
+argument tuple at the workspace root with inherited stdin and environment and
+runs it at most once. It then fully reprobes SQLite in the same Python process;
+an installer exit zero is not readiness proof.
+
+Host installation is refused when any of these recognized variables has a
+nonempty value: `CI`, `GITHUB_ACTIONS`, `GITLAB_CI`, `CIRCLECI`, `BUILDKITE`,
+`TF_BUILD`, `JENKINS_URL`, `TEAMCITY_VERSION`, `TRAVIS`, `APPVEYOR`,
+`BITBUCKET_BUILD_NUMBER`, `CODEBUILD_BUILD_ID`, or `DRONE`. Empty values and
+unrelated variables do not trigger that refusal.
+
+The CLI never prompts for consent. `--install-missing` and `--yes` must be
+supplied together and are valid only with `sqlite`; either flag alone or either
+flag with `filesystem` reports `invalid_request`. With no authorized install,
+a recognized plan reports `installation_required`. In `/settings`, the
+equivalent interactive path previews the exact command, highlights NO, and
+requires a separate exact YES; explicit decline and recognized-CI refusal both
+map to `installation_disallowed`.
+
+After functional readiness, an explicit SQLite selection preflights the fixed
+database and provisions it create-only when absent. Provisioning creates an
+empty destination; it never copies the filesystem store. Under the workspace
+lease, selection then compares fresh canonical archives from the current active
+backend and requested target. Same-backend selection or an empty active source
+needs no parity. A nonempty source requires exact parity: an empty target
+reports `migration_required`, while a nonempty divergent target reports
+`parity_mismatch`. Exact comparison includes active and archived metadata and
+every event, including `runtime_error`; FTS is excluded.
+
+Use this sequence when moving a nonempty filesystem store to SQLite:
+
+```bash
+story storage use sqlite
+# If installation_required, review the table above before authorizing:
+story storage use sqlite --install-missing --yes
+# If migration_required, the empty database remains ready:
+story storage migrate --from filesystem --to sqlite --dry-run
+story storage migrate --from filesystem --to sqlite
+story storage verify --from filesystem --to sqlite
+story storage use sqlite
+story
+```
+
+Use the reverse migration direction before selecting filesystem when SQLite is
+active and nonempty. Every invocation rereads current state. Installation or an
+empty provisioned database can remain after later parity, persona-catalog,
+configuration-conflict, or configuration-write failure. Selection does not
+change activation, but `configuration_write_failed` can include rollback
+uncertainty; inspect both configuration files before retrying. Never delete
+either store to force the workflow.
+
+A representative completed no-op selection is:
+
+```json
+{"activation":"next_shell","configuration":"unchanged","desired_backend":"filesystem","failure":null,"installation":"not_required","operation":"use","outcome":"completed","parity":"not_required","provisioning":"not_required","schema_version":1}
+```
+
+The exact fields are `activation`, `configuration`, `desired_backend`,
+`failure`, `installation`, `operation`, `outcome`, `parity`, `provisioning`, and
+`schema_version`. `operation` is always `use`; `outcome` is `completed` or
+`failed`; `desired_backend` is `filesystem`, `sqlite`, or `null`. The state
+vocabularies are:
+
+```text
+installation/provisioning: not_required completed not_run failed
+parity:                    not_required verified unverified mismatch
+configuration:             saved unchanged preserved
+activation:                next_shell unchanged
+```
+
+`failure` is `null` on completion; otherwise it is exactly one of:
+
+```text
+configuration_conflict configuration_invalid configuration_write_failed
+coordination_failed installation_disallowed installation_failed
+installation_required installation_unsupported interpreter_unavailable
+invalid_request migration_required parity_mismatch provisioning_failed
+workspace_invalid
+```
+
+Explicit decline or a recognized CI marker reports
+`installation_disallowed`; an unsupported host plan reports
+`installation_unsupported`; invalid consent flags report `invalid_request`;
+functional SQLite absence without authorized installation reports
+`installation_required`. Installer exit zero followed by failed same-process
+reprobe reports `installation:"completed"` with
+`failure:"interpreter_unavailable"`. Configuration rollback uncertainty maps
+to `configuration_write_failed`. Reports contain no counts, conversation or
+session identities, subjects, events, paths, exception text, installer output,
+or provider data.
+
+Exit status is `0` only for `completed`. Every reported selection failure and
+every argparse syntax failure exits `2`; selection has no exit `1`. A completed
+report always says `activation:"next_shell"`, including when configuration was
+already canonical. That field means the running process was not switched; it
+does not claim that the active marker changed.
+
+At the next bare `story` or `story chat`, startup reloads desired and active
+state under one outer lease. It composes the current active bundle, freshly
+checks target readiness and canonical parity, composes the complete target
+bundle, and compare-and-set advances the active marker before provider
+authentication. Any pre-CAS failure aborts startup without falling back to the
+old backend. A successful marker CAS is not rolled back if later terminal,
+authentication, backend, or session startup fails. See
+[storage state](configuration/session-storage.md#optional-sqlite-conversation-storage),
+[filesystem safety](../operations/filesystem-safety.md#conversation-storage-selection-and-startup-safety),
+and [recovery](../operations/recovery-and-limitations.md#conversation-storage-selection-and-activation-recovery).
 
 <a id="conversation-storage-migration"></a>
 
@@ -226,10 +371,12 @@ and [Session storage](configuration/session-storage.md#runtime-debug-log-storage
 
 ## Interactive provider authentication
 
-Bare `story` and `story chat` authenticate before constructing the CLI context,
-`AgentBackend`, controller, or session lifecycle. After workspace resolution
-and the welcome, the runtime launches only these native commands without a
-shell:
+Bare `story` and `story chat` resolve and, when needed, activate configured
+conversation storage after workspace/configuration loading and before terminal
+construction or provider authentication. They then show the welcome and
+authenticate before constructing the CLI context, `AgentBackend`, controller,
+or session lifecycle. The runtime launches only these native commands without
+a shell:
 
 | Provider | Silent bounded status probe | Inherited-terminal sign-in |
 | --- | --- | --- |
@@ -493,8 +640,10 @@ text so the invoking shell does not expand `$`.
 `/auth` and `/settings` are alias-free, take no argument, and are available with
 or without an attached session. `/auth` follows the authentication contract
 above. `/settings` edits isolated Current and Pending snapshots for
-Language, Persona, Maximum debate rounds, and Providers through a six-choice
-editor in this order: those four fields, Save, Cancel. `Providers` opens a
+Language, Persona, Maximum debate rounds, Conversation storage, and Providers
+through a seven-choice editor in this exact order: those five fields, Save,
+Cancel. Conversation storage independently offers Filesystem and SQLite for
+the next shell; it is not an agent-provider route. `Providers` opens a
 nested canonical-agent picker, then a Provider/Model/Reasoning effort picker;
 Model and Reasoning edit only that agent and `null`/Inherit falls back to the
 system defaults. Settings pickers and prompts follow the same transient input
@@ -514,23 +663,27 @@ free-text prompt.
 
 Choosing a provider starts authentication before changing that agent's pending
 route. A failed or cancelled authentication leaves the route candidate
-unchanged; a newly established missing workspace default is a separate durable
-write and remains even if the pending settings workflow later cancels.
+unchanged. During Settings, a newly established missing workspace default is
+rebased into the pending candidate rather than written separately.
 
 After Save confirmation, the controller freshly gates each distinct effective
 provider once before entering the configuration transaction. A stale,
 unavailable, unauthenticated, indeterminate, failed, cancelled, or interrupted
 status prevents Save. Authentication/default writes already completed remain
-durable. Save then validates the complete pending pair and rejects any
-exact-byte change to either configuration document or any persona-catalog
-change since opening.
+durable outside Settings; the Settings route rebase remains pending. Save then
+runs conversation-storage readiness, optional explicit installer confirmation,
+provisioning, and parity before validating the complete pending pair. It
+rejects any exact-byte change to either configuration document or any
+persona-catalog change since opening.
 Only changed documents are canonically replaced, in system-defaults then
 agent-configs order. A write failure attempts reverse-order restoration of
 every attempted target, including the failing target; rollback uncertainty is
-reported separately. Success returns to the main prompt and applies to the next
-shell/backend construction only. It does not refresh the active backend or
-runtime, invoke a story-model turn, alter session/explicit overrides, or add
-credentials, model discovery, or automatic save.
+reported separately. Success returns to the main prompt and applies
+configuration and desired storage to the next shell/backend construction only.
+It does not refresh the active backend, runtime, or conversation-storage
+bundle; migrate or activate storage; invoke a story-model turn; alter
+session/explicit overrides; or add credentials, model discovery, or automatic
+save.
 
 On capable real-CLI streams, orientation/current context, `/status`, `/inspect`,
 central errors/recovery, and accepted management, advisory, retrieval, and

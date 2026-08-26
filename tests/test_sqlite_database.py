@@ -9,6 +9,7 @@ import threading
 import unittest
 from contextlib import ExitStack
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable, cast
 from unittest import mock
 
@@ -37,6 +38,7 @@ from story_writing_agents.conversation_storage import sqlite as sqlite_module
 from story_writing_agents.conversation_storage.sqlite import (
     compose_sqlite_conversation_storage,
     preflight_sqlite_conversation_storage,
+    probe_sqlite_conversation_storage_runtime,
     provision_sqlite_conversation_storage,
 )
 
@@ -186,6 +188,77 @@ def _stat_identity_witness(
 
 
 class SQLiteDatabaseVerificationTests(unittest.TestCase):
+    def test_runtime_probe_is_lazy_in_memory_closes_and_has_no_fts_or_db_gate(
+        self,
+    ) -> None:
+        statements: list[str] = []
+        closed = False
+
+        class Cursor:
+            def __init__(self, row: tuple[object, ...]) -> None:
+                self._row = row
+
+            def fetchone(self) -> tuple[object, ...]:
+                return self._row
+
+        class Connection:
+            def execute(self, sql: str) -> Cursor:
+                statements.append(sql)
+                if sql == "PRAGMA foreign_keys":
+                    return Cursor((1,))
+                if sql == "SELECT sqlite_version()":
+                    return Cursor(("3.45.0",))
+                return Cursor(())
+
+            def close(self) -> None:
+                nonlocal closed
+                closed = True
+
+        connection = Connection()
+        connect = mock.Mock(return_value=connection)
+        fake_module = SimpleNamespace(
+            sqlite_version_info=(3, 45, 0),
+            connect=connect,
+        )
+        with mock.patch.object(
+            database_module.importlib,
+            "import_module",
+            return_value=fake_module,
+        ) as imported:
+            self.assertIsNone(database_module.probe_sqlite_runtime())
+        imported.assert_called_once_with("sqlite3")
+        connect.assert_called_once_with(":memory:", isolation_level=None)
+        self.assertEqual(
+            statements,
+            [
+                "PRAGMA foreign_keys = ON",
+                "PRAGMA foreign_keys",
+                "SELECT sqlite_version()",
+            ],
+        )
+        self.assertTrue(closed)
+        self.assertFalse(
+            any("fts" in statement.lower() for statement in statements)
+        )
+        self.assertFalse(
+            any(
+                database_module.SQLITE_DATABASE_PATH in statement
+                for statement in statements
+            )
+        )
+
+    def test_runtime_probe_propagates_process_controls(self) -> None:
+        for control in (KeyboardInterrupt("stop"), SystemExit(3)):
+            with self.subTest(control=type(control).__name__):
+                with mock.patch.object(
+                    database_module.importlib,
+                    "import_module",
+                    side_effect=control,
+                ):
+                    with self.assertRaises(type(control)) as caught:
+                        database_module.probe_sqlite_runtime()
+                self.assertIs(caught.exception, control)
+
     def test_runtime_minimum_is_3716_and_older_or_missing_sqlite_is_unavailable(
         self,
     ) -> None:
@@ -221,6 +294,26 @@ class SQLiteDatabaseVerificationTests(unittest.TestCase):
                     ConversationStorageCapability.UNAVAILABLE,
                 )
                 self.assertFalse(database_path(workspace).exists())
+
+    def test_public_runtime_probe_is_workspace_free_and_content_free(self) -> None:
+        workspace = initialized_workspace(self)
+        before = storage_snapshot(workspace)
+        ready = probe_sqlite_conversation_storage_runtime()
+        self.assertIs(ready.capability, ConversationStorageCapability.READY)
+        self.assertEqual(storage_snapshot(workspace), before)
+        self.assertFalse(database_path(workspace).exists())
+
+        with mock.patch.object(
+            sqlite_module,
+            "probe_sqlite_runtime",
+            side_effect=database_module.SQLiteDatabaseUnavailableError(),
+        ):
+            unavailable = probe_sqlite_conversation_storage_runtime()
+        self.assertIs(
+            unavailable.capability,
+            ConversationStorageCapability.UNAVAILABLE,
+        )
+        self.assertEqual(storage_snapshot(workspace), before)
 
     def test_connection_policy_is_verified_inside_each_read_transaction(self) -> None:
         workspace = initialized_workspace(self)

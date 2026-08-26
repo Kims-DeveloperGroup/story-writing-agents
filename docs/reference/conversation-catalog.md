@@ -1,10 +1,11 @@
 # Conversation catalog
 
-> **Availability:** the provider-neutral catalog and filesystem adapter serve
-> the installed TTY lobby's subject metadata. An optional SQLite adapter is
-> available only through its direct Python module. The lobby adds
-> defaults/focus and display handles; `StoryRuntime` does not depend on the
-> catalog or select SQLite.
+> **Availability:** the provider-neutral catalog serves the installed TTY
+> lobby's subject metadata through its startup-selected filesystem or SQLite
+> services bundle. Both adapters remain available through their documented
+> Python imports. The lobby adds defaults/focus and display handles; direct
+> `StoryRuntime` construction does not independently read or activate storage
+> selection.
 
 Key terms: **conversation ID**—an immutable identity scoped to one session;
 **display subject**—the exact stored title; **normalized key**—a derived
@@ -67,7 +68,9 @@ catalog = SQLiteConversationCatalog(
 Direct constructors do not provision storage. Prefer the same-provenance
 composition flow in the
 [package API](package-api.md#optional-sqlite-conversation-storage) when catalog,
-event-store, and search services are used together.
+event-store, and search services are used together. The installed shell obtains
+that complete bundle through the separate
+[next-shell selection workflow](cli.md#conversation-storage-selection).
 
 ## Filesystem metadata representation
 
