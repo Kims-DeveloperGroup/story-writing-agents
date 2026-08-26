@@ -628,7 +628,11 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
 
         for turn_id, kind, content in (
             ("turn_reply", ConversationEventKind.USER_MESSAGE, "question"),
-            ("turn_reply", ConversationEventKind.AGENT_REPLY, "reply"),
+            (
+                "turn_reply",
+                ConversationEventKind.AGENT_REPLY,
+                '{"answer":"reply","items":[1,true]}',
+            ),
             ("turn_error", ConversationEventKind.USER_MESSAGE, "bad request"),
             ("turn_error", ConversationEventKind.RUNTIME_ERROR, "safe failure"),
             ("turn_open", ConversationEventKind.USER_MESSAGE, "unmatched"),
@@ -653,6 +657,7 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
             callbacks,
             store,
         ) = self.selected_controller("/history", "/quit")
+        self.assertFalse(controller._show_message_details)
         self.seed_mixed_history(store, metadata)
         external_store = FilesystemConversationEventStore(
             workspace,
@@ -752,57 +757,105 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
             if type(component) is terminal_module.ListView
             and component.title == "History"
         ]
+        formatted_reply = (
+            "{\n"
+            '  "answer": "reply",\n'
+            '  "items": [\n'
+            "    1,\n"
+            "    true\n"
+            "  ]\n"
+            "}"
+        )
         expected_events = (
-            (1, "turn_reply", "user_message", "user", LEAD_ORCHESTRATOR, "question"),
-            (2, "turn_reply", "agent_reply", LEAD_ORCHESTRATOR, "user", "reply"),
-            (3, "turn_error", "user_message", "user", LEAD_ORCHESTRATOR, "bad request"),
-            (4, "turn_error", "runtime_error", "runtime", "user", "safe failure"),
-            (5, "turn_open", "user_message", "user", LEAD_ORCHESTRATOR, "unmatched"),
+            (
+                1,
+                "You → Lead Orchestrator",
+                "question",
+                terminal_module.SemanticRole.DEFAULT,
+                terminal_module.SpeakerAccent.MAGENTA,
+            ),
+            (
+                2,
+                "Lead Orchestrator → You",
+                formatted_reply,
+                terminal_module.SemanticRole.AGENT,
+                terminal_module.SpeakerAccent.CYAN,
+            ),
+            (
+                3,
+                "You → Lead Orchestrator",
+                "bad request",
+                terminal_module.SemanticRole.DEFAULT,
+                terminal_module.SpeakerAccent.MAGENTA,
+            ),
+            (
+                4,
+                "Runtime → You",
+                "safe failure",
+                terminal_module.SemanticRole.DEFAULT,
+                terminal_module.SpeakerAccent.CYAN,
+            ),
+            (
+                5,
+                "You → Lead Orchestrator",
+                "unmatched",
+                terminal_module.SemanticRole.DEFAULT,
+                terminal_module.SpeakerAccent.MAGENTA,
+            ),
         )
         expected_history = [
             terminal_module.ListView(
                 "History",
                 (
-                    terminal_module.Record(
-                        f"transcript {metadata.conversation_id}",
-                        fields=(
-                            terminal_module.Field("Sequence", str(sequence)),
-                            terminal_module.Field("Turn", turn_id),
-                            terminal_module.Field("Kind", kind),
-                            terminal_module.Field("Sender", sender),
-                            terminal_module.Field("Recipient", recipient),
-                            terminal_module.Field("Content", ""),
-                        ),
+                    terminal_module.Message(
+                        sender,
                         content=content,
-                        role=(
-                            terminal_module.SemanticRole.AGENT
-                            if kind == "agent_reply"
-                            else terminal_module.SemanticRole.DEFAULT
-                        ),
+                        role=role,
                         state=terminal_module.ViewState.COMPLETED,
+                        presentation=(
+                            terminal_module.MessagePresentation.CHAT_BLOCK
+                        ),
+                        metadata=f"Sequence: {sequence}",
+                        accent=accent,
                     ),
                 ),
                 total_count=5,
                 position=sequence,
                 state=terminal_module.ViewState.COMPLETED,
             )
-            for sequence, turn_id, kind, sender, recipient, content in expected_events
+            for sequence, sender, content, role, accent in expected_events
         ]
         self.assertEqual(history_views, expected_history)
         self.assertTrue(
             all(
-                {field.label for field in view.items[0].fields}.isdisjoint(
-                    {"Provider", "Model", "Effort", "Confirmation", "Thread"}
-                )
+                type(view.items[0]) is terminal_module.Message
+                and view.items[0].metadata == f"Sequence: {view.position}"
                 for view in history_views
             )
         )
-        for kind in ("user_message", "agent_reply", "runtime_error"):
-            self.assertIn(f"Kind: {kind}", rendered)
-        self.assertIn("Content:\n    unmatched", rendered)
+        self.assertEqual(rendered.count("You → Lead Orchestrator"), 3)
+        self.assertEqual(rendered.count("Lead Orchestrator → You"), 1)
+        self.assertEqual(rendered.count("Runtime → You"), 1)
+        self.assertIn('│   "answer": "reply",\n', rendered)
+        self.assertIn("│     true\n", rendered)
+        self.assertIn("│ unmatched", rendered)
+        for hidden in (
+            "Turn:",
+            "Kind:",
+            "IDs:",
+            "Provider:",
+            "Model:",
+            "Effort:",
+            "Confirmation:",
+            "Thread:",
+        ):
+            self.assertNotIn(hidden, rendered)
         self.assertNotIn("LATE_SNAPSHOT_SECRET", rendered)
         retained_bytes = len(
-            "questionreplybad requestsafe failure".encode("utf-8")
+            (
+                'question{"answer":"reply","items":[1,true]}'
+                "bad requestsafe failure"
+            ).encode("utf-8")
         )
         expected_context = terminal_module.Record(
             "context",

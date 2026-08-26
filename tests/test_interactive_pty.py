@@ -938,12 +938,13 @@ class InteractiveCliPtyTests(unittest.TestCase):
         process: PtyCliProcess,
         *,
         after: int,
-        identity: str,
         title: str,
         content: str,
         provider: str = "Codex",
+        provider_source: str = "system default",
+        details: bool = False,
     ) -> str:
-        """Wait for and verify one live execution-identity reply Record."""
+        """Wait for and verify one live speaker-rail reply."""
 
         process.wait_for_text(content, after=after)
         rendered = process.text_after(after)
@@ -951,16 +952,33 @@ class InteractiveCliPtyTests(unittest.TestCase):
             b"",
             rendered.encode("utf-8"),
         ).decode("utf-8")
-        self.assertIn(f"[{identity}] {title} [completed]\n", plain)
-        self.assertIn(f"Provider [info]: {provider} ", plain)
-        self.assertIn("Model: provider default [provider default]\n", plain)
-        self.assertIn("Effort: provider default [provider default]\n", plain)
-        self.assertIn("Confirmation [success]: confirmed\n", plain)
-        self.assertRegex(
-            plain,
-            r"Thread \[(?:info|success|warning)\]: (?:resumed|reused|fresh)\n",
+        compact_plain = " ".join(plain.split())
+        self.assertEqual(plain.count(f"{title} → You"), 1)
+        self.assertIn(f"│ {content}\n", plain)
+        diagnostics = (
+            f"Provider: {provider} [{provider_source}]",
+            "Model: provider default [provider default]",
+            "Effort: provider default [provider default]",
+            "Confirmation: confirmed",
         )
-        self.assertIn(f"  {content}\n", plain)
+        if details:
+            self.assertIn(f"{title} → You · Provider:", plain)
+            for diagnostic in diagnostics:
+                self.assertIn(diagnostic, compact_plain)
+            self.assertRegex(
+                compact_plain,
+                r"Thread: (?:resumed|reused|fresh)",
+            )
+        else:
+            self.assertIn(f"{title} → You [completed]\n", plain)
+            for label in (
+                "Provider:",
+                "Model:",
+                "Effort:",
+                "Confirmation:",
+                "Thread:",
+            ):
+                self.assertNotIn(label, plain)
         return rendered
 
     def _wait_for_auth_record(
@@ -5722,6 +5740,57 @@ print(
             process.original_terminal_attributes,
         )
 
+    def test_term_dumb_advisory_and_consensus_inputs_are_not_duplicated(
+        self,
+    ) -> None:
+        """Keep fallback echo as the sole accepted-input projection."""
+
+        self._seed_default_session()
+        process = self._spawn_cli(
+            ("chat", "alpha", "--workspace", str(self.workspace.root)),
+            environment_overrides={"TERM": "dumb"},
+        )
+        process.wait_for_text("story[alpha:lead]> ")
+
+        advisory_mark = process.output_mark()
+        process.send_line("fallback advisory body")
+        self._wait_for_live_reply(
+            process,
+            after=advisory_mark,
+            title="Lead Orchestrator",
+            content="deterministic advisory reply",
+        )
+        process.wait_for_text("story[alpha:lead]> ", after=advisory_mark)
+        advisory = process.text_after(advisory_mark)
+        self.assertEqual(advisory.count("fallback advisory body"), 1)
+        self.assertNotIn("You → Lead Orchestrator", advisory)
+        self.assertNotIn("\x1b", advisory)
+
+        consensus_mark = process.output_mark()
+        process.send_line(
+            "/run --output part-01/fallback.md fallback consensus body"
+        )
+        process.wait_for_text(
+            "Consensus [completed] [success]",
+            after=consensus_mark,
+        )
+        process.wait_for_text("story[alpha:lead]> ", after=consensus_mark)
+        consensus = process.text_after(consensus_mark)
+        self.assertEqual(consensus.count("fallback consensus body"), 1)
+        self.assertNotIn("You → Consensus", consensus)
+        self.assertNotIn("\x1b", consensus)
+
+        process.send_line("/quit")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(
+            self.workspace.read_text("manuscript/part-01/fallback.md"),
+            "deterministic candidate",
+        )
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
     def test_conversation_management_routes_controls_and_main_interrupt(
         self,
     ) -> None:
@@ -5783,13 +5852,12 @@ print(
         self._wait_for_live_reply(
             process,
             after=mark,
-            identity="plot",
             title="Plot & Structure Architect",
             content="deterministic advisory reply",
         )
         process.wait_for_text("story[alpha:plot]> ", after=mark)
         ordinary_output = process.text_after(mark)
-        self.assertNotIn("you → plot", ordinary_output)
+        self.assertNotIn("You → Plot & Structure Architect", ordinary_output)
         self.assertEqual(ordinary_output.count("ordinary sticky turn"), 1)
         self.assertNotIn("--- Conversation scope ", ordinary_output)
 
@@ -5798,14 +5866,13 @@ print(
         routed = self._wait_for_live_reply(
             process,
             after=mark,
-            identity="character",
             title="Character & World Custodian",
             content="deterministic advisory reply",
         )
         process.wait_for_text("story[alpha:plot]> ", after=mark)
         self.assertNotIn("[routing] One-shot route", routed)
         routed_output = process.text_after(mark)
-        self.assertNotIn("you → character", routed_output)
+        self.assertNotIn("You → Character & World Custodian", routed_output)
         self.assertEqual(routed_output.count("@character one-shot turn"), 1)
         self.assertNotIn("--- Conversation scope ", routed_output)
 
@@ -6073,9 +6140,13 @@ print(
         """Exercise provider-free reads followed by trusted retrieval progress."""
 
         selected = self._seed_default_session()
+        defaults = self.workspace.read_json("config/system_defaults.json")
+        defaults["show_message_details"] = True
+        self.workspace.write_json("config/system_defaults.json", defaults)
         process = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root)),
             environment_overrides={"TERM": "xterm-256color"},
+            decorative_color=True,
         )
         process.wait_for_text("story[alpha:lead]> ")
 
@@ -6084,20 +6155,29 @@ print(
         self._wait_for_live_reply(
             process,
             after=mark,
-            identity="lead",
             title="Lead Orchestrator",
             content="deterministic advisory reply",
+            details=True,
         )
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         advisory_output = process.text_after(mark)
+        advisory_plain = _ANSI_SGR_BYTES.sub(
+            b"",
+            advisory_output.encode("utf-8"),
+        ).decode("utf-8")
         accepted_message = (
-            "you → lead [completed]> harbor beacon beside the vessel"
+            "You → Lead Orchestrator [completed]\n\n"
+            "│ harbor beacon beside the vessel"
         )
-        self.assertEqual(advisory_output.count(accepted_message), 1)
+        self.assertEqual(advisory_plain.count(accepted_message), 1)
         self.assertLess(
-            advisory_output.index(accepted_message),
-            advisory_output.index("[lead] Lead Orchestrator [completed]"),
+            advisory_plain.index(accepted_message),
+            advisory_plain.index("Lead Orchestrator → You · Provider:"),
         )
+        self.assertNotIn("You → Lead Orchestrator · Provider:", advisory_plain)
+        advisory_raw = bytes(process.raw_bytes[mark:])
+        self.assertIn(b"\x1b[1;35m", advisory_raw)
+        self.assertIn(b"\x1b[1;36m", advisory_raw)
         provider_calls_before_reads = len(
             [
                 record
@@ -6115,6 +6195,28 @@ print(
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         self.assertIn("History (2/2) [completed]", history)
         self.assertIn("deterministic advisory reply", history)
+        first_events = FilesystemConversationEventStore(
+            self.workspace,
+            catalog=FilesystemConversationCatalog(self.workspace),
+        ).read("alpha", selected.conversation_id)
+        self.assertEqual(len(first_events), 2)
+        history_plain = _ANSI_SGR_BYTES.sub(
+            b"",
+            process.text_after(mark).encode("utf-8"),
+        ).decode("utf-8")
+        history_compact = " ".join(history_plain.split())
+        for detail in (
+            "You → Lead Orchestrator",
+            "Lead Orchestrator → You",
+            "Sequence: 1",
+            f"Turn: {first_events[0].turn_id}",
+            "Kind: user_message",
+            "IDs: user → lead_orchestrator",
+            "Sequence: 2",
+            "Kind: agent_reply",
+            "IDs: lead_orchestrator → user",
+        ):
+            self.assertIn(detail, history_compact)
 
         mark = process.output_mark()
         process.send_line("/search harbor beacon")
@@ -6162,6 +6264,21 @@ print(
             transcript_output.index("Transcript (1/2) [completed]"),
         )
         self.assertIn("deterministic advisory reply", transcript_output)
+        transcript_plain = _ANSI_SGR_BYTES.sub(
+            b"",
+            transcript_output.encode("utf-8"),
+        ).decode("utf-8")
+        transcript_compact = " ".join(transcript_plain.split())
+        for detail in (
+            "Sequence: 1",
+            f"Turn: {first_events[0].turn_id}",
+            "Kind: user_message",
+            "IDs: user → lead_orchestrator",
+            "Sequence: 2",
+            "Kind: agent_reply",
+            "IDs: lead_orchestrator → user",
+        ):
+            self.assertIn(detail, transcript_compact)
         self.assertEqual(
             len(
                 [
@@ -6188,15 +6305,17 @@ print(
         self._wait_for_live_reply(
             process,
             after=mark,
-            identity="lead",
             title="Lead Orchestrator",
             content="retrieval-assisted answer",
+            details=True,
         )
         process.wait_for_text("[context] Source 1 [completed]", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         retrieval_output = process.text_after(mark)
         self.assertIn(f"Conversation: {selected.conversation_id}", retrieval_output)
+        self.assertIn(f"Turn: {first_events[0].turn_id}", retrieval_output)
         self.assertIn("Sequence: 1", retrieval_output)
+        self.assertIn("Kind: user_message", retrieval_output)
         self.assertNotIn("[waiting]", retrieval_output)
         self.assertNotIn("[routing] One-shot route", retrieval_output)
         self.assertIn("\x1b[K", retrieval_output)
@@ -6300,7 +6419,7 @@ print(
         successful_output = process.text_after(mark)
         collapsed = "".join(successful_output.split())
         accepted_prompt = (
-            "you→consensus[completed]>/send/cancelfinalliteralline"
+            "You→Consensus[completed]││/send│/cancel│finalliteralline"
         )
         self.assertEqual(collapsed.count(accepted_prompt), 1)
         self.assertLess(
@@ -6331,6 +6450,7 @@ print(
         offsets = [collapsed.index(fragment) for fragment in ordered_fragments]
         self.assertEqual(offsets, sorted(offsets))
         self.assertNotIn("[waiting]", successful_output)
+        self.assertNotIn("Provider:", successful_output)
         durable_after_success = _durable_tree_without_access(self.workspace.root)
 
         mark = process.output_mark()
@@ -6388,7 +6508,7 @@ print(
             _durable_tree_without_access(self.workspace.root),
             durable_after_success,
         )
-        self.assertEqual(process.normalized_text.count("you → consensus"), 1)
+        self.assertEqual(process.normalized_text.count("You → Consensus"), 1)
 
         inspection = self.workspace.inspect_session("alpha")
         self.assertEqual(len(inspection["debates"]), 1)
@@ -6552,7 +6672,6 @@ asyncio.run(main())
         self._wait_for_live_reply(
             process,
             after=mark,
-            identity="plot",
             title="Plot & Structure Architect",
             content="deterministic advisory reply",
         )
@@ -6655,7 +6774,6 @@ asyncio.run(main())
         self._wait_for_live_reply(
             process,
             after=mark,
-            identity="plot",
             title="Plot & Structure Architect",
             content="deterministic advisory reply",
         )
@@ -6709,7 +6827,6 @@ asyncio.run(main())
         self._wait_for_live_reply(
             process,
             after=mark,
-            identity="lead",
             title="Lead Orchestrator",
             content="deterministic advisory reply",
         )
@@ -7105,7 +7222,6 @@ asyncio.run(main())
         self._wait_for_live_reply(
             process,
             after=mark,
-            identity="lead",
             title="Lead Orchestrator",
             content="deterministic advisory reply",
         )
@@ -7152,7 +7268,10 @@ asyncio.run(main())
         process.wait_for_text("[context] [completed]", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         malformed_history = process.text_after(mark)
-        self.assertIn("malformedJSON", "".join(malformed_history.split()))
+        self.assertIn(
+            "malformedJSON",
+            "".join(malformed_history.split()).replace("│", ""),
+        )
         self.assertNotIn(
             "MALFORMED_PROVIDER_VALUE_MUST_NOT_APPEAR",
             malformed_history,
@@ -7164,7 +7283,6 @@ asyncio.run(main())
         self._wait_for_live_reply(
             process,
             after=mark,
-            identity="lead",
             title="Lead Orchestrator",
             content="deterministic advisory reply",
         )

@@ -2002,7 +2002,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `/status` then renders the complete active execution roster with exact
   provider/model/effort values and sources, route generation, confirmation, and
   native-thread status; `/agents` shares a compact execution-profile and
-  confirmation projection for every canonical agent.
+  confirmation projection for every canonical agent. Both diagnostic commands
+  remain fully detailed regardless of the message-details preference.
   All transition, identity-resolution, routing,
   directive-result, inspection, trusted debate/retrieval progress and result,
   retrieval-source, and other presentation validation helpers are package
@@ -2014,12 +2015,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   `InteractiveSemanticOutput`; it retains that adapter alongside the same
   terminal used for input and terminal-owned semantic writers. After
   attachment, focus, collaborator, Runner, and payload validation, accepted
-  ordinary or routed advisory text is projected as one exact-body user
-  `Message` attributed to its resolved prompt alias, while accepted inline,
-  fresh, or composed prompt consensus text is projected as one exact-body user
-  `Message` attributed to consensus. Both use the adapter's mode-gated
-  accepted-input writer before coroutine construction or progress; the
-  controller neither observes terminal mode nor projects draft-file bytes.
+  ordinary or routed advisory text is projected once as an exact-body
+  chat-block `Message` headed `You → <full agent display name>`, while
+  accepted inline, fresh, or composed prompt consensus text is projected once
+  as an exact-body chat-block `Message` headed `You → Consensus`. Both use
+  the magenta speaker accent and the adapter's mode-gated accepted-input writer
+  before coroutine construction or progress; the controller neither observes
+  terminal mode nor projects draft-file bytes.
   Consensus requests also emit one persistent context record containing the
   validated output path and, for draft input, only its source path. Validated
   active search, filtered conversation-list, and resolved transcript requests
@@ -2064,26 +2066,37 @@ every intermediate arrow. The current runtime graph is acyclic.
   effective-route authentication gate before dirty settings Apply Changes use
   that borrowed collaborator. The controller owns no native authentication child, cursor
   sequence, or terminal geometry.
-  Retrieval results and persisted `agent_reply`
-  history/transcript rows use the facade's pure `format_agent_reply_content`
-  projection and agent semantic role without changing the stored event or
-  non-agent content. Ordered session,
-  conversation, search, transcript, and focused-history rows use one positioned
-  `ListView` containing one `Record` per established callback, so the controller
-  owns result counts and interruption boundaries without any remaining
-  `write_status` or specialized dense-row call. Before every attached main
-  prompt, it freshly revalidates any current focus and its visible handle
+  Retrieval results and persisted `agent_reply` history/transcript rows use the
+  facade's pure `format_agent_reply_content` projection and agent semantic role
+  without changing the stored event or non-agent content. Retrieval-source
+  records always retain subject and conversation facts; exact-event citations
+  additionally retain sequence, while message-details On adds turn and event
+  kind and subject-only citations omit all event facts. Ordered session,
+  conversation, and search rows retain one positioned `ListView` containing one
+  `Record` per established callback. Transcript and focused-history rows instead
+  use one positioned `ListView` containing one directional chat-block `Message`
+  per callback with its complete body and sequence; message-details On adds
+  turn, kind, and canonical sender/recipient IDs. The controller therefore
+  continues to own result counts and interruption boundaries without any
+  remaining `write_status` or specialized dense-row call. Before every attached
+  main prompt, it freshly revalidates any current focus and its visible handle
   against the complete conversation catalog, then presents conversation scope
   initially or when the semantic tuple of session ID, visible handle, subject,
   or sticky agent changes. Detachment resets that comparison, so a later
   attachment presents its scope again even when its values match the earlier
   attachment. The main conversation input composes an existing semantic
   `Notice` above the unchanged editable prompt, recomputes it from each live
-  buffer so a valid one-shot `@alias` shows the actual target profile, and lets
-  terminal rendering collapse the header on narrow/fallback layouts. A
-  completed agent reply uses an existing `Record` with provider/model/effort,
-  sources, confirmation, and thread status immediately above its exact body;
-  neither projection adds transcript or session-manifest persistence.
+  buffer so a valid one-shot `@alias` shows the actual target. With
+  message-details Off, that notice contains only the full target display name
+  and performs no execution-profile or confirmation lookup; with details On it
+  preserves the prior exact provider/model/effort, confirmation, and semantic
+  role profile. Terminal rendering may collapse the notice on narrow/fallback
+  layouts. A completed agent reply is one chat-block `Message` headed
+  `<full agent display name> → You` with its complete formatted body. Details
+  Off performs no reply-profile lookup and adds no metadata; details On adds
+  provider/model/effort values and sources, confirmation, and thread status as
+  compact metadata. Neither projection adds transcript or session-manifest
+  persistence.
   The clean settings editor exposes the exact six-row top level Language,
   Persona, Maximum debate rounds, Conversation storage, Message details, and
   Agents. Message details selects the pending strict Off/On presentation

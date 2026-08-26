@@ -1073,6 +1073,95 @@ class ControllerContractTests(ControllerTestCase):
         with self.assertRaises(FrozenInstanceError):
             context.truncated = True  # type: ignore[misc]
 
+    def test_agents_and_status_ignore_message_detail_preference(self) -> None:
+        workspace = self.make_workspace()
+        controller, _backend, callbacks = self.make_controller(workspace)
+        components: list[object] = []
+        real_write_component = (
+            terminal_module.InteractiveSemanticOutput.write_component
+        )
+
+        def capture_component(output, component):
+            components.append(component)
+            return real_write_component(output, component)
+
+        def projection(method, *, details: bool):
+            controller._show_message_details = details
+            component_start = len(components)
+            record_start = len(callbacks.records)
+            method()
+            return (
+                tuple(components[component_start:]),
+                tuple(callbacks.records[record_start:]),
+            )
+
+        with mock.patch.object(
+            terminal_module.InteractiveSemanticOutput,
+            "write_component",
+            autospec=True,
+            side_effect=capture_component,
+        ):
+            agents_off = projection(
+                controller._write_agent_roster,
+                details=False,
+            )
+            agents_on = projection(
+                controller._write_agent_roster,
+                details=True,
+            )
+            status_off = projection(
+                controller._write_runtime_status,
+                details=False,
+            )
+            status_on = projection(
+                controller._write_runtime_status,
+                details=True,
+            )
+
+        self.assertEqual(agents_off, agents_on)
+        self.assertEqual(status_off, status_on)
+        agent_view = agents_off[0][0]
+        self.assertIs(type(agent_view), terminal_module.ListView)
+        self.assertEqual(agent_view.title, "Agents")
+        self.assertEqual(len(agent_view.items), 4)
+        self.assertTrue(
+            all(
+                tuple(field.label for field in item.fields)
+                == (
+                    "ID",
+                    "Aliases",
+                    "Advisory domain",
+                    "Execution",
+                    "Confirmation",
+                )
+                for item in agent_view.items
+            )
+        )
+        execution_view = next(
+            component
+            for component in status_off[0]
+            if type(component) is terminal_module.ListView
+            and component.title == "Execution profiles"
+        )
+        self.assertEqual(len(execution_view.items), 4)
+        self.assertTrue(
+            all(
+                tuple(field.label for field in item.fields)
+                == (
+                    "Provider",
+                    "Provider source",
+                    "Model",
+                    "Model source",
+                    "Effort",
+                    "Effort source",
+                    "Confirmation",
+                    "Thread",
+                    "Route generation",
+                )
+                for item in execution_view.items
+            )
+        )
+
     def test_controller_and_composer_have_no_generic_status_sites(
         self,
     ) -> None:
@@ -8969,29 +9058,39 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
         )
         self.assertTrue(
             all(
-                type(view.items[0]) is terminal_module.Record
+                type(view.items[0]) is terminal_module.Message
                 and view.items[0].state is terminal_module.ViewState.COMPLETED
+                and view.items[0].presentation
+                is terminal_module.MessagePresentation.CHAT_BLOCK
                 and view.state is terminal_module.ViewState.COMPLETED
                 for view in transcript_views
             )
         )
-        agent_records = [
+        agent_messages = [
             item
             for view in transcript_views
             for item in view.items
-            if type(item) is terminal_module.Record
+            if type(item) is terminal_module.Message
             and item.role is terminal_module.SemanticRole.AGENT
         ]
-        self.assertTrue(agent_records)
+        self.assertEqual(len(agent_messages), 3)
         self.assertEqual(
-            agent_records[0].content,
-            '{\n'
-            '  "answer": "界",\n'
-            '  "items": [\n'
-            '    1,\n'
-            '    true\n'
-            '  ]\n'
-            '}',
+            agent_messages[0],
+            terminal_module.Message(
+                "Lead Orchestrator → You",
+                '{\n'
+                '  "answer": "界",\n'
+                '  "items": [\n'
+                '    1,\n'
+                '    true\n'
+                '  ]\n'
+                '}',
+                role=terminal_module.SemanticRole.AGENT,
+                state=terminal_module.ViewState.COMPLETED,
+                presentation=terminal_module.MessagePresentation.CHAT_BLOCK,
+                metadata="Sequence: 1",
+                accent=terminal_module.SpeakerAccent.CYAN,
+            ),
         )
         transcript_notices = [
             component
@@ -9121,40 +9220,156 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                 side_effect=capture_component,
             ),
         ):
+            controller._show_message_details = False
+            controller._write_focused_conversation_history(
+                InteractiveAction(ActionKind.HISTORY)
+            )
+            off_end = len(components)
+            controller._show_message_details = True
             controller._write_focused_conversation_history(
                 InteractiveAction(ActionKind.HISTORY)
             )
 
-        read.assert_called_once_with("session", entry.conversation_id)
-        history_views = [
-            component
-            for component in components
-            if type(component) is terminal_module.ListView
-            and component.title == "History"
-        ]
-        self.assertEqual(len(history_views), 2)
-        records = [
-            view.items[0]
-            for view in history_views
-            if type(view.items[0]) is terminal_module.Record
-            and view.items[0].role is terminal_module.SemanticRole.AGENT
-        ]
-        self.assertEqual(len(records), 1)
-        record = records[0]
-        self.assertIs(type(record), terminal_module.Record)
-        self.assertIs(record.role, terminal_module.SemanticRole.AGENT)
         self.assertEqual(
-            record.content,
+            read.call_args_list,
+            [
+                mock.call("session", entry.conversation_id),
+                mock.call("session", entry.conversation_id),
+            ],
+        )
+        expected_body = (
             '{\n'
             '  "z": "界",\n'
             '  "a": [\n'
             '    1,\n'
             '    true\n'
             '  ]\n'
-            '}',
+            '}'
+        )
+        off_views = [
+            component
+            for component in components[:off_end]
+            if type(component) is terminal_module.ListView
+            and component.title == "History"
+        ]
+        on_views = [
+            component
+            for component in components[off_end:]
+            if type(component) is terminal_module.ListView
+            and component.title == "History"
+        ]
+        self.assertEqual(
+            [
+                (view.position, view.total_count, view.items[0])
+                for view in off_views
+            ],
+            [
+                (
+                    1,
+                    2,
+                    terminal_module.Message(
+                        "You → Lead Orchestrator",
+                        "question",
+                        state=terminal_module.ViewState.COMPLETED,
+                        presentation=(
+                            terminal_module.MessagePresentation.CHAT_BLOCK
+                        ),
+                        metadata="Sequence: 1",
+                        accent=terminal_module.SpeakerAccent.MAGENTA,
+                    ),
+                ),
+                (
+                    2,
+                    2,
+                    terminal_module.Message(
+                        "Lead Orchestrator → You",
+                        expected_body,
+                        role=terminal_module.SemanticRole.AGENT,
+                        state=terminal_module.ViewState.COMPLETED,
+                        presentation=(
+                            terminal_module.MessagePresentation.CHAT_BLOCK
+                        ),
+                        metadata="Sequence: 2",
+                        accent=terminal_module.SpeakerAccent.CYAN,
+                    ),
+                ),
+            ],
+        )
+        self.assertEqual(
+            [
+                (view.position, view.total_count, view.items[0])
+                for view in on_views
+            ],
+            [
+                (
+                    1,
+                    2,
+                    terminal_module.Message(
+                        "You → Lead Orchestrator",
+                        "question",
+                        state=terminal_module.ViewState.COMPLETED,
+                        presentation=(
+                            terminal_module.MessagePresentation.CHAT_BLOCK
+                        ),
+                        metadata=(
+                            "Sequence: 1 · Turn: turn_1 · "
+                            "Kind: user_message · "
+                            "IDs: user → lead_orchestrator"
+                        ),
+                        accent=terminal_module.SpeakerAccent.MAGENTA,
+                    ),
+                ),
+                (
+                    2,
+                    2,
+                    terminal_module.Message(
+                        "Lead Orchestrator → You",
+                        expected_body,
+                        role=terminal_module.SemanticRole.AGENT,
+                        state=terminal_module.ViewState.COMPLETED,
+                        presentation=(
+                            terminal_module.MessagePresentation.CHAT_BLOCK
+                        ),
+                        metadata=(
+                            "Sequence: 2 · Turn: turn_1 · "
+                            "Kind: agent_reply · "
+                            "IDs: lead_orchestrator → user"
+                        ),
+                        accent=terminal_module.SpeakerAccent.CYAN,
+                    ),
+                ),
+            ],
         )
         self.assertEqual(stored_event.content, raw_reply)
         self.assertIn('"z": "界"', "".join(callbacks.records))
+
+        runtime_error = _stored_transcript_event(
+            entry.conversation_id,
+            3,
+            content="sanitized runtime failure",
+            kind=ConversationEventKind.RUNTIME_ERROR,
+            sender="runtime",
+            recipient="user",
+            turn_id="turn_2",
+        )
+        controller._show_message_details = False
+        self.assertEqual(
+            controller._conversation_event_message(runtime_error),
+            terminal_module.Message(
+                "Runtime → You",
+                "sanitized runtime failure",
+                state=terminal_module.ViewState.COMPLETED,
+                presentation=terminal_module.MessagePresentation.CHAT_BLOCK,
+                metadata="Sequence: 3",
+                accent=terminal_module.SpeakerAccent.CYAN,
+            ),
+        )
+        controller._show_message_details = True
+        self.assertEqual(
+            controller._conversation_event_message(runtime_error).metadata,
+            "Sequence: 3 · Turn: turn_2 · Kind: runtime_error · "
+            "IDs: runtime → user",
+        )
 
     def test_malformed_fresh_transcript_pages_are_transcript_invalid(self) -> None:
         conversation_id = _UNIQUE_C

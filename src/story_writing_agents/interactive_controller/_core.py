@@ -13,8 +13,10 @@ from typing import Mapping, TypeVar
 
 from ..agents import (
     AGENT_SPECS,
+    CHARACTER_CUSTODIAN,
     EXECUTION_SPECIALIST,
     LEAD_ORCHESTRATOR,
+    PLOT_ARCHITECT,
     ROSTER,
     SPECIALIST_IDS,
 )
@@ -133,6 +135,7 @@ from ..interactive_terminal import (
     InteractiveTerminal,
     ListView,
     Message,
+    MessagePresentation,
     Notice,
     Panel,
     Picker,
@@ -140,6 +143,7 @@ from ..interactive_terminal import (
     Record,
     Section,
     SemanticRole,
+    SpeakerAccent,
     TerminalActionKind,
     ViewState,
 )
@@ -239,8 +243,11 @@ _CONVERSATION_RESUME_COMMAND = "/conversation resume"
 _AGENT_ROUTE_ALIASES = frozenset(
     alias for route in AGENT_ROUTES for alias in route.aliases
 )
-_AGENT_PROMPT_ALIASES = {
-    route.agent_id: route.prompt_alias for route in AGENT_ROUTES
+_AGENT_SPEAKER_ACCENTS = {
+    LEAD_ORCHESTRATOR: SpeakerAccent.CYAN,
+    PLOT_ARCHITECT: SpeakerAccent.YELLOW,
+    CHARACTER_CUSTODIAN: SpeakerAccent.GREEN,
+    EXECUTION_SPECIALIST: SpeakerAccent.BLUE,
 }
 _CONVERSATION_CATALOG_OPERATIONS = (
     "create",
@@ -862,7 +869,7 @@ class InteractiveController:
     def _write_counted_list_row(
         self,
         title: str,
-        record: Record,
+        record: Record | Message,
         *,
         position: int,
         total_count: int,
@@ -932,6 +939,46 @@ class InteractiveController:
         if agent_id == "artifact_store":
             return "artifact_store"
         return agent_id.replace("_", " ")
+
+    def _conversation_event_message(self, event: ConversationEvent) -> Message:
+        """Project one durable transcript event into its human message view."""
+
+        if event.kind is ConversationEventKind.USER_MESSAGE:
+            sender = f"You → {AGENT_SPECS[event.recipient].display_name}"
+            accent = SpeakerAccent.MAGENTA
+        elif event.kind is ConversationEventKind.AGENT_REPLY:
+            sender = f"{AGENT_SPECS[event.sender].display_name} → You"
+            accent = _AGENT_SPEAKER_ACCENTS[event.sender]
+        else:
+            assert event.kind is ConversationEventKind.RUNTIME_ERROR
+            sender = "Runtime → You"
+            accent = SpeakerAccent.CYAN
+
+        metadata = f"Sequence: {event.sequence}"
+        if self._show_message_details:
+            metadata += (
+                f" · Turn: {event.turn_id}"
+                f" · Kind: {event.kind.value}"
+                f" · IDs: {event.sender} → {event.recipient}"
+            )
+        is_agent_reply = event.kind is ConversationEventKind.AGENT_REPLY
+        return Message(
+            sender,
+            (
+                format_agent_reply_content(event.content)
+                if is_agent_reply
+                else event.content
+            ),
+            role=(
+                SemanticRole.AGENT
+                if is_agent_reply
+                else SemanticRole.DEFAULT
+            ),
+            state=ViewState.COMPLETED,
+            presentation=MessagePresentation.CHAT_BLOCK,
+            metadata=metadata,
+            accent=accent,
+        )
 
     @staticmethod
     def _agent_display_chain(agent_ids: tuple[str, ...]) -> str:
@@ -1874,6 +1921,15 @@ class InteractiveController:
                 agent_id = routed
                 one_shot = True
 
+        label = "one-shot runtime" if one_shot else "active runtime"
+        if not self._show_message_details:
+            return Notice(
+                AGENT_SPECS[agent_id].display_name,
+                label=label,
+                role=SemanticRole.INFO,
+                state=ViewState.COMPLETED,
+            )
+
         profile = self._backend.execution_profile(agent_id)
         confirmation = self._backend.execution_profile_confirmation(agent_id)
         return Notice(
@@ -1883,7 +1939,7 @@ class InteractiveController:
                 f"model {_execution_value(profile.model)} · "
                 f"effort {_execution_value(profile.effort)} · {confirmation}"
             ),
-            label=("one-shot runtime" if one_shot else "active runtime"),
+            label=label,
             role=(
                 SemanticRole.INFO
                 if confirmation == "confirmed"
@@ -5086,28 +5142,7 @@ class InteractiveController:
         for position, event in enumerate(displayed, start=1):
             self._write_counted_list_row(
                 "History",
-                Record(
-                    f"transcript {focused.conversation_id}",
-                    fields=(
-                        Field("Sequence", str(event.sequence)),
-                        Field("Turn", event.turn_id),
-                        Field("Kind", event.kind.value),
-                        Field("Sender", event.sender),
-                        Field("Recipient", event.recipient),
-                        Field("Content", ""),
-                    ),
-                    content=(
-                        format_agent_reply_content(event.content)
-                        if event.kind is ConversationEventKind.AGENT_REPLY
-                        else event.content
-                    ),
-                    role=(
-                        SemanticRole.AGENT
-                        if event.kind is ConversationEventKind.AGENT_REPLY
-                        else SemanticRole.DEFAULT
-                    ),
-                    state=ViewState.COMPLETED,
-                ),
+                self._conversation_event_message(event),
                 position=position,
                 total_count=total_count,
             )
@@ -5343,7 +5378,11 @@ class InteractiveController:
             assert action.kind is ActionKind.MESSAGE
             agent_id = self._target_agent_id
         display_name = AGENT_SPECS[agent_id].display_name
-        execution_profile = self._backend.execution_profile(agent_id)
+        execution_profile = (
+            self._backend.execution_profile(agent_id)
+            if self._show_message_details
+            else None
+        )
 
         memory_service = self._conversation_memory_service
         if type(memory_service) is not ConversationMemoryService:
@@ -5357,10 +5396,12 @@ class InteractiveController:
             )
         self._semantic_output.write_accepted_input(
             Message(
-                f"you → {_AGENT_PROMPT_ALIASES[agent_id]}",
+                f"You → {display_name}",
                 action.text,
                 role=SemanticRole.DEFAULT,
                 state=ViewState.COMPLETED,
+                presentation=MessagePresentation.CHAT_BLOCK,
+                accent=SpeakerAccent.MAGENTA,
             )
         )
         progress_events: list[ConversationRetrievalProgressEvent] = []
@@ -5514,49 +5555,33 @@ class InteractiveController:
                     state=ViewState.COMPLETED,
                 ),
             )
-        confirmation = self._backend.execution_profile_confirmation(agent_id)
-        thread_status = self._backend.execution_profile_thread_status(agent_id)
+        metadata = None
+        if self._show_message_details:
+            assert execution_profile is not None
+            confirmation = self._backend.execution_profile_confirmation(agent_id)
+            thread_status = self._backend.execution_profile_thread_status(agent_id)
+            metadata = (
+                "Provider: "
+                f"{_provider_display_name(execution_profile.provider)} "
+                f"[{_execution_source_label(execution_profile.provider_source)}]"
+                " · Model: "
+                f"{_execution_value(execution_profile.model)} "
+                f"[{_execution_source_label(execution_profile.model_source)}]"
+                " · Effort: "
+                f"{_execution_value(execution_profile.effort)} "
+                f"[{_execution_source_label(execution_profile.effort_source)}]"
+                f" · Confirmation: {confirmation}"
+                f" · Thread: {thread_status.replace('_', ' ')}"
+            )
         self._semantic_output.write_component(
-            Record(
-                _AGENT_PROMPT_ALIASES[agent_id],
-                title=display_name,
-                fields=(
-                    Field(
-                        "Provider",
-                        (
-                            f"{_provider_display_name(execution_profile.provider)} "
-                            f"[{_execution_source_label(execution_profile.provider_source)}]"
-                        ),
-                        role=SemanticRole.INFO,
-                    ),
-                    Field(
-                        "Model",
-                        (
-                            f"{_execution_value(execution_profile.model)} "
-                            f"[{_execution_source_label(execution_profile.model_source)}]"
-                        ),
-                    ),
-                    Field(
-                        "Effort",
-                        (
-                            f"{_execution_value(execution_profile.effort)} "
-                            f"[{_execution_source_label(execution_profile.effort_source)}]"
-                        ),
-                    ),
-                    Field(
-                        "Confirmation",
-                        confirmation,
-                        role=_confirmation_role(confirmation),
-                    ),
-                    Field(
-                        "Thread",
-                        thread_status.replace("_", " "),
-                        role=_thread_status_role(thread_status),
-                    ),
-                ),
-                content=format_agent_reply_content(result.content),
+            Message(
+                f"{display_name} → You",
+                format_agent_reply_content(result.content),
                 role=SemanticRole.AGENT,
                 state=ViewState.COMPLETED,
+                presentation=MessagePresentation.CHAT_BLOCK,
+                metadata=metadata,
+                accent=_AGENT_SPEAKER_ACCENTS[agent_id],
             )
         )
         self._render_conversation_retrieval_sources(result.sources)
@@ -5657,10 +5682,11 @@ class InteractiveController:
     ) -> None:
         """Render validated ordered sources through existing sanitized status I/O.
 
-        Subject-only citations omit event fields; exact event citations include
-        turn, sequence, and event-kind values. Rendering is non-durable and does
-        not mutate focus, routing, memory, or transcripts. Invalid sources
-        and terminal writer failures propagate to fatal controller cleanup.
+        Subject-only citations omit event fields. Exact event citations always
+        include sequence; detailed presentation also includes turn and event
+        kind. Rendering is non-durable and does not mutate focus, routing,
+        memory, or transcripts. Invalid sources and terminal writer failures
+        propagate to fatal controller cleanup.
         """
 
         for ordinal, source in enumerate(sources, start=1):
@@ -5672,13 +5698,11 @@ class InteractiveController:
             if citation.sequence is not None:
                 assert citation.turn_id is not None
                 assert citation.event_kind is not None
-                fields.extend(
-                    (
-                        Field("Turn", citation.turn_id),
-                        Field("Sequence", str(citation.sequence)),
-                        Field("Kind", citation.event_kind.value),
-                    )
-                )
+                if self._show_message_details:
+                    fields.append(Field("Turn", citation.turn_id))
+                fields.append(Field("Sequence", str(citation.sequence)))
+                if self._show_message_details:
+                    fields.append(Field("Kind", citation.event_kind.value))
             self._semantic_output.write_component(
                 Record(
                     "context",
@@ -5808,10 +5832,12 @@ class InteractiveController:
         if input_kind is InputKind.PROMPT:
             self._semantic_output.write_accepted_input(
                 Message(
-                    "you → consensus",
+                    "You → Consensus",
                     payload,
                     role=SemanticRole.DEFAULT,
                     state=ViewState.COMPLETED,
+                    presentation=MessagePresentation.CHAT_BLOCK,
+                    accent=SpeakerAccent.MAGENTA,
                 )
             )
         context_fields = [Field("Output", output_path)]
@@ -6522,28 +6548,7 @@ class InteractiveController:
             for position, event in enumerate(page.events, start=1):
                 self._write_counted_list_row(
                     "Transcript",
-                    Record(
-                        f"transcript {handle}",
-                        fields=(
-                            Field("Sequence", str(event.sequence)),
-                            Field("Turn", event.turn_id),
-                            Field("Kind", event.kind.value),
-                            Field("Sender", event.sender),
-                            Field("Recipient", event.recipient),
-                            Field("Content", ""),
-                        ),
-                        content=(
-                            format_agent_reply_content(event.content)
-                            if event.kind is ConversationEventKind.AGENT_REPLY
-                            else event.content
-                        ),
-                        role=(
-                            SemanticRole.AGENT
-                            if event.kind is ConversationEventKind.AGENT_REPLY
-                            else SemanticRole.DEFAULT
-                        ),
-                        state=ViewState.COMPLETED,
-                    ),
+                    self._conversation_event_message(event),
                     position=position,
                     total_count=total_count,
                 )
