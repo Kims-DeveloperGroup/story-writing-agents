@@ -123,7 +123,10 @@ display name. Each attempt is bounded to five seconds and one MiB retained
 stdout, discards stderr/raw diagnostics, and has no automatic retry or cache.
 Fixed failure guidance preserves inherit/current/custom paths; re-entering
 retries later. Save writes only the selected opaque value or null and affects
-the next shell/backend construction; no catalog row is persisted.
+the running shell immediately after the complete staged snapshot is validated,
+persisted, and activated; no restart is required and no catalog row is
+persisted. A launch override remains higher precedence and makes its effective
+Provider, Model, or Effort field read-only in that shell.
 
 The complete persistent schemas are in
 [Agent configuration](../reference/configuration/agent-configuration.md).
@@ -151,9 +154,13 @@ session lifecycle commands.
 
 ## Precedence and snapshots
 
-Each backend construction validates and snapshots the complete persistent
-configuration. A later file edit or `/settings` save affects the next shell or
-backend, not one already running.
+Each backend construction validates and captures the complete persistent
+configuration. Direct file edits have no watcher: a newly launched backend
+reconciles them, while already running shells retain their captured state.
+Confirmed `/settings` Save is the no-restart path for the current shell; it
+authenticates and preflights the candidate, persists the complete prepared
+snapshot, and activates a new backend/runtime generation. It does not broadcast
+the change to other active shells.
 
 | Effective value | First non-null value wins |
 | --- | --- |
@@ -238,6 +245,14 @@ Antigravity conversation ID. Conversation focus and debate IDs do not create
 private provider channels; one provider thread can span them. A different
 backend, session, agent, or definition fingerprint starts separate history.
 
+Every provider change advances the agent's durable route generation. The
+nonzero generation participates in the definition fingerprint, so Codex →
+Antigravity → Codex starts a fresh target-provider thread on both switches;
+returning to an older provider does not revive the pre-switch route. A
+same-provider model or effort change does not advance the generation and
+remains eligible, but is not guaranteed, to reuse its compatible native thread.
+Generation zero preserves the legacy definition fingerprint.
+
 | Action | Provider conversation effect |
 | --- | --- |
 | Switch, `/quit`, EOF, or backend close | Releases process access but preserves the manifest reference and Antigravity-native state. |
@@ -245,6 +260,17 @@ backend, session, agent, or definition fingerprint starts separate history.
 | `/session resume` or `story session reopen` | Makes paused state ready and resumes a still-compatible provider conversation. |
 | Ambiguous failure or cancellation after launch | Marks existing compatible history tainted; the next call starts fresh. |
 | Definition fingerprint change | Starts fresh for that agent without deleting older provider-native data. |
+| Provider change, including A→B→A | Advances route generation and starts a fresh target-provider thread. |
+| Same-provider model/effort change | Retains route generation and remains eligible for native-thread reuse. |
+
+A fresh Antigravity or Codex thread is not a new story session. The first and
+later substantive turns rehydrate bounded facts from the belonging session:
+the receiving agent's newest owner outcomes, current bound core-document
+path/hash identities, and the included, fresh, or omitted focused-context mode.
+`/run --fresh` retains owner/core facts and the focused conversation identity
+while omitting its transcript. Provider-private hidden history and omitted
+transcript events are not reconstructed. See
+[Story sessions](story-sessions.md#execution-identity-and-fresh-thread-continuity).
 
 There is no user-facing session close or delete command. `AgentBackend.close()`
 ends one local backend instance; it does not pause the durable story session,

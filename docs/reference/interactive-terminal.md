@@ -284,7 +284,7 @@ export the process environment.
 `STORY_REDUCED_MOTION` is separate and presence-based; its value is not parsed.
 When it is present on an otherwise ANSI-eligible capable TTY, the driver emits
 one final colored frame with no animation, sleep, raw-mode activation, cursor
-control, or clearing. A truthy/nonzero `NO_COLOR`, non-TTY, `TERM=dumb`,
+control, or clearing. A disabling `NO_COLOR` value, non-TTY, `TERM=dumb`,
 non-POSIX, callback, or uncertain output path emits one width-appropriate plain
 final frame with no delay or ANSI. These fallbacks do not include provider
 output, account facts, URLs, tokens, credentials, or executable diagnostics.
@@ -491,6 +491,25 @@ LF. Safe line fallback receives the plain projection once. Capable live input
 uses the trusted fixed-theme projection for redraw and sanitizes the dynamic
 buffer separately.
 
+The capable main input's leading `Notice` is recomputed from the current buffer.
+It reports the active sticky agent, except that a valid leading `@agent` token
+reports the exact one-shot target. Its plain shapes are:
+
+```text
+[active runtime] Lead Orchestrator · Antigravity · model agy-model-id · effort high · pending
+story[novel:lead]> Who is answering?
+
+[one-shot runtime] Plot & Structure Architect · Codex · model codex-model-id · effort high · confirmed
+story[novel:lead]> @plot Check the current constraints.
+```
+
+A confirmed header is informational/cyan; a pending header is warning/yellow.
+The words and values remain identical without ANSI. In the lobby the same slot
+explains that a story session must be attached before an execution profile is
+active. Ordinary-line fallback captures that active-target header once before
+reading the line; it cannot change the header while a one-shot alias is being
+typed, so the reply metadata is the authoritative after-dispatch confirmation.
+
 Picker input is a separate semantic projection. Capable live input renders a
 bounded viewport at the current observed width; a permanently fallback driver,
 or a first input call that cannot safely preflight live mode, renders the
@@ -662,9 +681,13 @@ One attempt has a five-second deadline and a one-MiB retained-stdout ceiling.
 It discards stdin and stderr, drops raw bytes after strict projection, and has
 no automatic retry, cache, persistence, or raw diagnostic. Fixed failure
 guidance leaves Inherit and applicable Current custom/compatibility or Custom
-model paths available; re-entering the editor retries later. Save persists
-only the selected opaque model/effort value or null and activates it on the
-next shell/backend construction.
+model paths available; re-entering the editor retries later. Save persists only
+the selected opaque model/effort value or null and applies the complete staged
+snapshot to the running shell. A launch-owned effective Provider, Model, or
+Effort choice is disabled with `Set by a launch override; read-only in this
+shell.` Remove the launch override on a later launch to edit that value. Manual
+on-disk changes still have no watcher and apply only when a new backend is
+launched.
 
 Every capable picker and input component follows the universal transient
 lifecycle: commit, cancellation, interrupt, EOF, and failure erase or replace
@@ -764,10 +787,37 @@ non-finite values, and any serialization failure return the original string
 unchanged. The provider result and any stored transcript bytes are never
 rewritten.
 
+Agent replies also carry runtime-owned execution metadata outside the reply
+body. The exact plain topology is:
+
+```text
+[lead] Lead Orchestrator [completed]
+  Provider [info]: Antigravity [agent config]
+  Model: agy-model-id [agent config]
+  Effort: high [agent config]
+  Confirmation [success]: confirmed
+  Thread [warning]: fresh after provider switch
+  <agent reply>
+```
+
+This metadata is presentation-only: it is not appended to the transcript or
+provider history and does not rewrite earlier replies. The backend profile and
+provider argv are authoritative; reply prose such as “I am Codex” is not
+execution evidence. `confirmed` means one complete logical provider call
+succeeded under the profile, not that the remote provider attested its identity.
+
 An `AGENT` semantic role is bold with the terminal's default foreground color;
 it does not inspect or choose a terminal background. ANSI-capable output wraps
 that emphasis in a local reset, while plain and `NO_COLOR` output retain the
 same unstyled text.
+
+Execution identity uses the existing closed semantic palette: `INFO` is cyan,
+`SUCCESS` green, `WARNING` yellow, `MUTED` ANSI white/gray, and `ERROR` red.
+Provider facts are informational; confirmed and `reused` values are green;
+fresh or pending thread states are yellow; standalone `/status` source fields
+and `not observed` are muted. `NO_COLOR` removes decoration only when its
+trimmed value is neither empty nor exact `0`; labels, states, sources, and
+values keep the complete meaning.
 
 Status roles and terminal states are textual. For example, consensus inspection
 uses `[run DEBATE_ID] [completed] [success]`, interrupted inspection uses
@@ -782,7 +832,11 @@ Context help is one completed `Panel` titled `Help` containing one command
 record in `Group`, `Syntax`, `Aliases`, `Calls provider`,
 `May write artifacts`, `Example` order. Agent roster is one completed `Agents`
 list in canonical route order; each record retains display name, `ID`,
-`Aliases`, and `Advisory domain`.
+`Aliases`, `Advisory domain`, the compact provider/model/effort `Execution`
+profile with sources, and `Confirmation`. `/status` follows its lifecycle
+record with full execution-profile records in Provider, Provider source, Model,
+Model source, Effort, Effort source, Confirmation, Thread, Route generation
+order.
 
 Session, conversation, search, transcript, and focused-history rows use this
 positioned form, with one row per callback:

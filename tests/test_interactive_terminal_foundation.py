@@ -530,6 +530,7 @@ class PublicCompatibilityFoundationTests(unittest.TestCase):
                 ("choice_provider", positional, required),
                 ("session_id", keyword, None),
                 ("agent_id", keyword, None),
+                ("header_provider", keyword, None),
             ),
             InteractivePromptInput.read_prompt: (
                 ("prompt", positional, required),

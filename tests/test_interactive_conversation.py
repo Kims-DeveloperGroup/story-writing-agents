@@ -12,10 +12,12 @@ from typing import Any
 from unittest import mock
 
 from story_writing_agents import (
+    AGENT_SPECS,
     CHARACTER_CUSTODIAN,
     EXECUTION_SPECIALIST,
     LEAD_ORCHESTRATOR,
     PLOT_ARCHITECT,
+    ROSTER,
     SessionDurableState,
 )
 from story_writing_agents.backend import AgentBackend
@@ -87,6 +89,19 @@ from tests.helpers import core_snapshot, initialized_workspace
 
 _TIMESTAMP = "2026-01-01T00:00:00+00:00"
 _REAL_RUNTIME = object()
+_REPLY_ALIASES = {
+    LEAD_ORCHESTRATOR: "lead",
+    PLOT_ARCHITECT: "plot",
+    CHARACTER_CUSTODIAN: "character",
+    EXECUTION_SPECIALIST: "execution",
+}
+
+
+def _reply_header(agent_id: str) -> str:
+    return (
+        f"[{_REPLY_ALIASES[agent_id]}] "
+        f"{AGENT_SPECS[agent_id].display_name} [completed]\n"
+    )
 
 
 def _capture_semantic_method(
@@ -593,7 +608,8 @@ class RuntimeWiringAndGateTests(InteractiveConversationTestCase):
         validate_configuration.assert_not_called()
         bind.assert_not_called()
         rendered = "".join(callbacks.records)
-        self.assertEqual(rendered.count("[agent] "), 4)
+        for agent_id in ROSTER:
+            self.assertEqual(rendered.count(f"[{agent_id}] "), 1)
         roster_records = [
             record for record in callbacks.records if record.startswith("Agents (4)")
         ]
@@ -607,6 +623,15 @@ class RuntimeWiringAndGateTests(InteractiveConversationTestCase):
         )
         positions = [roster.index(f"ID: {agent_id}") for agent_id in ordered_ids]
         self.assertEqual(positions, sorted(positions))
+        self.assertEqual(
+            roster.count(
+                "Execution [info]: Codex [built in default] · "
+                "model provider default [provider default] · "
+                "effort provider default [provider default]"
+            ),
+            4,
+        )
+        self.assertEqual(roster.count("Confirmation [warning]: pending"), 4)
         self.assertEqual(rendered.count("[error session_not_attached]"), 4)
         self.assertNotIn("[error conversation_required]", rendered)
 
@@ -648,7 +673,8 @@ class RuntimeWiringAndGateTests(InteractiveConversationTestCase):
         run_boundary.assert_not_called()
         rendered = "".join(callbacks.records)
         self.assertEqual(rendered.count("[error conversation_required]"), 3)
-        self.assertEqual(rendered.count("[agent] "), 4)
+        for agent_id in ROSTER:
+            self.assertEqual(rendered.count(f"[{agent_id}] "), 1)
         main_prompts = [
             prompt for prompt in callbacks.prompts if prompt.startswith("story[")
         ]
@@ -666,6 +692,83 @@ class RuntimeWiringAndGateTests(InteractiveConversationTestCase):
 
 class ControllerRoutingTests(InteractiveConversationTestCase):
     """Verify exact routing, sticky state, output, and parse categories."""
+
+    def test_runtime_input_header_tracks_only_an_exact_leading_one_shot_route(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        agent_configs = workspace.read_json("config/agent_configs.json")
+        agent_configs[PLOT_ARCHITECT].update(
+            {
+                "backend": "antigravity",
+                "antigravity_model": "agy-live",
+                "antigravity_effort": "high",
+            }
+        )
+        workspace.write_json("config/agent_configs.json", agent_configs)
+        backend = self.make_backend(workspace)
+        controller, _backend, _callbacks, _store, _factory = self.make_controller(
+            workspace,
+            "/quit",
+            backend=backend,
+        )
+
+        self.assertEqual(
+            controller._main_runtime_header("", 0),
+            terminal_module.Notice(
+                "Attach a story session to activate an agent execution profile.",
+                label="active runtime",
+                role=terminal_module.SemanticRole.MUTED,
+                state=terminal_module.ViewState.EMPTY,
+            ),
+        )
+        controller._attached_session_id = "session"
+        active = terminal_module.Notice(
+            "Lead Orchestrator · Codex · model provider default · "
+            "effort provider default · pending",
+            label="active runtime",
+            role=terminal_module.SemanticRole.WARNING,
+            state=terminal_module.ViewState.LOADING,
+        )
+        one_shot = terminal_module.Notice(
+            "Plot & Structure Architect · Antigravity · model agy-live · "
+            "effort high · pending",
+            label="one-shot runtime",
+            role=terminal_module.SemanticRole.WARNING,
+            state=terminal_module.ViewState.LOADING,
+        )
+        for buffer in (
+            "",
+            "@",
+            "@p",
+            "@pl",
+            "@plo",
+            "@plot_",
+            "prefix @plot",
+            "/say @plot",
+        ):
+            with self.subTest(buffer=buffer, route="sticky"):
+                self.assertEqual(
+                    controller._main_runtime_header(buffer, len(buffer)),
+                    active,
+                )
+        for buffer in ("@plot", "@plot message", "@plot\tmessage"):
+            with self.subTest(buffer=buffer, route="one-shot"):
+                self.assertEqual(
+                    controller._main_runtime_header(buffer, len(buffer)),
+                    one_shot,
+                )
+
+        with mock.patch.object(
+            backend,
+            "execution_profile_confirmation",
+            return_value="confirmed",
+        ):
+            confirmed = controller._main_runtime_header("@plot", 5)
+        self.assertEqual(confirmed.label, "one-shot runtime")
+        self.assertIn(" · confirmed", confirmed.text)
+        self.assertIs(confirmed.role, terminal_module.SemanticRole.INFO)
+        self.assertIs(confirmed.state, terminal_module.ViewState.COMPLETED)
 
     def test_default_one_shot_sticky_handback_and_say_use_one_runtime_call(
         self,
@@ -704,6 +807,7 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
         assert store is not None
         real_run = asyncio.run
         accepted_components: list[object] = []
+        semantic_components: list[object] = []
         scope_calls: list[dict[str, object]] = []
         real_write_scope = terminal_module.InteractiveTerminal.write_conversation_scope
 
@@ -715,6 +819,10 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             _capture_semantic_method(
                 "write_accepted_input",
                 accepted_components,
+            ),
+            _capture_semantic_method(
+                "write_component",
+                semantic_components,
             ),
             mock.patch.object(
                 terminal_module.InteractiveTerminal,
@@ -811,6 +919,57 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
                 ),
             ],
         )
+        replies = [
+            component
+            for component in semantic_components
+            if isinstance(component, terminal_module.Record)
+            and component.identity in set(_REPLY_ALIASES.values())
+            and component.content is not None
+        ]
+        self.assertEqual(
+            [record.identity for record in replies],
+            ["lead", "plot", "character", "lead"],
+        )
+        self.assertEqual(
+            [record.content for record in replies],
+            [
+                "lead reply\x1b",
+                "plot reply",
+                "character reply",
+                "literal reply",
+            ],
+        )
+        for record, agent_id in zip(
+            replies,
+            (
+                LEAD_ORCHESTRATOR,
+                PLOT_ARCHITECT,
+                CHARACTER_CUSTODIAN,
+                LEAD_ORCHESTRATOR,
+            ),
+            strict=True,
+        ):
+            with self.subTest(agent_id=agent_id):
+                self.assertEqual(record.title, AGENT_SPECS[agent_id].display_name)
+                self.assertEqual(
+                    tuple((field.label, field.value) for field in record.fields),
+                    (
+                        ("Provider", "Codex [built in default]"),
+                        ("Model", "provider default [provider default]"),
+                        ("Effort", "provider default [provider default]"),
+                        ("Confirmation", "pending"),
+                        ("Thread", "not observed"),
+                    ),
+                )
+                self.assertIs(record.fields[0].role, terminal_module.SemanticRole.INFO)
+                self.assertIs(
+                    record.fields[3].role,
+                    terminal_module.SemanticRole.WARNING,
+                )
+                self.assertIs(
+                    record.fields[4].role,
+                    terminal_module.SemanticRole.MUTED,
+                )
         self.assertEqual(len(runtime.memory_services), 4)
         self.assertEqual(len({id(service) for service in runtime.memory_services}), 1)
         self.assertEqual(runtime.memory_services[0].scope.session_id, "session")
@@ -835,7 +994,8 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
         self.assertNotIn("you →", rendered)
         self.assertNotIn("[routing] One-shot route", rendered)
         self.assertNotIn("[waiting] ", rendered)
-        self.assertIn("lead [completed]> lead reply\\x1b\n", rendered)
+        self.assertIn(_reply_header(LEAD_ORCHESTRATOR), rendered)
+        self.assertIn("  lead reply\\x1b\n", rendered)
         self.assertNotIn("lead reply\x1b", rendered)
         main_prompts = [
             prompt for prompt in callbacks.prompts if prompt.startswith("story[")
@@ -899,7 +1059,7 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
         )
         rendered = "".join(callbacks.records)
         truncation_index = rendered.index("[context] [completed] [warning]")
-        reply_index = rendered.index('lead [completed]> {')
+        reply_index = rendered.index(_reply_header(LEAD_ORCHESTRATOR))
         self.assertLess(truncation_index, reply_index)
         self.assertNotIn("[routing] ", rendered)
         self.assertNotIn("[waiting] ", rendered)
@@ -911,9 +1071,9 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
         )
         self.assertIn(
             '"answer": "界",\n'
-            '                    "items": [\n'
-            '                      1,\n'
-            '                      true\n',
+            '    "items": [\n'
+            '      1,\n'
+            '      true\n',
             rendered,
         )
         self.assertNotIn(
@@ -945,7 +1105,8 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
         )
         self.assertEqual(controller.run_session_lobby(), 0)
         rendered = "".join(callbacks.records)
-        self.assertIn("lead [completed]> safe reply", rendered)
+        self.assertIn(_reply_header(LEAD_ORCHESTRATOR), rendered)
+        self.assertIn("  safe reply\n", rendered)
         self.assertNotIn(operation_id, rendered)
 
     def test_retrieval_progress_sources_and_selected_scope_render_exactly(self) -> None:
@@ -1061,8 +1222,8 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             "  Retrieval read action 2 completed: 2 turns; 4 events; "
             "654 observation bytes; truncated: no.\n",
             '"answer": "界",\n'
-            '                    "ok": true\n'
-            '                  }\n',
+            '    "ok": true\n'
+            '  }\n',
             "[context] Source 1 [completed]\n"
             "  Subject: Conversation source\n"
             "  Conversation: source_conversation\n",
@@ -1331,7 +1492,8 @@ class FailureAndResultTests(InteractiveConversationTestCase):
                 rendered = "".join(callbacks.records)
                 self.assertIn(_error_record(expected_code), rendered)
                 self.assertNotIn("secret", rendered)
-                self.assertIn("lead [completed]> recovered reply\n", rendered)
+                self.assertIn(_reply_header(LEAD_ORCHESTRATOR), rendered)
+                self.assertIn("  recovered reply\n", rendered)
                 self.assertEqual(len(runtime.calls), 2)
                 self.assertEqual(
                     [component.content for component in accepted_components],
@@ -1663,7 +1825,11 @@ class RealRetainedRuntimeTests(InteractiveConversationTestCase):
         )
         rendered = "".join(callbacks.records)
         self.assertIn(
-            f"execution [completed]> reply:{EXECUTION_SPECIALIST}:/run literal",
+            _reply_header(EXECUTION_SPECIALIST),
+            rendered,
+        )
+        self.assertIn(
+            f"  reply:{EXECUTION_SPECIALIST}:/run literal\n",
             rendered,
         )
         self.assertNotIn("[run ", rendered)
@@ -1746,7 +1912,8 @@ class RealRetainedRuntimeTests(InteractiveConversationTestCase):
             rendered,
         )
         self.assertNotIn("provider diagnostic", rendered)
-        self.assertIn("lead [completed]> recovered\n", rendered)
+        self.assertIn(_reply_header(LEAD_ORCHESTRATOR), rendered)
+        self.assertIn("  recovered\n", rendered)
         self.assertEqual(len({id(loop) for loop in loops}), 1)
         self.assertTrue(all(loop.is_closed() for loop in loops))
         self.assertTrue(all(task is not None and task.done() for task in tasks))

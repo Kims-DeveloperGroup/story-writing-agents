@@ -79,6 +79,42 @@ Removing or rewriting an explicit route is not an authentication recovery
 mechanism. Noninteractive commands do not open the picker; prepare native
 authentication before using their provider routes.
 
+<a id="settings-activation-and-route-recovery"></a>
+
+## Settings activation and route recovery
+
+Confirmed `/settings` Save is a current-shell operation: authenticate and
+preflight all effective providers, prepare/quiesce the runtime, validate the
+complete candidate, persist it, then activate it. Its exact prepared boundary
+is `config/system_defaults.json`, `config/agent_configs.json`, and optional
+`agent_states/orchestrator_state/provider_route_generations.json`. Launch
+overrides remain read-only and higher precedence.
+
+| Failure point | Guaranteed state | Recovery |
+| --- | --- | --- |
+| Before persistence | Active runtime and every prepared target are unchanged. | Correct authentication, validation, conflict, preflight, or quiescence and retry Save. |
+| During a prepared write, with proved rollback | Every attempted target is restored from exact opening bytes; active runtime is unchanged. | Review the fixed error and retry. |
+| After persistence, with proved compensation | Exact prior file state is restored and the old runtime remains active. | Review settings and retry in the same shell. |
+| Restoration or active generation cannot be proved | The shell reports `recovery_required`; persisted and in-memory state may not agree. | Stop using that shell immediately. Close it, inspect and back up the prepared targets, and restart against the persisted configuration. |
+
+Restart is exceptional recovery, not the normal activation path. A successful
+Save says it was applied to the running shell; changed profiles remain pending
+only until their first complete logical provider call succeeds. Other active
+shells are not updated and retain their captured state.
+
+There is no watcher for manual changes to the two configuration JSON files. A
+new backend launch validates those bytes and reconciles the runtime-owned route
+generation record; an existing shell does not. Never decrement, delete, or edit
+`provider_route_generations.json` to revive an older provider thread. Every
+provider switch, including A→B→A, deliberately advances freshness. Restore a
+verified complete backup if the record is corrupt or inconsistent.
+
+A fresh target-provider thread still rehydrates bounded context from its
+belonging story session. It is expected to lack provider-native hidden history;
+use `/history`, `/status`, and the visible reply metadata to distinguish story-
+session continuity from native-thread reuse. See
+[Story sessions](../guides/story-sessions.md#execution-identity-and-fresh-thread-continuity).
+
 ## Debate and shell-run recovery
 
 Debate IDs reserve before providers and cannot resume; debate `active` is not

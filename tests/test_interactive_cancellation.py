@@ -73,6 +73,7 @@ from tests.test_interactive_conversation import (
     _capture_semantic_method,
     _conversation_result,
     _error_record,
+    _reply_header,
 )
 
 
@@ -880,7 +881,10 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
         self.assertEqual(rendered.count(cancelled), 1)
         self.assertEqual(rendered.count(hint), 1)
         self.assertNotIn("operation_interrupted", rendered)
-        self.assertIn("plot [completed]> reply:after cancellation\n", rendered)
+        self.assertIn(_reply_header(PLOT_ARCHITECT), rendered)
+        self.assertIn("  Confirmation [warning]: pending\n", rendered)
+        self.assertIn("  Thread: not observed\n", rendered)
+        self.assertIn("  reply:after cancellation\n", rendered)
         detach.assert_called_once_with("session")
         close.assert_called_once_with()
         self.assertFalse(workspace.path(_ACCESS_RELATIVE).exists())
@@ -1131,7 +1135,10 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
             "thread may restart on the next message.\n",
             rendered,
         )
-        self.assertIn("plot [completed]> after reply\n", rendered)
+        self.assertIn(_reply_header(PLOT_ARCHITECT), rendered)
+        self.assertIn("  Confirmation [success]: confirmed\n", rendered)
+        self.assertIn("  Thread [warning]: fresh\n", rendered)
+        self.assertIn("  after reply\n", rendered)
         raw_debug_log = workspace.path(
             "debug_logs/runtime.jsonl"
         ).read_text(encoding="utf-8")
@@ -1288,7 +1295,10 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
             "thread may restart on the next message.\n",
             rendered,
         )
-        self.assertIn("lead [completed]> reply:after cancellation\n", rendered)
+        self.assertIn(_reply_header(LEAD_ORCHESTRATOR), rendered)
+        self.assertIn("  Confirmation [warning]: pending\n", rendered)
+        self.assertIn("  Thread: not observed\n", rendered)
+        self.assertIn("  reply:after cancellation\n", rendered)
 
     def test_nonquiescent_preentry_unjoined_and_bare_cancelled_are_fatal(
         self,

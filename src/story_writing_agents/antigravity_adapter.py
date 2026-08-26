@@ -18,6 +18,7 @@ from uuid import uuid4
 
 from .models import AgentDefinition
 from .provider_adapter import (
+    AgentExecutionProfile,
     ProviderBinding,
     ProviderInvocation,
     ProviderInvocationError,
@@ -76,6 +77,7 @@ class AntigravityAdapter:
             str,
             tuple[str | None, str | None],
         ] | None = None,
+        execution_profiles: Mapping[str, AgentExecutionProfile] | None = None,
         create_process: Callable[[], CreateProcess] = (
             lambda: asyncio.create_subprocess_exec
         ),
@@ -99,6 +101,18 @@ class AntigravityAdapter:
         )
         self._system_effort = self._optional_effort(system_effort)
         self._agent_settings = self._copy_agent_settings(agent_settings)
+        self._execution_profiles = (
+            None
+            if execution_profiles is None
+            else MappingProxyType(dict(execution_profiles))
+        )
+        if self._execution_profiles is not None and any(
+            profile.provider != self.vendor
+            for profile in self._execution_profiles.values()
+        ):
+            raise ValueError(
+                "Antigravity execution profiles must use the Antigravity provider"
+            )
         self._create_process = create_process
         self._wait_for = wait_for
         self._which = which
@@ -862,6 +876,14 @@ class AntigravityAdapter:
         """Resolve Antigravity flags from immutable settings for one agent."""
 
         if agent_id is None or self._agent_settings is None:
+            if agent_id is None:
+                return self.model, self.effort
+        if self._execution_profiles is not None:
+            profile = self._execution_profiles.get(agent_id)
+            if profile is None:
+                raise ValueError("Antigravity execution profile is unavailable")
+            return profile.model, profile.effort
+        if self._agent_settings is None:
             return self.model, self.effort
         if agent_id not in self._agent_settings:
             raise ValueError("Antigravity agent setting is unavailable")

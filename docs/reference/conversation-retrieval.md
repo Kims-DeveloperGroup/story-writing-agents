@@ -22,7 +22,8 @@ handler.handle_conversation_retrieval_action(action) -> ConversationRetrievalObs
 ConversationMemoryService.scope -> ConversationSearchScope
 serialize_conversation_retrieval_observation(observation) -> str  # module only
 
-ConversationRetrievalRequest(*, session_id, conversation_id, turn_id, agent_id, content, context)
+ConversationRetrievalRequest(*, session_id, conversation_id, turn_id, agent_id,
+    content, context, story_session_context=None)
 ConversationRetrievalReply(*, session_id, conversation_id, turn_id, content, sources)
 ConversationRetrievalResult(*, session_id, conversation_id, turn_id, agent_id, content, context, sources)
 ConversationRetrievalSource(*, subject, citation)
@@ -34,6 +35,9 @@ ConversationRetrievalProgressEvent(*, session_id, conversation_id, turn_id,
 
 Requests/results retain pre-turn context; replies/results carry ordered sources.
 Value objects are frozen, slotted, and keyword-only. See [facade exports](package-api.md).
+The request's trailing optional `story_session_context` is package-internal and
+not a root export. Runtime-built calls supply it; direct callers that omit it
+retain the legacy payload.
 
 Every action carries `kind`, three correlated IDs, and sequential `action_index`:
 
@@ -55,13 +59,16 @@ IDs are `s{action}h{ordinal}` and `r{action}e{ordinal}`.
 
 ## Payload, trust, and fixed budgets
 
-The initial payload has `operation`, session/conversation/turn/agent IDs,
-`content`, `context`, and `retrieval`. Continuations omit content/context and
-add one `observation`. Retrieval control has index, allowed actions, policy,
-and rules. Without references, existing conversation/debate payloads stay
-unchanged. With an internal reference coordinator, one separate content-free
-prelude runs first and `untrusted_writing_artifact_context` appears only on this
-initial retrieval payload, never on a continuation.
+The initial runtime-built payload has `operation`, session/conversation/turn/
+agent IDs, `content`, `story_session_context`, and `retrieval`; it omits the
+duplicate legacy `context`. The envelope carries the receiving agent's bounded
+belonging-session owner outcomes, core-document path/hash identities, and fresh
+or included focused mode. Direct callers that leave it `None` keep the legacy
+`context` field. Continuations omit content and all context and add one
+`observation`. Retrieval control has index, allowed actions, policy, and rules.
+With an internal reference coordinator, one separate content-free prelude runs
+first and `untrusted_writing_artifact_context` appears only on this initial
+retrieval payload, never on a continuation.
 
 Each observation is compact sorted-key UTF-8 JSON framed exactly as:
 
@@ -97,8 +104,10 @@ When an internal reference coordinator is supplied, a content-free prelude
 first requires the complete ordered reference action. It has no retrieval
 index. The retrieval loop then remains:
 
-1. Retrieval call one receives the question, focused context, and—only for a
-   referenced turn—the transient untrusted writing-artifact context.
+1. Retrieval call one receives the question, the bounded belonging-session
+   envelope, and—only for a referenced turn—the transient untrusted writing-
+   artifact context. A new empty focus uses `fresh`; established complete
+   history uses `included`.
 2. The agent searches active same-session conversations; it receives `s1h1`.
 3. It reads through `s1h1`, receiving pair `r2e1`, `r2e2`.
 4. It answers with supplied IDs; sources retain subject and citation.
@@ -106,6 +115,11 @@ index. The retrieval loop then remains:
 A direct answer stops at retrieval call one without memory or sources. It is
 physical provider call one without references and call two after a reference
 prelude.
+
+The content-free reference prelude never carries belonging-session context.
+Retrieval continuations likewise do not repeat it; they rely only on the
+authorized observation for that action. A fresh provider-native thread still
+receives call one's envelope and therefore remains in the same story session.
 
 ## Progress, durability, and failures
 
