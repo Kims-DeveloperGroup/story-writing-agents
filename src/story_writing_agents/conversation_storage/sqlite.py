@@ -1057,11 +1057,18 @@ def _refresh_search_index_after_commit(
                     searchable_content=searchable,
                 )
 
-        search_index.rebuild(
-            source_generation=source_generation,
-            documents=documents(),
-            validate_publication=validate_lease,
-        )
+        document_stream = documents()
+        try:
+            search_index.rebuild(
+                source_generation=source_generation,
+                documents=document_stream,
+                validate_publication=validate_lease,
+            )
+        finally:
+            try:
+                document_stream.close()
+            finally:
+                rows.close()
 
     try:
         validate_lease()

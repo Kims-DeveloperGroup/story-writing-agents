@@ -1489,6 +1489,232 @@ class SQLiteConversationSearchBehaviorTests(unittest.TestCase):
         self.assertEqual(after.hits, ())
 
 
+class SQLiteSearchIndexReadLockCleanupTests(unittest.TestCase):
+    @staticmethod
+    def generation(workspace: Workspace) -> int:
+        with raw_connection(workspace) as connection:
+            row = connection.execute(
+                "SELECT lexical_generation FROM conversation_storage_identity"
+            ).fetchone()
+        if type(row) is not tuple or len(row) != 1 or type(row[0]) is not int:
+            raise AssertionError("SQLite lexical generation is invalid")
+        return row[0]
+
+    def test_forced_fts_unavailable_allows_consecutive_authoritative_writes(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        index_path = workspace.path(SQLITE_CONVERSATION_SEARCH_INDEX_PATH)
+        with mock.patch.object(
+            search_index_module,
+            "_runtime",
+            side_effect=SQLiteConversationSearchIndexError,
+        ) as runtime:
+            provision(workspace)
+            services = compose_sqlite_conversation_storage(
+                workspace,
+                mutation_timeout_seconds=0.1,
+            )
+            metadata = services.catalog.create(
+                "session_a",
+                "Forced fallback subject",
+            )
+            user = services.event_store.append(
+                make_append(
+                    session_id="session_a",
+                    conversation_id=metadata.conversation_id,
+                    turn_id="turn_fallback_lock",
+                    content="forced fallback lock needle",
+                )
+            )
+            reply = services.event_store.append(
+                make_append(
+                    session_id="session_a",
+                    conversation_id=metadata.conversation_id,
+                    turn_id="turn_fallback_lock",
+                    kind=ConversationEventKind.AGENT_REPLY,
+                    content="consecutive visible reply",
+                )
+            )
+
+            self.assertEqual((user.sequence, reply.sequence), (1, 2))
+            self.assertEqual(self.generation(workspace), 3)
+            self.assertFalse(index_path.exists())
+            query = ConversationSearchQuery("forced fallback lock needle")
+            expected = ReferenceConversationSearch(
+                services.catalog,
+                services.event_store,
+            ).search(ConversationSearchScope("session_a"), query)
+            self.assertEqual(
+                services.search.search(ConversationSearchScope("session_a"), query),
+                expected,
+            )
+            self.assertFalse(index_path.exists())
+        self.assertEqual(runtime.call_count, 5)
+
+    def test_unsafe_hardlink_companion_preserves_resources_across_writes(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        provision(workspace)
+        index_path = workspace.path(SQLITE_CONVERSATION_SEARCH_INDEX_PATH)
+        outside = workspace.path("outside-unsafe-fts.sqlite3")
+        outside.write_bytes(b"unsafe FTS hard-link sentinel")
+        outside.chmod(0o600)
+        if index_path.exists():
+            index_path.unlink()
+        os.link(outside, index_path)
+
+        def companion_resources() -> tuple[object, ...]:
+            index_metadata = index_path.stat(follow_symlinks=False)
+            outside_metadata = outside.stat(follow_symlinks=False)
+            derived_artifacts = tuple(
+                sorted(
+                    path.name
+                    for path in index_path.parent.iterdir()
+                    if path.name.startswith(".conversation_storage_fts5.")
+                    and path.name != index_path.name
+                )
+            )
+            return (
+                index_path.read_bytes(),
+                outside.read_bytes(),
+                (
+                    index_metadata.st_dev,
+                    index_metadata.st_ino,
+                    index_metadata.st_nlink,
+                    index_metadata.st_mode,
+                ),
+                (
+                    outside_metadata.st_dev,
+                    outside_metadata.st_ino,
+                    outside_metadata.st_nlink,
+                    outside_metadata.st_mode,
+                ),
+                derived_artifacts,
+            )
+
+        before = companion_resources()
+        self.assertEqual(before[0], b"unsafe FTS hard-link sentinel")
+        self.assertEqual(before[2], before[3])
+        self.assertEqual(before[2][2], 2)  # type: ignore[index]
+        services = compose_sqlite_conversation_storage(
+            workspace,
+            mutation_timeout_seconds=0.1,
+        )
+        metadata = services.catalog.create("session_a", "Unsafe companion")
+        user = services.event_store.append(
+            make_append(
+                session_id="session_a",
+                conversation_id=metadata.conversation_id,
+                turn_id="turn_unsafe_companion",
+                content="unsafe companion fallback needle",
+            )
+        )
+        reply = services.event_store.append(
+            make_append(
+                session_id="session_a",
+                conversation_id=metadata.conversation_id,
+                turn_id="turn_unsafe_companion",
+                kind=ConversationEventKind.AGENT_REPLY,
+                content="authoritative reply after unsafe companion",
+            )
+        )
+
+        self.assertEqual((user.sequence, reply.sequence), (1, 2))
+        self.assertEqual(self.generation(workspace), 3)
+        self.assertEqual(companion_resources(), before)
+        query = ConversationSearchQuery("unsafe companion fallback needle")
+        expected = ReferenceConversationSearch(
+            services.catalog,
+            services.event_store,
+        ).search(ConversationSearchScope("session_a"), query)
+        self.assertEqual(
+            services.search.search(ConversationSearchScope("session_a"), query),
+            expected,
+        )
+        self.assertEqual(companion_resources(), before)
+
+    def test_control_during_unstarted_or_partial_stream_releases_read_lock(
+        self,
+    ) -> None:
+        for control_type in (KeyboardInterrupt, SystemExit):
+            for stage in ("unstarted", "partial"):
+                with self.subTest(control=control_type.__name__, stage=stage):
+                    workspace = initialized_workspace(self)
+                    provision(workspace)
+                    services = compose_sqlite_conversation_storage(
+                        workspace,
+                        mutation_timeout_seconds=0.1,
+                    )
+                    metadata = services.catalog.create(
+                        "session_a",
+                        f"{stage} {control_type.__name__}",
+                    )
+
+                    def interrupt_rebuild(*_args: object, **kwargs: object) -> None:
+                        documents = kwargs["documents"]
+                        if stage == "partial":
+                            document = next(iter(documents))  # type: ignore[arg-type]
+                            self.assertIsInstance(
+                                document,
+                                SQLiteConversationSearchIndexDocument,
+                            )
+                            self.assertEqual(document.sequence, 1)
+                        raise control_type()
+
+                    with (
+                        mock.patch.object(
+                            SQLiteConversationSearchIndex,
+                            "rebuild",
+                            side_effect=interrupt_rebuild,
+                        ) as rebuild,
+                        self.assertRaises(control_type),
+                    ):
+                        services.event_store.append(
+                            make_append(
+                                session_id="session_a",
+                                conversation_id=metadata.conversation_id,
+                                turn_id="turn_control_cleanup",
+                                content="control cleanup lock needle",
+                            )
+                        )
+                    rebuild.assert_called_once()
+                    committed = services.event_store.read(
+                        "session_a",
+                        metadata.conversation_id,
+                    )
+                    self.assertEqual(tuple(event.sequence for event in committed), (1,))
+                    self.assertIs(
+                        committed[0].kind,
+                        ConversationEventKind.USER_MESSAGE,
+                    )
+                    self.assertEqual(
+                        committed[0].content,
+                        "control cleanup lock needle",
+                    )
+                    self.assertEqual(self.generation(workspace), 2)
+
+                    reply = services.event_store.append(
+                        make_append(
+                            session_id="session_a",
+                            conversation_id=metadata.conversation_id,
+                            turn_id="turn_control_cleanup",
+                            kind=ConversationEventKind.AGENT_REPLY,
+                            content="next mutation commits without a retained lock",
+                        )
+                    )
+                    self.assertEqual(reply.sequence, 2)
+                    self.assertEqual(self.generation(workspace), 3)
+                    self.assertEqual(
+                        services.event_store.read(
+                            "session_a",
+                            metadata.conversation_id,
+                        ),
+                        (committed[0], reply),
+                    )
+
+
 class SQLiteBoundaryAndCompositionTests(unittest.TestCase):
     def test_constants_exports_and_owning_modules_are_exact(self) -> None:
         expected = (
