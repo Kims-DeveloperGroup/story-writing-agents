@@ -488,6 +488,7 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
                 user_content=" \t",
                 outcome_content="new reply",
             )
+            controller._show_message_details = True
             return f"/transcript {metadata.conversation_id[:12]} 2 --from 3"
 
         controller, _backend, callbacks = self.make_controller(
@@ -511,26 +512,34 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
         handle = metadata.conversation_id[:12]
         self.assertIn(
             "Transcript (1/2) [completed]\n"
-            f"  [transcript {handle}] [completed]\n"
-            "    Sequence: 3\n"
-            "    Turn: turn_2\n"
-            "    Kind: user_message\n"
-            "    Sender: user\n"
-            "    Recipient: plot_architect\n"
-            "    Content:\n"
-            "     \\x09\n",
+            "  You → Plot & Structure Architect · Sequence: 1 [completed]\n"
+            "\n"
+            "  │ first question\n",
             rendered,
         )
         self.assertIn(
             "Transcript (2/2) [completed]\n"
-            f"  [transcript {handle}] [completed]\n"
-            "    Sequence: 4\n"
-            "    Turn: turn_2\n"
-            "    Kind: agent_reply\n"
-            "    Sender: plot_architect\n"
-            "    Recipient: user\n"
-            "    Content:\n"
-            "    new reply\n",
+            "  Plot & Structure Architect → You · Sequence: 2 [completed]\n"
+            "\n"
+            "  │ first reply\n",
+            rendered,
+        )
+        self.assertIn(
+            "Transcript (1/2) [completed]\n"
+            "  You → Plot & Structure Architect · Sequence: 3 · "
+            "Turn: turn_2 · Kind: user_message · "
+            "IDs: user → plot_architect [completed]\n"
+            "\n"
+            "  │  \\x09\n",
+            rendered,
+        )
+        self.assertIn(
+            "Transcript (2/2) [completed]\n"
+            "  Plot & Structure Architect → You · Sequence: 4 · "
+            "Turn: turn_2 · Kind: agent_reply · "
+            "IDs: plot_architect → user [completed]\n"
+            "\n"
+            "  │ new reply\n",
             rendered,
         )
         self.assertEqual(

@@ -432,6 +432,7 @@ class InteractiveConsensusDispatchTests(InteractiveConversationTestCase):
             "/quit",
             runtime=runtime,  # type: ignore[arg-type]
         )
+        controller._show_message_details = True
         before = file_bytes(workspace)
         attachment_facts: list[tuple[object, object, object, object]] = []
         accepted_components: list[object] = []
@@ -503,19 +504,25 @@ class InteractiveConsensusDispatchTests(InteractiveConversationTestCase):
             accepted_components,
             [
                 terminal_module.Message(
-                    "you → consensus",
+                    "You → Consensus",
                     "inline ${core_documents/global_outline.md}",
                     state=terminal_module.ViewState.COMPLETED,
+                    presentation=terminal_module.MessagePresentation.CHAT_BLOCK,
+                    accent=terminal_module.SpeakerAccent.MAGENTA,
                 ),
                 terminal_module.Message(
-                    "you → consensus",
+                    "You → Consensus",
                     "isolated ${core_documents/character_sheets.md}",
                     state=terminal_module.ViewState.COMPLETED,
+                    presentation=terminal_module.MessagePresentation.CHAT_BLOCK,
+                    accent=terminal_module.SpeakerAccent.MAGENTA,
                 ),
                 terminal_module.Message(
-                    "you → consensus",
+                    "You → Consensus",
                     "composed line one\n/send",
                     state=terminal_module.ViewState.COMPLETED,
+                    presentation=terminal_module.MessagePresentation.CHAT_BLOCK,
+                    accent=terminal_module.SpeakerAccent.MAGENTA,
                 ),
             ],
         )
@@ -595,7 +602,7 @@ class InteractiveConsensusDispatchTests(InteractiveConversationTestCase):
         self.assertEqual(len({id(facts[3]) for facts in attachment_facts}), 1)
         rendered = "".join(callbacks.records)
         self.assertIn("[compose] Consensus run", rendered)
-        self.assertNotIn("you → consensus", rendered)
+        self.assertNotIn("You → Consensus", rendered)
         self.assertNotIn("exact loaded draft", rendered)
         self.assertNotIn("RAW_RESULT_SECRET", rendered)
 
