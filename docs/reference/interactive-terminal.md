@@ -810,7 +810,7 @@ described below. A root `/` opens with its first candidate highlighted. Compact
 registry order (not output layout):
 
 ```text
-/say /to /agent /agents /auth /language /persona /reset /settings /run /draft-file /session
+/say /rag /to /agent /agents /auth /language /persona /reset /settings /run /draft-file /session
 /conversation /search /transcript /inspect /history /status /help /? /quit /exit
 ```
 
@@ -821,8 +821,8 @@ order derived from each `AGENT_ROUTES` entry's `prompt_alias`:
 @lead @plot @character @execution
 ```
 
-Exact case-sensitive prefixes filter in stable order. Root provides the 22
-tokens above; help provides 25 including `/compose`, `/send`, and `/cancel`;
+Exact case-sensitive prefixes filter in stable order. Root provides the 23
+tokens above; help provides 26 including `/compose`, `/send`, and `/cancel`;
 agent-valued slash positions provide the four preferred prompt aliases `lead`,
 `plot`, `character`, and `execution` in the same route order. The parser still
 accepts all ten declared route aliases for slash and routed-message input;
@@ -1331,6 +1331,16 @@ byte is never guessed into a live key role.
 <a id="exact-search-and-transcript-records"></a>
 
 ## Dense search, transcript, and history records
+
+An accepted `/rag QUERY` is control input rather than an accepted provider
+message. The terminal shows only the fixed arming notice and never renders the
+query as semantic output. The live editor necessarily displays the current
+typed buffer; process-local main-command history can recall the submitted line,
+and ordinary-line fallback or terminal infrastructure may retain it in
+scrollback. On the later attempted story turn, one content-free `context`
+record reports `Conversation RAG` outcome and `Reason` before the agent reply;
+normal source records follow the reply. No excerpt body is a terminal
+diagnostic.
 
 Before search catalog/service work, one completed `Search request` record names
 the NFKC-normalized, case-folded, whitespace-collapsed query and `active` scope.

@@ -109,6 +109,7 @@ and distinguish `$` whole-file selection from `$$` ranged selection.
 | Valid `@agent TEXT` or `/say TEXT` | Eligible only in `TEXT`. |
 | `/run [--fresh] [--output PATH] PROMPT` | Eligible only in `PROMPT`, never flags or `PATH`. |
 | `/run` multiline composer; internal chat composer | Eligible in composed prompt text. |
+| `/rag QUERY` | Inert. This is private next-turn retrieval control, not provider-bound story text. Put references in the following eligible story message. |
 | Lobby or attached without conversation focus; management, ID, subject, option, output-path, settings, confirmation, and output fields | Inert. |
 | Noninteractive CLI, automation, or Python | No activation UI; type literal `${...}` indicators. |
 
@@ -263,6 +264,22 @@ document replacements.
 | Repair a character sheet | `@character Check ${core_documents/character_sheets.md} against ${manuscript/part-01/scenes/opening.md}#L12-L24 and propose the full correction.` | The character agent independently reads both sources; an advisory reply remains a proposal. |
 | Apply narrative rules | `@execution Review ${core_documents/narrative_rules.md}#L8-L20 and ${manuscript/part-01/scenes/opening.md}#L66-L90 before recommending prose changes.` | The execution agent receives only those selected ranges as transient untrusted context. |
 | Publish a manuscript revision | `/run --output part-01/revisions/opening-r2.md Revise ${manuscript/part-01/scenes/opening.md} using ${core_documents/global_outline.md}, ${core_documents/character_sheets.md}, and ${core_documents/narrative_rules.md}.` | Every participating role and debate phase gets a fresh read obligation; prior evidence cannot be borrowed. The approved result is written only to the new part-scoped path. |
+
+One forced conversation-RAG attempt can coexist with a later referenced
+advisory turn:
+
+```text
+/rag council vessel
+@plot Compare ${core_documents/global_outline.md} with ${manuscript/part-01/scenes/opening.md}#L40-L65.
+```
+
+The `/rag` line only arms retrieval. On the following eligible turn, the
+whole-file and ranged references use distinct paths and retain their ordered
+artifact authorization identity, while RAG excerpts retain separate `g...`
+citation identity. The independent reference prelude runs first; the initial
+substantive request then carries both bounded contexts. The existing batch rule
+still rejects whole-file plus ranged use of the same path, exact duplicates,
+and overlapping ranges.
 
 The source files in these examples may be manual or pre-provenance bytes; the
 read contract is the same. Advisory work still cannot write them. Consensus

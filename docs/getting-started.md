@@ -54,11 +54,13 @@ provider requires an approved internal, non-redistributing `.[rag]` install.
 Installation alone does not enable RAG or send conversation content anywhere.
 The installed noninteractive CLI supports explicit opt-in, rebuild, bounded
 cited search, disable, and derived-only purge; direct Python callers can also
-compose the same local runtime. Interactive `/settings` RAG controls, automatic
-shell-turn use, and `/rag QUERY` are not implemented yet. Follow
+compose the same local runtime. Interactive `/settings` can persist a local
+provider and automatic policy for the next shell, and `/rag QUERY` privately
+arms one forced preflight for the next eligible focused turn. Follow
 [Optional conversation RAG](guides/conversation-rag.md) for fresh/existing
 submodule setup, `.[rag]` installation, commands, offline pin checks,
-persistence/trust limits, and the current redistribution restriction.
+interactive use, persistence/trust limits, and the current redistribution
+restriction.
 
 ## 2. Check the runtime without a provider
 

@@ -62,9 +62,10 @@ integration. Noninteractive `story rag` status, opt-in, rebuild, cited search,
 disable, and derived-only purge workflows are available; enabling or using the
 local provider requires the pinned `rag` extra, and installation alone never
 opts a workspace in. Interactive `/settings` RAG controls, automatic shell-turn
-wiring, and one-turn `/rag QUERY` remain planned.
+wiring, and one-turn `/rag QUERY` are available: saved settings apply to the
+next shell, and `/rag` privately arms the next eligible focused story turn.
 See [Optional conversation RAG](docs/guides/conversation-rag.md) for setup,
-commands, trust/persistence limits, current agent use, and the remaining plan.
+commands, interactive use, and trust/persistence limits.
 
 `story` and `story-writing-agents` are exact aliases. Smoke uses synthetic data
 without Codex or Antigravity, credential reads, a terminal, subprocesses, apps,
@@ -133,7 +134,7 @@ story run --output part-01/opening.md --prompt 'Draft the opening.'
 - [Workspace guide](docs/guides/workspaces.md) explains the editable project files.
 - [Writing artifacts](docs/reference/writing-artifacts.md) separates current reference sources from publication identity, provenance, and recovery.
 - [Conversation archives](docs/reference/conversation-archives.md) documents canonical conversation-only bytes and privileged filesystem transfer.
-- [Optional conversation RAG](docs/guides/conversation-rag.md) covers the local provider/store, noninteractive lifecycle and cited-search commands, programmatic runtime integration, and planned interactive controls.
+- [Optional conversation RAG](docs/guides/conversation-rag.md) covers the local provider/store, noninteractive lifecycle and cited-search commands, interactive settings and one-turn use, and programmatic runtime integration.
 - [Antigravity guide](docs/guides/antigravity.md) covers `agy` setup, authentication, routing, safety, sessions, and provider-free verification.
 - [Story sessions](docs/guides/story-sessions.md) shows shell management, conversation reads, retrieval, and consensus.
 - [Session lifecycle](docs/design/session-lifecycle.md) maps internal state to commands, output, errors, and next actions.
@@ -159,8 +160,8 @@ identity-bound generation store, exact generic adapter, composition, and
 provider/store-neutral runtime service are direct-module APIs and are not
 package-root exports. An application can inject the runtime service into
 `StoryRuntime`; the installed CLI also exposes explicit local lifecycle and
-cited-search commands. `/settings` selection, automatic shell-turn wiring, and
-one-turn `/rag QUERY` remain deferred. See
+cited-search commands. The shell composes a persisted local selection at
+startup and supports automatic or one-turn preflight. See
 the [RAG package boundary](docs/reference/package-api.md#optional-conversation-rag-boundary).
 
 Canonical conversation archive values and lease-bound filesystem export/import
@@ -247,8 +248,9 @@ See the [CLI contract](docs/reference/cli.md#conversation-storage-migration).
   default and has explicit provider-free status plus opt-in, rebuild, cited
   search, disable, and derived-only purge commands. It consumes the active or
   freshly activated complete filesystem/SQLite authority bundle without
-  coupling derived state to either backend. Interactive `/settings` RAG fields,
-  automatic shell-turn wiring, and `/rag QUERY` are not implemented yet. The
+  coupling derived state to either backend. `/settings` persists the RAG choice
+  for the next shell; explicitly enabled automatic retrieval and `/rag QUERY`
+  affect only eligible focused advisory turns. The
   derived FTS5 companion does not change readiness, exact literal results,
   migration parity, or selection.
 - Smoke's explicit workspace is not read-only and retains bounded plaintext

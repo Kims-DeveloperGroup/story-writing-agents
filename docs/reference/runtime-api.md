@@ -5,8 +5,9 @@
 > projection, plus context-aware debates. Interactive `$`/`$$` discovery is a
 > controller/terminal workflow and adds no runtime method. Separate
 > noninteractive `story rag` lifecycle/search commands are implemented without
-> adding a `StoryRuntime` method; interactive `/settings` selection, automatic
-> shell wiring, and `/rag QUERY` are not implemented yet.
+> adding a `StoryRuntime` method; the installed controller composes saved
+> `/settings` policy and passes an armed `/rag QUERY` through the existing
+> `rag_query` parameter on the next eligible focused turn.
 
 Key terms: **context-omitted run**—no `conversation_context`; **included
 snapshot**—one transcript window reused for a debate; **progress
@@ -219,7 +220,8 @@ ConversationRetrievalResult(*, session_id: str, conversation_id: str,
     turn_id: str, agent_id: str, content: str,
     context: ConversationContextWindow, sources: tuple[ConversationRetrievalSource, ...],
     reference_operation_id: str | None = None,
-    rag_outcome: ConversationRagAttemptOutcome | None = None)
+    rag_outcome: ConversationRagAttemptOutcome | None = None,
+    rag_sources: tuple[ConversationRetrievalSource, ...] = ())
 ```
 
 Validation, observer errors, cancellation, and uncertain persistence raise.
@@ -244,12 +246,15 @@ preflight and overrides automatic policy. Without a configured RAG service, a
 forced query supplies a disabled literal-fallback context; without a forced
 query, no attempt occurs. A configured service may derive one automatic query
 only when its application-owned `automatic_enabled` policy is true. No-attempt
-requests omit `rag_context` and return `rag_outcome=None`, preserving the old
-provider and result shapes.
+requests omit `rag_context` and return `rag_outcome=None` plus
+`rag_sources=()`, preserving the old provider and source shapes.
 
 An attempted preflight supplies bounded authoritative excerpts only on the
 initial retrieval-provider request. The result copies its content-free
-outcome/reason to `rag_outcome`; continuations omit the context. Once a reply is
+outcome/reason to `rag_outcome` and the exact selected preflight-authorized
+source subset to `rag_sources`; continuations omit the context. RAG-only
+sources need no literal progress, while every source outside that subset still
+requires completed correlated search/read progress. Once a reply is
 committed, both `converse()` and `converse_with_retrieval()` ask the configured
 service to project the complete current active visible-turn target. Ordinary
 projection failure is isolated from the committed reply and recorded safely;

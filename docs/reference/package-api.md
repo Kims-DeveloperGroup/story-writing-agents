@@ -161,9 +161,9 @@ See [Conversation search](conversation-search.md#search-contract).
 > provider/store-neutral runtime service and its additive `StoryRuntime`
 > integration. Issue #348 adds concrete local runtime composition, persisted
 > default-disabled provider/automatic fields, and six noninteractive lifecycle
-> and authorized-search workflows. Interactive `/settings` RAG editors,
-> automatic shell wiring, and `/rag QUERY` do not exist yet; existing literal
-> `/search` is unchanged.
+> and authorized-search workflows. Issue #349 adds `/settings` RAG editors,
+> next-shell local/automatic composition, private one-turn `/rag QUERY`, and
+> exact RAG-source provenance; existing literal `/search` is unchanged.
 
 Provider-neutral story contracts live in
 `story_writing_agents.conversation_rag`. The module imports only the standard
@@ -561,8 +561,9 @@ Attempted contexts use contiguous `g1` through `g20` citation IDs and expose
 authoritative excerpt text only through the explicit provider dictionary;
 dataclass representations omit it. `ConversationRetrievalRequest.rag_context`
 and `ConversationRetrievalResult.rag_outcome` are additive and default to
-`None`. None of the three RAG values joins the unchanged 120-name package-root
-facade.
+`None`; `ConversationRetrievalResult.rag_sources` is an additive empty-tuple
+default and exact ordered subset of result sources. None of these direct-module
+RAG values joins the unchanged 120-name package-root facade.
 
 The command-domain boundary is direct-module-only and exports exactly seven
 names:
@@ -1313,7 +1314,7 @@ aliases. See [Backend and sessions](backend-and-sessions.md#lifecycle-value-cont
 - [Canonical conversation archives and storage migration](conversation-archives.md)
 - [Conversation search and cited transcript pages](conversation-search.md)
 - [Bounded conversation retrieval](conversation-retrieval.md)
-- [Optional conversation RAG setup, commands, and interactive plan](../guides/conversation-rag.md)
+- [Optional conversation RAG setup, commands, and interactive use](../guides/conversation-rag.md)
 - [Interactive command parser](interactive-command-parser.md)
 - [Identifiers and errors](configuration/identifiers-and-errors.md)
 

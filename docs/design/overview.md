@@ -8,7 +8,8 @@
 > contracts, a deterministic local provider, a disposable generation store, and
 > explicit composition plus programmatic runtime/agent integration. Six
 > noninteractive local lifecycle/search commands are implemented; interactive
-> `/settings`, automatic shell-turn wiring, and `/rag QUERY` remain planned.
+> `/settings`, automatic eligible-turn wiring, and one-turn `/rag QUERY` are
+> also available.
 
 Key terms: **controller**—owner of interactive transition order;
 **adapter**—provider-specific process/protocol implementation;
@@ -71,10 +72,14 @@ Callers own their workspace, store, lexical collaborator, low-level service,
 and restart-safe runtime-state-port lifecycles; fixed local composition can
 instead construct and retain those concrete resources for the CLI or another
 application. Configuration owns only nullable provider/exact automatic values,
-while the CLI owns their compare-and-set workflow. See
+the noninteractive CLI owns its compare-and-set workflow, and interactive
+Settings owns one pending guarded edit transaction. The controller reads the
+backend construction snapshot once, composes Local exactly once beside a
+complete storage bundle, and owns only the process-local pending `/rag` query.
+See
 [Optional conversation RAG](../guides/conversation-rag.md) for installation,
-the weak-local/persistence/runtime boundary, current commands, and planned
-interactive flow.
+the weak-local/persistence/runtime boundary, current commands, and interactive
+flow.
 
 `Workspace` owns generic path-safe persistence, inspection, and atomic
 replacement. Its retained root identity is a narrower internal

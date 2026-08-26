@@ -687,8 +687,8 @@ the same content.
 > contracts.
 
 A leading slash automatically opens `SuggestionPalette` at a recognized
-grammar position. Root candidates are the 22 main-available command tokens in
-registry order. Help offers those 22 plus `/compose`, `/send`, and `/cancel`;
+grammar position. Root candidates are the 23 main-available command tokens in
+registry order. Help offers those 23 plus `/compose`, `/send`, and `/cancel`;
 agent-valued slash positions expose the four preferred prompt aliases `lead`,
 `plot`, `character`, and `execution` in route order. Other implemented finite
 positions expose their static subcommands or options. Runtime values such as
@@ -881,10 +881,11 @@ eleven-field system object; loading, cancellation, decline, readiness/parity
 failure, conflict, or write failure does not rewrite legacy bytes.
 
 Conversation-RAG provider/automatic values are independent of agent-provider
-routing and conversation-storage selection. The current `/settings` view
-preserves those two values but offers no RAG editor; noninteractive `story rag`
-owns current opt-in/disable behavior, and interactive selection/turn wiring is
-planned separately.
+routing and conversation-storage selection. `/settings` exposes one nested
+Conversation RAG editor with Provider Disabled/Local and Automatic Off/On,
+using the same Current/Pending and guarded Save/Cancel transaction. Editing
+does not probe the optional package; a successful save applies to the next
+shell, whose controller composes Local once with the exact automatic value.
 
 Every backend validates the complete persisted schema before applying explicit
 provider settings and snapshots effective values at construction. Provider

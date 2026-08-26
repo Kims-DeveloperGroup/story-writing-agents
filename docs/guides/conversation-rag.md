@@ -1,17 +1,13 @@
 # Optional conversation RAG integration
 
-> **Current availability:** Issues #262, #283, #263, and #348 provide a direct
+> **Current availability:** Issues #262, #283, #263, #348, and #349 provide a direct
 > Python boundary, a fixed pure local provider, a disposable per-session
 > generation store, provider/store-neutral runtime authorization, and six
-> noninteractive `story rag` lifecycle/search commands. Local provider use
-> needs the pinned `generic-rag` package and explicit workspace opt-in.
-> Existing literal `/search` is unchanged.
->
-> **Planned availability:** Issue #349 adds `/settings` provider/automatic
-> controls, startup composition and automatic shell-turn wiring, and one-turn
-> `/rag QUERY`. The persisted automatic field exists now, but the installed
-> shell does not consume it yet. Flows labeled **planned** below are delivery
-> contracts, not current behavior.
+> noninteractive `story rag` lifecycle/search commands. The shell also provides
+> storage-backed `/settings` provider/automatic controls, next-startup local
+> composition, eligible automatic preflight, and private one-turn `/rag QUERY`
+> arming. Local provider use needs the pinned `generic-rag` package and explicit
+> workspace opt-in. Existing literal `/search` is unchanged.
 
 Key terms: **authoritative source**—the current conversation store whose bytes
 must be reread before use; **derived projection**—disposable fragments and
@@ -281,7 +277,9 @@ runtime = StoryRuntime(
 
 The bundle retains its service, generation store, and local state adapter.
 Construction checks the exact optional package and capabilities but neither
-changes persisted opt-in settings nor projects a session by itself.
+changes persisted opt-in settings nor projects a session by itself. Direct
+applications still own this composition. The installed shell independently
+uses the persisted construction snapshot described below.
 
 ## Use the current programmatic runtime integration
 
@@ -309,8 +307,9 @@ state_port, automatic_enabled=False)`. The low-level object implements the four
 the same workspace key and embedding identity plus synchronous
 `inspect_projection_state(session_id)` and
 `mark_projection_stale(session_id)` operations. An application may provide its
-own state port or retain the concrete local bundle above; there is still no
-interactive settings-owned runtime composition in this release.
+own state port or retain the concrete local bundle above. The installed shell
+uses the fixed concrete local bundle; it does not make that composition a
+package-root API.
 
 `StoryRuntime(..., conversation_rag_service=service)` accepts only that exact
 runtime-service type. It uses the default composed filesystem
@@ -354,7 +353,7 @@ marks state stale best-effort;
 `KeyboardInterrupt`, `SystemExit`, and cancellation controls propagate after
 the reply commit.
 
-## Current runtime and agent utilization
+## Runtime and agent utilization
 
 The programmatic integration uses RAG as a bounded preflight, never as memory
 authority:
@@ -393,7 +392,10 @@ The initial retrieval-provider request receives attempted `rag_context` with a
 content-free outcome/reason and bounded authoritative excerpts explicitly
 labeled as untrusted story data. Continuation requests omit that context. The
 Python result carries the optional content-free `rag_outcome`; no-attempt turns
-leave it `None`. See the exact
+leave it `None`. Its ordered `rag_sources` is the exact subset of final sources
+that the same preflight authorized. A RAG-only citation needs no literal-search
+progress; every non-RAG source still requires completed, correlated search or
+read progress. Mixed answers preserve both rules. See the exact
 [payload and citation contract](../reference/conversation-retrieval.md#optional-conversation-rag-preflight).
 
 ## Use the current noninteractive workflows
@@ -437,8 +439,9 @@ authoritative storage. See the exact machine contract in
 `"local"` and `conversation_rag_automatic` as an exact boolean. Both default to
 disabled (`null`/`false`), and `true` is valid only with provider `local`.
 Commands can enable/disable the provider but intentionally provide no automatic
-toggle. A legacy configuration missing either key reads as disabled without a
-rewrite; the next successful complete configuration save emits both keys in the
+toggle. Interactive `/settings` supplies that toggle as described below. A
+legacy configuration missing either key reads as disabled without a rewrite;
+the next successful complete configuration save emits both keys in the
 canonical eleven-key object.
 
 Every valid invocation writes one compact, key-sorted schema-v1 JSON line to
@@ -457,21 +460,123 @@ can itself require network/repository access as described above; running the
 installed local provider does not. Generic algorithm changes remain owned by
 the independent `generic-rag` repository rather than this integration.
 
-## Planned interactive utilization
+<a id="interactive-conversation-rag"></a>
 
-Issue #349 will add only the remaining interactive workflow:
+## Use RAG in the interactive shell
 
-| Planned user action | Planned behavior |
+### Persist the next-shell policy in `/settings`
+
+`config/system_defaults.json`, edited through the existing guarded `/settings`
+workflow, is the shell's storage-backed source of truth. Choose **Conversation
+RAG**, then edit these independent Current/Pending values:
+
+| Field | Choices and invariant |
 | --- | --- |
-| `/settings` | Edit the allowlisted provider and default-off automatic policy through the storage-backed settings owner, then compose that choice at the next shell startup; never persist credentials. |
-| Automatic eligible turn | When explicitly enabled, run at most one bounded authorized preflight before the addressed agent and supply only reread excerpts/citations. |
-| `/rag QUERY` | Force one cited preflight for the next eligible story-agent turn without changing the durable automatic policy. |
+| Provider | **Disabled** persists `null` and forces Automatic **Off**. **Local** persists `"local"` but does not turn Automatic on. |
+| Automatic | **Off** is the default. **On** is accepted only while the pending provider is **Local**. |
 
-The persisted automatic field does not by itself enable an interactive turn in
-the current release. Existing literal `/search` remains unchanged. Canonical
-writing-artifact references and RAG can coexist in one turn: the independently
-authorized reference prelude remains first, then the initial substantive agent
-request receives both bounded contexts; neither repeats on continuation.
+Values remain pending until the top-level **Save** confirmation. **Discard** by
+reverting values, or **Cancel**, Escape, Ctrl-C, or EOF according to the existing
+Settings transaction; an unsaved exit leaves the captured configuration bytes
+unchanged. Save uses the same exact-byte compare-and-set guard and canonical
+atomic replacement as every other setting. A concurrent byte change fails
+closed instead of merging an old RAG choice.
+
+Opening or editing the Conversation RAG fields never probes or installs the
+optional package, uses the network, or prompts for a credential. The full
+Settings Save retains its existing, independent agent-provider authentication
+and conversation-storage readiness gates. A saved RAG change affects only the
+next shell: the current backend, runtime, active storage bundle, and automatic
+policy remain unchanged.
+
+### What happens at the next shell startup
+
+After configured conversation storage has produced one complete authority
+bundle, the controller reads the backend construction-time configuration
+snapshot once:
+
+- **Disabled** creates no RAG factory, performs no optional-package probe or
+  import, and writes no RAG/configuration state.
+- **Local** composes exactly one local runtime service with the persisted
+  Automatic value and injects it beside that complete storage bundle.
+- A missing, wrong-version, or capability-incompatible optional package leaves
+  configuration unchanged and opens a usable RAG-free shell, including
+  `/settings`. It emits exactly one fixed actionable warning: verify the pinned
+  `rag` extra and restart. Reinstall the reviewed pin with
+  `python -m pip install --editable '.[rag]'`; startup never installs it.
+
+The legacy Python controller path that supplies only a raw conversation catalog
+has no complete catalog/search/provenance/coordinator authority and therefore
+does not compose RAG. Normal installed-shell construction supplies the complete
+bundle.
+
+### Choose automatic or one-turn preflight
+
+With Automatic **Off**, ordinary focused turns keep their established behavior.
+With Automatic **On**, each eligible ordinary, `/say`, or routed `@agent` turn
+may run the existing bounded authorized preflight once before the addressed
+story agent. This does not add retrieval to `/run`, debate, consensus, local
+management commands, or any other scope.
+
+To override automatic policy for one turn, first arm a private query:
+
+```text
+/rag council vessel
+@plot Which earlier decision constrains ${core_documents/global_outline.md} and ${manuscript/part-01/opening.md}#L20-L32?
+```
+
+`/rag QUERY` is alias-free. `QUERY` must be nonblank, free of Unicode control or
+format characters, and no longer than 200 codepoints before and after the
+established normalization. The command requires an attached session and a
+focused active conversation. It performs no retrieval itself, does not change
+the saved Automatic value, does not echo or persist the query, and does not
+replace literal `/search`.
+
+The pending query is process-local and bound to the exact session/conversation:
+
+- arming again replaces the older query;
+- local and otherwise ineligible commands retain it;
+- the next eligible ordinary, `/say`, or routed turn consumes it once;
+- changing session or conversation scope, pausing/detaching, quitting, or
+  controller cleanup clears it;
+- cancellation before the runtime coroutine enters retains it for the next
+  eligible turn; once that coroutine enters, the query is consumed even if the
+  turn later fails or is cancelled.
+
+Artifact references belong in the subsequent eligible story message, never in
+the `/rag` control. A whole-file reference and a line-range reference to
+distinct paths can coexist with the forced preflight; their artifact
+authorization identities and the RAG citation identities remain independent.
+The existing parser still rejects a whole-file and ranged reference to the same
+path, exact duplicates, and overlapping same-path ranges.
+
+### What agents and users receive
+
+Agents receive only the fixed bounded, reauthorized excerpt bodies and stable
+`g1` through `g20` citations on the initial substantive request. Provider text,
+scores, vector handles, credentials, and permission to expand the active
+session are absent. The user sees the story reply, the content-free RAG
+outcome/reason, and exact cited sources. Excerpt bodies are not exposed as
+diagnostics or copied into the semantic result; Python callers can distinguish
+the exact preflight-authorized subset through `rag_sources`.
+
+The `/rag` query, excerpt/source text bodies, credentials, and raw provider or
+composition diagnostics are absent from configuration, conversation
+transcripts, runtime debug records, and semantic result output. The subsequent
+ordinary story message and agent reply retain their established transcript
+persistence. While entering `/rag`, the terminal editor necessarily displays
+the typed line; its process-local command history may recall it, and ordinary
+line fallback or terminal infrastructure may retain visible input in
+scrollback. Those local terminal surfaces are not durable story storage or a
+secrecy boundary.
+
+The fixed local provider makes no runtime network call and has no credential
+flow. Existing commands, `/search`, provider/model overrides, storage adapters,
+debate/consensus, provider-free imports, package-root exports, and the generic
+repository source remain unchanged. This interactive slice adds no SQLite or
+MySQL behavior. `generic-rag` remains an independently packaged pinned submodule
+with zero imports from this story project; story-specific composition and
+authorization stay in this repository.
 
 ## Redistribution restriction
 

@@ -17,7 +17,8 @@
 > boundary. Conversation RAG also has a separate identity-bound, disposable
 > per-session generation store. An explicitly injected runtime service or the
 > noninteractive local lifecycle/search commands can authorize and schedule its
-> use; interactive `/settings` selection and shell-turn wiring remain planned.
+> use; interactive `/settings` persists next-shell policy, and startup composes
+> Local only beside a complete authoritative storage bundle.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -649,7 +650,7 @@ injected runtime service reauthorizes stable references and rereads conversation
 bytes before use. See the
 [persistence design](../design/persistence.md#optional-conversation-rag-derived-persistence),
 [direct API](../reference/package-api.md#optional-conversation-rag-boundary),
-and [current commands plus planned interactive workflow](../guides/conversation-rag.md).
+and [current commands plus interactive workflow](../guides/conversation-rag.md).
 
 <a id="sqlite-conversation-storage-safety"></a>
 

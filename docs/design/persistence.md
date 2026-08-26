@@ -12,8 +12,8 @@
 > Optional conversation RAG has a separate disposable generation store, an
 > injectable runtime authorization/projection path, persisted default-disabled
 > local provider/automatic values, and noninteractive lifecycle/search
-> commands. Interactive `/settings` selection and shell-turn wiring remain
-> planned.
+> commands. Interactive `/settings` persists next-shell selection, while the
+> controller retains any armed one-turn query only in process memory.
 > `StoryRuntime` creates and finalizes reference evidence for inline referenced
 > operations; Python callers can inspect it by operation ID.
 
@@ -39,7 +39,8 @@ provisioning nor migration alone selects runtime authority.
 | Same-workspace conversation migration and checkpoints | `conversation_storage.migration`; canonical archive adapters remain the data boundary |
 | Desired storage, readiness, and startup activation | Configuration owns desired value; `conversation_storage.selection` owns preparation/parity and next-shell marker CAS |
 | Disposable conversation RAG generations | `conversation_rag_store`; derived per-session state only, never conversation authority; the local composition or an injected runtime service schedules and verifies use through an explicit state port |
-| Conversation RAG opt-in defaults and CLI reports | Configuration owns nullable provider/exact automatic values; `conversation_rag_cli` owns complete CAS workflows and ephemeral schema-v1 reports |
+| Conversation RAG opt-in defaults and CLI reports | Configuration owns nullable provider/exact automatic values; `conversation_rag_cli` owns complete noninteractive CAS workflows and ephemeral schema-v1 reports; interactive Settings reuses its guarded configuration transaction |
+| Pending one-turn RAG query | Controller memory only; exact session/conversation scope, never configuration or transcript persistence |
 | Bounded runtime diagnostics | Internal `debug_log` writer |
 | Retrieval actions, observations, progress, sources | Process/terminal only |
 | Current conversation and agent focus | Controller memory only |
@@ -188,7 +189,7 @@ the canonical system-default configuration through exact-byte compare-and-set.
 See the
 [direct API](../reference/package-api.md#optional-conversation-rag-boundary),
 [filesystem guarantees](../operations/filesystem-safety.md#conversation-rag-generation-store-safety),
-and [current commands/runtime plus planned interactive workflow](../guides/conversation-rag.md).
+and [current commands, runtime, and interactive workflow](../guides/conversation-rag.md).
 
 <a id="optional-sqlite-conversation-persistence"></a>
 
