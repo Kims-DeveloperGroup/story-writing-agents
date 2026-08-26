@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import inspect
 import json
 import os
 import stat
@@ -43,6 +44,8 @@ from story_writing_agents.generic_rag_adapter import (
     GenericRagConversationService,
 )
 
+_VISIBLE_TURN_SCHEMA_ID = "story-conversation-rag-visible-turn-v1"
+
 
 class _EmptyLexicalRetriever:
     def search(
@@ -63,6 +66,7 @@ def _missing_state() -> rag.ConversationRagProjectionState:
 def _request(
     *,
     session_id: str = "session-a",
+    schema_id: str = CONVERSATION_RAG_STORE_SCHEMA_ID,
     document_id: str = "document-a",
     revision_id: str = "revision-a",
     text: str = "Alpha 한글 🌙",
@@ -78,7 +82,7 @@ def _request(
     )
     return rag.ConversationRagProjectionRequest(
         session_id,
-        CONVERSATION_RAG_STORE_SCHEMA_ID,
+        schema_id,
         LocalConversationRagEmbedder().identity,
         (rag.ConversationRagSourceDocument(identity, text),),
     )
@@ -269,6 +273,36 @@ class ConversationRagStoreTests(unittest.TestCase):
             CONVERSATION_RAG_STORE_SCHEMA_ID,
             "story-conversation-rag-store-v1",
         )
+        inspection = inspect.signature(ConversationRagGenerationStore.inspect)
+        self.assertEqual(
+            tuple(
+                (parameter.name, parameter.kind, parameter.default)
+                for parameter in inspection.parameters.values()
+            ),
+            (
+                ("self", inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.empty),
+                (
+                    "session_id",
+                    inspect.Parameter.POSITIONAL_ONLY,
+                    inspect.Parameter.empty,
+                ),
+                (
+                    "provider_id",
+                    inspect.Parameter.POSITIONAL_ONLY,
+                    inspect.Parameter.empty,
+                ),
+                (
+                    "embedding",
+                    inspect.Parameter.POSITIONAL_ONLY,
+                    inspect.Parameter.empty,
+                ),
+                (
+                    "expected_projection_schema_id",
+                    inspect.Parameter.KEYWORD_ONLY,
+                    CONVERSATION_RAG_STORE_SCHEMA_ID,
+                ),
+            ),
+        )
         self.assertEqual(
             tuple(item.value for item in ConversationRagStoreStatus),
             ("missing", "ready", "stale", "corrupt", "incompatible", "provider_failed"),
@@ -312,6 +346,49 @@ class ConversationRagStoreTests(unittest.TestCase):
         for failure in ConversationRagStoreFailure:
             with self.subTest(failure=failure):
                 self.assertStoreFailure(ConversationRagStoreError(failure), failure)
+
+    def test_projection_schema_expectation_is_validated_before_storage_io(
+        self,
+    ) -> None:
+        workspace, store = self.new_store()
+        rag_root = workspace.root / "agent_states/orchestrator_state/conversation_rag"
+
+        class DerivedString(str):
+            pass
+
+        cases: tuple[tuple[object, type[Exception], str], ...] = (
+            (1, TypeError, "must be a string"),
+            (DerivedString("derived"), TypeError, "must be a string"),
+            ("", ValueError, "must not be empty"),
+            (" \t", ValueError, "whitespace-only"),
+            ("\ud800", ValueError, "must be valid UTF-8"),
+        )
+        for value, error_type, message in cases:
+            with (
+                self.subTest(value=repr(value)),
+                mock.patch.object(store_module, "_open_session_scope") as opened,
+                self.assertRaisesRegex(error_type, message),
+            ):
+                store.inspect(
+                    "session-a",
+                    "local",
+                    LocalConversationRagEmbedder().identity,
+                    expected_projection_schema_id=value,  # type: ignore[arg-type]
+                )
+            opened.assert_not_called()
+
+        with (
+            mock.patch.object(store_module, "_open_session_scope") as opened,
+            self.assertRaises(TypeError),
+        ):
+            store.inspect(  # type: ignore[call-arg]
+                "session-a",
+                "local",
+                LocalConversationRagEmbedder().identity,
+                _VISIBLE_TURN_SCHEMA_ID,
+            )
+        opened.assert_not_called()
+        self.assertFalse(rag_root.exists())
 
     def test_construction_and_missing_inspection_do_not_create_store_state(
         self,
@@ -462,6 +539,137 @@ class ConversationRagStoreTests(unittest.TestCase):
             ConversationRagStoreFailure.OPERATION_FAILED,
         )
 
+    def test_visible_projection_preserves_envelope_reopens_and_reinspects_reader(
+        self,
+    ) -> None:
+        workspace, store = self.new_store()
+        secret = "VISIBLE_SOURCE_SENTINEL"
+        request = _request(schema_id=_VISIBLE_TURN_SCHEMA_ID, text=secret)
+        result, published = _publish(store, request)
+        session = self.session_root(workspace)
+        generation = self.generation_root(workspace, published)
+
+        active = json.loads((session / "active.json").read_bytes())
+        status = json.loads((session / "status.json").read_bytes())
+        manifest = json.loads((generation / "generic-manifest.json").read_bytes())
+        metadata = json.loads((generation / "generation.json").read_bytes())
+        self.assertEqual(
+            (
+                active["schema_id"],
+                status["schema_id"],
+                manifest["schema_id"],
+                metadata["schema_id"],
+            ),
+            (CONVERSATION_RAG_STORE_SCHEMA_ID,) * 4,
+        )
+        self.assertEqual(
+            (
+                manifest["projection_schema_id"],
+                metadata["projection_schema_id"],
+                result.checkpoint.schema_id,
+            ),
+            (_VISIBLE_TURN_SCHEMA_ID,) * 3,
+        )
+
+        reopened_store = ConversationRagGenerationStore(Workspace(workspace.root))
+        reopened = reopened_store.inspect(
+            "session-a",
+            "local",
+            LocalConversationRagEmbedder().identity,
+            expected_projection_schema_id=_VISIBLE_TURN_SCHEMA_ID,
+        )
+        self.assertEqual(reopened, published)
+        legacy_view = reopened_store.inspect(
+            "session-a",
+            "local",
+            LocalConversationRagEmbedder().identity,
+        )
+        self.assertEqual(
+            (
+                legacy_view.status,
+                legacy_view.state.availability,
+                legacy_view.state.checkpoint,
+                legacy_view.provider_id,
+                legacy_view.generation_id,
+                legacy_view.counts,
+            ),
+            (
+                ConversationRagStoreStatus.INCOMPATIBLE,
+                rag.ConversationRagProjectionStateAvailability.PRESENT,
+                published.state.checkpoint,
+                published.provider_id,
+                published.generation_id,
+                published.counts,
+            ),
+        )
+        self.assertNotIn(secret, repr(legacy_view))
+
+        with reopened_store.open_active_reader(
+            reopened,
+            LocalConversationRagVectorRanker(),
+        ) as reader:
+            candidates = reader.search(
+                rag.ConversationRagRetrievalRequest("session-a", "visible", 1),
+                LocalConversationRagEmbedder().embed(("visible",))[0],
+            )
+        self.assertEqual(len(candidates), 1)
+
+        _updated_result, updated = _publish(
+            reopened_store,
+            _request(
+                schema_id=_VISIBLE_TURN_SCHEMA_ID,
+                revision_id="revision-b",
+                text="Updated visible source",
+            ),
+            state=reopened.state,
+        )
+        self.assertNotEqual(updated.generation_id, reopened.generation_id)
+        with self.assertRaises(ConversationRagStoreError) as stale_reader:
+            reopened_store.open_active_reader(
+                reopened,
+                LocalConversationRagVectorRanker(),
+            )
+        self.assertStoreFailure(
+            stale_reader.exception,
+            ConversationRagStoreFailure.INCOMPATIBLE,
+        )
+
+    def test_persisted_projection_schema_disagreement_is_corrupt(self) -> None:
+        workspace, store = self.new_store()
+        _result, ready = _publish(
+            store,
+            _request(schema_id=_VISIBLE_TURN_SCHEMA_ID),
+        )
+        metadata_path = self.generation_root(workspace, ready) / "generation.json"
+        metadata = json.loads(metadata_path.read_bytes())
+        metadata["projection_schema_id"] = "different-projection-v1"
+        metadata_path.write_bytes(_canonical_json(metadata))
+
+        observed = store.inspect(
+            "session-a",
+            "local",
+            LocalConversationRagEmbedder().identity,
+            expected_projection_schema_id=_VISIBLE_TURN_SCHEMA_ID,
+        )
+        self.assertEqual(
+            (
+                observed.status,
+                observed.state.availability,
+                observed.state.checkpoint,
+                observed.provider_id,
+                observed.generation_id,
+                observed.counts,
+            ),
+            (
+                ConversationRagStoreStatus.CORRUPT,
+                rag.ConversationRagProjectionStateAvailability.CORRUPT,
+                None,
+                None,
+                None,
+                ConversationRagStoreCounts(),
+            ),
+        )
+
     def test_rebuild_is_deterministic_restart_not_resume_and_chunks_ranges(
         self,
     ) -> None:
@@ -505,6 +713,88 @@ class ConversationRagStoreTests(unittest.TestCase):
         )
         self.assertEqual(unchanged.generation_id, first.generation_id)
         self.assertEqual(unchanged.counts.generations, 1)
+
+    def test_legacy_generation_requires_atomic_rebuild_for_visible_schema(
+        self,
+    ) -> None:
+        workspace, store = self.new_store()
+        _legacy_result, legacy = _publish(store, _request())
+        session = self.session_root(workspace)
+        active = session / "active.json"
+        active_before = active.read_bytes()
+        legacy_generation = self.generation_root(workspace, legacy)
+        legacy_bytes = {
+            path.name: _regular_bytes(path) for path in legacy_generation.iterdir()
+        }
+        incompatible = store.inspect(
+            "session-a",
+            "local",
+            LocalConversationRagEmbedder().identity,
+            expected_projection_schema_id=_VISIBLE_TURN_SCHEMA_ID,
+        )
+        self.assertEqual(
+            (incompatible.status, incompatible.state, incompatible.counts),
+            (
+                ConversationRagStoreStatus.INCOMPATIBLE,
+                legacy.state,
+                legacy.counts,
+            ),
+        )
+        visible_request = _request(
+            schema_id=_VISIBLE_TURN_SCHEMA_ID,
+            revision_id="revision-visible",
+            text="Visible replacement",
+        )
+        with self.assertRaises(ConversationRagStoreError) as incremental:
+            store.begin_generation(
+                "local",
+                visible_request,
+                incompatible.state,
+                rebuild=False,
+            )
+        self.assertStoreFailure(
+            incremental.exception,
+            ConversationRagStoreFailure.INCOMPATIBLE,
+        )
+        self.assertEqual(active.read_bytes(), active_before)
+
+        _visible_result, visible = _publish(
+            store,
+            visible_request,
+            state=incompatible.state,
+        )
+        self.assertNotEqual(active.read_bytes(), active_before)
+        self.assertNotEqual(visible.generation_id, legacy.generation_id)
+        self.assertEqual(
+            {path.name: _regular_bytes(path) for path in legacy_generation.iterdir()},
+            legacy_bytes,
+        )
+        legacy_manifest = json.loads(
+            (legacy_generation / "generic-manifest.json").read_bytes()
+        )
+        self.assertEqual(
+            legacy_manifest["projection_schema_id"],
+            CONVERSATION_RAG_STORE_SCHEMA_ID,
+        )
+        self.assertEqual(
+            (visible.counts.generations, visible.counts.orphan_generations),
+            (2, 1),
+        )
+        reopened = ConversationRagGenerationStore(Workspace(workspace.root))
+        current = reopened.inspect(
+            "session-a",
+            "local",
+            LocalConversationRagEmbedder().identity,
+            expected_projection_schema_id=_VISIBLE_TURN_SCHEMA_ID,
+        )
+        self.assertEqual(current, visible)
+        legacy_view = reopened.inspect(
+            "session-a",
+            "local",
+            LocalConversationRagEmbedder().identity,
+        )
+        self.assertIs(legacy_view.status, ConversationRagStoreStatus.INCOMPATIBLE)
+        self.assertEqual(legacy_view.state, visible.state)
 
     def test_status_is_advisory_active_is_sole_commit_and_content_free(self) -> None:
         workspace, store = self.new_store()
@@ -550,6 +840,72 @@ class ConversationRagStoreTests(unittest.TestCase):
         )
         self.assertIs(observed.status, ConversationRagStoreStatus.STALE)
         self.assertEqual(observed.generation_id, ready.generation_id)
+
+    def test_advisory_status_never_masks_identity_or_schema_incompatibility(
+        self,
+    ) -> None:
+        _workspace, store = self.new_store()
+        secret = "PRIVATE_COMPATIBILITY_SENTINEL"
+        _result, ready = _publish(
+            store,
+            _request(schema_id=_VISIBLE_TURN_SCHEMA_ID, text=secret),
+        )
+        embedding = LocalConversationRagEmbedder().identity
+        other_embedding = rag.ConversationRagEmbeddingIdentity(
+            "different-local-model-v1",
+            embedding.dimensions,
+        )
+        mismatches = (
+            ("provider", "different-provider", embedding, _VISIBLE_TURN_SCHEMA_ID),
+            ("embedding", "local", other_embedding, _VISIBLE_TURN_SCHEMA_ID),
+            ("schema", "local", embedding, CONVERSATION_RAG_STORE_SCHEMA_ID),
+        )
+        advisories = (
+            (None, ConversationRagStoreStatus.READY),
+            (
+                ConversationRagStoreStatus.STALE,
+                ConversationRagStoreStatus.STALE,
+            ),
+            (
+                ConversationRagStoreStatus.PROVIDER_FAILED,
+                ConversationRagStoreStatus.PROVIDER_FAILED,
+            ),
+        )
+        for advisory, compatible_status in advisories:
+            if advisory is not None:
+                store.set_status("session-a", advisory)
+            compatible = store.inspect(
+                "session-a",
+                "local",
+                embedding,
+                expected_projection_schema_id=_VISIBLE_TURN_SCHEMA_ID,
+            )
+            self.assertIs(compatible.status, compatible_status)
+            for label, provider, expected_embedding, schema_id in mismatches:
+                with self.subTest(advisory=advisory, mismatch=label):
+                    observed = store.inspect(
+                        "session-a",
+                        provider,
+                        expected_embedding,
+                        expected_projection_schema_id=schema_id,
+                    )
+                    self.assertEqual(
+                        (
+                            observed.status,
+                            observed.state,
+                            observed.provider_id,
+                            observed.generation_id,
+                            observed.counts,
+                        ),
+                        (
+                            ConversationRagStoreStatus.INCOMPATIBLE,
+                            ready.state,
+                            ready.provider_id,
+                            ready.generation_id,
+                            ready.counts,
+                        ),
+                    )
+                    self.assertNotIn(secret, repr(observed))
 
     def test_successful_active_rename_is_the_final_publish_operation(self) -> None:
         _workspace, store = self.new_store()
@@ -642,7 +998,11 @@ class ConversationRagStoreTests(unittest.TestCase):
                 old_generation_before = {
                     path.name: _regular_bytes(path) for path in old_generation.iterdir()
                 }
-                updated = _request(revision_id="revision-b", text="Updated beta")
+                updated = _request(
+                    schema_id=_VISIBLE_TURN_SCHEMA_ID,
+                    revision_id="revision-b",
+                    text="Updated beta",
+                )
                 real_fsync = store_module.os.fsync
                 real_rename = store_module.os.rename
                 publication_state = {
@@ -751,6 +1111,23 @@ class ConversationRagStoreTests(unittest.TestCase):
                     (retry.counts.generations, retry.counts.orphan_generations),
                     (2, 1),
                 )
+                visible = store.inspect(
+                    "session-a",
+                    "local",
+                    LocalConversationRagEmbedder().identity,
+                    expected_projection_schema_id=_VISIBLE_TURN_SCHEMA_ID,
+                )
+                self.assertEqual(visible, retry)
+                legacy = store.inspect(
+                    "session-a",
+                    "local",
+                    LocalConversationRagEmbedder().identity,
+                )
+                self.assertIs(
+                    legacy.status,
+                    ConversationRagStoreStatus.INCOMPATIBLE,
+                )
+                self.assertEqual(legacy.state, retry.state)
 
     def test_canonical_corruption_size_and_generation_parity_fail_closed(self) -> None:
         cases = ("bom", "pretty", "metadata_count", "jsonl_blank", "oversized")

@@ -119,17 +119,26 @@ conversation_rag/
 Owned directories/files require modes `0700`/`0600`. Completed generations
 contain the generic checkpoint manifest, stable story source map, finite local
 vectors, provider/model/schema/chunking identity, content digests, and bounded
-counts. The source map repeats plaintext conversation fragments; derived and
-disposable does not mean redacted or encrypted. The pointers, public snapshots,
-errors, and diagnostics contain no query or source text.
+counts. `story-conversation-rag-store-v1` versions each persisted envelope;
+the caller-owned projection schema is recorded separately as
+`projection_schema_id` and as the checkpoint's `schema_id`. The source map
+repeats plaintext conversation fragments; derived and disposable does not mean
+redacted or encrypted. The pointers, public snapshots, errors, and diagnostics
+contain no query or source text.
 
 Reads require canonical strict-UTF-8 JSON/JSONL and exact fields, ordering,
 modes, identities, sizes, digests, counts, ranges/overlap, reconstructed source,
 checkpoint identity, and finite canonical float values. Bounded parsing maps
 duplicate fields, deep recursion, non-finite constants, numeric overflow,
 malformed bytes, and noncanonical re-encoding to fixed content-free corruption.
-Status is advisory: `stale` or `provider_failed` can qualify the identified
-active checkpoint but cannot commit another generation.
+Inspection validates its exact nonblank strict-UTF-8 expected projection schema
+before I/O. The default expects the legacy store-v1 projection schema. For a
+fully verified generation, provider/model/projection mismatch yields
+`incompatible` status while retaining a `present` checkpoint and safe
+generation/count fields. Store-envelope or otherwise unverifiable
+incompatibility exposes no trusted checkpoint. Status is advisory: `ready`,
+`stale`, or `provider_failed` can qualify a compatible identified checkpoint
+but cannot mask incompatibility or commit another generation.
 
 Projection writes one inactive `build-*` directory. On success it synchronizes
 and verifies the payload, renames it to a content-derived `gen-*`, synchronizes
@@ -148,6 +157,13 @@ Rebuild restarts deterministically; incremental projection may use a compatible
 verified active generation as its base. Local retrieval converts missing,
 stale, corrupt, incompatible, and provider-failed state to fixed literal
 fallback rather than trusting partial state.
+
+Generations built with the store-v1 value as their projection schema remain
+legacy-ready. A caller expecting another projection schema receives a verified
+incompatible state; no persisted generation is relabeled or migrated. Explicit
+rebuild writes the request's projection schema into a new inactive generation
+and publishes it only after complete verification. A failed precommit rebuild
+preserves the prior active pointer and generation.
 
 Confirmed purge prevalidates one session namespace, removes its active pointer
 first, then removes only advisory status and derived generation contents. It
