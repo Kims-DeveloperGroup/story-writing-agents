@@ -57,6 +57,8 @@ from .conversation_search import (
     ConversationTranscriptCursor,
     ConversationTranscriptPage,
 )
+from .conversation_storage.composition import compose_filesystem_conversation_storage
+from .conversation_storage.contracts import ConversationStorageServices
 from .conversations import (
     ConversationContextWindow,
     ConversationEvent,
@@ -116,7 +118,7 @@ from .session_lifecycle import (
     SessionLifecycleState,
     provider_work_is_ready,
 )
-from .workspace import FilesystemConversationEventStore, Workspace
+from .workspace import Workspace
 from .writing_artifacts import (
     ReferenceAuthorizationError,
     ReferenceAuthorizationErrorCode,
@@ -1081,6 +1083,7 @@ class StoryRuntime:
         backend: AgentBackend | None = None,
         *,
         conversation_event_store: ConversationEventStore | None = None,
+        conversation_storage_services: ConversationStorageServices | None = None,
     ) -> None:
         workspace_literal = (
             str(workspace.root) if isinstance(workspace, Workspace) else str(workspace)
@@ -1091,11 +1094,35 @@ class StoryRuntime:
         self._debug_log = WorkspaceDebugLog(self.workspace)
         self.backend = backend
         self.artifacts = WritingArtifactRepository(self.workspace.root)
+        if (
+            conversation_storage_services is not None
+            and conversation_event_store is not None
+        ):
+            raise TypeError(
+                "conversation_storage_services conflicts with "
+                "conversation_event_store"
+            )
+        if (
+            conversation_storage_services is not None
+            and type(conversation_storage_services) is not ConversationStorageServices
+        ):
+            raise TypeError(
+                "conversation_storage_services must be ConversationStorageServices"
+            )
+        if (
+            conversation_storage_services is None
+            and conversation_event_store is None
+        ):
+            conversation_storage_services = (
+                compose_filesystem_conversation_storage(self.workspace)
+            )
+        self.conversation_storage_services = conversation_storage_services
         self.conversation_event_store = (
-            conversation_event_store
-            if conversation_event_store is not None
-            else FilesystemConversationEventStore(self.workspace)
+            conversation_storage_services.event_store
+            if conversation_storage_services is not None
+            else conversation_event_store
         )
+        assert self.conversation_event_store is not None
         self._conversation_workspace_roots = tuple(
             dict.fromkeys((workspace_literal, str(self.workspace.root)))
         )

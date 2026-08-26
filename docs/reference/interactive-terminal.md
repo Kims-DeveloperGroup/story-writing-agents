@@ -618,8 +618,9 @@ provider. Valid retained commits and redraws within that editor do not run
 discovery again; leaving and re-entering does. Effort additionally resolves the
 pending effective model from the agent value and then workspace fallback.
 
-Language, Persona, Maximum debate rounds, Provider, Model, Custom model, and
-Effort remain active after a first valid Enter. A picker reopens in
+Language, Persona, Maximum debate rounds, Conversation storage, Provider,
+Model, Custom model, and Effort remain active after a first valid Enter. A
+picker reopens in
 `ViewState.OPEN` with its prompt focused and selection updated; a prompt reopens
 in `ViewState.FOCUSED` with its default updated. The latest applied value appears
 as the only visible inline `SemanticRole.SUCCESS`/`ViewState.COMPLETED` notice,
@@ -629,9 +630,10 @@ active, and re-arms that comparison. Invalid input, authentication failure,
 Custom model navigation, and editor re-entry reset it. This controller state is
 semantic and consecutive, with no raw-key timing window. Escape returns one
 level through Custom model > Model > Agent settings > Agents > Settings;
-Provider and Effort return directly to Agent settings. Authentication launched
-while choosing Provider is a subordinate action and returns to Provider after
-its result. Ctrl-C or EOF at any level cancels the whole settings transaction.
+Provider and Effort return directly to Agent settings, while Conversation
+storage returns directly to Settings. Authentication launched while choosing
+Provider is a subordinate action and returns to Provider after its result.
+Ctrl-C or EOF at any level cancels the whole settings transaction.
 
 Every one of those retained value editors also always renders the instruction
 `Entered changes remain pending in memory and are not saved; choose Save in

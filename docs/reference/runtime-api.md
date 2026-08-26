@@ -13,7 +13,8 @@ sink**—a synchronous observer; **retrieval turn**—one bounded answer.
 ```python
 StoryRuntime(workspace: Workspace | str | pathlib.Path,
              backend: AgentBackend | None = None, *,
-             conversation_event_store: ConversationEventStore | None = None)
+             conversation_event_store: ConversationEventStore | None = None,
+             conversation_storage_services: ConversationStorageServices | None = None)
 StoryRuntime.session(session_id: str) -> RuntimeSession
 StoryRuntime.apply_directive(session_id: str, text: str) -> dict[str, object]
 StoryRuntime.set_runtime_overrides(session_id: str, overrides: Mapping[str, Any]) -> dict[str, Any]
@@ -46,6 +47,23 @@ session raises `ValueError`. `Runtime` and `Session` are exact aliases.
 Interactive completion and range selection feed the existing methods the same
 literal `${path}` and `${path}#Lx-Ly` text a Python caller supplies directly.
 The viewer is not exported and no public artifact-selection result was added.
+
+`conversation_storage_services` additively supplies one same-provenance
+catalog, event store, search adapter, and mutation coordinator. It is mutually
+exclusive with the legacy raw `conversation_event_store`; passing both or a
+non-`ConversationStorageServices` value raises `TypeError` before conversation
+use. With neither argument, direct Python construction composes the established
+filesystem bundle and exposes it as `runtime.conversation_storage_services`.
+Passing only the legacy raw event store remains compatible, but does not supply
+catalog/search/coordinator provenance.
+
+The installed shell does not ask `StoryRuntime` to read desired or active
+storage configuration. Before provider authentication it completes the
+separate next-shell activation workflow and injects that already-composed
+filesystem or SQLite bundle into the runtime, controller, and scoped memory
+services. A running runtime never changes bundles. See the
+[selection API](package-api.md#conversation-storage-selection-api) and
+[CLI workflow](cli.md#conversation-storage-selection).
 
 Binding resource management is internal and adds no API. For each canonical
 agent, the runtime keeps at most one current binding at quiescence. Concurrent

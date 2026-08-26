@@ -2,7 +2,10 @@
 
 > **Availability:** these controls cover local reads, advisory turns, and
 > retrieval-enabled turns, management commands, focused-context consensus, and
-> runtime explicit-reference authorization and backend enforcement.
+> runtime explicit-reference authorization and backend enforcement, plus direct
+> Python conversation archive values, filesystem transfer, and optional SQLite
+> conversation/search storage, provider-free desired selection, and
+> conversation migration.
 > They do not make either provider, its executable, the workspace, or the
 > terminal trusted.
 > Inline canonical references in provider-bound prompt text are active.
@@ -20,14 +23,92 @@ stored or displayed failure text.
 There is no encryption, application access control, or secure erase.
 Documents, debate/context records, provider metadata, subjects, transcripts,
 scrollback, manuscripts, artifact catalogs, commit provenance, transaction
-journals, reference-operation evidence, and recovery markers have no
-application-managed retention policy and rely on OS/terminal-service
-protection. The workspace debug log is the one bounded-retention channel
-described below; it is still plaintext.
+journals, migration checkpoints, reference-operation evidence, and recovery
+markers have no application-managed retention policy and rely on
+OS/terminal-service protection. The workspace debug log is the one
+bounded-retention channel described below; it is still plaintext.
 
 Blackboards can contain input, drafts, reviews, and errors. Provider output is
-not generally scrubbed; archive neither deletes nor conceals conversations;
-transcripts retain messages, replies, and runtime errors.
+not generally scrubbed; catalog archive status neither deletes nor conceals
+conversations; transcripts retain messages, replies, and runtime errors.
+
+<a id="conversation-archive-privacy"></a>
+
+### Conversation archive exposure
+
+Canonical conversation archive values and serialized bytes contain exact
+plaintext subjects, identities, timestamps, statuses, user messages, agent
+replies, and runtime-error content. Serialization performs no redaction or
+encryption. Its SHA-256 digest detects modification but provides no secrecy,
+signature, origin authentication, or access control.
+
+Filesystem export deliberately excludes debate/runtime logs, debate
+state/results/context, credentials, provider and agent state, prompts,
+configuration/defaults, storage activation and RAG state, manuscripts, and
+writing artifacts. Those exclusions make the value conversation-only; they do
+not make its included transcript content safe to disclose. Import copies the
+included plaintext and neither deletes excluded state nor securely erases a
+source or caller-owned archive copy.
+
+The runtime owns no archive file or retention policy. A caller that stores,
+transmits, logs, or otherwise retains the returned bytes owns protection and
+cleanup for every copy. See
+[Canonical conversation archives](../reference/conversation-archives.md#archive-non-goals).
+
+The optional `discussion_logs/conversation_storage.sqlite3` database is also
+plaintext and can coexist with the filesystem catalog and transcripts, leaving
+two independent copies under caller control. It contains exact subjects,
+identities, timestamps, status, and transcript content plus derived normalized
+subjects, normalized transcript-search text, lexical generation, and private
+turn slots. Protect the database, any live rollback journal, external backups,
+and process memory with the rest of the workspace.
+
+Desired `conversation_storage_backend` in `config/system_defaults.json` and
+active `config/conversation_storage_state.json` are also plaintext. They expose
+backend choice, and the active marker exposes a nonnegative generation; they do
+not contain subjects or transcript content. File metadata and changes can still
+reveal operational timing. Protect them with the complete workspace and do not
+publish them as proof of authorization or parity.
+
+The private derived
+`discussion_logs/.conversation_storage_fts5.sqlite3` companion repeats
+normalized non-runtime visible event text and stable conversation/event
+coordinates. Owner-only permissions and its disposable status do not encrypt,
+redact, securely erase, or make that material safe to disclose. Protect it and
+any retained backup as transcript data. An authoritative backup must preserve
+the main database; it may omit the companion because exact search falls back
+to the main snapshot. Search preserves and ignores an unsafe companion rather
+than reading or repairing it.
+
+Provisioning is creation, not migration or deletion; archive export/import and
+the explicit storage migration workflow copy plaintext rather than securely
+erasing a source. The canonical archive payload contains exact metadata and
+events in memory, and any persistence or transmission performed by its caller
+is outside the adapters' controls.
+
+`story storage migrate` and `story storage verify` emit one content-free report
+containing backend names, fixed outcomes/failures, parity, checkpoint state, and
+aggregate classification/source counts. They never print subjects, conversation
+IDs, event text, paths, malformed values, or FTS content and never create a
+runtime debug record. This output boundary does not make the copied destination
+confidential: migration can leave the same plaintext conversations in both
+stores, never deletes the source, and does not impose a retention policy.
+
+`story storage use` emits a different counts-free content-free report containing
+only fixed operation/outcome/backend, installation/provisioning/parity,
+configuration/activation, failure, and schema values. It never prints
+conversation identities, subjects, events, paths, exceptions, installer
+output, provider data, or parity counts and never creates a runtime debug
+record. An explicitly run installer instead writes its native stdout and
+stderr to the CLI's stderr stream, outside that JSON boundary.
+
+Retained migration checkpoints contain session and conversation IDs, a SHA-256
+fingerprint of the canonical source archive, source conversation/event counts,
+and completed/total progress. They omit subjects, timestamps, statuses, events,
+runtime errors, and FTS data, but identities, counts, timing of file updates, and
+the fingerprint can still be sensitive. Protect both per-direction checkpoint
+files with the workspace; terminal completion is audit state, not secure
+erasure or authorization.
 
 ## Local management, search, and reads
 
@@ -57,6 +138,48 @@ fixed relative path `debug_logs/runtime.jsonl`, not a dynamically discovered or
 absolute diagnostic path. Terminal escaping is not redaction. See
 [Conversation search](../reference/conversation-search.md) and
 [Terminal safety](terminal-safety.md).
+
+Direct SQLite catalog, transcript, context, and exact literal-search operations
+are provider-free and add no network call, authentication, RAG, or new citation
+mechanism. Optional FTS5 hint lookup adds no network path and never becomes
+search truth. Returned Python values, application logs, process memory, and
+caller-created backups can still move or expose plaintext beyond the
+workspace. Storage migration/verification is also provider-free and dispatches
+before authentication, broader settings/context, backend, runtime, session, or
+debug-log construction. It still performs local archive reads and, outside
+dry-run/verify, destination and checkpoint writes. `story storage use` likewise
+dispatches provider-free before debug logging and provider/runtime construction,
+but can explicitly run a host installer, provision an empty database, read both
+canonical stores for parity, and write desired configuration. `/settings`
+uses the same storage selection boundary only after its separate provider-auth
+Save gate. The next shell activates the selected ready bundle before provider
+authentication.
+
+<a id="sqlite-installation-boundary"></a>
+
+## SQLite installation boundary
+
+SQLite readiness probes only the active Python interpreter through an in-memory
+connection and query; it does not execute or inspect a standalone `sqlite3`
+binary or require FTS5. A missing prerequisite triggers no process unless the
+CLI received both explicit automation flags or the user accepted the separate
+Settings preview with exact YES. Unsupported hosts and recognized CI markers
+run nothing.
+
+The one allowlisted package-manager child runs at the normalized workspace root
+with inherited stdin and environment. Its stdout and stderr both reach the
+caller's diagnostic stream; for the CLI that is real stderr. The package
+manager may prompt, access a network, modify host packages, write its own logs,
+or retain terminal scrollback under its own policy. Story neither captures nor
+redacts that output, supplies a custom environment, nor adds a shell, `sudo`,
+`-y`, timeout, retry, or cleanup. A host package and any later empty provisioned
+database are not rolled back after parity or configuration failure.
+
+The Settings preview itself persists in ordinary semantic output/scrollback and
+shows the exact command plus a host-mutation warning; it contains no provider or
+story content. See the exact commands, platform matching, CI marker set, and
+report mapping in the
+[CLI selection contract](../reference/cli.md#conversation-storage-selection).
 
 <a id="native-authentication-boundary"></a>
 

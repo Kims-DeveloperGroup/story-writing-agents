@@ -16,7 +16,10 @@ Key terms: **default**—a persisted command or conversation fallback;
 
 ```text
 workspace/
-├── config/{system_defaults.json,agent_configs.json,agents/,persona_templates/}
+├── config/
+│   ├── {system_defaults.json,agent_configs.json,agents/,persona_templates/}
+│   ├── conversation_storage_state.json                        [lazy explicit active-backend state]
+│   └── .conversation_storage.lock                             [lazy conversation-storage mutation guard]
 ├── core_documents/{global_outline.md,part_outlines.md,character_sheets.md,narrative_rules.md} [lazy agent publications]
 ├── agent_states/
 │   ├── orchestrator_state/
@@ -24,6 +27,9 @@ workspace/
 │   │   ├── cli_context.json                                   [lazy default session]
 │   │   ├── conversation_defaults/<session_id>.json             [lazy default conversation]
 │   │   ├── provider_route_generations.json                     [lazy route freshness]
+│   │   ├── conversation_storage_migrations/
+│   │   │   ├── filesystem-to-sqlite.json                       [lazy retained migration checkpoint]
+│   │   │   └── sqlite-to-filesystem.json                       [lazy retained migration checkpoint]
 │   │   ├── provider_sessions/.access-claims.lock               [lazy guard]
 │   │   ├── provider_sessions/.antigravity/                      [lazy retained provider state]
 │   │   ├── provider_sessions/<session_id>.json                 [lazy manifest]
@@ -51,10 +57,13 @@ workspace/
 │   ├── .runtime.lock                                           [lazy guard]
 │   ├── runtime.jsonl                                           [lazy active log]
 │   └── runtime.jsonl.{1..5}                                    [lazy backups]
-├── discussion_logs/<session_id>/
-│   ├── <debate_id>.{state.json,jsonl,result.json}
-│   ├── <debate_id>.context.json                                [lazy debate context]
-│   └── interactive/conversations/<conversation_id>/{metadata.json,transcript.jsonl}
+├── discussion_logs/
+│   ├── conversation_storage.sqlite3                            [lazy explicit authoritative SQLite provision]
+│   ├── .conversation_storage_fts5.sqlite3                      [lazy derived SQLite search companion]
+│   └── <session_id>/
+│       ├── <debate_id>.{state.json,jsonl,result.json}
+│       ├── <debate_id>.context.json                            [lazy debate context]
+│       └── interactive/conversations/<conversation_id>/{metadata.json,transcript.jsonl}
 └── manuscript/<part-id>/<safe-relative-markdown-path>           [lazy create-only output]
 ```
 
@@ -70,6 +79,161 @@ under `transactions/` are recovery journals. The three permanent lock names are
 hard links to one regular inode with link count three; partial or old two-link
 state is invalid and is not migrated or reconstructed. See
 [Canonical writing artifacts](../writing-artifacts.md).
+
+<a id="optional-sqlite-conversation-storage"></a>
+
+## Optional SQLite conversation storage
+
+The fixed `discussion_logs/conversation_storage.sqlite3` file is the optional
+authoritative SQLite conversation store. Importing its direct module creates
+nothing and does not load `sqlite3`; the standard-library module is loaded and
+checked only when a probe, preflight, provisioning, composition, adapter,
+selection, startup, or migration operation requests it. `story init` creates
+neither this database nor an active-state marker.
+
+Desired and active storage are separate records. The desired value is the
+`conversation_storage_backend` field in `config/system_defaults.json`; it is
+exactly `filesystem` or `sqlite`, and missing or `null` means filesystem. The
+active record is the strict schema-v1
+`config/conversation_storage_state.json`:
+
+```json
+{
+  "backend": "sqlite",
+  "generation": 1,
+  "schema_version": 1
+}
+```
+
+`backend` is exactly `filesystem` or `sqlite`; `generation` is a nonnegative
+integer. A missing record is the unwritten filesystem generation-zero baseline.
+Malformed, unsafe, or unsupported state fails closed. Do not edit this marker
+to switch stores.
+
+`story storage use` and `/settings` save only the desired value after checking
+readiness and exact canonical parity. They do not write the active marker.
+SQLite selection may explicitly provision the fixed absent database as an
+empty destination under a workspace-matched lease, but it does not copy
+filesystem conversations. A host package installed or empty database created
+during this preparation can remain after a later parity or configuration
+failure.
+
+The next interactive shell holds one outer lease while it reloads desired and
+active state, composes the current active bundle, freshly checks target
+readiness and parity, composes the complete target bundle, and compare-and-set
+advances this marker. A pre-CAS failure preserves it and aborts startup without
+fallback. A successful CAS remains durable even if later terminal, provider,
+backend, or session startup fails. The shell then supplies the one active
+catalog/event-store/search/coordinator bundle to its controller, runtime, and
+memory services. Direct `StoryRuntime` construction does not perform this
+startup selection and defaults to a composed filesystem bundle unless its
+caller supplies another complete bundle.
+
+Supported mutations use the lazy `config/.conversation_storage.lock`
+coordinator guard; the guard is not a database, desired setting, or activation
+record. The filesystem conversation paths can coexist with the SQLite file,
+but only the active backend is authoritative for the shell. There is no
+automatic synchronization or shared authority. Explicit
+`story storage migrate` can copy the active canonical store into the other
+already-ready store, and `story storage verify` can compare them; neither
+command changes desired or active state.
+
+The main database is authoritative. It includes required normalized subject
+and transcript-search values plus a lexical generation. The fixed private
+`discussion_logs/.conversation_storage_fts5.sqlite3` companion is a derived,
+owner-only FTS5 hint resource. It can appear after provisioning or an effective
+SQLite mutation, but absence, staleness, an unavailable FTS5 capability, or an
+unusable companion never changes main-database readiness or exact search
+results. Search falls back to the authoritative literal scan and performs no
+repair. A later effective mutation may create an absent companion or refresh a
+recognized safe one only after committing the main transaction under the same
+workspace mutation lease.
+
+Back up the main database as authoritative plaintext. The companion repeats
+normalized searchable transcript text and must receive the same filesystem,
+backup, and retention protection whenever it is retained; it may be omitted
+from an authoritative backup because exact fallback does not depend on it.
+There is no delete API or general repair operation. The supported direct index
+owner can create an absent resource or rebuild only a recognized safe one
+through its validated publication API; ordinary application search should not
+manage hints. Do not hand-edit or remove an unsafe or malformed companion to
+force search behavior; the adapter preserves and ignores it.
+
+Host installation is available only through explicit selection consent; shell
+startup and direct preflight never install or provision. Readiness is the
+active Python interpreter's functional SQLite capability, not a standalone
+`sqlite3` binary or FTS5. There is no live switch, dual write, source deletion,
+MySQL adapter, RAG integration, or FTS-dependent result behavior. Explicit
+migration remains a separate provider-free command/direct API over two
+already-ready stores; it never provisions or activates one. See the
+[exact selection workflow](../cli.md#conversation-storage-selection),
+[direct package API](../package-api.md#optional-sqlite-conversation-storage)
+and [recovery guidance](../../operations/recovery-and-limitations.md#sqlite-conversation-storage-recovery).
+
+<a id="conversation-migration-checkpoints"></a>
+
+### Conversation migration checkpoints
+
+Migration owns one retained checkpoint per direction:
+
+```text
+agent_states/orchestrator_state/conversation_storage_migrations/
+├── filesystem-to-sqlite.json
+└── sqlite-to-filesystem.json
+```
+
+Each is strict UTF-8 schema-v1 JSON with exactly these fields and nested shapes:
+
+```json
+{
+  "schema_version": 1,
+  "direction": "filesystem-to-sqlite",
+  "source_fingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "source": {
+    "conversations": 1,
+    "events": 4
+  },
+  "progress": {
+    "completed_conversations": 1,
+    "total_conversations": 1
+  },
+  "completed": [
+    {
+      "session_id": "novel",
+      "conversation_id": "c_0123456789abcdef0123456789abcdef"
+    }
+  ]
+}
+```
+
+The fingerprint is lowercase hexadecimal SHA-256 over the complete canonical
+source archive bytes. Counts are bounded by the canonical archive limits;
+`completed` is a unique, sorted list of safe `(session_id, conversation_id)`
+identities, its length equals `completed_conversations`, and total progress
+equals the source conversation count.
+
+Checkpoint files intentionally omit subjects, statuses, timestamps, event
+content/kinds, errors, and FTS state. They remain plaintext identity and progress
+metadata, so protect them with the workspace. The reader requires a bounded,
+regular, singly linked stable file; duplicate/extra/missing fields, malformed or
+noncanonical values, another direction, an unsupported version, symlinks, hard
+links, replacements, and oversized state fail closed.
+
+For SQLite-to-filesystem migration, a checkpoint advances only after one
+complete exact conversation is present and has been reread. On resume, fresh
+source/destination exports must prove every recorded identity still matches.
+Filesystem-to-SQLite uses one complete transaction and publishes its terminal
+checkpoint only after final parity. A successful migration retains the complete
+terminal checkpoint; a later safe migration with a changed source fingerprint
+replaces it only after an otherwise unblocked plan. Do not edit or delete it to
+force recovery.
+
+Dry-run reads and validates the applicable checkpoint when planning reaches
+that phase but never writes it. Verify neither reads nor writes a checkpoint.
+Both may create the empty `config/.conversation_storage.lock` while acquiring
+their outer coordinator lease. Migration never changes
+`config/conversation_storage_state.json`, other settings, or backend activation.
+See [migration recovery](../../operations/recovery-and-limitations.md#conversation-storage-migration-recovery).
 
 `input_snapshots/` is lazy, internal authorization evidence for nonempty
 explicit-reference operations. Its operation and invocation manifests and

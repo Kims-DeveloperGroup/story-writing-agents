@@ -116,7 +116,7 @@ ordinal sequence. `StoryRuntime` owns those values and allocates each
 invocation with attempt `1`; another agent, phase, replacement, or operation
 cannot reuse prior evidence.
 
-Construction first validates the complete eight-field
+Construction first validates the complete nine-field
 `config/system_defaults.json` object and closed per-agent objects in
 `config/agent_configs.json`, even when non-null constructor model/effort values
 would override persisted fields. Optional fields and canonical agents may be

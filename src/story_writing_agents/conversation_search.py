@@ -9,6 +9,13 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Iterator, Protocol
 
+from .conversation_literal_search import (
+    build_conversation_literal_snippet,
+    classify_conversation_literal_subject,
+    conversation_literal_sort_key,
+    normalize_conversation_literal_query,
+    normalize_conversation_literal_text,
+)
 from .conversations import (
     ConversationCatalog,
     ConversationEvent,
@@ -72,9 +79,7 @@ def _identifier(value: str, *, label: str) -> str:
     if type(value) is not str:
         raise TypeError(f"{label} must be a string")
     if _SAFE_IDENTIFIER.fullmatch(value) is None:
-        raise SessionIdError(
-            f"{label} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,63}}"
-        )
+        raise SessionIdError(f"{label} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,63}}")
     return value
 
 
@@ -119,17 +124,6 @@ def _has_control_or_format(value: str) -> bool:
     return any(unicodedata.category(character).startswith("C") for character in value)
 
 
-def _searchable_text(value: str) -> str:
-    """Return NFKC-casefolded text with Unicode ``C`` chars and spacing collapsed."""
-
-    normalized = unicodedata.normalize("NFKC", value).casefold()
-    without_controls = "".join(
-        " " if unicodedata.category(character).startswith("C") else character
-        for character in normalized
-    )
-    return " ".join(without_controls.split())
-
-
 def _normalized_query(value: str) -> str:
     """Return the bounded normalized literal used by conversation search.
 
@@ -139,27 +133,10 @@ def _normalized_query(value: str) -> str:
     without external reads or mutation.
     """
 
-    raw = _strict_utf8(value, label="conversation search query")
-    if not raw.strip():
-        raise ValueError("conversation search query must not be blank")
-    if len(raw) > CONVERSATION_MEMORY_POLICY.max_query_characters:
-        raise ValueError(
-            "conversation search query exceeds "
-            f"{CONVERSATION_MEMORY_POLICY.max_query_characters} characters"
-        )
-    if _has_control_or_format(raw):
-        raise ValueError(
-            "conversation search query must not contain control or format characters"
-        )
-    normalized = _searchable_text(raw)
-    if not normalized:
-        raise ValueError("conversation search query must not be blank")
-    if len(normalized) > CONVERSATION_MEMORY_POLICY.max_query_characters:
-        raise ValueError(
-            "normalized conversation search query exceeds "
-            f"{CONVERSATION_MEMORY_POLICY.max_query_characters} characters"
-        )
-    return normalized
+    return normalize_conversation_literal_query(
+        value,
+        max_characters=CONVERSATION_MEMORY_POLICY.max_query_characters,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,14 +184,6 @@ class ConversationSearchMatchKind(StrEnum):
     SUBJECT_PREFIX = "subject_prefix"
     SUBJECT_SUBSTRING = "subject_substring"
     TRANSCRIPT = "transcript"
-
-
-_MATCH_ORDER = {
-    ConversationSearchMatchKind.EXACT_SUBJECT: 0,
-    ConversationSearchMatchKind.SUBJECT_PREFIX: 1,
-    ConversationSearchMatchKind.SUBJECT_SUBSTRING: 2,
-    ConversationSearchMatchKind.TRANSCRIPT: 3,
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -329,8 +298,8 @@ class ConversationSearchHit:
 def _hit_sort_key(hit: ConversationSearchHit) -> tuple[int, str, str]:
     """Return the stable match-rank, normalized-subject, and identity key."""
 
-    return (
-        _MATCH_ORDER[hit.match_kind],
+    return conversation_literal_sort_key(
+        hit.match_kind.value,
         normalize_conversation_subject(hit.subject),
         hit.citation.conversation_id,
     )
@@ -395,8 +364,7 @@ class ConversationSearchResult:
         if tuple(sorted(self.hits, key=_hit_sort_key)) != self.hits:
             raise ValueError("search result hits are not in deterministic order")
         identities = {
-            (hit.citation.session_id, hit.citation.conversation_id)
-            for hit in self.hits
+            (hit.citation.session_id, hit.citation.conversation_id) for hit in self.hits
         }
         if len(identities) != len(self.hits):
             raise ValueError("search result contains duplicate conversations")
@@ -489,12 +457,9 @@ class ConversationTranscriptPage:
         )
         if self.requested_end_sequence > self.snapshot_last_sequence:
             raise ValueError("requested transcript range exceeds its snapshot")
-        if (
-            self.requested_end_sequence < self.requested_start_sequence
-            and not (
-                self.requested_start_sequence == self.snapshot_last_sequence + 1
-                and self.requested_end_sequence == self.snapshot_last_sequence
-            )
+        if self.requested_end_sequence < self.requested_start_sequence and not (
+            self.requested_start_sequence == self.snapshot_last_sequence + 1
+            and self.requested_end_sequence == self.snapshot_last_sequence
         ):
             raise ValueError("requested transcript range is invalid")
         previous_sequence = 0
@@ -565,56 +530,6 @@ class ConversationSearch(Protocol):
         ...
 
 
-def _bounded_snippet(searchable: str, normalized_query: str) -> str:
-    """Return a policy-bounded snippet around the query's first occurrence.
-
-    Up to 80 preceding characters are preferred, then the right edge expands
-    within character and UTF-8 byte limits; ellipses mark omitted text. Missing
-    or unfittable queries raise ``ValueError`` without external mutation.
-    """
-
-    match_start = searchable.find(normalized_query)
-    if match_start < 0:
-        raise ValueError("snippet source does not contain the normalized query")
-    match_end = match_start + len(normalized_query)
-    left_length = min(80, match_start)
-
-    def render(start: int, end: int) -> str:
-        """Render one source slice with ellipses for omitted boundaries."""
-
-        return (
-            ("…" if start > 0 else "")
-            + searchable[start:end]
-            + ("…" if end < len(searchable) else "")
-        )
-
-    def fits(value: str) -> bool:
-        """Report whether text fits both fixed snippet limits."""
-
-        return (
-            len(value) <= CONVERSATION_MEMORY_POLICY.max_snippet_characters
-            and len(value.encode("utf-8"))
-            <= CONVERSATION_MEMORY_POLICY.max_snippet_utf8_bytes
-        )
-
-    while left_length >= 0:
-        start = match_start - left_length
-        if fits(render(start, match_end)):
-            break
-        left_length -= 1
-    if left_length < 0:
-        raise ValueError("normalized query cannot fit within the snippet limits")
-
-    start = match_start - left_length
-    end = match_end
-    while end < len(searchable) and fits(render(start, end + 1)):
-        end += 1
-    snippet = render(start, end)
-    if not fits(snippet) or normalized_query not in snippet:
-        raise ValueError("conversation search snippet is inconsistent")
-    return snippet
-
-
 def _subject_match_kind(
     normalized_subject: str,
     normalized_query: str,
@@ -624,13 +539,11 @@ def _subject_match_kind(
     Exact, prefix, and substring matches are tested in that precedence order.
     """
 
-    if normalized_subject == normalized_query:
-        return ConversationSearchMatchKind.EXACT_SUBJECT
-    if normalized_subject.startswith(normalized_query):
-        return ConversationSearchMatchKind.SUBJECT_PREFIX
-    if normalized_query in normalized_subject:
-        return ConversationSearchMatchKind.SUBJECT_SUBSTRING
-    return None
+    match_kind = classify_conversation_literal_subject(
+        normalized_subject,
+        normalized_query,
+    )
+    return None if match_kind is None else ConversationSearchMatchKind(match_kind)
 
 
 def _validated_metadata(
@@ -673,13 +586,8 @@ def _iter_validated_events(
         if maximum is not None and expected_sequence > maximum:
             return
         if type(event) is not ConversationEvent:
-            raise TypeError(
-                "event store read must return a tuple of ConversationEvent"
-            )
-        if (
-            event.session_id != session_id
-            or event.conversation_id != conversation_id
-        ):
+            raise TypeError("event store read must return a tuple of ConversationEvent")
+        if event.session_id != session_id or event.conversation_id != conversation_id:
             raise ValueError("event store returned an event from another transcript")
         if event.sequence != expected_sequence:
             raise ValueError("event store returned non-contiguous event sequences")
@@ -813,9 +721,15 @@ class ReferenceConversationSearch:
                         status=item.status,
                         updated_at=item.updated_at,
                         match_kind=match_kind,
-                        snippet=_bounded_snippet(
-                            _searchable_text(item.subject),
+                        snippet=build_conversation_literal_snippet(
+                            normalize_conversation_literal_text(item.subject),
                             normalized_query,
+                            max_characters=(
+                                CONVERSATION_MEMORY_POLICY.max_snippet_characters
+                            ),
+                            max_utf8_bytes=(
+                                CONVERSATION_MEMORY_POLICY.max_snippet_utf8_bytes
+                            ),
                         ),
                     )
                 )
@@ -848,15 +762,12 @@ class ReferenceConversationSearch:
                 scanned_events += 1
                 if event.kind is ConversationEventKind.RUNTIME_ERROR:
                     continue
-                searchable = _searchable_text(event.content)
+                searchable = normalize_conversation_literal_text(event.content)
                 if normalized_query in searchable:
                     matched_event = event
                     matched_text = searchable
                     break
-            if (
-                matched_event is None
-                and examined_in_conversation < len(raw_events)
-            ):
+            if matched_event is None and examined_in_conversation < len(raw_events):
                 scan_truncated = True
             if scanned_events == CONVERSATION_MEMORY_POLICY.max_scan_events:
                 event_budget_exhausted = True
@@ -875,7 +786,16 @@ class ReferenceConversationSearch:
                         status=item.status,
                         updated_at=item.updated_at,
                         match_kind=ConversationSearchMatchKind.TRANSCRIPT,
-                        snippet=_bounded_snippet(matched_text, normalized_query),
+                        snippet=build_conversation_literal_snippet(
+                            matched_text,
+                            normalized_query,
+                            max_characters=(
+                                CONVERSATION_MEMORY_POLICY.max_snippet_characters
+                            ),
+                            max_utf8_bytes=(
+                                CONVERSATION_MEMORY_POLICY.max_snippet_utf8_bytes
+                            ),
+                        ),
                     )
                 )
 
@@ -893,20 +813,78 @@ class ReferenceConversationSearch:
         )
 
 
+class _ConversationStorageServicesLike(Protocol):
+    """Private structural view that avoids a storage-to-search import cycle."""
+
+    @property
+    def catalog(self) -> ConversationCatalog: ...
+
+    @property
+    def event_store(self) -> ConversationEventStore: ...
+
+    @property
+    def search(self) -> ConversationSearch: ...
+
+    @property
+    def mutation_coordinator(self) -> object: ...
+
+
+def _storage_service_components(
+    value: _ConversationStorageServicesLike,
+) -> tuple[ConversationCatalog, ConversationEventStore, ConversationSearch]:
+    """Validate the narrow immutable bundle surface without importing storage."""
+
+    try:
+        catalog = value.catalog
+        event_store = value.event_store
+        search = value.search
+        coordinator = value.mutation_coordinator
+    except AttributeError as exc:
+        raise TypeError("conversation storage services are invalid") from exc
+    if any(
+        not callable(getattr(catalog, name, None))
+        for name in ("create", "get", "list", "rename", "archive", "unarchive")
+    ):
+        raise TypeError("conversation storage catalog is invalid")
+    if any(
+        not callable(getattr(event_store, name, None))
+        for name in ("append", "read", "read_context")
+    ):
+        raise TypeError("conversation storage event store is invalid")
+    if not callable(getattr(search, "search", None)):
+        raise TypeError("conversation storage search is invalid")
+    if not callable(getattr(coordinator, "borrow", None)):
+        raise TypeError("conversation storage coordinator is invalid")
+    return catalog, event_store, search
+
+
 class ConversationMemoryService:
     """Authorize one session and coordinate search with bounded cited reads."""
 
     def __init__(
         self,
         scope: ConversationSearchScope,
-        catalog: ConversationCatalog,
-        event_store: ConversationEventStore,
+        catalog: ConversationCatalog | None = None,
+        event_store: ConversationEventStore | None = None,
         *,
         search: ConversationSearch | None = None,
+        conversation_storage_services: _ConversationStorageServicesLike | None = None,
     ) -> None:
         if type(scope) is not ConversationSearchScope:
             raise TypeError(
                 "conversation search scope must be a ConversationSearchScope"
+            )
+        if conversation_storage_services is not None:
+            if catalog is not None or event_store is not None or search is not None:
+                raise TypeError(
+                    "conversation_storage_services conflicts with raw collaborators"
+                )
+            catalog, event_store, search = _storage_service_components(
+                conversation_storage_services
+            )
+        elif catalog is None or event_store is None:
+            raise TypeError(
+                "catalog and event_store are required without storage services"
             )
         if not callable(getattr(catalog, "get", None)):
             raise TypeError("conversation catalog must provide get()")
@@ -915,6 +893,7 @@ class ConversationMemoryService:
         if search is not None and not callable(getattr(search, "search", None)):
             raise TypeError("conversation search adapter must provide search()")
         self._scope = scope
+        self._conversation_storage_services = conversation_storage_services
         self._catalog = catalog
         self._event_store = event_store
         self._search = (
@@ -942,8 +921,7 @@ class ConversationMemoryService:
         if result.query != query:
             raise ValueError("conversation search adapter changed the query")
         if any(
-            hit.citation.session_id != self._scope.session_id
-            for hit in result.hits
+            hit.citation.session_id != self._scope.session_id for hit in result.hits
         ):
             raise ValueError(
                 "conversation search adapter crossed the authorized session"
@@ -1061,9 +1039,7 @@ class ConversationMemoryService:
         ):
             raise ValueError("stale transcript cursor")
 
-        requested_end = (
-            snapshot_last_sequence if end_sequence is None else end_sequence
-        )
+        requested_end = snapshot_last_sequence if end_sequence is None else end_sequence
         if requested_end > snapshot_last_sequence:
             raise ValueError("transcript range exceeds the current snapshot")
         if start_sequence > snapshot_last_sequence + 1:
@@ -1095,8 +1071,7 @@ class ConversationMemoryService:
             event_utf8_bytes = len(event.content.encode("utf-8"))
             if (
                 not returned
-                and event_utf8_bytes
-                > CONVERSATION_MEMORY_POLICY.max_page_utf8_bytes
+                and event_utf8_bytes > CONVERSATION_MEMORY_POLICY.max_page_utf8_bytes
             ):
                 raise ValueError("transcript event exceeds the page UTF-8 byte limit")
             if len(returned) == max_events:

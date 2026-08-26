@@ -5,6 +5,18 @@
 > credentials or invoke Codex, Antigravity, `agy`, a terminal, subprocesses,
 > apps, the web, or the network.
 
+Smoke always constructs its own temporary/default filesystem conversation
+bundle, including in persistent `--workspace` mode. It does not read or honor
+the selectable SQLite backend. To verify SQLite selection, run provider-free
+`story storage use sqlite`, then start the next normal shell; storage activation
+finishes before that shell's separate provider-authentication gate. For a
+provider-free runtime-composition check in a source checkout, run:
+
+```bash
+PYTHONPATH=src python -m unittest \
+  tests.test_sqlite_conversation_storage.SQLiteBoundaryAndCompositionTests
+```
+
 Key terms: **deterministic backend**—fixed local replies with no provider;
 **temporary mode**—a check whose workspace is removed; **persistent mode**—a
 check that retains its workspace and any diagnostics successfully written;

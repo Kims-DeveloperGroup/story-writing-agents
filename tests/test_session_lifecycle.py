@@ -405,9 +405,24 @@ class SessionLifecycleContractTests(unittest.TestCase):
                 if isinstance(node, ast.ImportFrom) and node.module == "session_lifecycle"
             ]
         )
-        self.assertEqual(len(list(source_root.rglob("*.py"))), 57)
+        source_files = tuple(source_root.rglob("*.py"))
+        self.assertEqual(len(source_files), 69)
+        self.assertTrue(
+            {
+                source_root / "conversation_storage" / "archive.py",
+                source_root / "conversation_storage" / "filesystem_archive.py",
+                source_root / "conversation_storage" / "migration.py",
+                source_root / "conversation_storage" / "provisioning.py",
+                source_root / "conversation_storage" / "selection.py",
+                source_root / "conversation_storage" / "sqlite_database.py",
+                source_root / "conversation_storage" / "sqlite.py",
+                source_root / "conversation_storage" / "sqlite_search_index.py",
+                source_root / "conversation_literal_search.py",
+            }
+            <= set(source_files)
+        )
         index = (source_root.parents[1] / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8")
-        self.assertIn("Importable production units indexed: 57.", index)
+        self.assertIn("Importable production units indexed: 69.", index)
         environment = dict(os.environ, PYTHONPATH=str(source_root.parent))
         result = subprocess.run(
             [

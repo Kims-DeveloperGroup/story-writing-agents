@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 from .agents import ROSTER
 from .config import (
+    ConfigurationBaseline,
     ConfigurationSnapshot,
     ConfigManager,
     SystemDefaults,
@@ -154,6 +155,16 @@ class SettingsBaseline:
             MappingProxyType(dict(self.provider_routes)),
         )
 
+    @property
+    def configuration_baseline(self) -> ConfigurationBaseline:
+        """Return the config-owned exact-byte baseline for final persistence."""
+
+        return ConfigurationBaseline(
+            self.system_defaults_bytes,
+            self.agent_configs_bytes,
+            self.configuration,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class SettingsState:
@@ -215,27 +226,21 @@ def load_settings_state(workspace: Workspace) -> SettingsState:
     """Read exact configuration bytes and the safe persona catalog once."""
 
     _require_workspace(workspace)
-    system_bytes = _read_exact_bytes(workspace, _SYSTEM_DEFAULTS_PATH)
-    agent_bytes = _read_exact_bytes(workspace, _AGENT_CONFIGS_PATH)
+    configuration_baseline = ConfigManager(workspace).load_configuration_baseline()
     catalog = _persona_catalog(workspace)
-    manager = ConfigManager(workspace)
-    configuration = manager.validate_configuration(
-        _decode_json(system_bytes, _SYSTEM_DEFAULTS_PATH),
-        _decode_json(agent_bytes, _AGENT_CONFIGS_PATH),
-    )
     route_bytes, provider_routes = read_provider_route_generations(
         workspace,
-        configuration,
+        configuration_baseline.configuration,
     )
     baseline = SettingsBaseline(
-        system_bytes,
-        agent_bytes,
+        configuration_baseline.system_defaults_bytes,
+        configuration_baseline.agent_configs_bytes,
         catalog,
-        configuration,
+        configuration_baseline.configuration,
         route_bytes,
         provider_routes,
     )
-    return SettingsState(baseline, configuration)
+    return SettingsState(baseline, configuration_baseline.configuration)
 
 
 def update_language(state: SettingsState, language: str) -> SettingsState:
@@ -286,6 +291,24 @@ def update_max_debate_rounds(
         replace(
             state.pending.system_defaults,
             max_debate_rounds=max_debate_rounds,
+        ),
+    )
+
+
+def update_conversation_storage_backend(
+    state: SettingsState,
+    backend: str,
+) -> SettingsState:
+    """Return pending state with one independently validated storage backend."""
+
+    _require_state(state)
+    validated = ConfigManager.validate_conversation_storage_backend(backend)
+    assert validated is not None
+    return _with_system_defaults(
+        state,
+        replace(
+            state.pending.system_defaults,
+            conversation_storage_backend=validated,
         ),
     )
 
@@ -341,13 +364,7 @@ def establish_settings_default_backend(
     *,
     provider_overrides: Mapping[str, str] | None = None,
 ) -> SettingsState:
-    """Persist a missing default and safely rebase one open settings edit.
-
-    Only the opening baseline's default is changed for the durable write. The
-    original exact bytes and persona catalog are conflict-checked first, then
-    the resulting canonical default-only baseline is verified exactly before
-    every pending edit is replayed onto it.
-    """
+    """Rebase a missing provider default in memory for the final settings CAS."""
 
     _require_workspace(workspace)
     _require_state(state)
@@ -356,44 +373,9 @@ def establish_settings_default_backend(
     baseline_configuration = state.baseline.configuration
     if baseline_configuration.system_defaults.default_backend is not None:
         return state
-    if state.pending.system_defaults.default_backend is not None:
-        raise SettingsError(SettingsErrorKind.CONFLICT)
-
-    persisted_defaults = replace(
-        baseline_configuration.system_defaults,
-        default_backend=validated,
-    )
-    persisted_configuration = ConfigurationSnapshot(
-        persisted_defaults,
-        baseline_configuration.agent_configs,
-    )
-    expected_system_bytes = _canonical_json(
-        _system_value(persisted_defaults)
-    ).encode("utf-8")
-    commit_prepared_settings_save(
-        workspace,
-        prepare_settings_save(
-            workspace,
-            SettingsState(state.baseline, persisted_configuration),
-            provider_overrides=provider_overrides,
-        ),
-    )
-
-    try:
-        fresh = load_settings_state(workspace)
-    except Exception as exc:
-        raise SettingsError(SettingsErrorKind.CONFLICT) from exc
-    if (
-        fresh.baseline.system_defaults_bytes != expected_system_bytes
-        or (
-            fresh.baseline.agent_configs_bytes
-            != state.baseline.agent_configs_bytes
-        )
-        or fresh.baseline.persona_catalog != state.baseline.persona_catalog
-        or fresh.baseline.configuration != persisted_configuration
-    ):
-        raise SettingsError(SettingsErrorKind.CONFLICT)
-
+    pending_default = state.pending.system_defaults.default_backend
+    if pending_default is not None:
+        return state
     rebased_pending = ConfigurationSnapshot(
         replace(
             state.pending.system_defaults,
@@ -401,7 +383,7 @@ def establish_settings_default_backend(
         ),
         state.pending.agent_configs,
     )
-    return SettingsState(fresh.baseline, rebased_pending)
+    return SettingsState(state.baseline, rebased_pending)
 
 
 def update_agent_codex_model(
@@ -503,22 +485,21 @@ def prepare_settings_save(
 
     _require_workspace(workspace)
     _require_state(state)
-    system_value = _system_value(state.pending.system_defaults)
-    agent_value = _agent_value(state.pending)
+    manager = ConfigManager(workspace)
+    system_value = manager.system_defaults_value(state.pending.system_defaults)
+    agent_value = manager.agent_configs_value(state.pending)
     try:
-        ConfigManager(workspace).validate_configuration(
-            system_value,
-            agent_value,
-        )
+        manager.validate_configuration(system_value, agent_value)
     except ConfigurationError as exc:
         raise SettingsError(SettingsErrorKind.VALIDATION) from exc
 
     try:
-        system_before = _read_exact_bytes(workspace, _SYSTEM_DEFAULTS_PATH)
-        agent_before = _read_exact_bytes(workspace, _AGENT_CONFIGS_PATH)
+        configuration_baseline = manager.load_configuration_baseline()
         catalog_before = _persona_catalog(workspace)
     except Exception as exc:
         raise SettingsError(SettingsErrorKind.CONFLICT) from exc
+    system_before = configuration_baseline.system_defaults_bytes
+    agent_before = configuration_baseline.agent_configs_bytes
     if (
         system_before != state.baseline.system_defaults_bytes
         or agent_before != state.baseline.agent_configs_bytes
@@ -577,6 +558,23 @@ def prepare_settings_save(
     )
 
 
+def validate_settings_persona_catalog(
+    workspace: Workspace,
+    baseline: SettingsBaseline,
+) -> None:
+    """Raise the fixed conflict failure when the safe persona catalog changed."""
+
+    _require_workspace(workspace)
+    if type(baseline) is not SettingsBaseline:
+        raise TypeError("baseline must be a SettingsBaseline")
+    try:
+        catalog_before = _persona_catalog(workspace)
+    except Exception as exc:
+        raise SettingsError(SettingsErrorKind.CONFLICT) from exc
+    if catalog_before != baseline.persona_catalog:
+        raise SettingsError(SettingsErrorKind.CONFLICT)
+
+
 def commit_prepared_settings_save(
     workspace: Workspace,
     prepared: PreparedSettingsSave,
@@ -592,16 +590,29 @@ def commit_prepared_settings_save(
         if current_route.exists()
         else None
     )
+    system_current = _read_exact_bytes(workspace, _SYSTEM_DEFAULTS_PATH)
+    agent_current = _read_exact_bytes(workspace, _AGENT_CONFIGS_PATH)
+    configuration_is_before = (
+        system_current == prepared.system_before
+        and agent_current == prepared.agent_before
+    )
+    configuration_is_after = (
+        system_current == prepared.system_after
+        and agent_current == prepared.agent_after
+    )
     if (
-        _read_exact_bytes(workspace, _SYSTEM_DEFAULTS_PATH) != prepared.system_before
-        or _read_exact_bytes(workspace, _AGENT_CONFIGS_PATH) != prepared.agent_before
+        not (configuration_is_before or configuration_is_after)
         or observed_route != prepared.route_before
     ):
         raise SettingsError(SettingsErrorKind.CONFLICT)
-    writes: list[tuple[str, bytes, bytes | None]] = [
-        (_SYSTEM_DEFAULTS_PATH, prepared.system_after, prepared.system_before),
-        (_AGENT_CONFIGS_PATH, prepared.agent_after, prepared.agent_before),
-    ]
+    writes: list[tuple[str, bytes, bytes | None]] = []
+    if configuration_is_before:
+        writes.extend(
+            (
+                (_SYSTEM_DEFAULTS_PATH, prepared.system_after, prepared.system_before),
+                (_AGENT_CONFIGS_PATH, prepared.agent_after, prepared.agent_before),
+            )
+        )
     if prepared.route_after is not None:
         writes.append(
             (
@@ -610,7 +621,14 @@ def commit_prepared_settings_save(
                 prepared.route_before,
             )
         )
-    attempted: list[tuple[str, bytes | None]] = []
+    attempted: list[tuple[str, bytes | None]] = (
+        [
+            (_SYSTEM_DEFAULTS_PATH, prepared.system_before),
+            (_AGENT_CONFIGS_PATH, prepared.agent_before),
+        ]
+        if configuration_is_after and not configuration_is_before
+        else []
+    )
     try:
         for relative, after, before in writes:
             if after == before:
@@ -631,7 +649,6 @@ def commit_prepared_settings_save(
         if rollback_failure is not None:
             raise SettingsError(SettingsErrorKind.ROLLBACK) from rollback_failure
         raise SettingsError(SettingsErrorKind.WRITE) from write_failure
-
 
 def restore_prepared_settings_save(
     workspace: Workspace,
@@ -654,12 +671,18 @@ def restore_prepared_settings_save(
             if prepared.route_after is not None
             else prepared.route_before
         )
+        system_current = _read_exact_bytes(workspace, _SYSTEM_DEFAULTS_PATH)
+        agent_current = _read_exact_bytes(workspace, _AGENT_CONFIGS_PATH)
         if (
-            _read_exact_bytes(workspace, _SYSTEM_DEFAULTS_PATH)
-            != prepared.system_after
-            or _read_exact_bytes(workspace, _AGENT_CONFIGS_PATH)
-            != prepared.agent_after
-            or observed_route != expected_route
+            system_current == prepared.system_before
+            and agent_current == prepared.agent_before
+            and observed_route == prepared.route_before
+        ):
+            return
+        if (
+            system_current != prepared.system_after
+            or agent_current != prepared.agent_after
+            or observed_route not in {prepared.route_before, expected_route}
         ):
             raise SettingsError(SettingsErrorKind.RECOVERY_REQUIRED)
         workspace.write_text(
@@ -862,40 +885,6 @@ def _persona_catalog(workspace: Workspace) -> tuple[PersonaCatalogEntry, ...]:
             if target.is_file() and name not in selected:
                 selected[name] = PersonaCatalogEntry(name, relative)
     return tuple(selected[name] for name in sorted(selected))
-
-
-def _system_value(defaults: SystemDefaults) -> dict[str, Any]:
-    """Project one system-default candidate to its complete JSON shape."""
-
-    return {
-        "language": defaults.language,
-        "persona": defaults.persona,
-        "max_debate_rounds": defaults.max_debate_rounds,
-        "codex_model": defaults.codex_model,
-        "codex_reasoning_effort": defaults.codex_reasoning_effort,
-        "antigravity_model": defaults.antigravity_model,
-        "antigravity_effort": defaults.antigravity_effort,
-        "default_backend": defaults.default_backend,
-    }
-
-
-def _agent_value(snapshot: ConfigurationSnapshot) -> dict[str, dict[str, Any]]:
-    """Project one roster-complete agent candidate to its JSON shape."""
-
-    return {
-        agent_id: {
-            "backend": snapshot.agent_configs[agent_id].backend,
-            "language": snapshot.agent_configs[agent_id].language,
-            "persona": snapshot.agent_configs[agent_id].persona,
-            "codex_model": snapshot.agent_configs[agent_id].codex_model,
-            "codex_reasoning_effort": snapshot.agent_configs[agent_id].codex_reasoning_effort,
-            "antigravity_model": snapshot.agent_configs[agent_id].antigravity_model,
-            "antigravity_effort": snapshot.agent_configs[agent_id].antigravity_effort,
-        }
-        for agent_id in ROSTER
-    }
-
-
 def _configured_provider(
     snapshot: ConfigurationSnapshot,
     agent_id: str,

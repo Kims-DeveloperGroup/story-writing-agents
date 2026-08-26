@@ -39,6 +39,7 @@ from ._controls import (
     transition_picker,
     transition_picker_fallback,
     transition_line_input,
+    transition_prefilled_prompt_input,
     transition_prompt_input,
 )
 from ._driver import (
@@ -1688,6 +1689,7 @@ class InteractivePromptInput:
         prompt: Prompt,
         *,
         context: tuple[Panel | Section | Field | Notice, ...] = (),
+        initial_value: str | None = None,
         transient: bool = True,
     ) -> ControlOutcome:
         """Read one exact line with a distinct nested-cancel outcome."""
@@ -1695,7 +1697,7 @@ class InteractivePromptInput:
         if type(transient) is not bool:
             raise TypeError("transient must be a bool")
 
-        view = InputPromptView(context, prompt)
+        view = InputPromptView(context, prompt, initial_value=initial_value)
         outcome = self._read(view, transient=True)
         if type(outcome) is not ControlOutcome:
             raise TypeError("prompt reader must return a ControlOutcome")
@@ -1866,6 +1868,8 @@ def _plain_prompt_reader(
             return ControlOutcome(ControlOutcomeKind.EOF)
         if line == "\x1b":
             return ControlOutcome(ControlOutcomeKind.CANCEL)
+        if line == "" and view.initial_value is not None:
+            line = view.initial_value
         return ControlOutcome(ControlOutcomeKind.COMMIT, text=line)
 
     return read_prompt
@@ -2397,7 +2401,12 @@ def build_stream_terminal(
     def read_prompt(view, *, transient=True):
         if type(transient) is not bool:
             raise TypeError("transient must be a bool")
-        arguments = (view, render_input_prompt, transition_prompt_input)
+        transition = (
+            transition_prefilled_prompt_input
+            if view.initial_value is not None
+            else transition_prompt_input
+        )
+        arguments = (view, render_input_prompt, transition)
         return driver.read_prompt(*arguments, transient=True)
 
     terminal._picker_read = read_picker

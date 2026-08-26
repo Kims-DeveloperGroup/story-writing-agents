@@ -535,6 +535,7 @@ class PublicCompatibilityFoundationTests(unittest.TestCase):
             InteractivePromptInput.read_prompt: (
                 ("prompt", positional, required),
                 ("context", keyword, ()),
+                ("initial_value", keyword, None),
                 ("transient", keyword, True),
             ),
         }
@@ -682,6 +683,7 @@ class SemanticModelFoundationTests(unittest.TestCase):
             choice,
             SuggestionPalette("/", (choice,), highlighted_id="one"),
             Picker(Prompt("Choose"), (choice,), highlighted_id="one"),
+            _model.InputPromptView((), Prompt("Input")),
             RenderedFrame("text", 80, 1),
         )
         for sample in samples:
@@ -736,6 +738,38 @@ class SemanticModelFoundationTests(unittest.TestCase):
             with self.subTest(call=call):
                 with self.assertRaises((TypeError, ValueError)):
                     call()
+
+    def test_input_prompt_view_initial_value_is_exact_optional_and_keyword_only(
+        self,
+    ) -> None:
+        prompt = Prompt("Input")
+        unseeded = _model.InputPromptView((), prompt)
+        self.assertIsNone(unseeded.initial_value)
+        self.assertEqual(
+            tuple(field.name for field in fields(unseeded)),
+            ("context", "prompt", "initial_value"),
+        )
+
+        for initial_value in ("", "  ", "초기 界"):
+            with self.subTest(initial_value=initial_value):
+                view = _model.InputPromptView(
+                    (),
+                    prompt,
+                    initial_value=initial_value,
+                )
+                self.assertEqual(view.initial_value, initial_value)
+                self.assertFalse(hasattr(view, "__dict__"))
+                with self.assertRaises(FrozenInstanceError):
+                    view.initial_value = "changed"  # type: ignore[misc]
+
+        with self.assertRaises(TypeError):
+            _model.InputPromptView((), prompt, "positional")  # type: ignore[misc]
+        for invalid in (False, 1, object()):
+            with self.subTest(invalid=invalid), self.assertRaises(TypeError):
+                _model.InputPromptView((), prompt, initial_value=invalid)  # type: ignore[arg-type]
+        for invalid in ("line\nfeed", "carriage\rreturn", "both\r\n"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                _model.InputPromptView((), prompt, initial_value=invalid)
 
 
 class PureControlFoundationTests(unittest.TestCase):
@@ -813,6 +847,44 @@ class PureControlFoundationTests(unittest.TestCase):
             transition_prompt_input(object(), KeyEvent(KeyKind.ESCAPE))  # type: ignore[arg-type]
         with self.assertRaises(TypeError):
             transition_prompt_input(state, object())  # type: ignore[arg-type]
+
+    def test_prefilled_prompt_transition_makes_eof_an_unconditional_exit(
+        self,
+    ) -> None:
+        state = LineInputState("draft", 2)
+        for kind, expected in (
+            (KeyKind.ESCAPE, ControlOutcome(ControlOutcomeKind.CANCEL)),
+            (KeyKind.EOF, ControlOutcome(ControlOutcomeKind.EOF)),
+        ):
+            with self.subTest(kind=kind):
+                unchanged, outcome = _controls.transition_prefilled_prompt_input(
+                    state,
+                    KeyEvent(kind),
+                )
+                self.assertIs(unchanged, state)
+                self.assertEqual(outcome, expected)
+
+        for event in (
+            KeyEvent(KeyKind.TEXT, text="x"),
+            KeyEvent(KeyKind.LEFT),
+            KeyEvent(KeyKind.ENTER),
+            KeyEvent(KeyKind.INTERRUPT),
+        ):
+            with self.subTest(event=event):
+                self.assertEqual(
+                    _controls.transition_prefilled_prompt_input(state, event),
+                    transition_prompt_input(state, event),
+                )
+        with self.assertRaises(TypeError):
+            _controls.transition_prefilled_prompt_input(  # type: ignore[arg-type]
+                object(),
+                KeyEvent(KeyKind.EOF),
+            )
+        with self.assertRaises(TypeError):
+            _controls.transition_prefilled_prompt_input(  # type: ignore[arg-type]
+                state,
+                object(),
+            )
 
     def test_reserved_later_control_keys_have_no_foundation_semantics(self) -> None:
         state = LineInputState("draft", 2)
@@ -915,6 +987,57 @@ class RenderingFoundationTests(unittest.TestCase):
         self.assertEqual(
             strip_decorative_sgr("x\x1b[41mbackground\x1b[0m"),
             "x\x1b[41mbackground",
+        )
+
+    def test_prefilled_prompt_renders_ordered_sanitized_current_value_everywhere(
+        self,
+    ) -> None:
+        initial_value = "界\x1b]0;owned\x07 value"
+        view = _model.InputPromptView(
+            (Notice("Before current value."),),
+            Prompt("Focused input", default="display only"),
+            initial_value=initial_value,
+        )
+        frames = tuple(
+            render_input_prompt(view, capability(profile, width=width))
+            for profile, width in (
+                (CapabilityProfile.LINE, 18),
+                (CapabilityProfile.PLAIN, 40),
+                (CapabilityProfile.ANSI, 40),
+                (CapabilityProfile.ANSI, 18),
+            )
+        )
+        sanitized = _model.sanitize_terminal_text(initial_value)
+        for frame in frames:
+            with self.subTest(width=frame.width, text=frame.text):
+                self.assertIn("Current value", frame.plain_text)
+                self.assertIn(sanitized, frame.plain_text.replace("\n", ""))
+                self.assertLess(
+                    frame.plain_text.index("[info]"),
+                    frame.plain_text.index("Current value"),
+                )
+                self.assertLess(
+                    frame.plain_text.index("Current value"),
+                    frame.plain_text.index("Focused input"),
+                )
+                self.assertNotIn("\x1b]", frame.plain_text)
+                self.assertNotIn("\x07", frame.plain_text)
+                for line in frame.plain_text.splitlines():
+                    self.assertLessEqual(physical_width(line), frame.width)
+        self.assertNotIn("\x1b[", frames[0].text)
+        self.assertNotIn("\x1b[", frames[1].text)
+        self.assertEqual(strip_decorative_sgr(frames[2].text), frames[2].plain_text)
+        self.assertEqual(strip_decorative_sgr(frames[3].text), frames[3].plain_text)
+        self.assertIn(
+            "Current value",
+            render_input_prompt(
+                _model.InputPromptView(
+                    (),
+                    Prompt("Empty seed"),
+                    initial_value="",
+                ),
+                capability(CapabilityProfile.LINE, width=40),
+            ).plain_text,
         )
 
     def test_narrow_rendering_preserves_labels_wraps_by_cells_and_stacks_fields(
@@ -1332,7 +1455,13 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
     def test_prompt_adapter_and_driver_fallback_are_typed_literal_and_history_free(
         self,
     ) -> None:
-        reads: list[object] = ["\x1b", "/cancel", KeyboardInterrupt(), EOFError()]
+        reads: list[object] = [
+            "",
+            "\x1b",
+            "/cancel",
+            KeyboardInterrupt(),
+            EOFError(),
+        ]
         prompts: list[str] = []
 
         def read_line(prompt: str) -> str:
@@ -1355,6 +1484,10 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         )
         self.assertEqual(
             adapter.read_prompt(prompt, context=context),
+            ControlOutcome(ControlOutcomeKind.COMMIT, text=""),
+        )
+        self.assertEqual(
+            adapter.read_prompt(prompt, context=context),
             ControlOutcome(ControlOutcomeKind.CANCEL),
         )
         self.assertEqual(
@@ -1369,9 +1502,10 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             adapter.read_prompt(prompt, context=context),
             ControlOutcome(ControlOutcomeKind.EOF),
         )
-        self.assertEqual(len(prompts), 4)
+        self.assertEqual(len(prompts), 5)
         self.assertTrue(all("Settings [open]" in value for value in prompts))
         self.assertTrue(all("Codex model" in value for value in prompts))
+        self.assertTrue(all("provider default" in value for value in prompts))
         rendered_context = render_plain(context[0], width=40).text
         self.assertTrue(
             all(value.startswith(f"{rendered_context}\n") for value in prompts)
@@ -1442,6 +1576,44 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                     expected,
                 )
 
+    def test_prefilled_prompt_callback_reuses_only_exact_blank_after_escape(
+        self,
+    ) -> None:
+        reads: list[object] = [
+            "",
+            " \t",
+            "\x1b",
+            "/cancel",
+            KeyboardInterrupt(),
+            EOFError(),
+        ]
+
+        def read_line(_prompt: str) -> str:
+            value = reads.pop(0)
+            if isinstance(value, BaseException):
+                raise value
+            return value
+
+        adapter = InteractivePromptInput(
+            InteractiveTerminal(read_line, lambda _text: None, width=40)
+        )
+        prompt = Prompt("Configured value", default="display default")
+        expected = (
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="초기"),
+            ControlOutcome(ControlOutcomeKind.COMMIT, text=" \t"),
+            ControlOutcome(ControlOutcomeKind.CANCEL),
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="/cancel"),
+            ControlOutcome(ControlOutcomeKind.INTERRUPT),
+            ControlOutcome(ControlOutcomeKind.EOF),
+        )
+        for outcome in expected:
+            with self.subTest(outcome=outcome):
+                self.assertEqual(
+                    adapter.read_prompt(prompt, initial_value="초기"),
+                    outcome,
+                )
+        self.assertEqual(reads, [])
+
     def test_prompt_driver_raw_delegation_validation_and_failures_are_call_local(
         self,
     ) -> None:
@@ -1506,6 +1678,48 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             self.assertIs(call.args[4], transition_prompt_input)
             self.assertIs(call.kwargs["configuration"], configuration)
             self.assertEqual(call.kwargs["rendered_input"], frame)
+
+        prefilled_view = _model.InputPromptView(
+            (),
+            prompt,
+            initial_value="초기",
+        )
+        prefilled_frame = render_input_prompt(prefilled_view, capabilities)
+        prefilled_renderer = mock.Mock(return_value=prefilled_frame)
+        with (
+            mock.patch.object(
+                RawTerminalDriver,
+                "capabilities",
+                autospec=True,
+                return_value=capabilities,
+            ),
+            mock.patch.object(
+                RawTerminalDriver,
+                "_prepare_input",
+                autospec=True,
+                return_value=(capabilities, configuration),
+            ),
+            mock.patch.object(
+                RawTerminalDriver,
+                "_read_control_line",
+                autospec=True,
+                return_value="초기!",
+            ) as seeded_live,
+        ):
+            self.assertEqual(
+                driver.read_prompt(
+                    prefilled_view,
+                    prefilled_renderer,
+                    _controls.transition_prefilled_prompt_input,
+                ),
+                ControlOutcome(ControlOutcomeKind.COMMIT, text="초기!"),
+            )
+        seeded_call = seeded_live.call_args
+        self.assertEqual(seeded_call.args[3], LineInputState("초기", 2))
+        self.assertIs(
+            seeded_call.args[4],
+            _controls.transition_prefilled_prompt_input,
+        )
 
         invalid = (
             lambda: driver.read_prompt(object(), renderer, transition_prompt_input),
@@ -1794,6 +2008,13 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             ),
             ControlOutcome(ControlOutcomeKind.COMMIT, text="model"),
         )
+        self.assertEqual(
+            InteractivePromptInput(terminal).read_prompt(
+                Prompt("Codex model", scope="settings"),
+                initial_value="gpt-5",
+            ),
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="model"),
+        )
         picker = Picker(
             Prompt("Resume"),
             (
@@ -1897,14 +2118,29 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
             ],
         )
         driver.read_line.assert_called_once_with("conversation[subject]> ")
-        driver.read_prompt.assert_called_once_with(
-            _model.InputPromptView(
-                (),
-                Prompt("Codex model", scope="settings"),
-            ),
-            render_input_prompt,
-            transition_prompt_input,
-            transient=True,
+        self.assertEqual(
+            driver.read_prompt.call_args_list,
+            [
+                mock.call(
+                    _model.InputPromptView(
+                        (),
+                        Prompt("Codex model", scope="settings"),
+                    ),
+                    render_input_prompt,
+                    transition_prompt_input,
+                    transient=True,
+                ),
+                mock.call(
+                    _model.InputPromptView(
+                        (),
+                        Prompt("Codex model", scope="settings"),
+                        initial_value="gpt-5",
+                    ),
+                    render_input_prompt,
+                    _controls.transition_prefilled_prompt_input,
+                    transient=True,
+                ),
+            ],
         )
         self.assertEqual(
             driver.write_text.call_args_list,

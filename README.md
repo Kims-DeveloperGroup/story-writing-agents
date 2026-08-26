@@ -69,11 +69,13 @@ story smoke
 story
 ```
 
-After the welcome, authentication is the first interactive gate. At least one
-provider must pass a fresh native status check, and every distinct provider
-selected by the effective agent routes must pass again before the runtime
-constructs a story backend or session controller. Press Ctrl-C or send EOF to
-leave without starting the shell; cancelling the picker keeps the gate open.
+After workspace and configuration loading, startup first resolves the desired
+conversation-storage backend into one ready active service bundle. The welcome
+then precedes the first interactive gate: at least one provider must pass a
+fresh native status check, and every distinct provider selected by the
+effective agent routes must pass again before the runtime constructs a story
+backend or session controller. Press Ctrl-C or send EOF to leave without
+starting the shell; cancelling the picker keeps the gate open.
 
 At `story[lobby]>`, create a session and focus a subject conversation:
 
@@ -119,6 +121,7 @@ story run --output part-01/opening.md --prompt 'Draft the opening.'
 - [Documentation index](docs/INDEX.md) routes each task, contract, design topic, and operational concern.
 - [Workspace guide](docs/guides/workspaces.md) explains the editable project files.
 - [Writing artifacts](docs/reference/writing-artifacts.md) separates current reference sources from publication identity, provenance, and recovery.
+- [Conversation archives](docs/reference/conversation-archives.md) documents canonical conversation-only bytes and privileged filesystem transfer.
 - [Antigravity guide](docs/guides/antigravity.md) covers `agy` setup, authentication, routing, safety, sessions, and provider-free verification.
 - [Story sessions](docs/guides/story-sessions.md) shows shell management, conversation reads, retrieval, and consensus.
 - [Session lifecycle](docs/design/session-lifecycle.md) maps internal state to commands, output, errors, and next actions.
@@ -139,6 +142,70 @@ The only supported backend names are `codex` and `antigravity`; legacy
 
 For Python integrations, start with the [runtime API](docs/reference/runtime-api.md), [agent contracts](docs/reference/agent-contracts.md), and [bounded retrieval](docs/reference/conversation-retrieval.md).
 
+Canonical conversation archive values and lease-bound filesystem export/import
+are available from the `story_writing_agents.conversation_storage` subpackage.
+They are application-controlled transport infrastructure, not a shell command,
+complete workspace backup, or arbitrary restore workflow. See
+[Conversation archives](docs/reference/conversation-archives.md).
+
+Conversation catalog, transcript, and reference-search ports also have an
+optional SQLite implementation for direct Python composition. The installed
+shell can select the complete filesystem or SQLite bundle for its next launch;
+direct `StoryRuntime` construction still defaults to filesystem unless the
+caller supplies a composed bundle. Start with the
+[package API](docs/reference/package-api.md#optional-sqlite-conversation-storage).
+`SQLiteConversationSearch` keeps the public literal-search contract exact; a
+private disposable FTS5 companion can supply hints but never determines a
+result or readiness.
+
+Select desired storage without a provider:
+
+```bash
+story storage use sqlite
+```
+
+The command checks SQLite through the active Python interpreter and may
+explicitly provision an absent empty database. If it reports
+`installation_required`, rerun it only after reviewing the supported host
+command and authorizing both automation flags:
+
+```bash
+story storage use sqlite --install-missing --yes
+```
+
+If the active filesystem store is nonempty, selection can instead report
+`migration_required`. The ready SQLite destination can then be copied and
+verified before selection is retried:
+
+```bash
+story storage migrate --from filesystem --to sqlite --dry-run
+story storage migrate --from filesystem --to sqlite
+story storage verify --from filesystem --to sqlite
+story storage use sqlite
+story
+```
+
+Selection changes only the desired backend. It never migrates, deletes, or
+activates data; a successful choice applies when the next shell freshly checks
+readiness and exact canonical parity. The current shell keeps its original
+bundle. See the
+[storage selection contract](docs/reference/cli.md#conversation-storage-selection).
+
+Ready filesystem and SQLite stores in the same workspace can be
+planned, copied, and compared without a provider:
+
+```bash
+story storage migrate --from filesystem --to sqlite --dry-run
+story storage migrate --from filesystem --to sqlite
+story storage verify --from filesystem --to sqlite
+```
+
+`--from` must name the workspace's active backend, and the two backend names
+must differ. Migration preserves exact active and archived conversation
+metadata and every transcript event, but it never provisions SQLite, changes
+the active backend, deletes the source, or copies the derived FTS companion.
+See the [CLI contract](docs/reference/cli.md#conversation-storage-migration).
+
 <a id="current-limitations"></a>
 
 ## Important limits
@@ -149,6 +216,14 @@ For Python integrations, start with the [runtime API](docs/reference/runtime-api
 - Writing-artifact publication is journaled and catalog-last, and rolls forward
   on the next catalog or publication access after an interruption. It is not
   one transaction with debate logs, lifecycle state, or result files.
+- Conversation storage defaults to filesystem. `/settings` and provider-free
+  `story storage use` can save filesystem or SQLite as the desired backend for
+  the next shell. SQLite host installation requires explicit confirmation, and
+  startup never installs or provisions it. Migration remains a separate
+  provider-free copy/parity workflow over two ready same-workspace stores and
+  never activates or deletes one. There is no live switch, dual write, RAG, or
+  MySQL adapter. The derived FTS5 companion does not change readiness, exact
+  literal results, migration parity, or selection.
 - Smoke's explicit workspace is not read-only and retains bounded plaintext
   diagnostics when they can be written; abrupt termination can interrupt
   cleanup. A pass does not validate provider/model, terminal behavior,

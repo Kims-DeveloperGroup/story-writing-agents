@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import uuid
+import sys
 from types import TracebackType
 from typing import Mapping
 
@@ -33,6 +34,11 @@ from ..conversation_retrieval import (
     ConversationRetrievalProgressPhase,
     ConversationRetrievalResult,
     ConversationRetrievalSource,
+)
+from ..conversation_storage.contracts import ConversationStorageServices
+from ..conversation_storage.selection import (
+    ConversationStorageSelectionFailure,
+    select_conversation_storage,
 )
 from ..debug_log import (
     DebugComponent,
@@ -94,6 +100,7 @@ from ..interactive_settings import (
     update_agent_backend,
     update_agent_codex_model,
     update_agent_codex_reasoning_effort,
+    update_conversation_storage_backend,
     update_language,
     update_max_debate_rounds,
     update_persona,
@@ -163,7 +170,6 @@ from ..session_lifecycle import (
     provider_work_is_ready,
 )
 from ..workspace import (
-    FilesystemConversationCatalog,
     FilesystemConversationEventStore,
     Workspace,
 )
@@ -413,12 +419,115 @@ def _settings_pending_save_notice(state: SettingsState) -> Notice | None:
     if state.pending == state.baseline.configuration:
         return None
     return Notice(
-        "Pending changes are in memory only and are not saved. Choose Save to "
-        "persist them.",
+        "Choose Save to persist pending changes",
         label="save required",
         role=SemanticRole.WARNING,
         state=ViewState.IDLE,
     )
+
+
+def _settings_projection(
+    state: SettingsState,
+    *,
+    provider_overrides: Mapping[str, str] | None = None,
+) -> tuple[tuple[str, str | None, str, str, str], ...]:
+    """Project ordered root and agent identities with current/pending values."""
+
+    current = state.baseline.configuration
+    pending = state.pending
+    rows: list[tuple[str, str | None, str, str, str]] = [
+        (
+            "language",
+            None,
+            "Language",
+            current.system_defaults.language,
+            pending.system_defaults.language,
+        ),
+        (
+            "persona",
+            None,
+            "Persona",
+            current.system_defaults.persona,
+            pending.system_defaults.persona,
+        ),
+        (
+            "max_debate_rounds",
+            None,
+            "Maximum debate rounds",
+            str(current.system_defaults.max_debate_rounds),
+            str(pending.system_defaults.max_debate_rounds),
+        ),
+        (
+            "conversation_storage",
+            None,
+            "Conversation storage",
+            current.system_defaults.conversation_storage_backend or "filesystem",
+            pending.system_defaults.conversation_storage_backend or "filesystem",
+        ),
+    ]
+    for agent_id in ROSTER:
+        display_name = AGENT_SPECS[agent_id].display_name
+        current_agent = current.agent_configs[agent_id]
+        pending_agent = pending.agent_configs[agent_id]
+        current_provider = _effective_settings_provider(
+            state,
+            agent_id,
+            pending=False,
+            provider_overrides=provider_overrides,
+        )
+        pending_provider = _effective_settings_provider(
+            state,
+            agent_id,
+            provider_overrides=provider_overrides,
+        )
+        rows.extend(
+            (
+                (
+                    "providers",
+                    agent_id,
+                    f"{display_name} Provider",
+                    (
+                        current_provider
+                        if current_agent.backend is not None
+                        else f"{current_provider} (default)"
+                    ),
+                    (
+                        pending_provider
+                        if pending_agent.backend is not None
+                        else f"{pending_provider} (default)"
+                    ),
+                ),
+                (
+                    "providers",
+                    agent_id,
+                    f"{display_name} Codex model",
+                    current_agent.codex_model or "inherit",
+                    pending_agent.codex_model or "inherit",
+                ),
+                (
+                    "providers",
+                    agent_id,
+                    f"{display_name} Codex reasoning",
+                    current_agent.codex_reasoning_effort or "inherit",
+                    pending_agent.codex_reasoning_effort or "inherit",
+                ),
+                (
+                    "providers",
+                    agent_id,
+                    f"{display_name} Antigravity model",
+                    current_agent.antigravity_model or "inherit",
+                    pending_agent.antigravity_model or "inherit",
+                ),
+                (
+                    "providers",
+                    agent_id,
+                    f"{display_name} Antigravity effort",
+                    current_agent.antigravity_effort or "inherit",
+                    pending_agent.antigravity_effort or "inherit",
+                ),
+            )
+        )
+    return tuple(rows)
 
 
 def _remember_first_process_control(
@@ -473,6 +582,7 @@ class InteractiveController:
         "_conversation_catalog",
         "_conversation_event_store",
         "_conversation_memory_service",
+        "_conversation_storage_services",
         "_composition_input",
         "_context",
         "_debug_log",
@@ -504,6 +614,7 @@ class InteractiveController:
         terminal: InteractiveTerminal,
         *,
         conversation_catalog: ConversationCatalog | None = None,
+        conversation_storage_services: ConversationStorageServices | None = None,
         auth_coordinator: InteractiveAuthCoordinator | None = None,
         provider_catalog: ProviderCatalogService | None = None,
     ) -> None:
@@ -560,28 +671,62 @@ class InteractiveController:
         self._debate_progress = InteractiveDebateProgress(terminal)
         self._composition_input = InteractiveCompositionInput(terminal)
         self._main_input = InteractiveMainInput(terminal)
+        if (
+            conversation_storage_services is not None
+            and conversation_catalog is not None
+        ):
+            raise TypeError(
+                "conversation_storage_services conflicts with conversation_catalog"
+            )
+        if (
+            conversation_storage_services is not None
+            and type(conversation_storage_services) is not ConversationStorageServices
+        ):
+            raise TypeError(
+                "conversation_storage_services must be ConversationStorageServices"
+            )
+        if conversation_storage_services is None and conversation_catalog is None:
+            self._runtime = StoryRuntime(workspace, backend)
+            conversation_storage_services = (
+                self._runtime.conversation_storage_services
+            )
+            if type(conversation_storage_services) is not ConversationStorageServices:
+                raise TypeError("runtime storage services are invalid")
+        elif conversation_storage_services is not None:
+            self._runtime = StoryRuntime(
+                workspace,
+                backend,
+                conversation_storage_services=conversation_storage_services,
+            )
         resolved_catalog = (
-            FilesystemConversationCatalog(workspace)
-            if conversation_catalog is None
+            conversation_storage_services.catalog
+            if conversation_storage_services is not None
             else conversation_catalog
         )
+        assert resolved_catalog is not None
         if any(
             not callable(getattr(resolved_catalog, operation, None))
             for operation in _CONVERSATION_CATALOG_OPERATIONS
         ):
             raise TypeError(
                 "conversation_catalog must implement ConversationCatalog"
-            )
+        )
+        self._conversation_storage_services = conversation_storage_services
         self._conversation_catalog = resolved_catalog
-        self._conversation_event_store = FilesystemConversationEventStore(
-            workspace,
-            catalog=resolved_catalog,
+        self._conversation_event_store = (
+            conversation_storage_services.event_store
+            if conversation_storage_services is not None
+            else FilesystemConversationEventStore(
+                workspace,
+                catalog=resolved_catalog,
+            )
         )
-        self._runtime = StoryRuntime(
-            workspace,
-            backend,
-            conversation_event_store=self._conversation_event_store,
-        )
+        if conversation_storage_services is None:
+            self._runtime = StoryRuntime(
+                workspace,
+                backend,
+                conversation_event_store=self._conversation_event_store,
+            )
         self._conversation_memory_service: (
             ConversationMemoryService | None
         ) = None
@@ -1357,10 +1502,19 @@ class InteractiveController:
             self._present_destination_conversation_failure(exc)
             return
         try:
-            memory_service = ConversationMemoryService(
-                ConversationSearchScope(session_id),
-                self._conversation_catalog,
-                self._conversation_event_store,
+            memory_service = (
+                ConversationMemoryService(
+                    ConversationSearchScope(session_id),
+                    conversation_storage_services=(
+                        self._conversation_storage_services
+                    ),
+                )
+                if self._conversation_storage_services is not None
+                else ConversationMemoryService(
+                    ConversationSearchScope(session_id),
+                    self._conversation_catalog,
+                    self._conversation_event_store,
+                )
             )
         except Exception:
             self._release_uncommitted_destination(session_id)
@@ -2175,7 +2329,7 @@ class InteractiveController:
         *,
         newly_authenticated_provider: str | None = None,
     ) -> SettingsState:
-        """Persist and replay a settings-local missing default exactly once."""
+        """Rebase a settings-local missing provider default in memory."""
 
         provider = select_default_provider(
             snapshot,
@@ -2236,17 +2390,84 @@ class InteractiveController:
         top_highlight = "language"
         while True:
             dirty = state.pending != state.baseline.configuration
+            projection = _settings_projection(
+                state,
+                provider_overrides=self._backend.backend_overrides,
+            )
+            root_values = {
+                root_id: (current_value, pending_value)
+                for root_id, agent_id, _label, current_value, pending_value in projection
+                if agent_id is None
+            }
+            agent_change_count = sum(
+                current_value != pending_value
+                for root_id, agent_id, _label, current_value, pending_value in projection
+                if root_id == "providers" and agent_id is not None
+            )
             choices = (
-                Choice("language", "Language"),
-                Choice("persona", "Persona"),
-                Choice("max_debate_rounds", "Maximum debate rounds"),
-                Choice("providers", "Agents"),
+                Choice(
+                    "language",
+                    "Language",
+                    description=(
+                        f"Pending: {root_values['language'][1]}"
+                        if root_values["language"][0] != root_values["language"][1]
+                        else f"Current: {root_values['language'][0]}"
+                    ),
+                ),
+                Choice(
+                    "persona",
+                    "Persona",
+                    description=(
+                        f"Pending: {root_values['persona'][1]}"
+                        if root_values["persona"][0] != root_values["persona"][1]
+                        else f"Current: {root_values['persona'][0]}"
+                    ),
+                ),
+                Choice(
+                    "max_debate_rounds",
+                    "Maximum debate rounds",
+                    description=(
+                        f"Pending: {root_values['max_debate_rounds'][1]}"
+                        if root_values["max_debate_rounds"][0]
+                        != root_values["max_debate_rounds"][1]
+                        else f"Current: {root_values['max_debate_rounds'][0]}"
+                    ),
+                ),
+                Choice(
+                    "conversation_storage",
+                    "Conversation storage",
+                    description=(
+                        f"Pending: {root_values['conversation_storage'][1]}"
+                        if root_values["conversation_storage"][0]
+                        != root_values["conversation_storage"][1]
+                        else f"Current: {root_values['conversation_storage'][0]}"
+                    ),
+                ),
+                Choice(
+                    "providers",
+                    "Agents",
+                    description=(
+                        None
+                        if agent_change_count == 0
+                        else (
+                            "1 pending change"
+                            if agent_change_count == 1
+                            else f"{agent_change_count} pending changes"
+                        )
+                    ),
+                ),
                 Choice(
                     "save",
                     "Save",
                     warning_suffix="(*Required)" if dirty else None,
                 ),
-                Choice("cancel", "Cancel"),
+                Choice(
+                    "cancel",
+                    "Cancel",
+                    description=(
+                        "Pending changes will be discarded." if dirty else None
+                    ),
+                ),
             )
             outcome = self._picker_input.read_picker(
                 Prompt(
@@ -2262,19 +2483,19 @@ class InteractiveController:
                 ControlOutcomeKind.INTERRUPT,
                 ControlOutcomeKind.EOF,
             }:
-                self._write_settings_cancelled()
+                self._write_settings_cancelled(state)
                 return
             if outcome.kind is ControlOutcomeKind.CANCEL:
                 top_highlight = "cancel"
                 if self._settings_cancel_action(state):
-                    self._write_settings_cancelled()
+                    self._write_settings_cancelled(state)
                     return
                 continue
             selected = self._require_settings_commit(outcome)
             top_highlight = selected
             if selected == "cancel":
                 if self._settings_cancel_action(state):
-                    self._write_settings_cancelled()
+                    self._write_settings_cancelled(state)
                     return
                 continue
             if selected == "save":
@@ -2285,7 +2506,7 @@ class InteractiveController:
                 if confirmation == "return":
                     continue
                 if confirmation == "cancel":
-                    self._write_settings_cancelled()
+                    self._write_settings_cancelled(state)
                     return
                 if self._auth_coordinator is not None:
                     try:
@@ -2295,7 +2516,7 @@ class InteractiveController:
                     except _SettingsFlowAbort:
                         return
                     if auth_outcome == "cancel":
-                        self._write_settings_cancelled()
+                        self._write_settings_cancelled(state)
                         return
                     if auth_outcome == "return":
                         continue
@@ -2313,7 +2534,7 @@ class InteractiveController:
             except _SettingsFlowAbort:
                 return
             if cancelled:
-                self._write_settings_cancelled()
+                self._write_settings_cancelled(state)
                 return
 
     def _save_and_apply_settings(self, state: SettingsState) -> str:
@@ -2324,6 +2545,7 @@ class InteractiveController:
         runtime_candidate = None
         prepared = None
         persisted = False
+        storage_failure = None
         before_profiles = self._backend.execution_profiles()
         try:
             prepared = prepare_settings_save(
@@ -2348,6 +2570,27 @@ class InteractiveController:
             self._backend.validate_runtime_configuration_candidate(
                 backend_candidate
             )
+            report = select_conversation_storage(
+                self._workspace,
+                (
+                    prepared.configuration.system_defaults.conversation_storage_backend
+                    or "filesystem"
+                ),
+                installation_consent=self._confirm_storage_installation,
+                diagnostic_stream=sys.stderr,
+                configuration_baseline=state.baseline.configuration_baseline,
+                configuration=prepared.configuration,
+                precommit_guard=lambda: prepare_settings_save(
+                    self._workspace,
+                    state,
+                    provider_overrides=self._backend.backend_overrides,
+                ),
+            )
+            if report.outcome != "completed":
+                assert report.failure is not None
+                storage_failure = report.failure
+                raise SettingsError(SettingsErrorKind.CONFLICT)
+            persisted = report.configuration == "saved"
             commit_prepared_settings_save(self._workspace, prepared)
             persisted = True
             self._run_runtime_configuration_coroutine(
@@ -2413,7 +2656,9 @@ class InteractiveController:
                     )
                 )
                 return "retry"
-            if isinstance(failure, SettingsError):
+            if storage_failure is not None:
+                self._write_storage_selection_error(storage_failure)
+            elif isinstance(failure, SettingsError):
                 self._write_settings_error(failure.kind)
             else:
                 self._semantic_output.write_component(
@@ -2432,10 +2677,43 @@ class InteractiveController:
 
         assert prepared is not None
         active_profiles = self._backend.execution_profiles()
+        before_defaults = state.baseline.configuration.system_defaults
+        active_defaults = prepared.configuration.system_defaults
+        live_settings_changed = (
+            state.baseline.configuration.agent_configs
+            != prepared.configuration.agent_configs
+            or (
+                before_defaults.language,
+                before_defaults.persona,
+                before_defaults.max_debate_rounds,
+                before_defaults.codex_model,
+                before_defaults.codex_reasoning_effort,
+                before_defaults.antigravity_model,
+                before_defaults.antigravity_effort,
+                before_defaults.default_backend,
+            )
+            != (
+                active_defaults.language,
+                active_defaults.persona,
+                active_defaults.max_debate_rounds,
+                active_defaults.codex_model,
+                active_defaults.codex_reasoning_effort,
+                active_defaults.antigravity_model,
+                active_defaults.antigravity_effort,
+                active_defaults.default_backend,
+            )
+        )
         self._write_settings_applied_result(
             before_profiles,
             active_profiles,
             switched_agents=prepared.switched_agents,
+            live_settings_changed=live_settings_changed,
+            storage_before=(
+                before_defaults.conversation_storage_backend or "filesystem"
+            ),
+            storage_after=(
+                active_defaults.conversation_storage_backend or "filesystem"
+            ),
         )
         return "applied"
 
@@ -2459,10 +2737,19 @@ class InteractiveController:
         active_profiles: tuple[AgentExecutionProfile, ...],
         *,
         switched_agents: tuple[str, ...],
+        live_settings_changed: bool,
+        storage_before: str,
+        storage_after: str,
     ) -> None:
-        """Render truthful before/active execution facts after hot activation."""
+        """Render truthful current-shell and next-shell settings scopes."""
 
-        if len(before_profiles) != len(ROSTER) or len(active_profiles) != len(ROSTER):
+        if (
+            len(before_profiles) != len(ROSTER)
+            or len(active_profiles) != len(ROSTER)
+            or type(live_settings_changed) is not bool
+            or storage_before not in {"filesystem", "sqlite"}
+            or storage_after not in {"filesystem", "sqlite"}
+        ):
             raise _ControllerAbort(
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
             )
@@ -2473,14 +2760,29 @@ class InteractiveController:
             for agent_id in ROSTER
             if before[agent_id] != active[agent_id]
         )
-        items: list[Section | Notice] = [
-            Notice(
-                "Settings saved and applied to this running shell now.",
-                label="saved and applied",
-                role=SemanticRole.SUCCESS,
-                state=ViewState.COMPLETED,
+        storage_changed = storage_before != storage_after
+        items: list[Section | Notice] = []
+        if live_settings_changed or not storage_changed:
+            items.append(
+                Notice(
+                    "Settings saved and applied to this running shell now.",
+                    label="saved and applied",
+                    role=SemanticRole.SUCCESS,
+                    state=ViewState.COMPLETED,
+                )
             )
-        ]
+        if storage_changed:
+            items.append(
+                Notice(
+                    (
+                        "Settings saved. Desired conversation storage is "
+                        f"{storage_after}. Changes apply to the next shell."
+                    ),
+                    label="saved",
+                    role=SemanticRole.SUCCESS,
+                    state=ViewState.COMPLETED,
+                )
+            )
         if changed_agents:
             items.extend(
                 (
@@ -2741,6 +3043,8 @@ class InteractiveController:
             return self._edit_settings_persona(state)
         if selected == "max_debate_rounds":
             return self._edit_settings_rounds(state)
+        if selected == "conversation_storage":
+            return self._edit_settings_storage(state)
         if selected == "providers":
             return self._edit_settings_provider(state)
         raise _ControllerAbort(
@@ -2847,11 +3151,11 @@ class InteractiveController:
                         "applies the value and keeps this editor open; press Esc "
                         "to return to Settings."
                     ),
-                    default=str(
-                        state.pending.system_defaults.max_debate_rounds
-                    ),
                 ),
                 context=(notice,) if notice is not None else (),
+                initial_value=str(
+                    state.pending.system_defaults.max_debate_rounds
+                ),
                 transient=True,
             )
             value, whole_cancel = self._nested_settings_value(outcome)
@@ -2883,6 +3187,106 @@ class InteractiveController:
                 "Maximum debate rounds",
                 str(rounds),
             )
+
+    def _edit_settings_storage(
+        self,
+        state: SettingsState,
+    ) -> tuple[SettingsState, bool]:
+        """Select a desired next-shell storage backend without activating it."""
+
+        notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
+        while True:
+            pending = (
+                state.pending.system_defaults.conversation_storage_backend
+                or "filesystem"
+            )
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Conversation storage",
+                    instruction=_settings_value_instruction(
+                        "Choose the desired backend for the next shell. Enter "
+                        "applies the value and keeps this editor open; press Esc "
+                        "to return to Settings."
+                    ),
+                ),
+                (
+                    Choice("filesystem", "Filesystem"),
+                    Choice("sqlite", "SQLite"),
+                ),
+                highlighted_id=pending,
+                selected_id=pending,
+                notice=notice,
+                transient=True,
+            )
+            value, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel:
+                return state, True
+            if value is None:
+                return state, False
+            if armed_value == value:
+                return state, False
+            try:
+                state = update_conversation_storage_backend(state, value)
+            except ConfigurationError:
+                notice = None
+                armed_value = _SETTINGS_UNARMED
+                self._write_settings_validation(
+                    "Conversation storage must be filesystem or sqlite."
+                )
+                continue
+            armed_value = (
+                state.pending.system_defaults.conversation_storage_backend
+                or "filesystem"
+            )
+            notice = _settings_entered_notice(
+                "conversation storage",
+                armed_value,
+            )
+
+    def _confirm_storage_installation(
+        self,
+        plan: object,
+    ) -> bool:
+        """Preview the literal installer and require a separate exact YES."""
+
+        command = getattr(plan, "command", None)
+        if command not in {
+            "brew install sqlite",
+            "apt-get install sqlite3 libsqlite3-dev",
+            "dnf install sqlite sqlite-devel",
+        }:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        self._semantic_output.write_component(
+            Panel(
+                "SQLite prerequisite installation",
+                (
+                    Field("Command", command),
+                    Notice(
+                        "This command changes host packages and runs in the "
+                        "workspace with the real terminal attached.",
+                        label="installation",
+                        role=SemanticRole.WARNING,
+                    ),
+                ),
+                state=ViewState.OPEN,
+            )
+        )
+        outcome = self._picker_input.read_picker(
+            Prompt(
+                "Install SQLite prerequisite?",
+                instruction="Choose the exact YES to run the command.",
+            ),
+            (Choice("YES", "YES"), Choice("NO", "NO")),
+            highlighted_id="NO",
+            transient=True,
+        )
+        return (
+            outcome.kind is ControlOutcomeKind.COMMIT
+            and outcome.text == "YES"
+        )
 
     def _edit_settings_provider(
         self,
@@ -3704,79 +4108,33 @@ class InteractiveController:
     ) -> Panel:
         """Project a stable current/pending settings diff for confirmation."""
 
-        current = state.baseline.configuration
-        pending = state.pending
-
-        def values(*, pending_configuration: bool) -> tuple[tuple[str, str], ...]:
-            configuration = pending if pending_configuration else current
-            defaults = configuration.system_defaults
-            rows = [
-                ("Language", defaults.language),
-                ("Persona", defaults.persona),
-                ("Maximum debate rounds", str(defaults.max_debate_rounds)),
-            ]
-            for agent_id in ROSTER:
-                display_name = AGENT_SPECS[agent_id].display_name
-                agent = configuration.agent_configs[agent_id]
-                provider = _effective_settings_provider(
-                    state,
-                    agent_id,
-                    pending=pending_configuration,
-                    provider_overrides=provider_overrides,
-                )
-                provider_value = (
-                    provider
-                    if agent.backend is not None
-                    else f"{provider} (default)"
-                )
-                rows.extend(
-                    (
-                        (f"{display_name} Provider", provider_value),
-                        (
-                            f"{display_name} Codex model",
-                            agent.codex_model or "inherit",
-                        ),
-                        (
-                            f"{display_name} Codex reasoning",
-                            agent.codex_reasoning_effort or "inherit",
-                        ),
-                        (
-                            f"{display_name} Antigravity model",
-                            agent.antigravity_model or "inherit",
-                        ),
-                        (
-                            f"{display_name} Antigravity effort",
-                            agent.antigravity_effort or "inherit",
-                        ),
-                    )
-                )
-            return tuple(rows)
-
-        current_values = values(pending_configuration=False)
-        pending_values = values(pending_configuration=True)
-
-        changed_indices = tuple(
-            index
-            for index, (_current, pending_value) in enumerate(pending_values)
-            if pending_value != current_values[index][1]
+        changed_rows = tuple(
+            row
+            for row in _settings_projection(
+                state,
+                provider_overrides=provider_overrides,
+            )
+            if row[3] != row[4]
         )
         current_fields = tuple(
             Field(
-                current_values[index][0],
-                f"{current_values[index][1]} (Changed)",
+                label,
+                f"{current_value} (Changed)",
                 role=SemanticRole.WARNING,
             )
-            for index in changed_indices
+            for _root_id, _agent_id, label, current_value, _pending_value
+            in changed_rows
         )
         pending_fields = tuple(
             Field(
-                pending_values[index][0],
-                f"{pending_values[index][1]} (Changed)",
+                label,
+                f"{pending_value} (Changed)",
                 role=SemanticRole.WARNING,
             )
-            for index in changed_indices
+            for _root_id, _agent_id, label, _current_value, pending_value
+            in changed_rows
         )
-        if changed_indices:
+        if changed_rows:
             panel_items: list[Section | Notice] = [
                 Section("Current", current_fields),
                 Section("Pending", pending_fields),
@@ -3882,12 +4240,75 @@ class InteractiveController:
             )
         )
 
-    def _write_settings_cancelled(self) -> None:
-        """Render one semantic whole-settings cancellation notice."""
+    def _write_storage_selection_error(
+        self,
+        failure: ConversationStorageSelectionFailure,
+    ) -> None:
+        """Render one sanitized storage readiness or persistence recovery."""
+
+        messages = {
+            ConversationStorageSelectionFailure.INVALID_REQUEST: (
+                "The requested conversation storage selection is invalid."
+            ),
+            ConversationStorageSelectionFailure.WORKSPACE_INVALID: (
+                "Conversation storage could not inspect this workspace."
+            ),
+            ConversationStorageSelectionFailure.COORDINATION_FAILED: (
+                "Conversation storage coordination is unavailable or busy."
+            ),
+            ConversationStorageSelectionFailure.INSTALLATION_REQUIRED: (
+                "SQLite installation was not confirmed; settings were preserved."
+            ),
+            ConversationStorageSelectionFailure.INSTALLATION_UNSUPPORTED: (
+                "SQLite installation is not supported on this exact platform."
+            ),
+            ConversationStorageSelectionFailure.INSTALLATION_DISALLOWED: (
+                "SQLite host installation is disabled in this environment."
+            ),
+            ConversationStorageSelectionFailure.INSTALLATION_FAILED: (
+                "SQLite installation failed; inspect the installer diagnostics."
+            ),
+            ConversationStorageSelectionFailure.INTERPRETER_UNAVAILABLE: (
+                "This Python interpreter still lacks functional SQLite; "
+                "rebuild or reinstall Python with SQLite support."
+            ),
+            ConversationStorageSelectionFailure.PROVISIONING_FAILED: (
+                "SQLite conversation storage is unavailable or invalid."
+            ),
+            ConversationStorageSelectionFailure.MIGRATION_REQUIRED: (
+                "Migrate the active conversations to the requested backend first."
+            ),
+            ConversationStorageSelectionFailure.PARITY_MISMATCH: (
+                "Fresh conversation archive parity does not match."
+            ),
+            ConversationStorageSelectionFailure.CONFIGURATION_INVALID: (
+                "Pending settings are invalid; correct them before saving."
+            ),
+            ConversationStorageSelectionFailure.CONFIGURATION_CONFLICT: (
+                "Settings changed on disk; cancel and reopen /settings."
+            ),
+            ConversationStorageSelectionFailure.CONFIGURATION_WRITE_FAILED: (
+                "Settings could not be saved; prior configuration was preserved."
+            ),
+        }
+        self._semantic_output.write_component(
+            Notice(
+                messages[failure],
+                label="conversation storage",
+                role=SemanticRole.ERROR,
+                state=ViewState.ERROR,
+            )
+        )
+
+    def _write_settings_cancelled(self, state: SettingsState) -> None:
+        """Render one cancellation notice only when pending changes are discarded."""
+
+        if state.pending == state.baseline.configuration:
+            return
 
         self._semantic_output.write_component(
             Notice(
-                "Settings cancelled; no pending changes were saved.",
+                "Pending changes discarded.",
                 label="cancelled",
                 role=SemanticRole.WARNING,
                 state=ViewState.CANCELLED,

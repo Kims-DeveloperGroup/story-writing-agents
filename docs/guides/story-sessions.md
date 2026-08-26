@@ -124,8 +124,11 @@ any default already established.
 
 `/settings` is global, alias-free, and works in the lobby or while attached. It
 shows separate Current and Pending values for Language,
-Persona, Maximum debate rounds, and Agents. The top-level choices are those
-four rows followed by Save and Cancel. Choose Agents to select an agent in
+Persona, Maximum debate rounds, Conversation storage, and Agents. The exact
+top-level order is Language, Persona, Maximum debate rounds, Conversation
+storage, Agents, Save, Cancel. Conversation storage offers Filesystem and
+SQLite as an independent next-shell workspace choice; it is not an agent
+provider route. Choose Agents to select an agent in
 canonical roster order, then use Agent settings to choose Provider, Model, or
 Effort for that agent. Provider remains the field-level configuration concept;
 its choices are Codex and Antigravity. Changing the route does not erase the
@@ -135,19 +138,21 @@ provider-qualified so both providers' inactive values stay identifiable.
 
 On a capable terminal, Up/Down moves the current picker highlight. Enter opens
 a selected settings level or applies a pending value. Language, Persona,
-Maximum debate rounds, Provider, Model, Custom model, and Effort stay active
-after a valid Enter: the picker selection or prompt default updates immediately,
-and the editor shows one inline completed success result for the latest value,
-replacing the previous result. Guidance states that Enter applies the pending
-value and keeps the editor open. A second consecutive valid Enter with the same
-normalized value returns one level silently. Entering a different valid value
-applies it, keeps the editor open, and makes that value the new same-value
-comparison. Invalid input, authentication failure, Custom model navigation, or
-leaving and re-entering the editor resets the comparison. This is semantic
-commit sequencing, not a raw-key timing gesture.
+Maximum debate rounds, Conversation storage, Provider, Model, Custom model,
+and Effort stay active after a valid Enter: the picker selection or prompt
+default updates immediately, and the editor shows one inline completed success
+result for the latest value, replacing the previous result. Guidance states
+that Enter applies the pending value and keeps the editor open. A second
+consecutive valid Enter with the same normalized value returns one level
+silently. Entering a different valid value applies it, keeps the editor open,
+and makes that value the new same-value comparison. Invalid input,
+authentication failure, Custom model navigation, or leaving and re-entering
+the editor resets the comparison. This is semantic commit sequencing, not a
+raw-key timing gesture.
 
 Escape returns one level through Custom model > Model > Agent settings > Agents
-> Settings; Provider and Effort return directly to Agent settings. At root,
+> Settings; Provider and Effort return directly to Agent settings, while
+Conversation storage returns directly to Settings. At root,
 Escape invokes the same action as explicit Cancel: clean settings exit
 immediately, while dirty settings open the existing YES/NO Cancel confirmation.
 NO or Escape there returns to Settings. Ctrl-C or EOF still cancels the whole
@@ -156,7 +161,8 @@ and the same level hierarchy. In the per-agent active-provider Custom model
 prompt, blank means inherit that provider's workspace system model and
 `/cancel` is literal model text rather than a command.
 
-Every retained value editor always says `Entered changes remain pending in
+Every retained value editor, including Conversation storage, always says
+`Entered changes remain pending in
 memory and are not saved; choose Save in Settings to persist them.` This stays
 visible when the editor first opens, after a valid value is entered, and while
 fixing validation. Entering a value changes only the pending in-memory settings;
@@ -222,22 +228,49 @@ persisted before Save is confirmed.
 
 After Save is confirmed, Save freshly gates every distinct effective provider
 before the guarded file update; a stale or failed status prevents the settings
-file transaction. Save-time authentication may durably establish a missing
-workspace default before that transaction. The completed post-confirmation
-default is not rolled back if later Save gating or transaction work stops.
+file transaction. A missing workspace default learned during that gate remains
+in the pending candidate and becomes durable only through the same complete
+Save. Conversation-storage readiness and selection are provider-free, but the
+whole Settings Save retains this provider-authentication gate.
+
+Selecting SQLite records only a pending next-shell choice. On Save, Story
+checks workspace coordination and the active Python interpreter's functional
+`sqlite3` support. The standalone `sqlite3` executable and FTS5 are not
+readiness gates. If a supported host prerequisite is missing, Settings first
+shows the one exact command and warns that it changes host packages with the
+real terminal attached. The separate confirmation highlights NO and runs the
+command only after exact YES. Decline, recognized CI, unsupported platform,
+installation failure, failed same-interpreter reprobe, provisioning failure,
+or migration/parity failure leaves configuration unchanged.
+
+An explicit SQLite choice may create the fixed empty database, but it never
+copies conversations. If Save says migration is required, leave the current
+shell, run the provider-free migration and verification commands in the active
+direction, reopen `/settings`, select SQLite again, save, and start a new shell.
+The same sequence applies in reverse when returning to filesystem. See the
+[exact selection workflow](../reference/cli.md#conversation-storage-selection).
 
 Save fails closed if either configuration file, the provider-route generation
-record, or the persona catalog changed after opening. A confirmed Save
-validates, authenticates, preflights, persists, and applies the complete
-snapshot to this running shell; no restart is required. Provider, Model, or
-Effort fixed by a launch override is disabled and read-only because that
-override remains higher precedence. Other running shells keep the state they
-captured.
+record, or the persona catalog changed after opening. It also freshly checks
+the desired conversation-storage readiness and parity before committing the
+complete prepared snapshot. Provider, Model, or Effort fixed by a launch
+override is disabled and read-only because that override remains higher
+precedence.
+
+A confirmed Save applies non-storage runtime changes, including
+provider/model/effort, to this running shell without a restart. A storage-only
+save selecting SQLite instead reports
+`Settings saved. Desired conversation storage is sqlite. Changes apply to the next shell.`
+without claiming live activation (`filesystem` appears on the reverse change).
+A mixed save reports that runtime settings were applied now and desired storage
+applies to the next shell. The current controller/runtime storage bundle
+remains unchanged, and other running shells keep the runtime state and storage
+bundle they captured.
 
 Editing the JSON files directly is different: there is no file watcher. A
 manual edit is reconciled when a new backend launches, while already running
-shells remain unchanged. Use `/settings` when the current shell must change
-without restarting. See
+shells remain unchanged. Use `/settings` when non-storage runtime settings in
+the current shell must change without restarting. See
 [Agent configuration](../reference/configuration/agent-configuration.md) and
 [Filesystem safety](../operations/filesystem-safety.md). Antigravity setup and
 provider-specific precedence are in the [Antigravity guide](antigravity.md).

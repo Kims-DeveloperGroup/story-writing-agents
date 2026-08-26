@@ -1332,7 +1332,7 @@ class CodexBackendDefaultsTests(unittest.TestCase):
         cases = (
             (
                 "valid-persisted",
-                "-invalid-effort",
+                "ULTRA",
                 {},
                 "-invalid-explicit",
                 expected_effort,
