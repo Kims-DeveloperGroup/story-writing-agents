@@ -73,11 +73,13 @@ possible provider/artifact use, not shell gates. Parsing performs no I/O.
 `/auth` has `may_call_provider=True` because it invokes native authentication
 commands, and `may_write_artifacts=True` because fresh authentication may fill
 a missing workspace default immediately under the established global `/auth`
-policy. `/settings` has both flags: provider selection and confirmed Save can
-authenticate, but Provider-editor authentication alone persists neither its
-route nor a missing workspace default. Only after Save is confirmed may
-save-time authentication establish a durable missing default or the guarded
-settings transaction replace configuration documents.
+policy. `/settings` has both flags: provider selection and a full-path Apply
+Changes may authenticate, while any confirmed Apply Changes may persist
+configuration. A Message-details-only Apply Changes never authenticates.
+Provider-editor authentication alone persists neither its route nor a missing
+workspace default. Only after Apply Changes is confirmed may Apply-time
+authentication establish a durable missing default or the guarded settings
+transaction replace configuration documents.
 
 For `/run`, `--output` must be first, or immediately after `--fresh`. The parser
 recognizes only ASCII space or tab between `--output`, its `PART/PATH.md`, and

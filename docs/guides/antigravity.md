@@ -81,18 +81,19 @@ For a persistent route, use global `/settings`, choose Agents, choose an agent,
 and select Antigravity. If needed, native authentication runs as a subordinate
 Provider-editor action and returns to Provider. The route and any missing
 workspace default remain pending in memory; Escape or cancellation before
-confirmed Save leaves configuration bytes unchanged. No configuration value is
-persisted before Save is confirmed. Model and effort then edit that agent's
-active provider settings. Switching providers preserves the inactive provider's
+confirmed Apply Changes leaves configuration bytes unchanged. No configuration
+value is persisted before Apply Changes is confirmed. Model and effort then edit
+that agent's active provider settings. Route, model, and effort changes use the
+full Apply Changes path. Switching providers preserves the inactive provider's
 saved settings.
 
-After Save is confirmed, save-time authentication may rebase a missing
-workspace default only in the pending candidate. It becomes durable only when
-conversation-storage readiness, parity, and the final guarded settings write
-complete. This does not change startup authentication or explicit global
-`/auth`, which retain immediate absent-default durability. Direct JSON editing
-is also supported; this excerpt routes only the plot architect and leaves
-omitted agents to inherit the workspace default:
+After that full-path Apply Changes is confirmed, Apply-time authentication may
+rebase a missing workspace default only in the pending candidate. It becomes
+durable only when conversation-storage readiness, parity, and the final guarded
+settings write complete. This does not change startup authentication or
+explicit global `/auth`, which retain immediate absent-default durability.
+Direct JSON editing is also supported; this excerpt routes only the plot
+architect and leaves omitted agents to inherit the workspace default:
 
 ```json
 {
@@ -122,11 +123,12 @@ compatibility when needed. Story does not infer effort from a model slug or
 display name. Each attempt is bounded to five seconds and one MiB retained
 stdout, discards stderr/raw diagnostics, and has no automatic retry or cache.
 Fixed failure guidance preserves inherit/current/custom paths; re-entering
-retries later. Save writes only the selected opaque value or null and affects
-the running shell immediately after the complete staged snapshot is validated,
-persisted, and activated; no restart is required and no catalog row is
-persisted. A launch override remains higher precedence and makes its effective
-Provider, Model, or Effort field read-only in that shell.
+retries later. For these model/effort changes, Apply Changes writes only the
+selected opaque value or null and affects the running shell immediately after
+the complete staged snapshot is validated, persisted, and activated; no
+restart is required and no catalog row is persisted. A launch override remains
+higher precedence and makes its effective Provider, Model, or Effort field
+read-only in that shell.
 
 The complete persistent schemas are in
 [Agent configuration](../reference/configuration/agent-configuration.md).
@@ -157,10 +159,14 @@ session lifecycle commands.
 Each backend construction validates and captures the complete persistent
 configuration. Direct file edits have no watcher: a newly launched backend
 reconciles them, while already running shells retain their captured state.
-Confirmed `/settings` Save is the no-restart path for the current shell; it
-authenticates and preflights the candidate, persists the complete prepared
-snapshot, and activates a new backend/runtime generation. It does not broadcast
-the change to other active shells.
+A confirmed full-path `/settings` Apply Changes is the no-restart path for the
+current shell; it authenticates and preflights the candidate, persists the
+complete prepared snapshot, and activates a new backend/runtime generation. It
+does not broadcast the change to other active shells. The global
+Message-details-only exception prepares, verifies, and commits configuration,
+then updates the active presentation flag after commit without authentication,
+conversation-storage, backend/runtime activation, route-generation, or thread
+work.
 
 | Effective value | First non-null value wins |
 | --- | --- |

@@ -78,12 +78,17 @@ request to clear a persisted value. There is no Codex reasoning CLI flag or
 constructor argument. No provider model/effort is a session runtime override or
 directive. The interactive `/settings` Agents editor is the installed
 workflow for changing an agent's persisted active-provider model or effort; it
-preserves inactive-provider values. A confirmed Save validates, persists, and
-hot-applies non-storage runtime settings to that running shell. Desired
-conversation storage remains a next-shell setting and does not replace the
-current controller/runtime bundle. Any effective value whose source is
-`launch_override` remains masked by the first-precedence row and is
-disabled/read-only in `/settings`.
+preserves inactive-provider values. An Apply Changes candidate with any change
+beyond Message details uses the full path: it validates and authenticates the
+candidate, persists it, and activates the prepared backend/runtime generation
+so non-storage settings take effect in that running shell. A
+Message-details-only Apply Changes instead prepares, verifies, and commits the
+configuration, then updates the active presentation flag; it bypasses provider
+authentication, conversation-storage, backend/runtime activation, route, and
+thread work. Desired conversation storage remains a next-shell setting and
+does not replace the current controller/runtime bundle. Any effective value
+whose source is `launch_override` remains masked by the first-precedence row
+and is disabled/read-only in `/settings`.
 
 Direct file editing follows a different lifecycle. There is no file watcher;
 the next `AgentBackend` construction reads, validates, and reconciles the then-
@@ -97,12 +102,13 @@ the configured values, and explicit backend and run arguments retain their
 higher precedence. `/settings` does not clear or rewrite those overrides or
 alter the precedence table. Its Provider-editor authentication is subordinate and returns to
 Provider; the route and any missing workspace default remain pending in memory.
-Escape or cancellation before confirmed Save leaves configuration bytes
-unchanged, and no configuration value is persisted before Save is confirmed.
-After Save confirmation, Save freshly gates every distinct effective provider
-outside the configuration transaction. Save-time authentication may rebase a
-missing default only in the pending candidate, and that value becomes durable
-only when conversation-storage readiness, parity, and the final guarded
+Escape or cancellation before confirmed Apply Changes leaves configuration
+bytes unchanged, and no configuration value is persisted before Apply Changes
+is confirmed. After full-path Apply Changes confirmation, the controller
+freshly gates every distinct effective provider outside the configuration
+transaction. Apply-time authentication may rebase a missing default only in
+the pending candidate, and that value becomes durable only when
+conversation-storage readiness, parity, and the final guarded
 system/agent/optional-route settings write complete. A provider change advances
 its durable route generation and starts a fresh target-provider thread; a
 same-provider model/effort change remains eligible to reuse its native thread.

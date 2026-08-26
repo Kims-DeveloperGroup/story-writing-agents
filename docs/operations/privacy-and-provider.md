@@ -151,9 +151,10 @@ dry-run/verify, destination and checkpoint writes. `story storage use` likewise
 dispatches provider-free before debug logging and provider/runtime construction,
 but can explicitly run a host installer, provision an empty database, read both
 canonical stores for parity, and write desired configuration. `/settings`
-uses the same storage selection boundary only after its separate provider-auth
-Save gate. The next shell activates the selected ready bundle before provider
-authentication.
+uses the same storage selection boundary only on its full Apply Changes path,
+after the separate provider-auth gate. A Message-details-only Apply Changes
+never authenticates or enters storage selection. The next shell activates the
+selected ready bundle before provider authentication.
 
 <a id="sqlite-installation-boundary"></a>
 
@@ -255,8 +256,8 @@ timed-out, nonzero, malformed, empty, oversized, and unexpected failure
 details; stdout, stderr, return codes, and exception prose do not enter terminal
 output or the workspace debug log.
 
-No discovery fact is written to configuration. Save can persist only the
-selected opaque model/effort token or null for inheritance—not labels,
+No discovery fact is written to configuration. Apply Changes can persist only
+the selected opaque model/effort token or null for inheritance—not labels,
 descriptions, defaults, supported-effort lists, failure state, stderr, or raw
 stdout. Chosen tokens remain plaintext local process settings and may later
 appear in provider process arguments as described below.
