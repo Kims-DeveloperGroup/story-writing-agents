@@ -62,6 +62,12 @@ _PROCESS_DEADLINE_SECONDS = 12.0
 _PROCESS_POLL_QUANTUM_SECONDS = 0.02
 _TEARDOWN_DEADLINE_SECONDS = 3.0
 _ANSI_SGR_BYTES = re.compile(rb"\x1b\[[0-9;]*m")
+_VISIBLE_PROGRESS_FRAMES = (
+    "[█▓▒░░░░░]",
+    "[▓█▓▒░░░░]",
+    "[▒▓█▓▒░░░]",
+    "[░▒▓█▓▒░░]",
+)
 
 
 _FAKE_CODEX = r'''#!/usr/bin/env python3
@@ -2630,12 +2636,12 @@ print(
             process.send_text(navigation)
             output = process.wait_for_text(expected_picker, after=mark)
             positions = tuple(
-                output.index(frame) for frame in ("◐", "◓", "◑", "◒")
+                output.index(frame) for frame in _VISIBLE_PROGRESS_FRAMES
             )
             self.assertEqual(positions, tuple(sorted(positions)))
             self.assertLess(max(positions), output.index(expected_picker))
             self.assertIn("\r\x1b[K", output)
-            self.assertNotRegex(output, r"[◐◓◑◒]\n")
+            self.assertNotIn(f"{_VISIBLE_PROGRESS_FRAMES[0]}\n", output)
             return output
 
         provider = open_delayed_picker(
@@ -5937,18 +5943,22 @@ asyncio.run(main())
                     source,
                     environment_overrides={"TERM": "xterm-256color"},
                     terminal_columns=40,
+                    decorative_color=True,
                 )
                 mark = process.output_mark()
                 output = process.wait_for_text("RESULT=two", after=mark)
                 self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
                 positions = tuple(
-                    output.index(frame) for frame in ("◐", "◓", "◑", "◒")
+                    output.index(frame) for frame in _VISIBLE_PROGRESS_FRAMES
                 )
                 self.assertEqual(positions, tuple(sorted(positions)))
                 self.assertIn("answer-one", output)
                 self.assertIn("answer-two", output)
                 self.assertNotIn("[routing]", output)
                 self.assertNotIn("[waiting]", output)
+                raw_output = bytes(process.raw_bytes)
+                for color in (36, 34, 35, 31):
+                    self.assertIn(f"\x1b[1;{color}m".encode(), raw_output)
                 self.assertGreaterEqual(output.count("\x1b[K"), 4)
                 self.assertNotIn("Task was destroyed", process.normalized_text)
 
@@ -5978,7 +5988,7 @@ asyncio.run(main())
         process = self._spawn_python(source, environment_overrides={"TERM": "dumb"})
         output = process.wait_for_text("RESULT=done")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
-        self.assertNotRegex(output, r"[◐◓◑◒]")
+        self.assertNotIn(_VISIBLE_PROGRESS_FRAMES[0], output)
         self.assertNotIn("\x1b[K", output)
 
     def test_advisory_vintr_terminates_provider_taints_then_restarts_thread(
@@ -6018,7 +6028,10 @@ asyncio.run(main())
         records_before_cancel = len(self._provider_records())
         mark = process.output_mark()
         process.send_line("cancel advisory")
-        progress_output = process.wait_for_text("◐", after=mark)
+        progress_output = process.wait_for_text(
+            _VISIBLE_PROGRESS_FRAMES[0],
+            after=mark,
+        )
         self.assertNotIn("responding; Ctrl-C", progress_output)
         self.assertNotIn("[routing] ", progress_output)
 
@@ -6177,7 +6190,7 @@ asyncio.run(main())
             "/run --output part-01/cancel-consensus.md cancel consensus"
         )
         process.wait_for_text("Started prompt consensus.", after=mark)
-        process.wait_for_text("◐", after=mark)
+        process.wait_for_text(_VISIBLE_PROGRESS_FRAMES[0], after=mark)
 
         def is_blocked_consensus_draft(record: dict[str, Any]) -> bool:
             """Identify the blocked execution draft for the cancellation run."""

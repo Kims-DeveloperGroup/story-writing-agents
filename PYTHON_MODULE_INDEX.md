@@ -2626,7 +2626,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `AdvisoryProgressError` bind advisory, consensus, and Settings option-read
   async progress lifecycles through the same facade: callback and incapable
   terminals await silently,
-  while stream construction injects the pure fixed-glyph renderer into the sole
+  while stream construction injects the pure fixed-row renderer into the sole
   driver. They do not expand the public `__all__` or expose terminal leaves to
   the controller.
   Unlisted package-internal `InteractiveTextViewer`, `TextViewerExitKind`, and
@@ -2825,9 +2825,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   a two-space-indented projection; malformed JSON, scalars, embedded prose, and
   every other string return exactly unchanged. The fixed `AGENT` role is bold
   terminal-default foreground with the same plain meaning and local reset.
-  `render_advisory_progress_frame` projects the fixed one-cell `◐`, `◓`,
-  `◑`, and `◒` cycle without ANSI, cursor controls, dynamic content, or
-  state. Package-internal `render_startup_welcome_frame` separately consumes one
+  `render_advisory_progress_frame` projects one fixed text-free eight-cell
+  block-shade shimmer whose graded bright point travels out and back, without
+  ANSI, cursor controls, dynamic content, or state. Package-internal
+  `render_startup_welcome_frame` separately consumes one
   exact purpose-bound `StartupWelcome`, never a raw stage index, and projects
   its validated stage without entering the general `Component` vocabulary. It
   selects its prefix-free wide, compact, or narrow layout from the supplied
@@ -3066,9 +3067,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   this lifecycle. Line fallback cannot erase printed prompts or input and emits
   no synthetic `completed` or `cancelled` control frame. Supported
   package-internal `run_advisory_progress` accepts one advisory, consensus, or
-  Settings option-read awaitable and an injected fixed-glyph renderer, awaits
+  Settings option-read awaitable and an injected fixed-row renderer, awaits
   silently without raw cursor capability, and on a capable stream joins the
-  operation with one indicator task. Internal
+  operation with one indicator task. The row is fitted to a freshly observed
+  width while reserving the rightmost cell, cleared as a unit around semantic
+  writes, and leaves no completed loading record. A fixed bold ANSI palette
+  cycles by frame when decorative SGR is enabled; `NO_COLOR` retains the same
+  spatial frames without SGR. Internal
   `AdvisoryProgressError` distinguishes indicator failure from provider failure
   for controller cleanup. Purpose-bound `run_startup_welcome`,
   `run_startup_notice`, and `run_startup_result_notice` accept injected pure
@@ -3344,7 +3349,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `InteractiveAdvisoryProgress` and
   `InteractiveDebateProgress` bind the terminal's advisory, consensus, and
   Settings option-read awaitable wrappers: callback construction remains
-  visually silent, and stream construction injects the pure fixed-glyph
+  visually silent, and stream construction injects the pure fixed-row
   renderer into the sole driver without exposing capabilities or streams.
   Resource-free
   `InteractiveStartupPresentation` similarly binds the fixed, prefix-free
@@ -4637,9 +4642,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   reset, and synchronous input exclusion; `_driver` retains the fixed
   50-millisecond Escape readiness select and checks decoded suffixes first. For
   advisory progress it also
-  exclusively owns the active glyph state, operation/animation task joining,
-  cursor clear/redraw writes, and cleanup; `_render` supplies only the pure
-  injected four-glyph projection, and incapable or callback terminals remain
+  exclusively owns the active row state, operation/animation task joining,
+  cursor clear/redraw writes, rightmost-cell-safe fitting, and cleanup;
+  `_render` supplies only the pure injected text-free shimmer row,
+  and incapable or callback terminals remain
   visually silent. For the separate fixed startup/auth presentation it alone
   owns capability and reduced-motion selection, guarded noncanonical/no-echo
   activation, atomic type-ahead discard, exact restoration before native login,
