@@ -7,17 +7,20 @@ import inspect
 import uuid
 import sys
 from collections.abc import Callable
+from dataclasses import replace
 from types import TracebackType
 from typing import Mapping, TypeVar
 
 from ..agents import (
     AGENT_SPECS,
+    CHARACTER_CUSTODIAN,
     EXECUTION_SPECIALIST,
     LEAD_ORCHESTRATOR,
+    PLOT_ARCHITECT,
     ROSTER,
     SPECIALIST_IDS,
 )
-from ..backend import AgentBackend
+from ..backend import AgentBackend, backend_configuration_snapshot
 from ..cli_context import (
     CliContext,
     load_default_conversation,
@@ -105,6 +108,7 @@ from ..interactive_settings import (
     update_language,
     update_max_debate_rounds,
     update_persona,
+    update_show_message_details,
 )
 from ..interactive_terminal import (
     AdvisoryProgressError,
@@ -131,6 +135,7 @@ from ..interactive_terminal import (
     InteractiveTerminal,
     ListView,
     Message,
+    MessagePresentation,
     Notice,
     Panel,
     Picker,
@@ -138,6 +143,7 @@ from ..interactive_terminal import (
     Record,
     Section,
     SemanticRole,
+    SpeakerAccent,
     TerminalActionKind,
     ViewState,
 )
@@ -237,8 +243,11 @@ _CONVERSATION_RESUME_COMMAND = "/conversation resume"
 _AGENT_ROUTE_ALIASES = frozenset(
     alias for route in AGENT_ROUTES for alias in route.aliases
 )
-_AGENT_PROMPT_ALIASES = {
-    route.agent_id: route.prompt_alias for route in AGENT_ROUTES
+_AGENT_SPEAKER_ACCENTS = {
+    LEAD_ORCHESTRATOR: SpeakerAccent.CYAN,
+    PLOT_ARCHITECT: SpeakerAccent.YELLOW,
+    CHARACTER_CUSTODIAN: SpeakerAccent.GREEN,
+    EXECUTION_SPECIALIST: SpeakerAccent.BLUE,
 }
 _CONVERSATION_CATALOG_OPERATIONS = (
     "create",
@@ -478,6 +487,13 @@ def _settings_projection(
             current.system_defaults.conversation_storage_backend or "filesystem",
             pending.system_defaults.conversation_storage_backend or "filesystem",
         ),
+        (
+            "show_message_details",
+            None,
+            "Message details",
+            "On" if current.system_defaults.show_message_details else "Off",
+            "On" if pending.system_defaults.show_message_details else "Off",
+        ),
     ]
     for agent_id in ROSTER:
         display_name = AGENT_SPECS[agent_id].display_name
@@ -611,6 +627,7 @@ class InteractiveController:
         "_runner",
         "_runtime",
         "_semantic_output",
+        "_show_message_details",
         "_focused_conversation",
         "_debate_message_offsets",
         "_debate_last_conflict_targets",
@@ -675,6 +692,10 @@ class InteractiveController:
         self._error_write_count = 0
         self._context = context
         self._backend = backend
+        self._show_message_details = (
+            backend_configuration_snapshot(backend)
+            .system_defaults.show_message_details
+        )
         self._terminal = terminal
         self._auth_coordinator = auth_coordinator
         self._provider_catalog = resolved_provider_catalog
@@ -848,7 +869,7 @@ class InteractiveController:
     def _write_counted_list_row(
         self,
         title: str,
-        record: Record,
+        record: Record | Message,
         *,
         position: int,
         total_count: int,
@@ -919,6 +940,46 @@ class InteractiveController:
             return "artifact_store"
         return agent_id.replace("_", " ")
 
+    def _conversation_event_message(self, event: ConversationEvent) -> Message:
+        """Project one durable transcript event into its human message view."""
+
+        if event.kind is ConversationEventKind.USER_MESSAGE:
+            sender = f"You → {AGENT_SPECS[event.recipient].display_name}"
+            accent = SpeakerAccent.MAGENTA
+        elif event.kind is ConversationEventKind.AGENT_REPLY:
+            sender = f"{AGENT_SPECS[event.sender].display_name} → You"
+            accent = _AGENT_SPEAKER_ACCENTS[event.sender]
+        else:
+            assert event.kind is ConversationEventKind.RUNTIME_ERROR
+            sender = "Runtime → You"
+            accent = SpeakerAccent.CYAN
+
+        metadata = f"Sequence: {event.sequence}"
+        if self._show_message_details:
+            metadata += (
+                f" · Turn: {event.turn_id}"
+                f" · Kind: {event.kind.value}"
+                f" · IDs: {event.sender} → {event.recipient}"
+            )
+        is_agent_reply = event.kind is ConversationEventKind.AGENT_REPLY
+        return Message(
+            sender,
+            (
+                format_agent_reply_content(event.content)
+                if is_agent_reply
+                else event.content
+            ),
+            role=(
+                SemanticRole.AGENT
+                if is_agent_reply
+                else SemanticRole.DEFAULT
+            ),
+            state=ViewState.COMPLETED,
+            presentation=MessagePresentation.CHAT_BLOCK,
+            metadata=metadata,
+            accent=accent,
+        )
+
     @staticmethod
     def _agent_display_chain(agent_ids: tuple[str, ...]) -> str:
         """Render one compact textual sender/recipient chain."""
@@ -933,14 +994,6 @@ class InteractiveController:
         """Return one stable key for debate-local in-memory cursors."""
 
         return (event.session_id, event.debate_id)
-
-    @staticmethod
-    def _truncate_for_display(text: str, limit: int = 1200) -> str:
-        """Shorten long speech content before printing an event log."""
-
-        if len(text) <= limit:
-            return text
-        return f"{text[: limit - 20]} ... [truncated]"
 
     def _debate_handoff_for_phase(
         self,
@@ -1021,96 +1074,133 @@ class InteractiveController:
             "Persist interrupted state and return for retry.",
         )
 
-    def _write_debate_progress_context(self, event: DebateProgressEvent) -> None:
-        """Render event-handoff metadata before the phase status row."""
+    @staticmethod
+    def _debate_progress_outcome(event: DebateProgressEvent) -> str:
+        """Return the fixed phase-specific outcome sentence."""
 
-        role, state = self._debate_progress_style(event.phase)
-        from_agents, to_agents, action = self._debate_handoff_for_phase(event)
-        fields = (
-            Field("Event", event.phase.value),
-            Field("Round", str(event.round_number)),
-            Field("Revision", event.revision_id or "n/a"),
-            Field(
-                "Handoff",
-                f"{self._agent_display_chain(from_agents)} -> "
-                f"{self._agent_display_chain(to_agents)}",
-            ),
-            Field("Action", action),
-        )
-        if event.conflicting_agents:
-            fields = (*fields,)
-            fields += (
-                Field(
-                    "Conflicts",
-                    self._agent_display_chain(event.conflicting_agents),
-                ),
+        phase = event.phase
+        if phase is DebateProgressPhase.STARTED:
+            return f"Started {event.input_kind.value} consensus."
+        if phase is DebateProgressPhase.DRAFTED:
+            return "Drafted revision r0."
+        if phase is DebateProgressPhase.AUDIT_STARTED:
+            return (
+                f"Audit started for {event.revision_id} at round "
+                f"{event.round_number}."
             )
-        self._semantic_output.write_component(
-            Record(
-                "event",
-                title=f"{event.debate_id} phase",
-                fields=fields,
-                role=role,
-                state=state,
+        if phase is DebateProgressPhase.AUDIT_COMPLETED:
+            conflicts = (
+                ", ".join(event.conflicting_agents)
+                if event.conflicting_agents
+                else "none"
             )
-        )
+            return (
+                f"Audit completed for {event.revision_id} at round "
+                f"{event.round_number}; conflicts: {conflicts}."
+            )
+        if phase is DebateProgressPhase.SYNTHESIZED:
+            return (
+                f"Synthesized {event.revision_id} at round "
+                f"{event.round_number}."
+            )
+        if phase is DebateProgressPhase.ARTIFACTS_COMMITTED:
+            updates = ", ".join(event.core_updates) if event.core_updates else "none"
+            return (
+                f"Artifacts committed for {event.revision_id}: "
+                f"{event.manuscript_path}; core updates: {updates}."
+            )
+        if phase is DebateProgressPhase.CONSENSUS:
+            return (
+                f"Consensus reached on {event.revision_id} after "
+                f"{event.round_number} revision rounds."
+            )
+        if phase is DebateProgressPhase.DEADLOCK:
+            return (
+                f"Deadlock on {event.revision_id} after "
+                f"{event.round_number} revision rounds."
+            )
+        if phase is DebateProgressPhase.FAILED:
+            assert event.failure_kind is not None
+            return f"Run failed ({event.failure_kind.value})."
+        assert phase is DebateProgressPhase.INTERRUPTED
+        return "Run interrupted after durable state transition."
 
-    def _render_debate_agent_sayings(self, event: DebateProgressEvent) -> None:
-        """Render only the new agent messages since the previous phase."""
+    def _debate_speech_sections(
+        self,
+        event: DebateProgressEvent,
+        *,
+        start: int,
+    ) -> tuple[tuple[Section, ...], Notice | None, int]:
+        """Read and group one uncommitted chronological speech suffix."""
 
-        key = self._debate_message_key(event)
-        start = self._debate_message_offsets.get(key, 0)
         try:
             messages = self._workspace.read_debate_messages(
                 event.session_id,
                 event.debate_id,
             )
         except (OSError, WorkspaceFormatError, WorkspaceSecurityError):
-            self._debate_message_offsets[key] = start
-            self._write_notice(
-                "Agent sayings unavailable; the debate log could not be read.",
-                label="agent-saying",
-                role=SemanticRole.WARNING,
-                state=ViewState.ERROR,
+            return (
+                (),
+                Notice(
+                    "Agent sayings unavailable; the debate log could not be read.",
+                    label="agent-saying",
+                    role=SemanticRole.WARNING,
+                    state=ViewState.ERROR,
+                ),
+                start,
             )
-            return
+
         if start > len(messages):
             start = 0
-        items = tuple(
-            item for item in messages[start:] if item.sender in AGENT_SPECS
-        )
-        if not items:
-            self._debate_message_offsets[key] = len(messages)
-            return
+        sections: list[Section] = []
+        group_key: tuple[str, int, str] | None = None
+        group_messages: list[Message] = []
 
-        panel_items: list[Message] = []
-        for item in items:
-            label = self._agent_display_name(item.sender)
-            metadata = f"[{item.kind}] {item.phase} {item.revision} round {item.round}:"
-            panel_items.append(
-                Message(
-                    label,
+        def append_group() -> None:
+            """Append the current nonempty persisted speech group."""
+
+            if group_key is None:
+                return
+            phase, round_number, revision = group_key
+            sections.append(
+                Section(
                     (
-                        f"{metadata}\n{self._truncate_for_display(item.content)}"
-                        if item.kind != "error"
-                        else f"{metadata}\nAgent error details are unavailable."
+                        f"Speeches · {phase} · round {round_number} · "
+                        f"revision {revision or 'n/a'}"
                     ),
-                    role=(
-                        SemanticRole.AGENT
-                        if item.sender in AGENT_SPECS
-                        else SemanticRole.DEFAULT
+                    tuple(group_messages),
+                )
+            )
+
+        for item in messages[start:]:
+            if item.sender not in AGENT_SPECS:
+                continue
+            item_group_key = (item.phase, item.round, item.revision)
+            if group_key is not None and item_group_key != group_key:
+                append_group()
+                group_messages = []
+            group_key = item_group_key
+            group_messages.append(
+                Message(
+                    self._agent_display_name(item.sender),
+                    (
+                        "Agent error details are unavailable."
+                        if item.kind == "error"
+                        else format_agent_reply_content(item.content)
                     ),
+                    role=SemanticRole.AGENT,
                     state=ViewState.COMPLETED,
-                ),
+                    presentation=MessagePresentation.CHAT_BLOCK,
+                    metadata=(
+                        f"Kind: {item.kind}"
+                        if self._show_message_details
+                        else None
+                    ),
+                    accent=_AGENT_SPEAKER_ACCENTS[item.sender],
+                )
             )
-        self._semantic_output.write_component(
-            Panel(
-                "Agent saying",
-                tuple(panel_items),
-                state=ViewState.COMPLETED,
-            )
-        )
-        self._debate_message_offsets[key] = len(messages)
+        append_group()
+        return tuple(sections), None, len(messages)
 
     @staticmethod
     def _debate_inspection_record(facts: DebateInspectionFacts) -> Record:
@@ -1860,6 +1950,15 @@ class InteractiveController:
                 agent_id = routed
                 one_shot = True
 
+        label = "one-shot runtime" if one_shot else "active runtime"
+        if not self._show_message_details:
+            return Notice(
+                AGENT_SPECS[agent_id].display_name,
+                label=label,
+                role=SemanticRole.INFO,
+                state=ViewState.COMPLETED,
+            )
+
         profile = self._backend.execution_profile(agent_id)
         confirmation = self._backend.execution_profile_confirmation(agent_id)
         return Notice(
@@ -1869,7 +1968,7 @@ class InteractiveController:
                 f"model {_execution_value(profile.model)} · "
                 f"effort {_execution_value(profile.effort)} · {confirmation}"
             ),
-            label=("one-shot runtime" if one_shot else "active runtime"),
+            label=label,
             role=(
                 SemanticRole.INFO
                 if confirmation == "confirmed"
@@ -2485,6 +2584,20 @@ class InteractiveController:
                     ),
                 ),
                 Choice(
+                    "show_message_details",
+                    "Message details",
+                    description=(
+                        f"Pending: {root_values['show_message_details'][1]}"
+                        if root_changed["show_message_details"]
+                        else f"Current: {root_values['show_message_details'][0]}"
+                    ),
+                    description_role=(
+                        SemanticRole.WARNING
+                        if root_changed["show_message_details"]
+                        else SemanticRole.DEFAULT
+                    ),
+                ),
+                Choice(
                     "providers",
                     "Agents",
                     description=(
@@ -2564,6 +2677,15 @@ class InteractiveController:
                 if confirmation == "cancel":
                     self._write_settings_cancelled(state)
                     return
+                if state.pending == state.baseline.configuration:
+                    continue
+                if self._settings_change_is_message_details_only(state):
+                    save_outcome = self._save_message_details_setting(state)
+                    if save_outcome == "retry":
+                        continue
+                    if save_outcome != "applied":
+                        return
+                    return
                 if self._auth_coordinator is not None:
                     try:
                         state, auth_outcome = (
@@ -2594,6 +2716,64 @@ class InteractiveController:
             if cancelled:
                 self._write_settings_cancelled(state)
                 return
+
+    @staticmethod
+    def _settings_change_is_message_details_only(state: SettingsState) -> bool:
+        """Classify one exact immutable presentation-only candidate."""
+
+        baseline = state.baseline.configuration
+        pending = state.pending
+        expected = replace(
+            baseline,
+            system_defaults=replace(
+                baseline.system_defaults,
+                show_message_details=(
+                    pending.system_defaults.show_message_details
+                ),
+            ),
+        )
+        return pending != baseline and pending == expected
+
+    def _save_message_details_setting(self, state: SettingsState) -> str:
+        """Persist and activate only the message presentation preference."""
+
+        try:
+            prepared = prepare_settings_save(
+                self._workspace,
+                state,
+                provider_overrides=self._backend.backend_overrides,
+            )
+        except SettingsError as failure:
+            self._write_settings_error(failure.kind)
+            return "retry"
+        if prepared.configuration != state.pending or prepared.switched_agents:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        try:
+            commit_prepared_settings_save(self._workspace, prepared)
+        except SettingsError as failure:
+            self._write_settings_error(failure.kind)
+            return "retry"
+
+        self._show_message_details = (
+            prepared.configuration.system_defaults.show_message_details
+        )
+        self._semantic_output.write_component(
+            Panel(
+                "Settings",
+                (
+                    Notice(
+                        "Settings saved and applied to this running shell now.",
+                        label="saved and applied",
+                        role=SemanticRole.SUCCESS,
+                        state=ViewState.COMPLETED,
+                    ),
+                ),
+                state=ViewState.COMPLETED,
+            )
+        )
+        return "applied"
 
     def _save_and_apply_settings(self, state: SettingsState) -> str:
         """Persist and activate one staged snapshot without false success."""
@@ -2749,6 +2929,7 @@ class InteractiveController:
                 before_defaults.antigravity_model,
                 before_defaults.antigravity_effort,
                 before_defaults.default_backend,
+                before_defaults.show_message_details,
             )
             != (
                 active_defaults.language,
@@ -2759,8 +2940,10 @@ class InteractiveController:
                 active_defaults.antigravity_model,
                 active_defaults.antigravity_effort,
                 active_defaults.default_backend,
+                active_defaults.show_message_details,
             )
         )
+        self._show_message_details = active_defaults.show_message_details
         self._write_settings_applied_result(
             before_profiles,
             active_profiles,
@@ -3065,6 +3248,8 @@ class InteractiveController:
             return self._edit_settings_rounds(state)
         if selected == "conversation_storage":
             return self._edit_settings_storage(state)
+        if selected == "show_message_details":
+            return self._edit_settings_message_details(state)
         if selected == "providers":
             return self._edit_settings_provider(state)
         raise _ControllerAbort(
@@ -3262,6 +3447,56 @@ class InteractiveController:
             notice = _settings_entered_notice(
                 "conversation storage",
                 armed_value,
+            )
+
+    def _edit_settings_message_details(
+        self,
+        state: SettingsState,
+    ) -> tuple[SettingsState, bool]:
+        """Select compact or detailed message presentation for this shell."""
+
+        notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
+        while True:
+            pending = (
+                "on"
+                if state.pending.system_defaults.show_message_details
+                else "off"
+            )
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Message details",
+                    instruction=_settings_value_instruction(
+                        "Choose Off for compact messages or On for detailed "
+                        "messages. Enter applies the value and keeps this "
+                        "editor open; press Esc to return to Settings."
+                    ),
+                ),
+                (
+                    Choice("off", "Off"),
+                    Choice("on", "On"),
+                ),
+                highlighted_id=pending,
+                selected_id=pending,
+                notice=notice,
+                transient=True,
+            )
+            value, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel:
+                return state, True
+            if value is None:
+                return state, False
+            if value not in {"off", "on"}:
+                raise _ControllerAbort(
+                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                )
+            if armed_value == value:
+                return state, False
+            state = update_show_message_details(state, value == "on")
+            armed_value = value
+            notice = _settings_entered_notice(
+                "message details",
+                "On" if value == "on" else "Off",
             )
 
     def _confirm_storage_installation(
@@ -4936,28 +5171,7 @@ class InteractiveController:
         for position, event in enumerate(displayed, start=1):
             self._write_counted_list_row(
                 "History",
-                Record(
-                    f"transcript {focused.conversation_id}",
-                    fields=(
-                        Field("Sequence", str(event.sequence)),
-                        Field("Turn", event.turn_id),
-                        Field("Kind", event.kind.value),
-                        Field("Sender", event.sender),
-                        Field("Recipient", event.recipient),
-                        Field("Content", ""),
-                    ),
-                    content=(
-                        format_agent_reply_content(event.content)
-                        if event.kind is ConversationEventKind.AGENT_REPLY
-                        else event.content
-                    ),
-                    role=(
-                        SemanticRole.AGENT
-                        if event.kind is ConversationEventKind.AGENT_REPLY
-                        else SemanticRole.DEFAULT
-                    ),
-                    state=ViewState.COMPLETED,
-                ),
+                self._conversation_event_message(event),
                 position=position,
                 total_count=total_count,
             )
@@ -5193,7 +5407,11 @@ class InteractiveController:
             assert action.kind is ActionKind.MESSAGE
             agent_id = self._target_agent_id
         display_name = AGENT_SPECS[agent_id].display_name
-        execution_profile = self._backend.execution_profile(agent_id)
+        execution_profile = (
+            self._backend.execution_profile(agent_id)
+            if self._show_message_details
+            else None
+        )
 
         memory_service = self._conversation_memory_service
         if type(memory_service) is not ConversationMemoryService:
@@ -5207,10 +5425,12 @@ class InteractiveController:
             )
         self._semantic_output.write_accepted_input(
             Message(
-                f"you → {_AGENT_PROMPT_ALIASES[agent_id]}",
+                f"You → {display_name}",
                 action.text,
                 role=SemanticRole.DEFAULT,
                 state=ViewState.COMPLETED,
+                presentation=MessagePresentation.CHAT_BLOCK,
+                accent=SpeakerAccent.MAGENTA,
             )
         )
         progress_events: list[ConversationRetrievalProgressEvent] = []
@@ -5364,49 +5584,33 @@ class InteractiveController:
                     state=ViewState.COMPLETED,
                 ),
             )
-        confirmation = self._backend.execution_profile_confirmation(agent_id)
-        thread_status = self._backend.execution_profile_thread_status(agent_id)
+        metadata = None
+        if self._show_message_details:
+            assert execution_profile is not None
+            confirmation = self._backend.execution_profile_confirmation(agent_id)
+            thread_status = self._backend.execution_profile_thread_status(agent_id)
+            metadata = (
+                "Provider: "
+                f"{_provider_display_name(execution_profile.provider)} "
+                f"[{_execution_source_label(execution_profile.provider_source)}]"
+                " · Model: "
+                f"{_execution_value(execution_profile.model)} "
+                f"[{_execution_source_label(execution_profile.model_source)}]"
+                " · Effort: "
+                f"{_execution_value(execution_profile.effort)} "
+                f"[{_execution_source_label(execution_profile.effort_source)}]"
+                f" · Confirmation: {confirmation}"
+                f" · Thread: {thread_status.replace('_', ' ')}"
+            )
         self._semantic_output.write_component(
-            Record(
-                _AGENT_PROMPT_ALIASES[agent_id],
-                title=display_name,
-                fields=(
-                    Field(
-                        "Provider",
-                        (
-                            f"{_provider_display_name(execution_profile.provider)} "
-                            f"[{_execution_source_label(execution_profile.provider_source)}]"
-                        ),
-                        role=SemanticRole.INFO,
-                    ),
-                    Field(
-                        "Model",
-                        (
-                            f"{_execution_value(execution_profile.model)} "
-                            f"[{_execution_source_label(execution_profile.model_source)}]"
-                        ),
-                    ),
-                    Field(
-                        "Effort",
-                        (
-                            f"{_execution_value(execution_profile.effort)} "
-                            f"[{_execution_source_label(execution_profile.effort_source)}]"
-                        ),
-                    ),
-                    Field(
-                        "Confirmation",
-                        confirmation,
-                        role=_confirmation_role(confirmation),
-                    ),
-                    Field(
-                        "Thread",
-                        thread_status.replace("_", " "),
-                        role=_thread_status_role(thread_status),
-                    ),
-                ),
-                content=format_agent_reply_content(result.content),
+            Message(
+                f"{display_name} → You",
+                format_agent_reply_content(result.content),
                 role=SemanticRole.AGENT,
                 state=ViewState.COMPLETED,
+                presentation=MessagePresentation.CHAT_BLOCK,
+                metadata=metadata,
+                accent=_AGENT_SPEAKER_ACCENTS[agent_id],
             )
         )
         self._render_conversation_retrieval_sources(result.sources)
@@ -5507,10 +5711,11 @@ class InteractiveController:
     ) -> None:
         """Render validated ordered sources through existing sanitized status I/O.
 
-        Subject-only citations omit event fields; exact event citations include
-        turn, sequence, and event-kind values. Rendering is non-durable and does
-        not mutate focus, routing, memory, or transcripts. Invalid sources
-        and terminal writer failures propagate to fatal controller cleanup.
+        Subject-only citations omit event fields. Exact event citations always
+        include sequence; detailed presentation also includes turn and event
+        kind. Rendering is non-durable and does not mutate focus, routing,
+        memory, or transcripts. Invalid sources and terminal writer failures
+        propagate to fatal controller cleanup.
         """
 
         for ordinal, source in enumerate(sources, start=1):
@@ -5522,13 +5727,11 @@ class InteractiveController:
             if citation.sequence is not None:
                 assert citation.turn_id is not None
                 assert citation.event_kind is not None
-                fields.extend(
-                    (
-                        Field("Turn", citation.turn_id),
-                        Field("Sequence", str(citation.sequence)),
-                        Field("Kind", citation.event_kind.value),
-                    )
-                )
+                if self._show_message_details:
+                    fields.append(Field("Turn", citation.turn_id))
+                fields.append(Field("Sequence", str(citation.sequence)))
+                if self._show_message_details:
+                    fields.append(Field("Kind", citation.event_kind.value))
             self._semantic_output.write_component(
                 Record(
                     "context",
@@ -5658,10 +5861,12 @@ class InteractiveController:
         if input_kind is InputKind.PROMPT:
             self._semantic_output.write_accepted_input(
                 Message(
-                    "you → consensus",
+                    "You → Consensus",
                     payload,
                     role=SemanticRole.DEFAULT,
                     state=ViewState.COMPLETED,
+                    presentation=MessagePresentation.CHAT_BLOCK,
+                    accent=SpeakerAccent.MAGENTA,
                 )
             )
         context_fields = [Field("Output", output_path)]
@@ -5897,114 +6102,105 @@ class InteractiveController:
             previous=events[-1] if events else None,
         )
         key = self._debate_message_key(canonical)
+        candidate_offset = self._render_debate_progress(canonical)
+        self._debate_message_offsets[key] = candidate_offset
         if canonical.phase is DebateProgressPhase.STARTED:
-            self._debate_message_offsets[key] = 0
             self._debate_last_conflict_targets[key] = ()
         elif canonical.phase is DebateProgressPhase.AUDIT_COMPLETED:
             self._debate_last_conflict_targets[key] = canonical.conflicting_agents
-        self._render_debate_progress(canonical)
         events.append(canonical)
         if canonical.phase is DebateProgressPhase.STARTED:
             self._last_started_debate_by_session[
                 canonical.session_id
             ] = canonical.debate_id
 
-    def _render_debate_progress(self, event: DebateProgressEvent) -> None:
-        """Render one validated event using only typed fields and fixed labels."""
+    def _render_debate_progress(self, event: DebateProgressEvent) -> int:
+        """Build and atomically write one validated phase presentation."""
 
+        key = self._debate_message_key(event)
         phase = event.phase
+        role, state = self._debate_progress_style(phase)
+        committed_offset = self._debate_message_offsets.get(key, 0)
+        start = (
+            0
+            if phase is DebateProgressPhase.STARTED
+            else committed_offset
+        )
         if phase is DebateProgressPhase.STARTED:
-            self._write_debate_progress_context(event)
-            self._write_run_record(
-                event.debate_id,
-                content=f"Started {event.input_kind.value} consensus.",
-                role=SemanticRole.INFO,
-                state=ViewState.LOADING,
+            conflicts: tuple[str, ...] = ()
+        elif phase is DebateProgressPhase.AUDIT_COMPLETED:
+            conflicts = event.conflicting_agents
+        else:
+            conflicts = self._debate_last_conflict_targets.get(key, ())
+
+        from_agents, to_agents, action = self._debate_handoff_for_phase(event)
+        fields = [
+            Field("Debate ID", event.debate_id),
+            Field("Phase", phase.value),
+            Field("Round", str(event.round_number)),
+            Field("Revision", event.revision_id or "n/a"),
+        ]
+        if self._show_message_details:
+            fields.append(
+                Field(
+                    "Handoff",
+                    f"{self._agent_display_chain(from_agents)} -> "
+                    f"{self._agent_display_chain(to_agents)}",
+                )
             )
+        fields.extend(
+            (
+                Field("Action", action),
+                Field(
+                    "Outcome",
+                    self._debate_progress_outcome(event),
+                    role=role,
+                    state=state,
+                ),
+                Field(
+                    "Conflicts",
+                    self._agent_display_chain(conflicts) if conflicts else "none",
+                ),
+            )
+        )
+
+        panel_items: list[Field | Notice | Section] = list(fields)
+        if phase is DebateProgressPhase.STARTED:
             if event.context_mode is DebateContextMode.INCLUDED:
-                self._write_notice(
-                    (
-                        f"Included {event.context_event_count} focused-conversation "
-                        f"events; {event.context_omitted_turns} earlier turns omitted."
-                    ),
-                    label="context",
-                    state=ViewState.COMPLETED,
+                panel_items.append(
+                    Notice(
+                        (
+                            f"Included {event.context_event_count} "
+                            "focused-conversation events; "
+                            f"{event.context_omitted_turns} earlier turns omitted."
+                        ),
+                        label="context",
+                        state=ViewState.COMPLETED,
+                    )
                 )
             elif event.context_mode is DebateContextMode.FRESH:
-                self._write_notice(
-                    "Fresh run; no conversation events were included.",
-                    label="context",
-                    state=ViewState.COMPLETED,
+                panel_items.append(
+                    Notice(
+                        "Fresh run; no conversation events were included.",
+                        label="context",
+                        state=ViewState.COMPLETED,
+                    )
                 )
-            self._render_debate_agent_sayings(event)
-            return
-        if phase is DebateProgressPhase.DRAFTED:
-            text = "Drafted revision r0."
-        elif phase is DebateProgressPhase.AUDIT_STARTED:
-            text = (
-                f"Audit started for {event.revision_id} at round "
-                f"{event.round_number}."
-            )
-        elif phase is DebateProgressPhase.AUDIT_COMPLETED:
-            conflicts = (
-                ", ".join(event.conflicting_agents)
-                if event.conflicting_agents
-                else "none"
-            )
-            text = (
-                f"Audit completed for {event.revision_id} at round "
-                f"{event.round_number}; conflicts: {conflicts}."
-            )
-        elif phase is DebateProgressPhase.SYNTHESIZED:
-            text = (
-                f"Synthesized {event.revision_id} at round "
-                f"{event.round_number}."
-            )
-        elif phase is DebateProgressPhase.ARTIFACTS_COMMITTED:
-            updates = ", ".join(event.core_updates) if event.core_updates else "none"
-            text = (
-                f"Artifacts committed for {event.revision_id}: "
-                f"{event.manuscript_path}; core updates: {updates}."
-            )
-        elif phase is DebateProgressPhase.CONSENSUS:
-            text = (
-                f"Consensus reached on {event.revision_id} after "
-                f"{event.round_number} revision rounds."
-            )
-        elif phase is DebateProgressPhase.DEADLOCK:
-            text = (
-                f"Deadlock on {event.revision_id} after "
-                f"{event.round_number} revision rounds."
-            )
-        elif phase is DebateProgressPhase.FAILED:
-            assert event.failure_kind is not None
-            text = f"Run failed ({event.failure_kind.value})."
-        else:
-            assert phase is DebateProgressPhase.INTERRUPTED
-            text = "Run interrupted after durable state transition."
-        if phase is DebateProgressPhase.CONSENSUS:
-            role = SemanticRole.SUCCESS
-            state = ViewState.COMPLETED
-        elif phase in {
-            DebateProgressPhase.DEADLOCK,
-            DebateProgressPhase.FAILED,
-        }:
-            role = SemanticRole.ERROR
-            state = ViewState.ERROR
-        elif phase is DebateProgressPhase.INTERRUPTED:
-            role = SemanticRole.WARNING
-            state = ViewState.CANCELLED
-        else:
-            role = SemanticRole.INFO
-            state = ViewState.LOADING
-        self._write_debate_progress_context(event)
-        self._write_run_record(
-            event.debate_id,
-            content=text,
-            role=role,
+
+        sections, warning, candidate_offset = self._debate_speech_sections(
+            event,
+            start=start,
+        )
+        if warning is not None:
+            panel_items.append(warning)
+        panel_items.extend(sections)
+        panel = Panel(
+            "Debate phase",
+            tuple(panel_items),
             state=state,
         )
-        self._render_debate_agent_sayings(event)
+        self._semantic_output.write_component(panel)
+        return candidate_offset
 
     def _present_consensus_result(
         self,
@@ -6372,28 +6568,7 @@ class InteractiveController:
             for position, event in enumerate(page.events, start=1):
                 self._write_counted_list_row(
                     "Transcript",
-                    Record(
-                        f"transcript {handle}",
-                        fields=(
-                            Field("Sequence", str(event.sequence)),
-                            Field("Turn", event.turn_id),
-                            Field("Kind", event.kind.value),
-                            Field("Sender", event.sender),
-                            Field("Recipient", event.recipient),
-                            Field("Content", ""),
-                        ),
-                        content=(
-                            format_agent_reply_content(event.content)
-                            if event.kind is ConversationEventKind.AGENT_REPLY
-                            else event.content
-                        ),
-                        role=(
-                            SemanticRole.AGENT
-                            if event.kind is ConversationEventKind.AGENT_REPLY
-                            else SemanticRole.DEFAULT
-                        ),
-                        state=ViewState.COMPLETED,
-                    ),
+                    self._conversation_event_message(event),
                     position=position,
                     total_count=total_count,
                 )

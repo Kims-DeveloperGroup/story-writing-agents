@@ -14,6 +14,7 @@ from ._model import (
     InputPromptView,
     ListView,
     Message,
+    MessagePresentation,
     Notice,
     Panel,
     Picker,
@@ -25,6 +26,7 @@ from ._model import (
     RenderedInputFrame,
     Section,
     SemanticRole,
+    SpeakerAccent,
     StartupWelcome,
     StartupWelcomeStage,
     SuggestionPalette,
@@ -46,6 +48,13 @@ _ROLE_SGR = {
     SemanticRole.ERROR: "\x1b[31m",
     SemanticRole.COMMAND: "\x1b[35m",
     SemanticRole.AGENT: "\x1b[1m",
+}
+_SPEAKER_HEADER_SGR = {
+    SpeakerAccent.MAGENTA: "\x1b[1;35m",
+    SpeakerAccent.CYAN: "\x1b[1;36m",
+    SpeakerAccent.YELLOW: "\x1b[1;33m",
+    SpeakerAccent.GREEN: "\x1b[1;32m",
+    SpeakerAccent.BLUE: "\x1b[1;34m",
 }
 _DECORATIVE_SGR = re.compile(r"\x1b\[(?:0|1|3[1-7]|1;3[1-7])m")
 _ADVISORY_PROGRESS_FRAMES = (
@@ -168,7 +177,18 @@ class _InlineRole:
         self.spans = spans
 
 
-_LineRole: TypeAlias = SemanticRole | _InlineRole
+class _SpeakerHeaderRole:
+    """Decorate only one chat-block header with its fixed speaker accent."""
+
+    __slots__ = ("accent",)
+
+    def __init__(self, accent: SpeakerAccent) -> None:
+        if not isinstance(accent, SpeakerAccent):
+            raise TypeError("accent must be a SpeakerAccent")
+        self.accent = accent
+
+
+_LineRole: TypeAlias = SemanticRole | _InlineRole | _SpeakerHeaderRole
 _SemanticLine: TypeAlias = tuple[str, _LineRole]
 
 
@@ -1012,7 +1032,11 @@ def _message_lines(
     width: int,
     *,
     indent: int,
-) -> list[tuple[str, SemanticRole]]:
+) -> list[_SemanticLine]:
+    if message.presentation is MessagePresentation.CHAT_BLOCK:
+        return _chat_block_message_lines(message, width, indent=indent)
+    if message.presentation is not MessagePresentation.INLINE:
+        raise RuntimeError("message has an unsupported presentation")
     prefix = (
         f"{_inline(message.sender)}"
         f"{_semantic_suffix(message.state, message.role)}> "
@@ -1028,6 +1052,147 @@ def _message_lines(
             preserve_lines=True,
         )
     ]
+
+
+def _chat_block_message_lines(
+    message: Message,
+    width: int,
+    *,
+    indent: int,
+) -> list[_SemanticLine]:
+    """Render one speaker header, separator, and default-styled body rail."""
+
+    header = _inline(message.sender)
+    if message.metadata is not None:
+        header += f" · {_inline(message.metadata)}"
+    header += _semantic_suffix(message.state, message.role)
+    header_role = _SpeakerHeaderRole(message.accent)
+    header_indent = " " * max(0, min(indent, max(width - 1, 0)))
+    lines: list[_SemanticLine] = [
+        (line, header_role)
+        for line in _word_wrapped_prefixed_lines(
+            header,
+            width,
+            prefix=header_indent,
+            fallback_prefix="",
+        )
+    ]
+    lines.append(("", SemanticRole.DEFAULT))
+    lines.extend(
+        (line, SemanticRole.DEFAULT)
+        for line in _chat_block_body_lines(message.content, width, indent=indent)
+    )
+    return lines
+
+
+def _chat_block_body_lines(value: str, width: int, *, indent: int) -> list[str]:
+    """Word-wrap one sanitized body under a physical-cell-safe speaker rail."""
+
+    safe = sanitize_terminal_text(value)
+    safe_indent = max(0, min(indent, max(width - 1, 0)))
+    base_indent = " " * safe_indent
+    remaining_width = width - safe_indent
+    if remaining_width >= 3:
+        prefix = f"{base_indent}│ "
+        fallback_prefix = base_indent
+    else:
+        prefix = base_indent
+        fallback_prefix = ""
+    return [
+        rendered
+        for source in safe.split("\n")
+        for rendered in _word_wrapped_prefixed_lines(
+            source,
+            width,
+            prefix=prefix,
+            fallback_prefix=fallback_prefix,
+        )
+    ]
+
+
+def _word_wrapped_prefixed_lines(
+    text: str,
+    width: int,
+    *,
+    prefix: str,
+    fallback_prefix: str,
+) -> list[str]:
+    """Wrap exact text and fall back only for one incompatible leading glyph."""
+
+    if not text:
+        return [prefix.rstrip()]
+
+    rendered: list[str] = []
+    remaining = text
+    prefix_width = _cell_width(prefix)
+    fallback_width = _cell_width(fallback_prefix)
+    while remaining:
+        active_prefix = prefix
+        available = width - prefix_width
+        leading_glyph = _leading_display_glyph(remaining)
+        if _cell_width(leading_glyph) > available:
+            active_prefix = fallback_prefix
+            fallback_available = width - fallback_width
+            if _cell_width(leading_glyph) > fallback_available:
+                active_prefix = ""
+            chunk = leading_glyph
+        else:
+            chunk = _word_cell_prefix(remaining, available)
+        rendered.append(f"{active_prefix}{chunk}")
+        remaining = remaining[len(chunk) :]
+    return rendered
+
+
+def _leading_display_glyph(text: str) -> str:
+    """Keep one spacing code point with adjacent zero-cell combining marks."""
+
+    stop = 0
+    has_spacing_character = False
+    for character in text:
+        character_width = display_character_width(character)
+        if has_spacing_character and character_width > 0:
+            break
+        stop += 1
+        if character_width > 0:
+            has_spacing_character = True
+    return text[:stop]
+
+
+def _word_cell_prefix(text: str, width: int) -> str:
+    """Return one exact cell-bounded prefix, preferring a later word boundary."""
+
+    if not text:
+        return ""
+    hard_stop = _cell_prefix_stop(text, width)
+    if hard_stop == len(text):
+        return text
+    if hard_stop == 0:
+        return text[:1]
+
+    candidate = text[:hard_stop]
+    break_stop = 0
+    has_nonspace = False
+    for index, character in enumerate(candidate):
+        if character.isspace():
+            if has_nonspace:
+                break_stop = index + 1
+        else:
+            has_nonspace = True
+    return text[: break_stop or hard_stop]
+
+
+def _cell_prefix_stop(text: str, width: int) -> int:
+    """Locate the largest leading code-point span that fits physical cells."""
+
+    cells = 0
+    stop = 0
+    for character in text:
+        character_width = display_character_width(character)
+        if cells + character_width > width:
+            break
+        cells += character_width
+        stop += 1
+    return stop
 
 
 def _record_lines(
@@ -1477,6 +1642,10 @@ def _cell_width(text: str) -> int:
 def _decorate(text: str, role: _LineRole) -> str:
     """Apply one fixed local style without parsing dynamic text as markup."""
 
+    if isinstance(role, _SpeakerHeaderRole):
+        if not text:
+            return text
+        return f"{_SPEAKER_HEADER_SGR[role.accent]}{text}{_RESET}"
     if isinstance(role, _InlineRole):
         rendered: list[str] = []
         offset = 0

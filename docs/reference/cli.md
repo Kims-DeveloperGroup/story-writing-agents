@@ -490,7 +490,11 @@ file watcher: they are reconciled by a newly launched backend, and other
 running shells retain their captured state. Confirmed `/settings` Apply Changes
 instead validates, persists, and applies non-storage runtime settings to the
 current shell without a restart. Desired conversation storage remains a
-next-shell setting and the current storage bundle is unchanged. Launch
+next-shell setting and the current storage bundle is unchanged. A
+Message-details-only Apply uses the configuration prepare/verify/commit fast
+path and updates the active presentation flag without provider, storage,
+backend/runtime, route, or thread activation work. Mixed changes retain the
+full activation path. Launch
 overrides stay higher precedence, so the corresponding effective Provider,
 Model, or Effort editor is disabled and read-only. Existing
 three-key system-default files remain valid and provide no provider-specific
@@ -518,15 +522,16 @@ always an ordinary read.
 
 Accepted provider-bound content is informative output, not a retained control
 frame. On a capable stream, ordinary, `/say`, and `@agent` advisory text is
-rendered once after cleanup as `you → ALIAS`, using the resolved preferred
-target alias and exact semantic body without the command envelope. Inline,
-fresh, and committed composer consensus prompts use `you → consensus`. These
+rendered once after cleanup as a `You → DISPLAY NAME` chat block with the exact
+semantic body and no command envelope. Inline, fresh, and committed composer
+consensus prompts use a `You → Consensus` chat block. These
 messages appear before progress or provider work and remain through later
 success, handled failure, cancellation, or post-acceptance interrupt. In
 ordinary-line fallback the submitted input already remains visible, so the
 terminal adds no duplicate accepted-input message. This is terminal
 presentation only, not a storage, transcript-retention, provider-history, or
-audit guarantee.
+audit guarantee. Fallback promises complete, nonduplicated meaning, not the
+same physical topology as capable output.
 
 After workspace resolution, a capable POSIX terminal shows a bounded,
 width-aware four-frame welcome before the authentication gate. Physical widths
@@ -550,9 +555,12 @@ without delay or ANSI. The welcome does not use the alternate screen or hide
 the cursor, and it never includes provider output.
 See the exact [terminal startup contract](interactive-terminal.md#startup-welcome-and-authentication).
 
-The capable main input also carries a responsive execution-profile header. It
-shows the sticky agent's active profile, or the exact one-shot profile when the
-buffer begins with a valid `@agent` route:
+The capable main input carries a responsive target/runtime header. With Message
+details Off, it shows only the sticky agent's full display name, or the exact
+one-shot target when the buffer begins with a valid `@agent` route, and performs
+no execution-profile or confirmation lookup. With Message details On, the
+header also shows Provider, Model, Effort, and confirmation state. For example,
+the detailed view can show:
 
 ```text
 [active runtime] Lead Orchestrator · Antigravity · model agy-model-id · effort high · pending
@@ -562,8 +570,9 @@ story[novel:lead]> Who is answering?
 story[novel:lead]> @plot Check the current constraints.
 ```
 
-These runtime-owned facts, the provider argv, and the profile records below are
-execution evidence. A model's reply prose or self-identification is not.
+With Message details On, these runtime-owned facts, the provider argv, and the
+profile records below are execution evidence. A model's reply prose or
+self-identification is not.
 
 Main prompts project canonical root, subcommand, and finite fixed-option
 candidates into a selectable semantic palette. Opening highlights the first
@@ -684,11 +693,13 @@ text so the invoking shell does not expand `$`.
 `/auth` and `/settings` are alias-free, take no argument, and are available with
 or without an attached session. `/auth` follows the authentication contract
 above. `/settings` edits isolated Current and Pending snapshots for Language,
-Persona, Maximum debate rounds, Conversation storage, and Agents. A clean root
-shows exactly those five choices in that order, with no persistence action or
-save guidance. Dirty state appends `Apply Changes (*Required)` and then `Discard
-Changes`. Conversation storage independently offers Filesystem and SQLite for
-the next shell; it is not an agent-provider route. `Agents` opens a nested
+Persona, Maximum debate rounds, Conversation storage, Message details, and
+Agents. A clean root shows exactly those six choices in that order, with no
+persistence action or save guidance. Dirty state appends `Apply Changes
+(*Required)` and then `Discard Changes`. Conversation storage independently
+offers Filesystem and SQLite for the next shell; it is not an agent-provider
+route. Message details offers Off and On. Off is the default compact
+presentation and does not delete stored content. `Agents` opens a nested
 canonical-agent picker. Each canonical agent is followed by `Current:` or
 `Pending:` and its effective `(Provider/model/effort)` profile. Selecting an
 agent opens a provider-neutral Provider/Model/Effort picker; each field
@@ -707,7 +718,8 @@ These summaries use only already validated local Settings and backend state;
 rendering them does not authenticate, discover a provider catalog, persist a
 value, or invoke a story provider.
 
-At the Settings root, each one-level value, including Conversation storage,
+At the Settings root, each one-level value, including Conversation storage and
+Message details,
 shows one effective description: neutral `Current` when unchanged or
 warning-semantic `Pending` when changed. Agents similarly warning-marks its
 explicit nonzero nested pending-change count. In Agents and Agent settings,
@@ -721,7 +733,7 @@ color is never required to identify state. The additive Choice description
 role remains package-internal.
 
 Every retained Language, Persona, Maximum debate rounds, Conversation storage,
-Provider, Model, Custom model, and Effort editor always shows `Entered changes
+Message details, Provider, Model, Custom model, and Effort editor always shows `Entered changes
 remain pending in memory and are not saved; choose Apply Changes in Settings to
 persist them.` The text is present on initial entry, after a valid Enter reopens
 the editor, and during validation. The established entered-value success result
@@ -763,8 +775,8 @@ Settings pickers and prompts follow the same transient input
 lifecycle as all capable input; fallback readers retain printed input and add no
 synthetic final picker frame. Nested Escape returns to
 the parent silently without a Current/Pending snapshot or cancellation record.
-In Language, Persona, Maximum debate rounds, Conversation storage, Provider,
-Model, Custom model, and Effort, the first valid commit applies the normalized
+In Language, Persona, Maximum debate rounds, Conversation storage, Message
+details, Provider, Model, Custom model, and Effort, the first valid commit applies the normalized
 pending value and keeps the editor active. The next valid commit of that same
 normalized value returns one level silently; a different valid value applies,
 stays active, and re-arms the comparison. Invalid input, authentication
@@ -799,10 +811,17 @@ unchanged. No configuration value is persisted before Apply Changes is
 confirmed.
 
 After Apply Changes confirmation, the controller rechecks that pending still
-differs from the opening baseline, then freshly gates each distinct effective
-provider once before entering the configuration transaction. A clean final
-recheck returns to the Settings root without authentication, persistence,
-output, exit, or a saved event. A stale,
+differs from the opening baseline. A clean final recheck returns to the Settings
+root without authentication, persistence, output, exit, or a saved event.
+
+When `show_message_details` is the sole difference in that exact immutable
+candidate, the controller prepares and verifies the configuration, commits it,
+and updates the active presentation flag only after commit. This fast path does
+not authenticate, stage or activate a backend/runtime, check storage readiness,
+switch routes or generations, or perform provider/thread work. If any other
+field differs, including a mixed Message details change, the controller uses the
+full path: it freshly gates each distinct effective provider once before
+entering the configuration transaction. A stale,
 unavailable, unauthenticated, indeterminate, failed, cancelled, or interrupted
 status prevents the settings file transaction. A missing workspace default
 learned during this gate remains in the pending candidate. The controller then
@@ -820,13 +839,14 @@ The prepared persistence boundary contains
 `agent_states/orchestrator_state/provider_route_generations.json`. Changed
 targets are written in that order; a write failure attempts exact reverse-order
 restoration of every attempted target, including the failing target. After
-persistence, the controller commits the staged backend/runtime generation.
+persistence on the full path, the controller commits the staged backend/runtime
+generation.
 Safe compensation restores the exact prior configuration and route files and
 leaves the old runtime active; if restoration or activation cannot be proved,
 the shell reports `recovery_required` and must not be used until restarted
 against the persisted state.
 
-A non-storage Apply returns to the main prompt with
+A non-storage Apply, including Message-details-only, returns to the main prompt with
 `Settings saved and applied to this running shell now.` A storage-only Apply
 instead reports
 `Restart is required for sqlite.` when selecting SQLite (`filesystem` appears
@@ -879,6 +899,19 @@ order, or noninteractive success stdout, JSON, ordering, or exit contracts. The
 documented availability line is the sole additive noninteractive stderr
 contract for a caught exception after CLI workspace initialization or discovery
 succeeds, independently of whether a diagnostic handle or file is available.
+
+Generic semantic `Message` output retains its inline layout. User and agent
+messages use a speaker header, blank separator, and default-styled `│ ` body
+rail; only the header receives a stable speaker accent. Physical-cell wrapping
+preserves whitespace, strict-JSON presentation, and CJK/full-width content, with
+a row-local rail fallback when a narrow row cannot fit its leading glyph.
+Message details Off is the compact default and never removes stored content. A
+direct agent reply still shows its speaker and full body; On adds Provider,
+Model, and Effort with each source, then Confirmation and Thread. The accepted
+user message has no diagnostic metadata. The main runtime header similarly
+shows only the target display name when Off and the full execution profile when
+On. `/agents` and `/status` are diagnostic commands and remain fully detailed in
+both modes.
 
 After attachment, `Conversation scope` appears before the first prompt and is
 then repeated only when its session ID, visible conversation handle, subject,
@@ -989,12 +1022,20 @@ effects, and example. `/agents` is one canonical roster list. Every agent row
 shows `ID`, `Aliases`, `Advisory domain`, an `Execution` composite with
 provider/model/effort and each source, and `Confirmation`. The compact value
 shape is `PROVIDER [SOURCE] · model VALUE [SOURCE] · effort VALUE [SOURCE]`.
-Session and
-conversation catalogs, search hits, transcript events, and focused history
-emit one positioned, one-record list per established row callback. Empty
-states are explicit. If Ctrl-C interrupts search, transcript, or history after
+Session and conversation catalogs and search hits use `Record` rows where
+applicable; transcript events and focused history use attributed `Message` rows.
+Each emits one positioned `ListView` per established row callback. Empty states
+are explicit. If Ctrl-C interrupts search, transcript, or history after
 some rows, those completed rows remain, one cancellation record follows, and
 no trailing result, hint, or history-context record is emitted.
+
+Transcript and history message rows always retain their position, Sequence,
+human direction header (`You → Agent`, `Agent → You`, or `Runtime → You`), and
+full body. Message details On additionally shows canonical sender/recipient IDs,
+Turn, and Kind. Retrieval sources always show Subject and Conversation;
+event-level sources always show Sequence and add Turn and Kind only when On.
+Conversation-level sources have no Sequence because they have no event
+citation. Retrieval reply execution-profile metadata also appears only when On.
 
 `/status` emits one read-only semantic lifecycle record with fields in this
 exact order:
@@ -1048,7 +1089,7 @@ reads can include archives. See [grammar](interactive-command-parser.md) and
 | `/draft-file PATH` | Strict-UTF-8 draft plus one focused snapshot; prompts for `PART/PATH.md`. |
 
 After prompt and path validation, inline, fresh, and committed composer runs
-write one exact-body `you → consensus` message before the `Consensus request`
+write one exact-body `You → Consensus` chat block before the `Consensus request`
 record and before progress. Every request record names the validated `Output`.
 `/draft-file` instead adds only its validated `Source` path: loaded draft bytes
 are never echoed as a terminal message. Prompt messages and request context
@@ -1057,6 +1098,17 @@ cancellation, or post-acceptance interrupt. Ordinary-line fallback retains its
 already printed prompt text and receives no duplicate message; the distinct
 output/source context is still written. None of this changes `story run` or
 other noninteractive output.
+
+Each accepted progress event is one atomic `Debate phase` Panel. It always shows
+Debate ID, Phase, Round, Revision, Action, Outcome, and Conflicts; Message
+details On inserts Handoff after Revision. Newly readable durable speech is
+grouped into contiguous persisted phase/round/revision sections within that same
+panel and shown in full except for fixed safe replacement of error-kind content.
+On adds each speech's Kind. A debate-log read warning remains inside the panel,
+and a failed panel write advances no cursor or progress cache. Successful
+consensus receives a separate final `Consensus` Record after terminal progress;
+deadlock and failed outcomes instead use typed error presentation. This
+interactive presentation does not change `story run` JSON or exit behavior.
 
 In both `/run --output ...` and `/run --fresh --output ...`, option boundaries
 use ASCII space or tab only. Unicode whitespace cannot separate `--output` from

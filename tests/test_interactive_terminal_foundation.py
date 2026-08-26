@@ -13,7 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from dataclasses import FrozenInstanceError, fields, is_dataclass
+from dataclasses import MISSING, FrozenInstanceError, fields, is_dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import get_args
@@ -72,6 +72,7 @@ from story_writing_agents.interactive_terminal._model import (
     MainInputControlState,
     MainInputHistoryState,
     Message,
+    MessagePresentation,
     Notice,
     Panel,
     Picker,
@@ -81,6 +82,7 @@ from story_writing_agents.interactive_terminal._model import (
     RenderedInputFrame,
     Section,
     SemanticRole,
+    SpeakerAccent,
     StartupWelcome,
     StartupWelcomeStage,
     SuggestionPalette,
@@ -148,6 +150,8 @@ PROGRESS_FRAMES = (
 
 MODEL_EXPORTS = (
     "SemanticRole",
+    "MessagePresentation",
+    "SpeakerAccent",
     "ViewState",
     "CapabilityProfile",
     "KeyKind",
@@ -628,6 +632,23 @@ class SemanticModelFoundationTests(unittest.TestCase):
             ),
         )
         self.assertEqual(
+            tuple((item.name, item.value) for item in MessagePresentation),
+            (
+                ("INLINE", "inline"),
+                ("CHAT_BLOCK", "chat_block"),
+            ),
+        )
+        self.assertEqual(
+            tuple((item.name, item.value) for item in SpeakerAccent),
+            (
+                ("MAGENTA", "magenta"),
+                ("CYAN", "cyan"),
+                ("YELLOW", "yellow"),
+                ("GREEN", "green"),
+                ("BLUE", "blue"),
+            ),
+        )
+        self.assertEqual(
             get_args(_model.Component),
             (
                 Prompt,
@@ -771,6 +792,104 @@ class SemanticModelFoundationTests(unittest.TestCase):
             with self.subTest(call=call):
                 with self.assertRaises((TypeError, ValueError)):
                     call()
+
+    def test_message_schema_defaults_and_list_membership_are_exact(self) -> None:
+        positional = inspect.Parameter.POSITIONAL_OR_KEYWORD
+        keyword = inspect.Parameter.KEYWORD_ONLY
+        message_fields = tuple(
+            (field.name, field.kw_only, field.default) for field in fields(Message)
+        )
+        self.assertEqual(
+            message_fields,
+            (
+                ("sender", False, MISSING),
+                ("content", False, MISSING),
+                ("role", True, SemanticRole.DEFAULT),
+                ("state", True, ViewState.COMPLETED),
+                ("presentation", True, MessagePresentation.INLINE),
+                ("metadata", True, None),
+                ("accent", True, SpeakerAccent.CYAN),
+            ),
+        )
+        signature = inspect.signature(Message)
+        self.assertEqual(
+            tuple(
+                (parameter.name, parameter.kind, parameter.default)
+                for parameter in signature.parameters.values()
+            ),
+            (
+                ("sender", positional, inspect.Parameter.empty),
+                ("content", positional, inspect.Parameter.empty),
+                ("role", keyword, SemanticRole.DEFAULT),
+                ("state", keyword, ViewState.COMPLETED),
+                ("presentation", keyword, MessagePresentation.INLINE),
+                ("metadata", keyword, None),
+                ("accent", keyword, SpeakerAccent.CYAN),
+            ),
+        )
+
+        compatible = Message("user", "body")
+        explicit = Message(
+            "user",
+            "body",
+            role=SemanticRole.DEFAULT,
+            state=ViewState.COMPLETED,
+            presentation=MessagePresentation.INLINE,
+            metadata=None,
+            accent=SpeakerAccent.CYAN,
+        )
+        self.assertEqual(compatible, explicit)
+        self.assertFalse(hasattr(compatible, "__dict__"))
+        with self.assertRaises(FrozenInstanceError):
+            compatible.presentation = (  # type: ignore[misc]
+                MessagePresentation.CHAT_BLOCK
+            )
+        restored = pickle.loads(pickle.dumps(explicit))
+        self.assertEqual(restored, explicit)
+        self.assertIs(type(restored), Message)
+
+        chat = Message(
+            "you",
+            "accepted",
+            presentation=MessagePresentation.CHAT_BLOCK,
+            metadata="user → plot",
+            accent=SpeakerAccent.MAGENTA,
+        )
+        view = ListView("Messages", (chat,))
+        self.assertEqual(view.items, (chat,))
+        self.assertEqual(view.total_count, None)
+
+        invalid_calls = (
+            lambda: Message(  # type: ignore[misc]
+                "user",
+                "body",
+                SemanticRole.DEFAULT,
+            ),
+            lambda: Message(  # type: ignore[arg-type]
+                "user",
+                "body",
+                presentation="inline",
+            ),
+            lambda: Message("user", "body", metadata=1),  # type: ignore[arg-type]
+            lambda: Message("user", "body", metadata=""),
+            lambda: Message("user", "body", metadata="  "),
+            lambda: Message(  # type: ignore[arg-type]
+                "user",
+                "body",
+                accent="cyan",
+            ),
+            lambda: ListView(  # type: ignore[arg-type]
+                "Unsupported",
+                (Notice("notice"),),
+            ),
+            lambda: ListView(  # type: ignore[arg-type]
+                "Unsupported",
+                (Panel("panel", ()),),
+            ),
+        )
+        for call in invalid_calls:
+            with self.subTest(call=call), self.assertRaises((TypeError, ValueError)):
+                call()
 
     def test_input_prompt_view_initial_value_is_exact_optional_and_keyword_only(
         self,
@@ -1117,9 +1236,9 @@ class RenderingFoundationTests(unittest.TestCase):
                 ("--- Interactive erro", "    r [error] ------"),
             ),
             (
-                "Agent saying",
-                ViewState.COMPLETED,
-                ("--- Agent saying", "    [completed] ----"),
+                "Debate phase",
+                ViewState.LOADING,
+                ("--- Debate phase", "    [loading] ------"),
             ),
             ("Settings", ViewState.OPEN, ("--- Settings [open]",)),
             (

@@ -938,12 +938,13 @@ class InteractiveCliPtyTests(unittest.TestCase):
         process: PtyCliProcess,
         *,
         after: int,
-        identity: str,
         title: str,
         content: str,
         provider: str = "Codex",
+        provider_source: str = "system default",
+        details: bool = False,
     ) -> str:
-        """Wait for and verify one live execution-identity reply Record."""
+        """Wait for and verify one live speaker-rail reply."""
 
         process.wait_for_text(content, after=after)
         rendered = process.text_after(after)
@@ -951,16 +952,33 @@ class InteractiveCliPtyTests(unittest.TestCase):
             b"",
             rendered.encode("utf-8"),
         ).decode("utf-8")
-        self.assertIn(f"[{identity}] {title} [completed]\n", plain)
-        self.assertIn(f"Provider [info]: {provider} ", plain)
-        self.assertIn("Model: provider default [provider default]\n", plain)
-        self.assertIn("Effort: provider default [provider default]\n", plain)
-        self.assertIn("Confirmation [success]: confirmed\n", plain)
-        self.assertRegex(
-            plain,
-            r"Thread \[(?:info|success|warning)\]: (?:resumed|reused|fresh)\n",
+        compact_plain = " ".join(plain.split())
+        self.assertEqual(plain.count(f"{title} → You"), 1)
+        self.assertIn(f"│ {content}\n", plain)
+        diagnostics = (
+            f"Provider: {provider} [{provider_source}]",
+            "Model: provider default [provider default]",
+            "Effort: provider default [provider default]",
+            "Confirmation: confirmed",
         )
-        self.assertIn(f"  {content}\n", plain)
+        if details:
+            self.assertIn(f"{title} → You · Provider:", plain)
+            for diagnostic in diagnostics:
+                self.assertIn(diagnostic, compact_plain)
+            self.assertRegex(
+                compact_plain,
+                r"Thread: (?:resumed|reused|fresh)",
+            )
+        else:
+            self.assertIn(f"{title} → You [completed]\n", plain)
+            for label in (
+                "Provider:",
+                "Model:",
+                "Effort:",
+                "Confirmation:",
+                "Thread:",
+            ):
+                self.assertNotIn(label, plain)
         return rendered
 
     def _wait_for_auth_record(
@@ -2106,6 +2124,127 @@ print("RESULT=" + outcome.kind.value)
         self.assertEqual(_durable_tree(self.workspace.root), before)
         self.assertFalse(self.provider_log.exists())
 
+    def test_speaker_rails_match_ansi_no_color_and_dumb_profiles(self) -> None:
+        """Keep one exact rail topology while styling only speaker headers."""
+
+        source = r'''
+import sys
+
+from story_writing_agents import (
+    CHARACTER_CUSTODIAN,
+    EXECUTION_SPECIALIST,
+    LEAD_ORCHESTRATOR,
+    PLOT_ARCHITECT,
+)
+from story_writing_agents.interactive_terminal import (
+    InteractiveSemanticOutput,
+    Message,
+    MessagePresentation,
+    SpeakerAccent,
+    build_stream_terminal,
+)
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+InteractiveSemanticOutput(terminal).write_component(
+    Message(
+        "you",
+        "user body",
+        presentation=MessagePresentation.CHAT_BLOCK,
+        accent=SpeakerAccent.MAGENTA,
+    )
+)
+for agent_id in (
+    LEAD_ORCHESTRATOR,
+    PLOT_ARCHITECT,
+    CHARACTER_CUSTODIAN,
+    EXECUTION_SPECIALIST,
+):
+    terminal.write_agent(agent_id, "agent body")
+print("RESULT=done")
+'''
+        before = _durable_tree(self.workspace.root)
+        profiles = (
+            (
+                "ansi",
+                {"TERM": "xterm-256color"},
+                True,
+            ),
+            (
+                "no_color",
+                {"TERM": "xterm-256color", "NO_COLOR": "1"},
+                False,
+            ),
+            (
+                "dumb",
+                {"TERM": "dumb"},
+                False,
+            ),
+        )
+        captures: dict[str, str] = {}
+        for name, environment, decorative_color in profiles:
+            with self.subTest(profile=name):
+                process = self._spawn_python(
+                    source,
+                    environment_overrides=environment,
+                    terminal_columns=40,
+                    decorative_color=decorative_color,
+                )
+                process.wait_for_text("RESULT=done")
+                self.assertEqual(
+                    process.wait_for_exit(),
+                    0,
+                    process.normalized_text,
+                )
+                captures[name] = process.normalized_text
+                self.assertEqual(
+                    process.final_terminal_attributes,
+                    process.original_terminal_attributes,
+                )
+
+        expected_plain = (
+            "you [completed]\n"
+            "\n"
+            "│ user body\n"
+            "lead [completed]\n"
+            "\n"
+            "│ agent body\n"
+            "plot [completed]\n"
+            "\n"
+            "│ agent body\n"
+            "character [completed]\n"
+            "\n"
+            "│ agent body\n"
+            "execution [completed]\n"
+            "\n"
+            "│ agent body\n"
+            "RESULT=done\n"
+        )
+        styled_headers = (
+            ("\x1b[1;35m", "you [completed]"),
+            ("\x1b[1;36m", "lead [completed]"),
+            ("\x1b[1;33m", "plot [completed]"),
+            ("\x1b[1;32m", "character [completed]"),
+            ("\x1b[1;34m", "execution [completed]"),
+        )
+        ansi = captures["ansi"]
+        header_stripped = ansi
+        for sgr, header in styled_headers:
+            decorated = f"{sgr}{header}\x1b[0m"
+            self.assertEqual(ansi.count(decorated), 1)
+            header_stripped = header_stripped.replace(decorated, header, 1)
+        self.assertNotIn("\x1b", header_stripped)
+        self.assertEqual(header_stripped, expected_plain)
+        self.assertEqual(
+            _ANSI_SGR_BYTES.sub(b"", ansi.encode("utf-8")).decode("utf-8"),
+            expected_plain,
+        )
+        self.assertEqual(captures["no_color"], expected_plain)
+        self.assertEqual(captures["dumb"], expected_plain)
+        self.assertNotIn("\x1b", captures["no_color"])
+        self.assertNotIn("\x1b", captures["dumb"])
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+
     def test_internal_main_dynamic_choices_focus_commit_clear_and_restore(self) -> None:
         """Exercise call-local live choices without exposing opaque identities."""
 
@@ -2353,6 +2492,26 @@ print(
                     compact_opened,
                 )
                 self.assertIn("Maximumdebaterounds—Current:1", compact_opened)
+                ordered_settings = (
+                    f"Language—Current:{current_language}",
+                    "Persona—Current:default_kim_eun_hee",
+                    "Maximumdebaterounds—Current:1",
+                    "Conversationstorage—Current:filesystem",
+                    "Messagedetails—Current:Off",
+                    "Agents",
+                )
+                self.assertEqual(
+                    tuple(
+                        compact_opened.index(value)
+                        for value in ordered_settings
+                    ),
+                    tuple(
+                        sorted(
+                            compact_opened.index(value)
+                            for value in ordered_settings
+                        )
+                    ),
+                )
                 self.assertIn(
                     b"\x1b[35mSettings [focused] [open] >\x1b[0m",
                     process.raw_bytes,
@@ -2445,7 +2604,7 @@ print(
                 )
                 self.assertNotIn(b"\x1b[33mCurrent:", idle_pending)
                 returned_mark = process.output_mark()
-                process.send_text(("\x1b[B" * 4) + "\n")
+                process.send_text(("\x1b[B" * 5) + "\n")
                 process.send_text("\n")
                 saved = process.wait_for_text(
                     "[saved and applied]",
@@ -2513,7 +2672,7 @@ print(
             after=mark,
         )
 
-        process.send_text(("\x1b[B" * 4) + "\n")
+        process.send_text(("\x1b[B" * 5) + "\n")
         agents_picker = process.wait_for_text(
             "Select an agent to configure",
             after=mark,
@@ -2654,6 +2813,138 @@ print(
             process.original_terminal_attributes,
         )
 
+    def test_settings_message_details_only_applies_live_on_capable_pty(
+        self,
+    ) -> None:
+        """Persist one live presentation toggle without unrelated provider work."""
+
+        process = self._spawn_cli(
+            (),
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=48,
+            decorative_color=True,
+        )
+        process.wait_for_text("story[lobby]> ")
+        auth_before = self._auth_records()
+        self._set_auth_state(
+            codex="unauthenticated",
+            antigravity="unauthenticated",
+        )
+        agent_path = self.workspace.path("config/agent_configs.json")
+        agent_before = agent_path.read_bytes()
+        route_path = self.workspace.path(
+            "agent_states/orchestrator_state/provider_route_generations.json"
+        )
+        route_before = route_path.read_bytes() if route_path.exists() else None
+        thread_root = self.workspace.path(_SESSION_DIRECTORY)
+        threads_before = _durable_tree(thread_root)
+
+        settings_mark = process.output_mark()
+        process.send_text("/settings\n\n")
+        opened = process.wait_for_text(
+            "Choose a setting to edit.",
+            after=settings_mark,
+        )
+        compact_opened = "".join(
+            re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", opened).split()
+        )
+        ordered_settings = (
+            "Language—Current:KO",
+            "Persona—Current:default_kim_eun_hee",
+            "Maximumdebaterounds—Current:1",
+            "Conversationstorage—Current:filesystem",
+            "Messagedetails—Current:Off",
+            "Agents",
+        )
+        self.assertEqual(
+            tuple(compact_opened.index(value) for value in ordered_settings),
+            tuple(
+                sorted(
+                    compact_opened.index(value)
+                    for value in ordered_settings
+                )
+            ),
+        )
+
+        details_mark = process.output_mark()
+        process.send_text(("\x1b[B" * 4) + "\n")
+        details = process.wait_for_text(
+            "Message details [focused] [open]",
+            after=details_mark,
+        )
+        self.assertIn("Message details [focused] [open]", details)
+        self.assertIn(
+            "ChooseOffforcompactmessagesorOnfordetailedmessages.",
+            "".join(
+                re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", details).split()
+            ),
+        )
+        self.assertIn("[selected] [highlighted] Off", details)
+        self.assertIn("[available] On", details)
+
+        entered_mark = process.output_mark()
+        process.send_text("\x1b[B\n")
+        entered = process.wait_for_text(
+            "[entered] Pending message details entered:",
+            after=entered_mark,
+        )
+        self.assertEqual(
+            "".join(
+                re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", entered).split()
+            ).count("[entered]Pendingmessagedetailsentered:On."),
+            1,
+        )
+        returned_mark = process.output_mark()
+        process.send_text("\n")
+        returned = process.wait_for_text("[save required]", after=returned_mark)
+        self.assertIn(
+            "Messagedetails—Pending:On",
+            "".join(
+                re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", returned).split()
+            ),
+        )
+
+        apply_mark = process.output_mark()
+        process.send_text(("\x1b[B" * 2) + "\n")
+        process.wait_for_text("Apply changes?", after=apply_mark)
+        save_mark = process.output_mark()
+        process.send_text("\n")
+        process.wait_for_text("[saved and applied]", after=save_mark)
+        process.wait_for_text("story[lobby]> ", after=save_mark)
+        saved = process.text_after(save_mark)
+        compact_saved = "".join(
+            re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", saved).split()
+        )
+        self.assertEqual(saved.count("[saved and applied]"), 1)
+        self.assertEqual(
+            compact_saved.count(
+                "Settingssavedandappliedtothisrunningshellnow."
+            ),
+            1,
+        )
+        self.assertNotIn("[profiles changed]", saved)
+        self.assertIs(
+            self.workspace.read_json("config/system_defaults.json")[
+                "show_message_details"
+            ],
+            True,
+        )
+        self.assertEqual(agent_path.read_bytes(), agent_before)
+        self.assertEqual(
+            route_path.read_bytes() if route_path.exists() else None,
+            route_before,
+        )
+        self.assertEqual(_durable_tree(thread_root), threads_before)
+        self.assertEqual(self._auth_records(), auth_before)
+        self.assertFalse(self.provider_log.exists())
+
+        process.send_text("/quit\n\n")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
     def test_settings_delayed_option_reads_animate_until_each_picker_is_ready(
         self,
     ) -> None:
@@ -2674,7 +2965,7 @@ print(
 
         process.send_text("/settings\n\n")
         process.wait_for_text("Choose a setting to edit.")
-        process.send_text(("\x1b[B" * 4) + "\n")
+        process.send_text(("\x1b[B" * 5) + "\n")
         process.wait_for_text("Select an agent to configure")
         process.send_text("\x1b[B\n")
         process.wait_for_text("Choose a provider, model, or effort setting")
@@ -2758,7 +3049,7 @@ print(
         mark = process.output_mark()
         process.send_text("/settings\n\n")
         process.wait_for_text("[highlighted] Language", after=mark)
-        process.send_text(("\x1b[B" * 4) + "\n")
+        process.send_text(("\x1b[B" * 5) + "\n")
         agents = process.wait_for_text("Agents [focused] [open]", after=mark)
         self.assertIn(
             "Plot&StructureArchitect—Current:"
@@ -2821,6 +3112,12 @@ print(
         self.assertIn(
             "ChooseApplyChangestopersistpendingchanges",
             "".join(process.normalized_text.split()),
+        )
+        discard_view_mark = process.output_mark()
+        process.send_text("\x1b[B" * 2)
+        returned_settings += process.wait_for_text(
+            "Discard Changes",
+            after=discard_view_mark,
         )
         self.assertIn(
             "Pendingchangeswillbediscarded.",
@@ -2915,8 +3212,12 @@ print(
         process.wait_for_text("story[lobby]> ")
         mark = process.output_mark()
         process.send_line("/settings")
-        process.wait_for_text("5. [available] Agents", after=mark)
-        process.send_line("5")
+        settings = process.wait_for_text("6. [available] Agents", after=mark)
+        self.assertIn(
+            "5.[available]Messagedetails—Current:Off",
+            "".join(settings.split()),
+        )
+        process.send_line("6")
         process.wait_for_text("Agents > ", after=mark)
         process.send_line("2")
         process.wait_for_text("Agent settings", after=mark)
@@ -2947,21 +3248,21 @@ print(
         process.wait_for_text("Agents > ", after=model_mark)
         process.send_line("/cancel")
         returned_settings = process.wait_for_text(
-            "7. [available] Discard Changes",
+            "8. [available] Discard Changes",
             after=model_mark,
         )
         self.assertIn("[save required]", returned_settings)
         compact_returned = "".join(returned_settings.split())
         self.assertIn(
-            "6.[available]ApplyChanges(*Required)",
+            "7.[available]ApplyChanges(*Required)",
             compact_returned,
         )
-        self.assertNotIn("6.[available]Save", compact_returned)
+        self.assertNotIn("7.[available]Save", compact_returned)
         self.assertIn(
             "ChooseApplyChangestopersistpendingchanges",
             "".join(returned_settings.split()),
         )
-        process.send_line("6")
+        process.send_line("7")
         process.send_line("1")
         process.wait_for_text("Settings saved", after=mark)
         process.wait_for_text("story[lobby]> ", after=mark)
@@ -3191,7 +3492,7 @@ print(
 
         settings_mark = process.output_mark()
         process.send_line("/settings")
-        process.wait_for_text("5. [available] Agents", after=settings_mark)
+        process.wait_for_text("6. [available] Agents", after=settings_mark)
         process.send_line("1")
         process.wait_for_text("Language >", after=settings_mark)
         process.send_line("2")
@@ -3202,7 +3503,7 @@ print(
         process.send_line("/cancel")
         process.wait_for_text("Apply Changes (*Required)", after=settings_mark)
         self._set_auth_state(codex="unauthenticated")
-        process.send_line("6")
+        process.send_line("7")
         process.wait_for_text("Apply changes?", after=settings_mark)
         process.send_line("1")
         process.wait_for_text("Provider authentication", after=settings_mark)
@@ -5439,6 +5740,63 @@ print(
             process.original_terminal_attributes,
         )
 
+    def test_term_dumb_advisory_and_consensus_inputs_are_not_duplicated(
+        self,
+    ) -> None:
+        """Keep fallback echo as the sole accepted-input projection."""
+
+        self._seed_default_session()
+        process = self._spawn_cli(
+            ("chat", "alpha", "--workspace", str(self.workspace.root)),
+            environment_overrides={"TERM": "dumb"},
+        )
+        process.wait_for_text("story[alpha:lead]> ")
+
+        advisory_mark = process.output_mark()
+        process.send_line("fallback advisory body")
+        self._wait_for_live_reply(
+            process,
+            after=advisory_mark,
+            title="Lead Orchestrator",
+            content="deterministic advisory reply",
+        )
+        process.wait_for_text("story[alpha:lead]> ", after=advisory_mark)
+        advisory = process.text_after(advisory_mark)
+        self.assertEqual(advisory.count("fallback advisory body"), 1)
+        self.assertNotIn("You → Lead Orchestrator", advisory)
+        self.assertNotIn("\x1b", advisory)
+
+        consensus_mark = process.output_mark()
+        process.send_line(
+            "/run --output part-01/fallback.md fallback consensus body"
+        )
+        process.wait_for_text(
+            "Consensus [completed] [success]",
+            after=consensus_mark,
+        )
+        process.wait_for_text("story[alpha:lead]> ", after=consensus_mark)
+        consensus = process.text_after(consensus_mark)
+        self.assertEqual(consensus.count("fallback consensus body"), 1)
+        self.assertNotIn("You → Consensus", consensus)
+        self.assertNotIn("\x1b", consensus)
+        self.assertEqual(consensus.count("--- Debate phase"), 6)
+        self.assertEqual(consensus.count("deterministic candidate"), 1)
+        self.assertLess(
+            consensus.rfind("--- Debate phase"),
+            consensus.index("Consensus [completed] [success]"),
+        )
+
+        process.send_line("/quit")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(
+            self.workspace.read_text("manuscript/part-01/fallback.md"),
+            "deterministic candidate",
+        )
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
     def test_conversation_management_routes_controls_and_main_interrupt(
         self,
     ) -> None:
@@ -5500,13 +5858,12 @@ print(
         self._wait_for_live_reply(
             process,
             after=mark,
-            identity="plot",
             title="Plot & Structure Architect",
             content="deterministic advisory reply",
         )
         process.wait_for_text("story[alpha:plot]> ", after=mark)
         ordinary_output = process.text_after(mark)
-        self.assertNotIn("you → plot", ordinary_output)
+        self.assertNotIn("You → Plot & Structure Architect", ordinary_output)
         self.assertEqual(ordinary_output.count("ordinary sticky turn"), 1)
         self.assertNotIn("--- Conversation scope ", ordinary_output)
 
@@ -5515,14 +5872,13 @@ print(
         routed = self._wait_for_live_reply(
             process,
             after=mark,
-            identity="character",
             title="Character & World Custodian",
             content="deterministic advisory reply",
         )
         process.wait_for_text("story[alpha:plot]> ", after=mark)
         self.assertNotIn("[routing] One-shot route", routed)
         routed_output = process.text_after(mark)
-        self.assertNotIn("you → character", routed_output)
+        self.assertNotIn("You → Character & World Custodian", routed_output)
         self.assertEqual(routed_output.count("@character one-shot turn"), 1)
         self.assertNotIn("--- Conversation scope ", routed_output)
 
@@ -5790,9 +6146,13 @@ print(
         """Exercise provider-free reads followed by trusted retrieval progress."""
 
         selected = self._seed_default_session()
+        defaults = self.workspace.read_json("config/system_defaults.json")
+        defaults["show_message_details"] = True
+        self.workspace.write_json("config/system_defaults.json", defaults)
         process = self._spawn_cli(
             ("chat", "alpha", "--workspace", str(self.workspace.root)),
             environment_overrides={"TERM": "xterm-256color"},
+            decorative_color=True,
         )
         process.wait_for_text("story[alpha:lead]> ")
 
@@ -5801,20 +6161,29 @@ print(
         self._wait_for_live_reply(
             process,
             after=mark,
-            identity="lead",
             title="Lead Orchestrator",
             content="deterministic advisory reply",
+            details=True,
         )
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         advisory_output = process.text_after(mark)
+        advisory_plain = _ANSI_SGR_BYTES.sub(
+            b"",
+            advisory_output.encode("utf-8"),
+        ).decode("utf-8")
         accepted_message = (
-            "you → lead [completed]> harbor beacon beside the vessel"
+            "You → Lead Orchestrator [completed]\n\n"
+            "│ harbor beacon beside the vessel"
         )
-        self.assertEqual(advisory_output.count(accepted_message), 1)
+        self.assertEqual(advisory_plain.count(accepted_message), 1)
         self.assertLess(
-            advisory_output.index(accepted_message),
-            advisory_output.index("[lead] Lead Orchestrator [completed]"),
+            advisory_plain.index(accepted_message),
+            advisory_plain.index("Lead Orchestrator → You · Provider:"),
         )
+        self.assertNotIn("You → Lead Orchestrator · Provider:", advisory_plain)
+        advisory_raw = bytes(process.raw_bytes[mark:])
+        self.assertIn(b"\x1b[1;35m", advisory_raw)
+        self.assertIn(b"\x1b[1;36m", advisory_raw)
         provider_calls_before_reads = len(
             [
                 record
@@ -5832,6 +6201,28 @@ print(
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         self.assertIn("History (2/2) [completed]", history)
         self.assertIn("deterministic advisory reply", history)
+        first_events = FilesystemConversationEventStore(
+            self.workspace,
+            catalog=FilesystemConversationCatalog(self.workspace),
+        ).read("alpha", selected.conversation_id)
+        self.assertEqual(len(first_events), 2)
+        history_plain = _ANSI_SGR_BYTES.sub(
+            b"",
+            process.text_after(mark).encode("utf-8"),
+        ).decode("utf-8")
+        history_compact = " ".join(history_plain.split())
+        for detail in (
+            "You → Lead Orchestrator",
+            "Lead Orchestrator → You",
+            "Sequence: 1",
+            f"Turn: {first_events[0].turn_id}",
+            "Kind: user_message",
+            "IDs: user → lead_orchestrator",
+            "Sequence: 2",
+            "Kind: agent_reply",
+            "IDs: lead_orchestrator → user",
+        ):
+            self.assertIn(detail, history_compact)
 
         mark = process.output_mark()
         process.send_line("/search harbor beacon")
@@ -5879,6 +6270,21 @@ print(
             transcript_output.index("Transcript (1/2) [completed]"),
         )
         self.assertIn("deterministic advisory reply", transcript_output)
+        transcript_plain = _ANSI_SGR_BYTES.sub(
+            b"",
+            transcript_output.encode("utf-8"),
+        ).decode("utf-8")
+        transcript_compact = " ".join(transcript_plain.split())
+        for detail in (
+            "Sequence: 1",
+            f"Turn: {first_events[0].turn_id}",
+            "Kind: user_message",
+            "IDs: user → lead_orchestrator",
+            "Sequence: 2",
+            "Kind: agent_reply",
+            "IDs: lead_orchestrator → user",
+        ):
+            self.assertIn(detail, transcript_compact)
         self.assertEqual(
             len(
                 [
@@ -5905,15 +6311,17 @@ print(
         self._wait_for_live_reply(
             process,
             after=mark,
-            identity="lead",
             title="Lead Orchestrator",
             content="retrieval-assisted answer",
+            details=True,
         )
         process.wait_for_text("[context] Source 1 [completed]", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         retrieval_output = process.text_after(mark)
         self.assertIn(f"Conversation: {selected.conversation_id}", retrieval_output)
+        self.assertIn(f"Turn: {first_events[0].turn_id}", retrieval_output)
         self.assertIn("Sequence: 1", retrieval_output)
+        self.assertIn("Kind: user_message", retrieval_output)
         self.assertNotIn("[waiting]", retrieval_output)
         self.assertNotIn("[routing] One-shot route", retrieval_output)
         self.assertIn("\x1b[K", retrieval_output)
@@ -6015,9 +6423,23 @@ print(
         process.wait_for_text("revision rounds:", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         successful_output = process.text_after(mark)
+        successful_plain = _ANSI_SGR_BYTES.sub(
+            b"",
+            successful_output.encode("utf-8"),
+        ).decode("utf-8")
+        self.assertIn("\x1b[", successful_output)
+        self.assertEqual(successful_plain.count("--- Debate phase"), 6)
+        successful_compact = "".join(
+            successful_plain.replace("│", "").split()
+        )
+        self.assertEqual(successful_compact.count("deterministiccandidate"), 1)
+        self.assertLess(
+            successful_compact.rfind("---Debatephase"),
+            successful_compact.index("Consensus[completed][success]"),
+        )
         collapsed = "".join(successful_output.split())
         accepted_prompt = (
-            "you→consensus[completed]>/send/cancelfinalliteralline"
+            "You→Consensus[completed]││/send│/cancel│finalliteralline"
         )
         self.assertEqual(collapsed.count(accepted_prompt), 1)
         self.assertLess(
@@ -6048,6 +6470,7 @@ print(
         offsets = [collapsed.index(fragment) for fragment in ordered_fragments]
         self.assertEqual(offsets, sorted(offsets))
         self.assertNotIn("[waiting]", successful_output)
+        self.assertNotIn("Provider:", successful_output)
         durable_after_success = _durable_tree_without_access(self.workspace.root)
 
         mark = process.output_mark()
@@ -6105,7 +6528,7 @@ print(
             _durable_tree_without_access(self.workspace.root),
             durable_after_success,
         )
-        self.assertEqual(process.normalized_text.count("you → consensus"), 1)
+        self.assertEqual(process.normalized_text.count("You → Consensus"), 1)
 
         inspection = self.workspace.inspect_session("alpha")
         self.assertEqual(len(inspection["debates"]), 1)
@@ -6269,7 +6692,6 @@ asyncio.run(main())
         self._wait_for_live_reply(
             process,
             after=mark,
-            identity="plot",
             title="Plot & Structure Architect",
             content="deterministic advisory reply",
         )
@@ -6372,7 +6794,6 @@ asyncio.run(main())
         self._wait_for_live_reply(
             process,
             after=mark,
-            identity="plot",
             title="Plot & Structure Architect",
             content="deterministic advisory reply",
         )
@@ -6426,7 +6847,6 @@ asyncio.run(main())
         self._wait_for_live_reply(
             process,
             after=mark,
-            identity="lead",
             title="Lead Orchestrator",
             content="deterministic advisory reply",
         )
@@ -6476,6 +6896,23 @@ asyncio.run(main())
         process.wait_for_text("It cannot resume.", after=mark)
         process.wait_for_text('"alpha" remains ready and attached.', after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
+        cancelled_output = process.text_after(mark)
+        cancelled_plain = _ANSI_SGR_BYTES.sub(
+            b"",
+            cancelled_output.encode("utf-8"),
+        ).decode("utf-8")
+        self.assertEqual(cancelled_plain.count("--- Debate phase"), 2)
+        self.assertEqual(cancelled_plain.count("Phase: interrupted"), 1)
+        self.assertEqual(
+            cancelled_plain.count(
+                "Run interrupted after durable state transition."
+            ),
+            1,
+        )
+        self.assertLess(
+            cancelled_plain.index("Phase: interrupted"),
+            cancelled_plain.index("[cancelled] Debate "),
+        )
 
         blocked_pid = blocked["pid"]
 
@@ -6822,7 +7259,6 @@ asyncio.run(main())
         self._wait_for_live_reply(
             process,
             after=mark,
-            identity="lead",
             title="Lead Orchestrator",
             content="deterministic advisory reply",
         )
@@ -6869,7 +7305,10 @@ asyncio.run(main())
         process.wait_for_text("[context] [completed]", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         malformed_history = process.text_after(mark)
-        self.assertIn("malformedJSON", "".join(malformed_history.split()))
+        self.assertIn(
+            "malformedJSON",
+            "".join(malformed_history.split()).replace("│", ""),
+        )
         self.assertNotIn(
             "MALFORMED_PROVIDER_VALUE_MUST_NOT_APPEAR",
             malformed_history,
@@ -6881,7 +7320,6 @@ asyncio.run(main())
         self._wait_for_live_reply(
             process,
             after=mark,
-            identity="lead",
             title="Lead Orchestrator",
             content="deterministic advisory reply",
         )

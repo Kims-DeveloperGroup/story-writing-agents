@@ -35,6 +35,7 @@ class SystemDefaults:
     antigravity_effort: str | None = None
     default_backend: str | None = None
     conversation_storage_backend: str | None = None
+    show_message_details: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +174,16 @@ class ConfigManager:
         return value
 
     @staticmethod
+    def validate_show_message_details(value: Any) -> bool:
+        """Validate one strict compact/detailed presentation preference."""
+
+        if type(value) is not bool:
+            raise ConfigurationError(
+                "show_message_details must be a boolean"
+            )
+        return value
+
+    @staticmethod
     def validate_codex_model(value: Any) -> str | None:
         if value is None:
             return None
@@ -255,6 +266,7 @@ class ConfigManager:
                 "antigravity_effort",
                 "default_backend",
                 "conversation_storage_backend",
+                "show_message_details",
             }
         )
         if unknown:
@@ -283,6 +295,9 @@ class ConfigManager:
             value.get("conversation_storage_backend"),
             allow_none=True,
         )
+        show_message_details = self.validate_show_message_details(
+            value.get("show_message_details", False)
+        )
         return SystemDefaults(
             language=language,
             persona=persona,
@@ -293,6 +308,7 @@ class ConfigManager:
             antigravity_effort=antigravity_effort,
             default_backend=default_backend,
             conversation_storage_backend=conversation_storage_backend,
+            show_message_details=show_message_details,
         )
 
     def load_agent_configs(self) -> dict[str, AgentConfig]:
@@ -482,7 +498,7 @@ class ConfigManager:
 
     @staticmethod
     def system_defaults_value(defaults: SystemDefaults) -> dict[str, Any]:
-        """Project one system-default value to the canonical nine-key shape."""
+        """Project one system-default value to the canonical ten-key shape."""
 
         if type(defaults) is not SystemDefaults:
             raise TypeError("defaults must be a SystemDefaults")
@@ -497,6 +513,7 @@ class ConfigManager:
             "antigravity_effort": defaults.antigravity_effort,
             "default_backend": defaults.default_backend,
             "conversation_storage_backend": storage_backend,
+            "show_message_details": defaults.show_message_details,
         }
 
     @staticmethod

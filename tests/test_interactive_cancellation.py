@@ -73,6 +73,7 @@ from tests.test_interactive_conversation import (
     _capture_semantic_method,
     _conversation_result,
     _error_record,
+    _expected_reply_message,
     _reply_header,
 )
 
@@ -769,7 +770,10 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
             callbacks=callbacks,
             store=store,
         )
+        controller._show_message_details = True
         core_before = core_snapshot(workspace)
+        accepted_components: list[object] = []
+        semantic_components: list[object] = []
 
         async def bind(definition: AgentDefinition) -> ConversationBound:
             """Return a direct-answer binding only after cancellation recovery."""
@@ -805,6 +809,14 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
             return real_run_until_complete(loop, future)
 
         with (
+            _capture_semantic_method(
+                "write_accepted_input",
+                accepted_components,
+            ),
+            _capture_semantic_method(
+                "write_component",
+                semantic_components,
+            ),
             mock.patch.object(
                 asyncio.BaseEventLoop,
                 "run_until_complete",
@@ -881,10 +893,50 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
         self.assertEqual(rendered.count(cancelled), 1)
         self.assertEqual(rendered.count(hint), 1)
         self.assertNotIn("operation_interrupted", rendered)
-        self.assertIn(_reply_header(PLOT_ARCHITECT), rendered)
-        self.assertIn("  Confirmation [warning]: pending\n", rendered)
-        self.assertIn("  Thread: not observed\n", rendered)
-        self.assertIn("  reply:after cancellation\n", rendered)
+        self.assertEqual(
+            accepted_components,
+            [
+                terminal_module.Message(
+                    "You → Plot & Structure Architect",
+                    "cancel before entry",
+                    state=terminal_module.ViewState.COMPLETED,
+                    presentation=terminal_module.MessagePresentation.CHAT_BLOCK,
+                    accent=terminal_module.SpeakerAccent.MAGENTA,
+                ),
+                terminal_module.Message(
+                    "You → Plot & Structure Architect",
+                    "after cancellation",
+                    state=terminal_module.ViewState.COMPLETED,
+                    presentation=terminal_module.MessagePresentation.CHAT_BLOCK,
+                    accent=terminal_module.SpeakerAccent.MAGENTA,
+                ),
+            ],
+        )
+        replies = [
+            component
+            for component in semantic_components
+            if type(component) is terminal_module.Message
+            and component.role is terminal_module.SemanticRole.AGENT
+        ]
+        self.assertEqual(
+            replies,
+            [
+                _expected_reply_message(
+                    PLOT_ARCHITECT,
+                    "reply:after cancellation",
+                    metadata=(
+                        "Provider: Codex [built in default] · "
+                        "Model: provider default [provider default] · "
+                        "Effort: provider default [provider default] · "
+                        "Confirmation: pending · Thread: not observed"
+                    ),
+                )
+            ],
+        )
+        self.assertIn("Plot & Structure Architect → You · Provider:", rendered)
+        self.assertIn("Confirmation: pending", rendered)
+        self.assertIn("Thread: not observed", rendered)
+        self.assertIn("│ reply:after cancellation\n", rendered)
         detach.assert_called_once_with("session")
         close.assert_called_once_with()
         self.assertFalse(workspace.path(_ACCESS_RELATIVE).exists())
@@ -1025,7 +1077,17 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
             return process
 
         core_before = core_snapshot(workspace)
+        accepted_components: list[object] = []
+        semantic_components: list[object] = []
         with (
+            _capture_semantic_method(
+                "write_accepted_input",
+                accepted_components,
+            ),
+            _capture_semantic_method(
+                "write_component",
+                semantic_components,
+            ),
             mock.patch.dict(
                 os.environ,
                 {
@@ -1135,10 +1197,42 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
             "thread may restart on the next message.\n",
             rendered,
         )
+        self.assertEqual(
+            [component.content for component in accepted_components],
+            ["seed", "cancel this", "after cancellation"],
+        )
+        self.assertTrue(
+            all(
+                component.sender == "You → Plot & Structure Architect"
+                and component.presentation
+                is terminal_module.MessagePresentation.CHAT_BLOCK
+                and component.accent is terminal_module.SpeakerAccent.MAGENTA
+                and component.metadata is None
+                for component in accepted_components
+            )
+        )
+        self.assertEqual(
+            [
+                component
+                for component in semantic_components
+                if type(component) is terminal_module.Message
+                and component.role is terminal_module.SemanticRole.AGENT
+            ],
+            [
+                _expected_reply_message(PLOT_ARCHITECT, "seed reply"),
+                _expected_reply_message(PLOT_ARCHITECT, "after reply"),
+            ],
+        )
         self.assertIn(_reply_header(PLOT_ARCHITECT), rendered)
-        self.assertIn("  Confirmation [success]: confirmed\n", rendered)
-        self.assertIn("  Thread [warning]: fresh\n", rendered)
-        self.assertIn("  after reply\n", rendered)
+        self.assertIn("│ after reply\n", rendered)
+        for diagnostic in (
+            "Provider:",
+            "Model:",
+            "Effort:",
+            "Confirmation:",
+            "Thread:",
+        ):
+            self.assertNotIn(diagnostic, rendered)
         raw_debug_log = workspace.path(
             "debug_logs/runtime.jsonl"
         ).read_text(encoding="utf-8")
@@ -1230,10 +1324,15 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
         )
         core_before = core_snapshot(workspace)
         accepted_components: list[object] = []
+        semantic_components: list[object] = []
         with (
             _capture_semantic_method(
                 "write_accepted_input",
                 accepted_components,
+            ),
+            _capture_semantic_method(
+                "write_component",
+                semantic_components,
             ),
             mock.patch.object(controller_core_module.asyncio, "Runner", runner_factory),
             mock.patch.object(backend, "bind", new=bind),
@@ -1278,8 +1377,17 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
         self.assertEqual(core_snapshot(workspace), core_before)
         self.assertEqual(all_manuscripts(workspace), [])
         self.assertEqual(
-            [component.content for component in accepted_components],
-            ["cancel me", "after cancellation"],
+            accepted_components,
+            [
+                terminal_module.Message(
+                    "You → Lead Orchestrator",
+                    body,
+                    state=terminal_module.ViewState.COMPLETED,
+                    presentation=terminal_module.MessagePresentation.CHAT_BLOCK,
+                    accent=terminal_module.SpeakerAccent.MAGENTA,
+                )
+                for body in ("cancel me", "after cancellation")
+            ],
         )
         self.assertFalse(workspace.path(_ACCESS_RELATIVE).exists())
         runner = runner_factory.instances[0]
@@ -1295,10 +1403,30 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
             "thread may restart on the next message.\n",
             rendered,
         )
+        self.assertEqual(
+            [
+                component
+                for component in semantic_components
+                if type(component) is terminal_module.Message
+                and component.role is terminal_module.SemanticRole.AGENT
+            ],
+            [
+                _expected_reply_message(
+                    LEAD_ORCHESTRATOR,
+                    "reply:after cancellation",
+                )
+            ],
+        )
         self.assertIn(_reply_header(LEAD_ORCHESTRATOR), rendered)
-        self.assertIn("  Confirmation [warning]: pending\n", rendered)
-        self.assertIn("  Thread: not observed\n", rendered)
-        self.assertIn("  reply:after cancellation\n", rendered)
+        self.assertIn("│ reply:after cancellation\n", rendered)
+        for diagnostic in (
+            "Provider:",
+            "Model:",
+            "Effort:",
+            "Confirmation:",
+            "Thread:",
+        ):
+            self.assertNotIn(diagnostic, rendered)
 
     def test_nonquiescent_preentry_unjoined_and_bare_cancelled_are_fatal(
         self,
@@ -1408,9 +1536,11 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
             accepted_components,
             [
                 terminal_module.Message(
-                    "you → consensus",
+                    "You → Consensus",
                     "prompt",
                     state=terminal_module.ViewState.COMPLETED,
+                    presentation=terminal_module.MessagePresentation.CHAT_BLOCK,
+                    accent=terminal_module.SpeakerAccent.MAGENTA,
                 )
             ],
         )
@@ -1463,10 +1593,15 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
             predicates={1: lambda: runtime.entered},
         )
         accepted_components: list[object] = []
+        semantic_components: list[object] = []
         with (
             _capture_semantic_method(
                 "write_accepted_input",
                 accepted_components,
+            ),
+            _capture_semantic_method(
+                "write_component",
+                semantic_components,
             ),
             mock.patch.object(
                 controller_core_module.asyncio,
@@ -1484,12 +1619,41 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
         self.assertEqual(controller._last_started_debate_by_session, {})
         self.assertEqual(_file_bytes(workspace), before)
         self.assertEqual(all_manuscripts(workspace), [])
+        interrupted_panels = [
+            component
+            for component in semantic_components
+            if type(component) is terminal_module.Panel
+            and component.title == "Debate phase"
+        ]
+        self.assertEqual(
+            interrupted_panels,
+            [
+                terminal_module.Panel(
+                    "Debate phase",
+                    (
+                        terminal_module.Field("Debate ID", debate_id),
+                        terminal_module.Field("Phase", "interrupted"),
+                        terminal_module.Field("Round", "0"),
+                        terminal_module.Field("Revision", "n/a"),
+                        terminal_module.Field(
+                            "Action",
+                            "Persist interrupted state and return for retry.",
+                        ),
+                        terminal_module.Field(
+                            "Outcome",
+                            "Run interrupted after durable state transition.",
+                            role=terminal_module.SemanticRole.WARNING,
+                            state=terminal_module.ViewState.CANCELLED,
+                        ),
+                        terminal_module.Field("Conflicts", "none"),
+                    ),
+                    state=terminal_module.ViewState.CANCELLED,
+                )
+            ],
+        )
         rendered = "".join(callbacks.records)
         self.assertEqual(
-            rendered.count(
-                f"[run {debate_id}] [cancelled] [warning]\n"
-                "  Run interrupted after durable state transition.\n"
-            ),
+            rendered.count("Run interrupted after durable state transition."),
             1,
         )
         for record in (
@@ -1549,7 +1713,12 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
             interruptions={1: "joined"},
             predicates={1: audits_started},
         )
+        semantic_components: list[object] = []
         with (
+            _capture_semantic_method(
+                "write_component",
+                semantic_components,
+            ),
             mock.patch.object(controller_core_module.asyncio, "Runner", runner_factory),
             mock.patch.object(backend, "bind", new=bind),
             mock.patch.object(
@@ -1584,12 +1753,54 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
         self.assertEqual(len(manuscripts), 1)
         self.assertNotIn("cancelled_debate", manuscripts[0].name)
         self.assertEqual(manuscripts[0].name, "interactive-4.md")
+        interrupted_panels = []
+        for component in semantic_components:
+            if (
+                type(component) is not terminal_module.Panel
+                or component.title != "Debate phase"
+            ):
+                continue
+            fields = {
+                item.label: item.value
+                for item in component.items
+                if type(item) is terminal_module.Field
+            }
+            if fields.get("Debate ID") == "cancelled_debate" and fields.get(
+                "Phase"
+            ) == "interrupted":
+                interrupted_panels.append(component)
+        self.assertEqual(len(interrupted_panels), 1)
+        interrupted_panel = interrupted_panels[0]
+        self.assertIs(interrupted_panel.state, terminal_module.ViewState.CANCELLED)
+        interrupted_fields = {
+            item.label: item
+            for item in interrupted_panel.items
+            if type(item) is terminal_module.Field
+        }
+        self.assertEqual(
+            tuple(interrupted_fields),
+            (
+                "Debate ID",
+                "Phase",
+                "Round",
+                "Revision",
+                "Action",
+                "Outcome",
+                "Conflicts",
+            ),
+        )
+        self.assertEqual(
+            interrupted_fields["Outcome"],
+            terminal_module.Field(
+                "Outcome",
+                "Run interrupted after durable state transition.",
+                role=terminal_module.SemanticRole.WARNING,
+                state=terminal_module.ViewState.CANCELLED,
+            ),
+        )
         rendered = "".join(callbacks.records)
         self.assertEqual(
-            rendered.count(
-                "[run cancelled_debate] [cancelled] [warning]\n"
-                "  Run interrupted after durable state transition.\n"
-            ),
+            rendered.count("Run interrupted after durable state transition."),
             1,
         )
         self.assertIn(

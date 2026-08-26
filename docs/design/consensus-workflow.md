@@ -82,6 +82,40 @@ result and state are then durable before
 context-propagation, workspace, finalization, or artifact failure similarly
 saves its result and state before a typed `FAILED` event.
 
+### Interactive phase presentation
+
+The interactive shell presents each accepted progress event as one Panel titled
+`Debate phase` in one terminal write. Its ordered fields are Debate ID, Phase,
+Round, Revision, Action, Outcome, and Conflicts. Message details On inserts
+Handoff between Revision and Action; Off omits only that diagnostic field.
+`STARTED` also includes the fixed included/fresh context notice.
+
+Before writing the panel, the controller reads the uncommitted suffix of the
+durable debate log. It groups contiguous messages by their persisted phase,
+round, and revision into sections titled
+`Speeches · PHASE · round N · revision REVISION`, using `n/a` for an empty
+revision. Every non-error agent speech is
+shown in full as a speaker-aware chat block, with presentation-only strict JSON
+formatting when applicable. Message details On adds the persisted Kind; Off
+still shows the complete speech. An error-kind message is replaced with the
+fixed safe text `Agent error details are unavailable.` If the log cannot be
+read, the same panel contains the fixed `agent-saying` warning `Agent sayings
+unavailable; the debate log could not be read.` If that warning panel is
+written successfully, `STARTED` commits its candidate cursor of zero; a
+later-phase read failure retains the existing cursor.
+
+Only a successful panel write commits the candidate log cursor, accepted
+progress event, `STARTED` mapping, and any `STARTED` or `AUDIT_COMPLETED`
+conflict-cache update. The last successfully written `AUDIT_COMPLETED`
+conflicts remain visible in subsequent phases. They reset only after a
+successfully written `STARTED` panel and are replaced only after a successfully
+written later audit panel. A failed write commits none of those changes, so a
+retry sees the same suffix and retained conflicts. Successful consensus
+receives a separate final `Consensus` Record after terminal progress; deadlock
+and failed outcomes instead use typed error presentation. These display rules
+neither replace nor weaken the runtime's durable-before-progress guarantees
+above.
+
 ## Observer and cancellation boundaries
 
 Declared coroutine or async-generator observers fail validation before

@@ -765,19 +765,21 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ConfigurationBaseline`, `ConfigurationCommitFailure`, and
   `ConfigurationCommitError` define one exact-byte complete-configuration
   compare-and-set boundary. `SystemDefaults` retains all established positional
-  fields and adds only a trailing optional nullable
-  `conversation_storage_backend` after the trailing optional workspace
-  `default_backend`; old positional construction remains valid.
+  fields, keeps the optional nullable `conversation_storage_backend` after the
+  optional workspace `default_backend`, and adds only the trailing strict
+  boolean `show_message_details` with a false default; old positional
+  construction remains valid.
   `AgentConfig` retains its seven-field order while allowing its leading
   backend route to be null. `ConfigManager` owns both complete persisted schemas
   plus provider-specific safe-model validators, an additive forward-compatible
   lowercase Codex effort-token validator, and the exact Antigravity
   low/medium/high effort validator, together with the independent exact
-  filesystem/SQLite storage validator. Provider-catalog membership is not a
-  persisted-schema requirement. Missing legacy storage selection is interpreted
-  as filesystem when projecting a saved canonical document, while missing
-  default and agent backend keys remain null; reads do not rewrite either
-  document. Package-internal
+  filesystem/SQLite storage validator and the strict message-details boolean
+  validator. Provider-catalog membership is not a persisted-schema requirement.
+  Missing legacy storage selection is interpreted as filesystem when projecting
+  a saved canonical document, missing `show_message_details` is interpreted as
+  false, and missing default and agent backend keys remain null; reads do not
+  rewrite either document. Package-internal
   `validate_configuration` validates both persisted documents as one complete
   candidate, `load_configuration_baseline` captures exact bytes and one
   immutable value, `commit_configuration` validates and compare-and-sets both
@@ -788,7 +790,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   signatures and delegate to the same validation and resolution rules.
 - **Direct internal dependencies:** `agents`, `errors`, and `workspace`.
 - **State, resources, and side effects:** Owns strict-UTF-8 reads, complete
-  schema validation, deterministic projection of canonical nine-key system
+  schema validation, deterministic projection of canonical ten-key system
   defaults and roster-complete agent configuration, and the configuration CAS
   lifecycle. Commit first compares both exact baseline byte strings, writes
   only changed complete documents through `Workspace` in system-then-agent
@@ -2000,7 +2002,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `/status` then renders the complete active execution roster with exact
   provider/model/effort values and sources, route generation, confirmation, and
   native-thread status; `/agents` shares a compact execution-profile and
-  confirmation projection for every canonical agent.
+  confirmation projection for every canonical agent. Both diagnostic commands
+  remain fully detailed regardless of the message-details preference.
   All transition, identity-resolution, routing,
   directive-result, inspection, trusted debate/retrieval progress and result,
   retrieval-source, and other presentation validation helpers are package
@@ -2012,12 +2015,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   `InteractiveSemanticOutput`; it retains that adapter alongside the same
   terminal used for input and terminal-owned semantic writers. After
   attachment, focus, collaborator, Runner, and payload validation, accepted
-  ordinary or routed advisory text is projected as one exact-body user
-  `Message` attributed to its resolved prompt alias, while accepted inline,
-  fresh, or composed prompt consensus text is projected as one exact-body user
-  `Message` attributed to consensus. Both use the adapter's mode-gated
-  accepted-input writer before coroutine construction or progress; the
-  controller neither observes terminal mode nor projects draft-file bytes.
+  ordinary or routed advisory text is projected once as an exact-body
+  chat-block `Message` headed `You → <full agent display name>`, while
+  accepted inline, fresh, or composed prompt consensus text is projected once
+  as an exact-body chat-block `Message` headed `You → Consensus`. Both use
+  the magenta speaker accent and the adapter's mode-gated accepted-input writer
+  before coroutine construction or progress; the controller neither observes
+  terminal mode nor projects draft-file bytes.
   Consensus requests also emit one persistent context record containing the
   validated output path and, for draft input, only its source path. Validated
   active search, filtered conversation-list, and resolved transcript requests
@@ -2034,8 +2038,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   lifecycle remains active. Capable
   stream terminals show bounded progress, while callback and ordinary-line
   fallback remain visually silent. The controller owns no indicator glyph,
-  cursor control, or animation task. It
-  also retains the facade's resource-free main-input,
+  cursor control, or animation task. Independently, each validated debate
+  progress callback constructs one `Debate phase` `Panel` and submits it in one
+  semantic write. Debate ID, phase, round, revision, action, outcome, conflicts,
+  and any applicable starting-context notice remain visible with message
+  details Off; details On additionally includes the phase handoff. The same
+  panel contains either a fixed debate-log-read warning or the unread
+  chronological suffix of persisted canonical-agent speeches, grouped by each
+  consecutive phase, round, and revision tuple. Non-error speeches retain their
+  complete formatted bodies as stable-accent chat-block `Message` values headed
+  by the full agent display name; agent-error prose remains redacted, and
+  details On alone adds each speech kind. `Workspace` remains the durable
+  debate-log owner. The controller also retains the facade's resource-free
+  main-input,
   generic-picker, and cancellable-prompt adapters. Omitted
   `/session resume` and `/conversation resume` pass a call-local provider of
   controller-built immutable `Picker` choices and opaque canonical command
@@ -2062,28 +2077,41 @@ every intermediate arrow. The current runtime graph is acyclic.
   effective-route authentication gate before dirty settings Apply Changes use
   that borrowed collaborator. The controller owns no native authentication child, cursor
   sequence, or terminal geometry.
-  Retrieval results and persisted `agent_reply`
-  history/transcript rows use the facade's pure `format_agent_reply_content`
-  projection and agent semantic role without changing the stored event or
-  non-agent content. Ordered session,
-  conversation, search, transcript, and focused-history rows use one positioned
-  `ListView` containing one `Record` per established callback, so the controller
-  owns result counts and interruption boundaries without any remaining
-  `write_status` or specialized dense-row call. Before every attached main
-  prompt, it freshly revalidates any current focus and its visible handle
+  Retrieval results and persisted `agent_reply` history/transcript rows use the
+  facade's pure `format_agent_reply_content` projection and agent semantic role
+  without changing the stored event or non-agent content. Retrieval-source
+  records always retain subject and conversation facts; exact-event citations
+  additionally retain sequence, while message-details On adds turn and event
+  kind and subject-only citations omit all event facts. Ordered session,
+  conversation, and search rows retain one positioned `ListView` containing one
+  `Record` per established callback. Transcript and focused-history rows instead
+  use one positioned `ListView` containing one directional chat-block `Message`
+  per callback with its complete body and sequence; message-details On adds
+  turn, kind, and canonical sender/recipient IDs. The controller therefore
+  continues to own result counts and interruption boundaries without any
+  remaining `write_status` or specialized dense-row call. Before every attached
+  main prompt, it freshly revalidates any current focus and its visible handle
   against the complete conversation catalog, then presents conversation scope
   initially or when the semantic tuple of session ID, visible handle, subject,
   or sticky agent changes. Detachment resets that comparison, so a later
   attachment presents its scope again even when its values match the earlier
   attachment. The main conversation input composes an existing semantic
   `Notice` above the unchanged editable prompt, recomputes it from each live
-  buffer so a valid one-shot `@alias` shows the actual target profile, and lets
-  terminal rendering collapse the header on narrow/fallback layouts. A
-  completed agent reply uses an existing `Record` with provider/model/effort,
-  sources, confirmation, and thread status immediately above its exact body;
-  neither projection adds transcript or session-manifest persistence.
-  The clean settings editor exposes the exact five-row top level Language,
-  Persona, Maximum debate rounds, Conversation storage, and Agents. A
+  buffer so a valid one-shot `@alias` shows the actual target. With
+  message-details Off, that notice contains only the full target display name
+  and performs no execution-profile or confirmation lookup; with details On it
+  preserves the prior exact provider/model/effort, confirmation, and semantic
+  role profile. Terminal rendering may collapse the notice on narrow/fallback
+  layouts. A completed agent reply is one chat-block `Message` headed
+  `<full agent display name> → You` with its complete formatted body. Details
+  Off performs no reply-profile lookup and adds no metadata; details On adds
+  provider/model/effort values and sources, confirmation, and thread status as
+  compact metadata. Neither projection adds transcript or session-manifest
+  persistence.
+  The clean settings editor exposes the exact six-row top level Language,
+  Persona, Maximum debate rounds, Conversation storage, Message details, and
+  Agents. Message details selects the pending strict Off/On presentation
+  preference without changing the running shell before persistence. A
   structurally dirty candidate appends `Apply Changes (*Required)` and `Discard
   Changes` while retaining the stable internal `save` and `cancel` routing
   identities; a previously retained action highlight normalizes when its row
@@ -2122,23 +2150,30 @@ every intermediate arrow. The current runtime graph is acyclic.
   `Choose Apply Changes to persist pending changes` notice; all are absent
   initially and after a complete revert, while the notice remains absent from
   nested editors and Apply/Discard confirmations. The shared projection names
-  conversation storage plus both providers' model/effort rows, so root
-  visibility and changed-only confirmations identify pending changes without
-  changing the active backend or runtime snapshot. Editors contain no repeated
+  conversation storage, message details, and both providers' model/effort rows,
+  so root visibility and changed-only confirmations identify pending changes
+  without changing the active backend, runtime snapshot, or message-details flag.
+  Editors contain no repeated
   Current/Pending context panel. The clean root contains no persistence action
   to confirm, authenticate, persist, report, or exit through. Dirty Apply
   Changes uses the stable `save` route and one selectable YES/NO confirmation
   whose preceding context contains only changed Current/Pending properties in
   stable settings and roster order; Current fields use default styling and
   Pending fields use warning styling, with the explicit changed text cues
-  preserved. After authentication and any provider-default rebase, the
-  controller rechecks structural dirtiness at the final persistence boundary
-  and loops silently when clean. A still-dirty candidate delegates storage
-  readiness, installer consent, baseline-checked configuration persistence,
-  the fresh persona-catalog guard, and storage failure reporting to
-  `select_conversation_storage`. Exactly one saved event follows only a
-  successful dirty persistence and a completed storage-selection report;
-  failed, cancelled, or rejected apply attempts emit none. Explicit Discard
+  preserved. After confirmation, the controller rechecks structural dirtiness
+  at the final persistence boundary and loops silently when clean. An exact
+  message-details-only candidate uses the settings-owned prepare and commit
+  transaction, requires the prepared configuration to equal the pending
+  candidate with no switched agents, and updates the controller's active
+  presentation flag only after commit. That path skips authentication,
+  backend/runtime staging and activation, storage readiness, provider-route
+  switching, and provider-thread work. Every other still-dirty candidate first
+  completes authentication and any provider-default rebase, then delegates
+  storage readiness, installer consent, baseline-checked configuration
+  persistence, the fresh persona-catalog guard, and storage failure reporting
+  to `select_conversation_storage`. Exactly one saved result follows only a
+  successful dirty persistence; failed, cancelled, or rejected apply attempts
+  emit none. Explicit Discard
   Changes uses the stable `cancel` route and root Settings Escape shares the
   same action: an unchanged candidate exits immediately, while a structurally
   changed candidate uses the same selectable confirmation context. Any
@@ -2184,8 +2219,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   a successful switch, and cleared on pause, cleanup, and final close. The
   controller also owns its current attached-session identifier, current-focus
   conversation metadata, sticky target, current CLI-context snapshot,
-  process-local per-session latest accepted STARTED debate-ID map, and
-  one-run/closed state. It also retains a controller-private count of
+  process-local per-session latest accepted STARTED debate-ID map,
+  persisted-speech offsets and last-conflict tuples keyed by session and debate,
+  and the active message-details presentation flag initialized from the
+  backend's immutable configuration snapshot, and one-run/closed state. For each
+  trusted debate phase it derives a candidate speech offset and complete panel
+  from the current presentation state, then advances the offset,
+  phase-conflict state, accepted-event sequence, and applicable latest-STARTED
+  mapping only after its semantic panel write succeeds. A debate-log read
+  failure contributes the
+  fixed warning without advancing the speech offset, while a failed terminal
+  write advances none of that process-local progress state. These maps own no
+  durable debate bytes or external resource. The controller also retains a
+  controller-private count of
   successfully rendered typed errors. Each submitted command snapshots that
   count before dispatch and independently records `failed`/`rejected` when a
   normally returned path rendered a new typed error, or
@@ -2220,9 +2266,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   through `interactive_auth`, coordinate its default-selection policy, and
   delegate exact-byte default persistence and open-settings rebase to
   `interactive_settings`. Settings assignment requires a fresh exact
-  authenticated status for the selected provider, and dirty Apply Changes
-  freshly gates every distinct effective agent route with fixed unauthenticated,
-  unavailable, or indeterminate remediation. Outside Settings, completed
+  authenticated status for the selected provider, and every dirty Apply Changes
+  outside the presentation-only path freshly gates each distinct effective
+  agent route with fixed unauthenticated, unavailable, or indeterminate
+  remediation.
+  Outside Settings, completed
   authentication and missing-default effects remain durable. Within an open
   Settings flow, authentication rebases a missing default only in the pending
   candidate, so cancellation preserves the opening configuration bytes. This module owns only
@@ -2237,24 +2285,28 @@ every intermediate arrow. The current runtime graph is acyclic.
   native state and `provider_process` owns subprocess resources. The settings
   flow retains only one call-local immutable baseline and pending candidate. Each
   retained Language, Persona, Maximum debate rounds, Conversation storage,
-  Provider, Model, Custom model, and Effort editor owns one entry-local
+  Message details, Provider, Model, Custom model, and Effort editor owns one
+  entry-local
   normalized last-successful semantic commit: the first success arms it, a
   different success replaces it, and a second consecutive success of the same
   value returns silently to the parent. Invalid input, authentication failure,
   Custom-model navigation, and editor re-entry reset or recreate that state. The
-  flow constructs its changed-only confirmation context. Dirty Apply Changes
-  stages and provider-preflights one complete backend generation, quiesces and
-  stages the runtime prompt snapshot, delegates the persona-catalog guard,
-  storage readiness/parity, and complete configuration CAS to their named
-  owners,
+  flow constructs its changed-only confirmation context. Except for the exact
+  message-details-only transaction above, Dirty Apply Changes stages and
+  provider-preflights one complete backend generation, quiesces and stages the
+  runtime prompt snapshot, delegates the persona-catalog guard, storage
+  readiness/parity, and complete configuration CAS to their named owners,
   commits the prepared provider-route generation state, and then activates the
-  matching backend and prompt snapshots before returning to the prompt.
-  Provider/model/effort, language, persona, and round changes therefore apply
-  to the current shell, while a changed storage backend remains desired
-  next-shell state only. Preflight or persistence failure leaves active runtime
-  state unchanged; a verified post-persist pre-activation failure restores the
-  exact configuration and optional route bytes, while uncertain post-persist
-  activation reports recovery-required and never renders false success.
+  matching backend and prompt snapshots before returning to the prompt. A
+  message-details change mixed with any other change updates the active
+  presentation flag only after that full activation succeeds.
+  Provider/model/effort, language, persona, round, and message-details changes
+  therefore apply to the current shell, while a changed storage backend remains
+  desired next-shell state only. Preflight or persistence failure leaves active
+  runtime and presentation state unchanged; a verified post-persist failure
+  before activation restores the exact configuration and optional route bytes,
+  while uncertain post-persist activation reports recovery-required and never
+  renders false success.
   Launch-masked settings fields are read-only and show their explicit source.
   Successful activation renders the current-running-shell saved-and-applied
   notice for live changes, the desired-storage next-shell notice for storage
@@ -2497,7 +2549,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `SettingsError`; the exact ordered `SETTINGS_LANGUAGES`;
   `load_settings_state`, `update_language`, `update_persona`,
   `update_max_debate_rounds`, `update_conversation_storage_backend`,
-  `update_agent_backend`,
+  `update_show_message_details`, `update_agent_backend`,
   `establish_default_backend`, `establish_settings_default_backend`,
   `update_agent_codex_model`, `update_agent_codex_reasoning_effort`,
   `update_agent_antigravity_model`, `update_agent_antigravity_effort`,
@@ -2513,8 +2565,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   complete provider-route roster, and a safe lexical persona catalog with
   top-level-template precedence. Pure update operations replace only the
   pending immutable candidate, including the independently validated desired
-  conversation-storage backend, one agent's provider, or one provider-specific
-  model/effort value at a time while preserving every inactive-provider value.
+  conversation-storage backend, strict message-details boolean, one agent's
+  provider, or one provider-specific model/effort value at a time while
+  preserving every inactive-provider value.
   System-level provider model/effort values remain unchanged fallback data
   rather than editable settings.
   `establish_default_backend` persists only a validated missing workspace
@@ -2523,7 +2576,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   candidate; authentication and default choice remain caller-owned, and
   Discard Changes or a clean exit preserves the exact opening bytes.
   Preparation completely validates and
-  canonically serializes the nine-key system and seven-key agent candidate,
+  canonically serializes the ten-key system and seven-key agent candidate,
   rereads both documents, the optional route document, and the catalog for
   exact stale-state detection, and performs no mutation. It
   increments exactly one roster entry's monotonically increasing generation
@@ -2580,8 +2633,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   use, and the existing `Field`, `ListView`,
   `Message`, `Notice`, `Panel`, `Record`, `Section`, `SemanticRole`, and
   `ViewState` contracts are likewise facade-bound but omitted from `__all__`.
-  These bindings support count-aware dense semantic views without changing the
-  package-supported surface. Callback construction discards accepted-input
+  Unlisted `MessagePresentation` and `SpeakerAccent` additionally bind the
+  internal inline/chat-block layout and fixed speaker-accent contracts without
+  becoming supported exports. `Message` retains exact inline compatibility and
+  accepts only additive keyword-only presentation, optional metadata, and
+  accent values; `ListView` accepts messages alongside its established record
+  and field rows. These bindings support count-aware dense semantic and
+  attributed-message views without changing the package-supported surface.
+  Callback construction discards accepted-input
   projections because its ordinary reader already owns the visible echo, while
   stream construction routes them through the sole driver's selected input
   mode without exposing that mode. The adapter and contracts add no
@@ -2698,7 +2757,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   unlisted purpose-bound `StartupWelcomeStage` and stage-only `StartupWelcome`
   design-component contract outside the general `Component` union, the closed
   `Prompt`, `Panel`, `Section`, `Field`, `Notice`, `Message`, `Record`,
-  `ListView`, `SuggestionPalette`, and `Picker` component vocabulary, shared
+  `ListView`, `SuggestionPalette`, and `Picker` component vocabulary, internal
+  `MessagePresentation` inline/chat-block and `SpeakerAccent`
+  magenta/cyan/yellow/green/blue enums, additive keyword-only message
+  presentation, optional metadata, and accent values whose defaults preserve
+  exact inline construction and rendering, message-capable list rows, shared
   `Choice` with its optional keyword-only validated plain `warning_suffix` and
   additive keyword-only validated `SemanticRole` description metadata,
   `RenderedFrame`, internal `InputPromptView` with an optional keyword-only
@@ -2718,7 +2781,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   validated semantic picker and its
   call-local window origin, while viewport values carry one contiguous
   at-most-seven-choice slice; stable choice identities remain internal
-  correlation keys. A choice owns its immutable warning-suffix and description-
+  correlation keys. A message owns only validated attributed text and immutable
+  presentation metadata; it performs no sanitization or layout and its default
+  cyan accent has no effect under the default inline presentation. A choice
+  owns its immutable warning-suffix and description-
   role semantics but no styling or control precedence. Composer values retain exact accepted lines
   and derive joined content and code-point counts without mutation. Startup
   welcome values carry only one validated semantic stage and no terminal,
@@ -2840,6 +2906,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   a two-space-indented projection; malformed JSON, scalars, embedded prose, and
   every other string return exactly unchanged. The fixed `AGENT` role is bold
   terminal-default foreground with the same plain meaning and local reset.
+  Messages preserve the exact established inline branch by default. Opted-in
+  chat blocks render a sanitized speaker header with optional compact metadata
+  and the visible state cue, one blank separator row, then every explicit body
+  line beneath a default-styled `│ ` rail. A private fixed style carrier makes
+  only the header bold plus its magenta, cyan, yellow, green, or blue accent;
+  separator, rail, and body remain terminal-default in every profile. The
+  message-specific word wrapper preserves whitespace and explicit blank or
+  trailing-LF rows, prefers word boundaries without normalizing content,
+  measures physical cells for combining and wide text, hard-splits long tokens,
+  and safely removes the rail when the remaining width or a wide glyph cannot
+  coexist with it. `ListView` delegates message rows through that same renderer.
   `render_advisory_progress_frame` projects one fixed text-free sixteen-cell
   block-shade shimmer whose graded bright point travels out and back, without
   ANSI, cursor controls, dynamic content, or state. Package-internal
@@ -3293,7 +3370,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   closed component vocabulary through the terminal, while the latter delegates
   its completed rendering to a mode-aware callback without exposing terminal
   mode to the controller. The specialized agent writer applies the pure
-  strict-JSON reply projection before constructing its semantic message, and
+  strict-JSON reply projection before constructing exactly one chat-block
+  semantic message. It maps the canonical lead, plot, character, and execution
+  IDs to cyan, yellow, green, and blue speaker accents respectively without
+  changing its supported signature or write cardinality, and
   the core binds that formatter through the facade for controller-owned
   retrieval and persisted reply records. Composition opening, rejection, send,
   and discard events plus invalid-confirmation hints use the semantic component
@@ -3832,10 +3912,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   existing initialized workspaces need neither directory until the corresponding
   owning feature first creates it lazily. `debug_log`, not `Workspace`, owns the
   files, lock, schema, append, and rotation inside the diagnostic directory. New
-  workspaces also receive the canonical nine-key system-default document with
+  workspaces also receive the canonical ten-key system-default document with
   null Codex model/reasoning, Antigravity model/effort, and workspace
-  `default_backend` values plus desired `conversation_storage_backend` set to
-  `filesystem`; canonical seven-key per-agent entries retain a null backend,
+  `default_backend` values, desired `conversation_storage_backend` set to
+  `filesystem`, and `show_message_details` set to false; canonical seven-key
+  per-agent entries retain a null backend,
   language, persona, and both providers' model/effort values.
   Existing configuration bytes are never migrated or rewritten by
   initialization. `cli_context` owns
@@ -4553,9 +4634,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   construction emits no record. All five consumers use only the internal append
   surface; none assumes ownership of diagnostic files, locks, schema, or
   rotation.
-- `Workspace` initializes the canonical nine-key system and seven-key per-agent
-  configuration shapes with desired conversation storage set to filesystem and
-  nullable workspace/agent provider routes, but never rewrites existing
+- `Workspace` initializes the canonical ten-key system and seven-key per-agent
+  configuration shapes with desired conversation storage set to filesystem,
+  message details set to false, and nullable workspace/agent provider routes,
+  but never rewrites existing
   documents. `ConfigManager` owns full system and per-agent schema validation,
   the independent filesystem/SQLite desired-storage vocabulary, the exact
   Codex/Antigravity backend vocabulary with legacy Gemini guidance, nullable
@@ -4577,12 +4659,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   provider switch, making A-to-B-to-A fresh rather than reviving the earlier
   route. A backend-bound `StoryRuntime` and its `PromptAssembler` reuse the
   active immutable configuration and route-generation snapshot while session
-  and explicit overrides remain live. A successful `/settings` Apply Changes
-  stages and preflights isolated adapters, proves runtime quiescence, persists
-  its guarded configuration and route transaction, and hot-activates matching
-  backend, runtime, and prompt generations in the current shell. A changed desired
-  conversation-storage backend is the exception: it applies only when the next
-  shell freshly activates a ready bundle. Direct configuration-file edits have
+  and explicit overrides remain live. An exact message-details-only
+  `/settings` Apply Changes prepares and commits the guarded settings
+  transaction, then updates the controller-owned active presentation flag
+  without authentication, storage readiness, backend/runtime staging,
+  provider-route switching, or provider-thread work. Every other successful
+  Apply stages and preflights isolated adapters, proves runtime quiescence,
+  persists its guarded configuration and route transaction, and hot-activates matching
+  backend, runtime, and prompt generations in the current shell; a mixed
+  message-details change updates its active flag only after that activation. A
+  changed desired conversation-storage backend is the exception: it applies
+  only when the next shell freshly activates a ready bundle. Direct
+  configuration-file edits have
   no watcher, and other running shells retain their captured state until a new
   backend launch reconciles durable route generations and loads configuration.
 - `interactive_settings` owns one call-local exact-byte system, agent, and
@@ -4591,7 +4679,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   default rebase, complete candidate preparation, and exact stale-state
   detection. It owns provider-generation increments and startup reconciliation
   plus the three-file rollback/recovery contract; `ConfigManager` remains the
-  canonical nine-key/seven-key schema owner and owns the two-document CAS used
+  canonical ten-key/seven-key schema owner and owns the two-document CAS used
   by storage selection.
   Discard Changes or a clean exit preserves the opening files. Default choice
   and authentication facts remain outside it. The controller owns

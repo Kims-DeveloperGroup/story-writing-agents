@@ -13,7 +13,7 @@ agent's static instructions; **persona template**—a reusable behavior document
 
 ## System defaults
 
-`config/system_defaults.json` uses a closed nine-field schema. New workspaces are
+`config/system_defaults.json` uses a closed ten-field schema. New workspaces are
 initialized with:
 
 ```json
@@ -26,7 +26,8 @@ initialized with:
   "default_backend": null,
   "language": "KO",
   "max_debate_rounds": 1,
-  "persona": "default_kim_eun_hee"
+  "persona": "default_kim_eun_hee",
+  "show_message_details": false
 }
 ```
 
@@ -41,20 +42,24 @@ initialized with:
 | `antigravity_effort` | Optional Antigravity workspace fallback; absent or `null` inherits the provider default. The only string values are exactly `low`, `medium`, and `high`. |
 | `default_backend` | Optional workspace provider fallback; absent or `null` falls through to Codex. A value is exactly `codex` or `antigravity`. Interactive authentication fills a missing value once and does not replace an existing value. |
 | `conversation_storage_backend` | Independent desired conversation storage for the next shell. A non-null value is exactly `filesystem` or `sqlite`; missing or `null` is read as the effective filesystem default. |
+| `show_message_details` | A strict JSON boolean when present. Missing means `false` without rewriting the file. `false` selects compact terminal presentation; it never deletes or truncates stored content. |
 
 Unknown fields are rejected. The complete object is validated before a backend
 accepts any explicit model/effort override, so malformed persisted fields are
 never hidden by CLI or `AgentBackend` constructor values.
 
-Existing three-key and eight-key files remain valid: all missing
+Existing three-key, eight-key, and prior nine-key files remain valid: all missing
 provider-specific keys and `default_backend` resolve as `null`, providing no
 workspace model/effort or provider fallback beyond Codex. Missing or null
 `conversation_storage_backend` resolves to filesystem. Loading does not rewrite
 legacy bytes; the next successful complete settings or `story storage use`
-save emits the canonical nine-key object with an explicit storage value.
+save emits the canonical ten-key object with an explicit storage value and
+`show_message_details`. A binary that still enforces the older closed nine-key
+schema rejects that newly saved file because it does not recognize
+`show_message_details`; downgrading requires an explicit compatible migration.
 Running `story init` again, including with `--overwrite-prompts`, does not
 rewrite or migrate existing system-default bytes. Global `/settings` edits this
-canonical nine-field object and the per-agent object through an isolated
+canonical ten-field object and the per-agent object through an isolated
 current/pending view; it adds no supported public save API. The ten language
 choices are exactly `KO`, `EN`,
 `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, and `RU`. Persona choices come from
@@ -64,7 +69,9 @@ is not synthesized as a choice. Maximum debate rounds accepts a nonnegative
 ASCII integer, including `0`. System-level provider model/effort values are
 preserved but are not edited by the UI; direct validated JSON edits may change
 them. Conversation storage is edited independently from agent provider routes
-and offers Filesystem or SQLite as a pending next-shell value. Selection
+and offers Filesystem or SQLite as a pending next-shell value. Message details
+offers Off and On; Off is the default compact view and On reveals documented
+diagnostic fields without changing stored messages. Selection
 readiness, installation consent, provisioning, parity, and activation are
 described by the
 [CLI storage contract](../cli.md#conversation-storage-selection).
@@ -140,7 +147,7 @@ when needed, completes native authentication before mutating the candidate.
 Authentication is subordinate and returns to Provider; a successful selection
 changes only the pending in-memory route. Failed or cancelled authentication
 leaves that route unchanged, and any missing workspace default also remains
-pending in memory before confirmed Save.
+pending in memory before confirmed Apply Changes.
 
 Only entering Model or Effort performs one fresh bounded discovery for the
 pending effective provider; Effort also uses the pending effective model.
@@ -157,22 +164,34 @@ Edits update only the selected agent's
 active-provider pending fields and preserve that agent's inactive-provider
 values. Editor labels remain Provider, Model, and Effort; Current/Pending
 confirmation stays provider-qualified so inactive values remain clear.
-Discovery writes no catalog data. Save persists only the selected opaque
+Discovery writes no catalog data. Apply Changes persists only the selected opaque
 model/effort token or null. If a launch override supplies an effective
 provider/model/effort value, that field is disabled and read-only in the active
 shell because the override remains higher precedence.
 
 Opening `/settings` captures exact bytes for both configuration documents and
 the optional provider-route generation record, a fully validated immutable
-configuration pair, and the safe persona catalog. The system object is the
-canonical nine-field shape, including independent desired conversation
-storage. No configuration value is persisted before Save is confirmed; Escape
-or cancellation leaves the captured bytes unchanged. After confirmation, Save
-freshly authenticates every distinct effective provider, preflights staged
-adapters, prepares runtime quiescence, validates the candidate, coordinates
-storage readiness and fresh parity, and requires the opening facts to remain
-exact. A missing provider default learned inside Settings remains in the
-pending candidate and becomes durable only through this complete Save.
+configuration pair, and the safe persona catalog. The root picker has exactly
+six rows in this order: Language, Persona, Maximum debate rounds, Conversation
+storage, Message details, and Agents. The system object is the canonical
+ten-field shape, including independent desired conversation storage and the
+message-presentation preference. No configuration value is persisted before
+Apply Changes is confirmed; Escape or cancellation leaves the captured bytes
+unchanged.
+
+After confirmation, Apply Changes uses one of two exact paths. If
+`show_message_details` is the only difference from the immutable opening
+snapshot, the controller prepares, verifies, and commits that configuration
+change without authentication, backend or runtime staging/activation, storage
+readiness, route switching or generation work, or provider/thread changes. The
+active presentation flag changes only after the commit succeeds. Every mixed
+change uses the full path: it freshly authenticates every distinct effective
+provider, preflights staged adapters, prepares runtime quiescence, validates the
+candidate, coordinates storage readiness and fresh parity, and requires the
+opening facts to remain exact. The active presentation flag changes only after
+full activation succeeds. A missing provider default learned inside Settings
+remains in the pending candidate and becomes durable only through this complete
+save.
 
 The prepared boundary is exactly `config/system_defaults.json`,
 `config/agent_configs.json`, and optional
@@ -212,7 +231,7 @@ even if only one changed, while preserving every other existing file. One
 backend construction validates and captures the complete persisted system and
 agent configuration pair. Direct on-disk edits have no watcher: a newly
 launched backend validates and reconciles them, while existing other shells
-retain their captured state. Confirmed `/settings` Save is the distinct
+retain their captured state. Confirmed `/settings` Apply Changes is the distinct
 current-shell hot-activation path for non-storage runtime settings described
 above; desired conversation storage remains a next-shell selection. Session
 language and persona overrides remain live, and explicit applicable

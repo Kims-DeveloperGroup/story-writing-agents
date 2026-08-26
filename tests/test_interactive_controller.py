@@ -22,7 +22,9 @@ from unittest import mock
 import story_writing_agents
 from story_writing_agents.agents import (
     AGENT_SPECS,
+    CHARACTER_CUSTODIAN,
     EXECUTION_SPECIALIST,
+    LEAD_ORCHESTRATOR,
     PLOT_ARCHITECT,
     ROSTER,
     SPECIALIST_IDS,
@@ -129,6 +131,8 @@ from story_writing_agents.interactive_terminal._reference_activation import (
     ReferenceInputScope,
 )
 from story_writing_agents.models import (
+    DebateContextMode,
+    DebateFailureKind,
     DebateMessage,
     DebateProgressEvent,
     DebateProgressPhase,
@@ -1073,6 +1077,95 @@ class ControllerContractTests(ControllerTestCase):
         with self.assertRaises(FrozenInstanceError):
             context.truncated = True  # type: ignore[misc]
 
+    def test_agents_and_status_ignore_message_detail_preference(self) -> None:
+        workspace = self.make_workspace()
+        controller, _backend, callbacks = self.make_controller(workspace)
+        components: list[object] = []
+        real_write_component = (
+            terminal_module.InteractiveSemanticOutput.write_component
+        )
+
+        def capture_component(output, component):
+            components.append(component)
+            return real_write_component(output, component)
+
+        def projection(method, *, details: bool):
+            controller._show_message_details = details
+            component_start = len(components)
+            record_start = len(callbacks.records)
+            method()
+            return (
+                tuple(components[component_start:]),
+                tuple(callbacks.records[record_start:]),
+            )
+
+        with mock.patch.object(
+            terminal_module.InteractiveSemanticOutput,
+            "write_component",
+            autospec=True,
+            side_effect=capture_component,
+        ):
+            agents_off = projection(
+                controller._write_agent_roster,
+                details=False,
+            )
+            agents_on = projection(
+                controller._write_agent_roster,
+                details=True,
+            )
+            status_off = projection(
+                controller._write_runtime_status,
+                details=False,
+            )
+            status_on = projection(
+                controller._write_runtime_status,
+                details=True,
+            )
+
+        self.assertEqual(agents_off, agents_on)
+        self.assertEqual(status_off, status_on)
+        agent_view = agents_off[0][0]
+        self.assertIs(type(agent_view), terminal_module.ListView)
+        self.assertEqual(agent_view.title, "Agents")
+        self.assertEqual(len(agent_view.items), 4)
+        self.assertTrue(
+            all(
+                tuple(field.label for field in item.fields)
+                == (
+                    "ID",
+                    "Aliases",
+                    "Advisory domain",
+                    "Execution",
+                    "Confirmation",
+                )
+                for item in agent_view.items
+            )
+        )
+        execution_view = next(
+            component
+            for component in status_off[0]
+            if type(component) is terminal_module.ListView
+            and component.title == "Execution profiles"
+        )
+        self.assertEqual(len(execution_view.items), 4)
+        self.assertTrue(
+            all(
+                tuple(field.label for field in item.fields)
+                == (
+                    "Provider",
+                    "Provider source",
+                    "Model",
+                    "Model source",
+                    "Effort",
+                    "Effort source",
+                    "Confirmation",
+                    "Thread",
+                    "Route generation",
+                )
+                for item in execution_view.items
+            )
+        )
+
     def test_controller_and_composer_have_no_generic_status_sites(
         self,
     ) -> None:
@@ -1574,6 +1667,13 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
         input_kind: InputKind = InputKind.PROMPT,
         revision_id: str | None = None,
         round_number: int = 0,
+        context_mode: DebateContextMode | None = None,
+        context_event_count: int = 0,
+        context_omitted_turns: int = 0,
+        conflicting_agents: tuple[str, ...] = (),
+        manuscript_path: str | None = None,
+        core_updates: tuple[str, ...] = (),
+        failure_kind: DebateFailureKind | None = None,
     ) -> DebateProgressEvent:
         """Build one valid event for direct visibility projections."""
 
@@ -1584,6 +1684,13 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
             phase=phase,
             revision_id=revision_id,
             round_number=round_number,
+            context_mode=context_mode,
+            context_event_count=context_event_count,
+            context_omitted_turns=context_omitted_turns,
+            conflicting_agents=conflicting_agents,
+            manuscript_path=manuscript_path,
+            core_updates=core_updates,
+            failure_kind=failure_kind,
         )
 
     def test_draft_and_synthesis_handoffs_match_runtime_flow(self) -> None:
@@ -1637,70 +1744,859 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
         self.assertEqual(synthesized[1], tuple(SPECIALIST_IDS))
         backend.close()
 
-    def test_agent_panel_filters_user_entries_and_redacts_errors(self) -> None:
+    def test_every_phase_writes_one_panel_with_always_visible_fields(self) -> None:
         workspace = self.make_workspace()
         controller, backend, callbacks = self.make_controller(workspace)
-        for message in (
+        controller._show_message_details = False
+        cases = (
+            (
+                self._event(
+                    DebateProgressPhase.STARTED,
+                    context_mode=DebateContextMode.INCLUDED,
+                    context_event_count=4,
+                    context_omitted_turns=1,
+                ),
+                "Started prompt consensus.",
+                terminal_module.SemanticRole.INFO,
+                terminal_module.ViewState.LOADING,
+            ),
+            (
+                self._event(DebateProgressPhase.DRAFTED, revision_id="r0"),
+                "Drafted revision r0.",
+                terminal_module.SemanticRole.INFO,
+                terminal_module.ViewState.LOADING,
+            ),
+            (
+                self._event(DebateProgressPhase.AUDIT_STARTED, revision_id="r0"),
+                "Audit started for r0 at round 0.",
+                terminal_module.SemanticRole.INFO,
+                terminal_module.ViewState.LOADING,
+            ),
+            (
+                self._event(
+                    DebateProgressPhase.AUDIT_COMPLETED,
+                    revision_id="r0",
+                    conflicting_agents=(PLOT_ARCHITECT,),
+                ),
+                "Audit completed for r0 at round 0; conflicts: plot_architect.",
+                terminal_module.SemanticRole.INFO,
+                terminal_module.ViewState.LOADING,
+            ),
+            (
+                self._event(
+                    DebateProgressPhase.SYNTHESIZED,
+                    revision_id="r1",
+                    round_number=1,
+                ),
+                "Synthesized r1 at round 1.",
+                terminal_module.SemanticRole.INFO,
+                terminal_module.ViewState.LOADING,
+            ),
+            (
+                self._event(
+                    DebateProgressPhase.ARTIFACTS_COMMITTED,
+                    revision_id="r1",
+                    round_number=1,
+                    manuscript_path="manuscript/part.md",
+                    core_updates=("global_outline.md",),
+                ),
+                (
+                    "Artifacts committed for r1: manuscript/part.md; "
+                    "core updates: global_outline.md."
+                ),
+                terminal_module.SemanticRole.INFO,
+                terminal_module.ViewState.LOADING,
+            ),
+            (
+                self._event(
+                    DebateProgressPhase.CONSENSUS,
+                    revision_id="r1",
+                    round_number=1,
+                ),
+                "Consensus reached on r1 after 1 revision rounds.",
+                terminal_module.SemanticRole.SUCCESS,
+                terminal_module.ViewState.COMPLETED,
+            ),
+            (
+                self._event(
+                    DebateProgressPhase.DEADLOCK,
+                    revision_id="r1",
+                    round_number=1,
+                ),
+                "Deadlock on r1 after 1 revision rounds.",
+                terminal_module.SemanticRole.ERROR,
+                terminal_module.ViewState.ERROR,
+            ),
+            (
+                self._event(
+                    DebateProgressPhase.FAILED,
+                    revision_id="r1",
+                    round_number=1,
+                    failure_kind=DebateFailureKind.INTERNAL,
+                ),
+                "Run failed (internal).",
+                terminal_module.SemanticRole.ERROR,
+                terminal_module.ViewState.ERROR,
+            ),
+            (
+                self._event(DebateProgressPhase.INTERRUPTED),
+                "Run interrupted after durable state transition.",
+                terminal_module.SemanticRole.WARNING,
+                terminal_module.ViewState.CANCELLED,
+            ),
+        )
+        components: list[object] = []
+        real_write_component = (
+            terminal_module.InteractiveSemanticOutput.write_component
+        )
+
+        def capture_component(output, component):
+            components.append(component)
+            return real_write_component(output, component)
+
+        with mock.patch.object(
+            terminal_module.InteractiveSemanticOutput,
+            "write_component",
+            autospec=True,
+            side_effect=capture_component,
+        ):
+            for event, expected_outcome, expected_role, expected_state in cases:
+                with self.subTest(phase=event.phase):
+                    component_start = len(components)
+                    record_start = len(callbacks.records)
+                    self.assertEqual(controller._render_debate_progress(event), 0)
+                    self.assertEqual(len(components), component_start + 1)
+                    self.assertEqual(len(callbacks.records), record_start + 1)
+                    panel = components[-1]
+                    self.assertIs(type(panel), terminal_module.Panel)
+                    assert isinstance(panel, terminal_module.Panel)
+                    self.assertEqual(panel.title, "Debate phase")
+                    self.assertIs(panel.state, expected_state)
+                    fields = tuple(
+                        item
+                        for item in panel.items
+                        if type(item) is terminal_module.Field
+                    )
+                    self.assertEqual(
+                        tuple(field.label for field in fields),
+                        (
+                            "Debate ID",
+                            "Phase",
+                            "Round",
+                            "Revision",
+                            "Action",
+                            "Outcome",
+                            "Conflicts",
+                        ),
+                    )
+                    self.assertEqual(fields[0].value, "debate")
+                    self.assertEqual(fields[1].value, event.phase.value)
+                    self.assertEqual(fields[2].value, str(event.round_number))
+                    self.assertEqual(fields[3].value, event.revision_id or "n/a")
+                    self.assertTrue(fields[4].value)
+                    self.assertEqual(
+                        fields[5],
+                        terminal_module.Field(
+                            "Outcome",
+                            expected_outcome,
+                            role=expected_role,
+                            state=expected_state,
+                        ),
+                    )
+                    self.assertNotIn("Handoff", tuple(field.label for field in fields))
+                    if event.phase is DebateProgressPhase.AUDIT_COMPLETED:
+                        self.assertEqual(
+                            fields[6].value,
+                            "Plot & Structure Architect",
+                        )
+                    else:
+                        self.assertEqual(fields[6].value, "none")
+                    context_notices = tuple(
+                        item
+                        for item in panel.items
+                        if type(item) is terminal_module.Notice
+                        and item.label == "context"
+                    )
+                    if event.phase is DebateProgressPhase.STARTED:
+                        self.assertEqual(
+                            context_notices,
+                            (
+                                terminal_module.Notice(
+                                    (
+                                        "Included 4 focused-conversation events; "
+                                        "1 earlier turns omitted."
+                                    ),
+                                    label="context",
+                                    state=terminal_module.ViewState.COMPLETED,
+                                ),
+                            ),
+                        )
+                    else:
+                        self.assertEqual(context_notices, ())
+        backend.close()
+
+    def test_phase_panel_groups_complete_speeches_and_gates_details(self) -> None:
+        long_speech = "opening " + ("x" * 1205) + " COMPLETE_TAIL"
+        raw_json = '{"verdict":"approve","score":1}'
+        formatted_json = '{\n  "verdict": "approve",\n  "score": 1\n}'
+        messages = (
             DebateMessage(
-                "user", "started", 0, "", "user", "private prompt", _CREATED
+                "user", "initiation", 0, "r0", "prompt", "private prompt", _CREATED
             ),
             DebateMessage(
-                PLOT_ARCHITECT,
-                "audit_completed",
+                EXECUTION_SPECIALIST,
+                "draft",
                 0,
                 "r0",
-                "critique",
-                "visible critique",
+                "candidate",
+                long_speech,
                 _CREATED,
             ),
             DebateMessage(
                 PLOT_ARCHITECT,
-                "failed",
+                "audit",
                 0,
                 "r0",
+                "critique",
+                raw_json,
+                _CREATED,
+            ),
+            DebateMessage(
+                EXECUTION_SPECIALIST,
+                "audit",
+                0,
+                "r0",
+                "verdict",
+                "same-group execution verdict",
+                _CREATED,
+            ),
+            DebateMessage(
+                CHARACTER_CUSTODIAN,
+                "audit",
+                1,
+                "r0",
+                "verdict",
+                "visible character verdict",
+                _CREATED,
+            ),
+            DebateMessage(
+                LEAD_ORCHESTRATOR,
+                "audit",
+                1,
+                "r1",
                 "error",
                 "provider secret details",
                 _CREATED,
             ),
-        ):
-            workspace.append_debate_message("session", "debate", message)
-
-        controller._render_debate_agent_sayings(
-            self._event(DebateProgressPhase.STARTED)
         )
-        rendered = "".join(callbacks.records)
-        self.assertIn("visible critique", rendered)
-        self.assertIn("Agent error details are unavailable.", rendered)
-        self.assertNotIn("private prompt", rendered)
-        self.assertNotIn("provider secret details", rendered)
-        agent_records = [
-            record for record in callbacks.records if "Agent saying" in record
-        ]
-        self.assertEqual(len(agent_records), 1)
-        self.assertTrue(agent_records[0].startswith("--- Agent saying [completed]"))
-        self.assertTrue(agent_records[0].endswith(f"{'-' * 80}\n"))
+        for details in (False, True):
+            with self.subTest(details=details):
+                workspace = self.make_workspace()
+                controller, backend, callbacks = self.make_controller(workspace)
+                controller._show_message_details = details
+                for message in messages:
+                    workspace.append_debate_message("session", "debate", message)
+                started = self._event(
+                    DebateProgressPhase.STARTED,
+                    context_mode=DebateContextMode.INCLUDED,
+                )
+                drafted = self._event(
+                    DebateProgressPhase.DRAFTED,
+                    revision_id="r0",
+                )
+                audit_started = self._event(
+                    DebateProgressPhase.AUDIT_STARTED,
+                    revision_id="r0",
+                )
+                events = [started, drafted, audit_started]
+                audit_completed = self._event(
+                    DebateProgressPhase.AUDIT_COMPLETED,
+                    revision_id="r0",
+                    conflicting_agents=(PLOT_ARCHITECT, CHARACTER_CUSTODIAN),
+                )
+                synthesized = self._event(
+                    DebateProgressPhase.SYNTHESIZED,
+                    revision_id="r1",
+                    round_number=1,
+                )
+                components: list[object] = []
+                real_write_component = (
+                    terminal_module.InteractiveSemanticOutput.write_component
+                )
 
-        callbacks.records.clear()
-        controller._render_debate_agent_sayings(
-            self._event(DebateProgressPhase.DRAFTED, revision_id="r0")
-        )
-        self.assertNotIn("Agent saying", "".join(callbacks.records))
-        backend.close()
+                def capture_component(output, component):
+                    components.append(component)
+                    return real_write_component(output, component)
 
-    def test_malformed_agent_log_emits_safe_warning(self) -> None:
+                with mock.patch.object(
+                    terminal_module.InteractiveSemanticOutput,
+                    "write_component",
+                    autospec=True,
+                    side_effect=capture_component,
+                ):
+                    controller._accept_debate_progress(
+                        audit_completed,
+                        expected_session_id="session",
+                        expected_input_kind=InputKind.PROMPT,
+                        expected_context_mode=DebateContextMode.INCLUDED,
+                        events=events,
+                    )
+                    controller._accept_debate_progress(
+                        synthesized,
+                        expected_session_id="session",
+                        expected_input_kind=InputKind.PROMPT,
+                        expected_context_mode=DebateContextMode.INCLUDED,
+                        events=events,
+                    )
+
+                handoff = (
+                    (
+                        terminal_module.Field(
+                            "Handoff",
+                            (
+                                "Plot & Structure Architect, "
+                                "Character & World Custodian -> Lead Orchestrator"
+                            ),
+                        ),
+                    )
+                    if details
+                    else ()
+                )
+                metadata = (lambda kind: f"Kind: {kind}") if details else (lambda _kind: None)
+                expected_audit = terminal_module.Panel(
+                    "Debate phase",
+                    (
+                        terminal_module.Field("Debate ID", "debate"),
+                        terminal_module.Field("Phase", "audit_completed"),
+                        terminal_module.Field("Round", "0"),
+                        terminal_module.Field("Revision", "r0"),
+                        *handoff,
+                        terminal_module.Field(
+                            "Action",
+                            "Conflicts found; return critiques to orchestrator.",
+                        ),
+                        terminal_module.Field(
+                            "Outcome",
+                            (
+                                "Audit completed for r0 at round 0; conflicts: "
+                                "plot_architect, character_custodian."
+                            ),
+                            role=terminal_module.SemanticRole.INFO,
+                            state=terminal_module.ViewState.LOADING,
+                        ),
+                        terminal_module.Field(
+                            "Conflicts",
+                            (
+                                "Plot & Structure Architect, "
+                                "Character & World Custodian"
+                            ),
+                        ),
+                        terminal_module.Section(
+                            "Speeches · draft · round 0 · revision r0",
+                            (
+                                terminal_module.Message(
+                                    "Tone & Execution Specialist",
+                                    long_speech,
+                                    role=terminal_module.SemanticRole.AGENT,
+                                    state=terminal_module.ViewState.COMPLETED,
+                                    presentation=(
+                                        terminal_module.MessagePresentation.CHAT_BLOCK
+                                    ),
+                                    metadata=metadata("candidate"),
+                                    accent=terminal_module.SpeakerAccent.BLUE,
+                                ),
+                            ),
+                        ),
+                        terminal_module.Section(
+                            "Speeches · audit · round 0 · revision r0",
+                            (
+                                terminal_module.Message(
+                                    "Plot & Structure Architect",
+                                    formatted_json,
+                                    role=terminal_module.SemanticRole.AGENT,
+                                    state=terminal_module.ViewState.COMPLETED,
+                                    presentation=(
+                                        terminal_module.MessagePresentation.CHAT_BLOCK
+                                    ),
+                                    metadata=metadata("critique"),
+                                    accent=terminal_module.SpeakerAccent.YELLOW,
+                                ),
+                                terminal_module.Message(
+                                    "Tone & Execution Specialist",
+                                    "same-group execution verdict",
+                                    role=terminal_module.SemanticRole.AGENT,
+                                    state=terminal_module.ViewState.COMPLETED,
+                                    presentation=(
+                                        terminal_module.MessagePresentation.CHAT_BLOCK
+                                    ),
+                                    metadata=metadata("verdict"),
+                                    accent=terminal_module.SpeakerAccent.BLUE,
+                                ),
+                            ),
+                        ),
+                        terminal_module.Section(
+                            "Speeches · audit · round 1 · revision r0",
+                            (
+                                terminal_module.Message(
+                                    "Character & World Custodian",
+                                    "visible character verdict",
+                                    role=terminal_module.SemanticRole.AGENT,
+                                    state=terminal_module.ViewState.COMPLETED,
+                                    presentation=(
+                                        terminal_module.MessagePresentation.CHAT_BLOCK
+                                    ),
+                                    metadata=metadata("verdict"),
+                                    accent=terminal_module.SpeakerAccent.GREEN,
+                                ),
+                            ),
+                        ),
+                        terminal_module.Section(
+                            "Speeches · audit · round 1 · revision r1",
+                            (
+                                terminal_module.Message(
+                                    "Lead Orchestrator",
+                                    "Agent error details are unavailable.",
+                                    role=terminal_module.SemanticRole.AGENT,
+                                    state=terminal_module.ViewState.COMPLETED,
+                                    presentation=(
+                                        terminal_module.MessagePresentation.CHAT_BLOCK
+                                    ),
+                                    metadata=metadata("error"),
+                                    accent=terminal_module.SpeakerAccent.CYAN,
+                                ),
+                            ),
+                        ),
+                    ),
+                    state=terminal_module.ViewState.LOADING,
+                )
+                synthesis_handoff = (
+                    (
+                        terminal_module.Field(
+                            "Handoff",
+                            (
+                                "Lead Orchestrator -> Plot & Structure Architect, "
+                                "Character & World Custodian, "
+                                "Tone & Execution Specialist"
+                            ),
+                        ),
+                    )
+                    if details
+                    else ()
+                )
+                expected_synthesis = terminal_module.Panel(
+                    "Debate phase",
+                    (
+                        terminal_module.Field("Debate ID", "debate"),
+                        terminal_module.Field("Phase", "synthesized"),
+                        terminal_module.Field("Round", "1"),
+                        terminal_module.Field("Revision", "r1"),
+                        *synthesis_handoff,
+                        terminal_module.Field(
+                            "Action",
+                            (
+                                "Synthesize revision from proposals and feedback; "
+                                "re-audit all specialists."
+                            ),
+                        ),
+                        terminal_module.Field(
+                            "Outcome",
+                            "Synthesized r1 at round 1.",
+                            role=terminal_module.SemanticRole.INFO,
+                            state=terminal_module.ViewState.LOADING,
+                        ),
+                        terminal_module.Field(
+                            "Conflicts",
+                            (
+                                "Plot & Structure Architect, "
+                                "Character & World Custodian"
+                            ),
+                        ),
+                    ),
+                    state=terminal_module.ViewState.LOADING,
+                )
+                self.assertEqual(components, [expected_audit, expected_synthesis])
+                self.assertEqual(
+                    [
+                        item.title
+                        for item in expected_audit.items
+                        if type(item) is terminal_module.Section
+                    ],
+                    [
+                        "Speeches · draft · round 0 · revision r0",
+                        "Speeches · audit · round 0 · revision r0",
+                        "Speeches · audit · round 1 · revision r0",
+                        "Speeches · audit · round 1 · revision r1",
+                    ],
+                )
+                self.assertEqual(
+                    [
+                        len(item.items)
+                        for item in expected_audit.items
+                        if type(item) is terminal_module.Section
+                    ],
+                    [1, 2, 1, 1],
+                )
+                self.assertEqual(len(callbacks.records), 2)
+                self.assertEqual(events[-2:], [audit_completed, synthesized])
+                key = ("session", "debate")
+                self.assertEqual(controller._debate_message_offsets[key], len(messages))
+                self.assertEqual(
+                    controller._debate_last_conflict_targets[key],
+                    (PLOT_ARCHITECT, CHARACTER_CUSTODIAN),
+                )
+                rendered = "".join(callbacks.records)
+                self.assertIn("COMPLETE_TAIL", rendered)
+                self.assertIn('"verdict": "approve"', rendered)
+                self.assertIn("Agent error details are unavailable.", rendered)
+                self.assertNotIn("[truncated]", rendered)
+                self.assertNotIn("private prompt", rendered)
+                self.assertNotIn("provider secret details", rendered)
+                plain = render_plain(expected_audit, width=80).text
+                self.assertIn("COMPLETE_TAIL", plain)
+                self.assertIn('"score": 1', plain)
+                backend.close()
+
+    def test_later_phase_read_failure_retries_from_nonzero_cursor(self) -> None:
         workspace = self.make_workspace()
         controller, backend, callbacks = self.make_controller(workspace)
-        with mock.patch.object(
-            workspace,
-            "read_debate_messages",
-            side_effect=WorkspaceFormatError("raw provider details"),
+        messages = (
+            DebateMessage(
+                EXECUTION_SPECIALIST,
+                "draft",
+                0,
+                "r0",
+                "candidate",
+                "OLD_CURSOR_ONE",
+                _CREATED,
+            ),
+            DebateMessage(
+                PLOT_ARCHITECT,
+                "audit",
+                0,
+                "r0",
+                "critique",
+                "OLD_CURSOR_TWO",
+                _CREATED,
+            ),
+            DebateMessage(
+                CHARACTER_CUSTODIAN,
+                "audit",
+                0,
+                "r0",
+                "verdict",
+                "NEW_CURSOR_ONE",
+                _CREATED,
+            ),
+            DebateMessage(
+                LEAD_ORCHESTRATOR,
+                "synthesize",
+                1,
+                "r1",
+                "candidate",
+                "NEW_CURSOR_TWO",
+                _CREATED,
+            ),
+        )
+        started = self._event(
+            DebateProgressPhase.STARTED,
+            context_mode=DebateContextMode.INCLUDED,
+        )
+        drafted = self._event(DebateProgressPhase.DRAFTED, revision_id="r0")
+        audit_started = self._event(
+            DebateProgressPhase.AUDIT_STARTED,
+            revision_id="r0",
+        )
+        audit_completed = self._event(
+            DebateProgressPhase.AUDIT_COMPLETED,
+            revision_id="r0",
+        )
+        synthesized = self._event(
+            DebateProgressPhase.SYNTHESIZED,
+            revision_id="r1",
+            round_number=1,
+        )
+        events = [started, drafted, audit_started]
+        key = ("session", "debate")
+        committed_offset = 2
+        controller._debate_message_offsets[key] = committed_offset
+        components: list[object] = []
+        real_write_component = (
+            terminal_module.InteractiveSemanticOutput.write_component
+        )
+
+        def capture_component(output, component):
+            components.append(component)
+            return real_write_component(output, component)
+
+        with (
+            mock.patch.object(
+                workspace,
+                "read_debate_messages",
+                side_effect=(
+                    WorkspaceFormatError("raw provider details"),
+                    messages,
+                ),
+            ) as read_messages,
+            mock.patch.object(
+                terminal_module.InteractiveSemanticOutput,
+                "write_component",
+                autospec=True,
+                side_effect=capture_component,
+            ),
         ):
-            controller._render_debate_agent_sayings(
-                self._event(DebateProgressPhase.STARTED)
+            controller._accept_debate_progress(
+                audit_completed,
+                expected_session_id="session",
+                expected_input_kind=InputKind.PROMPT,
+                expected_context_mode=DebateContextMode.INCLUDED,
+                events=events,
             )
+            self.assertEqual(
+                controller._debate_message_offsets[key],
+                committed_offset,
+            )
+            controller._accept_debate_progress(
+                synthesized,
+                expected_session_id="session",
+                expected_input_kind=InputKind.PROMPT,
+                expected_context_mode=DebateContextMode.INCLUDED,
+                events=events,
+            )
+
+        self.assertEqual(
+            read_messages.call_args_list,
+            [mock.call("session", "debate"), mock.call("session", "debate")],
+        )
+        self.assertEqual(len(components), 2)
+        self.assertTrue(
+            all(type(component) is terminal_module.Panel for component in components)
+        )
+        first = components[0]
+        second = components[1]
+        assert isinstance(first, terminal_module.Panel)
+        assert isinstance(second, terminal_module.Panel)
+        self.assertIn(
+            terminal_module.Notice(
+                "Agent sayings unavailable; the debate log could not be read.",
+                label="agent-saying",
+                role=terminal_module.SemanticRole.WARNING,
+                state=terminal_module.ViewState.ERROR,
+            ),
+            first.items,
+        )
+        self.assertFalse(
+            any(type(component) is terminal_module.Notice for component in components)
+        )
+        sections = tuple(
+            item for item in second.items if type(item) is terminal_module.Section
+        )
+        self.assertEqual(
+            tuple(section.title for section in sections),
+            (
+                "Speeches · audit · round 0 · revision r0",
+                "Speeches · synthesize · round 1 · revision r1",
+            ),
+        )
+        self.assertEqual(
+            tuple(section.items[0].content for section in sections),
+            ("NEW_CURSOR_ONE", "NEW_CURSOR_TWO"),
+        )
+        self.assertEqual(
+            controller._debate_message_offsets[key],
+            len(messages),
+        )
+        self.assertEqual(
+            events,
+            [started, drafted, audit_started, audit_completed, synthesized],
+        )
+        self.assertEqual(len(callbacks.records), 2)
         rendered = "".join(callbacks.records)
-        self.assertIn("Agent sayings unavailable; the debate log could not be read.", rendered)
+        self.assertNotIn("OLD_CURSOR_ONE", rendered)
+        self.assertNotIn("OLD_CURSOR_TWO", rendered)
+        self.assertEqual(rendered.count("NEW_CURSOR_ONE"), 1)
+        self.assertEqual(rendered.count("NEW_CURSOR_TWO"), 1)
         self.assertNotIn("raw provider details", rendered)
+        backend.close()
+
+    def test_phase_write_failure_rolls_back_state_event_and_cursor_for_retry(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        controller, backend, callbacks = self.make_controller(workspace)
+        workspace.append_debate_message(
+            "session",
+            "debate",
+            DebateMessage(
+                EXECUTION_SPECIALIST,
+                "draft",
+                0,
+                "r0",
+                "candidate",
+                "write-retry speech",
+                _CREATED,
+            ),
+        )
+        event = self._event(
+            DebateProgressPhase.STARTED,
+            context_mode=DebateContextMode.INCLUDED,
+        )
+        key = ("session", "debate")
+        controller._debate_message_offsets[key] = 7
+        controller._debate_last_conflict_targets[key] = (PLOT_ARCHITECT,)
+        controller._last_started_debate_by_session["session"] = "older_debate"
+        events: list[DebateProgressEvent] = []
+        attempted: list[object] = []
+        failure = OSError("terminal write secret")
+        real_write_component = (
+            terminal_module.InteractiveSemanticOutput.write_component
+        )
+
+        def fail_once(output, component):
+            attempted.append(component)
+            if len(attempted) == 1:
+                raise failure
+            return real_write_component(output, component)
+
+        with mock.patch.object(
+            terminal_module.InteractiveSemanticOutput,
+            "write_component",
+            autospec=True,
+            side_effect=fail_once,
+        ):
+            with self.assertRaises(OSError) as raised:
+                controller._accept_debate_progress(
+                    event,
+                    expected_session_id="session",
+                    expected_input_kind=InputKind.PROMPT,
+                    expected_context_mode=DebateContextMode.INCLUDED,
+                    events=events,
+                )
+            self.assertIs(raised.exception, failure)
+            self.assertEqual(controller._debate_message_offsets[key], 7)
+            self.assertEqual(
+                controller._debate_last_conflict_targets[key],
+                (PLOT_ARCHITECT,),
+            )
+            self.assertEqual(
+                controller._last_started_debate_by_session,
+                {"session": "older_debate"},
+            )
+            self.assertEqual(events, [])
+            self.assertEqual(callbacks.records, [])
+
+            controller._accept_debate_progress(
+                event,
+                expected_session_id="session",
+                expected_input_kind=InputKind.PROMPT,
+                expected_context_mode=DebateContextMode.INCLUDED,
+                events=events,
+            )
+
+        self.assertEqual(len(attempted), 2)
+        self.assertEqual(attempted[0], attempted[1])
+        self.assertEqual(controller._debate_message_offsets[key], 1)
+        self.assertEqual(controller._debate_last_conflict_targets[key], ())
+        self.assertEqual(
+            controller._last_started_debate_by_session,
+            {"session": "debate"},
+        )
+        self.assertEqual(events, [event])
+        self.assertEqual(len(callbacks.records), 1)
+        self.assertEqual("".join(callbacks.records).count("write-retry speech"), 1)
+        self.assertNotIn("terminal write secret", "".join(callbacks.records))
+        backend.close()
+
+    def test_audit_write_failure_keeps_prior_conflicts_until_retry(self) -> None:
+        workspace = self.make_workspace()
+        controller, backend, callbacks = self.make_controller(workspace)
+        for content in ("OLD_AUDIT_CURSOR", "NEW_AUDIT_CURSOR"):
+            workspace.append_debate_message(
+                "session",
+                "debate",
+                DebateMessage(
+                    CHARACTER_CUSTODIAN,
+                    "audit",
+                    0,
+                    "r0",
+                    "critique",
+                    content,
+                    _CREATED,
+                ),
+            )
+        started = self._event(
+            DebateProgressPhase.STARTED,
+            context_mode=DebateContextMode.INCLUDED,
+        )
+        drafted = self._event(DebateProgressPhase.DRAFTED, revision_id="r0")
+        audit_started = self._event(
+            DebateProgressPhase.AUDIT_STARTED,
+            revision_id="r0",
+        )
+        event = self._event(
+            DebateProgressPhase.AUDIT_COMPLETED,
+            revision_id="r0",
+            conflicting_agents=(CHARACTER_CUSTODIAN,),
+        )
+        events = [started, drafted, audit_started]
+        prior_events = list(events)
+        key = ("session", "debate")
+        controller._debate_message_offsets[key] = 1
+        controller._debate_last_conflict_targets[key] = (PLOT_ARCHITECT,)
+        attempted: list[object] = []
+        failure = OSError("audit write secret")
+        real_write_component = (
+            terminal_module.InteractiveSemanticOutput.write_component
+        )
+
+        def fail_once(output, component):
+            attempted.append(component)
+            if len(attempted) == 1:
+                raise failure
+            return real_write_component(output, component)
+
+        with mock.patch.object(
+            terminal_module.InteractiveSemanticOutput,
+            "write_component",
+            autospec=True,
+            side_effect=fail_once,
+        ):
+            with self.assertRaises(OSError) as raised:
+                controller._accept_debate_progress(
+                    event,
+                    expected_session_id="session",
+                    expected_input_kind=InputKind.PROMPT,
+                    expected_context_mode=DebateContextMode.INCLUDED,
+                    events=events,
+                )
+            self.assertIs(raised.exception, failure)
+            self.assertEqual(controller._debate_message_offsets[key], 1)
+            self.assertEqual(
+                controller._debate_last_conflict_targets[key],
+                (PLOT_ARCHITECT,),
+            )
+            self.assertEqual(events, prior_events)
+            self.assertEqual(callbacks.records, [])
+
+            controller._accept_debate_progress(
+                event,
+                expected_session_id="session",
+                expected_input_kind=InputKind.PROMPT,
+                expected_context_mode=DebateContextMode.INCLUDED,
+                events=events,
+            )
+
+        self.assertEqual(attempted[0], attempted[1])
+        self.assertEqual(controller._debate_message_offsets[key], 2)
+        self.assertEqual(
+            controller._debate_last_conflict_targets[key],
+            (CHARACTER_CUSTODIAN,),
+        )
+        self.assertEqual(events, [*prior_events, event])
+        self.assertEqual(len(callbacks.records), 1)
+        rendered = "".join(callbacks.records)
+        self.assertNotIn("OLD_AUDIT_CURSOR", rendered)
+        self.assertEqual(rendered.count("NEW_AUDIT_CURSOR"), 1)
+        self.assertNotIn("audit write secret", rendered)
         backend.close()
 
 
@@ -3408,6 +4304,10 @@ class ControllerSettingsTests(ControllerTestCase):
                     "Conversation storage",
                     defaults.conversation_storage_backend or "filesystem",
                 ),
+                (
+                    "Message details",
+                    "On" if defaults.show_message_details else "Off",
+                ),
             ]
             for agent_id in ROSTER:
                 display_name = AGENT_SPECS[agent_id].display_name
@@ -3525,14 +4425,14 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(
             workspace,
             "/settings",
-            "5",
+            "6",
             "2",
             "1",
             "2",
             "/cancel",
             "/cancel",
             "/cancel",
-            "6",
+            "7",
             "1",
             "/quit",
             auth_coordinator=coordinator,
@@ -3589,14 +4489,14 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(
             workspace,
             "/settings",
-            "5",
+            "6",
             "2",
             "1",
             "2",
             "/cancel",
             "/cancel",
             "/cancel",
-            "7",
+            "8",
             "1",
             "/quit",
             auth_coordinator=coordinator,
@@ -3688,7 +4588,7 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(
             workspace,
             "/settings",
-            "5",
+            "6",
             "2",
             "1",
             "1",
@@ -3697,7 +4597,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "1",
             "/cancel",
             "/cancel",
-            "7",
+            "8",
             "1",
             "/quit",
             auth_coordinator=coordinator,
@@ -3745,7 +4645,7 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(
             workspace,
             "/settings",
-            "5",
+            "6",
             "2",
             "1",
             "1",
@@ -3754,7 +4654,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "1",
             "/cancel",
             "/cancel",
-            "7",
+            "8",
             "1",
             "/quit",
             auth_coordinator=coordinator,
@@ -3864,7 +4764,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "1",
             "2",
             "/cancel",
-            "6",
+            "7",
             "1",
             "/quit",
             auth_coordinator=coordinator,
@@ -3899,9 +4799,9 @@ class ControllerSettingsTests(ControllerTestCase):
             "1",
             "2",
             "/cancel",
-            "6",
-            "1",
             "7",
+            "1",
+            "8",
             "1",
             "/quit",
             auth_coordinator=coordinator,
@@ -4021,6 +4921,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "persona",
                     "max_debate_rounds",
                     "conversation_storage",
+                    "show_message_details",
                     "providers",
                 ),
                 (
@@ -4028,6 +4929,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "persona",
                     "max_debate_rounds",
                     "conversation_storage",
+                    "show_message_details",
                     "providers",
                     "save",
                     "cancel",
@@ -4037,6 +4939,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "persona",
                     "max_debate_rounds",
                     "conversation_storage",
+                    "show_message_details",
                     "providers",
                 ),
                 (
@@ -4044,6 +4947,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "persona",
                     "max_debate_rounds",
                     "conversation_storage",
+                    "show_message_details",
                     "providers",
                 ),
             ),
@@ -4059,6 +4963,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "Persona",
                     "Maximum debate rounds",
                     "Conversation storage",
+                    "Message details",
                     "Agents",
                 ),
                 (
@@ -4066,6 +4971,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "Persona",
                     "Maximum debate rounds",
                     "Conversation storage",
+                    "Message details",
                     "Agents",
                     "Apply Changes",
                     "Discard Changes",
@@ -4075,6 +4981,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "Persona",
                     "Maximum debate rounds",
                     "Conversation storage",
+                    "Message details",
                     "Agents",
                 ),
                 (
@@ -4082,6 +4989,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "Persona",
                     "Maximum debate rounds",
                     "Conversation storage",
+                    "Message details",
                     "Agents",
                 ),
             ),
@@ -4106,6 +5014,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "Current: default_kim_eun_hee",
                     "Current: 1",
                     "Current: filesystem",
+                    "Current: Off",
                     None,
                 ),
                 (
@@ -4113,6 +5022,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "Current: default_kim_eun_hee",
                     "Current: 1",
                     "Current: filesystem",
+                    "Current: Off",
                     None,
                     None,
                     "Pending changes will be discarded.",
@@ -4122,6 +5032,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "Current: default_kim_eun_hee",
                     "Current: 1",
                     "Current: filesystem",
+                    "Current: Off",
                     None,
                 ),
                 (
@@ -4129,6 +5040,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "Current: default_kim_eun_hee",
                     "Current: 1",
                     "Current: filesystem",
+                    "Current: Off",
                     None,
                 ),
             ),
@@ -4141,10 +5053,19 @@ class ControllerSettingsTests(ControllerTestCase):
                 for call in top_level_calls
             ),
             (
-                (default, default, default, default, default),
-                (warning, default, default, default, default, default, default),
-                (default, default, default, default, default),
-                (default, default, default, default, default),
+                (default, default, default, default, default, default),
+                (
+                    warning,
+                    default,
+                    default,
+                    default,
+                    default,
+                    default,
+                    default,
+                    default,
+                ),
+                (default, default, default, default, default, default),
+                (default, default, default, default, default, default),
             ),
         )
         self.assertEqual(
@@ -4153,10 +5074,10 @@ class ControllerSettingsTests(ControllerTestCase):
                 for call in top_level_calls
             ),
             (
-                (None, None, None, None, None),
-                (None, None, None, None, None, "(*Required)", None),
-                (None, None, None, None, None),
-                (None, None, None, None, None),
+                (None, None, None, None, None, None),
+                (None, None, None, None, None, None, "(*Required)", None),
+                (None, None, None, None, None, None),
+                (None, None, None, None, None, None),
             ),
         )
         self.assertEqual(
@@ -4697,7 +5618,7 @@ class ControllerSettingsTests(ControllerTestCase):
         run.assert_not_called()
         connect.assert_not_called()
 
-    def test_settings_open_is_exact_five_item_discovery_free_snapshot(self) -> None:
+    def test_settings_open_is_exact_six_item_discovery_free_snapshot(self) -> None:
         workspace = self.make_workspace()
         before = _tree_snapshot(workspace.root)
         catalog = ScriptedProviderCatalog(
@@ -4742,17 +5663,19 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertIn("Current: default_kim_eun_hee", callbacks.prompts[1])
         self.assertIn("Current: 1", callbacks.prompts[1])
         self.assertIn("Current: filesystem", callbacks.prompts[1])
+        self.assertIn("Current: Off", callbacks.prompts[1])
         settings_call = picker.call_args_list[0]
         self.assertEqual(settings_call.args[1].name, "Settings")
         self.assertIsNone(settings_call.kwargs["notice"])
         self.assertEqual(
             callbacks.prompts[1],
-            "Choices (highlighted 1/5) [open]\n"
+            "Choices (highlighted 1/6) [open]\n"
             "  1. [highlighted] Language — Current: KO\n"
             "  2. [available] Persona — Current: default_kim_eun_hee\n"
             "  3. [available] Maximum debate rounds — Current: 1\n"
             "  4. [available] Conversation storage — Current: filesystem\n"
-            "  5. [available] Agents\n"
+            "  5. [available] Message details — Current: Off\n"
+            "  6. [available] Agents\n"
             "[input] Enter a choice number, press Enter for the highlighted choice, or enter /cancel.\n"
             "Choose a setting to edit.\n"
             "Settings > ",
@@ -4764,6 +5687,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 "persona",
                 "max_debate_rounds",
                 "conversation_storage",
+                "show_message_details",
                 "providers",
             ),
         )
@@ -4774,6 +5698,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 "Persona",
                 "Maximum debate rounds",
                 "Conversation storage",
+                "Message details",
                 "Agents",
             ),
         )
@@ -4784,6 +5709,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 "Current: default_kim_eun_hee",
                 "Current: 1",
                 "Current: filesystem",
+                "Current: Off",
                 None,
             ),
         )
@@ -4818,14 +5744,14 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, _callbacks = self.make_controller(
             workspace,
             "/settings",
-            "5",
+            "6",
             "2",
             "1",
             "1",
             "/cancel",
             "/cancel",
             "/cancel",
-            "7",
+            "8",
             "1",
             "/quit",
             provider_catalog=catalog,
@@ -4970,6 +5896,78 @@ class ControllerSettingsTests(ControllerTestCase):
                     ),
                     (values[1], values[1]),
                 )
+
+    def test_message_details_editor_retains_exact_off_on_choices(self) -> None:
+        workspace = self.make_workspace()
+        controller, _backend, _callbacks = self.make_controller(workspace)
+        baseline = settings_module.load_settings_state(workspace)
+
+        def commit(value: str) -> terminal_module.ControlOutcome:
+            return terminal_module.ControlOutcome(
+                terminal_module.ControlOutcomeKind.COMMIT,
+                text=value,
+            )
+
+        cases = (
+            (baseline, "off", "on", "On", True),
+            (
+                settings_module.update_show_message_details(baseline, True),
+                "on",
+                "off",
+                "Off",
+                False,
+            ),
+        )
+        choices = (
+            terminal_module.Choice("off", "Off"),
+            terminal_module.Choice("on", "On"),
+        )
+        for state, initial, selected, display, expected in cases:
+            with self.subTest(selected=selected):
+                with mock.patch.object(
+                    terminal_module.InteractivePickerInput,
+                    "read_picker",
+                    autospec=True,
+                    side_effect=(commit(selected), commit(selected)),
+                ) as picker:
+                    updated, whole_cancel = (
+                        controller._edit_settings_message_details(state)
+                    )
+
+                self.assertFalse(whole_cancel)
+                self.assertIs(
+                    updated.pending.system_defaults.show_message_details,
+                    expected,
+                )
+                self.assertEqual(picker.call_count, 2)
+                self.assertTrue(
+                    all(call.args[2] == choices for call in picker.call_args_list)
+                )
+                self.assertEqual(
+                    (
+                        picker.call_args_list[0].kwargs["highlighted_id"],
+                        picker.call_args_list[0].kwargs["selected_id"],
+                    ),
+                    (initial, initial),
+                )
+                second = picker.call_args_list[1]
+                self.assertEqual(
+                    (
+                        second.kwargs["highlighted_id"],
+                        second.kwargs["selected_id"],
+                    ),
+                    (selected, selected),
+                )
+                self.assertEqual(
+                    second.kwargs["notice"],
+                    self.expected_entered_notice("message details", display),
+                )
+                prompt = picker.call_args_list[0].args[1]
+                self.assertEqual(prompt.name, "Message details")
+                self.assertIn("Choose Off for compact messages", prompt.instruction)
+                self.assertIn("Enter applies", prompt.instruction)
+                self.assertIn("press Esc", prompt.instruction)
+                self.assert_value_save_guidance(prompt.instruction)
 
     def test_rounds_editor_retains_valid_value_and_clears_stale_success(
         self,
@@ -6141,12 +7139,12 @@ class ControllerSettingsTests(ControllerTestCase):
         self,
     ) -> None:
         paths = {
-            "agents": ("5",),
-            "agent-settings": ("5", "2"),
-            "provider": ("5", "2", "1"),
-            "model": ("5", "2", "2"),
-            "effort": ("5", "2", "3"),
-            "custom-model": ("5", "2", "2", "3"),
+            "agents": ("6",),
+            "agent-settings": ("6", "2"),
+            "provider": ("6", "2", "1"),
+            "model": ("6", "2", "2"),
+            "effort": ("6", "2", "3"),
+            "custom-model": ("6", "2", "2", "3"),
         }
         for dirty in (False, True):
             for failure_type in (KeyboardInterrupt, EOFError):
@@ -6209,7 +7207,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "3",
             "0",
             "\x1b",
-            "6",
+            "7",
             "1",
             "/quit",
             terminal_width=120,
@@ -6282,7 +7280,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "1",
             "2",
             "/cancel",
-            "6",
+            "7",
             "1",
             "/quit",
             terminal_width=48,
@@ -6331,6 +7329,492 @@ class ControllerSettingsTests(ControllerTestCase):
             "EN",
         )
 
+    def test_message_details_only_save_is_confirmed_and_transaction_only(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        controller, backend, callbacks = self.make_controller(
+            workspace,
+            auth_coordinator=mock.Mock(),
+        )
+        state = settings_module.update_show_message_details(
+            settings_module.load_settings_state(workspace),
+            True,
+        )
+        agent_path = workspace.path("config/agent_configs.json")
+        route_path = workspace.path(
+            "agent_states/orchestrator_state/provider_route_generations.json"
+        )
+        agent_before = agent_path.read_bytes()
+        route_before = route_path.read_bytes()
+        route_generations_before = dict(backend.provider_route_generations())
+        profiles_before = tuple(
+            backend.execution_profile(agent_id) for agent_id in ROSTER
+        )
+        thread_status_before = tuple(
+            backend.execution_profile_thread_status(agent_id)
+            for agent_id in ROSTER
+        )
+        commit_save = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.COMMIT,
+            text="save",
+        )
+        events: list[str] = []
+        prepared_values = []
+        rendered_components = []
+        real_classify = (
+            InteractiveController._settings_change_is_message_details_only
+        )
+        real_prepare = controller_core_module.prepare_settings_save
+        real_commit = controller_core_module.commit_prepared_settings_save
+        real_output = controller._semantic_output.write_component
+
+        def confirm(_controller, candidate, *, action):
+            self.assertIs(candidate, state)
+            self.assertEqual(action, "save")
+            events.append("confirmation")
+            return "save"
+
+        def classify(candidate):
+            self.assertIs(candidate, state)
+            events.append("final dirty classification")
+            return real_classify(candidate)
+
+        def prepare(saved_workspace, candidate, *, provider_overrides=None):
+            events.append("prepare")
+            prepared = real_prepare(
+                saved_workspace,
+                candidate,
+                provider_overrides=provider_overrides,
+            )
+            prepared_values.append(prepared)
+            return prepared
+
+        def commit(saved_workspace, prepared):
+            events.append("commit")
+            self.assertIs(prepared, prepared_values[0])
+            self.assertEqual(prepared.configuration, state.pending)
+            self.assertEqual(prepared.switched_agents, ())
+            self.assertFalse(controller._show_message_details)
+            return real_commit(saved_workspace, prepared)
+
+        def write_component(_output, component):
+            events.append("completion")
+            rendered_components.append(component)
+            return real_output(component)
+
+        runtime_prepare = mock.AsyncMock()
+        runtime_commit = mock.AsyncMock()
+        runtime_discard = mock.Mock()
+        with (
+            mock.patch.object(
+                controller_core_module,
+                "load_settings_state",
+                return_value=state,
+            ),
+            mock.patch.object(
+                terminal_module.InteractivePickerInput,
+                "read_picker",
+                autospec=True,
+                return_value=commit_save,
+            ) as picker,
+            mock.patch.object(
+                InteractiveController,
+                "_settings_save_confirmation",
+                autospec=True,
+                side_effect=confirm,
+            ) as confirmation,
+            mock.patch.object(
+                InteractiveController,
+                "_settings_change_is_message_details_only",
+                autospec=True,
+                side_effect=classify,
+            ) as classification,
+            mock.patch.object(
+                controller_core_module,
+                "prepare_settings_save",
+                autospec=True,
+                side_effect=prepare,
+            ) as prepared_save,
+            mock.patch.object(
+                controller_core_module,
+                "commit_prepared_settings_save",
+                autospec=True,
+                side_effect=commit,
+            ) as committed_save,
+            mock.patch.object(
+                InteractiveController,
+                "_authenticate_settings_routes",
+                autospec=True,
+            ) as authenticate,
+            mock.patch.object(
+                backend,
+                "execution_profiles",
+            ) as execution_profiles,
+            mock.patch.object(
+                backend,
+                "stage_runtime_configuration",
+            ) as stage_backend,
+            mock.patch.object(
+                backend,
+                "validate_runtime_configuration_candidate",
+            ) as validate_backend,
+            mock.patch.object(
+                backend,
+                "discard_runtime_configuration",
+            ) as discard_backend,
+            mock.patch.object(
+                backend,
+                "record_runtime_configuration_recovery_required",
+            ) as recovery_backend,
+            mock.patch.object(
+                controller._runtime,
+                "prepare_runtime_configuration",
+                new=runtime_prepare,
+            ),
+            mock.patch.object(
+                controller._runtime,
+                "commit_runtime_configuration",
+                new=runtime_commit,
+            ),
+            mock.patch.object(
+                controller._runtime,
+                "discard_runtime_configuration",
+                new=runtime_discard,
+            ),
+            mock.patch.object(
+                controller_core_module,
+                "select_conversation_storage",
+            ) as select_storage,
+            mock.patch.object(
+                workspace,
+                "write_text",
+                wraps=workspace.write_text,
+            ) as write,
+            mock.patch.object(
+                type(controller._semantic_output),
+                "write_component",
+                autospec=True,
+                side_effect=write_component,
+            ) as output,
+        ):
+            controller._run_settings()
+
+        picker.assert_called_once()
+        confirmation.assert_called_once()
+        classification.assert_called_once_with(state)
+        prepared_save.assert_called_once()
+        committed_save.assert_called_once()
+        output.assert_called_once()
+        authenticate.assert_not_called()
+        execution_profiles.assert_not_called()
+        stage_backend.assert_not_called()
+        validate_backend.assert_not_called()
+        discard_backend.assert_not_called()
+        recovery_backend.assert_not_called()
+        runtime_prepare.assert_not_awaited()
+        runtime_commit.assert_not_awaited()
+        runtime_discard.assert_not_called()
+        select_storage.assert_not_called()
+        self.assertEqual(
+            events,
+            [
+                "confirmation",
+                "final dirty classification",
+                "prepare",
+                "commit",
+                "completion",
+            ],
+        )
+        self.assertEqual(
+            [call.args[0] for call in write.call_args_list],
+            ["config/system_defaults.json"],
+        )
+        self.assertEqual(agent_path.read_bytes(), agent_before)
+        self.assertEqual(route_path.read_bytes(), route_before)
+        self.assertEqual(
+            dict(backend.provider_route_generations()),
+            route_generations_before,
+        )
+        self.assertEqual(
+            tuple(backend.execution_profile(agent_id) for agent_id in ROSTER),
+            profiles_before,
+        )
+        self.assertEqual(
+            tuple(
+                backend.execution_profile_thread_status(agent_id)
+                for agent_id in ROSTER
+            ),
+            thread_status_before,
+        )
+        self.assertTrue(controller._show_message_details)
+        self.assertTrue(
+            settings_module.load_settings_state(
+                workspace
+            ).pending.system_defaults.show_message_details
+        )
+        self.assertEqual(
+            rendered_components,
+            [
+                terminal_module.Panel(
+                    "Settings",
+                    (
+                        terminal_module.Notice(
+                            (
+                                "Settings saved and applied to this running "
+                                "shell now."
+                            ),
+                            label="saved and applied",
+                            role=terminal_module.SemanticRole.SUCCESS,
+                            state=terminal_module.ViewState.COMPLETED,
+                        ),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                )
+            ],
+        )
+        self.assertEqual(
+            "".join(callbacks.records).count(
+                "[saved and applied] Settings saved and applied to this "
+                "running shell now.\n"
+            ),
+            1,
+        )
+
+    def test_message_details_only_save_rechecks_dirty_after_confirmation(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        controller, _backend, callbacks = self.make_controller(workspace)
+        state = settings_module.update_show_message_details(
+            settings_module.load_settings_state(workspace),
+            True,
+        )
+        commit_save = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.COMMIT,
+            text="save",
+        )
+        cancel = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.CANCEL
+        )
+
+        def clear_candidate(_controller, candidate, *, action):
+            self.assertEqual(action, "save")
+            object.__setattr__(
+                candidate,
+                "pending",
+                candidate.baseline.configuration,
+            )
+            return "save"
+
+        with (
+            mock.patch.object(
+                controller_core_module,
+                "load_settings_state",
+                return_value=state,
+            ),
+            mock.patch.object(
+                terminal_module.InteractivePickerInput,
+                "read_picker",
+                autospec=True,
+                side_effect=(commit_save, cancel),
+            ) as picker,
+            mock.patch.object(
+                InteractiveController,
+                "_settings_save_confirmation",
+                autospec=True,
+                side_effect=clear_candidate,
+            ) as confirmation,
+            mock.patch.object(
+                InteractiveController,
+                "_settings_change_is_message_details_only",
+                autospec=True,
+            ) as classification,
+            mock.patch.object(
+                controller_core_module,
+                "prepare_settings_save",
+            ) as prepare,
+            mock.patch.object(
+                controller_core_module,
+                "commit_prepared_settings_save",
+            ) as commit,
+            mock.patch.object(
+                InteractiveController,
+                "_authenticate_settings_routes",
+                autospec=True,
+            ) as authenticate,
+        ):
+            controller._run_settings()
+
+        self.assertEqual(picker.call_count, 2)
+        confirmation.assert_called_once()
+        classification.assert_not_called()
+        prepare.assert_not_called()
+        commit.assert_not_called()
+        authenticate.assert_not_called()
+        self.assertFalse(controller._show_message_details)
+        self.assertFalse(
+            settings_module.load_settings_state(
+                workspace
+            ).pending.system_defaults.show_message_details
+        )
+        self.assertEqual(callbacks.records, [])
+
+    def test_message_details_only_failures_preserve_activation_and_order(
+        self,
+    ) -> None:
+        failures = (
+            (
+                "prepare_settings_save",
+                settings_module.SettingsErrorKind.VALIDATION,
+            ),
+            (
+                "prepare_settings_save",
+                settings_module.SettingsErrorKind.CONFLICT,
+            ),
+            (
+                "commit_prepared_settings_save",
+                settings_module.SettingsErrorKind.WRITE,
+            ),
+            (
+                "commit_prepared_settings_save",
+                settings_module.SettingsErrorKind.ROLLBACK,
+            ),
+        )
+        for operation, kind in failures:
+            with self.subTest(operation=operation, kind=kind):
+                workspace = self.make_workspace()
+                controller, _backend, callbacks = self.make_controller(workspace)
+                state = settings_module.update_show_message_details(
+                    settings_module.load_settings_state(workspace),
+                    True,
+                )
+                before = _tree_snapshot(workspace.root)
+                if operation == "prepare_settings_save":
+                    with (
+                        mock.patch.object(
+                            controller_core_module,
+                            operation,
+                            side_effect=settings_module.SettingsError(kind),
+                        ) as failed,
+                        mock.patch.object(
+                            controller_core_module,
+                            "commit_prepared_settings_save",
+                        ) as commit,
+                    ):
+                        outcome = controller._save_message_details_setting(state)
+                    commit.assert_not_called()
+                else:
+                    with mock.patch.object(
+                        controller_core_module,
+                        operation,
+                        side_effect=settings_module.SettingsError(kind),
+                    ) as failed:
+                        outcome = controller._save_message_details_setting(state)
+
+                self.assertEqual(outcome, "retry")
+                failed.assert_called_once()
+                self.assertFalse(controller._show_message_details)
+                self.assertEqual(_tree_snapshot(workspace.root), before)
+                self.assertFalse(
+                    settings_module.load_settings_state(
+                        workspace
+                    ).pending.system_defaults.show_message_details
+                )
+                self.assertEqual(
+                    "".join(callbacks.records).count("[settings error]"),
+                    1,
+                )
+                self.assertNotIn("saved and applied", "".join(callbacks.records))
+
+        for tampering in ("configuration", "switched agents"):
+            with self.subTest(tampering=tampering):
+                workspace = self.make_workspace()
+                controller, backend, callbacks = self.make_controller(workspace)
+                state = settings_module.update_show_message_details(
+                    settings_module.load_settings_state(workspace),
+                    True,
+                )
+                before = _tree_snapshot(workspace.root)
+                prepared = settings_module.prepare_settings_save(
+                    workspace,
+                    state,
+                    provider_overrides=backend.backend_overrides,
+                )
+                tampered = (
+                    replace(
+                        prepared,
+                        configuration=state.baseline.configuration,
+                    )
+                    if tampering == "configuration"
+                    else replace(
+                        prepared,
+                        switched_agents=(PLOT_ARCHITECT,),
+                    )
+                )
+                with (
+                    mock.patch.object(
+                        controller_core_module,
+                        "prepare_settings_save",
+                        return_value=tampered,
+                    ) as prepare,
+                    mock.patch.object(
+                        controller_core_module,
+                        "commit_prepared_settings_save",
+                    ) as commit,
+                ):
+                    with self.assertRaises(
+                        controller_core_module._ControllerAbort
+                    ):
+                        controller._save_message_details_setting(state)
+
+                prepare.assert_called_once()
+                commit.assert_not_called()
+                self.assertFalse(controller._show_message_details)
+                self.assertEqual(_tree_snapshot(workspace.root), before)
+                self.assertEqual(callbacks.records, [])
+
+        workspace = self.make_workspace()
+        controller, _backend, _callbacks = self.make_controller(workspace)
+        state = settings_module.update_show_message_details(
+            settings_module.load_settings_state(workspace),
+            True,
+        )
+        agent_path = workspace.path("config/agent_configs.json")
+        route_path = workspace.path(
+            "agent_states/orchestrator_state/provider_route_generations.json"
+        )
+        agent_before = agent_path.read_bytes()
+        route_before = route_path.read_bytes()
+        terminal_failure = OSError("terminal write failed")
+        with (
+            mock.patch.object(
+                controller_core_module,
+                "commit_prepared_settings_save",
+                wraps=controller_core_module.commit_prepared_settings_save,
+            ) as commit,
+            mock.patch.object(
+                type(controller._semantic_output),
+                "write_component",
+                autospec=True,
+                side_effect=terminal_failure,
+            ) as output,
+        ):
+            with self.assertRaises(OSError) as caught:
+                controller._save_message_details_setting(state)
+
+        self.assertIs(caught.exception, terminal_failure)
+        commit.assert_called_once()
+        output.assert_called_once()
+        self.assertTrue(controller._show_message_details)
+        self.assertTrue(
+            settings_module.load_settings_state(
+                workspace
+            ).pending.system_defaults.show_message_details
+        )
+        self.assertEqual(agent_path.read_bytes(), agent_before)
+        self.assertEqual(route_path.read_bytes(), route_before)
+
     def test_settings_save_and_cancel_confirmation_controls_are_call_local(
         self,
     ) -> None:
@@ -6342,9 +7826,9 @@ class ControllerSettingsTests(ControllerTestCase):
                     "1",
                     "2",
                     "/cancel",
-                    "6",
-                    "2",
                     "7",
+                    "2",
+                    "8",
                     "1",
                     "/quit",
                 ),
@@ -6359,9 +7843,9 @@ class ControllerSettingsTests(ControllerTestCase):
                     "1",
                     "2",
                     "/cancel",
-                    "6",
-                    "/cancel",
                     "7",
+                    "/cancel",
+                    "8",
                     "1",
                     "/quit",
                 ),
@@ -6371,7 +7855,7 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
             (
                 "clean-action-ordinal-is-not-selectable",
-                ("/settings", "6", "/cancel", "/quit"),
+                ("/settings", "7", "/cancel", "/quit"),
                 0,
                 False,
                 0,
@@ -6398,9 +7882,9 @@ class ControllerSettingsTests(ControllerTestCase):
                     "1",
                     "2",
                     "/cancel",
-                    "7",
+                    "8",
                     "2",
-                    "7",
+                    "8",
                     "1",
                     "/quit",
                 ),
@@ -6417,7 +7901,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "/cancel",
                     "/cancel",
                     "/cancel",
-                    "7",
+                    "8",
                     "1",
                     "/quit",
                 ),
@@ -6432,7 +7916,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "1",
                     "2",
                     "/cancel",
-                    "7",
+                    "8",
                     KeyboardInterrupt(),
                     "/quit",
                 ),
@@ -6476,7 +7960,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "1",
                     "2",
                     "/cancel",
-                    "6",
+                    "7",
                     KeyboardInterrupt(),
                     "/quit",
                 ),
@@ -6491,7 +7975,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "1",
                     "2",
                     "/cancel",
-                    "6",
+                    "7",
                     EOFError(),
                     "/quit",
                 ),
@@ -6615,6 +8099,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "persona",
                     "max_debate_rounds",
                     "conversation_storage",
+                    "show_message_details",
                     "providers",
                 )
                 for call in picker.call_args_list
@@ -6700,6 +8185,7 @@ class ControllerSettingsTests(ControllerTestCase):
                             "persona",
                             "max_debate_rounds",
                             "conversation_storage",
+                            "show_message_details",
                             "providers",
                         ),
                     )
@@ -6756,21 +8242,21 @@ class ControllerSettingsTests(ControllerTestCase):
             "bad",
             "0",
             "\x1b",
-            "5",
+            "6",
             "2",
             "2",
             "3",
             "/cancel",
             "/cancel",
             "/cancel",
-            "5",
+            "6",
             "2",
             "3",
             "3",
             "/cancel",
             "/cancel",
             "/cancel",
-            "5",
+            "6",
             "2",
             "2",
             "4",
@@ -6779,7 +8265,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "/cancel",
             "/cancel",
             "/cancel",
-            "6",
+            "7",
             "1",
             "/quit",
             provider_catalog=catalog,
@@ -6910,14 +8396,14 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, backend, callbacks = self.make_controller(
             workspace,
             "/settings",
-            "5",
+            "6",
             "2",
             "1",
             "2",
             "/cancel",
             "/cancel",
             "/cancel",
-            "5",
+            "6",
             "2",
             "2",
             "4",
@@ -6927,14 +8413,14 @@ class ControllerSettingsTests(ControllerTestCase):
             "/cancel",
             "/cancel",
             "/cancel",
-            "5",
+            "6",
             "2",
             "3",
             "4",
             "/cancel",
             "/cancel",
             "/cancel",
-            "6",
+            "7",
             "1",
             "/quit",
             provider_catalog=catalog,
@@ -7011,6 +8497,102 @@ class ControllerSettingsTests(ControllerTestCase):
             ("antigravity", "agy-model", "high", 1),
         )
 
+    def test_mixed_message_details_save_uses_full_pipeline_and_activates_last(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        controller, backend, _callbacks = self.make_controller(workspace)
+        state = settings_module.update_show_message_details(
+            settings_module.update_language(
+                settings_module.load_settings_state(workspace),
+                "EN",
+            ),
+            True,
+        )
+        real_runtime_prepare = (
+            controller._runtime.prepare_runtime_configuration
+        )
+        real_runtime_commit = controller._runtime.commit_runtime_configuration
+        real_result = controller._write_settings_applied_result
+
+        runtime_prepare = mock.AsyncMock(wraps=real_runtime_prepare)
+
+        async def commit_runtime(runtime_candidate, backend_candidate):
+            self.assertFalse(controller._show_message_details)
+            result = await real_runtime_commit(
+                runtime_candidate,
+                backend_candidate,
+            )
+            self.assertFalse(controller._show_message_details)
+            return result
+
+        runtime_commit = mock.AsyncMock(side_effect=commit_runtime)
+
+        def write_result(_controller, *args, **kwargs):
+            self.assertTrue(controller._show_message_details)
+            return real_result(*args, **kwargs)
+
+        with (
+            mock.patch.object(
+                controller_core_module,
+                "prepare_settings_save",
+                wraps=controller_core_module.prepare_settings_save,
+            ) as prepare,
+            mock.patch.object(
+                backend,
+                "stage_runtime_configuration",
+                wraps=backend.stage_runtime_configuration,
+            ) as stage_backend,
+            mock.patch.object(
+                controller._runtime,
+                "prepare_runtime_configuration",
+                new=runtime_prepare,
+            ),
+            mock.patch.object(
+                backend,
+                "validate_runtime_configuration_candidate",
+                wraps=backend.validate_runtime_configuration_candidate,
+            ) as validate_backend,
+            mock.patch.object(
+                controller_core_module,
+                "select_conversation_storage",
+                wraps=controller_core_module.select_conversation_storage,
+            ) as select_storage,
+            mock.patch.object(
+                controller_core_module,
+                "commit_prepared_settings_save",
+                wraps=controller_core_module.commit_prepared_settings_save,
+            ) as commit_settings,
+            mock.patch.object(
+                controller._runtime,
+                "commit_runtime_configuration",
+                new=runtime_commit,
+            ),
+            mock.patch.object(
+                InteractiveController,
+                "_write_settings_applied_result",
+                autospec=True,
+                side_effect=write_result,
+            ) as result,
+        ):
+            self.assertEqual(
+                controller._save_and_apply_settings(state),
+                "applied",
+            )
+
+        self.assertEqual(prepare.call_count, 2)
+        stage_backend.assert_called_once()
+        runtime_prepare.assert_awaited_once()
+        validate_backend.assert_called_once()
+        select_storage.assert_called_once()
+        commit_settings.assert_called_once()
+        runtime_commit.assert_awaited_once()
+        result.assert_called_once()
+        self.assertTrue(controller._show_message_details)
+        loaded = settings_module.load_settings_state(workspace).pending
+        self.assertEqual(loaded.system_defaults.language, "EN")
+        self.assertTrue(loaded.system_defaults.show_message_details)
+
     def test_hot_save_preflight_quiescence_restore_and_recovery_are_truthful(
         self,
     ) -> None:
@@ -7021,11 +8603,15 @@ class ControllerSettingsTests(ControllerTestCase):
                 "/quit",
                 terminal_width=160,
             )
-            state = settings_module.update_agent_codex_model(
-                settings_module.load_settings_state(workspace),
-                PLOT_ARCHITECT,
-                "hot-ui-model",
+            state = settings_module.update_show_message_details(
+                settings_module.update_agent_codex_model(
+                    settings_module.load_settings_state(workspace),
+                    PLOT_ARCHITECT,
+                    "hot-ui-model",
+                ),
+                True,
             )
+            self.assertFalse(controller._show_message_details)
             return workspace, controller, backend, callbacks, state
 
         workspace, controller, backend, callbacks, state = setup_case()
@@ -7046,6 +8632,7 @@ class ControllerSettingsTests(ControllerTestCase):
             self.assertEqual(controller._save_and_apply_settings(state), "retry")
         stage.assert_called_once()
         prepare_runtime.assert_not_awaited()
+        self.assertFalse(controller._show_message_details)
         self.assertEqual(_tree_snapshot(workspace.root), before)
         self.assertEqual(backend.execution_profile(PLOT_ARCHITECT), before_profile)
         rendered = "".join(callbacks.records)
@@ -7075,6 +8662,7 @@ class ControllerSettingsTests(ControllerTestCase):
             self.assertEqual(controller._save_and_apply_settings(state), "retry")
         prepare_runtime.assert_awaited_once()
         discard_backend.assert_called_once()
+        self.assertFalse(controller._show_message_details)
         self.assertEqual(_tree_snapshot(workspace.root), before)
         self.assertEqual(backend.execution_profile(PLOT_ARCHITECT), before_profile)
         rendered = "".join(callbacks.records)
@@ -7104,6 +8692,7 @@ class ControllerSettingsTests(ControllerTestCase):
             self.assertEqual(controller._save_and_apply_settings(state), "retry")
         commit_runtime.assert_awaited_once()
         restore.assert_called_once()
+        self.assertFalse(controller._show_message_details)
         after_files = {
             relative: value[0]
             for relative, value in _tree_snapshot(workspace.root).items()
@@ -7147,6 +8736,7 @@ class ControllerSettingsTests(ControllerTestCase):
             )
         commit_runtime.assert_awaited_once()
         record_recovery.assert_called_once()
+        self.assertFalse(controller._show_message_details)
         self.assertNotEqual(_tree_snapshot(workspace.root), before)
         self.assertEqual(
             backend.execution_profile(PLOT_ARCHITECT).model,
@@ -7163,7 +8753,7 @@ class ControllerSettingsTests(ControllerTestCase):
             (
                 (
                     "/settings",
-                    "5",
+                    "6",
                     "2",
                     "2",
                     "/cancel",
@@ -7213,7 +8803,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "4",
             "2",
             "2",
-            "6",
+            "7",
             "1",
             "/quit",
             terminal_width=160,
@@ -7256,9 +8846,9 @@ class ControllerSettingsTests(ControllerTestCase):
             "1",
             "2",
             "/cancel",
-            "6",
-            "1",
             "7",
+            "1",
+            "8",
             "1",
             "/quit",
             terminal_width=160,
@@ -7323,9 +8913,9 @@ class ControllerSettingsTests(ControllerTestCase):
                     "1",
                     "2",
                     "/cancel",
-                    "6",
-                    "1",
                     "7",
+                    "1",
+                    "8",
                     "1",
                     "/quit",
                     terminal_width=160,
@@ -7421,9 +9011,9 @@ class ControllerSettingsTests(ControllerTestCase):
                     "1",
                     "2",
                     "/cancel",
-                    "6",
-                    "1",
                     "7",
+                    "1",
+                    "8",
                     "1",
                     "/quit",
                     terminal_width=160,
@@ -8275,29 +9865,39 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
         )
         self.assertTrue(
             all(
-                type(view.items[0]) is terminal_module.Record
+                type(view.items[0]) is terminal_module.Message
                 and view.items[0].state is terminal_module.ViewState.COMPLETED
+                and view.items[0].presentation
+                is terminal_module.MessagePresentation.CHAT_BLOCK
                 and view.state is terminal_module.ViewState.COMPLETED
                 for view in transcript_views
             )
         )
-        agent_records = [
+        agent_messages = [
             item
             for view in transcript_views
             for item in view.items
-            if type(item) is terminal_module.Record
+            if type(item) is terminal_module.Message
             and item.role is terminal_module.SemanticRole.AGENT
         ]
-        self.assertTrue(agent_records)
+        self.assertEqual(len(agent_messages), 3)
         self.assertEqual(
-            agent_records[0].content,
-            '{\n'
-            '  "answer": "界",\n'
-            '  "items": [\n'
-            '    1,\n'
-            '    true\n'
-            '  ]\n'
-            '}',
+            agent_messages[0],
+            terminal_module.Message(
+                "Lead Orchestrator → You",
+                '{\n'
+                '  "answer": "界",\n'
+                '  "items": [\n'
+                '    1,\n'
+                '    true\n'
+                '  ]\n'
+                '}',
+                role=terminal_module.SemanticRole.AGENT,
+                state=terminal_module.ViewState.COMPLETED,
+                presentation=terminal_module.MessagePresentation.CHAT_BLOCK,
+                metadata="Sequence: 1",
+                accent=terminal_module.SpeakerAccent.CYAN,
+            ),
         )
         transcript_notices = [
             component
@@ -8427,40 +10027,156 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                 side_effect=capture_component,
             ),
         ):
+            controller._show_message_details = False
+            controller._write_focused_conversation_history(
+                InteractiveAction(ActionKind.HISTORY)
+            )
+            off_end = len(components)
+            controller._show_message_details = True
             controller._write_focused_conversation_history(
                 InteractiveAction(ActionKind.HISTORY)
             )
 
-        read.assert_called_once_with("session", entry.conversation_id)
-        history_views = [
-            component
-            for component in components
-            if type(component) is terminal_module.ListView
-            and component.title == "History"
-        ]
-        self.assertEqual(len(history_views), 2)
-        records = [
-            view.items[0]
-            for view in history_views
-            if type(view.items[0]) is terminal_module.Record
-            and view.items[0].role is terminal_module.SemanticRole.AGENT
-        ]
-        self.assertEqual(len(records), 1)
-        record = records[0]
-        self.assertIs(type(record), terminal_module.Record)
-        self.assertIs(record.role, terminal_module.SemanticRole.AGENT)
         self.assertEqual(
-            record.content,
+            read.call_args_list,
+            [
+                mock.call("session", entry.conversation_id),
+                mock.call("session", entry.conversation_id),
+            ],
+        )
+        expected_body = (
             '{\n'
             '  "z": "界",\n'
             '  "a": [\n'
             '    1,\n'
             '    true\n'
             '  ]\n'
-            '}',
+            '}'
+        )
+        off_views = [
+            component
+            for component in components[:off_end]
+            if type(component) is terminal_module.ListView
+            and component.title == "History"
+        ]
+        on_views = [
+            component
+            for component in components[off_end:]
+            if type(component) is terminal_module.ListView
+            and component.title == "History"
+        ]
+        self.assertEqual(
+            [
+                (view.position, view.total_count, view.items[0])
+                for view in off_views
+            ],
+            [
+                (
+                    1,
+                    2,
+                    terminal_module.Message(
+                        "You → Lead Orchestrator",
+                        "question",
+                        state=terminal_module.ViewState.COMPLETED,
+                        presentation=(
+                            terminal_module.MessagePresentation.CHAT_BLOCK
+                        ),
+                        metadata="Sequence: 1",
+                        accent=terminal_module.SpeakerAccent.MAGENTA,
+                    ),
+                ),
+                (
+                    2,
+                    2,
+                    terminal_module.Message(
+                        "Lead Orchestrator → You",
+                        expected_body,
+                        role=terminal_module.SemanticRole.AGENT,
+                        state=terminal_module.ViewState.COMPLETED,
+                        presentation=(
+                            terminal_module.MessagePresentation.CHAT_BLOCK
+                        ),
+                        metadata="Sequence: 2",
+                        accent=terminal_module.SpeakerAccent.CYAN,
+                    ),
+                ),
+            ],
+        )
+        self.assertEqual(
+            [
+                (view.position, view.total_count, view.items[0])
+                for view in on_views
+            ],
+            [
+                (
+                    1,
+                    2,
+                    terminal_module.Message(
+                        "You → Lead Orchestrator",
+                        "question",
+                        state=terminal_module.ViewState.COMPLETED,
+                        presentation=(
+                            terminal_module.MessagePresentation.CHAT_BLOCK
+                        ),
+                        metadata=(
+                            "Sequence: 1 · Turn: turn_1 · "
+                            "Kind: user_message · "
+                            "IDs: user → lead_orchestrator"
+                        ),
+                        accent=terminal_module.SpeakerAccent.MAGENTA,
+                    ),
+                ),
+                (
+                    2,
+                    2,
+                    terminal_module.Message(
+                        "Lead Orchestrator → You",
+                        expected_body,
+                        role=terminal_module.SemanticRole.AGENT,
+                        state=terminal_module.ViewState.COMPLETED,
+                        presentation=(
+                            terminal_module.MessagePresentation.CHAT_BLOCK
+                        ),
+                        metadata=(
+                            "Sequence: 2 · Turn: turn_1 · "
+                            "Kind: agent_reply · "
+                            "IDs: lead_orchestrator → user"
+                        ),
+                        accent=terminal_module.SpeakerAccent.CYAN,
+                    ),
+                ),
+            ],
         )
         self.assertEqual(stored_event.content, raw_reply)
         self.assertIn('"z": "界"', "".join(callbacks.records))
+
+        runtime_error = _stored_transcript_event(
+            entry.conversation_id,
+            3,
+            content="sanitized runtime failure",
+            kind=ConversationEventKind.RUNTIME_ERROR,
+            sender="runtime",
+            recipient="user",
+            turn_id="turn_2",
+        )
+        controller._show_message_details = False
+        self.assertEqual(
+            controller._conversation_event_message(runtime_error),
+            terminal_module.Message(
+                "Runtime → You",
+                "sanitized runtime failure",
+                state=terminal_module.ViewState.COMPLETED,
+                presentation=terminal_module.MessagePresentation.CHAT_BLOCK,
+                metadata="Sequence: 3",
+                accent=terminal_module.SpeakerAccent.CYAN,
+            ),
+        )
+        controller._show_message_details = True
+        self.assertEqual(
+            controller._conversation_event_message(runtime_error).metadata,
+            "Sequence: 3 · Turn: turn_2 · Kind: runtime_error · "
+            "IDs: runtime → user",
+        )
 
     def test_malformed_fresh_transcript_pages_are_transcript_invalid(self) -> None:
         conversation_id = _UNIQUE_C

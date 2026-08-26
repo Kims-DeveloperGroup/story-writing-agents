@@ -116,7 +116,7 @@ ordinal sequence. `StoryRuntime` owns those values and allocates each
 invocation with attempt `1`; another agent, phase, replacement, or operation
 cannot reuse prior evidence.
 
-Construction first validates the complete nine-field
+Construction first validates the complete ten-field
 `config/system_defaults.json` object and closed per-agent objects in
 `config/agent_configs.json`, even when non-null constructor model/effort values
 would override persisted fields. Optional fields and canonical agents may be
@@ -127,8 +127,12 @@ backend construction observes and reconciles valid persisted changes, while
 existing other shells retain their captured state. The installed interactive
 `/settings` path is different: it stages and preflights a complete candidate,
 persists it, and swaps the current shell's backend/runtime generation without a
-restart. Launch overrides remain higher precedence and therefore mask the
-corresponding editor fields.
+restart. The one exception is a candidate that changes only Message details:
+that presentation-only fast path prepares, verifies, and commits configuration
+without authentication, storage readiness, backend/runtime, route-generation,
+or provider/thread work, then updates the active flag.
+Launch overrides remain higher precedence and therefore mask the corresponding
+editor fields.
 
 When present, the optional invocation arguments are inserted in this exact
 order immediately after `exec` and before any `resume` marker:
