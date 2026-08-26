@@ -945,6 +945,7 @@ class ConversationRetrievalResult:
     sources: tuple[ConversationRetrievalSource, ...]
     reference_operation_id: str | None = None
     rag_outcome: ConversationRagAttemptOutcome | None = None
+    rag_sources: tuple[ConversationRetrievalSource, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate result identity, context, content, and canonical sources."""
@@ -989,6 +990,18 @@ class ConversationRetrievalResult:
         ):
             raise TypeError(
                 "conversation retrieval RAG outcome must use the exact type"
+            )
+        _validate_sources(self.rag_sources, session_id=self.session_id)
+        if self.rag_sources and self.rag_outcome is None:
+            raise ValueError(
+                "conversation retrieval RAG sources require an attempted outcome"
+            )
+        rag_source_set = set(self.rag_sources)
+        if tuple(
+            source for source in self.sources if source in rag_source_set
+        ) != self.rag_sources:
+            raise ValueError(
+                "conversation retrieval RAG sources must be an ordered result subset"
             )
 
 

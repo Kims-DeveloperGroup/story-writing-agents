@@ -220,6 +220,56 @@ def update_conversation_storage_backend(
     )
 
 
+def update_conversation_rag_provider(
+    state: SettingsState,
+    provider: str | None,
+) -> SettingsState:
+    """Return pending state with one validated optional local RAG provider."""
+
+    _require_state(state)
+    validated = ConfigManager.validate_conversation_rag_provider(
+        provider,
+        allow_none=True,
+    )
+    defaults = state.pending.system_defaults
+    return _with_system_defaults(
+        state,
+        replace(
+            defaults,
+            conversation_rag_provider=validated,
+            conversation_rag_automatic=(
+                defaults.conversation_rag_automatic
+                if validated == "local"
+                else False
+            ),
+        ),
+    )
+
+
+def update_conversation_rag_automatic(
+    state: SettingsState,
+    automatic: bool,
+) -> SettingsState:
+    """Return pending state with one valid local-only automatic RAG policy."""
+
+    _require_state(state)
+    validated = ConfigManager.validate_conversation_rag_automatic(automatic)
+    if (
+        validated
+        and state.pending.system_defaults.conversation_rag_provider != "local"
+    ):
+        raise ConfigurationError(
+            "conversation_rag_automatic requires the local RAG provider"
+        )
+    return _with_system_defaults(
+        state,
+        replace(
+            state.pending.system_defaults,
+            conversation_rag_automatic=validated,
+        ),
+    )
+
+
 def update_agent_backend(
     state: SettingsState,
     agent_id: str,

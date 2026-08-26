@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from dataclasses import dataclass, field
 from types import TracebackType
 
 from ..agents import (
@@ -13,7 +14,7 @@ from ..agents import (
     ROSTER,
     SPECIALIST_IDS,
 )
-from ..backend import AgentBackend
+from ..backend import AgentBackend, backend_configuration_snapshot
 from ..cli_context import (
     CliContext,
     load_default_conversation,
@@ -31,6 +32,10 @@ from ..conversation_retrieval import (
     ConversationRetrievalProgressPhase,
     ConversationRetrievalResult,
     ConversationRetrievalSource,
+)
+from ..conversation_rag_composition import (
+    ConversationRagCompositionError,
+    compose_local_conversation_rag_runtime,
 )
 from ..conversation_storage.contracts import ConversationStorageServices
 from ..conversation_storage.selection import (
@@ -94,6 +99,8 @@ from ..interactive_settings import (
     update_agent_backend,
     update_agent_codex_model,
     update_agent_codex_reasoning_effort,
+    update_conversation_rag_automatic,
+    update_conversation_rag_provider,
     update_conversation_storage_backend,
     update_language,
     update_max_debate_rounds,
@@ -251,6 +258,27 @@ _SETTINGS_UNARMED = object()
 
 
 _ExceptionState = tuple[BaseException, TracebackType | None]
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingConversationRagQuery:
+    """Retain one private next-turn query in its exact process-local scope."""
+
+    session_id: str
+    conversation_id: str
+    query: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        Workspace.validate_identifier(self.session_id)
+        Workspace.validate_identifier(
+            self.conversation_id,
+            label="conversation ID",
+        )
+        ConversationSearchQuery(
+            text=self.query,
+            limit=20,
+            include_archived=False,
+        )
 
 
 def _effective_settings_provider(
@@ -412,6 +440,28 @@ def _settings_projection(
             current.system_defaults.conversation_storage_backend or "filesystem",
             pending.system_defaults.conversation_storage_backend or "filesystem",
         ),
+        (
+            "conversation_rag_provider",
+            None,
+            "Conversation RAG Provider",
+            (
+                "Local"
+                if current.system_defaults.conversation_rag_provider == "local"
+                else "Disabled"
+            ),
+            (
+                "Local"
+                if pending.system_defaults.conversation_rag_provider == "local"
+                else "Disabled"
+            ),
+        ),
+        (
+            "conversation_rag_automatic",
+            None,
+            "Conversation RAG Automatic",
+            "On" if current.system_defaults.conversation_rag_automatic else "Off",
+            "On" if pending.system_defaults.conversation_rag_automatic else "Off",
+        ),
     ]
     for agent_id in ROSTER:
         display_name = AGENT_SPECS[agent_id].display_name
@@ -525,6 +575,7 @@ class InteractiveController:
         "_conversation_catalog",
         "_conversation_event_store",
         "_conversation_memory_service",
+        "_conversation_rag_startup_unavailable",
         "_conversation_storage_services",
         "_composition_input",
         "_context",
@@ -535,6 +586,7 @@ class InteractiveController:
         "_picker_input",
         "_prompt_input",
         "_provider_catalog",
+        "_pending_rag_query",
         "_advisory_progress",
         "_debate_progress",
         "_runner",
@@ -628,6 +680,25 @@ class InteractiveController:
             raise TypeError(
                 "conversation_storage_services must be ConversationStorageServices"
             )
+        startup_configuration = backend_configuration_snapshot(backend)
+        rag_service = None
+        self._conversation_rag_startup_unavailable = False
+        if startup_configuration.system_defaults.conversation_rag_provider == "local":
+            if conversation_storage_services is None:
+                self._conversation_rag_startup_unavailable = True
+            else:
+                try:
+                    rag_composition = compose_local_conversation_rag_runtime(
+                        workspace,
+                        automatic_enabled=(
+                            startup_configuration.system_defaults
+                            .conversation_rag_automatic
+                        ),
+                    )
+                except ConversationRagCompositionError:
+                    self._conversation_rag_startup_unavailable = True
+                else:
+                    rag_service = rag_composition.service
         if conversation_storage_services is None and conversation_catalog is None:
             self._runtime = StoryRuntime(workspace, backend)
             conversation_storage_services = (
@@ -640,6 +711,7 @@ class InteractiveController:
                 workspace,
                 backend,
                 conversation_storage_services=conversation_storage_services,
+                conversation_rag_service=rag_service,
             )
         resolved_catalog = (
             conversation_storage_services.catalog
@@ -673,6 +745,7 @@ class InteractiveController:
         self._conversation_memory_service: (
             ConversationMemoryService | None
         ) = None
+        self._pending_rag_query: _PendingConversationRagQuery | None = None
         self._attached_session_id: str | None = None
         self._focused_conversation: ConversationMetadata | None = None
         self._target_agent_id = LEAD_ORCHESTRATOR
@@ -772,6 +845,22 @@ class InteractiveController:
 
         self._semantic_output.write_component(
             Notice(text, label=label, role=role, state=state)
+        )
+
+    def _write_conversation_rag_startup_warning(self) -> None:
+        """Render one fixed warning when configured local RAG was unavailable."""
+
+        if not self._conversation_rag_startup_unavailable:
+            return
+        self._write_notice(
+            (
+                "Conversation RAG is unavailable for this shell. Verify the "
+                "pinned rag extra and restart; settings remain available and "
+                "configuration was not changed."
+            ),
+            label="conversation RAG",
+            role=SemanticRole.WARNING,
+            state=ViewState.ERROR,
         )
 
     def _write_counted_list_row(
@@ -1136,6 +1225,7 @@ class InteractiveController:
         try:
             try:
                 self._runner = asyncio.Runner()
+                self._write_conversation_rag_startup_warning()
                 startup_requested_exit = self._enter_initial_session(
                     requested_session
                 )
@@ -1919,6 +2009,7 @@ class InteractiveController:
     ) -> bool:
         """Record and execute one fixed parsed interactive command."""
 
+        self._synchronize_pending_rag_scope()
         session_id = self._attached_session_id
         conversation_id = (
             None
@@ -1964,6 +2055,8 @@ class InteractiveController:
                 agent_id=agent_id,
             )
             raise
+        finally:
+            self._synchronize_pending_rag_scope()
         rejected = self._error_write_count > error_write_count
         self._trace_debug(
             DebugOperation.INTERACTIVE_COMMAND,
@@ -2029,6 +2122,7 @@ class InteractiveController:
         if action.kind is ActionKind.SESSION_PAUSE:
             return self._pause_attached_session()
         if action.kind is ActionKind.QUIT:
+            self._pending_rag_query = None
             return True
         if action.kind is ActionKind.PARSE_ERROR:
             self._write_parser_error(action, original_line)
@@ -2051,6 +2145,9 @@ class InteractiveController:
             return False
         if action.kind is ActionKind.SET_TARGET:
             self._set_target_agent(action)
+            return False
+        if action.kind is ActionKind.RAG:
+            self._arm_conversation_rag_query(action)
             return False
         if action.kind in {
             ActionKind.MESSAGE,
@@ -2282,6 +2379,14 @@ class InteractiveController:
                 for root_id, agent_id, _label, current_value, pending_value in projection
                 if root_id == "providers" and agent_id is not None
             )
+            current_rag = (
+                f"Provider {root_values['conversation_rag_provider'][0]}; "
+                f"Automatic {root_values['conversation_rag_automatic'][0]}"
+            )
+            pending_rag = (
+                f"Provider {root_values['conversation_rag_provider'][1]}; "
+                f"Automatic {root_values['conversation_rag_automatic'][1]}"
+            )
             choices = (
                 Choice(
                     "language",
@@ -2319,6 +2424,15 @@ class InteractiveController:
                         if root_values["conversation_storage"][0]
                         != root_values["conversation_storage"][1]
                         else f"Current: {root_values['conversation_storage'][0]}"
+                    ),
+                ),
+                Choice(
+                    "conversation_rag",
+                    "Conversation RAG",
+                    description=(
+                        f"Pending: {pending_rag}"
+                        if current_rag != pending_rag
+                        else f"Current: {current_rag}"
                     ),
                 ),
                 Choice(
@@ -2596,6 +2710,8 @@ class InteractiveController:
             return self._edit_settings_rounds(state)
         if selected == "conversation_storage":
             return self._edit_settings_storage(state)
+        if selected == "conversation_rag":
+            return self._edit_settings_conversation_rag(state)
         if selected == "providers":
             return self._edit_settings_provider(state)
         raise _ControllerAbort(
@@ -2793,6 +2909,178 @@ class InteractiveController:
             notice = _settings_entered_notice(
                 "conversation storage",
                 armed_value,
+            )
+
+    def _edit_settings_conversation_rag(
+        self,
+        state: SettingsState,
+    ) -> tuple[SettingsState, bool]:
+        """Edit pending local RAG policy without probing optional resources."""
+
+        highlighted = "provider"
+        while True:
+            current = state.baseline.configuration.system_defaults
+            pending = state.pending.system_defaults
+            current_provider = (
+                "Local" if current.conversation_rag_provider == "local" else "Disabled"
+            )
+            pending_provider = (
+                "Local" if pending.conversation_rag_provider == "local" else "Disabled"
+            )
+            current_automatic = "On" if current.conversation_rag_automatic else "Off"
+            pending_automatic = "On" if pending.conversation_rag_automatic else "Off"
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Conversation RAG",
+                    instruction=(
+                        "Choose Provider or Automatic to edit; press Esc to "
+                        "return to Settings. Optional-package compatibility is "
+                        "checked only when the next shell starts."
+                    ),
+                ),
+                (
+                    Choice(
+                        "provider",
+                        "Provider",
+                        description=(
+                            f"Pending: {pending_provider}"
+                            if current_provider != pending_provider
+                            else f"Current: {current_provider}"
+                        ),
+                    ),
+                    Choice(
+                        "automatic",
+                        "Automatic",
+                        description=(
+                            f"Pending: {pending_automatic}"
+                            if current_automatic != pending_automatic
+                            else f"Current: {current_automatic}"
+                        ),
+                    ),
+                ),
+                highlighted_id=highlighted,
+                transient=True,
+            )
+            selected, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel:
+                return state, True
+            if selected is None:
+                return state, False
+            highlighted = selected
+            if selected == "provider":
+                state, cancelled = self._edit_settings_rag_provider(state)
+            elif selected == "automatic":
+                state, cancelled = self._edit_settings_rag_automatic(state)
+            else:
+                raise _ControllerAbort(
+                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                )
+            if cancelled:
+                return state, True
+
+    def _edit_settings_rag_provider(
+        self,
+        state: SettingsState,
+    ) -> tuple[SettingsState, bool]:
+        """Select Disabled or Local while retaining the pending transaction."""
+
+        notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
+        while True:
+            pending = state.pending.system_defaults.conversation_rag_provider
+            pending_id = "local" if pending == "local" else "disabled"
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Conversation RAG Provider",
+                    instruction=_settings_value_instruction(
+                        "Choose Disabled or Local. Disabling also turns "
+                        "Automatic off. Enter applies the value and keeps this "
+                        "editor open; press Esc to return to Conversation RAG."
+                    ),
+                ),
+                (
+                    Choice("disabled", "Disabled"),
+                    Choice("local", "Local"),
+                ),
+                highlighted_id=pending_id,
+                selected_id=pending_id,
+                notice=notice,
+                transient=True,
+            )
+            value, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel:
+                return state, True
+            if value is None:
+                return state, False
+            if armed_value == value:
+                return state, False
+            if value not in {"disabled", "local"}:
+                raise _ControllerAbort(
+                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                )
+            state = update_conversation_rag_provider(
+                state,
+                "local" if value == "local" else None,
+            )
+            armed_value = value
+            notice = _settings_entered_notice(
+                "Conversation RAG provider",
+                "Local" if value == "local" else "Disabled",
+            )
+
+    def _edit_settings_rag_automatic(
+        self,
+        state: SettingsState,
+    ) -> tuple[SettingsState, bool]:
+        """Select Off or On while enforcing the local-provider invariant."""
+
+        notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
+        while True:
+            automatic = state.pending.system_defaults.conversation_rag_automatic
+            pending_id = "on" if automatic else "off"
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Conversation RAG Automatic",
+                    instruction=_settings_value_instruction(
+                        "Choose Off or On. On requires the pending Local "
+                        "provider. Enter applies the value and keeps this editor "
+                        "open; press Esc to return to Conversation RAG."
+                    ),
+                ),
+                (Choice("off", "Off"), Choice("on", "On")),
+                highlighted_id=pending_id,
+                selected_id=pending_id,
+                notice=notice,
+                transient=True,
+            )
+            value, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel:
+                return state, True
+            if value is None:
+                return state, False
+            if armed_value == value:
+                return state, False
+            if value not in {"off", "on"}:
+                raise _ControllerAbort(
+                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                )
+            try:
+                state = update_conversation_rag_automatic(
+                    state,
+                    value == "on",
+                )
+            except ConfigurationError:
+                notice = None
+                armed_value = _SETTINGS_UNARMED
+                self._write_settings_validation(
+                    "Automatic Conversation RAG requires the Local provider."
+                )
+                continue
+            armed_value = value
+            notice = _settings_entered_notice(
+                "Conversation RAG automatic",
+                "On" if value == "on" else "Off",
             )
 
     def _confirm_storage_installation(
@@ -4299,6 +4587,71 @@ class InteractiveController:
 
         self._present_memory_error(classify_inspection_failure(failure))
 
+    def _synchronize_pending_rag_scope(self) -> None:
+        """Discard a pending query after its exact attachment scope changes."""
+
+        pending = self._pending_rag_query
+        if pending is None:
+            return
+        conversation_id = (
+            None
+            if self._focused_conversation is None
+            else self._focused_conversation.conversation_id
+        )
+        if (
+            pending.session_id != self._attached_session_id
+            or pending.conversation_id != conversation_id
+        ):
+            self._pending_rag_query = None
+
+    def _arm_conversation_rag_query(self, action: InteractiveAction) -> None:
+        """Replace one exact-scope private query without provider or durability."""
+
+        assert action.kind is ActionKind.RAG
+        assert action.rag_query is not None
+        if self._attached_session_id is None:
+            self._write_error(
+                InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
+            )
+            return
+        focused = self._require_active_conversation_focus()
+        if focused is None:
+            return
+        self._pending_rag_query = _PendingConversationRagQuery(
+            session_id=self._attached_session_id,
+            conversation_id=focused.conversation_id,
+            query=action.rag_query,
+        )
+        self._write_notice(
+            (
+                "Conversation RAG is armed for the next ordinary, /say, or "
+                "routed story turn in this conversation."
+            ),
+            label="conversation RAG",
+            role=SemanticRole.SUCCESS,
+            state=ViewState.COMPLETED,
+        )
+
+    def _consume_pending_rag_query(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+    ) -> str | None:
+        """Consume one matching query only after its advisory coroutine enters."""
+
+        pending = self._pending_rag_query
+        if pending is None:
+            return None
+        if (
+            pending.session_id != session_id
+            or pending.conversation_id != conversation_id
+        ):
+            self._pending_rag_query = None
+            return None
+        self._pending_rag_query = None
+        return pending.query
+
     def _set_target_agent(self, action: InteractiveAction) -> None:
         """Set one attached process's sticky responder without provider work.
 
@@ -4350,6 +4703,7 @@ class InteractiveController:
         session_id = self._attached_session_id
         assert session_id is not None
         assert action.text is not None
+        turn_text = action.text
         if action.kind is ActionKind.ROUTED_MESSAGE:
             assert action.agent_id is not None
             agent_id = action.agent_id
@@ -4371,7 +4725,7 @@ class InteractiveController:
         self._semantic_output.write_accepted_input(
             Message(
                 f"you → {_AGENT_PROMPT_ALIASES[agent_id]}",
-                action.text,
+                turn_text,
                 role=SemanticRole.DEFAULT,
                 state=ViewState.COMPLETED,
             )
@@ -4409,13 +4763,18 @@ class InteractiveController:
             nonlocal operation_joined
             operation_entered = True
             try:
+                rag_query = self._consume_pending_rag_query(
+                    session_id=session_id,
+                    conversation_id=focused.conversation_id,
+                )
                 return await self._runtime.converse_with_retrieval(
                     session_id,
                     focused.conversation_id,
                     agent_id,
-                    action.text,
+                    turn_text,
                     memory_service=memory_service,
                     progress_sink=accept_and_render_progress,
+                    rag_query=rag_query,
                 )
             except asyncio.CancelledError:
                 cancellation_reached_operation = True
@@ -4501,6 +4860,7 @@ class InteractiveController:
             raise _ControllerAbort(
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
             ) from None
+        self._render_conversation_rag_outcome(result)
         if result.context.truncated:
             event_count = len(result.context.events)
             retained_turns = result.context.retained_turns
@@ -4536,6 +4896,31 @@ class InteractiveController:
             )
         )
         self._render_conversation_retrieval_sources(result.sources)
+
+    def _render_conversation_rag_outcome(
+        self,
+        result: ConversationRetrievalResult,
+    ) -> None:
+        """Render only the fixed content-free facts of one attempted preflight."""
+
+        attempt = result.rag_outcome
+        if attempt is None:
+            return
+        self._semantic_output.write_component(
+            Record(
+                "context",
+                fields=(
+                    Field("Conversation RAG", attempt.outcome.value),
+                    Field("Reason", attempt.reason.value),
+                ),
+                role=(
+                    SemanticRole.SUCCESS
+                    if attempt.outcome.value == "complete"
+                    else SemanticRole.WARNING
+                ),
+                state=ViewState.COMPLETED,
+            )
+        )
 
     def _accept_conversation_retrieval_progress(
         self,
@@ -6632,6 +7017,7 @@ class InteractiveController:
         self._attached_session_id = None
         self._focused_conversation = None
         self._conversation_memory_service = None
+        self._pending_rag_query = None
         self._target_agent_id = LEAD_ORCHESTRATOR
         self._trace_debug(
             DebugOperation.ATTACHMENT,
@@ -6792,6 +7178,7 @@ class InteractiveController:
         self._attached_session_id = None
         self._focused_conversation = None
         self._conversation_memory_service = None
+        self._pending_rag_query = None
         raise _ControllerAbort(
             InteractiveError(InteractiveErrorCode.CLEANUP_FAILED)
         )
@@ -6842,6 +7229,7 @@ class InteractiveController:
         runner = self._runner
         discard_runner_state_after_cleanup = runner is None
         attached_session = self._attached_session_id
+        self._pending_rag_query = None
         if runner is not None:
             try:
                 runner.close()
@@ -6924,6 +7312,7 @@ class InteractiveController:
         self._attached_session_id = None
         self._focused_conversation = None
         self._conversation_memory_service = None
+        self._pending_rag_query = None
         self._closed = True
 
         if cleanup_failed and not cleanup_error_reported:
