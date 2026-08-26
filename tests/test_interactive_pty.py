@@ -2358,7 +2358,7 @@ print(
                     1,
                 )
                 returned_mark = process.output_mark()
-                process.send_text(("\x1b[B" * 5) + "\n")
+                process.send_text(("\x1b[B" * 6) + "\n")
                 process.send_text("\n")
                 saved = process.wait_for_text(
                     "[saved] Settings saved.",
@@ -2416,7 +2416,7 @@ print(
             after=mark,
         )
 
-        process.send_text(("\x1b[B" * 4) + "\n")
+        process.send_text(("\x1b[B" * 5) + "\n")
         process.wait_for_text("Select an agent to configure", after=mark)
         process.send_text("\x1b[B\n")
         process.wait_for_text(
@@ -2511,7 +2511,7 @@ print(
         mark = process.output_mark()
         process.send_text("/settings\n\n")
         process.wait_for_text("[highlighted] Language", after=mark)
-        process.send_text(("\x1b[B" * 4) + "\n")
+        process.send_text(("\x1b[B" * 5) + "\n")
         process.wait_for_text("Agents [focused] [open]", after=mark)
         process.send_text("\x1b[B\n")
         process.wait_for_text("Agent settings", after=mark)
@@ -2549,9 +2549,15 @@ print(
             "ChooseSavetopersistpendingchanges",
             "".join(process.normalized_text.split()),
         )
+        cancel_description_mark = process.output_mark()
+        process.send_text("\x1b[B" * 2)
+        cancel_description = process.wait_for_text(
+            "[highlighted] Cancel",
+            after=cancel_description_mark,
+        )
         self.assertIn(
             "Pendingchangeswillbediscarded.",
-            "".join(returned_settings.split()),
+            "".join(cancel_description.split()),
         )
         cancelled_mark = process.output_mark()
         process.send_text("\x1b")
@@ -2638,8 +2644,8 @@ print(
         process.wait_for_text("story[lobby]> ")
         mark = process.output_mark()
         process.send_line("/settings")
-        process.wait_for_text("7. [available] Cancel", after=mark)
-        process.send_line("5")
+        process.wait_for_text("8. [available] Cancel", after=mark)
+        process.send_line("6")
         process.wait_for_text("Agents > ", after=mark)
         process.send_line("2")
         process.wait_for_text("Agent settings", after=mark)
@@ -2670,16 +2676,16 @@ print(
         process.wait_for_text("Agents > ", after=model_mark)
         process.send_line("/cancel")
         returned_settings = process.wait_for_text(
-            "7. [available] Cancel",
+            "8. [available] Cancel",
             after=model_mark,
         )
         self.assertIn("[save required]", returned_settings)
-        self.assertIn("6. [available] Save (*Required)", returned_settings)
+        self.assertIn("7. [available] Save (*Required)", returned_settings)
         self.assertIn(
             "ChooseSavetopersistpendingchanges",
             "".join(returned_settings.split()),
         )
-        process.send_line("6")
+        process.send_line("7")
         process.send_line("1")
         process.wait_for_text("Settings saved", after=mark)
         process.wait_for_text("story[lobby]> ", after=mark)
@@ -2909,9 +2915,9 @@ print(
 
         settings_mark = process.output_mark()
         process.send_line("/settings")
-        process.wait_for_text("7. [available] Cancel", after=settings_mark)
+        process.wait_for_text("8. [available] Cancel", after=settings_mark)
         self._set_auth_state(codex="unauthenticated")
-        process.send_line("6")
+        process.send_line("7")
         process.wait_for_text("Save settings?", after=settings_mark)
         process.send_line("1")
         process.wait_for_text("Provider authentication", after=settings_mark)
@@ -3114,6 +3120,7 @@ print(
         compact_preview = "".join(preview.split())
         for token in (
             "/say",
+            "/rag",
             "/to",
             "/agent",
             "/agents",
@@ -4496,7 +4503,7 @@ print("RESULT=" + json.dumps({
         preview_mark = process.output_mark()
         process.send_text("/")
         process.wait_for_text("Suggestions [open]", after=preview_mark)
-        process.send_text("\x1b[B")
+        process.send_text("\x1b[B" * 2)
         process.wait_for_text("[highlighted] /to", after=preview_mark)
         close_mark = process.output_mark()
         process.send_text("\x1b")
@@ -4564,7 +4571,7 @@ print("RESULT=" + json.dumps({
         mark = process.output_mark()
         process.send_text("/")
         process.wait_for_text("Suggestions [open]", after=mark)
-        process.send_text("\x1b[B")
+        process.send_text("\x1b[B" * 2)
         process.wait_for_text("[highlighted] /to", after=mark)
         process.send_text("\t")
         process.wait_for_text("story[lobby]> /to", after=mark)

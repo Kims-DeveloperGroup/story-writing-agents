@@ -18,7 +18,7 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 76.
 
-Direct internal dependency edges indexed: 305.
+Direct internal dependency edges indexed: 307.
 
 ## Current Dependency Direction
 
@@ -65,6 +65,7 @@ interactive_controller._core -> interactive_controller._session_policy
                              -> interactive_controller._conversation_policy
                              -> interactive_controller._runtime_policy
                              -> agents/backend/cli_context/debug_log
+                             -> conversation_rag_composition
                              -> conversation_retrieval/conversation_search
                              -> conversation_storage.contracts/selection
                              -> conversations/errors/interactive_commands
@@ -81,7 +82,7 @@ smoke -> agents/conversation_retrieval/conversation_search/conversations/debug_l
       -> models/orchestrator/session_lifecycle/workspace/writing_artifacts.repository
 debug_log -> agents/workspace
 directives -> config/workspace/errors/agents
-interactive_commands -> agents
+interactive_commands -> agents/conversation_search
 interactive_auth -> interactive_terminal/provider_auth
 interactive_line_editor -> interactive_commands/interactive_terminal
 interactive_settings -> agents/config/errors/workspace
@@ -1211,9 +1212,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   contract names remain package-facade exports; the three RAG values and the
   serializer are supported only from this direct module, preserving the exact
   120-name root facade. `ConversationRetrievalRequest` carries additive
-  optional `rag_context`; `ConversationRetrievalResult`
-  carries additive optional `rag_outcome`. Both default to `None`, so no-attempt
-  construction and provider payloads omit RAG context exactly. Attempted
+  optional `rag_context`; `ConversationRetrievalResult` carries additive
+  optional `rag_outcome` plus trailing `rag_sources`, an exact unique result-
+  ordered subset of sources proven to originate in the preflight-authorized
+  RAG context. The outcome defaults to `None` and provenance to an empty tuple,
+  so no-attempt construction and provider payloads omit RAG context exactly;
+  nonempty provenance requires an attempted outcome. Attempted
   context always includes outcome/reason, canonical `g1` through `g20`
   authoritative excerpts, exact retained UTF-8 bytes, and truncation.
   `ConversationRetrievalResult`
@@ -2296,7 +2300,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   `start_sequence` field;
   existing action payloads remain compatible. `/search QUERY` and
   `/transcript ID [COUNT] [--from SEQUENCE]` participate in the same immutable
-  help registry and exact parser. Global no-argument `/auth` and `/settings`
+  help registry and exact parser. Additive alias-free `/rag QUERY` validates
+  the established strict-UTF-8, control-free, nonblank 200-code-point search
+  query contract and carries it only in a keyword-only, representation-hidden
+  `rag_query` field. The command is provider-neutral control input, so provider-
+  text projection returns no span and parsing performs no provider, storage, or
+  persistence work. Global no-argument `/auth` and `/settings`
   are represented by the additive `AUTH` and `SETTINGS` actions and the same
   help/completion grammar. Their registry metadata truthfully allows native
   provider calls and artifact writes: authentication may persist provider-owned
@@ -2319,7 +2328,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   token except exact `--output` is rejected as an unknown flag instead of
   becoming prompt text. The package facade does not re-export the route
   metadata.
-- **Direct internal dependencies:** `agents`.
+- **Direct internal dependencies:** `agents` and `conversation_search`.
 - **State, resources, and side effects:** Immutable command and agent-route
   metadata only. Completion and provider-span projection are pure and
   call-local; the module owns
@@ -2373,6 +2382,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   conversation history; roster,
   sticky-target, current-session search, and bounded transcript-read actions;
   global attached-or-unattached persistent settings editing;
+  private next-turn `/rag QUERY` arming;
   current-focus advisory turns; and current-focus consensus
   prompt, fresh-prompt, and draft-file actions while retaining the established
   conversation commands. Search, transcript reads, directives, and inspection
@@ -2455,8 +2465,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   or sticky agent changes. Detachment resets that comparison, so a later
   attachment presents its scope again even when its values match the earlier
   attachment.
-  The settings editor exposes the exact seven-row top level Language, Persona,
-  Maximum debate rounds, Conversation storage, Agents, Save, and Cancel.
+  The settings editor exposes the exact eight-row top level Language, Persona,
+  Maximum debate rounds, Conversation storage, Conversation RAG, Agents, Save,
+  and Cancel. Conversation RAG owns nested Provider Disabled/Local and
+  Automatic Off/On pending edits without probing or installing its optional
+  package; Disabled forces Automatic off, and On requires Local. Save retains
+  the existing complete configuration CAS and takes effect only in a later
+  shell, while Cancel/Discard preserve the opening bytes.
   Conversation storage edits only the pending desired next-shell backend; Save
   retains provider-default rebasing in memory, completes any provider auth,
   then delegates readiness, explicit installer confirmation, provisioning,
@@ -2507,7 +2522,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   directives and structured `ReferenceOperationFailure` codes to fixed safe
   interactive errors without presenting exception prose.
 - **Direct internal dependencies:** `agents`, `backend`, `cli_context`,
-  `conversation_retrieval`, `conversation_search`, `conversations`, `debug_log`,
+  `conversation_rag_composition`, `conversation_retrieval`,
+  `conversation_search`, `conversations`, `debug_log`,
   `conversation_storage.contracts`, `conversation_storage.selection`, `errors`,
   `interactive_auth`, `interactive_commands`,
   `interactive_controller._conversation_policy`,
@@ -2527,11 +2543,21 @@ every intermediate arrow. The current runtime graph is acyclic.
   bundle's exact catalog, event store, search, and coordinator through the
   runtime and attachment-scoped `ConversationMemoryService`, while raw
   compatibility mode constructs the established filesystem event store around
-  the injected catalog. The memory service is absent in lobby state,
+  the injected catalog. From the backend's immutable construction snapshot,
+  Disabled RAG performs no compatibility probe or composition; configured
+  Local RAG with a complete bundle composes exactly one local service with the
+  exact automatic policy and injects it into that runtime. Sanitized local
+  composition failure retains a usable RAG-free shell/settings flow and emits
+  one fixed warning without changing configuration. Legacy raw-catalog and
+  controller-composed default-storage construction remain RAG-free, reporting
+  that same fixed unavailability only when Local was configured. The memory
+  service is absent in lobby state,
   constructed for a validated destination before attachment commit, rebound on
   a successful switch, and cleared on pause, cleanup, and final close. The
   controller also owns its current attached-session identifier, current-focus
   conversation metadata, sticky target, current CLI-context snapshot,
+  at most one representation-hidden pending RAG query scoped to the exact
+  session and conversation,
   process-local per-session latest accepted STARTED debate-ID map, and
   one-run/closed state. It also retains a controller-private count of
   successfully rendered typed errors. Each submitted command snapshots that
@@ -2639,7 +2665,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   semantic-output adapter. Before advisory coroutine entry, the established
   fixed cancelled/hint copy returns attached only when public Runner task
   inspection proves quiescence; that path calls no provider and mutates no
-  controller or persistent state. After entry, returning attached requires the
+  controller or persistent state. `/rag` arms or replaces one process-local
+  query without echo, provider work, or persistence. Ineligible commands retain
+  it; scope/session changes, pause, detach, quit, and cleanup clear it. The next
+  eligible ordinary, `/say`, or routed turn consumes it only after its coroutine
+  enters, so pre-entry cancellation retains it while any later outcome consumes
+  it exactly once; the consumed value is passed only as the runtime's one-turn
+  forced `rag_query`, overriding automatic policy for that turn. After entry,
+  returning attached requires the
   runtime to receive `CancelledError` and the operation to join; every other
   advisory cancellation state fails closed. Provider-free search, transcript,
   and focused-history interruption stops further rendering and returns to the
@@ -2751,7 +2784,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   validation accept an additive optional reference-operation identity only
   when it has the exact content-free
   `rr_<two-hex-length>_<session>_<32-lowercase-hex>` form for the inspected
-  session, and preserve it in the canonical result. The
+  session, and preserve it in the canonical result. Retrieval-result
+  validation also deeply reconstructs and preserves the exact RAG attempt and
+  ordered `rag_sources` provenance subset. RAG provenance, not an outcome or
+  erased citation prefix, permits those proven sources without retrieval
+  progress; every source outside that subset still requires terminal completed
+  search/read progress correlated to the result turn, including mixed-source
+  replies. The
   module never renders, appends, retains, or calls the runtime.
 - **Direct internal dependencies:** `conversation_retrieval`,
   `conversation_search`, `errors`, `interactive_terminal`, `models`, and
@@ -2824,6 +2863,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   redacted `SettingsError`; the exact ordered `SETTINGS_LANGUAGES`;
   `load_settings_state`, `update_language`, `update_persona`,
   `update_max_debate_rounds`, `update_conversation_storage_backend`,
+  `update_conversation_rag_provider`, `update_conversation_rag_automatic`,
   `update_agent_backend`,
   `establish_default_backend`, `establish_settings_default_backend`,
   `update_agent_codex_model`, `update_agent_codex_reasoning_effort`,
@@ -2837,8 +2877,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   immutable configuration snapshot, and a safe lexical persona catalog with
   top-level-template precedence. Pure update operations replace only the
   pending immutable candidate, including the independently validated desired
-  conversation-storage backend, one agent's provider, or one provider-specific
+  conversation-storage backend, nullable allowlisted local RAG provider and
+  local-only automatic policy, one agent's provider, or one provider-specific
   model/effort value at a time while preserving every inactive-provider value.
+  Disabling RAG forces automatic false; enabling automatic without Local fails
+  before candidate mutation. These pure transforms never probe or compose the
+  optional provider.
   System-level provider model/effort values remain unchanged fallback data
   rather than editable settings.
   `establish_default_backend` persists only a validated missing workspace
@@ -3855,8 +3899,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   catalog, owner-state, or control/progress/source persistence.
   When configured, exactly one nonrecursive RAG preflight runs before the user
   append and supplies its optional context only to the initial provider
-  request. The call-local handler preauthorizes its `g` citations alongside
-  later search/read citations. After a successful agent-reply append in either
+  request. While provider citation identities remain available, the call-local
+  handler records the exact final result-ordered subset sourced from its
+  preflight-owned citation map alongside later search/read citations. It
+  exposes that provenance only after exact final-reply validation and never
+  infers authorization from erased `g`/`s` prefixes. `StoryRuntime` copies the
+  subset and attempted outcome into the result. After a successful agent-reply
+  append in either
   advisory path, the runtime synchronously requests one isolated full-target
   projection. Ordinary projection or stale-marking failure records only a
   fixed safe diagnostic and cannot change the committed reply or append an

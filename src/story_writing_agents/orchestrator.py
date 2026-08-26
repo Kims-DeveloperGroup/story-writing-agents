@@ -232,6 +232,7 @@ class _RuntimeConversationRetrievalHandler:
         "_nonterminal_actions",
         "_observation_utf8_bytes",
         "_progress",
+        "_rag_sources",
         "_request",
         "_search_hits",
         "_search_sources",
@@ -239,6 +240,7 @@ class _RuntimeConversationRetrievalHandler:
         "_transcript_events",
         "_transcript_turns",
         "_final_reply",
+        "_final_rag_sources",
     )
 
     def __init__(
@@ -269,16 +271,18 @@ class _RuntimeConversationRetrievalHandler:
         self._has_read = False
         self._completed = False
         self._search_sources: dict[str, ConversationRetrievalSource] = {}
-        self._supplied_sources = {
+        self._rag_sources = {
             excerpt.citation_id: excerpt.source
             for excerpt in (
                 () if request.rag_context is None else request.rag_context.excerpts
             )
         }
+        self._supplied_sources = dict(self._rag_sources)
         if request.rag_context is not None:
             for excerpt in request.rag_context.excerpts:
                 self._record_text_diagnostics(excerpt.content)
         self._final_reply: ConversationRetrievalReply | None = None
+        self._final_rag_sources: tuple[ConversationRetrievalSource, ...] | None = None
 
     def handle_conversation_retrieval_action(
         self,
@@ -308,12 +312,17 @@ class _RuntimeConversationRetrievalHandler:
     def validate_returned_reply(
         self,
         value: object,
-    ) -> ConversationRetrievalReply:
-        """Return the exact reply previously authorized by this handler.
+    ) -> tuple[
+        ConversationRetrievalReply,
+        tuple[ConversationRetrievalSource, ...],
+    ]:
+        """Return the exact reply and its preflight-authorized source subset.
 
         This pure post-provider check prevents a binding from fabricating or
-        altering terminal content or sources. Invalid types, correlation, or
-        divergence raise ``BackendProtocolError`` and no durability occurs.
+        altering terminal content or sources. RAG source provenance is exposed
+        only after the same exact reply check succeeds. Invalid types,
+        correlation, or divergence raise ``BackendProtocolError`` and no
+        durability occurs.
         """
 
         if type(value) is not ConversationRetrievalReply:
@@ -332,11 +341,15 @@ class _RuntimeConversationRetrievalHandler:
             raise BackendProtocolError(
                 "conversation retrieval reply is invalid"
             ) from exc
-        if self._final_reply is None or canonical != self._final_reply:
+        if (
+            self._final_reply is None
+            or self._final_rag_sources is None
+            or canonical != self._final_reply
+        ):
             raise BackendProtocolError(
                 "conversation retrieval reply was not authorized by its handler"
             )
-        return canonical
+        return canonical, self._final_rag_sources
 
     def _canonical_action(
         self,
@@ -609,6 +622,7 @@ class _RuntimeConversationRetrievalHandler:
         """Resolve supplied citation IDs and complete the handler exactly once."""
 
         sources: list[ConversationRetrievalSource] = []
+        rag_sources: list[ConversationRetrievalSource] = []
         seen_sources: set[ConversationRetrievalSource] = set()
         for citation_id in action.citation_ids:
             source = self._supplied_sources.get(citation_id)
@@ -618,6 +632,8 @@ class _RuntimeConversationRetrievalHandler:
                 continue
             seen_sources.add(source)
             sources.append(source)
+            if citation_id in self._rag_sources:
+                rag_sources.append(source)
         reply = ConversationRetrievalReply(
             session_id=self._request.session_id,
             conversation_id=self._request.conversation_id,
@@ -626,6 +642,7 @@ class _RuntimeConversationRetrievalHandler:
             sources=tuple(sources),
         )
         self._final_reply = reply
+        self._final_rag_sources = tuple(rag_sources)
         self._completed = True
         self._next_action_index += 1
         return reply
@@ -1857,7 +1874,7 @@ class StoryRuntime:
                         )
                 finally:
                     await self._release_bound_agent_use(bound_agent)
-                reply = handler.validate_returned_reply(raw_reply)
+                reply, rag_sources = handler.validate_returned_reply(raw_reply)
                 reply_event = ConversationEventAppend(
                     session_id=session,
                     conversation_id=conversation,
@@ -1881,6 +1898,7 @@ class StoryRuntime:
                         if request.rag_context is None
                         else request.rag_context.outcome
                     ),
+                    rag_sources=rag_sources,
                 )
                 reference_operation.finish()
             except asyncio.CancelledError as cancellation_error:

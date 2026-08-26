@@ -10,7 +10,8 @@
 > next shell; host installation always requires explicit consent. Migration and
 > parity verification remain separate workflows between two already-ready
 > stores. Optional local conversation RAG has no-write status, explicit
-> opt-in/rebuild/search/disable, and confirmed derived-only purge recovery.
+> opt-in/rebuild/search/disable, confirmed derived-only purge recovery,
+> next-shell settings, and private one-turn preflight arming.
 > Automatic retry, silent installation, general destructive cleanup, event
 > repair, live switching, automation picker UI, and Windows console emulation
 > are not available.
@@ -682,6 +683,21 @@ or confirmed rebuild belongs to the configured conversation-storage startup
 boundary. Repair/provision/migrate/select that authority through its documented
 workflow before retrying RAG; RAG never provisions or migrates it.
 
+If Local is saved but the next shell prints the fixed one-time Conversation RAG
+unavailable warning, the shell and `/settings` remain usable and configuration
+is unchanged. Restore the exact reviewed dependency with
+`python -m pip install --editable '.[rag]'`, verify its pin/version/capabilities,
+and restart. Startup never installs or silently disables the saved provider.
+Choose Disabled and save only when that is the intended durable policy.
+
+An armed `/rag QUERY` is not an immediate operation. Ineligible commands retain
+it, while scope change, pause/detach, quit, or cleanup clears it. If Ctrl-C
+arrives before the advisory runtime coroutine enters, retrying an eligible turn
+uses the retained query. Once the coroutine enters, the query is consumed even
+when that turn later fails or is cancelled; explicitly arm it again for a new
+attempt. The query is intentionally absent from logs/transcripts/results, so a
+user who needs to retry must retain it outside those channels.
+
 A successful search can still report `literal_fallback` with a non-ready reason
 and exit `0`. Its excerpts, if any, were reread from authority, but the result is
 not proof that semantic state was ready; inspect status and rebuild when semantic
@@ -727,8 +743,9 @@ protected workspace are the recovery evidence.
   The private local FTS5 companion supplies non-authoritative hints only.
 - Optional local conversation RAG defaults off and has explicit noninteractive
   status, enable, rebuild, cited search, disable, and derived-only purge.
-  `/settings` provider/automatic editors, startup/automatic shell-turn wiring,
-  `/rag QUERY`, external/network RAG providers, and MySQL coupling remain
+  `/settings` provider/automatic editors apply to the next shell; Automatic On
+  and private `/rag QUERY` use bounded preflight only for eligible focused
+  advisory turns. External/network RAG providers and MySQL coupling remain
   unavailable. Literal `/search` is unchanged.
 - Parsing, repository authorization/evidence, top-level `StoryRuntime`
   propagation, and provider-enforced reads are active for inline canonical

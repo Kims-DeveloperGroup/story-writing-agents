@@ -33,6 +33,7 @@ from story_writing_agents.interactive_terminal._model import MainInputHistorySta
 
 EXPECTED_SUGGESTIONS = (
     "/say",
+    "/rag",
     "/to",
     "/agent",
     "/agents",

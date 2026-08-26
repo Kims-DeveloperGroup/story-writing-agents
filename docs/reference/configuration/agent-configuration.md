@@ -5,7 +5,7 @@
 > Codex and Antigravity. Desired filesystem/SQLite conversation storage is an
 > independent system default. Optional local conversation RAG has separate
 > provider/automatic system defaults operated by noninteractive `story rag`
-> commands; interactive Settings does not edit them yet. Interactive
+> commands and interactive Settings for the next shell. Interactive
 > authentication establishes a missing agent-provider default; Codex is the
 > final route fallback.
 
@@ -46,8 +46,8 @@ are initialized with:
 | `antigravity_effort` | Optional Antigravity workspace fallback; absent or `null` inherits the provider default. The only string values are exactly `low`, `medium`, and `high`. |
 | `default_backend` | Optional workspace provider fallback; absent or `null` falls through to Codex. A value is exactly `codex` or `antigravity`. Interactive authentication fills a missing value once and does not replace an existing value. |
 | `conversation_storage_backend` | Independent desired conversation storage for the next shell. A non-null value is exactly `filesystem` or `sqlite`; missing or `null` is read as the effective filesystem default. |
-| `conversation_rag_provider` | Independent optional conversation-RAG provider. Missing or `null` means disabled; the only non-null value is exactly `local`. `story rag enable --provider local` preflights the pinned optional package before saving it. |
-| `conversation_rag_automatic` | Exact boolean; missing means `false`. `true` is valid only when `conversation_rag_provider` is `local`. The installed interactive shell does not consume this setting yet; automatic turn wiring remains planned. |
+| `conversation_rag_provider` | Independent optional conversation-RAG provider. Missing or `null` means disabled; the only non-null value is exactly `local`. `story rag enable --provider local` preflights the pinned optional package before saving it. `/settings` edits Disabled/Local without probing it. |
+| `conversation_rag_automatic` | Exact boolean; missing means `false`. `true` is valid only when `conversation_rag_provider` is `local`. A newly constructed shell composes this exact automatic policy once when Local is selected. |
 
 Unknown fields are rejected. The complete object is validated before a backend
 accepts any explicit model/effort override, so malformed persisted fields are
@@ -63,8 +63,11 @@ emits the canonical eleven-key object with explicit storage and RAG values.
 Running `story init` again, including with `--overwrite-prompts`, does not
 rewrite or migrate existing system-default bytes. Global `/settings` edits this
 canonical eleven-field object and the per-agent object through an isolated
-current/pending view; it preserves, but does not offer editors for, the two RAG
-keys and adds no supported public save API. The ten language
+current/pending view. Its Conversation RAG editor offers Provider
+Disabled/Local and Automatic Off/On; Disabled canonicalizes both keys to
+`null`/`false`, selecting Local preserves Off, and On requires pending Local.
+These editors perform no optional-package probe or installation and add no
+supported public save API. The ten language
 choices are exactly `KO`, `EN`,
 `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, and `RU`. Persona choices come from
 the safe lexical catalog with top-level-template precedence. An existing
@@ -82,10 +85,16 @@ Conversation RAG is independent of both agent-provider routing and desired
 conversation storage. `story rag enable --provider local` preserves the
 current automatic boolean; `story rag disable` clears the provider and forces
 automatic to `false`. Neither operation edits agent configurations. Direct
-validated JSON may set automatic to `true` only beside provider `local`, but
-that persisted value does not wire interactive turns until the planned
-`/settings`/startup integration is delivered. Exact command behavior is in the
-[conversation RAG CLI contract](../cli.md#conversation-rag-operations).
+validated JSON or `/settings` may set automatic to `true` only beside provider
+`local`. A successful Settings save uses the established exact-byte guarded
+replacement and affects the next shell only. That shell reads its backend
+construction snapshot once and, when Local is selected, composes one runtime
+service with the exact automatic value. Disabled selection performs no
+optional-package probe; missing or incompatible Local dependencies leave the
+configuration unchanged and produce a usable RAG-free shell with one fixed
+warning. Exact command and shell behavior is in the
+[conversation RAG CLI contract](../cli.md#conversation-rag-operations) and
+[interactive RAG guide](../../guides/conversation-rag.md#interactive-conversation-rag).
 
 At interactive startup, `default_backend` is written only when missing. A
 provider authenticated by that immediate interaction wins; otherwise a sole

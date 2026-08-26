@@ -7,7 +7,8 @@
 > conversation/search storage, provider-free desired selection, and
 > conversation migration. They also cover the optional fixed-local
 > conversation-RAG store and noninteractive lifecycle/authorized-search
-> commands.
+> commands, plus interactive settings, startup composition, automatic
+> preflight, and private one-turn `/rag` arming.
 > They do not make either provider, its executable, the workspace, or the
 > terminal trusted.
 > Inline canonical references in provider-bound prompt text are active.
@@ -182,12 +183,30 @@ occurred: status/rebuild inspect authority, and search is intentionally
 content-bearing after authoritative reread.
 
 `conversation_rag_provider` and `conversation_rag_automatic` are plaintext
-configuration facts, not credentials. Automatic use defaults off; the current
-interactive shell does not consume that boolean, and `/settings` RAG controls
-and `/rag QUERY` remain planned. When interactive use is later enabled, agents
-must receive only bounded reauthorized excerpts/citations. Provider fragment
-text and vectors never become authority, and canonical writing-artifact
-references remain an independent authorization path.
+configuration facts, not credentials. Automatic use defaults off. The
+Conversation RAG `/settings` editors change only pending values and perform no
+optional-package probe, install, network access, or credential prompt; the
+existing complete Settings Save retains its independent agent-authentication
+and storage-readiness boundaries. A saved choice applies at the next shell.
+
+`/rag QUERY` retains one representation-hidden process-local value scoped to
+the attached session and focused conversation. It is absent from configuration,
+conversation transcripts, runtime debug records, RAG outcome/source result
+values, semantic output, and the later story-agent payload. The subsequent
+ordinary story message and reply retain their normal transcript persistence.
+The live editor necessarily displays typed input, process-local command history
+may recall the submitted line, and ordinary-line fallback or terminal/remote
+infrastructure may retain it in scrollback; those surfaces are not a secrecy
+boundary.
+
+An attempted preflight sends the story agent only bounded reauthorized excerpt
+bodies with stable citations. The shell renders only content-free outcome/reason
+and source identities, never excerpt bodies as diagnostics. Raw optional-package
+and composition diagnostics are replaced with fixed guidance and do not enter
+configuration, transcript, debug, or semantic result output. The fixed local
+provider has no runtime network or credential flow. Provider fragment text and
+vectors never become authority, and canonical writing-artifact references
+remain an independent authorization path.
 
 <a id="sqlite-installation-boundary"></a>
 
