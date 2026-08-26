@@ -74,11 +74,15 @@ possible provider/artifact use, not shell gates. Parsing performs no I/O.
 `/auth` has `may_call_provider=True` because it invokes native authentication
 commands, and `may_write_artifacts=True` because fresh authentication may fill
 a missing workspace default immediately under the established global `/auth`
-policy. `/settings` has both flags: provider selection and confirmed Save can
-authenticate, but Provider-editor authentication alone persists neither its
-route nor a missing workspace default. Only after Save is confirmed may
-save-time authentication establish a durable missing default or the guarded
-settings transaction replace configuration documents.
+policy. `/settings` has both flags: provider selection and a full-path Apply
+Changes may authenticate, while any confirmed Apply Changes may persist
+configuration. Message-details-only and Conversation-RAG-only Apply Changes
+never authenticate; the RAG-only path also performs no storage readiness,
+runtime activation, route/thread work, or optional-package probe.
+Provider-editor authentication alone persists neither its route nor a missing
+workspace default. Only after Apply Changes is confirmed may Apply-time
+authentication establish a durable missing default or the guarded settings
+transaction replace configuration documents.
 `/rag` has both flags false because parsing and arming are private local control;
 only the subsequent eligible story turn may perform provider/RAG work.
 

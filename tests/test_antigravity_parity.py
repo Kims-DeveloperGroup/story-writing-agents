@@ -626,12 +626,26 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             agent_id=agent_id,
         )
 
-    def backend(self, *, timeout_seconds: float = 4) -> AgentBackend:
+    def backend(
+        self,
+        *,
+        timeout_seconds: float = 4,
+        backend_overrides: dict[str, str] | None = None,
+    ) -> AgentBackend:
+        selected_overrides = (
+            {
+                PLOT_ARCHITECT: "antigravity",
+                CHARACTER_CUSTODIAN: "antigravity",
+            }
+            if backend_overrides is None
+            else backend_overrides
+        )
         backend = AgentBackend(
             self.workspace,
             executable=str(self.fake_directory / "unused-codex"),
             antigravity_executable=str(self.executable),
             timeout_seconds=timeout_seconds,
+            backend_overrides=selected_overrides,
         )
         self.addCleanup(backend.close)
         return backend
@@ -1649,10 +1663,18 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         session_id = "mixed-session"
-        backend = self.backend()
+        backend = self.backend(
+            backend_overrides={
+                PLOT_ARCHITECT: "antigravity",
+                CHARACTER_CUSTODIAN: "codex",
+            }
+        )
         backend.create_session_with_access(session_id)
         antigravity_bound = await backend.bind(self.definition())
-        codex_definition = self.definition(backend="codex")
+        codex_definition = self.definition(
+            CHARACTER_CUSTODIAN,
+            backend="codex",
+        )
         codex_bound = await backend.bind(codex_definition)
 
         entered = asyncio.Event()
@@ -1722,6 +1744,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                             session_id=session_id,
                             debate_id="codex-independent",
                             phase=Phase.DRAFT,
+                            agent_id=CHARACTER_CUSTODIAN,
                         )
                     )
                 )
@@ -1755,7 +1778,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             set(manifest["provider_threads"]),
             {
                 "antigravity:plot_architect",
-                "codex:plot_architect",
+                "codex:character_custodian",
             },
         )
         self.assertEqual(
@@ -1764,12 +1787,17 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             "agy-mixed-thread",
         )
         self.assertEqual(
-            manifest["provider_threads"]["codex:plot_architect"]["thread_id"],
+            manifest["provider_threads"]["codex:character_custodian"]
+            ["thread_id"],
             "codex-mixed-thread",
         )
         self.assertNotEqual(
             backend._thread_lock(session_id, "antigravity", PLOT_ARCHITECT),
-            backend._thread_lock(session_id, "codex", PLOT_ARCHITECT),
+            backend._thread_lock(
+                session_id,
+                "codex",
+                CHARACTER_CUSTODIAN,
+            ),
         )
 
     def test_public_surface_and_provider_schema_remain_provider_neutral(self) -> None:
@@ -2060,6 +2088,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             self.workspace,
             executable=str(self.fake_directory / "unused-codex"),
             antigravity_executable=str(self.fake_directory / "missing-agy"),
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
         )
         self.addCleanup(missing.close)
         missing.acquire_session_access(session_id)

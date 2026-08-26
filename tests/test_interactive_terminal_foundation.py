@@ -13,7 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from dataclasses import FrozenInstanceError, fields, is_dataclass
+from dataclasses import MISSING, FrozenInstanceError, fields, is_dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import get_args
@@ -72,6 +72,7 @@ from story_writing_agents.interactive_terminal._model import (
     MainInputControlState,
     MainInputHistoryState,
     Message,
+    MessagePresentation,
     Notice,
     Panel,
     Picker,
@@ -81,6 +82,7 @@ from story_writing_agents.interactive_terminal._model import (
     RenderedInputFrame,
     Section,
     SemanticRole,
+    SpeakerAccent,
     StartupWelcome,
     StartupWelcomeStage,
     SuggestionPalette,
@@ -113,8 +115,43 @@ TERMINAL_EXPORTS = (
     "InteractiveTerminal",
 )
 
+PROGRESS_FRAMES = (
+    "[█▓▒░░░░░░░░░░░░░]",
+    "[▓█▓▒░░░░░░░░░░░░]",
+    "[▒▓█▓▒░░░░░░░░░░░]",
+    "[░▒▓█▓▒░░░░░░░░░░]",
+    "[░░▒▓█▓▒░░░░░░░░░]",
+    "[░░░▒▓█▓▒░░░░░░░░]",
+    "[░░░░▒▓█▓▒░░░░░░░]",
+    "[░░░░░▒▓█▓▒░░░░░░]",
+    "[░░░░░░▒▓█▓▒░░░░░]",
+    "[░░░░░░░▒▓█▓▒░░░░]",
+    "[░░░░░░░░▒▓█▓▒░░░]",
+    "[░░░░░░░░░▒▓█▓▒░░]",
+    "[░░░░░░░░░░▒▓█▓▒░]",
+    "[░░░░░░░░░░░▒▓█▓▒]",
+    "[░░░░░░░░░░░░▒▓█▓]",
+    "[░░░░░░░░░░░░░▒▓█]",
+    "[░░░░░░░░░░░░▒▓█▓]",
+    "[░░░░░░░░░░░▒▓█▓▒]",
+    "[░░░░░░░░░░▒▓█▓▒░]",
+    "[░░░░░░░░░▒▓█▓▒░░]",
+    "[░░░░░░░░▒▓█▓▒░░░]",
+    "[░░░░░░░▒▓█▓▒░░░░]",
+    "[░░░░░░▒▓█▓▒░░░░░]",
+    "[░░░░░▒▓█▓▒░░░░░░]",
+    "[░░░░▒▓█▓▒░░░░░░░]",
+    "[░░░▒▓█▓▒░░░░░░░░]",
+    "[░░▒▓█▓▒░░░░░░░░░]",
+    "[░▒▓█▓▒░░░░░░░░░░]",
+    "[▒▓█▓▒░░░░░░░░░░░]",
+    "[▓█▓▒░░░░░░░░░░░░]",
+)
+
 MODEL_EXPORTS = (
     "SemanticRole",
+    "MessagePresentation",
+    "SpeakerAccent",
     "ViewState",
     "CapabilityProfile",
     "KeyKind",
@@ -530,6 +567,7 @@ class PublicCompatibilityFoundationTests(unittest.TestCase):
                 ("choice_provider", positional, required),
                 ("session_id", keyword, None),
                 ("agent_id", keyword, None),
+                ("header_provider", keyword, None),
             ),
             InteractivePromptInput.read_prompt: (
                 ("prompt", positional, required),
@@ -591,6 +629,23 @@ class SemanticModelFoundationTests(unittest.TestCase):
                 "error",
                 "command",
                 "agent",
+            ),
+        )
+        self.assertEqual(
+            tuple((item.name, item.value) for item in MessagePresentation),
+            (
+                ("INLINE", "inline"),
+                ("CHAT_BLOCK", "chat_block"),
+            ),
+        )
+        self.assertEqual(
+            tuple((item.name, item.value) for item in SpeakerAccent),
+            (
+                ("MAGENTA", "magenta"),
+                ("CYAN", "cyan"),
+                ("YELLOW", "yellow"),
+                ("GREEN", "green"),
+                ("BLUE", "blue"),
             ),
         )
         self.assertEqual(
@@ -737,6 +792,104 @@ class SemanticModelFoundationTests(unittest.TestCase):
             with self.subTest(call=call):
                 with self.assertRaises((TypeError, ValueError)):
                     call()
+
+    def test_message_schema_defaults_and_list_membership_are_exact(self) -> None:
+        positional = inspect.Parameter.POSITIONAL_OR_KEYWORD
+        keyword = inspect.Parameter.KEYWORD_ONLY
+        message_fields = tuple(
+            (field.name, field.kw_only, field.default) for field in fields(Message)
+        )
+        self.assertEqual(
+            message_fields,
+            (
+                ("sender", False, MISSING),
+                ("content", False, MISSING),
+                ("role", True, SemanticRole.DEFAULT),
+                ("state", True, ViewState.COMPLETED),
+                ("presentation", True, MessagePresentation.INLINE),
+                ("metadata", True, None),
+                ("accent", True, SpeakerAccent.CYAN),
+            ),
+        )
+        signature = inspect.signature(Message)
+        self.assertEqual(
+            tuple(
+                (parameter.name, parameter.kind, parameter.default)
+                for parameter in signature.parameters.values()
+            ),
+            (
+                ("sender", positional, inspect.Parameter.empty),
+                ("content", positional, inspect.Parameter.empty),
+                ("role", keyword, SemanticRole.DEFAULT),
+                ("state", keyword, ViewState.COMPLETED),
+                ("presentation", keyword, MessagePresentation.INLINE),
+                ("metadata", keyword, None),
+                ("accent", keyword, SpeakerAccent.CYAN),
+            ),
+        )
+
+        compatible = Message("user", "body")
+        explicit = Message(
+            "user",
+            "body",
+            role=SemanticRole.DEFAULT,
+            state=ViewState.COMPLETED,
+            presentation=MessagePresentation.INLINE,
+            metadata=None,
+            accent=SpeakerAccent.CYAN,
+        )
+        self.assertEqual(compatible, explicit)
+        self.assertFalse(hasattr(compatible, "__dict__"))
+        with self.assertRaises(FrozenInstanceError):
+            compatible.presentation = (  # type: ignore[misc]
+                MessagePresentation.CHAT_BLOCK
+            )
+        restored = pickle.loads(pickle.dumps(explicit))
+        self.assertEqual(restored, explicit)
+        self.assertIs(type(restored), Message)
+
+        chat = Message(
+            "you",
+            "accepted",
+            presentation=MessagePresentation.CHAT_BLOCK,
+            metadata="user → plot",
+            accent=SpeakerAccent.MAGENTA,
+        )
+        view = ListView("Messages", (chat,))
+        self.assertEqual(view.items, (chat,))
+        self.assertEqual(view.total_count, None)
+
+        invalid_calls = (
+            lambda: Message(  # type: ignore[misc]
+                "user",
+                "body",
+                SemanticRole.DEFAULT,
+            ),
+            lambda: Message(  # type: ignore[arg-type]
+                "user",
+                "body",
+                presentation="inline",
+            ),
+            lambda: Message("user", "body", metadata=1),  # type: ignore[arg-type]
+            lambda: Message("user", "body", metadata=""),
+            lambda: Message("user", "body", metadata="  "),
+            lambda: Message(  # type: ignore[arg-type]
+                "user",
+                "body",
+                accent="cyan",
+            ),
+            lambda: ListView(  # type: ignore[arg-type]
+                "Unsupported",
+                (Notice("notice"),),
+            ),
+            lambda: ListView(  # type: ignore[arg-type]
+                "Unsupported",
+                (Panel("panel", ()),),
+            ),
+        )
+        for call in invalid_calls:
+            with self.subTest(call=call), self.assertRaises((TypeError, ValueError)):
+                call()
 
     def test_input_prompt_view_initial_value_is_exact_optional_and_keyword_only(
         self,
@@ -932,13 +1085,16 @@ class PureControlFoundationTests(unittest.TestCase):
 class RenderingFoundationTests(unittest.TestCase):
     def test_advisory_progress_frames_are_fixed_and_strict(self) -> None:
         self.assertEqual(
-            tuple(render_advisory_progress_frame(index) for index in range(4)),
-            ("◐", "◓", "◑", "◒"),
+            tuple(
+                render_advisory_progress_frame(index)
+                for index in range(len(PROGRESS_FRAMES))
+            ),
+            PROGRESS_FRAMES,
         )
         for invalid in (True, 1.0, "0", None):
             with self.subTest(invalid=invalid), self.assertRaises(TypeError):
                 render_advisory_progress_frame(invalid)  # type: ignore[arg-type]
-        for invalid in (-1, 4):
+        for invalid in (-1, len(PROGRESS_FRAMES)):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 render_advisory_progress_frame(invalid)
 
@@ -1080,9 +1236,9 @@ class RenderingFoundationTests(unittest.TestCase):
                 ("--- Interactive erro", "    r [error] ------"),
             ),
             (
-                "Agent saying",
-                ViewState.COMPLETED,
-                ("--- Agent saying", "    [completed] ----"),
+                "Debate phase",
+                ViewState.LOADING,
+                ("--- Debate phase", "    [loading] ------"),
             ),
             ("Settings", ViewState.OPEN, ("--- Settings [open]",)),
             (
@@ -1786,7 +1942,7 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
                     )
                 self.assertEqual(result, "answer")
                 if profile is CapabilityProfile.PLAIN:
-                    self.assertIn("◐", output.getvalue())
+                    self.assertIn(PROGRESS_FRAMES[0], output.getvalue())
                     self.assertNotRegex(output.getvalue(), r"\x1b\[[0-9;]*m")
                 else:
                     self.assertEqual(output.getvalue(), "")
@@ -1830,10 +1986,56 @@ class CapabilityAndDriverFoundationTests(unittest.TestCase):
         self.assertEqual(result, "done")
         self.assertFalse(driver._progress_active)
         self.assertIsNone(driver._progress_renderer)
-        positions = tuple(rendered.index(frame) for frame in ("◐", "◓", "◑", "◒"))
+        frames = PROGRESS_FRAMES[:4]
+        positions = tuple(rendered.index(frame) for frame in frames)
         self.assertEqual(positions, tuple(sorted(positions)))
-        self.assertRegex(rendered, r"\r\x1b\[Kanswer\n\r[◐◓◑◒]")
+        color_positions = tuple(
+            rendered.index(color)
+            for color in (
+                "\x1b[1;36m",
+                "\x1b[1;34m",
+                "\x1b[1;35m",
+                "\x1b[1;31m",
+            )
+        )
+        self.assertEqual(color_positions, tuple(sorted(color_positions)))
+        self.assertIn("\r\x1b[Kanswer\n\r\x1b[1;", rendered)
+        plain_after_answer = strip_decorative_sgr(rendered).split(
+            "answer\n",
+            1,
+        )[1]
+        self.assertTrue(
+            any(frame in plain_after_answer for frame in PROGRESS_FRAMES)
+        )
         self.assertTrue(rendered.endswith("\r\x1b[K"))
+
+    def test_advisory_progress_fits_without_using_the_rightmost_cell(self) -> None:
+        async def operation() -> str:
+            return "done"
+
+        for width, expected in (
+            (10, "[█▓▒░░░░░"),
+            (7, "[█▓▒░░"),
+            (1, ""),
+        ):
+            with self.subTest(width=width):
+                driver, output = self._progress_driver()
+                with mock.patch.object(
+                    RawTerminalDriver,
+                    "capabilities",
+                    autospec=True,
+                    return_value=capability(
+                        CapabilityProfile.PLAIN,
+                        width=width,
+                    ),
+                ):
+                    result = asyncio.run(
+                        driver.run_advisory_progress(
+                            operation(), render_advisory_progress_frame
+                        )
+                    )
+                self.assertEqual(result, "done")
+                self.assertEqual(output.getvalue(), f"\r{expected}\r\x1b[K")
 
     def test_advisory_progress_preserves_operation_failure_and_wraps_worker_failure(
         self,

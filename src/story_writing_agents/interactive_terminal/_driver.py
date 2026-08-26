@@ -71,8 +71,24 @@ _DEFAULT_TERMINAL_WIDTH = 80
 _MAX_ESCAPE_SEQUENCE_LENGTH = 64
 _ESCAPE_LOOKAHEAD_SECONDS = 0.05
 _DEFAULT_TERMIOS = object()
-_PROGRESS_FRAME_COUNT = 4
+_PROGRESS_FRAME_COUNT = 14
 _PROGRESS_INTERVAL_SECONDS = 0.08
+_PROGRESS_SGR_FRAMES = (
+    "\x1b[1;36m",
+    "\x1b[1;34m",
+    "\x1b[1;35m",
+    "\x1b[1;31m",
+    "\x1b[1;33m",
+    "\x1b[1;32m",
+    "\x1b[1;36m",
+    "\x1b[1;34m",
+    "\x1b[1;36m",
+    "\x1b[1;32m",
+    "\x1b[1;33m",
+    "\x1b[1;31m",
+    "\x1b[1;35m",
+    "\x1b[1;34m",
+)
 _STARTUP_WELCOME_FRAME_COUNT = 4
 _STARTUP_WELCOME_INTERVAL_SECONDS = 0.4
 _STARTUP_NOTICE_DURATION_SECONDS = 0.8
@@ -172,6 +188,9 @@ _HistoryAppend: TypeAlias = Callable[
 ]
 _InputRenderer: TypeAlias = Callable[
     [InputPromptView, TerminalCapabilities], RenderedInputFrame
+]
+_InputFrameProvider: TypeAlias = Callable[
+    [str, int, TerminalCapabilities], RenderedInputFrame
 ]
 _StartupFrameRenderer: TypeAlias = Callable[
     [int, TerminalCapabilities, int], RenderedFrame
@@ -431,7 +450,7 @@ class RawTerminalDriver:
         self._output_stream.flush()
 
     def _clear_progress_frame(self) -> None:
-        """Clear the current one-cell indicator without adding a row."""
+        """Clear the current one-row indicator without adding a row."""
 
         self._write_raw_text("\r\x1b[K")
 
@@ -439,7 +458,7 @@ class RawTerminalDriver:
         self,
         frame_renderer: Callable[[int], str] | None = None,
     ) -> None:
-        """Draw the current fixed indicator frame at the cursor cell."""
+        """Draw the current fixed indicator frame on the active row."""
 
         frame_renderer = (
             self._progress_renderer if frame_renderer is None else frame_renderer
@@ -447,8 +466,17 @@ class RawTerminalDriver:
         if not callable(frame_renderer):
             raise TypeError("frame_renderer must be callable")
         frame = frame_renderer(self._progress_frame)
-        if type(frame) is not str or len(frame) != 1:
-            raise TypeError("frame_renderer must return one display cell")
+        if type(frame) is not str:
+            raise TypeError("frame_renderer must return a string")
+        plain_frame = frame
+        for prefix in _PROGRESS_SGR_FRAMES:
+            if frame.startswith(prefix) and frame.endswith(_SGR_RESET):
+                plain_frame = frame[len(prefix) : -len(_SGR_RESET)]
+                break
+        if sanitize_terminal_text(plain_frame) != plain_frame or any(
+            character in plain_frame for character in ("\r", "\n", "\x1b")
+        ) or (plain_frame is frame and "\x1b" in frame):
+            raise ValueError("progress frame must be safe single-row text")
         self._write_raw_text(f"\r{frame}")
 
     async def run_advisory_progress(
@@ -466,11 +494,37 @@ class RawTerminalDriver:
         if not capabilities.raw_mode:
             return await operation
 
+        def fitted_frame_renderer(frame: int) -> str:
+            """Reserve the rightmost cell while retaining fixed safe copy."""
+
+            rendered = frame_renderer(frame)
+            if type(rendered) is not str:
+                raise TypeError("frame_renderer must return a string")
+            if sanitize_terminal_text(rendered) != rendered or any(
+                character in rendered for character in ("\r", "\n", "\x1b")
+            ):
+                raise ValueError("progress frame must be safe single-row text")
+            available_width = max(0, capabilities.width - 1)
+            fitted: list[str] = []
+            fitted_width = 0
+            for character in rendered:
+                character_width = display_character_width(character)
+                if fitted_width + character_width > available_width:
+                    break
+                fitted.append(character)
+                fitted_width += character_width
+            fitted_text = "".join(fitted)
+            if not fitted_text or not capabilities.decorative_sgr:
+                return fitted_text
+            return (
+                f"{_PROGRESS_SGR_FRAMES[frame]}{fitted_text}{_SGR_RESET}"
+            )
+
         self._progress_active = True
         self._progress_frame = 0
-        self._progress_renderer = frame_renderer
+        self._progress_renderer = fitted_frame_renderer
         try:
-            self._draw_progress_frame(frame_renderer)
+            self._draw_progress_frame(fitted_frame_renderer)
         except BaseException as exc:
             self._progress_active = False
             self._progress_renderer = None
@@ -486,7 +540,9 @@ class RawTerminalDriver:
             ) from exc
 
         operation_task = asyncio.ensure_future(operation)
-        progress_task = asyncio.create_task(self._run_progress_frames(frame_renderer))
+        progress_task = asyncio.create_task(
+            self._run_progress_frames(fitted_frame_renderer)
+        )
         operation_failure: BaseException | None = None
         progress_failure: BaseException | None = None
         result: _T | None = None
@@ -1299,6 +1355,7 @@ class RawTerminalDriver:
             palette_projector,
             palette_renderer,
             None,
+            None,
         )
 
     def read_reference_main_command_line(
@@ -1319,6 +1376,38 @@ class RawTerminalDriver:
             palette_projector,
             palette_renderer,
             reference_bindings,
+            None,
+        )
+
+    def read_contextual_main_command_line(
+        self,
+        prompt: str,
+        completion_provider: _CompletionProvider,
+        palette_projector: _PaletteProjector,
+        palette_renderer: _PaletteRenderer,
+        input_frame_provider: _InputFrameProvider,
+        reference_bindings: ReferenceInputBindings | None,
+    ) -> str:
+        """Read a main command beneath a buffer-aware semantic header."""
+
+        if not callable(input_frame_provider):
+            raise TypeError("input_frame_provider must be callable")
+        if (
+            reference_bindings is not None
+            and type(reference_bindings) is not ReferenceInputBindings
+        ):
+            raise TypeError(
+                "reference_bindings must be a ReferenceInputBindings or None"
+            )
+        if input_frame_provider is not None and not callable(input_frame_provider):
+            raise TypeError("input_frame_provider must be callable or None")
+        return self._read_main_command_line(
+            prompt,
+            completion_provider,
+            palette_projector,
+            palette_renderer,
+            reference_bindings,
+            input_frame_provider,
         )
 
     def _read_main_command_line(
@@ -1328,6 +1417,7 @@ class RawTerminalDriver:
         palette_projector: _PaletteProjector,
         palette_renderer: _PaletteRenderer,
         reference_bindings: ReferenceInputBindings | None,
+        input_frame_provider: _InputFrameProvider | None,
     ) -> str:
         """Implement main input with optional package-internal activation."""
 
@@ -1387,17 +1477,29 @@ class RawTerminalDriver:
                     palette_projector=palette_projector,
                     palette_renderer=palette_renderer,
                     reference_bindings=reference_bindings,
+                    input_frame_provider=input_frame_provider,
                     transient=True,
                 )
                 if configuration is not None
                 else (
                     self._read_reference_fallback(
-                        prompt,
+                        _fallback_contextual_prompt(
+                            prompt,
+                            input_frame_provider,
+                            capabilities,
+                        ),
                         capabilities,
                         reference_bindings,
                     )
                     if reference_bindings is not None
-                    else self._read_fallback_line(prompt, capabilities)
+                    else self._read_fallback_line(
+                        _fallback_contextual_prompt(
+                            prompt,
+                            input_frame_provider,
+                            capabilities,
+                        ),
+                        capabilities,
+                    )
                 )
             )
             self._append_completed_main_history(line)
@@ -2014,6 +2116,7 @@ class RawTerminalDriver:
         palette_projector: _PaletteProjector | None = None,
         palette_renderer: _PaletteRenderer | None = None,
         reference_bindings: ReferenceInputBindings | None = None,
+        input_frame_provider: _InputFrameProvider | None = None,
         transient: bool = False,
     ) -> str:
         """Read one exact buffer through one pure logical-state transition.
@@ -2047,6 +2150,12 @@ class RawTerminalDriver:
             raise TypeError("rendered_input must be a RenderedInputFrame or None")
         if rendered_input is not None and rendered_input.width != configuration.width:
             raise ValueError("rendered input and known width must match")
+        if input_frame_provider is not None and not callable(input_frame_provider):
+            raise TypeError("input_frame_provider must be callable or None")
+        if rendered_input is not None and input_frame_provider is not None:
+            raise ValueError(
+                "rendered_input and input_frame_provider are mutually exclusive"
+            )
         if (
             live_capabilities is not None
             and type(live_capabilities) is not TerminalCapabilities
@@ -2106,6 +2215,7 @@ class RawTerminalDriver:
                 palette_projector,
                 palette_renderer,
                 reference_bindings,
+                input_frame_provider,
             )
             if transient:
                 self._clear_live_display(display_state, line_break=False)
@@ -2116,6 +2226,8 @@ class RawTerminalDriver:
                     display_state,
                     line_state,
                     rendered_input,
+                    live_capabilities,
+                    input_frame_provider,
                 )
         except BaseException as failure:
             active_failure = failure
@@ -2146,6 +2258,7 @@ class RawTerminalDriver:
         palette_projector: _PaletteProjector | None,
         palette_renderer: _PaletteRenderer | None,
         reference_bindings: ReferenceInputBindings | None,
+        input_frame_provider: _InputFrameProvider | None,
     ) -> tuple[str, LineInputState]:
         """Edit one code-point buffer until submit, interrupt, EOF, or failure.
 
@@ -2167,6 +2280,7 @@ class RawTerminalDriver:
             live_capabilities,
             palette_projector,
             palette_renderer,
+            input_frame_provider,
         )
         while True:
             try:
@@ -2210,6 +2324,7 @@ class RawTerminalDriver:
                         live_capabilities,
                         palette_projector,
                         palette_renderer,
+                        input_frame_provider,
                     )
                 continue
 
@@ -2249,6 +2364,7 @@ class RawTerminalDriver:
                             live_capabilities,
                             palette_projector,
                             palette_renderer,
+                            input_frame_provider,
                         )
                 if not reprocess:
                     continue
@@ -2285,6 +2401,7 @@ class RawTerminalDriver:
                             live_capabilities,
                             palette_projector,
                             palette_renderer,
+                            input_frame_provider,
                         )
                     continue
                 display_state.escape_sequence = character
@@ -2320,6 +2437,7 @@ class RawTerminalDriver:
                     live_capabilities,
                     palette_projector,
                     palette_renderer,
+                    input_frame_provider,
                 )
 
     def _resolve_live_reference_outcome(
@@ -2786,6 +2904,7 @@ class RawTerminalDriver:
         live_capabilities: TerminalCapabilities | None,
         palette_projector: _PaletteProjector | None,
         palette_renderer: _PaletteRenderer | None,
+        input_frame_provider: _InputFrameProvider | None,
     ) -> int:
         """Replace the current editor area and return its visible cursor row.
 
@@ -2794,11 +2913,18 @@ class RawTerminalDriver:
         propagates for the owning read boundary to clear and restore resources.
         """
 
-        render_width = max(1, width - 1) if rendered_input is None else width
         line_state = _control_line_state(control_state)
+        active_input = _resolve_contextual_input_frame(
+            rendered_input,
+            input_frame_provider,
+            line_state,
+            live_capabilities,
+            width,
+        )
+        render_width = max(1, width - 1) if active_input is None else width
         input_lines, cursor_row, cursor_column = _editor_input_lines(
             prompt,
-            rendered_input,
+            active_input,
             line_state.buffer,
             line_state.cursor,
             render_width,
@@ -2888,6 +3014,8 @@ class RawTerminalDriver:
         display_state: _LiveEditorState,
         line_state: LineInputState,
         rendered_input: RenderedInputFrame | None,
+        live_capabilities: TerminalCapabilities | None,
+        input_frame_provider: _InputFrameProvider | None,
     ) -> int:
         """Remove suggestions and leave the submitted prompt line visible.
 
@@ -2896,10 +3024,17 @@ class RawTerminalDriver:
         owned by ``read_line``.
         """
 
-        render_width = max(1, width - 1) if rendered_input is None else width
+        active_input = _resolve_contextual_input_frame(
+            rendered_input,
+            input_frame_provider,
+            line_state,
+            live_capabilities,
+            width,
+        )
+        render_width = max(1, width - 1) if active_input is None else width
         input_lines, _cursor_row, _cursor_column = _editor_input_lines(
             prompt,
-            rendered_input,
+            active_input,
             line_state.buffer,
             len(line_state.buffer),
             render_width,
@@ -3731,6 +3866,51 @@ def _completed_text_or_raise(outcome: ControlOutcome | None) -> str | None:
     if outcome.kind is ControlOutcomeKind.CANCEL:
         raise _PromptCancelled
     raise ValueError(f"unsupported control outcome: {outcome.kind.value}")
+
+
+def _fallback_contextual_prompt(
+    prompt: str,
+    input_frame_provider: _InputFrameProvider | None,
+    capabilities: TerminalCapabilities,
+) -> str:
+    """Resolve one static accessible header before line-mode input begins."""
+
+    if input_frame_provider is None:
+        return prompt
+    frame = input_frame_provider("", 0, capabilities)
+    _require_contextual_input_frame(frame, capabilities.width)
+    return frame.plain_text
+
+
+def _resolve_contextual_input_frame(
+    rendered_input: RenderedInputFrame | None,
+    input_frame_provider: _InputFrameProvider | None,
+    line_state: LineInputState,
+    capabilities: TerminalCapabilities | None,
+    width: int,
+) -> RenderedInputFrame | None:
+    """Resolve and validate the exact semantic frame for one live buffer."""
+
+    if input_frame_provider is None:
+        return rendered_input
+    if capabilities is None:
+        raise ValueError("contextual input requires live capabilities")
+    frame = input_frame_provider(
+        line_state.buffer,
+        line_state.cursor,
+        capabilities,
+    )
+    _require_contextual_input_frame(frame, width)
+    return frame
+
+
+def _require_contextual_input_frame(frame: object, width: int) -> None:
+    """Require a dynamic frame to preserve the active terminal geometry."""
+
+    if type(frame) is not RenderedInputFrame:
+        raise TypeError("input_frame_provider must return a RenderedInputFrame")
+    if frame.width != width:
+        raise ValueError("contextual input frame width must match capabilities")
 
 
 def _editor_input_lines(

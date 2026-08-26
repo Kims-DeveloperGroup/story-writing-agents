@@ -14,6 +14,7 @@ from ._model import (
     InputPromptView,
     ListView,
     Message,
+    MessagePresentation,
     Notice,
     Panel,
     Picker,
@@ -25,6 +26,7 @@ from ._model import (
     RenderedInputFrame,
     Section,
     SemanticRole,
+    SpeakerAccent,
     StartupWelcome,
     StartupWelcomeStage,
     SuggestionPalette,
@@ -47,8 +49,46 @@ _ROLE_SGR = {
     SemanticRole.COMMAND: "\x1b[35m",
     SemanticRole.AGENT: "\x1b[1m",
 }
+_SPEAKER_HEADER_SGR = {
+    SpeakerAccent.MAGENTA: "\x1b[1;35m",
+    SpeakerAccent.CYAN: "\x1b[1;36m",
+    SpeakerAccent.YELLOW: "\x1b[1;33m",
+    SpeakerAccent.GREEN: "\x1b[1;32m",
+    SpeakerAccent.BLUE: "\x1b[1;34m",
+}
 _DECORATIVE_SGR = re.compile(r"\x1b\[(?:0|1|3[1-7]|1;3[1-7])m")
-_ADVISORY_PROGRESS_FRAMES = ("◐", "◓", "◑", "◒")
+_ADVISORY_PROGRESS_FRAMES = (
+    "[█▓▒░░░░░░░░░░░░░]",
+    "[▓█▓▒░░░░░░░░░░░░]",
+    "[▒▓█▓▒░░░░░░░░░░░]",
+    "[░▒▓█▓▒░░░░░░░░░░]",
+    "[░░▒▓█▓▒░░░░░░░░░]",
+    "[░░░▒▓█▓▒░░░░░░░░]",
+    "[░░░░▒▓█▓▒░░░░░░░]",
+    "[░░░░░▒▓█▓▒░░░░░░]",
+    "[░░░░░░▒▓█▓▒░░░░░]",
+    "[░░░░░░░▒▓█▓▒░░░░]",
+    "[░░░░░░░░▒▓█▓▒░░░]",
+    "[░░░░░░░░░▒▓█▓▒░░]",
+    "[░░░░░░░░░░▒▓█▓▒░]",
+    "[░░░░░░░░░░░▒▓█▓▒]",
+    "[░░░░░░░░░░░░▒▓█▓]",
+    "[░░░░░░░░░░░░░▒▓█]",
+    "[░░░░░░░░░░░░▒▓█▓]",
+    "[░░░░░░░░░░░▒▓█▓▒]",
+    "[░░░░░░░░░░▒▓█▓▒░]",
+    "[░░░░░░░░░▒▓█▓▒░░]",
+    "[░░░░░░░░▒▓█▓▒░░░]",
+    "[░░░░░░░▒▓█▓▒░░░░]",
+    "[░░░░░░▒▓█▓▒░░░░░]",
+    "[░░░░░▒▓█▓▒░░░░░░]",
+    "[░░░░▒▓█▓▒░░░░░░░]",
+    "[░░░▒▓█▓▒░░░░░░░░]",
+    "[░░▒▓█▓▒░░░░░░░░░]",
+    "[░▒▓█▓▒░░░░░░░░░░]",
+    "[▒▓█▓▒░░░░░░░░░░░]",
+    "[▓█▓▒░░░░░░░░░░░░]",
+)
 _STARTUP_LETTER_SGR = (
     "\x1b[1;36m",
     "\x1b[1;35m",
@@ -99,28 +139,66 @@ _StartupSpan: TypeAlias = tuple[str, str]
 _StartupLine: TypeAlias = tuple[_StartupSpan, ...]
 
 
-class _InlineWarningRole:
-    """Decorate one already-wrapped warning suffix within its base row."""
+class _InlineRoleSpan:
+    """Identify one semantic interval within an already-wrapped row."""
 
-    __slots__ = ("base", "start", "stop")
+    __slots__ = ("role", "start", "stop")
 
-    def __init__(self, base: SemanticRole, start: int, stop: int) -> None:
-        self.base = base
+    def __init__(self, start: int, stop: int, role: SemanticRole) -> None:
         self.start = start
         self.stop = stop
+        self.role = role
 
 
-_LineRole: TypeAlias = SemanticRole | _InlineWarningRole
+class _InlineRole:
+    """Decorate ordered non-overlapping semantic spans within a base row."""
+
+    __slots__ = ("base", "spans")
+
+    def __init__(
+        self,
+        base: SemanticRole,
+        spans: tuple[_InlineRoleSpan, ...],
+    ) -> None:
+        if not isinstance(base, SemanticRole):
+            raise TypeError("base must be a SemanticRole")
+        if type(spans) is not tuple or any(
+            type(span) is not _InlineRoleSpan for span in spans
+        ):
+            raise TypeError("spans must be a tuple of _InlineRoleSpan values")
+        previous_stop = 0
+        for span in spans:
+            if span.start < previous_stop or span.start >= span.stop:
+                raise ValueError("inline role spans must be ordered and non-overlapping")
+            if not isinstance(span.role, SemanticRole):
+                raise TypeError("inline span role must be a SemanticRole")
+            previous_stop = span.stop
+        self.base = base
+        self.spans = spans
+
+
+class _SpeakerHeaderRole:
+    """Decorate only one chat-block header with its fixed speaker accent."""
+
+    __slots__ = ("accent",)
+
+    def __init__(self, accent: SpeakerAccent) -> None:
+        if not isinstance(accent, SpeakerAccent):
+            raise TypeError("accent must be a SpeakerAccent")
+        self.accent = accent
+
+
+_LineRole: TypeAlias = SemanticRole | _InlineRole | _SpeakerHeaderRole
 _SemanticLine: TypeAlias = tuple[str, _LineRole]
 
 
 def render_advisory_progress_frame(frame: int) -> str:
-    """Render one pure fixed-cell advisory progress frame."""
+    """Render one fixed high-visibility advisory progress row."""
 
     if type(frame) is not int:
         raise TypeError("frame must be an integer")
     if frame < 0 or frame >= len(_ADVISORY_PROGRESS_FRAMES):
-        raise ValueError("frame must identify one advisory progress glyph")
+        raise ValueError("frame must identify one advisory progress row")
     return _ADVISORY_PROGRESS_FRAMES[frame]
 
 
@@ -691,24 +769,12 @@ def _numbered_picker_choice_lines(
             if highlighted
             else SemanticRole.DEFAULT
         )
-    text = choice.label
-    if choice.warning_suffix is not None:
-        text += f" {choice.warning_suffix}"
-    if choice.description is not None:
-        text += f" — {choice.description}"
-    if choice.disabled_reason is not None:
-        text += f" (disabled: {choice.disabled_reason})"
+    text, spans = _choice_text_and_spans(choice, numbered=True)
     prefix = f"{ordinal}. {cues} "
-    if choice.warning_suffix is not None and role is SemanticRole.DEFAULT:
-        tail = ""
-        if choice.description is not None:
-            tail += f" — {choice.description}"
-        if choice.disabled_reason is not None:
-            tail += f" (disabled: {choice.disabled_reason})"
-        return _wrap_warning_suffix(
-            choice.label,
-            choice.warning_suffix,
-            tail,
+    if spans and role is SemanticRole.DEFAULT:
+        return _wrap_inline_roles(
+            text,
+            spans,
             width,
             indent=indent,
             initial_prefix=prefix,
@@ -966,7 +1032,11 @@ def _message_lines(
     width: int,
     *,
     indent: int,
-) -> list[tuple[str, SemanticRole]]:
+) -> list[_SemanticLine]:
+    if message.presentation is MessagePresentation.CHAT_BLOCK:
+        return _chat_block_message_lines(message, width, indent=indent)
+    if message.presentation is not MessagePresentation.INLINE:
+        raise RuntimeError("message has an unsupported presentation")
     prefix = (
         f"{_inline(message.sender)}"
         f"{_semantic_suffix(message.state, message.role)}> "
@@ -982,6 +1052,147 @@ def _message_lines(
             preserve_lines=True,
         )
     ]
+
+
+def _chat_block_message_lines(
+    message: Message,
+    width: int,
+    *,
+    indent: int,
+) -> list[_SemanticLine]:
+    """Render one speaker header, separator, and default-styled body rail."""
+
+    header = _inline(message.sender)
+    if message.metadata is not None:
+        header += f" · {_inline(message.metadata)}"
+    header += _semantic_suffix(message.state, message.role)
+    header_role = _SpeakerHeaderRole(message.accent)
+    header_indent = " " * max(0, min(indent, max(width - 1, 0)))
+    lines: list[_SemanticLine] = [
+        (line, header_role)
+        for line in _word_wrapped_prefixed_lines(
+            header,
+            width,
+            prefix=header_indent,
+            fallback_prefix="",
+        )
+    ]
+    lines.append(("", SemanticRole.DEFAULT))
+    lines.extend(
+        (line, SemanticRole.DEFAULT)
+        for line in _chat_block_body_lines(message.content, width, indent=indent)
+    )
+    return lines
+
+
+def _chat_block_body_lines(value: str, width: int, *, indent: int) -> list[str]:
+    """Word-wrap one sanitized body under a physical-cell-safe speaker rail."""
+
+    safe = sanitize_terminal_text(value)
+    safe_indent = max(0, min(indent, max(width - 1, 0)))
+    base_indent = " " * safe_indent
+    remaining_width = width - safe_indent
+    if remaining_width >= 3:
+        prefix = f"{base_indent}│ "
+        fallback_prefix = base_indent
+    else:
+        prefix = base_indent
+        fallback_prefix = ""
+    return [
+        rendered
+        for source in safe.split("\n")
+        for rendered in _word_wrapped_prefixed_lines(
+            source,
+            width,
+            prefix=prefix,
+            fallback_prefix=fallback_prefix,
+        )
+    ]
+
+
+def _word_wrapped_prefixed_lines(
+    text: str,
+    width: int,
+    *,
+    prefix: str,
+    fallback_prefix: str,
+) -> list[str]:
+    """Wrap exact text and fall back only for one incompatible leading glyph."""
+
+    if not text:
+        return [prefix.rstrip()]
+
+    rendered: list[str] = []
+    remaining = text
+    prefix_width = _cell_width(prefix)
+    fallback_width = _cell_width(fallback_prefix)
+    while remaining:
+        active_prefix = prefix
+        available = width - prefix_width
+        leading_glyph = _leading_display_glyph(remaining)
+        if _cell_width(leading_glyph) > available:
+            active_prefix = fallback_prefix
+            fallback_available = width - fallback_width
+            if _cell_width(leading_glyph) > fallback_available:
+                active_prefix = ""
+            chunk = leading_glyph
+        else:
+            chunk = _word_cell_prefix(remaining, available)
+        rendered.append(f"{active_prefix}{chunk}")
+        remaining = remaining[len(chunk) :]
+    return rendered
+
+
+def _leading_display_glyph(text: str) -> str:
+    """Keep one spacing code point with adjacent zero-cell combining marks."""
+
+    stop = 0
+    has_spacing_character = False
+    for character in text:
+        character_width = display_character_width(character)
+        if has_spacing_character and character_width > 0:
+            break
+        stop += 1
+        if character_width > 0:
+            has_spacing_character = True
+    return text[:stop]
+
+
+def _word_cell_prefix(text: str, width: int) -> str:
+    """Return one exact cell-bounded prefix, preferring a later word boundary."""
+
+    if not text:
+        return ""
+    hard_stop = _cell_prefix_stop(text, width)
+    if hard_stop == len(text):
+        return text
+    if hard_stop == 0:
+        return text[:1]
+
+    candidate = text[:hard_stop]
+    break_stop = 0
+    has_nonspace = False
+    for index, character in enumerate(candidate):
+        if character.isspace():
+            if has_nonspace:
+                break_stop = index + 1
+        else:
+            has_nonspace = True
+    return text[: break_stop or hard_stop]
+
+
+def _cell_prefix_stop(text: str, width: int) -> int:
+    """Locate the largest leading code-point span that fits physical cells."""
+
+    cells = 0
+    stop = 0
+    for character in text:
+        character_width = display_character_width(character)
+        if cells + character_width > width:
+            break
+        cells += character_width
+        stop += 1
+    return stop
 
 
 def _record_lines(
@@ -1144,23 +1355,11 @@ def _choice_lines(
     else:
         marker = "- "
         role = SemanticRole.DEFAULT
-    text = choice.label
-    if choice.warning_suffix is not None:
-        text += f" {choice.warning_suffix}"
-    if choice.description is not None:
-        text += f" — {choice.description}"
-    if choice.disabled_reason is not None:
-        text += f" ({choice.disabled_reason})"
-    if choice.warning_suffix is not None and role is SemanticRole.DEFAULT:
-        tail = ""
-        if choice.description is not None:
-            tail += f" — {choice.description}"
-        if choice.disabled_reason is not None:
-            tail += f" ({choice.disabled_reason})"
-        return _wrap_warning_suffix(
-            choice.label,
-            choice.warning_suffix,
-            tail,
+    text, spans = _choice_text_and_spans(choice, numbered=False)
+    if spans and role is SemanticRole.DEFAULT:
+        return _wrap_inline_roles(
+            text,
+            spans,
             width,
             indent=indent,
             initial_prefix=marker,
@@ -1273,10 +1472,36 @@ def _wrap(
     return rendered or [base_indent.rstrip()]
 
 
-def _wrap_warning_suffix(
-    label: str,
-    warning_suffix: str,
-    tail: str,
+def _choice_text_and_spans(
+    choice: Choice,
+    *,
+    numbered: bool,
+) -> tuple[str, tuple[_InlineRoleSpan, ...]]:
+    """Build one sanitized choice line and its independent semantic spans."""
+
+    text = _inline(choice.label)
+    spans: list[_InlineRoleSpan] = []
+    if choice.warning_suffix is not None:
+        text += " "
+        start = len(text)
+        text += _inline(choice.warning_suffix)
+        spans.append(_InlineRoleSpan(start, len(text), SemanticRole.WARNING))
+    if choice.description is not None:
+        text += " — "
+        start = len(text)
+        text += _inline(choice.description)
+        if choice.description_role is not SemanticRole.DEFAULT:
+            spans.append(_InlineRoleSpan(start, len(text), choice.description_role))
+    if choice.disabled_reason is not None:
+        text += " (disabled: " if numbered else " ("
+        text += _inline(choice.disabled_reason)
+        text += ")"
+    return text, tuple(spans)
+
+
+def _wrap_inline_roles(
+    text: str,
+    spans: tuple[_InlineRoleSpan, ...],
     width: int,
     *,
     indent: int,
@@ -1284,18 +1509,12 @@ def _wrap_warning_suffix(
     continuation_prefix: str,
     base_role: SemanticRole,
 ) -> list[_SemanticLine]:
-    """Wrap one choice while retaining its plain warning-suffix boundaries."""
+    """Wrap sanitized choice text while retaining semantic span boundaries."""
 
-    safe_label = _inline(label)
-    safe_warning_suffix = _inline(warning_suffix)
-    safe_text = f"{safe_label} {safe_warning_suffix}{_inline(tail)}"
-    warning_start = len(safe_label) + 1
-    warning_stop = warning_start + len(safe_warning_suffix)
     base_indent = " " * max(0, min(indent, max(width - 1, 0)))
-    return _prefixed_warning_lines(
-        safe_text,
-        warning_start,
-        warning_stop,
+    return _prefixed_inline_role_lines(
+        text,
+        spans,
         width,
         first_prefix=f"{base_indent}{initial_prefix}",
         continuation_prefix=f"{base_indent}{continuation_prefix}",
@@ -1303,17 +1522,16 @@ def _wrap_warning_suffix(
     )
 
 
-def _prefixed_warning_lines(
+def _prefixed_inline_role_lines(
     text: str,
-    warning_start: int,
-    warning_stop: int,
+    spans: tuple[_InlineRoleSpan, ...],
     width: int,
     *,
     first_prefix: str,
     continuation_prefix: str,
     base_role: SemanticRole,
 ) -> list[_SemanticLine]:
-    """Fit safe choice text while mapping its warning interval to each row."""
+    """Fit safe choice text while projecting semantic spans onto each row."""
 
     rendered: list[_SemanticLine] = []
     remaining = text
@@ -1336,16 +1554,18 @@ def _prefixed_warning_lines(
         content = _cell_chunks(remaining, available)[0]
         line = f"{active_prefix}{content}"
         content_stop = offset + len(content)
-        overlap_start = max(offset, warning_start)
-        overlap_stop = min(content_stop, warning_stop)
-        if overlap_start < overlap_stop:
-            role: _LineRole = _InlineWarningRole(
-                base_role,
-                len(active_prefix) + overlap_start - offset,
-                len(active_prefix) + overlap_stop - offset,
+        line_spans = tuple(
+            _InlineRoleSpan(
+                len(active_prefix) + max(offset, span.start) - offset,
+                len(active_prefix) + min(content_stop, span.stop) - offset,
+                span.role,
             )
-        else:
-            role = base_role
+            for span in spans
+            if max(offset, span.start) < min(content_stop, span.stop)
+        )
+        role: _LineRole = (
+            _InlineRole(base_role, line_spans) if line_spans else base_role
+        )
         rendered.append((line, role))
         remaining = remaining[len(content) :]
         offset = content_stop
@@ -1422,14 +1642,19 @@ def _cell_width(text: str) -> int:
 def _decorate(text: str, role: _LineRole) -> str:
     """Apply one fixed local style without parsing dynamic text as markup."""
 
-    if isinstance(role, _InlineWarningRole):
-        return "".join(
-            (
-                _decorate(text[: role.start], role.base),
-                _decorate(text[role.start : role.stop], SemanticRole.WARNING),
-                _decorate(text[role.stop :], role.base),
-            )
-        )
+    if isinstance(role, _SpeakerHeaderRole):
+        if not text:
+            return text
+        return f"{_SPEAKER_HEADER_SGR[role.accent]}{text}{_RESET}"
+    if isinstance(role, _InlineRole):
+        rendered: list[str] = []
+        offset = 0
+        for span in role.spans:
+            rendered.append(_decorate(text[offset : span.start], role.base))
+            rendered.append(_decorate(text[span.start : span.stop], span.role))
+            offset = span.stop
+        rendered.append(_decorate(text[offset:], role.base))
+        return "".join(rendered)
     sgr = _ROLE_SGR[role]
     if not sgr or not text:
         return text

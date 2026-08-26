@@ -263,7 +263,7 @@ class ConversationStorageSelectionTests(unittest.TestCase):
         coordinator.assert_not_called()
         self.assertEqual(_configuration_bytes(self.workspace), before)
 
-    def test_explicit_default_noop_and_legacy_save_are_canonical_eleven_key(self) -> None:
+    def test_explicit_default_noop_and_legacy_save_are_canonical_twelve_key(self) -> None:
         before = _configuration_bytes(self.workspace)
         report = select_conversation_storage(self.workspace, "filesystem")
         self.assertEqual(
@@ -286,7 +286,10 @@ class ConversationStorageSelectionTests(unittest.TestCase):
         self.assertEqual((report.outcome, report.configuration), ("completed", "saved"))
         persisted = self.workspace.read_json(_SYSTEM_PATH)
         self.assertEqual(persisted["conversation_storage_backend"], "filesystem")
-        self.assertEqual(len(persisted), 11)
+        self.assertIs(persisted["show_message_details"], False)
+        self.assertIsNone(persisted["conversation_rag_provider"])
+        self.assertIs(persisted["conversation_rag_automatic"], False)
+        self.assertEqual(len(persisted), 12)
         self.assertEqual(self.workspace.path(_AGENT_PATH).read_bytes(), agent_before)
         self.assertFalse(
             self.workspace.path(CONVERSATION_STORAGE_ACTIVATION_STATE_PATH).exists()

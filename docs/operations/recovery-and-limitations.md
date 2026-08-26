@@ -122,7 +122,8 @@ Keep desired and active state distinct while diagnosing a failed switch.
 `conversation_storage_backend`; missing or null means filesystem.
 `config/conversation_storage_state.json` stores strict schema-v1 active backend
 and generation; a missing marker means filesystem generation zero. A completed
-`storage use` or Settings Save changes desired only. Do not hand-edit either
+`storage use` or Settings Apply Changes updates desired state only. Do not
+hand-edit either
 file or delete one store to manufacture agreement.
 
 | Report, startup result, or exit | Meaning | Safe response |
@@ -302,15 +303,64 @@ deadline.
 | Startup picker Cancel | No provider was chosen. | The hard gate remains open; choose an enabled provider. Ctrl-C or EOF exits normally before context/backend/controller/session construction. |
 | `/auth` picker Cancel, interrupt, or EOF | The picker ended without a new authorization. | The shell continues, explicit routes stay unchanged, and any already persisted default remains. Run `/auth` again when ready. |
 | Ctrl-C during native login | The inherited provider process and runtime received the interrupt. | The runtime best-effort stops and reaps that child. Startup exits normally; an already running shell follows its fatal interruption cleanup. Retry after checking native state. |
-| Settings Provider-editor authentication succeeds | Fresh authorization was proved within the subordinate editor, which returns to Provider. | The provider route and any missing workspace default remain pending in memory. Escape or cancellation before confirmed Save leaves configuration bytes unchanged; no configuration value is persisted. |
-| Settings Provider-editor authentication is cancelled or fails | Fresh authorization was not proved before assignment. | The pending route is unchanged. Retry the provider choice or cancel settings; configuration bytes remain unchanged before confirmed Save. |
-| Save-time status is stale or fails after Save confirmation | One distinct effective provider did not freshly authenticate before the file transaction. | Repair or complete native sign-in, return to Save, and reprobe. No pending settings file update occurs. Any missing default learned during the gate remains in the pending candidate and becomes durable only when the final storage-coordinated Save completes. |
+| Settings Provider-editor authentication succeeds | Fresh authorization was proved within the subordinate editor, which returns to Provider. | The provider route and any missing workspace default remain pending in memory. Escape or cancellation before confirmed Apply Changes leaves configuration bytes unchanged; no configuration value is persisted. |
+| Settings Provider-editor authentication is cancelled or fails | Fresh authorization was not proved before assignment. | The pending route is unchanged. Retry the provider choice or cancel settings; configuration bytes remain unchanged before confirmed Apply Changes. |
+| Apply-time status is stale or fails after confirmation | One distinct effective provider did not freshly authenticate before the mixed-candidate file transaction. | Repair or complete native sign-in, return to Apply Changes, and reprobe. No pending settings file update occurs. Any missing default learned during the gate remains in the pending candidate and becomes durable only when the final storage-coordinated Apply completes. |
+| Message-details-only Apply fails | The presentation-only fast path could not prepare, verify, or commit the exact candidate. It performs no provider, backend/runtime, storage, route-generation, or thread work. | The active display flag remains unchanged unless the configuration commit completed. Review the fixed settings error and retry Apply Changes. |
+| Conversation-RAG-only Apply fails | The startup-policy fast path could not prepare, verify, or commit the exact system candidate. It performs no authentication, storage, backend/runtime, route/thread, composition, optional-package probe/install, provider-catalog, subprocess, socket, or network work. | The current RAG service and automatic policy are unchanged regardless. Inspect the fixed settings result and persisted configuration before retrying Apply Changes. |
 
 Interactive startup first needs any authenticated provider, then every distinct
 effective route under CLI override → agent route → workspace default → Codex.
 Removing or rewriting an explicit route is not an authentication recovery
 mechanism. Noninteractive commands do not open the picker; prepare native
 authentication before using their provider routes.
+
+<a id="settings-activation-and-route-recovery"></a>
+
+## Settings activation and route recovery
+
+Confirmed `/settings` Apply Changes uses the current-shell operation for
+live-capable changes: authenticate and preflight all effective providers,
+prepare/quiesce the runtime, validate the complete candidate, persist it, then
+activate it. A candidate whose sole difference is `show_message_details`
+instead uses the
+prepare/verify/commit configuration path and updates the active presentation
+flag only after commit; it skips the full provider, runtime, storage, route, and
+thread activation path. A Conversation-RAG-only candidate uses the same guarded
+configuration transaction without authentication, storage, runtime,
+route/thread, composition, optional-package, provider-catalog, subprocess,
+socket, or network work; its saved policy applies only to the next shell. Every
+other mixed candidate uses the full operation. Its exact prepared boundary
+is `config/system_defaults.json`, `config/agent_configs.json`, and optional
+`agent_states/orchestrator_state/provider_route_generations.json`. Launch
+overrides remain read-only and higher precedence.
+
+| Failure point | Guaranteed state | Recovery |
+| --- | --- | --- |
+| Before persistence | Active runtime and every prepared target are unchanged. | Correct authentication, validation, conflict, preflight, or quiescence and retry Apply Changes. |
+| During a prepared write, with proved rollback | Every attempted target is restored from exact opening bytes; active runtime is unchanged. | Review the fixed error and retry. |
+| After persistence, with proved compensation | Exact prior file state is restored and the old runtime remains active. | Review settings and retry in the same shell. |
+| Restoration or active generation cannot be proved | The shell reports `recovery_required`; persisted and in-memory state may not agree. | Stop using that shell immediately. Close it, inspect and back up the prepared targets, and restart against the persisted configuration. |
+
+Restart is exceptional recovery, not the normal activation path for live-
+capable changes. A successful live Apply says it was applied to the running
+shell; a RAG-only Apply says only that its policy was saved for the next shell.
+Changed profiles remain pending only until their first complete logical
+provider call succeeds. Other active shells are not updated and retain their
+captured state.
+
+There is no watcher for manual changes to the two configuration JSON files. A
+new backend launch validates those bytes and reconciles the runtime-owned route
+generation record; an existing shell does not. Never decrement, delete, or edit
+`provider_route_generations.json` to revive an older provider thread. Every
+provider switch, including A→B→A, deliberately advances freshness. Restore a
+verified complete backup if the record is corrupt or inconsistent.
+
+A fresh target-provider thread still rehydrates bounded context from its
+belonging story session. It is expected to lack provider-native hidden history;
+use `/history`, `/status`, and the visible reply metadata to distinguish story-
+session continuity from native-thread reuse. See
+[Story sessions](../guides/story-sessions.md#execution-identity-and-fresh-thread-continuity).
 
 ## Debate and shell-run recovery
 
@@ -688,7 +738,8 @@ unavailable warning, the shell and `/settings` remain usable and configuration
 is unchanged. Restore the exact reviewed dependency with
 `python -m pip install --editable '.[rag]'`, verify its pin/version/capabilities,
 and restart. Startup never installs or silently disables the saved provider.
-Choose Disabled and save only when that is the intended durable policy.
+Choose Disabled and confirm Apply Changes only when that is the intended
+durable policy.
 
 An armed `/rag QUERY` is not an immediate operation. Ineligible commands retain
 it, while scope change, pause/detach, quit, or cleanup clears it. If Ctrl-C

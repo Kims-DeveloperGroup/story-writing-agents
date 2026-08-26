@@ -6,15 +6,21 @@ import hashlib
 import json
 from typing import Mapping
 
-from .agents import AGENT_SPECS
+from .agents import AGENT_SPECS, ROSTER
 from .config import ConfigurationSnapshot, ConfigManager
 from .conversations import ConversationContextWindow
 from .models import (
     AgentDefinition,
     AgentRequest,
+    BoundCoreDocumentIdentity,
     DebateMessage,
     Phase,
     PromptFileReference,
+    STORY_SESSION_CONTEXT_SCHEMA_VERSION,
+    StoryFocusedContextMode,
+    StorySessionContext,
+    focused_story_context,
+    select_owner_outcome_window,
 )
 from .workspace import Workspace
 from .writing_artifacts import ArtifactContentSnapshot
@@ -31,6 +37,7 @@ class PromptAssembler:
         artifact_repository: WritingArtifactRepository | None = None,
         backend_overrides: Mapping[str, str] | None = None,
         configuration_snapshot: ConfigurationSnapshot | None = None,
+        provider_route_generations: Mapping[str, int] | None = None,
     ) -> None:
         self.workspace = workspace
         self.artifacts = (
@@ -47,6 +54,17 @@ class PromptAssembler:
                 "configuration_snapshot must be a ConfigurationSnapshot or None"
             )
         self.configuration_snapshot = configuration_snapshot
+        raw_generations = dict(provider_route_generations or {})
+        if set(raw_generations).difference(ROSTER):
+            raise ValueError("provider route generations contain an unknown agent")
+        if any(
+            type(generation) is not int or generation < 0
+            for generation in raw_generations.values()
+        ):
+            raise ValueError("provider route generations must be non-negative integers")
+        self.provider_route_generations = {
+            agent_id: raw_generations.get(agent_id, 0) for agent_id in ROSTER
+        }
 
     def build_definition(
         self,
@@ -93,6 +111,7 @@ class PromptAssembler:
             system_prompt_file=system_prompt_file,
             persona_file=persona_file,
             context_document_files=context_document_file_tuple,
+            provider_route_generation=self.provider_route_generations[agent_id],
         )
         return AgentDefinition(
             agent_id=agent_id,
@@ -118,6 +137,9 @@ class PromptAssembler:
         candidate_payload: str | None = None,
         messages: tuple[DebateMessage, ...] = (),
         conversation_context: ConversationContextWindow | None = None,
+        focused_context_mode: StoryFocusedContextMode | None = None,
+        focused_conversation_id: str | None = None,
+        definition: AgentDefinition | None = None,
     ) -> AgentRequest:
         """Build a prompt-free turn with optional immutable conversation context.
 
@@ -130,6 +152,25 @@ class PromptAssembler:
             agent_id,
             session_id,
             debate_id,
+        )
+        mode = focused_context_mode
+        if mode is None:
+            mode = (
+                StoryFocusedContextMode.INCLUDED
+                if conversation_context is not None
+                else StoryFocusedContextMode.OMITTED
+            )
+        story_session_context = (
+            None
+            if definition is None
+            else self.build_story_session_context(
+                definition=definition,
+                session_id=session_id,
+                agent_id=agent_id,
+                focused_context_mode=mode,
+                focused_conversation_id=focused_conversation_id,
+                conversation_context=conversation_context,
+            )
         )
         return AgentRequest(
             session_id=session_id,
@@ -147,6 +188,46 @@ class PromptAssembler:
             messages=messages,
             agent_state=agent_state,
             conversation_context=conversation_context,
+            story_session_context=story_session_context,
+        )
+
+    def build_story_session_context(
+        self,
+        *,
+        definition: AgentDefinition,
+        session_id: str,
+        agent_id: str,
+        focused_context_mode: StoryFocusedContextMode,
+        focused_conversation_id: str | None = None,
+        conversation_context: ConversationContextWindow | None = None,
+    ) -> StorySessionContext:
+        """Build the bounded continuity envelope for one substantive turn."""
+
+        owner_entries = self.workspace.read_agent_session_state(
+            agent_id,
+            session_id,
+        )
+        if type(definition) is not AgentDefinition:
+            raise TypeError("definition must be an AgentDefinition")
+        if definition.agent_id != agent_id:
+            raise ValueError("definition does not match the context agent")
+        return StorySessionContext(
+            schema_version=STORY_SESSION_CONTEXT_SCHEMA_VERSION,
+            session_id=session_id,
+            agent_id=agent_id,
+            owner_outcomes=select_owner_outcome_window(owner_entries),
+            focused_context=focused_story_context(
+                focused_context_mode,
+                conversation_id=focused_conversation_id,
+                context=conversation_context,
+            ),
+            core_documents=tuple(
+                BoundCoreDocumentIdentity(
+                    path=reference.path.relative_to(self.workspace.root).as_posix(),
+                    sha256=reference.sha256,
+                )
+                for reference in definition.context_document_files
+            ),
         )
 
     def _reference(self, relative: str) -> PromptFileReference:
@@ -175,6 +256,7 @@ class PromptAssembler:
         system_prompt_file: PromptFileReference,
         persona_file: PromptFileReference,
         context_document_files: tuple[PromptFileReference, ...],
+        provider_route_generation: int = 0,
     ) -> str:
         components = (
             ("system_prompt", system_prompt_file),
@@ -199,6 +281,10 @@ class PromptAssembler:
                 for kind, reference in components
             ],
         }
+        if type(provider_route_generation) is not int or provider_route_generation < 0:
+            raise ValueError("provider route generation must be non-negative")
+        if provider_route_generation:
+            value["provider_route_generation"] = provider_route_generation
         encoded = json.dumps(
             value,
             ensure_ascii=False,

@@ -3028,6 +3028,137 @@ class CompletionDriverTests(unittest.TestCase):
             (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
         )
 
+    def test_contextual_runtime_header_redraws_for_route_and_backspace_states(
+        self,
+    ) -> None:
+        driver, input_stream, output, fallback, termios, _os = make_driver(
+            "@plot\x7ft message\n"
+        )
+        observed: list[tuple[str, int]] = []
+
+        def header(buffer: str, cursor: int) -> _model.Notice:
+            observed.append((buffer, cursor))
+            one_shot = buffer == "@plot" or buffer.startswith("@plot ")
+            return _model.Notice(
+                "Antigravity · agy-live · high"
+                if one_shot
+                else "Codex · provider default · provider default",
+                label="one-shot runtime" if one_shot else "active runtime",
+                role=_model.SemanticRole.WARNING,
+                state=_model.ViewState.LOADING,
+            )
+
+        self.assertEqual(
+            _core.read_main_command_line(
+                driver,
+                "main> ",
+                input_context_provider=header,
+            ),
+            "@plot message",
+        )
+
+        transitions = [
+            value
+            for index, value in enumerate(observed)
+            if index == 0 or value != observed[index - 1]
+        ]
+        self.assertEqual(
+            transitions[:8],
+            [
+                ("", 0),
+                ("@", 1),
+                ("@p", 2),
+                ("@pl", 3),
+                ("@plo", 4),
+                ("@plot", 5),
+                ("@plo", 4),
+                ("@plot", 5),
+            ],
+        )
+        rendered = "".join(output.records)
+        self.assertIn("[active runtime] Codex", rendered)
+        self.assertIn("[one-shot runtime] Antigravity", rendered)
+        self.assertEqual(input_stream.reads, [])
+        fallback.assert_not_called()
+        self.assertEqual(
+            tuple(call[1] for call in termios.set_calls),
+            (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
+        )
+
+    def test_contextual_runtime_header_keeps_labels_in_no_color_narrow_and_fallback(
+        self,
+    ) -> None:
+        for label, no_color, columns, decorative in (
+            ("ansi", False, 40, True),
+            ("no-color", True, 40, False),
+            ("narrow", True, 24, False),
+        ):
+            with self.subTest(mode=label):
+                driver, _input, output, fallback, termios, os_module = make_driver(
+                    "x\n"
+                )
+                if no_color:
+                    os_module.environ["NO_COLOR"] = "1"
+                os_module.get_terminal_size = lambda _descriptor: SimpleNamespace(
+                    columns=columns,
+                    lines=24,
+                )
+                header = mock.Mock(
+                    return_value=_model.Notice(
+                        "Lead Orchestrator · Codex · model provider default · "
+                        "effort provider default · pending",
+                        label="active runtime",
+                        role=_model.SemanticRole.WARNING,
+                        state=_model.ViewState.LOADING,
+                    )
+                )
+                self.assertEqual(
+                    _core.read_main_command_line(
+                        driver,
+                        "main> ",
+                        input_context_provider=header,
+                    ),
+                    "x",
+                )
+                rendered = "".join(output.records)
+                self.assertIn("[active runtime]", rendered)
+                self.assertIn("LeadOrchestrator", "".join(rendered.split()))
+                self.assertEqual("\x1b[33m" in rendered, decorative)
+                header.assert_any_call("", 0)
+                header.assert_any_call("x", 1)
+                fallback.assert_not_called()
+                self.assertEqual(
+                    tuple(call[1] for call in termios.set_calls),
+                    (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
+                )
+
+        driver, _input, output, fallback, termios, _os = make_driver(
+            "unused",
+            terminal=False,
+        )
+        header = mock.Mock(
+            return_value=_model.Notice(
+                "Attach a story session to activate an agent execution profile.",
+                label="active runtime",
+                role=_model.SemanticRole.MUTED,
+                state=_model.ViewState.EMPTY,
+            )
+        )
+        self.assertEqual(
+            _core.read_main_command_line(
+                driver,
+                "main> ",
+                input_context_provider=header,
+            ),
+            "fallback",
+        )
+        header.assert_called_once_with("", 0)
+        fallback_prompt = fallback.call_args.args[0]
+        self.assertIn("[active runtime] Attach a story session", fallback_prompt)
+        self.assertTrue(fallback_prompt.endswith("main> "))
+        self.assertEqual(output.records, [])
+        self.assertEqual(termios.set_calls, [])
+
     def test_transient_picker_renderer_failure_clears_and_restores(self) -> None:
         driver, _input, output, fallback, termios, _os = make_driver("unused")
         state = initialize_picker(

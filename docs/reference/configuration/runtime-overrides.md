@@ -78,28 +78,46 @@ request to clear a persisted value. There is no Codex reasoning CLI flag or
 constructor argument. No provider model/effort is a session runtime override or
 directive. The interactive `/settings` Agents editor is the installed
 workflow for changing an agent's persisted active-provider model or effort; it
-preserves inactive-provider values. Each `AgentBackend` validates and snapshots
-the complete persisted system-default and per-agent configuration pair once
-during construction. Later direct edits or `/settings` saves do not change that
-backend or its runtime's persisted provider, language, persona, round, model,
-reasoning, or effort defaults. Even late persisted corruption does not
-reconfigure the active lifecycle; the next backend construction reads and
-validates the then-persisted pair.
+preserves inactive-provider values. A candidate with live-capable execution
+changes uses the full path: it validates and authenticates the candidate,
+persists it, and activates the prepared backend/runtime generation in that
+running shell. A
+Message-details-only Apply Changes instead prepares, verifies, and commits the
+configuration, then updates the active presentation flag; it bypasses provider
+authentication, conversation-storage, backend/runtime activation, route, and
+thread work. A Conversation-RAG-only Apply prepares, verifies, and commits only
+the system configuration without authentication, storage, backend/runtime,
+route/thread, composition, optional-package probe/install, provider-catalog,
+subprocess, socket, network, or live activation work. Desired conversation
+storage and RAG remain next-shell settings and do not replace the current
+controller/runtime bundles. Any effective value
+whose source is `launch_override` remains masked by the first-precedence row
+and is disabled/read-only in `/settings`.
+
+Direct file editing follows a different lifecycle. There is no file watcher;
+the next `AgentBackend` construction reads, validates, and reconciles the then-
+persisted pair, while already running shells keep their captured configuration
+and route-generation map. Thus `/settings` is the no-restart path for the
+current shell's live-capable runtime settings, not a live storage or RAG switch
+or a broadcast update to other backends.
 
 Session-wide and per-agent runtime language/persona overrides remain live above
-that snapshot, and explicit backend and run arguments retain their higher
-precedence. `/settings` changes persistent fallbacks only; it does not clear or
-rewrite those overrides, refresh provider threads, or alter the precedence
-table. Its Provider-editor authentication is subordinate and returns to
+the configured values, and explicit backend and run arguments retain their
+higher precedence. `/settings` does not clear or rewrite those overrides or
+alter the precedence table. Its Provider-editor authentication is subordinate and returns to
 Provider; the route and any missing workspace default remain pending in memory.
-Escape or cancellation before confirmed Save leaves configuration bytes
-unchanged, and no configuration value is persisted before Save is confirmed.
-After Save confirmation, Save freshly gates every distinct effective provider
-outside the configuration transaction. Save-time authentication may rebase a
-missing default only in the pending candidate, and that value becomes durable
-only when conversation-storage readiness, parity, and the final guarded
-settings write complete. This `/settings` boundary does not change startup
-authentication or global `/auth`, which retain immediate absent-default
+Escape or cancellation before confirmed Apply Changes leaves configuration
+bytes unchanged, and no configuration value is persisted before Apply Changes
+is confirmed. After full-path Apply Changes confirmation, the controller
+freshly gates every distinct effective provider outside the configuration
+transaction. Apply-time authentication may rebase a missing default only in
+the pending candidate, and that value becomes durable only when
+conversation-storage readiness, parity, and the final guarded
+system/agent/optional-route settings write complete. A provider change advances
+its durable route generation and starts a fresh target-provider thread; a
+same-provider model/effort change remains eligible to reuse its native thread.
+This `/settings` boundary does not change startup authentication or global
+`/auth`, which retain immediate absent-default
 durability.
 
 Persisted Codex reasoning accepts any forward-compatible lowercase token

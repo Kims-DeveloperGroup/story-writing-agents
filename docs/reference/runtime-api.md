@@ -161,6 +161,15 @@ persists and reuses it for every phase, and performs no search or retrieval.
 Fresh mode records the supplied conversation identity but performs no context
 read and sends no context. A context-omitted call does neither and has no sidecar.
 
+These modes also select the focused portion of each substantive phase's
+package-internal schema-v1 `story_session_context`: `included` carries the
+bounded window, `fresh` carries only the conversation identity, and an omitted
+request carries neither. All three retain the receiving agent's bounded owner
+outcomes and current bound core-document path/hash identities. Thus `/run
+--fresh` is fresh only for focused transcript context, not for the belonging
+story session. The exact envelope and caps are in
+[Prompts and provider boundary](../design/prompts-and-provider.md#story-session-continuity-envelope).
+
 `inspect_debate_context()` reads only the strict sidecar and returns `None` when
 it is absent; it does not alter the established debate/session inspection JSON.
 The exact stored schema lives in [Persistence](../design/persistence.md#debate-context-sidecar).
@@ -262,6 +271,15 @@ projection failure is isolated from the committed reply and recorded safely;
 commit. Exact authorization, citation, payload, stale-state, and failure rules
 are in [Bounded conversation retrieval](conversation-retrieval.md#optional-conversation-rag-preflight).
 Debate context never appends or modifies a transcript.
+
+For every runtime-built advisory, retrieval initial call, and consensus phase,
+the runtime builds the bounded belonging-session envelope from the receiving
+agent's current owner outcomes, focused mode, and the definition's bound core
+identities. Reference preludes do not carry it; retrieval continuations do not
+repeat it. A provider switch or taint may force a fresh native thread without
+discarding these story-session facts. Callers constructing the request values
+directly may leave the trailing optional envelope as `None` and preserve the
+legacy backend payload.
 
 Inline `${path}` and `${path}#Lx-Ly` indicators are supported by all four
 provider-bound entry points above. The runtime preserves the exact source text

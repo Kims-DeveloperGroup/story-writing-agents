@@ -7,7 +7,7 @@ import json
 import re
 import shutil
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +16,7 @@ from .config import ConfigurationSnapshot
 from .errors import ConfigurationError
 from .models import AgentDefinition
 from .provider_adapter import (
+    AgentExecutionProfile,
     ProviderBinding,
     ProviderInvocation,
     ProviderInvocationError,
@@ -47,6 +48,7 @@ class CodexAdapter:
         timeout_seconds: float,
         configuration: ConfigurationSnapshot,
         explicit_model: str | None,
+        execution_profiles: Mapping[str, AgentExecutionProfile] | None = None,
         create_process: Callable[[], CreateProcess] = (
             lambda: asyncio.create_subprocess_exec
         ),
@@ -60,6 +62,16 @@ class CodexAdapter:
         self.timeout_seconds = timeout_seconds
         self._configuration = configuration
         self._explicit_model = explicit_model
+        self._execution_profiles = (
+            None
+            if execution_profiles is None
+            else dict(execution_profiles)
+        )
+        if self._execution_profiles is not None and any(
+            profile.provider != self.vendor
+            for profile in self._execution_profiles.values()
+        ):
+            raise ValueError("Codex execution profiles must use the Codex provider")
         self._create_process = create_process
         self._wait_for = wait_for
         self._make_temporary_directory = make_temporary_directory
@@ -317,6 +329,13 @@ class CodexAdapter:
             return self.model, self.reasoning_effort
         if agent_id not in ROSTER:
             raise ConfigurationError(f"unknown agent: {agent_id}")
+        if self._execution_profiles is not None:
+            profile = self._execution_profiles.get(agent_id)
+            if profile is None:
+                raise ConfigurationError(
+                    f"Codex execution profile is unavailable: {agent_id}"
+                )
+            return profile.model, profile.effort
         agent = self._configuration.agent_configs[agent_id]
         model = (
             self._explicit_model

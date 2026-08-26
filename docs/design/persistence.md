@@ -334,8 +334,14 @@ does not import migration or consume migration checkpoints. `story storage use`
 dispatches to it before debug logging and provider/runtime construction.
 `/settings` supplies its complete pending configuration plus the
 settings-owned fresh persona-catalog guard. Storage choice is independent from
-the Agents editor and provider routing, although the complete Settings Save
-retains provider authentication before selection begins.
+the Agents editor and provider routing. A mixed Settings Apply retains provider
+authentication before selection begins. A Message-details-only Apply never
+enters selection: it prepares, verifies, and commits the presentation preference
+without provider, storage, backend/runtime, route, or thread activation work. A
+Conversation-RAG-only Apply also bypasses selection and authentication: it
+prepares, verifies, and commits only the startup-fixed system configuration,
+with no backend/runtime, route/thread, composition, optional-package probe,
+provider catalog, subprocess, socket, or network work.
 
 Selection first briefly proves the workspace coordinator, then releases it
 during any consent interaction and host installer. For SQLite it functionally
@@ -426,12 +432,13 @@ and [recovery procedure](../operations/recovery-and-limitations.md#conversation-
 
 ## Workspace runtime debug log
 
-The internal diagnostics writer appends compact, ASCII-safe schema-v1 JSONL.
-Every record has `schema_version`, a writer-owned UTC `timestamp`, and fixed
-`level`, `component`, `operation`, and `phase` values. It may add an `outcome`
-from its fixed taxonomy and exact validated `session_id`, `conversation_id`,
-`debate_id`, or canonical `agent_id`; absent optional fields are omitted rather
-than written as `null`.
+The internal diagnostics writer appends compact, ASCII-safe JSONL. Ordinary
+operational records retain schema version 1. Every schema-v1 record has
+`schema_version`, a writer-owned UTC `timestamp`, and fixed `level`,
+`component`, `operation`, and `phase` values. It may add an `outcome` from its
+fixed taxonomy and exact validated `session_id`, `conversation_id`, `debate_id`,
+or canonical `agent_id`; absent optional fields are omitted rather than written
+as `null`.
 
 An error record additionally has an `exception` object with only `type`,
 `frames`, and `frames_truncated`. A frame has only a safe module name, function
@@ -439,6 +446,33 @@ name, and positive line number. The writer keeps the nearest 32 frames and uses
 fixed replacements for unsafe type, module, or function names. It does not
 accept a caller timestamp, message, path, traceback text, or arbitrary detail
 or payload mapping.
+
+Execution identity records use schema version 2 and one of these operations:
+`execution_setting_change`, `execution_profile_applied`,
+`execution_profile_confirmed`, or `execution_profile_recovery_required`. Every
+record has `schema_version: 2`, timestamp, level, `component: "backend"`,
+operation, phase, `correlation_id`, canonical `agent_id`, nonnegative
+`route_generation`, and `activation_state`. It has exactly one profile form:
+either `active_profile`, or both `old_profile` and `new_profile`. Each profile
+has exactly `provider`, `provider_source`, `model`, `model_source`, `effort`,
+and `effort_source`; provider is `codex` or `antigravity`, sources are
+`launch_override`, `agent_config`, `system_default`, `built_in_default`, or
+`provider_default`, and model/effort may be null. Optional
+`thread_disposition` is `fresh`, `reused`, or
+`fresh_after_provider_switch`; optional `context_state` is `rehydrated` or
+`unavailable`.
+
+After successful backend construction, four `execution_profile_applied`
+records use trace level, succeeded phase, correlation `startup`,
+`activation_state: "active"`, and only an
+`active_profile`; they do not fabricate old values. A changed hot profile emits
+`activation_state: "accepted"` for `execution_setting_change`,
+`activation_state: "active"` for `execution_profile_applied`, then
+`activation_state: "confirmed"` once after the first complete logical call; all
+three successful hot records use trace level and succeeded phase. Uncertain
+recovery uses `execution_profile_recovery_required`, error level, failed phase,
+and `activation_state: "recovery_required"`. A no-op, cancelled save, or
+pre-persist failure emits no successful transition.
 
 `Workspace` owns canonical-root resolution, containment, no-symlink checks, its
 per-instance meaningful root identity, package-internal root open/reverification

@@ -22,6 +22,23 @@ class SemanticRole(StrEnum):
     AGENT = "agent"
 
 
+class MessagePresentation(StrEnum):
+    """Select one deterministic attributed-message layout."""
+
+    INLINE = "inline"
+    CHAT_BLOCK = "chat_block"
+
+
+class SpeakerAccent(StrEnum):
+    """Select one fixed accessible accent for a chat-block speaker header."""
+
+    MAGENTA = "magenta"
+    CYAN = "cyan"
+    YELLOW = "yellow"
+    GREEN = "green"
+    BLUE = "blue"
+
+
 class ViewState(StrEnum):
     """Explicit view or control state independent of presentation style."""
 
@@ -524,13 +541,16 @@ class Notice:
 
 @dataclass(frozen=True, slots=True)
 class Message:
-    """Preserve one attributed content boundary."""
+    """Preserve one attributed content boundary and optional chat layout."""
 
     sender: str
     content: str
     _: KW_ONLY
     role: SemanticRole = SemanticRole.DEFAULT
     state: ViewState = ViewState.COMPLETED
+    presentation: MessagePresentation = MessagePresentation.INLINE
+    metadata: str | None = None
+    accent: SpeakerAccent = SpeakerAccent.CYAN
 
     def __post_init__(self) -> None:
         _require_text("sender", self.sender)
@@ -538,6 +558,11 @@ class Message:
         if not isinstance(self.role, SemanticRole):
             raise TypeError("role must be a SemanticRole")
         _require_state(self.state)
+        if not isinstance(self.presentation, MessagePresentation):
+            raise TypeError("presentation must be a MessagePresentation")
+        _require_optional_text("metadata", self.metadata)
+        if not isinstance(self.accent, SpeakerAccent):
+            raise TypeError("accent must be a SpeakerAccent")
 
 
 @dataclass(frozen=True, slots=True)
@@ -568,10 +593,10 @@ class Record:
 
 @dataclass(frozen=True, slots=True)
 class ListView:
-    """Present ordered records with explicit count, position, and empty meaning."""
+    """Present ordered semantic rows with count, position, and empty meaning."""
 
     title: str
-    items: tuple[Record | Field, ...]
+    items: tuple[Record | Field | Message, ...]
     _: KW_ONLY
     total_count: int | None = None
     position: int | None = None
@@ -581,9 +606,11 @@ class ListView:
     def __post_init__(self) -> None:
         _require_text("title", self.title)
         if type(self.items) is not tuple or any(
-            type(item) not in {Record, Field} for item in self.items
+            type(item) not in {Record, Field, Message} for item in self.items
         ):
-            raise TypeError("items must be a tuple of Record or Field values")
+            raise TypeError(
+                "items must be a tuple of Record, Field, or Message values"
+            )
         total = len(self.items) if self.total_count is None else self.total_count
         if type(total) is not int or total < len(self.items):
             raise ValueError("total_count must cover every visible item")
@@ -654,6 +681,7 @@ class Choice:
     _: KW_ONLY
     warning_suffix: str | None = None
     description: str | None = None
+    description_role: SemanticRole = SemanticRole.DEFAULT
     enabled: bool = True
     disabled_reason: str | None = None
 
@@ -662,6 +690,8 @@ class Choice:
         _require_text("label", self.label)
         _require_optional_text("warning_suffix", self.warning_suffix)
         _require_optional_text("description", self.description)
+        if not isinstance(self.description_role, SemanticRole):
+            raise TypeError("description_role must be a SemanticRole")
         if type(self.enabled) is not bool:
             raise TypeError("enabled must be a bool")
         _require_optional_text("disabled_reason", self.disabled_reason)
@@ -968,6 +998,8 @@ def _visible_escape(character: str) -> str:
 
 __all__ = [
     "SemanticRole",
+    "MessagePresentation",
+    "SpeakerAccent",
     "ViewState",
     "CapabilityProfile",
     "KeyKind",

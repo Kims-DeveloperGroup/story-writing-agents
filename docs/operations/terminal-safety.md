@@ -99,9 +99,13 @@ line fallback. The driver observes bounded output width and height before the
 first viewer frame and after every nonexit key. It installs no `SIGWINCH`
 handler or background resize loop, and it never hides or shows the cursor.
 
-For one advisory turn, the same capability result also gates the narrow
-terminal-owned progress indicator. A capable raw stream may show the fixed
-four-glyph `◐`/`◓`/`◑`/`◒` cycle; `NO_COLOR` leaves those plain glyphs enabled.
+For startup storage activation, authenticated runtime preparation, native
+authentication probes, persisted omitted-resume preparation, advisory and
+consensus turns, and Settings option preparation, the same capability result
+also gates the narrow terminal-owned progress indicator. A capable raw stream
+may show the fixed
+text-free sixteen-cell block-shade shimmer with a fixed ANSI color cycle;
+`NO_COLOR` preserves the same spatial motion without SGR.
 Callback construction and non-TTY, `TERM=dumb`, non-POSIX, missing, or
 uncertain-capability paths await the operation silently and emit no indicator.
 The installed CLI's earlier TTY guard still rejects non-TTY shell entry before
@@ -199,6 +203,15 @@ enter rendered text. A selected choice outside the live viewport is summarized
 only by its ordinal and sanitized label; line fallback renders every numbered
 choice and ends with its focused prompt space without a final LF.
 
+Terminal retention and storage durability are separate boundaries. Confirmed
+user submissions and user-to-agent messages, agent replies,
+retrieval/history/transcript records, debate speeches, results, errors, and
+final notices are committed informative output: capable redraw cleanup does not
+erase them. Editors, pickers, Settings/configuration controls, confirmations,
+loading/progress animation, highlights, and intermediate frames are transient.
+This policy describes terminal scrollback; only the conversation and debate
+storage contracts determine which content is durable on disk.
+
 Viewer validation precedes capability inspection and terminal I/O. Supplied
 text and its one-line display name must be exact strict-UTF-8 `str` values; text
 is limited by a private terminal-local 8 MiB UTF-8 capacity and 65,536
@@ -233,6 +246,17 @@ does not ASCII-escape Unicode. Malformed JSON, embedded prose or extra data,
 scalar JSON values, duplicate keys, non-finite values, and serialization
 failures return the original content exactly; no formatter result is written
 back to the transcript or provider result.
+
+`Message` retains its compatible inline layout by default. Controller call
+sites that represent a user or agent speaker select the chat-block layout: a
+full speaker header, one blank separator row, and a default-styled `│ ` body
+rail. Only the header receives its stable bold accent—user magenta, lead cyan,
+plot yellow, character green, and execution blue—so long message bodies remain
+legible on either terminal theme. Sanitization precedes Unicode physical-cell
+measurement and word wrapping; whitespace-only bodies, strict-JSON projection,
+embedded LF, and CJK/full-width glyphs retain their meaning. If the rail would
+make a leading display glyph impossible to place, only that physical row drops
+the rail; narrower layouts fall back without losing or duplicating body text.
 
 Search/history/transcript renderers validate IDs, sequences, metadata, and
 citations. Controller views construct typed semantic components from validated
@@ -271,9 +295,16 @@ then delegates the complete LF-terminated string to a no-op callback sink or
 the stream driver's mode-gated sink. It neither reads input nor owns a second
 stream, raw mode, cursor, width, restoration lifecycle, payload store, or
 commit token. #275 supplies only validated controller call sites: exact-body
-advisory messages use a resolved prompt alias, prompt-based consensus uses the
+advisory messages use `You →` plus the resolved full agent display name,
+prompt-based consensus uses the
 fixed consensus target, and request records use validated paths, normalized
 queries/scopes, or resolved transcript page facts.
+
+Each debate callback similarly builds one `Debate phase` Panel and submits it
+through exactly one semantic writer call. The panel contains its fixed progress
+fields, any read warning, and all newly readable contiguous persisted speech
+sections. Only after that write succeeds does the controller advance its debate
+message cursor, conflict cache, accepted-event list, or last-started mapping.
 
 Conversation-scope deduplication is also controller-owned. Before each attached
 prompt, the controller freshly validates any current focus against the complete
@@ -292,9 +323,11 @@ confirmations, credentials, provider-native input, raw diagnostics, or commit
 token. It creates no separate storage, transcript-retention, provider-history,
 or audit record.
 
-Dense list commands preserve callback granularity by rendering each row as one
-positioned, one-record `ListView`. If search, transcript, or history rendering
-is interrupted after completed rows, those callbacks remain visible, one
+Dense list commands preserve callback granularity by rendering each row in one
+positioned `ListView`. Session, conversation, and search rows use `Record`
+values where applicable; transcript and history rows use attributed `Message`
+values. If search, transcript, or history rendering is interrupted after
+completed rows, those callbacks remain visible, one
 cancellation record follows, and no unrendered row or trailing result, hint, or
 context component is written.
 
@@ -314,15 +347,21 @@ alternate-screen enter, home-and-clear redraw, and alternate-screen exit
 sequences surround only sanitized, bounded renderer output. Caller text and
 display metadata can never supply these functional sequences.
 
-## Advisory progress boundary
+## Startup and advisory progress boundary
 
-The indicator is advisory-only: it wraps exactly one runtime awaitable for one
-advisory turn and is not a semantic record, callback, status event, or general
-animation service. The raw driver owns the active glyph, advances the fixed
-four-frame cycle, serializes clear/redraw around semantic retrieval/progress or
-result writes, and creates no OS thread or import-time task. It joins both the
-operation and indicator tasks, then clears the cell before final, cancellation,
-or error presentation; the wrapper returns after this cleanup.
+The same private indicator wraps one awaitable at a time and is not a semantic
+record, callback, status event, or general animation service. Startup uses it
+first for conversation-storage activation before the welcome, then for one
+continuous post-authentication span covering CLI-context, backend, and
+controller construction before the lobby. Native-status probes and persisted
+session/conversation reads before omitted resume pickers use the same lifecycle
+and add no text. Advisory, consensus, and Settings consumers retain their
+established boundaries. The raw driver owns the active row, advances the fixed
+shimmer cycle, serializes
+clear/redraw around semantic retrieval/progress or result writes, and creates
+no OS thread or import-time task. It joins both the operation and indicator
+tasks, then clears the row before final, cancellation, or error presentation;
+the wrapper returns after this cleanup.
 
 An underlying operation failure takes precedence over a simultaneous indicator
 failure. If only the indicator or its final clear fails, the driver raises the
@@ -390,7 +429,11 @@ that rendered record; stream construction delegates it to the sole driver.
 The driver requires an already selected mode, writes only for `LIVE`, and is
 silent for `FALLBACK`. This avoids both removal after capable cleanup and a
 second verbatim representation in ordinary-line fallback without exposing the
-latch to the controller.
+latch to the controller. Fallback guarantees complete, nonduplicated meaning,
+not identical capable-mode topology: the ordinary line reader has already
+displayed submitted input, so it adds no duplicate accepted-input chat block;
+agent replies, results, errors, and notices still render through their semantic
+plain forms.
 
 Before selecting `LIVE`, decoder preflight admits only registry-canonical
 ASCII, UTF-8, or ISO-8859-1 with the resolved built-in `strict` or
@@ -554,13 +597,15 @@ from the nested editor; Ctrl-C and EOF cancel the whole workflow. Nested
 settings input does not navigate or mutate main history and receives no command
 completion. These reads follow the same universal capable cleanup and
 honest fallback visibility as every other input route; nested Escape returns
-silently without a snapshot or cancellation record. Save opens a transient
-yes/no confirmation. Cancel and root Settings Escape share a controller-owned
-action: they exit directly when Current and Pending are equal and open that
+silently without a snapshot or cancellation record. Apply Changes opens a
+transient yes/no confirmation. Discard Changes and root Settings Escape share
+a controller-owned action: they exit directly when Current and Pending are
+equal and open that
 transient confirmation only when they differ. Confirmation context shows only
 changed Current/Pending fields and marks each displayed value `(Changed)`;
-unchanged Save confirmation shows `No pending settings changes.` Committed YES
-proceeds; committed NO or confirmation Escape returns to the root settings
+the defensive no-changes Apply confirmation shows
+`No pending settings changes.` Committed YES proceeds; committed NO or
+confirmation Escape returns to the root settings
 picker; invalid fallback input retries with a trusted notice. Top-level
 cancellation does not claim a snapshot that was not rendered.
 

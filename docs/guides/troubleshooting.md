@@ -71,7 +71,9 @@ authorization-code text is never proof by itself; fresh status is the sole
 authority. Startup Cancel leaves the gate open; Ctrl-C or EOF exits without
 starting the story runtime. `/auth` cancellation returns to the existing shell.
 In `/settings`, failed or cancelled provider authentication preserves the
-pending route, and stale authentication at Save prevents the file update. See
+pending route, and stale authentication at a full-path Apply Changes prevents
+the file update; Message-details-only and Conversation-RAG-only Apply Changes
+never authenticate. See
 [authentication recovery](../operations/recovery-and-limitations.md#authentication-recovery).
 
 ## Interactive mode requires a terminal

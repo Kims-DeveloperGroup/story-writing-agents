@@ -25,13 +25,16 @@ writing approved story text; the runtime never invokes Git.
 `StoryRuntime` owns validated debate/advisory sequencing, consensus, retrieval
 authority, replies, artifacts, and per-agent desired/current/retiring binding
 selection. It leases the exact selected binding across each provider-bound
-operation. See the
+operation and builds the bounded `story_session_context` envelope for every
+substantive turn. See the
 [Runtime API](../reference/runtime-api.md#one-conversation-turn).
 
 `session_lifecycle` owns immutable provider-neutral lifecycle facts and pure
 readiness, with no resource or I/O. `AgentBackend` retains manifests, access
 claims, routes, active-call retention, and provider-neutral thread and
-read-action coordination. Provider adapters own bindings, staging, and
+read-action coordination. It is the sole authoritative resolver of the active
+provider/model/effort profile and sources; adapters receive that profile for
+argv. Provider adapters own bindings, staging, and
 provider-native state; `provider_process` owns subprocess resources. A
 `BoundAgent` is the immutable handle for one definition and binding, not the
 runtime selection owner. Codex and Antigravity adapters are implemented; the
@@ -81,6 +84,13 @@ See
 the weak-local/persistence/runtime boundary, current commands, and interactive
 flow.
 
+Provider switches also advance a durable per-agent route generation, including
+A→B→A, so each switch starts a fresh target-provider thread. Same-provider
+model/effort changes retain that generation and remain eligible for thread
+reuse. Native-thread freshness does not erase story-session continuity: the
+runtime supplies bounded owner outcomes, focused mode, and core path/hash
+identities again on the next substantive call.
+
 `Workspace` owns generic path-safe persistence, inspection, and atomic
 replacement. Its retained root identity is a narrower internal
 diagnostic-storage seam; ordinary domain I/O remains pathname-based and may
@@ -125,6 +135,11 @@ project-root export. Constructing its workspace-bound handle performs no I/O;
 complete configuration snapshot loads, and CLI, controller, and smoke emission
 starts only after workspace resolution or initialization succeeds.
 
+Ordinary diagnostic records use schema version 1. Backend execution-profile
+startup, hot change, applied, confirmed, and recovery records use schema version
+2 and intentionally include exact provider/model/effort identities and sources
+without story content or provider stderr.
+
 The low-level writer suppresses ordinary `Exception` failures. The five
 consumers—CLI, backend, runtime, controller, and smoke—submit only fixed facts
 through private guards that also catch diagnostic `BaseException`. Thus
@@ -151,11 +166,11 @@ revision; all must approve. Blackboard and owner-isolated history stay separate.
 | --- | --- |
 | `interactive_commands` | Pure grammar, canonical agent-route metadata, and cursor-aware completion projection for finite main-command positions |
 | `interactive_controller` | Stable `InteractiveController` import facade; no state or I/O |
-| `interactive_controller._core` | Sole controller state, dispatch, transition order, I/O sequencing, resources, cleanup, typed semantic output composition, disposable resume-choice snapshots, and fresh post-submit validation/mutation |
+| `interactive_controller._core` | Sole controller state, dispatch, transition order, I/O sequencing, resources, cleanup, typed semantic output composition, responsive active/one-shot execution-profile selection, disposable resume-choice snapshots, settings hot-activation coordination, and fresh post-submit validation/mutation |
 | `interactive_controller._session_policy` | Pure lifecycle validation, next actions, and typed failure classification |
 | `interactive_controller._conversation_policy` | Pure catalog, reference, search, transcript, and failure interpretation |
 | `interactive_controller._runtime_policy` | Pure progress, result, failure interpretation, and frozen validated inspection facts |
-| `interactive_settings` | Package-internal immutable current/pending configuration snapshots, pending desired storage, safe persona catalog and fresh conflict guard; final complete persistence remains configuration-owned and storage selection coordinates Settings Save |
+| `interactive_settings` | Package-internal immutable current/pending configuration snapshots, pending desired storage, safe persona catalog, durable provider-route generations, exact conflict detection, and prepared system/agent/optional-route persistence and restoration; conversation-storage selection coordinates readiness and the desired system setting under its lease |
 | `cli_context`, catalog, memory service, event store | Defaults, identity, scoped reads, and authoritative events |
 | `interactive_terminal` | Stable package-supported facade, package-internal real-CLI factory, and unlisted internal semantic output, controller-main-input, picker, cancellable-prompt, and supplied-text viewer adapters and identities |
 | `interactive_terminal._core` | Established terminal API behavior, explicit ordinary/main/composition/confirmation routing, canonical static/dynamic main-choice adaptation, semantic input-view and lifecycle-event construction, call-local reference scope/source-list/text binding, resource-free semantic output/main/picker/prompt/viewer adapters, and terminal-leaf coordination |
@@ -203,8 +218,10 @@ profiles are implemented. Orientation, status/inspection, central errors and
 recovery, and accepted management, advisory, retrieval, and consensus output
 use them. Full/context help, roster, session/conversation lists, search,
 transcript, and focused history now use them too. The controller sends each
-dense row as one positioned, one-record `ListView` callback; empty and
-interrupted outcomes remain explicit. Composition and confirmation now build
+dense row as one positioned `ListView` callback: session, conversation, and
+search rows use `Record` where applicable, while transcript and history rows use
+attributed `Message` values. Empty and interrupted outcomes remain explicit.
+Composition and confirmation now build
 ordered semantic input views, and the four composer lifecycle records use
 semantic `open`, `error`, `completed`, and `cancelled` notices. No internal
 composer `write_status` site remains. Capable main reads now project canonical
@@ -213,6 +230,14 @@ confirmation, and subject reads do not. Exact omitted resume commands may add
 controller-owned live rows to that capable main palette. The controller owns
 their ordering, initial highlight, catalog/lifecycle reads, and fresh validation;
 the terminal owns only input state and presentation. There is no public theme API.
+
+The capable main frame also receives a controller-provided active or exact
+leading-`@agent` target header. With Message details Off, that header contains
+only the full target display name and direct replies avoid execution-profile
+lookup and metadata. On adds backend-authoritative provider/model/effort facts,
+sources, confirmation, and thread state to the documented header/reply surfaces.
+`/agents` and `/status` remain fully diagnostic in both modes; model reply prose
+is never used to infer execution identity.
 
 The generic picker foundation is also implemented entirely inside the terminal
 package. It keeps opaque choice identities out of rendered text, separates
@@ -268,15 +293,28 @@ Conversation-subject input remains history- and completion-free. It uses the
 same cleared live frame after the driver selects `LIVE`, or the ordinary
 callback after `FALLBACK`; submitted subject semantics are unchanged.
 
-The controller owns settings focus and semantic presentation. It delegates the
-call-local immutable baseline, pending candidate, persona catalog, exact
-stale-state checks, and pending edits to the package-internal
-`interactive_settings` module. Conversation-storage selection coordinates
-readiness, optional explicit installation, provisioning, parity, the fresh
-settings-owned persona guard, and the config-owned complete-document CAS. The
-active backend and runtime retain their construction-time configuration
-snapshot and storage bundle, while session and explicit runtime overrides
-remain live. A save affects only a later shell or backend construction.
+The controller owns settings focus, semantic presentation, authentication,
+adapter preflight, runtime quiescence, storage coordination,
+persistence/activation order, and truthful compensation outcomes. It delegates
+the call-local immutable baseline, pending candidate, persona catalog,
+route-generation calculation, exact stale-state checks, deterministic prepared
+writes, and rollback to the package-internal `interactive_settings` module.
+Conversation-storage selection coordinates readiness, optional explicit
+installation, provisioning, parity, and the complete desired-system-setting
+guard under its lease.
+
+Confirmed Apply Changes hot-applies runtime-affecting settings, including
+execution profiles, to the current backend/runtime without a restart. A
+Message details-only Apply uses prepare, verify, and commit without provider,
+storage, backend, runtime, route, or thread activation. Desired storage is
+persisted for the next shell. A Conversation-RAG-only Apply likewise commits
+only system configuration, without authentication, storage readiness,
+backend/runtime activation, route/thread work, composition, or optional-package
+probing; the saved policy starts with the next shell. The current
+controller/runtime storage and RAG bundles remain unchanged. Launch overrides
+remain higher precedence and read-only. Direct disk edits have no watcher and
+are reconciled only by a newly launched backend; other running shells retain
+their captured state.
 
 The core gives immutable facts to policy validators and receives validated
 values, typed failures/errors, actions, or safe summaries. Leaves retain

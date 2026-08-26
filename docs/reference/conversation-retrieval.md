@@ -29,7 +29,8 @@ handler.handle_conversation_retrieval_action(action) -> ConversationRetrievalObs
 ConversationMemoryService.scope -> ConversationSearchScope
 serialize_conversation_retrieval_observation(observation) -> str  # module only
 
-ConversationRetrievalRequest(*, session_id, conversation_id, turn_id, agent_id, content, context)
+ConversationRetrievalRequest(*, session_id, conversation_id, turn_id, agent_id,
+    content, context, story_session_context=None, rag_context=None)
 ConversationRetrievalReply(*, session_id, conversation_id, turn_id, content, sources)
 ConversationRetrievalResult(*, session_id, conversation_id, turn_id, agent_id,
     content, context, sources, reference_operation_id=None,
@@ -48,6 +49,10 @@ Requests/results retain pre-turn context; replies/results carry ordered sources.
 `rag_sources` is the exact ordered preflight-authorized subset of result
 `sources`; it is empty when no such citation was selected.
 Value objects are frozen, slotted, and keyword-only. See [facade exports](package-api.md).
+The request's trailing optional `story_session_context` and `rag_context`
+fields are package-internal integration seams; their context types are not root
+exports. Runtime-built calls supply the story-session envelope and may supply
+the RAG envelope; direct callers that omit both retain the legacy payload.
 
 Every action carries `kind`, three correlated IDs, and sequential `action_index`:
 
@@ -69,14 +74,20 @@ IDs are `s{action}h{ordinal}` and `r{action}e{ordinal}`.
 
 ## Payload, trust, and fixed budgets
 
-The initial payload has `operation`, session/conversation/turn/agent IDs,
-`content`, `context`, and `retrieval`, plus `rag_context` only after an attempted
-RAG preflight. Continuations omit content, context, and RAG context and add one
-`observation`. Retrieval control has index, allowed actions, policy, and rules.
-Without references or an attempted RAG preflight, established payloads stay
-unchanged. With an internal reference coordinator, one separate content-free
-prelude runs first and `untrusted_writing_artifact_context` appears only on this
-initial retrieval payload, never on a continuation.
+The initial runtime-built payload has `operation`, session/conversation/turn/
+agent IDs, `content`, `story_session_context`, optional `rag_context` after an
+attempted RAG preflight, and `retrieval`; it omits the duplicate legacy
+`context`. The story-session envelope carries the receiving agent's bounded
+belonging-session owner outcomes, core-document path/hash identities, and fresh
+or included focused mode. The RAG envelope carries only bounded reauthorized
+excerpts and stable citations. Direct callers that leave
+`story_session_context=None` keep the legacy `context` field and may still
+supply an attempted `rag_context`. Continuations omit content and every context
+envelope and add one `observation`. Retrieval control has index, allowed
+actions, policy, and rules. A request with no attempted RAG omits `rag_context`.
+With an internal reference coordinator, one separate content-free prelude runs
+first and `untrusted_writing_artifact_context` appears only on this initial
+retrieval payload, never on a continuation.
 
 Each observation is compact sorted-key UTF-8 JSON framed exactly as:
 
@@ -174,8 +185,10 @@ When an internal reference coordinator is supplied, a content-free prelude
 first requires the complete ordered reference action. It has no retrieval
 index. The retrieval loop then remains:
 
-1. Retrieval call one receives the question, focused context, and—only for a
-   referenced turn—the transient untrusted writing-artifact context.
+1. Retrieval call one receives the question, the bounded belonging-session
+   envelope, any attempted bounded RAG context, and—only for a referenced
+   turn—the transient untrusted writing-artifact context. A new empty focus
+   uses `fresh`; established complete history uses `included`.
 2. The agent searches active same-session conversations; it receives `s1h1`.
 3. It reads through `s1h1`, receiving pair `r2e1`, `r2e2`.
 4. It answers with supplied IDs; sources retain subject and citation.
@@ -183,6 +196,11 @@ index. The retrieval loop then remains:
 A direct answer stops at retrieval call one without memory or sources. It is
 physical provider call one without references and call two after a reference
 prelude.
+
+The content-free reference prelude never carries belonging-session context.
+Retrieval continuations likewise do not repeat it; they rely only on the
+authorized observation for that action. A fresh provider-native thread still
+receives call one's envelope and therefore remains in the same story session.
 
 ## Progress, durability, and failures
 
@@ -204,9 +222,7 @@ synchronous sink returns `None`. Later observer failure stores a safe error.
 [context] Source N [completed]
   Subject: SUBJECT
   Conversation: ID
-  Turn: ID
   Sequence: N
-  Kind: KIND
 ```
 
 An attempted shell RAG preflight adds one content-free record before the agent
@@ -221,13 +237,26 @@ reply:
 The cited sources remain the established source records after the reply.
 Neither the query nor excerpt body appears in this diagnostic presentation.
 
-These are the structured plain shapes; capable interactive output may add only
-fixed decorative ANSI, and `NO_COLOR` removes that decoration without changing
-the text. Each progress event or source remains one ordered callback record.
+These are the compact structured plain shapes. With Message details On, an
+event-level source adds `Turn: ID` before Sequence and `Kind: KIND` after it.
+A conversation-level source has no event citation, so it shows only Subject and
+Conversation in either mode. Capable interactive output may add only fixed
+decorative ANSI, and `NO_COLOR` removes that decoration without changing the
+text. Each progress event or source remains one ordered callback record.
 
-The final retrieval answer is presented as an agent reply. Before its semantic
-message is rendered, the controller attempts the same presentation-only
-formatter used for direct replies: only a complete strict JSON object or array
+On a capable live stream, the accepted user submission and final retrieval
+answer are retained as speaker-aware chat blocks with full bodies. Ordinary-line
+fallback keeps its already-echoed user input as the sole submission
+representation and renders the reply through semantic plain output; it promises
+complete, nonduplicated meaning, not identical topology. Message details Off
+keeps the reply compact. On adds its resolved Provider, Model, and Effort with
+each value's source, plus Confirmation and Thread; a capable accepted-user block
+receives no diagnostic metadata. This setting is presentation-only and does not
+change the retrieval result or transcript.
+
+Before the final semantic message is rendered, the controller attempts the same
+presentation-only formatter used for direct replies: only a complete strict
+JSON object or array
 is re-emitted with two-space indentation, preserved key order, and unescaped
 Unicode. Duplicate keys, non-finite constants, malformed or embedded-prose
 content, scalar JSON values, and serialization failures fall back to the exact

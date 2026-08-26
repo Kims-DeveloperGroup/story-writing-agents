@@ -60,48 +60,56 @@ from .writing_artifacts import canonical_artifact_kind
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 _SAFE_REFERENCE_OPERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _SAFE_TEMPLATE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
-_CONVERSATION_METADATA_FIELDS = frozenset({
-    "schema_version",
-    "session_id",
-    "conversation_id",
-    "subject",
-    "subject_revision",
-    "status",
-    "created_at",
-    "updated_at",
-})
+_CONVERSATION_METADATA_FIELDS = frozenset(
+    {
+        "schema_version",
+        "session_id",
+        "conversation_id",
+        "subject",
+        "subject_revision",
+        "status",
+        "created_at",
+        "updated_at",
+    }
+)
 _CONVERSATION_ID_ALLOCATION_ATTEMPTS = 16
 _WORKSPACE_ROOT_IDENTITY_PENDING = object()
 _WORKSPACE_ROOT_IDENTITY_BIND_FAILED = object()
 _WORKSPACE_ROOT_IDENTITY_UNAVAILABLE = object()
-_CONVERSATION_EVENT_FIELDS = frozenset({
-    "schema_version",
-    "session_id",
-    "conversation_id",
-    "turn_id",
-    "sequence",
-    "timestamp",
-    "sender",
-    "recipient",
-    "kind",
-    "content",
-})
-_DEBATE_CONTEXT_FIELDS = frozenset({
-    "schema_version",
-    "session_id",
-    "debate_id",
-    "conversation_id",
-    "mode",
-    "snapshot",
-})
-_DEBATE_CONTEXT_SNAPSHOT_FIELDS = frozenset({
-    "events",
-    "total_complete_turns",
-    "retained_turns",
-    "omitted_turns",
-    "retained_utf8_bytes",
-    "truncated",
-})
+_CONVERSATION_EVENT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "session_id",
+        "conversation_id",
+        "turn_id",
+        "sequence",
+        "timestamp",
+        "sender",
+        "recipient",
+        "kind",
+        "content",
+    }
+)
+_DEBATE_CONTEXT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "session_id",
+        "debate_id",
+        "conversation_id",
+        "mode",
+        "snapshot",
+    }
+)
+_DEBATE_CONTEXT_SNAPSHOT_FIELDS = frozenset(
+    {
+        "events",
+        "total_complete_turns",
+        "retained_turns",
+        "omitted_turns",
+        "retained_utf8_bytes",
+        "truncated",
+    }
+)
 
 
 class _ConversationEventLock:
@@ -129,6 +137,7 @@ DEFAULT_SYSTEM_CONFIG: dict[str, Any] = {
     "antigravity_effort": None,
     "default_backend": None,
     "conversation_storage_backend": "filesystem",
+    "show_message_details": False,
     "conversation_rag_provider": None,
     "conversation_rag_automatic": False,
 }
@@ -211,9 +220,7 @@ class Workspace:
     @staticmethod
     def validate_identifier(value: str, *, label: str = "session ID") -> str:
         if not isinstance(value, str) or _SAFE_IDENTIFIER.fullmatch(value) is None:
-            raise SessionIdError(
-                f"{label} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,63}}"
-            )
+            raise SessionIdError(f"{label} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,63}}")
         return value
 
     @staticmethod
@@ -249,9 +256,7 @@ class Workspace:
             "config/persona_templates/default_kim_eun_hee.md",
             DEFAULT_PERSONA,
         )
-        self._ensure_text(
-            "config/persona_templates/alternative_templates/.gitkeep", ""
-        )
+        self._ensure_text("config/persona_templates/alternative_templates/.gitkeep", "")
         for agent_id in ROSTER:
             prompt_file = AGENT_SPECS[agent_id].system_prompt_file
             if overwrite_prompts:
@@ -439,32 +444,35 @@ class Workspace:
         session_id: str,
         debate_id: str,
     ) -> tuple[AgentStateEntry, ...]:
-        """Rehydrate the requested owner's session history in stable chronology."""
+        """Compatibility delegate for owner-scoped session rehydration."""
+
+        self.validate_identifier(debate_id, label="debate ID")
+        return self.read_agent_session_state(agent_id, session_id)
+
+    def read_agent_session_state(
+        self,
+        agent_id: str,
+        session_id: str,
+    ) -> tuple[AgentStateEntry, ...]:
+        """Rehydrate one owner's complete session history in stable chronology."""
 
         if agent_id not in AGENT_STATE_DIRECTORIES:
             raise WorkspaceSecurityError(f"unknown agent state owner: {agent_id}")
         session = self.validate_identifier(session_id)
-        self.validate_identifier(debate_id, label="debate ID")
         state_directory = AGENT_STATE_DIRECTORIES[agent_id]
-        relative_directory = (
-            f"agent_states/{state_directory}/debates/{session}"
-        )
+        relative_directory = f"agent_states/{state_directory}/debates/{session}"
         directory = self.path(relative_directory)
         if not directory.exists():
             return ()
 
         ordered: list[tuple[str, str, int, int, AgentStateEntry]] = []
         state_files = sorted(
-            entry
-            for entry in directory.iterdir()
-            if entry.name.endswith(".jsonl")
+            entry for entry in directory.iterdir() if entry.name.endswith(".jsonl")
         )
         for file_index, state_file in enumerate(state_files):
             file_debate_id = state_file.name[: -len(".jsonl")]
             self.validate_identifier(file_debate_id, label="debate ID")
-            relative = (
-                f"{relative_directory}/{file_debate_id}.jsonl"
-            )
+            relative = f"{relative_directory}/{file_debate_id}.jsonl"
             for line_number, line in enumerate(
                 self.read_text(relative).splitlines(), 1
             ):
@@ -476,9 +484,7 @@ class Workspace:
                         or value["session_id"] != session
                         or value["debate_id"] != file_debate_id
                     ):
-                        raise TypeError(
-                            "agent state ownership does not match its path"
-                        )
+                        raise TypeError("agent state ownership does not match its path")
                     entry = AgentStateEntry(**value)
                     ordered.append(
                         (
@@ -533,9 +539,7 @@ class Workspace:
 
         for suffix in (".jsonl", ".result.json", ".context.json"):
             if self.path(self._debate_relative(session, debate, suffix)).exists():
-                raise DebateExistsError(
-                    f"debate already exists: {session}/{debate}"
-                )
+                raise DebateExistsError(f"debate already exists: {session}/{debate}")
 
         now = datetime.now(UTC).isoformat()
         state = {
@@ -677,8 +681,7 @@ class Workspace:
             )
         except ManuscriptExistsError as exc:
             raise DebateExistsError(
-                f"debate result already exists: "
-                f"{result.session_id}/{result.debate_id}"
+                f"debate result already exists: {result.session_id}/{result.debate_id}"
             ) from exc
 
     def save_debate_context(
@@ -891,9 +894,7 @@ class Workspace:
         if not target.exists():
             self.write_json(relative, value, overwrite=False)
 
-    def _debate_relative(
-        self, session_id: str, debate_id: str, suffix: str
-    ) -> str:
+    def _debate_relative(self, session_id: str, debate_id: str, suffix: str) -> str:
         session = self.validate_identifier(session_id)
         debate = self.validate_identifier(debate_id, label="debate ID")
         return f"discussion_logs/{session}/{debate}{suffix}"
@@ -909,10 +910,7 @@ class Workspace:
         session = self.validate_identifier(session_id)
         debate = self.validate_identifier(debate_id, label="debate ID")
         state_directory = AGENT_STATE_DIRECTORIES[agent_id]
-        return (
-            f"agent_states/{state_directory}/debates/"
-            f"{session}/{debate}.jsonl"
-        )
+        return f"agent_states/{state_directory}/debates/{session}/{debate}.jsonl"
 
     @staticmethod
     def _validate_agent_state_entry(value: Any) -> dict[str, Any]:
@@ -1040,9 +1038,8 @@ class Workspace:
             raise WorkspaceFormatError("debate result has an invalid optional field")
         if "reference_operation_id" in value and (
             type(value["reference_operation_id"]) is not str
-            or _SAFE_REFERENCE_OPERATION_ID.fullmatch(
-                value["reference_operation_id"]
-            ) is None
+            or _SAFE_REFERENCE_OPERATION_ID.fullmatch(value["reference_operation_id"])
+            is None
         ):
             raise WorkspaceFormatError(
                 "debate result reference_operation_id is invalid"
@@ -1153,10 +1150,7 @@ class Workspace:
     ) -> ConversationContextWindow:
         """Parse and canonicalize strict snapshot fields without filesystem I/O."""
 
-        if (
-            not isinstance(value, dict)
-            or set(value) != _DEBATE_CONTEXT_SNAPSHOT_FIELDS
-        ):
+        if not isinstance(value, dict) or set(value) != _DEBATE_CONTEXT_SNAPSHOT_FIELDS:
             raise WorkspaceFormatError(
                 "included debate context snapshot has an invalid schema"
             )
@@ -1232,9 +1226,7 @@ class Workspace:
         try:
             target.relative_to(self.root)
         except ValueError as exc:
-            raise WorkspaceSecurityError(
-                f"path escapes workspace: {target}"
-            ) from exc
+            raise WorkspaceSecurityError(f"path escapes workspace: {target}") from exc
 
     def _assert_no_symlinks(self, target: Path) -> None:
         """Reject aliases instead of allowing paths to change logical category."""
@@ -1607,12 +1599,7 @@ class FilesystemConversationCatalog:
     def _catalog_relative(session_id: str) -> Path:
         """Return the catalog directory for a previously validated session."""
 
-        return (
-            Path("discussion_logs")
-            / session_id
-            / "interactive"
-            / "conversations"
-        )
+        return Path("discussion_logs") / session_id / "interactive" / "conversations"
 
     @classmethod
     def _metadata_relative(
@@ -1798,10 +1785,7 @@ class FilesystemConversationEventStore:
                     "conversation transcript is not valid JSON: "
                     f"{logical_artifact} at line {line_number}"
                 ) from exc
-            if (
-                not isinstance(value, dict)
-                or set(value) != _CONVERSATION_EVENT_FIELDS
-            ):
+            if not isinstance(value, dict) or set(value) != _CONVERSATION_EVENT_FIELDS:
                 raise WorkspaceFormatError(
                     "conversation event has an invalid schema: "
                     f"{logical_artifact} at line {line_number}"
@@ -1901,9 +1885,7 @@ class FilesystemConversationEventStore:
             return
         user_event = user_events.get(event.turn_id)
         if user_event is None:
-            raise ValueError(
-                f"conversation outcome has no user event: {event.turn_id}"
-            )
+            raise ValueError(f"conversation outcome has no user event: {event.turn_id}")
         if event.turn_id in completed_turn_ids:
             raise ValueError(
                 f"conversation turn already has an outcome: {event.turn_id}"
@@ -2128,9 +2110,7 @@ def _initialize_pending_workspace(
 ) -> tuple[int, int]:
     """Initialize one terminalized pending root through its retained descriptor."""
 
-    root_descriptor, root_identity = _bind_pending_workspace_root_identity(
-        workspace
-    )
+    root_descriptor, root_identity = _bind_pending_workspace_root_identity(workspace)
     try:
         _initialize_pending_workspace_entries(
             workspace,
@@ -2175,9 +2155,7 @@ def _bind_pending_workspace_root_identity(
                 "workspace root identity is unavailable",
             )
         if named_identity != opened_identity:
-            raise WorkspaceSecurityError(
-                "workspace root directory identity changed"
-            )
+            raise WorkspaceSecurityError("workspace root directory identity changed")
     except BaseException:
         _close_pending_descriptor_after_failure(descriptor)
         raise
@@ -2463,16 +2441,10 @@ def _verify_pending_workspace_root_identity(
         close_start=True,
     )
     try:
-        retained_identity = _meaningful_directory_identity(
-            os.fstat(root_descriptor)
-        )
-        named_identity = _meaningful_directory_identity(
-            os.fstat(named_descriptor)
-        )
+        retained_identity = _meaningful_directory_identity(os.fstat(root_descriptor))
+        named_identity = _meaningful_directory_identity(os.fstat(named_descriptor))
         if retained_identity != expected or named_identity != expected:
-            raise WorkspaceSecurityError(
-                "workspace root directory identity changed"
-            )
+            raise WorkspaceSecurityError("workspace root directory identity changed")
     except BaseException:
         _close_pending_descriptor_after_failure(named_descriptor)
         raise
@@ -2607,8 +2579,7 @@ def _require_pending_workspace_root_creation_operations() -> None:
         getattr(operation, "__name__", None) for operation in supports_dir_fd
     }
     no_follow_operations = {
-        getattr(operation, "__name__", None)
-        for operation in supports_follow_symlinks
+        getattr(operation, "__name__", None) for operation in supports_follow_symlinks
     }
     required_operations = (
         "open",

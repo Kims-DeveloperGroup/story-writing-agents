@@ -657,6 +657,50 @@ class ConversationRuntimeSuccessTests(_ConversationRuntimeCase):
         self.assertEqual(request.context.events, prior)
         self.assertEqual(request.content, text)
         self.assertEqual(request.agent_id, CHARACTER_CUSTODIAN)
+        story_context = request.story_session_context
+        self.assertIsNotNone(story_context)
+        assert story_context is not None
+        self.assertEqual(
+            (
+                story_context.schema_version,
+                story_context.session_id,
+                story_context.agent_id,
+                story_context.focused_context.mode.value,
+                story_context.focused_context.conversation_id,
+                story_context.focused_context.window,
+            ),
+            (
+                1,
+                "session_a",
+                CHARACTER_CUSTODIAN,
+                "included",
+                conversation_id,
+                request.context,
+            ),
+        )
+        self.assertEqual(story_context.owner_outcomes.entries, ())
+        self.assertEqual(
+            tuple(identity.path for identity in story_context.core_documents),
+            tuple(
+                reference.path.relative_to(workspace.root).as_posix()
+                for reference in backend.definitions[0].context_document_files
+            ),
+        )
+        focused_projection = story_context.to_dict()["focused_context"]
+        self.assertEqual(
+            focused_projection["events"],
+            [
+                {
+                    "turn_id": event.turn_id,
+                    "sequence": event.sequence,
+                    "sender": event.sender,
+                    "recipient": event.recipient,
+                    "kind": event.kind.value,
+                    "content": event.content,
+                }
+                for event in prior
+            ],
+        )
         self.assertEqual(result.context, request.context)
         self.assertEqual(result.session_id, "session_a")
         self.assertEqual(result.conversation_id, conversation_id)
@@ -712,6 +756,15 @@ class ConversationRuntimeSuccessTests(_ConversationRuntimeCase):
             FilesystemConversationEventStore,
         )
         self.assertRegex(first.turn_id, r"^t_[0-9a-f]{32}$")
+        first_context = first_backend.requests[0].story_session_context
+        self.assertIsNotNone(first_context)
+        assert first_context is not None
+        self.assertEqual(first_context.focused_context.mode.value, "fresh")
+        self.assertEqual(
+            first_context.focused_context.conversation_id,
+            metadata.conversation_id,
+        )
+        self.assertIsNone(first_context.focused_context.window)
 
         second_backend = _ConversationBackend()
         second_runtime = StoryRuntime(
@@ -730,6 +783,17 @@ class ConversationRuntimeSuccessTests(_ConversationRuntimeCase):
         self.assertNotEqual(first.turn_id, second.turn_id)
         self.assertEqual(len(second_backend.requests), 1)
         rehydrated = second_backend.requests[0].context
+        second_context = second_backend.requests[0].story_session_context
+        self.assertIsNotNone(second_context)
+        assert second_context is not None
+        self.assertEqual(second_context.session_id, "session_a")
+        self.assertEqual(second_context.agent_id, CHARACTER_CUSTODIAN)
+        self.assertEqual(second_context.focused_context.mode.value, "included")
+        self.assertEqual(
+            second_context.focused_context.conversation_id,
+            metadata.conversation_id,
+        )
+        self.assertIs(second_context.focused_context.window, rehydrated)
         transcript = FilesystemConversationEventStore(workspace).read(
             "session_a",
             metadata.conversation_id,
@@ -797,6 +861,18 @@ class ConversationRuntimeSuccessTests(_ConversationRuntimeCase):
 
         request = backend.requests[0]
         self.assertEqual(request.context.events, visible_a)
+        story_context = request.story_session_context
+        self.assertIsNotNone(story_context)
+        assert story_context is not None
+        self.assertEqual(story_context.session_id, "session_a")
+        self.assertEqual(story_context.agent_id, CHARACTER_CUSTODIAN)
+        self.assertTrue(
+            all(
+                entry.agent_id == CHARACTER_CUSTODIAN
+                and entry.session_id == "session_a"
+                for entry in story_context.owner_outcomes.entries
+            )
+        )
         request_text = repr(request)
         for secret in (
             "OTHER_CONVERSATION_SECRET",
@@ -811,6 +887,13 @@ class ConversationRuntimeSuccessTests(_ConversationRuntimeCase):
             for reference in definition.context_document_files
         )
         self.assertEqual(relative_contexts, ("character_sheets.md",))
+        self.assertEqual(
+            tuple(
+                identity.path.rsplit("/", 1)[-1]
+                for identity in story_context.core_documents
+            ),
+            ("character_sheets.md",),
+        )
         self.assertEqual(
             AGENT_SPECS[CHARACTER_CUSTODIAN].context_documents,
             ("character_sheets.md",),

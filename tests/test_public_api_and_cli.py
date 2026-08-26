@@ -13,6 +13,7 @@ import sys
 import tempfile
 import tomllib
 import unittest
+from collections.abc import Awaitable, Callable
 from dataclasses import MISSING, FrozenInstanceError, fields
 from pathlib import Path
 from typing import get_type_hints
@@ -1871,6 +1872,19 @@ class CliTests(unittest.TestCase):
         auth_service = object()
         catalog_service = object()
         terminal = InteractiveTerminal(lambda _prompt: "", lambda _text: None)
+
+        async def observe_startup_progress(
+            operation: Awaitable[object],
+        ) -> object:
+            """Record both startup progress spans around their real work."""
+
+            events.append(("progress_start", None))
+            try:
+                return await operation
+            finally:
+                events.append(("progress_end", None))
+
+        terminal._advisory_progress = observe_startup_progress
         backend = mock.Mock()
         controller = mock.Mock()
         controller.run_session_lobby.return_value = 7
@@ -2036,9 +2050,11 @@ class CliTests(unittest.TestCase):
             [
                 "validation",
                 "workspace",
+                "terminal",
+                "progress_start",
                 "storage",
                 "snapshot",
-                "terminal",
+                "progress_end",
                 "auth_service",
                 "catalog_service",
                 "auth_coordinator",
@@ -2048,14 +2064,16 @@ class CliTests(unittest.TestCase):
                 "snapshot",
                 "routes",
                 "probe_all",
+                "progress_start",
                 "context",
                 "backend",
                 "controller",
+                "progress_end",
                 "lobby",
             ],
         )
-        self.assertEqual(events[5][1], workspace.root)
-        self.assertEqual(events[6][1], workspace.root)
+        self.assertEqual(events[7][1], workspace.root)
+        self.assertEqual(events[8][1], workspace.root)
         backend.close.assert_not_called()
         self.assertEqual(stderr.getvalue(), "")
 
@@ -2137,6 +2155,10 @@ class CliTests(unittest.TestCase):
                 stdin = TtyStringIO(is_terminal=True)
                 stdout = TtyStringIO(is_terminal=True)
                 stderr = io.StringIO()
+                terminal = InteractiveTerminal(
+                    lambda _prompt: "",
+                    lambda _text: None,
+                )
                 self.provider_auth_factory.reset_mock()
                 self.auth_coordinator_factory.reset_mock()
                 with (
@@ -2152,6 +2174,7 @@ class CliTests(unittest.TestCase):
                     mock.patch.object(
                         cli_module,
                         "build_stream_terminal",
+                        return_value=terminal,
                     ) as terminal_factory,
                     mock.patch.object(cli_module, "load_cli_context") as context,
                     mock.patch.object(cli_module, "AgentBackend") as backend,
@@ -2167,7 +2190,7 @@ class CliTests(unittest.TestCase):
 
                 if runtime_probe is not None:
                     runtime_probe.assert_called_once_with()
-                terminal_factory.assert_not_called()
+                terminal_factory.assert_called_once_with(input, stdin, stdout)
                 self.provider_auth_factory.assert_not_called()
                 self.auth_coordinator_factory.assert_not_called()
                 context.assert_not_called()
@@ -2202,6 +2225,65 @@ class CliTests(unittest.TestCase):
                     ],
                     "sqlite",
                 )
+
+    def test_startup_indicator_failures_use_the_internal_error_path(self) -> None:
+        """Keep terminal-only startup failures distinct from domain failures."""
+
+        workspace = initialized_workspace(self)
+        for failing_span in (1, 2):
+            with self.subTest(failing_span=failing_span):
+                calls = 0
+
+                def run_progress(
+                    terminal: InteractiveTerminal,
+                    operation: Callable[[], object],
+                ) -> object:
+                    nonlocal calls
+                    self.assertIsInstance(terminal, InteractiveTerminal)
+                    calls += 1
+                    if calls == failing_span:
+                        raise cli_module.AdvisoryProgressError("progress-secret")
+                    return operation()
+
+                stdin = TtyStringIO(is_terminal=True)
+                stdout = TtyStringIO(is_terminal=True)
+                stderr = io.StringIO()
+                with (
+                    mock.patch.object(sys, "stdin", stdin),
+                    mock.patch.object(sys, "stdout", stdout),
+                    mock.patch.object(sys, "stderr", stderr),
+                    mock.patch.object(
+                        cli_module,
+                        "resolve_workspace",
+                        return_value=workspace,
+                    ),
+                    mock.patch.object(
+                        cli_module,
+                        "_run_interactive_startup_progress",
+                        side_effect=run_progress,
+                    ),
+                    mock.patch.object(cli_module, "load_cli_context") as context,
+                    mock.patch.object(cli_module, "AgentBackend") as backend,
+                    mock.patch.object(
+                        cli_module,
+                        "InteractiveController",
+                    ) as controller,
+                ):
+                    self.assertEqual(main(["chat"]), 2)
+
+                self.assertEqual(calls, failing_span)
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertEqual(
+                    stderr.getvalue(),
+                    expected_interactive_error(
+                        InteractiveErrorCode.INTERNAL_ERROR,
+                        debug_log_available=True,
+                    ),
+                )
+                self.assertNotIn("progress-secret", stderr.getvalue())
+                context.assert_not_called()
+                backend.assert_not_called()
+                controller.assert_not_called()
 
     def test_every_interactive_argument_failure_precedes_workspace_and_auth(
         self,
@@ -2864,6 +2946,7 @@ class CliTests(unittest.TestCase):
             "_classify_workspace_entry_failure",
             "_classify_interactive_configuration_failure",
             "_close_unstarted_interactive_backend",
+            "_run_interactive_startup_progress",
             "_run_interactive_cli",
             "main",
         )
@@ -2884,7 +2967,10 @@ class CliTests(unittest.TestCase):
                 backend = mock.Mock()
                 controller = mock.Mock()
                 controller.run_session_lobby.return_value = 0
-                terminal = mock.Mock()
+                terminal = InteractiveTerminal(
+                    lambda _prompt: "",
+                    lambda _text: None,
+                )
                 with (
                     mock.patch.object(sys, "stdin", stdin),
                     mock.patch.object(sys, "stdout", stdout),

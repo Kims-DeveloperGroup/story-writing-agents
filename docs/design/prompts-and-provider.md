@@ -35,13 +35,15 @@ without fabricating publication history. Definitions include no unrelated
 workspace paths.
 
 The fingerprint covers agent, provider, language, component identities, and
-hashes. Editing a role prompt or persona changes the next definition. An
-external manual core edit made while workspace processes are stopped changes
-the next filesystem snapshot and definition fingerprint; generic `Workspace`
-writes reject canonical artifact paths. Later agent republication can replace
-the current bytes and record provenance, but provenance is not required for
-binding. Either effective-context change starts a fresh provider thread for
-that agent.
+hashes. A nonzero provider-route generation is also included, while generation
+zero preserves the legacy hash exactly. Model and effort are deliberately not
+fingerprint inputs. Editing a role prompt or persona changes the next
+definition. An external manual core edit made while workspace processes are
+stopped changes the next filesystem snapshot and definition fingerprint;
+generic `Workspace` writes reject canonical artifact paths. Later agent
+republication can replace the current bytes and record provenance, but
+provenance is not required for binding. Either effective-context change starts
+a fresh provider thread for that agent.
 Provider conversation state remains partitioned by story session and agent.
 
 ## Binding resource lifecycle
@@ -81,17 +83,66 @@ memory authorization, and transcript order. Backend holds one provider-thread
 lock across the action loop and calls only the synchronous runtime handler; it
 never receives a search, catalog, transcript, or filesystem collaborator.
 
-On the established `StoryRuntime` path and every no-reference backend call, the
-first provider call receives current input and bounded focused context. Later
-retrieval calls receive only runtime-authorized observations framed as
-untrusted story data. Exact payloads and action order live in
+On the established `StoryRuntime` path, every substantive provider turn receives
+the bounded belonging-session envelope described below. The first retrieval
+call also receives current input. An attempted conversation-RAG preflight adds
+its separate bounded `rag_context` beside `story_session_context` on that first
+call only. Later calls receive only runtime-authorized observations framed as
+untrusted story data and do not repeat input or either context envelope.
+Exact payloads and action order live in
 [Bounded retrieval](../reference/conversation-retrieval.md). Direct Python
 `converse()` with no reference coordinator and its `ConversationRequest`
-payload remain one-step and unchanged.
+payload remain one-step; callers that leave the new optional envelope as `None`
+retain the legacy payload.
 
 Conversation IDs scope visible events, not provider-private history. One
 session-and-agent thread can span subjects and debates. Direct routing chooses
 a responder; it is not a private provider channel.
+
+<a id="story-session-continuity-envelope"></a>
+
+## Story-session continuity envelope
+
+`StoryRuntime` builds one package-internal schema-v1 `StorySessionContext` for
+every substantive advisory, retrieval, and consensus phase. The provider
+payload contains it under the top-level key `story_session_context`. It carries:
+
+- `schema_version: 1`, `scope: "story_session"`, and the exact `session_id` and
+  receiving `agent_id`;
+- `owner_outcomes`, the newest complete suffix belonging only to that agent and
+  session, capped at 24 entries and 32,768 compact UTF-8 bytes, with exact
+  `total_entries`, `retained_entries`, `omitted_entries`,
+  `retained_utf8_bytes`, `truncated`, and `entries` fields;
+- `focused_context` in `included`, `fresh`, or `omitted` mode; and
+- `core_documents`, the bound canonical `core_documents/...` paths and
+  lowercase SHA-256 identities, never their bytes.
+
+The owner byte count covers compact serialized entries and separators but not
+the surrounding `[]`; entries are never split. Every owner entry has exactly
+`agent_id`, `session_id`, `debate_id`, `phase`, `round`, `revision`, `kind`,
+`content`, and `timestamp`. `included` uses the established
+[conversation-context policy](../reference/conversation-transcripts.md#context-window-derivation-and-failure-evidence):
+the newest at most 24 complete turns and 32,768 combined content bytes, with no
+split turn. It adds `conversation_id`, `total_complete_turns`, `retained_turns`,
+`omitted_turns`, `retained_utf8_bytes`, `truncated`, and `events`; every event
+has `turn_id`, `sequence`, `sender`, `recipient`, `kind`, and `content`. `fresh`
+has only `mode` and `conversation_id`. `omitted` has only `mode`. Every
+core-document entry has exactly `path` and `sha256`.
+
+The first advisory or retrieval turn in an empty/new focused conversation uses
+`fresh`; later normal focused turns use `included`. Normal `/run` is included;
+`/run --fresh` is fresh, preserving the focused identity without its transcript;
+a context-omitted noninteractive run is omitted. A fresh provider-native thread
+therefore remains part of the same story session and can rehydrate owner,
+core-identity, and focus facts. It cannot reconstruct another agent's outcomes,
+events outside the bounded focused window, provider-native hidden history,
+artifact bytes, or core-document bytes.
+
+When the envelope is present, provider payloads omit the duplicate legacy
+`agent_state`, `conversation_context`, or `context` field. The request values
+retain those established fields for validation and result APIs. A content-free
+reference prelude does not carry the envelope; its following substantive call
+does. Retrieval call one carries it, and continuation calls do not repeat it.
 
 <a id="explicit-reference-provider-flow"></a>
 
@@ -133,10 +184,12 @@ closing local transient carriers is not remote erasure. See
 
 ## Debate context field
 
-An included debate adds a top-level `conversation_context` field to every agent
-request. Drafting, audits, proposals, synthesis, and finalization all receive
-the same captured event snapshot. The runtime does not reread or search the
-transcript between phases. Fresh and context-omitted requests omit the field.
+An included debate retains the same `conversation_context` request value for
+every agent phase. Drafting, audits, proposals, synthesis, and finalization all
+receive the same captured event snapshot. The runtime does not reread or search
+the transcript between phases. Fresh and context-omitted requests omit that
+legacy request field, while all runtime-built substantive requests carry the
+corresponding `story_session_context` mode.
 
 This context is not concatenated into the bound prompt, phase `task`, original
 `user_payload`, current candidate, public blackboard, or owner state. There is
@@ -160,9 +213,10 @@ commands are disabled, plan mode is selected, and sandbox controls are applied. 
 setup, precedence, preflight, and lifecycle contracts are in the
 [Antigravity guide](../guides/antigravity.md).
 
-Debate JSON contains task, input, candidate, blackboard, the receiving agent's
-stored outcomes, and only when included, conversation context. It does not
-repeat role prompts, persona, language directives, or core-document text.
+Runtime-built debate JSON contains task, input, candidate, blackboard, and the
+single bounded `story_session_context` envelope. It does not duplicate owner
+state or focused context into legacy payload fields and does not repeat role
+prompts, persona, language directives, or core-document text.
 A referenced backend call adds only the separate
 `untrusted_writing_artifact_context` field described above to its substantive
 payload; the content-free prelude uses its own payload and schema.

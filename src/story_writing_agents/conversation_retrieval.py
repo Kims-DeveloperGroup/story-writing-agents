@@ -27,6 +27,7 @@ from .conversations import (
     validate_conversation_context_window,
 )
 from .errors import SessionIdError
+from .models import StorySessionContext
 
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 _SAFE_REFERENCE_OPERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
@@ -61,9 +62,7 @@ def _identifier(value: str, *, label: str) -> str:
     if type(value) is not str:
         raise TypeError(f"{label} must be a string")
     if _SAFE_IDENTIFIER.fullmatch(value) is None:
-        raise SessionIdError(
-            f"{label} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,63}}"
-        )
+        raise SessionIdError(f"{label} must match [A-Za-z0-9][A-Za-z0-9_-]{{0,63}}")
     return value
 
 
@@ -241,7 +240,8 @@ class ConversationRagExcerpt:
             raise ValueError("conversation RAG excerpt source crossed its document")
         citation = self.source.citation
         if citation.sequence is not None and (
-            citation.turn_id not in {
+            citation.turn_id
+            not in {
                 document.start_turn_id,
                 document.end_turn_id,
             }
@@ -295,12 +295,9 @@ class ConversationRagContext:
         if type(self.outcome) is not ConversationRagAttemptOutcome:
             raise TypeError("conversation RAG context outcome must use the exact type")
         if type(self.excerpts) is not tuple or any(
-            type(excerpt) is not ConversationRagExcerpt
-            for excerpt in self.excerpts
+            type(excerpt) is not ConversationRagExcerpt for excerpt in self.excerpts
         ):
-            raise TypeError(
-                "conversation RAG excerpts must be a tuple of exact values"
-            )
+            raise TypeError("conversation RAG excerpts must be a tuple of exact values")
         if len(self.excerpts) > CONVERSATION_RAG_POLICY.max_candidates:
             raise ValueError("conversation RAG context exceeds the excerpt limit")
         for ordinal, excerpt in enumerate(self.excerpts, start=1):
@@ -319,10 +316,7 @@ class ConversationRagContext:
         if retained > 32_768:
             raise ValueError("conversation RAG context exceeds the UTF-8 byte limit")
         _boolean(self.truncated, label="conversation RAG context truncated")
-        if (
-            self.truncated
-            and self.outcome.outcome is ConversationRagOutcome.COMPLETE
-        ):
+        if self.truncated and self.outcome.outcome is ConversationRagOutcome.COMPLETE:
             raise ValueError("truncated conversation RAG context must be partial")
 
     def to_dict(self) -> dict[str, object]:
@@ -364,10 +358,7 @@ class ConversationRetrievalPolicy:
             raise ValueError(
                 "total search hits must not be less than per-action search hits"
             )
-        if (
-            self.max_search_hits_per_action
-            > CONVERSATION_MEMORY_POLICY.max_search_hits
-        ):
+        if self.max_search_hits_per_action > CONVERSATION_MEMORY_POLICY.max_search_hits:
             raise ValueError(
                 "per-action search hits exceed the conversation memory policy"
             )
@@ -375,10 +366,7 @@ class ConversationRetrievalPolicy:
             raise ValueError(
                 "maximum transcript events must equal twice the turn limit"
             )
-        if (
-            self.max_transcript_events
-            > CONVERSATION_MEMORY_POLICY.max_page_events
-        ):
+        if self.max_transcript_events > CONVERSATION_MEMORY_POLICY.max_page_events:
             raise ValueError(
                 "maximum transcript events exceed the conversation memory policy"
             )
@@ -417,6 +405,7 @@ class ConversationRetrievalRequest:
     agent_id: str
     content: str
     context: ConversationContextWindow
+    story_session_context: StorySessionContext | None = None
     rag_context: ConversationRagContext | None = None
 
     def __post_init__(self) -> None:
@@ -449,6 +438,22 @@ class ConversationRetrievalRequest:
                 excluded_turn_id=self.turn_id,
             ),
         )
+        if self.story_session_context is not None:
+            if type(self.story_session_context) is not StorySessionContext:
+                raise TypeError(
+                    "story_session_context must be a StorySessionContext or None"
+                )
+            if (
+                self.story_session_context.session_id != self.session_id
+                or self.story_session_context.agent_id != self.agent_id
+                or (
+                    self.story_session_context.focused_context.conversation_id
+                    is not None
+                    and self.story_session_context.focused_context.conversation_id
+                    != self.conversation_id
+                )
+            ):
+                raise ValueError("story-session context request identity mismatch")
         if self.rag_context is not None:
             if type(self.rag_context) is not ConversationRagContext:
                 raise TypeError(
@@ -477,9 +482,7 @@ def _validate_action_common(
     if type(kind) is not ConversationRetrievalActionKind:
         raise TypeError("conversation retrieval action kind is invalid")
     if kind is not expected_kind:
-        raise ValueError(
-            f"{expected_kind.value} action must use its matching kind"
-        )
+        raise ValueError(f"{expected_kind.value} action must use its matching kind")
     _identifier(session_id, label="session ID")
     _identifier(conversation_id, label="conversation ID")
     _identifier(turn_id, label="turn ID")
@@ -543,10 +546,7 @@ class ConversationRetrievalReadAction:
         _positive_integer(self.start_sequence, label="start sequence")
         if self.end_sequence is not None:
             _positive_integer(self.end_sequence, label="end sequence")
-        if (
-            self.end_sequence is not None
-            and self.end_sequence < self.start_sequence
-        ):
+        if self.end_sequence is not None and self.end_sequence < self.start_sequence:
             raise ValueError("end sequence must not precede start sequence")
 
 
@@ -650,10 +650,7 @@ class ConversationRetrievalSearchItem:
             label="conversation retrieval search snippet",
             nonempty=True,
         )
-        if (
-            self.source.citation.event_kind
-            is ConversationEventKind.RUNTIME_ERROR
-        ):
+        if self.source.citation.event_kind is ConversationEventKind.RUNTIME_ERROR:
             raise ValueError("search items cannot cite runtime errors")
 
     def to_dict(self) -> dict[str, object]:
@@ -827,8 +824,7 @@ class ConversationRetrievalReadObservation:
             citation = event.citation
             if (
                 citation.session_id != self.session_id
-                or citation.conversation_id
-                != self.source.citation.conversation_id
+                or citation.conversation_id != self.source.citation.conversation_id
             ):
                 raise ValueError("read observation event crossed its source")
             assert citation.turn_id is not None
@@ -843,14 +839,12 @@ class ConversationRetrievalReadObservation:
             users = [
                 event
                 for event in turn_events
-                if event.citation.event_kind
-                is ConversationEventKind.USER_MESSAGE
+                if event.citation.event_kind is ConversationEventKind.USER_MESSAGE
             ]
             replies = [
                 event
                 for event in turn_events
-                if event.citation.event_kind
-                is ConversationEventKind.AGENT_REPLY
+                if event.citation.event_kind is ConversationEventKind.AGENT_REPLY
             ]
             if len(turn_events) != 2 or len(users) != 1 or len(replies) != 1:
                 raise ValueError("read observation contains an incomplete turn")
@@ -980,9 +974,8 @@ class ConversationRetrievalResult:
         _validate_sources(self.sources, session_id=self.session_id)
         if self.reference_operation_id is not None and (
             type(self.reference_operation_id) is not str
-            or _SAFE_REFERENCE_OPERATION_ID.fullmatch(
-                self.reference_operation_id
-            ) is None
+            or _SAFE_REFERENCE_OPERATION_ID.fullmatch(self.reference_operation_id)
+            is None
         ):
             raise ValueError("reference operation ID is invalid")
         if self.rag_outcome is not None and (
@@ -997,9 +990,10 @@ class ConversationRetrievalResult:
                 "conversation retrieval RAG sources require an attempted outcome"
             )
         rag_source_set = set(self.rag_sources)
-        if tuple(
-            source for source in self.sources if source in rag_source_set
-        ) != self.rag_sources:
+        if (
+            tuple(source for source in self.sources if source in rag_source_set)
+            != self.rag_sources
+        ):
             raise ValueError(
                 "conversation retrieval RAG sources must be an ordered result subset"
             )
@@ -1036,9 +1030,7 @@ class ConversationRetrievalProgressEvent:
         if self.action_index > CONVERSATION_RETRIEVAL_POLICY.max_nonterminal_actions:
             raise ValueError("progress action index exceeds the retrieval policy")
         if type(self.phase) is not ConversationRetrievalProgressPhase:
-            raise TypeError(
-                "conversation retrieval progress phase is invalid"
-            )
+            raise TypeError("conversation retrieval progress phase is invalid")
         for value, label in (
             (self.search_hit_count, "search hit count"),
             (self.transcript_turn_count, "transcript turn count"),
@@ -1052,14 +1044,17 @@ class ConversationRetrievalProgressEvent:
             ConversationRetrievalProgressPhase.SEARCH_STARTED,
             ConversationRetrievalProgressPhase.READ_STARTED,
         }:
-            if any(
-                (
-                    self.search_hit_count,
-                    self.transcript_turn_count,
-                    self.transcript_event_count,
-                    self.observation_utf8_bytes,
+            if (
+                any(
+                    (
+                        self.search_hit_count,
+                        self.transcript_turn_count,
+                        self.transcript_event_count,
+                        self.observation_utf8_bytes,
+                    )
                 )
-            ) or self.truncated:
+                or self.truncated
+            ):
                 raise ValueError("started retrieval progress must have zero metadata")
             return
         if self.observation_utf8_bytes < 1:
@@ -1071,9 +1066,7 @@ class ConversationRetrievalProgressEvent:
             raise ValueError("progress observation bytes exceed the retrieval policy")
         if self.phase is ConversationRetrievalProgressPhase.SEARCH_COMPLETED:
             if self.transcript_turn_count or self.transcript_event_count:
-                raise ValueError(
-                    "search progress cannot carry transcript counts"
-                )
+                raise ValueError("search progress cannot carry transcript counts")
             if (
                 self.search_hit_count
                 > CONVERSATION_RETRIEVAL_POLICY.max_search_hits_per_action
@@ -1133,11 +1126,7 @@ def serialize_conversation_retrieval_observation(
         sort_keys=True,
         separators=(",", ":"),
     )
-    return (
-        f"{_BEGIN_UNTRUSTED_STORY_DATA}\n"
-        f"{payload}\n"
-        f"{_END_UNTRUSTED_STORY_DATA}"
-    )
+    return f"{_BEGIN_UNTRUSTED_STORY_DATA}\n{payload}\n{_END_UNTRUSTED_STORY_DATA}"
 
 
 __all__ = [

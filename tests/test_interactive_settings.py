@@ -21,19 +21,27 @@ from story_writing_agents.config import (
 )
 from story_writing_agents.errors import (
     ConfigurationError,
+    WorkspaceFormatError,
     WorkspaceSecurityError,
 )
 from story_writing_agents import interactive_settings as settings_module
 from story_writing_agents.interactive_settings import (
     SETTINGS_LANGUAGES,
     PersonaCatalogEntry,
+    PreparedSettingsSave,
+    ProviderRouteEntry,
     SettingsBaseline,
     SettingsError,
     SettingsErrorKind,
     SettingsState,
+    commit_prepared_settings_save,
     establish_default_backend,
     establish_settings_default_backend,
     load_settings_state,
+    prepare_settings_save,
+    read_provider_route_generations,
+    reconcile_provider_route_generations,
+    restore_prepared_settings_save,
     save_settings_state,
     update_agent_antigravity_effort,
     update_agent_antigravity_model,
@@ -46,6 +54,7 @@ from story_writing_agents.interactive_settings import (
     update_language,
     update_max_debate_rounds,
     update_persona,
+    update_show_message_details,
     validate_settings_persona_catalog,
 )
 from story_writing_agents.workspace import Workspace
@@ -55,6 +64,7 @@ from tests.helpers import initialized_workspace
 
 _SYSTEM_PATH = "config/system_defaults.json"
 _AGENT_PATH = "config/agent_configs.json"
+_ROUTE_PATH = "agent_states/orchestrator_state/provider_route_generations.json"
 
 
 def _files(root: Path) -> dict[str, bytes]:
@@ -109,6 +119,7 @@ class SettingsModelContractTests(SettingsTestCase):
                 ("CONFLICT", "conflict"),
                 ("WRITE", "write"),
                 ("ROLLBACK", "rollback"),
+                ("RECOVERY_REQUIRED", "recovery_required"),
             ),
         )
         self.assertEqual(
@@ -122,6 +133,26 @@ class SettingsModelContractTests(SettingsTestCase):
                 "agent_configs_bytes",
                 "persona_catalog",
                 "configuration",
+                "provider_route_bytes",
+                "provider_routes",
+            ),
+        )
+        self.assertEqual(
+            tuple(field.name for field in fields(ProviderRouteEntry)),
+            ("provider", "generation"),
+        )
+        self.assertEqual(
+            tuple(field.name for field in fields(PreparedSettingsSave)),
+            (
+                "configuration",
+                "system_before",
+                "agent_before",
+                "route_before",
+                "system_after",
+                "agent_after",
+                "route_after",
+                "provider_routes",
+                "switched_agents",
             ),
         )
         self.assertEqual(
@@ -136,9 +167,15 @@ class SettingsModelContractTests(SettingsTestCase):
             update_conversation_storage_backend: ("state", "backend"),
             update_conversation_rag_provider: ("state", "provider"),
             update_conversation_rag_automatic: ("state", "automatic"),
+            update_show_message_details: ("state", "enabled"),
             update_agent_backend: ("state", "agent_id", "backend"),
             establish_default_backend: ("workspace", "backend"),
-            establish_settings_default_backend: ("workspace", "state", "backend"),
+            establish_settings_default_backend: (
+                "workspace",
+                "state",
+                "backend",
+                "provider_overrides",
+            ),
             update_agent_codex_model: ("state", "agent_id", "codex_model"),
             update_agent_codex_reasoning_effort: (
                 "state",
@@ -156,6 +193,19 @@ class SettingsModelContractTests(SettingsTestCase):
                 "antigravity_effort",
             ),
             save_settings_state: ("workspace", "state"),
+            prepare_settings_save: ("workspace", "state", "provider_overrides"),
+            commit_prepared_settings_save: ("workspace", "prepared"),
+            restore_prepared_settings_save: ("workspace", "prepared"),
+            read_provider_route_generations: (
+                "workspace",
+                "configuration",
+                "provider_overrides",
+            ),
+            reconcile_provider_route_generations: (
+                "workspace",
+                "configuration",
+                "provider_overrides",
+            ),
             validate_settings_persona_catalog: ("workspace", "baseline"),
         }
         for function, expected in signatures.items():
@@ -164,6 +214,8 @@ class SettingsModelContractTests(SettingsTestCase):
 
         internal_names = (
             "PersonaCatalogEntry",
+            "PreparedSettingsSave",
+            "ProviderRouteEntry",
             "SettingsBaseline",
             "SettingsError",
             "SettingsErrorKind",
@@ -172,6 +224,11 @@ class SettingsModelContractTests(SettingsTestCase):
             "establish_settings_default_backend",
             "load_settings_state",
             "save_settings_state",
+            "prepare_settings_save",
+            "commit_prepared_settings_save",
+            "restore_prepared_settings_save",
+            "read_provider_route_generations",
+            "reconcile_provider_route_generations",
             "validate_settings_persona_catalog",
         )
         for name in internal_names:
@@ -324,6 +381,10 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
         write.assert_not_called()
         self.assertEqual(_files(self.workspace.root), before)
         self.assertEqual(state.baseline.system_defaults_bytes, system_bytes)
+        self.assertFalse(
+            state.baseline.configuration.system_defaults.show_message_details
+        )
+        self.assertFalse(state.pending.system_defaults.show_message_details)
         self.assertEqual(
             tuple(
                 (entry.name, entry.relative_path)
@@ -436,6 +497,11 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
                     PLOT_ARCHITECT
                 ].antigravity_effort,
                 "high",
+            ),
+            (
+                update_show_message_details(state, True),
+                lambda value: value.system_defaults.show_message_details,
+                True,
             ),
         )
         for updated, project, expected in cases:
@@ -550,6 +616,18 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
                 lambda: update_conversation_rag_provider(state, "LOCAL"),
                 ConfigurationError,
             ),
+            (
+                lambda: update_show_message_details(state, 1),
+                ConfigurationError,
+            ),
+            (
+                lambda: update_show_message_details(state, None),
+                ConfigurationError,
+            ),
+            (
+                lambda: update_show_message_details(state, "on"),
+                ConfigurationError,
+            ),
             (lambda: update_agent_codex_model(state, PLOT_ARCHITECT, "-unsafe"), ConfigurationError),
             (lambda: update_agent_codex_model(state, PLOT_ARCHITECT, "bad\x1b"), ConfigurationError),
             (
@@ -593,6 +671,7 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
                 ConfigurationError,
             ),
             (lambda: update_language(object(), "EN"), TypeError),
+            (lambda: update_show_message_details(object(), True), TypeError),
             (lambda: load_settings_state(object()), TypeError),
             (lambda: save_settings_state(object(), state), TypeError),
         )
@@ -632,6 +711,7 @@ class SettingsDefaultPersistenceTests(SettingsTestCase):
                     "antigravity_effort": None,
                     "default_backend": "codex",
                     "conversation_storage_backend": "filesystem",
+                    "show_message_details": False,
                     "conversation_rag_automatic": False,
                     "conversation_rag_provider": None,
                 }
@@ -749,6 +829,265 @@ class SettingsDefaultPersistenceTests(SettingsTestCase):
 class SettingsPersistenceTests(SettingsTestCase):
     """Exercise exact conflicts, deterministic writes, and complete rollback."""
 
+    def test_message_details_round_trip_is_system_only_and_canonical(
+        self,
+    ) -> None:
+        state = self.load()
+        agent_before = self.workspace.path(_AGENT_PATH).read_bytes()
+        self.assertFalse(self.workspace.path(_ROUTE_PATH).exists())
+        updated = update_show_message_details(state, True)
+        self.assertIs(updated.baseline, state.baseline)
+        self.assertFalse(state.pending.system_defaults.show_message_details)
+        self.assertTrue(updated.pending.system_defaults.show_message_details)
+
+        with mock.patch.object(
+            self.workspace,
+            "write_text",
+            wraps=self.workspace.write_text,
+        ) as write:
+            save_settings_state(self.workspace, updated)
+
+        self.assertEqual(
+            [call.args[0] for call in write.call_args_list],
+            [_SYSTEM_PATH],
+        )
+        self.assertEqual(
+            self.workspace.path(_AGENT_PATH).read_bytes(),
+            agent_before,
+        )
+        self.assertFalse(self.workspace.path(_ROUTE_PATH).exists())
+        self.assertEqual(
+            self.workspace.read_text(_SYSTEM_PATH),
+            _canonical(
+                {
+                    "language": "KO",
+                    "persona": "default_kim_eun_hee",
+                    "max_debate_rounds": 1,
+                    "codex_model": None,
+                    "codex_reasoning_effort": None,
+                    "antigravity_model": None,
+                    "antigravity_effort": None,
+                    "default_backend": None,
+                    "conversation_storage_backend": "filesystem",
+                    "show_message_details": True,
+                    "conversation_rag_automatic": False,
+                    "conversation_rag_provider": None,
+                }
+            ),
+        )
+        self.assertTrue(
+            self.load().pending.system_defaults.show_message_details
+        )
+
+    def test_route_generations_change_only_for_effective_provider_switches(
+        self,
+    ) -> None:
+        state = self.load()
+        self.assertIsNone(state.baseline.provider_route_bytes)
+        self.assertEqual(
+            dict(state.baseline.provider_routes),
+            {
+                agent_id: ProviderRouteEntry("codex", 0)
+                for agent_id in ROSTER
+            },
+        )
+        model_only = update_agent_codex_reasoning_effort(
+            update_agent_codex_model(
+                state,
+                PLOT_ARCHITECT,
+                "same-provider-model",
+            ),
+            PLOT_ARCHITECT,
+            "ultra",
+        )
+        prepared_model = prepare_settings_save(self.workspace, model_only)
+        self.assertIsNone(prepared_model.route_after)
+        self.assertEqual(prepared_model.switched_agents, ())
+        self.assertEqual(
+            prepared_model.provider_routes[PLOT_ARCHITECT],
+            ProviderRouteEntry("codex", 0),
+        )
+        commit_prepared_settings_save(self.workspace, prepared_model)
+        self.assertFalse(self.workspace.path(_ROUTE_PATH).exists())
+
+        switch_to_antigravity = update_agent_backend(
+            self.load(),
+            PLOT_ARCHITECT,
+            "antigravity",
+        )
+        prepared_antigravity = prepare_settings_save(
+            self.workspace,
+            switch_to_antigravity,
+        )
+        self.assertEqual(
+            prepared_antigravity.switched_agents,
+            (PLOT_ARCHITECT,),
+        )
+        self.assertEqual(
+            prepared_antigravity.provider_routes[PLOT_ARCHITECT],
+            ProviderRouteEntry("antigravity", 1),
+        )
+        commit_prepared_settings_save(self.workspace, prepared_antigravity)
+
+        switch_back_to_codex = update_agent_backend(
+            self.load(),
+            PLOT_ARCHITECT,
+            "codex",
+        )
+        prepared_codex = prepare_settings_save(
+            self.workspace,
+            switch_back_to_codex,
+        )
+        self.assertEqual(prepared_codex.switched_agents, (PLOT_ARCHITECT,))
+        self.assertEqual(
+            prepared_codex.provider_routes[PLOT_ARCHITECT],
+            ProviderRouteEntry("codex", 2),
+        )
+        commit_prepared_settings_save(self.workspace, prepared_codex)
+        route_bytes, routes = read_provider_route_generations(
+            self.workspace,
+            self.load().pending,
+        )
+        self.assertEqual(route_bytes, self.workspace.path(_ROUTE_PATH).read_bytes())
+        self.assertEqual(routes[PLOT_ARCHITECT], ProviderRouteEntry("codex", 2))
+
+        masked_workspace = initialized_workspace(self)
+        masked = update_agent_backend(
+            load_settings_state(masked_workspace),
+            PLOT_ARCHITECT,
+            "antigravity",
+        )
+        prepared_masked = prepare_settings_save(
+            masked_workspace,
+            masked,
+            provider_overrides={PLOT_ARCHITECT: "codex"},
+        )
+        self.assertEqual(prepared_masked.switched_agents, ())
+        self.assertIsNone(prepared_masked.route_after)
+        self.assertEqual(
+            prepared_masked.provider_routes[PLOT_ARCHITECT],
+            ProviderRouteEntry("codex", 0),
+        )
+
+    def test_manual_provider_edits_reconcile_once_at_each_new_launch(self) -> None:
+        configuration = ConfigManager(
+            self.workspace
+        ).load_configuration_snapshot()
+        with mock.patch.object(
+            self.workspace,
+            "write_text",
+            wraps=self.workspace.write_text,
+        ) as write:
+            before, initial = read_provider_route_generations(
+                self.workspace,
+                configuration,
+            )
+        self.assertIsNone(before)
+        write.assert_not_called()
+        self.assertEqual(initial[PLOT_ARCHITECT], ProviderRouteEntry("codex", 0))
+
+        route_bytes, initial = reconcile_provider_route_generations(
+            self.workspace,
+            configuration,
+        )
+        self.assertEqual(route_bytes, self.workspace.path(_ROUTE_PATH).read_bytes())
+        self.assertEqual(initial[PLOT_ARCHITECT], ProviderRouteEntry("codex", 0))
+
+        agents = self.workspace.read_json(_AGENT_PATH)
+        agents[PLOT_ARCHITECT]["backend"] = "antigravity"
+        self.workspace.write_json(_AGENT_PATH, agents)
+        changed_configuration = ConfigManager(
+            self.workspace
+        ).load_configuration_snapshot()
+        changed_bytes, changed = reconcile_provider_route_generations(
+            self.workspace,
+            changed_configuration,
+        )
+        self.assertEqual(
+            changed[PLOT_ARCHITECT],
+            ProviderRouteEntry("antigravity", 1),
+        )
+        with mock.patch.object(
+            self.workspace,
+            "write_text",
+            wraps=self.workspace.write_text,
+        ) as write:
+            repeated_bytes, repeated = reconcile_provider_route_generations(
+                self.workspace,
+                changed_configuration,
+            )
+        self.assertEqual(repeated_bytes, changed_bytes)
+        self.assertEqual(repeated, changed)
+        write.assert_not_called()
+
+        agents[PLOT_ARCHITECT]["codex_model"] = "manual-model-only"
+        self.workspace.write_json(_AGENT_PATH, agents)
+        model_configuration = ConfigManager(
+            self.workspace
+        ).load_configuration_snapshot()
+        _model_bytes, model_routes = reconcile_provider_route_generations(
+            self.workspace,
+            model_configuration,
+        )
+        self.assertEqual(
+            model_routes[PLOT_ARCHITECT],
+            ProviderRouteEntry("antigravity", 1),
+        )
+
+        agents[PLOT_ARCHITECT]["backend"] = "codex"
+        self.workspace.write_json(_AGENT_PATH, agents)
+        codex_configuration = ConfigManager(
+            self.workspace
+        ).load_configuration_snapshot()
+        _codex_bytes, codex_routes = reconcile_provider_route_generations(
+            self.workspace,
+            codex_configuration,
+        )
+        self.assertEqual(
+            codex_routes[PLOT_ARCHITECT],
+            ProviderRouteEntry("codex", 2),
+        )
+
+        malformed = b'{"schema_version":1,"agents":{}}\n'
+        self.workspace.path(_ROUTE_PATH).write_bytes(malformed)
+        with self.assertRaises(WorkspaceFormatError):
+            read_provider_route_generations(
+                self.workspace,
+                codex_configuration,
+            )
+        self.assertEqual(self.workspace.path(_ROUTE_PATH).read_bytes(), malformed)
+
+    def test_post_activation_restore_is_exact_and_tamper_requires_recovery(
+        self,
+    ) -> None:
+        state = update_agent_backend(
+            self.load(),
+            PLOT_ARCHITECT,
+            "antigravity",
+        )
+        prepared = prepare_settings_save(self.workspace, state)
+        before = _files(self.workspace.root)
+        commit_prepared_settings_save(self.workspace, prepared)
+        self.assertTrue(self.workspace.path(_ROUTE_PATH).exists())
+        restore_prepared_settings_save(self.workspace, prepared)
+        self.assertEqual(_files(self.workspace.root), before)
+        self.assertFalse(self.workspace.path(_ROUTE_PATH).exists())
+
+        commit_prepared_settings_save(self.workspace, prepared)
+        self.workspace.write_text(
+            _AGENT_PATH,
+            self.workspace.read_text(_AGENT_PATH).replace(
+                '"language": null',
+                '"language": "JA"',
+                1,
+            ),
+        )
+        tampered = _files(self.workspace.root)
+        with self.assertRaises(SettingsError) as caught:
+            restore_prepared_settings_save(self.workspace, prepared)
+        self.assertIs(caught.exception.kind, SettingsErrorKind.RECOVERY_REQUIRED)
+        self.assertEqual(_files(self.workspace.root), tampered)
+
     def test_noop_and_each_changed_document_have_exact_write_boundaries(self) -> None:
         state = self.load()
         before = _files(self.workspace.root)
@@ -784,6 +1123,7 @@ class SettingsPersistenceTests(SettingsTestCase):
                     "antigravity_effort": None,
                     "default_backend": None,
                     "conversation_storage_backend": "filesystem",
+                    "show_message_details": False,
                     "conversation_rag_automatic": False,
                     "conversation_rag_provider": None,
                 }
@@ -803,13 +1143,33 @@ class SettingsPersistenceTests(SettingsTestCase):
             wraps=self.workspace.write_text,
         ) as write:
             save_settings_state(self.workspace, agent_state)
-        self.assertEqual([call.args[0] for call in write.call_args_list], [_AGENT_PATH])
+        self.assertEqual(
+            [call.args[0] for call in write.call_args_list],
+            [_AGENT_PATH, _ROUTE_PATH],
+        )
         self.assertEqual(self.workspace.path(_SYSTEM_PATH).read_bytes(), system_before)
         persisted_agents = self.workspace.read_json(_AGENT_PATH)
         self.assertEqual(tuple(persisted_agents), tuple(sorted(ROSTER)))
         self.assertEqual(
             persisted_agents[PLOT_ARCHITECT]["backend"],
             "antigravity",
+        )
+        self.assertEqual(
+            self.workspace.read_json(_ROUTE_PATH),
+            {
+                "schema_version": 1,
+                "agents": {
+                    agent_id: {
+                        "provider": (
+                            "antigravity"
+                            if agent_id == PLOT_ARCHITECT
+                            else "codex"
+                        ),
+                        "generation": 1 if agent_id == PLOT_ARCHITECT else 0,
+                    }
+                    for agent_id in ROSTER
+                },
+            },
         )
         for agent_id in ROSTER:
             self.assertEqual(
@@ -878,7 +1238,7 @@ class SettingsPersistenceTests(SettingsTestCase):
 
         self.assertEqual(
             [call.args[0] for call in write.call_args_list],
-            [_SYSTEM_PATH, _AGENT_PATH],
+            [_SYSTEM_PATH, _AGENT_PATH, _ROUTE_PATH],
         )
         loaded = self.load().pending
         self.assertEqual(loaded, expected)
@@ -959,7 +1319,7 @@ class SettingsPersistenceTests(SettingsTestCase):
             save_settings_state(self.workspace, state)
         self.assertEqual(
             [call.args[0] for call in write.call_args_list],
-            [_SYSTEM_PATH, _AGENT_PATH],
+            [_SYSTEM_PATH, _AGENT_PATH, _ROUTE_PATH],
         )
         self.assertEqual(
             self.workspace.path(_SYSTEM_PATH).read_text(encoding="utf-8"),
@@ -974,6 +1334,7 @@ class SettingsPersistenceTests(SettingsTestCase):
                     "antigravity_effort": None,
                     "default_backend": None,
                     "conversation_storage_backend": "filesystem",
+                    "show_message_details": False,
                     "conversation_rag_automatic": False,
                     "conversation_rag_provider": None,
                 }
@@ -1096,6 +1457,36 @@ class SettingsPersistenceTests(SettingsTestCase):
         self.assertIs(caught.exception.kind, SettingsErrorKind.WRITE)
         self.assertEqual(calls, [_SYSTEM_PATH, _SYSTEM_PATH])
         self.assertEqual(self.workspace.path(_SYSTEM_PATH).read_bytes(), original_system)
+
+    def test_missing_route_precreate_failure_is_a_write_failure(self) -> None:
+        state = update_agent_backend(
+            self.load(),
+            PLOT_ARCHITECT,
+            "antigravity",
+        )
+        prepared = prepare_settings_save(self.workspace, state)
+        self.assertIsNone(prepared.route_before)
+        self.assertIsNotNone(prepared.route_after)
+        before = _files(self.workspace.root)
+        actual_write = self.workspace.write_text
+
+        def fail_before_route_create(relative: str, text: str) -> Path:
+            if relative == _ROUTE_PATH:
+                raise OSError("private-route-write-failure")
+            return actual_write(relative, text)
+
+        with mock.patch.object(
+            self.workspace,
+            "write_text",
+            side_effect=fail_before_route_create,
+        ):
+            with self.assertRaises(SettingsError) as caught:
+                commit_prepared_settings_save(self.workspace, prepared)
+
+        self.assertIs(caught.exception.kind, SettingsErrorKind.WRITE)
+        self.assertEqual(_files(self.workspace.root), before)
+        self.assertFalse(self.workspace.path(_ROUTE_PATH).exists())
+        self.assertNotIn("private-route-write-failure", str(caught.exception))
 
     def test_rollback_failure_is_redacted_and_does_not_stop_later_restoration(self) -> None:
         state = update_agent_backend(

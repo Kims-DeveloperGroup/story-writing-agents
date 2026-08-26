@@ -2045,6 +2045,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         backend = AgentBackend(
             self.workspace,
             executable=sys.executable,
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
             antigravity_executable="private-agy",
             antigravity_model="agy-model",
             antigravity_effort="medium",
@@ -2094,6 +2095,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         resumed_backend = AgentBackend(
             self.workspace,
             executable=sys.executable,
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
             antigravity_executable="private-agy",
             antigravity_model="agy-model",
             antigravity_effort="medium",

@@ -442,7 +442,7 @@ Commands can enable/disable the provider but intentionally provide no automatic
 toggle. Interactive `/settings` supplies that toggle as described below. A
 legacy configuration missing either key reads as disabled without a rewrite;
 the next successful complete configuration save emits both keys in the
-canonical eleven-key object.
+canonical twelve-key object.
 
 Every valid invocation writes one compact, key-sorted schema-v1 JSON line to
 standard output and creates no runtime debug record. Successful operations exit
@@ -475,19 +475,24 @@ RAG**, then edit these independent Current/Pending values:
 | Provider | **Disabled** persists `null` and forces Automatic **Off**. **Local** persists `"local"` but does not turn Automatic on. |
 | Automatic | **Off** is the default. **On** is accepted only while the pending provider is **Local**. |
 
-Values remain pending until the top-level **Save** confirmation. **Discard** by
-reverting values, or **Cancel**, Escape, Ctrl-C, or EOF according to the existing
-Settings transaction; an unsaved exit leaves the captured configuration bytes
-unchanged. Save uses the same exact-byte compare-and-set guard and canonical
-atomic replacement as every other setting. A concurrent byte change fails
-closed instead of merging an old RAG choice.
+Values remain pending until top-level **Apply Changes** is confirmed. Reverting
+both values returns to clean state; dirty **Discard Changes**, root Escape,
+Ctrl-C, or EOF follows the existing Settings cancellation transaction and
+leaves the captured configuration bytes unchanged. Apply uses the same
+exact-byte compare-and-set guard and canonical atomic replacement as every
+other setting. A concurrent byte change fails closed instead of merging an old
+RAG choice.
 
 Opening or editing the Conversation RAG fields never probes or installs the
 optional package, uses the network, or prompts for a credential. The full
-Settings Save retains its existing, independent agent-provider authentication
-and conversation-storage readiness gates. A saved RAG change affects only the
-next shell: the current backend, runtime, active storage bundle, and automatic
-policy remain unchanged.
+mixed Settings path retains its independent agent-provider authentication and
+conversation-storage readiness gates. A RAG-only Apply does not enter that
+path: it prepares, verifies, and commits only the system configuration, with no
+authentication, storage selection/readiness, backend/runtime prepare, commit,
+discard, or activation, route/thread work, composition, optional-package probe
+or installation, provider catalog, subprocess, socket, or network work. It
+reports `Conversation RAG settings were saved for the next shell. This running
+shell retains its current Conversation RAG service and automatic policy.`
 
 ### What happens at the next shell startup
 
