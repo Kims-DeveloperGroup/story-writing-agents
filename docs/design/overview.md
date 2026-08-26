@@ -178,8 +178,10 @@ profiles are implemented. Orientation, status/inspection, central errors and
 recovery, and accepted management, advisory, retrieval, and consensus output
 use them. Full/context help, roster, session/conversation lists, search,
 transcript, and focused history now use them too. The controller sends each
-dense row as one positioned, one-record `ListView` callback; empty and
-interrupted outcomes remain explicit. Composition and confirmation now build
+dense row as one positioned `ListView` callback: session, conversation, and
+search rows use `Record` where applicable, while transcript and history rows use
+attributed `Message` values. Empty and interrupted outcomes remain explicit.
+Composition and confirmation now build
 ordered semantic input views, and the four composer lifecycle records use
 semantic `open`, `error`, `completed`, and `cancelled` notices. No internal
 composer `write_status` site remains. Capable main reads now project canonical
@@ -190,9 +192,12 @@ their ordering, initial highlight, catalog/lifecycle reads, and fresh validation
 the terminal owns only input state and presentation. There is no public theme API.
 
 The capable main frame also receives a controller-provided active or exact
-leading-`@agent` profile header. Reply records, `/agents`, and `/status` project
-backend-authoritative provider/model/effort facts, sources, confirmation, and
-thread state; model reply prose is never used to infer execution identity.
+leading-`@agent` target header. With Message details Off, that header contains
+only the full target display name and direct replies avoid execution-profile
+lookup and metadata. On adds backend-authoritative provider/model/effort facts,
+sources, confirmation, and thread state to the documented header/reply surfaces.
+`/agents` and `/status` remain fully diagnostic in both modes; model reply prose
+is never used to infer execution identity.
 
 The generic picker foundation is also implemented entirely inside the terminal
 package. It keeps opaque choice identities out of rendered text, separates
@@ -258,8 +263,10 @@ Conversation-storage selection coordinates readiness, optional explicit
 installation, provisioning, parity, and the complete desired-system-setting
 guard under its lease.
 
-Confirmed Save hot-applies non-storage runtime settings, including execution
-profiles, to the current backend/runtime without a restart. Desired storage is
+Confirmed Apply Changes hot-applies runtime-affecting settings, including
+execution profiles, to the current backend/runtime without a restart. A
+Message details-only Apply uses prepare, verify, and commit without provider,
+storage, backend, runtime, route, or thread activation. Desired storage is
 persisted for the next shell; the current controller/runtime storage bundle is
 unchanged. Launch overrides remain higher precedence and read-only. Direct disk
 edits have no watcher and are reconciled only by a newly launched backend;

@@ -141,18 +141,29 @@ synchronous sink returns `None`. Later observer failure stores a safe error.
 [context] Source N [completed]
   Subject: SUBJECT
   Conversation: ID
-  Turn: ID
   Sequence: N
-  Kind: KIND
 ```
 
-These are the structured plain shapes; capable interactive output may add only
-fixed decorative ANSI, and `NO_COLOR` removes that decoration without changing
-the text. Each progress event or source remains one ordered callback record.
+These are the compact structured plain shapes. With Message details On, an
+event-level source adds `Turn: ID` before Sequence and `Kind: KIND` after it.
+A conversation-level source has no event citation, so it shows only Subject and
+Conversation in either mode. Capable interactive output may add only fixed
+decorative ANSI, and `NO_COLOR` removes that decoration without changing the
+text. Each progress event or source remains one ordered callback record.
 
-The final retrieval answer is presented as an agent reply. Before its semantic
-message is rendered, the controller attempts the same presentation-only
-formatter used for direct replies: only a complete strict JSON object or array
+On a capable live stream, the accepted user submission and final retrieval
+answer are retained as speaker-aware chat blocks with full bodies. Ordinary-line
+fallback keeps its already-echoed user input as the sole submission
+representation and renders the reply through semantic plain output; it promises
+complete, nonduplicated meaning, not identical topology. Message details Off
+keeps the reply compact. On adds its resolved Provider, Model, and Effort with
+each value's source, plus Confirmation and Thread; a capable accepted-user block
+receives no diagnostic metadata. This setting is presentation-only and does not
+change the retrieval result or transcript.
+
+Before the final semantic message is rendered, the controller attempts the same
+presentation-only formatter used for direct replies: only a complete strict
+JSON object or array
 is re-emitted with two-space indentation, preserved key order, and unescaped
 Unicode. Duplicate keys, non-finite constants, malformed or embedded-prose
 content, scalar JSON values, and serialization failures fall back to the exact

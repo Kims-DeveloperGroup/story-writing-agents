@@ -22,7 +22,7 @@
 > input remains visible without a synthetic final control frame. #274 adds an
 > unlisted mode-gated accepted-input projection operation, and #275 uses it for
 > accepted advisory and consensus prompt content. Capable streams render one
-> exact-body attributed message after input cleanup and before progress;
+> exact-body speaker-aware chat block after input cleanup and before progress;
 > callback and ordinary-line fallback input remain visible without a duplicate.
 > Consensus and local-read request records add safe result-defining context.
 > Advisory and
@@ -47,6 +47,11 @@
 > dirty state alone appends Apply Changes and Discard Changes. Root Settings
 > Escape retains its cancellation behavior. Generic picker/prompt reads, resume
 > pickers, and dirty Apply/Discard confirmations remain one-shot.
+> The root Settings picker also exposes Message details. Off is the compact
+> default; On reveals documented diagnostics without changing stored content.
+> User/agent messages use readable speaker headers and railed bodies, and each
+> debate progress event is one atomic `Debate phase` panel containing newly
+> readable persisted speeches.
 
 ## Public API
 
@@ -103,8 +108,9 @@ composition-provider selection and the history-free contextual route are
 package-internal, not added supported API.
 
 For controller wiring, the package facade also exposes the unlisted canonical
-identities `InteractiveSemanticOutput`, `Field`, `Message`, `Notice`, `Panel`,
-`Record`, `Section`, `ListView`, `SemanticRole`, and `ViewState`. They are
+identities `InteractiveSemanticOutput`, `Field`, `Message`,
+`MessagePresentation`, `SpeakerAccent`, `Notice`, `Panel`, `Record`, `Section`,
+`ListView`, `SemanticRole`, and `ViewState`. They are
 package-internal, absent from `__all__` and the root package, and are not a
 supported public API. The facade also binds the package-internal
 `MainInputHistoryState`, `MainInputControlState`,
@@ -375,10 +381,9 @@ and performs no stream observation or resource acquisition.
 - advisory cancellation, context disclosure, and agent replies; #111 adds an
   optional capable-only indicator without an advisory waiting record;
 - retrieval progress and cited-source records; and
-- consensus progress, inspection, cancellation, and terminal summaries.
-- Consensus progress now includes phase handoff/action metadata and a dedicated
-  semantic `Panel` titled `Agent saying` when new agent messages are available
-  for a phase.
+- consensus progress, inspection, cancellation, and terminal summaries. Each
+  progress event is one `Debate phase` Panel containing its progress facts and
+  any newly readable persisted speech sections.
 
 #84 uses the same foundation for:
 
@@ -393,10 +398,10 @@ and performs no stream observation or resource acquisition.
 #275 completes the informative-content consumers:
 
 - accepted ordinary, `/say`, and one-shot routed advisory text becomes one
-  exact-body `Message` attributed as `you → ALIAS`, where `ALIAS` is
-  the resolved preferred prompt alias;
+  exact-body chat-block `Message` attributed as `You → DISPLAY NAME`;
 - accepted inline, fresh, and committed multiline consensus prompt text becomes
-  one `you → consensus` `Message` followed by a `Consensus request` record;
+  one `You → Consensus` chat-block `Message` followed by a `Consensus request`
+  record;
 - every consensus request names its validated `Output`, while `/draft-file`
   names only its validated `Source` path and never projects the file bytes;
 - search and filtered conversation-list requests name their normalized `Query`
@@ -409,6 +414,13 @@ construction, progress, catalog/service work, or result output as applicable.
 They remain visible through later success, handled failure, cancellation, or
 post-acceptance interrupt. They are call-local terminal presentation and add no
 storage, transcript-retention, provider-history, or audit guarantee.
+
+Informative output includes those confirmed submissions, agent replies,
+retrieval/history/transcript records, debate speeches, results, errors, and
+final notices. Editors, pickers, Settings/configuration controls,
+confirmations, loading/progress animation, highlights, and intermediate frames
+are transient. “Remain visible” is a terminal-scrollback promise, not a claim
+that every record is persisted by a storage backend.
 
 The controller composes typed components and sends one component through the
 adapter for each established callback record. The plain form preserves the
@@ -426,11 +438,34 @@ record without a user-message copy of its source bytes. These records precede
 coroutine construction, so a later cancellation, provider failure, deadlock, or
 other handled outcome does not erase them.
 
-Consensus-phase rendering now emits per-event metadata as fields (`Event`,
-`Round`, `Revision`, `Handoff`, and `Action`, with optional `Conflicts`) in
-one `Record`, then the phase status record. When phase messages exist, the
-controller also writes one bounded `Panel` titled `Agent saying`, where each
-message includes the sender label and its phase/revision metadata.
+Consensus-phase rendering builds one `Debate phase` Panel and performs one
+semantic writer call per accepted event. Fields are ordered Debate ID, Phase,
+Round, Revision, Action, Outcome, and Conflicts; Message details On inserts
+Handoff between Revision and Action. `STARTED` adds its fixed included/fresh
+context notice. The panel then contains the uncommitted suffix of readable
+durable debate messages, grouped by each contiguous persisted
+phase/round/revision tuple into `Speeches · PHASE · round N · revision REVISION`
+sections (`n/a` for an empty revision).
+
+Each normal agent speech is a full chat block and receives the strict JSON
+presentation projection when applicable. Message details On adds `Kind`; Off
+still shows the full speech. Error-kind content is replaced with exactly `Agent
+error details are unavailable.` A debate-log read failure puts the fixed
+`[agent-saying] Agent sayings unavailable; the debate log could not be read.`
+warning inside the same panel. If that warning panel writes successfully,
+`STARTED` commits its candidate cursor of zero; a later-phase read failure
+retains the existing cursor. If the saved cursor exceeds the current
+log length, the scan restarts at zero.
+
+The candidate cursor, accepted progress event, last-started mapping, and any
+`STARTED` or `AUDIT_COMPLETED` conflict-cache update change only after the panel
+write succeeds. The last successfully written `AUDIT_COMPLETED` conflicts
+remain visible in subsequent phases. They reset only after a successfully
+written `STARTED` panel and are replaced only after a successfully written
+later audit panel. A writer failure commits none of those changes, so retry
+observes the same suffix and retained conflicts. Successful consensus receives
+a separate final `Consensus` Record after terminal progress; deadlock and failed
+outcomes instead use typed error presentation.
 
 ### Startup, picker, advisory, consensus, and Settings progress
 
@@ -461,10 +496,11 @@ the controller presents the existing `internal_error` path. Advisory and
 consensus waits emit no `[routing]` or `[waiting]` record; their ordinary
 result, cancellation, context, and error records remain unchanged.
 
-The five dense-view terminal writer families now accept the same primitive
-arguments and emit the same fact order through semantic `Panel`, `ListView`, or
-`Record` values. Controller list commands emit one positioned, one-record
-`ListView` for each established row callback. The terminal composer now emits
+The five dense-view terminal writer families retain their primitive arguments
+and fact order through semantic `Panel` and `ListView` values. Session,
+conversation, and search rows use `Record` values where applicable; transcript
+and history rows use attributed `Message` values. Controller list commands emit
+one positioned `ListView` for each established row callback. The terminal composer now emits
 semantic `open`, `error`, `completed`, and `cancelled` notices instead of its
 four generic-status call sites; the controller also has no generic
 `write_status` call site. Composition and confirmation build ordered semantic
@@ -505,7 +541,8 @@ buffer separately.
 
 The capable main input's leading `Notice` is recomputed from the current buffer.
 It reports the active sticky agent, except that a valid leading `@agent` token
-reports the exact one-shot target. Its plain shapes are:
+reports the exact one-shot target. Message details Off shows only the target
+display name. On shows the full execution profile; its plain shapes are:
 
 ```text
 [active runtime] Lead Orchestrator · Antigravity · model agy-model-id · effort high · pending
@@ -516,7 +553,8 @@ story[novel:lead]> @plot Check the current constraints.
 ```
 
 A confirmed header is informational/cyan; a pending header is warning/yellow.
-The words and values remain identical without ANSI. In the lobby the same slot
+The words and values remain identical without ANSI. `/agents` and `/status`
+remain fully diagnostic when Message details is Off. In the lobby the same slot
 explains that a story session must be attached before an execution profile is
 active. Ordinary-line fallback captures that active-target header once before
 reading the line; it cannot change the header while a one-shot alias is being
@@ -603,7 +641,7 @@ and `NO` choices. Discard Changes and root Settings Escape share the existing
 controller discard action: clean Escape exits immediately without a
 confirmation, while dirty state shows the transient discard confirmation. Its preceding context
 contains only fields whose Current and Pending values differ, and both
-displayed values carry the `(Changed)` cue; unchanged Save confirmation shows
+displayed values carry the `(Changed)` cue; the defensive no-changes Apply confirmation shows
 only `No pending settings changes.` without empty Current or Pending sections.
 These confirmations are one-shot: selecting `YES` commits and closes the
 requested action, while `NO` or confirmation Escape returns to the root
@@ -613,6 +651,11 @@ do not imply a snapshot was rendered.
 <a id="provider-model-and-effort-pickers"></a>
 
 ## Provider Model and Effort pickers
+
+The top-level Settings picker has exactly six rows in this order: Language,
+Persona, Maximum debate rounds, Conversation storage, Message details, and
+Agents. Message details offers Off and On. Off is the default compact
+presentation; it does not delete stored content.
 
 Within `/settings`, the visible per-agent fields and editor titles are exactly
 Provider, Model, and Effort. Current/Pending confirmations remain
@@ -638,8 +681,8 @@ drawn, so loading adds no durable row. Callback, ordinary fallback,
 the same option read silently. The indicator changes neither read frequency nor
 the established failure guidance, choice ordering, cancellation, or save state.
 
-Language, Persona, Maximum debate rounds, Conversation storage, Provider,
-Model, Custom model, and Effort remain active after a first valid Enter. A
+Language, Persona, Maximum debate rounds, Conversation storage, Message details,
+Provider, Model, Custom model, and Effort remain active after a first valid Enter. A
 picker reopens in
 `ViewState.OPEN` with its prompt focused and selection updated; a prompt reopens
 in `ViewState.FOCUSED` with its default updated. The latest applied value appears
@@ -651,7 +694,7 @@ Custom model navigation, and editor re-entry reset it. This controller state is
 semantic and consecutive, with no raw-key timing window. Escape returns one
 level through Custom model > Model > Agent settings > Agents > Settings;
 Provider and Effort return directly to Agent settings, while Conversation
-storage returns directly to Settings. Authentication launched while choosing
+storage and Message details return directly to Settings. Authentication launched while choosing
 Provider is a subordinate action and returns to Provider after its result.
 Ctrl-C or EOF at any level cancels the whole settings transaction.
 
@@ -667,7 +710,7 @@ pending configuration with the opening baseline. Only a difference adds
 `[save required] Choose Apply Changes to persist pending changes` as a
 `SemanticRole.WARNING`/`ViewState.IDLE` notice. The
 notice is absent initially, after a complete revert, and in Agents, Agent
-settings, every value editor, and Save/Cancel confirmations. Capable, narrow,
+settings, every value editor, and Apply Changes/Discard Changes confirmations. Capable, narrow,
 `NO_COLOR`, and fallback projections keep the complete text. Fallback may retain
 an older prompt in historical scrollback, but the current top-level prompt is
 recomputed and truthful. Existing instruction and `Notice` semantics are used;
@@ -704,20 +747,28 @@ One attempt has a five-second deadline and a one-MiB retained-stdout ceiling.
 It discards stdin and stderr, drops raw bytes after strict projection, and has
 no automatic retry, cache, persistence, or raw diagnostic. Fixed failure
 guidance leaves Inherit and applicable Current custom/compatibility or Custom
-model paths available; re-entering the editor retries later. Save persists only
-the selected opaque model/effort value or null and applies the complete staged
+model paths available; re-entering the editor retries later. Apply Changes
+persists only the selected opaque model/effort value or null and applies the complete staged
 snapshot to the running shell. A launch-owned effective Provider, Model, or
 Effort choice is disabled with `Set by a launch override; read-only in this
 shell.` Remove the launch override on a later launch to edit that value. Manual
 on-disk changes still have no watcher and apply only when a new backend is
 launched.
 
+After confirmation, a candidate whose sole difference is Message details uses
+the configuration prepare/verify/commit path. It skips authentication,
+backend/runtime staging or activation, storage readiness, route switching or
+generation, and provider/thread work; the active presentation flag changes only
+after commit. Any mixed change uses the complete activation path above and
+changes that flag only after full activation succeeds.
+
 Every capable picker and input component follows the universal transient
 lifecycle: commit, cancellation, interrupt, EOF, and failure erase or replace
 the submitted control instead of leaving its snapshot in terminal display
-history. Durable result/event components are separate. Numbered fallback
-cannot erase bytes already printed, but adds no duplicate or synthetic final
-control frame.
+history. Committed informative output is separate. Numbered fallback cannot
+erase bytes already printed, but adds no duplicate or synthetic final control
+frame. Fallback guarantees complete, nonduplicated meaning rather than an
+identical physical layout.
 
 ## Current semantic plain shapes
 
@@ -756,7 +807,8 @@ presented tuple, and reattachment therefore presents scope again. The terminal
 remains stateless: `write_conversation_scope()` renders every call, retains no
 tuple, and does not cache a failed write.
 
-Agent and run output preserve content boundaries:
+Generic `Message` values retain the compatible inline default, and run output
+retains its record boundary:
 
 ```text
 ALIAS [completed]> FIRST LINE
@@ -766,18 +818,29 @@ ALIAS [completed]> FIRST LINE
   CONTENT
 ```
 
-Accepted user-to-agent content uses the same message boundary. Command
-envelopes and options are excluded from the body:
+Controller messages with semantic user/agent speakers select the chat-block
+layout. It uses a full speaker header, one blank separator, and a
+default-styled `│ ` body rail. Command envelopes and options are excluded from
+accepted bodies:
 
 ```text
-you → lead [completed]> EXACT ADVISORY BODY
-you → consensus [completed]> EXACT CONSENSUS PROMPT
+You → Lead Orchestrator [completed]
+
+│ EXACT ADVISORY BODY
+
+You → Consensus [completed]
+
+│ EXACT CONSENSUS PROMPT
 ```
 
-The sender label uses the resolved preferred advisory alias or `consensus`.
-Embedded LF, wrapping, visible control escaping, and narrow continuation
-indentation follow the ordinary safe `Message` renderer; “exact” refers to the
-accepted semantic body, not unsanitized terminal bytes.
+Only the header receives its stable bold accent: user magenta, lead cyan, plot
+yellow, character green, and execution blue. The body stays at terminal-default
+style. Sanitization precedes physical-cell-aware word wrapping, so embedded LF,
+whitespace-only content, strict-JSON projection, combining characters, and
+CJK/full-width glyphs remain safe and readable. If the rail leaves too little
+room for a leading glyph, only that physical row falls back without the rail;
+very narrow output still preserves complete, nonduplicated meaning. “Exact”
+refers to the accepted semantic body, not unsanitized terminal bytes.
 
 Request-defining context uses completed `Record` values. Consensus field order
 is `Output`, then `Source` only for draft input. Search and filtered-list field
@@ -810,29 +873,36 @@ non-finite values, and any serialization failure return the original string
 unchanged. The provider result and any stored transcript bytes are never
 rewritten.
 
-Agent replies also carry runtime-owned execution metadata outside the reply
-body. The exact plain topology is:
+Direct agent replies always use the chat-block shape and retain their full body.
+Message details Off is compact and adds no diagnostic metadata. On adds one
+runtime-owned metadata string to the speaker header, in this exact field order:
+Provider, Model, Effort, Confirmation, Thread. Provider, Model, and Effort each
+include their resolved source. The exact plain topology is:
 
 ```text
-[lead] Lead Orchestrator [completed]
-  Provider [info]: Antigravity [agent config]
-  Model: agy-model-id [agent config]
-  Effort: high [agent config]
-  Confirmation [success]: confirmed
-  Thread [warning]: fresh after provider switch
-  <agent reply>
+Lead Orchestrator → You · Provider: Antigravity [agent config] · Model: agy-model-id [agent config] · Effort: high [agent config] · Confirmation: confirmed · Thread: fresh after provider switch [completed]
+
+│ <agent reply>
 ```
 
-This metadata is presentation-only: it is not appended to the transcript or
+Accepted user blocks never receive this diagnostic metadata. The metadata is
+presentation-only: it is not appended to the transcript or
 provider history and does not rewrite earlier replies. The backend profile and
 provider argv are authoritative; reply prose such as “I am Codex” is not
 execution evidence. `confirmed` means one complete logical provider call
 succeeded under the profile, not that the remote provider attested its identity.
 
-An `AGENT` semantic role is bold with the terminal's default foreground color;
-it does not inspect or choose a terminal background. ANSI-capable output wraps
-that emphasis in a local reset, while plain and `NO_COLOR` output retain the
-same unstyled text.
+The final retrieval reply follows the same Off/On profile-metadata rule. Each
+retrieval source always shows Subject and Conversation. An event citation always
+adds Sequence; Message details On additionally adds Turn before Sequence and
+Kind after it. A conversation-level source has no Sequence because it has no
+event citation.
+
+The generic inline `AGENT` semantic role remains bold with the terminal's
+default foreground color. A chat block instead applies only its fixed speaker
+accent to the header; neither form inspects or chooses a terminal background.
+ANSI-capable output uses local resets, while plain and `NO_COLOR` output retain
+the same text.
 
 Execution identity uses the existing closed semantic palette: `INFO` is cyan,
 `SUCCESS` green, `WARNING` yellow, `MUTED` ANSI white/gray, and `ERROR` red.
@@ -1207,8 +1277,8 @@ interrupt, or EOF and attempt the same cleanup on failure; restoration failure
 remains fatal. Callback and
 line fallback cannot erase the already printed numbered prompt or input, so
 they retain it and add no synthetic terminal-state frame. Nested settings Escape
-returns to the parent silently. Save and Cancel confirmations show a selectable
-YES/NO control with changed-only Current/Pending context; unchanged context
+returns to the parent silently. Apply Changes and Discard Changes confirmations
+show a selectable YES/NO control with changed-only Current/Pending context; unchanged context
 contains only the no-changes notice. Top-level cancellation does not claim a
 snapshot that was not rendered.
 
@@ -1441,9 +1511,12 @@ results` list and one callback. Rows are followed, in separate callbacks, by:
 
 The hint appears only when the established limits truncate the result.
 
-Transcript and focused-history rows retain `Sequence`, `Turn`, `Kind`,
-`Sender`, `Recipient`, then `Content`, in that order. Each event is one
-completed positioned `Transcript` or `History` list and one callback. A
+Transcript and focused-history rows are speaker-aware chat blocks inside a
+positioned `Transcript` or `History` ListView. Their headers use the human
+directions `You → Agent`, `Agent → You`, or `Runtime → You`; their metadata
+always contains Sequence. Message details On appends Turn, Kind, and canonical
+`sender → recipient` IDs. Every mode shows the ListView position and the full
+body. Each event is one completed positioned list and one callback. A
 transcript page then emits:
 
 ```text
@@ -1457,8 +1530,8 @@ history instead emits one `[context]` record with `History displayed`,
 cap`, and `Truncated` in that order. Source whitespace and LF remain; controls
 are visible, events are never joined, and content remains inside its one
 callback record. An `agent_reply` content value receives the same strict
-object/array presentation projection as a direct reply; all other event kinds
-remain unchanged.
+object/array presentation projection as a direct reply; user and runtime event
+content remains unchanged.
 
 If Ctrl-C interrupts search, transcript, or history row delivery, all already
 completed row callbacks remain visible. The controller writes exactly one

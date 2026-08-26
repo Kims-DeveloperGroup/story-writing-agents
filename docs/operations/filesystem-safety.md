@@ -808,13 +808,17 @@ default after any reported save failure. See
 `/settings` coordinates `config/system_defaults.json` and
 `config/agent_configs.json` more narrowly. Opening captures both files' exact
 strict-UTF-8 bytes, their fully validated values, and the safe persona catalog.
-Save first completes its provider gate in memory, then delegates desired
-storage readiness, optional explicit installation, provisioning, and fresh
-parity to the selection owner. Under that workflow's active lease, the
-settings-owned precommit guard requires the persona catalog to match the
-opening baseline; the config owner then revalidates the complete pending pair
-and requires both exact byte snapshots to match. Any mismatch or read failure
-reports a conflict and performs no configuration or activation write.
+For a mixed candidate, Apply Changes first completes its provider gate in
+memory, then delegates desired storage readiness, optional explicit
+installation, provisioning, and fresh parity to the selection owner. Under that
+workflow's active lease, the settings-owned precommit guard requires the
+persona catalog to match the opening baseline; the config owner then revalidates
+the complete pending pair and requires both exact byte snapshots to match. Any
+mismatch or read failure reports a conflict and performs no configuration or
+activation write. A candidate that changes only `show_message_details` skips
+that provider/storage/runtime path: it prepares, verifies, and commits the exact
+configuration candidate, then changes the active display flag only after the
+commit succeeds.
 
 An unchanged candidate performs no write. Otherwise, only changed documents
 are serialized as canonical sorted, indented JSON and atomically replaced,
@@ -829,7 +833,7 @@ This is guarded optimistic coordination, not one cross-file transaction. Each
 replacement is atomic, but an abrupt process, operating-system, hardware,
 filesystem, or power failure can still leave the pair partially durable. Host
 installation and an empty SQLite database prepared before the config boundary
-are not rolled back. A successful Save changes desired storage only; startup
+are not rolled back. A successful Apply Changes changes desired storage only; startup
 owns later active-marker CAS.
 
 Invalid identifiers raise `SessionIdError`; unsafe paths or symlinks raise
