@@ -48,11 +48,13 @@ conda activate story-writing-agents
 On PowerShell, activate a `venv` with `.venv\Scripts\Activate.ps1`. The
 installed `story` and `story-writing-agents` commands are exact aliases.
 The editable command above installs the RAG-free base. The optional conversation
-RAG dependency uses an exact VCS pin and is currently a direct Python boundary,
-not a shell or runtime feature. Approved internal evaluators should follow
+RAG dependency uses an exact VCS pin. Direct Python callers can now compose the
+deterministic local provider over a disposable generation store, but this is not
+yet a shell, settings, agent, or runtime feature. Approved internal evaluators
+should follow
 [Optional conversation RAG](guides/conversation-rag.md) for fresh/existing
-submodule setup, `.[rag]` installation, offline pin checks, and the current
-redistribution restriction.
+submodule setup, `.[rag]` installation, offline pin checks, persistence/trust
+limits, and the current redistribution restriction.
 
 ## 2. Check the runtime without a provider
 

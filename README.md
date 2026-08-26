@@ -55,12 +55,12 @@ python -m pip install --editable .
 rehash
 ```
 
-That is the RAG-free base installation. An optional direct Python conversation
-RAG boundary is available for approved internal, non-redistributing evaluation,
-but no RAG provider, derived store, runtime/agent integration, command, or
-setting is enabled yet. See [Optional conversation RAG](docs/guides/conversation-rag.md)
-for submodule initialization, the pinned `rag` extra, license limits, and the
-clearly labeled delivery plan.
+That is the RAG-free base installation. Approved internal, non-redistributing
+evaluation can use the optional direct Python boundary, deterministic local
+provider, and disposable generation store. Explicit composition requires the
+pinned `rag` extra; runtime/agent integration, commands, and settings remain
+unavailable. See [Optional conversation RAG](docs/guides/conversation-rag.md)
+for setup, trust/persistence limits, and the labeled delivery plan.
 
 `story` and `story-writing-agents` are exact aliases. Smoke uses synthetic data
 without Codex or Antigravity, credential reads, a terminal, subprocesses, apps,
@@ -129,7 +129,7 @@ story run --output part-01/opening.md --prompt 'Draft the opening.'
 - [Workspace guide](docs/guides/workspaces.md) explains the editable project files.
 - [Writing artifacts](docs/reference/writing-artifacts.md) separates current reference sources from publication identity, provenance, and recovery.
 - [Conversation archives](docs/reference/conversation-archives.md) documents canonical conversation-only bytes and privileged filesystem transfer.
-- [Optional conversation RAG](docs/guides/conversation-rag.md) separates the current direct Python adapter boundary from the planned agent and user workflow.
+- [Optional conversation RAG](docs/guides/conversation-rag.md) covers the current direct local provider/store and separates it from planned agent and user integration.
 - [Antigravity guide](docs/guides/antigravity.md) covers `agy` setup, authentication, routing, safety, sessions, and provider-free verification.
 - [Story sessions](docs/guides/story-sessions.md) shows shell management, conversation reads, retrieval, and consensus.
 - [Session lifecycle](docs/design/session-lifecycle.md) maps internal state to commands, output, errors, and next actions.
@@ -150,9 +150,10 @@ The only supported backend names are `codex` and `antigravity`; legacy
 
 For Python integrations, start with the [runtime API](docs/reference/runtime-api.md), [agent contracts](docs/reference/agent-contracts.md), and [bounded retrieval](docs/reference/conversation-retrieval.md).
 
-The optional conversation RAG contracts, exact generic adapter, and deferred
-composition surface are direct-module APIs and are not package-root exports.
-They do not alter runtime retrieval until later integration is delivered. See
+The optional conversation RAG contracts, deterministic local provider,
+identity-bound generation store, exact generic adapter, and deferred composition
+are direct-module APIs and are not package-root exports. They do not alter
+runtime retrieval until later integration is delivered. See
 the [RAG package boundary](docs/reference/package-api.md#optional-conversation-rag-boundary).
 
 Canonical conversation archive values and lease-bound filesystem export/import
@@ -236,9 +237,11 @@ See the [CLI contract](docs/reference/cli.md#conversation-storage-migration).
   provider-free copy/parity workflow over two ready same-workspace stores and
   never activates or deletes one. There is no live switch, dual write, MySQL
   adapter, or runtime/shell RAG integration. The optional direct Python RAG
-  boundary has no local provider/store, authorized scheduling/reread/citation
-  path, commands, or settings yet. The derived FTS5 companion does not change
-  readiness, exact literal results, migration parity, or selection.
+  boundary now has a deterministic local provider and separate disposable
+  generation store, but no authorized scheduling/reread/citation path,
+  commands, or settings yet. It is not coupled to filesystem or SQLite
+  conversation authority. The derived FTS5 companion does not change readiness,
+  exact literal results, migration parity, or selection.
 - Smoke's explicit workspace is not read-only and retains bounded plaintext
   diagnostics when they can be written; abrupt termination can interrupt
   cleanup. A pass does not validate provider/model, terminal behavior,

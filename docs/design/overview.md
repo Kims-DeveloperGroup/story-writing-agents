@@ -4,9 +4,9 @@
 > dependency direction, filesystem/SQLite conversation selection, and the
 > installed interactive controller. The controller now uses the package-internal supplied-text viewer
 > for `$`/`$$` prompt editing; the viewer still has no standalone command or
-> supported public API. Optional conversation RAG currently has a direct Python
-> boundary only; provider/store, runtime, agent, and shell integration remain
-> planned.
+> supported public API. Optional conversation RAG currently has direct Python
+> contracts, a deterministic local provider, a disposable generation store, and
+> explicit composition; runtime, agent, and shell integration remain planned.
 
 Key terms: **controller**—owner of interactive transition order;
 **adapter**—provider-specific process/protocol implementation;
@@ -48,18 +48,22 @@ conversation without deleting prior data. See the
 | Module | Responsibility |
 | --- | --- |
 | `conversation_rag` | Standard-library-only story contracts, fixed projection/retrieval budgets, stable source identities, collaborator protocols, outcomes, reasons, and content-free failures |
+| `conversation_rag_local` | Pure fixed local embedding and deterministic vector ranking; no generic package, filesystem, network, credential, subprocess, environment, or lifecycle ownership |
+| `conversation_rag_store` | Identity-bound disposable per-session generation construction, full verification, active/status pointers, reader contexts, and confirmed derived-only purge |
 | `generic_rag_adapter` | Sole production translation boundary that imports story contracts and the exact optional `generic-rag` API |
-| `conversation_rag_composition` | Import-safe deferred composition, fixed `local` allowlist, version/capability checks, and sanitized diagnostics |
+| `conversation_rag_composition` | Import-safe deferred generic/local composition, fixed `local` allowlist, version/capability checks, store-aware fallback, and sanitized diagnostics |
 
 `generic-rag` has no dependency on this project. The package root does not
 re-export these modules, the base install does not need the generic package,
-and #262 creates no provider, store, runtime authorization, projection schedule,
-citation path, command, or setting. Callers own injected collaborators and
-their lifecycles. Provider fragment text is non-authoritative; later runtime
-integration must reauthorize stable references and reread authoritative
-conversation bytes before use. See
+and importing the provider/store/composition path neither probes package
+metadata nor imports `generic-rag`. Explicit composition requires the pinned
+optional package. #283 supplies only direct local provider/store behavior: it
+does not authorize sources, schedule projection, reread or cite authoritative
+bytes, inject agent context, or add commands/settings. Provider fragment text
+and every derived generation remain non-authoritative. Callers own their
+workspace, store, and lexical collaborator lifecycles. See
 [Optional conversation RAG](../guides/conversation-rag.md) for installation,
-the current boundary, and the explicitly planned agent/user workflow.
+the current weak-local/persistence boundary, and the planned agent/user flow.
 
 `Workspace` owns generic path-safe persistence, inspection, and atomic
 replacement. Its retained root identity is a narrower internal

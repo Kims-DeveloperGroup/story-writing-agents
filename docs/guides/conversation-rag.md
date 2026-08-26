@@ -1,14 +1,15 @@
 # Optional conversation RAG integration
 
-> **Current availability:** Issue #262 provides a direct Python boundary for
-> optional conversation RAG. It pins and adapts `generic-rag` but does not yet
-> provide a local provider, derived store, runtime authorization/projection,
-> citations, CLI commands, `/rag`, or RAG fields in `/settings`. Existing
-> literal `/search` behavior is unchanged.
+> **Current availability:** Issues #262 and #283 provide a direct Python
+> boundary, a fixed pure local provider, and a disposable per-session generation
+> store for optional conversation RAG. Explicit local composition still needs
+> the pinned `generic-rag` package. There is no runtime authorization or
+> projection scheduling, agent context/citation integration, CLI command,
+> `/rag`, or RAG field in `/settings`. Existing literal `/search` is unchanged.
 >
-> **Planned availability:** Issues #283, #263, and #264 add those pieces in
-> order. Commands and flows labeled **planned** below are delivery contracts,
-> not current behavior.
+> **Planned availability:** Issue #263 adds runtime/agent orchestration and
+> Issue #264 adds user commands/settings. Commands and flows labeled **planned**
+> below are delivery contracts, not current behavior.
 
 Key terms: **authoritative source**—the current conversation store whose bytes
 must be reread before use; **derived projection**—disposable fragments and
@@ -51,8 +52,9 @@ first installation normally needs `git`, network access, and repository access.
 The submodule is review/development evidence; pip resolves the VCS URL rather
 than using `vendor/generic-rag` as its dependency source. A populated local
 Git/pip cache can avoid a new fetch, but an offline install from an empty cache
-is not supported. Installing the extra does not enable runtime RAG: #262 only
-allows direct composition with caller-supplied collaborators. See the
+is not supported. Installing the extra does not enable runtime RAG: #283 allows
+direct local composition over an explicit caller-owned store and lexical
+retriever. See the
 [direct-module API](../reference/package-api.md#optional-conversation-rag-boundary).
 
 ## Verify the pin offline
@@ -106,13 +108,14 @@ Commit the gitlink, `pyproject.toml`, and generated lock change together.
 | Direct module | Current responsibility | Dependency behavior |
 | --- | --- | --- |
 | `story_writing_agents.conversation_rag` | Frozen story-owned values, fixed budgets, collaborator protocols, outcomes/reasons, and content-free failures | Standard library only; safe in the base install |
+| `story_writing_agents.conversation_rag_local` | Pure deterministic local embedding and vector ranking | Imports only story contracts/literal normalization; no generic package, workspace, I/O, network, credentials, subprocess, or environment discovery |
+| `story_writing_agents.conversation_rag_store` | Identity-bound disposable generation construction, verification, active/status pointers, reading, and confirmed purge | Imports no provider or generic package; construction performs no I/O |
 | `story_writing_agents.generic_rag_adapter` | Exact translation to/from `generic-rag` 0.1.0 | Sole production module importing both projects; direct import needs the optional package |
-| `story_writing_agents.conversation_rag_composition` | Deferred composition, fixed capability checks, and sanitized diagnostics | Safe to import without the optional package; composition performs the version check and adapter import |
+| `story_writing_agents.conversation_rag_composition` | Deferred generic composition plus fixed local-provider/store composition, capability checks, fallback mapping, and sanitized diagnostics | Safe to import without the optional package; an explicit composition call performs the version check and adapter import |
 
 The root facade remains unchanged at 120 exports. The provider allowlist is
-exactly `("local",)`, but #262 implements neither that provider nor a vector
-store. Composition does not discover plugins, inspect provider configuration,
-create credentials, acquire resources, or own lifecycles.
+exactly `("local",)`. Composition does not discover plugins, inspect provider
+configuration, create credentials, or own an external provider lifecycle.
 
 | Fixed boundary | Limit |
 | --- | ---: |
@@ -129,6 +132,105 @@ vector writer/resetter/reader, and lexical retriever for their full lifetimes;
 the adapter borrows them only during an operation. Ordinary failures cross the
 boundary as fixed content-free categories. `KeyboardInterrupt` and `SystemExit`
 propagate.
+
+## Current local provider
+
+`conversation_rag_local` exports provider `local`, model
+`story-conversation-rag-local-hash-v1`, and exactly 256 dimensions. The
+embedder first pins later Unicode assignments against the standard library's
+Unicode 3.2 database, applies the shared strict NFKC/casefold/control/whitespace
+normalization, and hashes whole-token plus boundary-padded codepoint 1/2/3-gram
+features through a fixed length-framed SHA-256 domain. Integer accumulation and
+L2 normalization produce deterministic finite vectors; normalized empty input
+produces the zero vector.
+
+The ranker scans at most 65,536 exact 256-coordinate records, removes identical
+duplicates, rejects conflicts or cross-session records, retains only positive
+similarity, and orders ties by the complete stable source key before the
+request's at-most-20 limit. It never returns scores to the story-facing result.
+
+This is intentionally a weak, dependency-free baseline. It offers deterministic
+local feature matching, not a semantic-quality guarantee, and must not be
+described as equivalent to a learned embedding model.
+
+## Current derived generation store
+
+`ConversationRagGenerationStore(workspace)` retains the identity-bound
+`Workspace` without I/O. Its first stateful operation uses the fixed subtree:
+
+```text
+agent_states/orchestrator_state/conversation_rag/
+├── .lock
+└── sessions/
+    └── SESSION_ID/
+        ├── .lock
+        ├── active.json
+        ├── status.json
+        └── generations/
+            └── gen-SHA256/
+                ├── generation.json
+                ├── generic-manifest.json
+                ├── source-map.jsonl
+                └── vectors.jsonl
+```
+
+Owned directories require mode `0700`; regular files require `0600`. The store
+uses descriptor-relative, no-follow operations, meaningful identity checks,
+process-local and bounded POSIX advisory locks, canonical bounded JSON/JSONL,
+complete digest/count/source-range reconstruction, and finite-vector
+verification. Unsupported filesystem primitives fail closed rather than using
+a pathname fallback. Deep JSON, non-finite values, numeric overflow, malformed
+canonical bytes, unsafe names, and inconsistent persisted records become fixed
+content-free corrupt/unsafe outcomes. Status, snapshots, exceptions, and
+diagnostics contain no query or source text; `source-map.jsonl` deliberately
+does contain derived plaintext source fragments, so protect this subtree as
+conversation data.
+
+Projection writes an inactive `build-*` generation, completely verifies it,
+renames it to its content-derived generation ID, reopens and verifies it, then
+writes advisory `status.json`. `active.json` is the sole commit record and its
+atomic rename is the final callable publication operation after the complete
+temporary pointer and session directory have been synchronized. There is no
+post-rename synchronization claim: an immediate system crash may retain either
+the old or new valid pointer. A reported failure before that commit preserves
+the old pointer byte-for-byte. Partial builds and inactive generations are
+orphans; inspection reports but never removes them, while a later safe mutation
+validates and cleans them.
+
+Rebuild is deterministic and restartable from the beginning, not resumable.
+Advisory `stale` or `provider_failed` status never overrides the active pointer's
+identity. Missing, stale, corrupt, incompatible, and provider-failed state maps
+through local composition to `literal_fallback` with a fixed reason and no
+candidate text. `purge(session_id, confirmed=True)` prevalidates and deletes
+only that session's active/status and generation contents; its lock/directories
+remain. It never deletes authoritative conversations, SQLite/filesystem
+conversation storage, configuration, manuscripts, or writing artifacts.
+
+## Use the current direct composition
+
+The current composition entry point is direct Python API:
+
+```python
+from story_writing_agents.conversation_rag_composition import (
+    compose_local_conversation_rag,
+)
+from story_writing_agents.conversation_rag_store import (
+    ConversationRagGenerationStore,
+)
+
+store = ConversationRagGenerationStore(workspace)
+rag = compose_local_conversation_rag(store, lexical_retriever)
+```
+
+`workspace` must be an initialized `Workspace`; `lexical_retriever` is a
+caller-owned implementation of `ConversationRagLexicalRetriever`. Explicit
+composition immediately validates installed `generic-rag` 0.1.0 and its fixed
+capabilities, then creates a call-local generic adapter for each projection or
+retrieval that reaches generic work. Among caller-supplied objects, the
+composition retains the store and lexical retriever; it also owns the stateless
+fixed embedder/ranker.
+Missing/incompatible optional-package state raises the sanitized composition
+error before storage is touched. No runtime or shell path invokes this API yet.
 
 ## Planned agent utilization
 
@@ -155,10 +257,10 @@ authority:
    a sanitized reason. Disabled, unavailable, stale, corrupt, incompatible, or
    failed state degrades explicitly to authorized literal retrieval.
 
-Planned Issue #283 supplies the deterministic network-free local provider and
-disposable atomic generation store. Issue #263 owns authorization, projection
+The deterministic local provider and generation store now supply these direct
+building blocks. Planned Issue #263 still owns authorization, projection
 scheduling, authoritative rereads, citations, bounded context, and failure
-isolation. None of that behavior is delivered by #262.
+isolation; #283 does not make derived state authoritative or agent-visible.
 
 ## Planned user utilization
 
@@ -179,6 +281,8 @@ The `/settings` choice will be durable configuration, independent of
 filesystem/SQLite conversation-storage selection. Literal `/search` remains
 unchanged. External providers, arbitrary plugin discovery, silent network
 transmission, credential storage, SQLite coupling, and MySQL are excluded.
+Generic algorithm changes remain owned by the independent `generic-rag`
+repository rather than this integration.
 
 ## Redistribution restriction
 

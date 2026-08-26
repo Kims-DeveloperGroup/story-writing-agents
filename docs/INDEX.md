@@ -10,9 +10,10 @@ Use this index to find one canonical answer instead of searching a long manual.
 > controller-boundary cancellation for active operations and local reads.
 > Desired conversation storage is resolved and activated before the native
 > authentication gate and interactive runtime construction.
-> Optional conversation RAG currently has a direct Python contract/adapter
-> boundary only. Its provider, runtime, agent, command, and `/settings`
-> integration are planned and unavailable.
+> Optional conversation RAG currently has direct Python contracts, a
+> deterministic local provider, a disposable generation store, and explicit
+> composition. Runtime/agent integration, commands, and `/settings` RAG fields
+> remain planned and unavailable.
 > Inline `${path}` and `${path}#Lx-Ly` references are active in provider-bound
 > prompts. In those shell spans, `$` discovers current safe reference sources.
 > Exact `$$` immediately shows ranged-source choices; Enter/Tab opens the
@@ -43,7 +44,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Append/read transcripts; derive bounded complete-turn context | Shell turns append/consume context and `/transcript` reads fresh bounded pages; Python API |
 | Search one session and cite hits | Attached shell `/search` for active records; Python API can explicitly include archived records |
 | Ask an agent to retrieve cited conversation history | Focused shell conversation; additive Python runtime API; active records in the current session only |
-| Inspect or inject the optional conversation RAG boundary | Direct Python modules; provider-neutral contracts work in the base install, while adapter composition requires the pinned `rag` extra. No RAG shell/runtime integration exists yet. [Current boundary and plan](guides/conversation-rag.md) |
+| Use the optional local conversation RAG boundary | Direct Python modules provide provider-neutral contracts, deterministic local embedding/ranking, disposable generations, and explicit composition. Composition requires the pinned `rag` extra; no RAG shell/runtime integration exists yet. [Current boundary and plan](guides/conversation-rag.md) |
 | Persist and send one explicitly addressed one-step turn | Existing `StoryRuntime.converse()` Python API |
 | Run consensus with included, fresh, or draft-file input | Focused active shell conversation; noninteractive CLI and Python API remain available |
 | Publish and identify canonical agent-produced writing artifacts | Every unanimous consensus run; exact source paths and separate publication provenance in the writing-artifact reference |
@@ -101,7 +102,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 
 - [Overview](design/overview.md)
 - [Interactive CLI design system contract](design/interactive-cli-design-system.md)
-- [Canonical Python module inventory (72 production units)](../PYTHON_MODULE_INDEX.md)
+- [Canonical Python module inventory (74 production units)](../PYTHON_MODULE_INDEX.md)
 - [Prompts and provider boundary](design/prompts-and-provider.md)
 - [Session lifecycle](design/session-lifecycle.md)
 - [Consensus workflow](design/consensus-workflow.md)

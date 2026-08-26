@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import tempfile
 import textwrap
 import unittest
 from importlib import metadata
 from pathlib import Path
 from unittest import mock
 
+from story_writing_agents import Workspace
 from story_writing_agents import conversation_rag as rag
 from story_writing_agents import conversation_rag_composition as composition
+from story_writing_agents import conversation_rag_local as local
+from story_writing_agents import conversation_rag_store as rag_store
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _GENERIC_RAG_SOURCE = _REPOSITORY_ROOT / "vendor" / "generic-rag" / "src"
@@ -24,6 +28,44 @@ def _collaborators() -> rag.ConversationRagCollaborators:
         object(),
         object(),
         object(),
+    )
+
+
+class _EmptyLexicalRetriever:
+    def search(
+        self,
+        _request: rag.ConversationRagRetrievalRequest,
+        /,
+    ) -> tuple[rag.ConversationRagProviderCandidate, ...]:
+        return ()
+
+
+def _projection_request(
+    *,
+    revision_id: str = "revision-a",
+    text: str = "Alpha beta 한글",
+) -> rag.ConversationRagProjectionRequest:
+    identity = rag.ConversationRagDocumentIdentity(
+        rag.ConversationRagDocumentKey("session-a", "document-a"),
+        "conversation-a",
+        "turn-a",
+        "turn-b",
+        1,
+        2,
+        revision_id,
+    )
+    return rag.ConversationRagProjectionRequest(
+        "session-a",
+        rag_store.CONVERSATION_RAG_STORE_SCHEMA_ID,
+        local.LocalConversationRagEmbedder().identity,
+        (rag.ConversationRagSourceDocument(identity, text),),
+    )
+
+
+def _missing_state() -> rag.ConversationRagProjectionState:
+    return rag.ConversationRagProjectionState(
+        rag.ConversationRagProjectionStateAvailability.MISSING,
+        None,
     )
 
 
@@ -46,7 +88,9 @@ class ConversationRagCompositionTests(unittest.TestCase):
                 "CONVERSATION_RAG_PROVIDER_ALLOWLIST",
                 "ConversationRagCompositionError",
                 "ConversationRagCompositionFailure",
+                "LocalConversationRagComposition",
                 "compose_conversation_rag",
+                "compose_local_conversation_rag",
             ],
         )
         self.assertEqual(composition.CONVERSATION_RAG_PROVIDER_ALLOWLIST, ("local",))
@@ -97,6 +141,7 @@ class ConversationRagCompositionTests(unittest.TestCase):
             importlib.metadata.version = forbidden_version
             import story_writing_agents.conversation_rag_composition as module
             assert module.CONVERSATION_RAG_PROVIDER_ALLOWLIST == ("local",)
+            assert len(module.__all__) == 6
             assert calls == []
             assert not any(
                 name == "generic_rag" or name.startswith("generic_rag.")
@@ -351,6 +396,296 @@ class ConversationRagCompositionTests(unittest.TestCase):
                         _collaborators(),
                     )
                 self.assertIs(caught.exception, control)
+
+    def test_local_composition_exact_pin_projects_reopens_and_retrieves(self) -> None:
+        if str(_GENERIC_RAG_SOURCE) not in sys.path:
+            sys.path.insert(0, str(_GENERIC_RAG_SOURCE))
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Workspace(temporary).initialize()
+            store = rag_store.ConversationRagGenerationStore(workspace)
+            lexical = _EmptyLexicalRetriever()
+            real_compose = composition.compose_conversation_rag
+            with (
+                mock.patch.object(
+                    composition.metadata, "version", return_value="0.1.0"
+                ),
+                mock.patch.object(
+                    composition,
+                    "compose_conversation_rag",
+                    wraps=real_compose,
+                ) as composed_calls,
+            ):
+                composed = composition.compose_local_conversation_rag(store, lexical)
+                self.assertIs(
+                    type(composed), composition.LocalConversationRagComposition
+                )
+                self.assertIs(composed.service, composed)
+                self.assertIs(composed.store, store)
+                request = _projection_request()
+                projected = composed.rebuild_projection(request, _missing_state())
+                snapshot = store.inspect(
+                    "session-a",
+                    local.LOCAL_CONVERSATION_RAG_PROVIDER_ID,
+                    local.LocalConversationRagEmbedder().identity,
+                )
+                self.assertIs(
+                    snapshot.status, rag_store.ConversationRagStoreStatus.READY
+                )
+                self.assertEqual(snapshot.state.checkpoint, projected.checkpoint)
+                semantic = composed.retrieve_semantic(
+                    rag.ConversationRagRetrievalRequest("session-a", "alpha", 3),
+                    snapshot.state,
+                )
+                self.assertEqual(
+                    (semantic.outcome, semantic.reason, len(semantic.candidates)),
+                    (
+                        rag.ConversationRagOutcome.COMPLETE,
+                        rag.ConversationRagReason.NONE,
+                        1,
+                    ),
+                )
+                self.assertEqual(
+                    semantic.candidates[0].source.document.key.document_id,
+                    "document-a",
+                )
+                fresh = composition.compose_local_conversation_rag(
+                    rag_store.ConversationRagGenerationStore(Workspace(workspace.root)),
+                    lexical,
+                )
+                reopened = fresh.retrieve_semantic(
+                    rag.ConversationRagRetrievalRequest("session-a", "beta", 3),
+                    snapshot.state,
+                )
+                self.assertEqual(reopened.candidates, semantic.candidates)
+
+            # Construction, projection, retrieval, fresh construction, and
+            # fresh retrieval each validate and create a call-local adapter.
+            self.assertEqual(composed_calls.call_count, 5)
+            collaborator_ids = [
+                id(call.args[1]) for call in composed_calls.call_args_list
+            ]
+            self.assertEqual(len(collaborator_ids), len(set(collaborator_ids)))
+
+    def test_local_projection_failure_is_sanitized_and_records_provider_status(
+        self,
+    ) -> None:
+        if str(_GENERIC_RAG_SOURCE) not in sys.path:
+            sys.path.insert(0, str(_GENERIC_RAG_SOURCE))
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Workspace(temporary).initialize()
+            store = rag_store.ConversationRagGenerationStore(workspace)
+            with mock.patch.object(
+                composition.metadata, "version", return_value="0.1.0"
+            ):
+                composed = composition.compose_local_conversation_rag(
+                    store,
+                    _EmptyLexicalRetriever(),
+                )
+                with (
+                    mock.patch.object(
+                        local.LocalConversationRagEmbedder,
+                        "embed",
+                        side_effect=RuntimeError("secret provider detail"),
+                    ),
+                    self.assertRaises(rag.ConversationRagOperationError) as caught,
+                ):
+                    composed.rebuild_projection(_projection_request(), _missing_state())
+            self.assertNotIn("secret", str(caught.exception))
+            self.assertNotIn("secret", repr(caught.exception))
+            self.assertIsNone(caught.exception.__cause__)
+            observed = store.inspect(
+                "session-a",
+                "local",
+                local.LocalConversationRagEmbedder().identity,
+            )
+            self.assertIs(
+                observed.status,
+                rag_store.ConversationRagStoreStatus.PROVIDER_FAILED,
+            )
+            self.assertIs(
+                observed.state.availability,
+                rag.ConversationRagProjectionStateAvailability.MISSING,
+            )
+
+    def test_local_process_controls_preserve_active_and_release_builder(self) -> None:
+        if str(_GENERIC_RAG_SOURCE) not in sys.path:
+            sys.path.insert(0, str(_GENERIC_RAG_SOURCE))
+        for control in (KeyboardInterrupt("stop"), SystemExit(8)):
+            with (
+                self.subTest(control=type(control).__name__),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                workspace = Workspace(temporary).initialize()
+                store = rag_store.ConversationRagGenerationStore(workspace)
+                with mock.patch.object(
+                    composition.metadata, "version", return_value="0.1.0"
+                ):
+                    composed = composition.compose_local_conversation_rag(
+                        store,
+                        _EmptyLexicalRetriever(),
+                    )
+                    original_request = _projection_request()
+                    projected = composed.rebuild_projection(
+                        original_request, _missing_state()
+                    )
+                    active = workspace.root.joinpath(
+                        "agent_states/orchestrator_state/conversation_rag/sessions/"
+                        "session-a/active.json"
+                    )
+                    active_before = active.read_bytes()
+                    updated = _projection_request(
+                        revision_id="revision-b", text="updated beta"
+                    )
+                    with (
+                        mock.patch.object(
+                            local.LocalConversationRagEmbedder,
+                            "embed",
+                            side_effect=control,
+                        ),
+                        self.assertRaises(type(control)) as caught,
+                    ):
+                        composed.rebuild_projection(
+                            updated,
+                            rag.ConversationRagProjectionState(
+                                rag.ConversationRagProjectionStateAvailability.PRESENT,
+                                projected.checkpoint,
+                            ),
+                        )
+                    self.assertIs(caught.exception, control)
+                    self.assertEqual(active.read_bytes(), active_before)
+                    observed = store.inspect(
+                        "session-a",
+                        "local",
+                        local.LocalConversationRagEmbedder().identity,
+                    )
+                    self.assertEqual(observed.state.checkpoint, projected.checkpoint)
+                    # A later operation reacquires the same session lock.
+                    store.set_status(
+                        "session-a", rag_store.ConversationRagStoreStatus.STALE
+                    )
+
+    def test_local_retrieval_maps_store_state_and_rejects_stale_callers(self) -> None:
+        if str(_GENERIC_RAG_SOURCE) not in sys.path:
+            sys.path.insert(0, str(_GENERIC_RAG_SOURCE))
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Workspace(temporary).initialize()
+            store = rag_store.ConversationRagGenerationStore(workspace)
+            with mock.patch.object(
+                composition.metadata, "version", return_value="0.1.0"
+            ):
+                composed = composition.compose_local_conversation_rag(
+                    store,
+                    _EmptyLexicalRetriever(),
+                )
+                request = _projection_request()
+                result = composed.rebuild_projection(request, _missing_state())
+                query = rag.ConversationRagRetrievalRequest("session-a", "alpha", 2)
+                stale = composed.retrieve_semantic(query, _missing_state())
+                self.assertEqual(
+                    (stale.outcome, stale.reason),
+                    (
+                        rag.ConversationRagOutcome.LITERAL_FALLBACK,
+                        rag.ConversationRagReason.STALE,
+                    ),
+                )
+                store.set_status(
+                    "session-a", rag_store.ConversationRagStoreStatus.PROVIDER_FAILED
+                )
+                failed = composed.retrieve_semantic(
+                    query,
+                    rag.ConversationRagProjectionState(
+                        rag.ConversationRagProjectionStateAvailability.PRESENT,
+                        result.checkpoint,
+                    ),
+                )
+                self.assertEqual(
+                    (failed.outcome, failed.reason, failed.candidates),
+                    (
+                        rag.ConversationRagOutcome.LITERAL_FALLBACK,
+                        rag.ConversationRagReason.FAILED,
+                        (),
+                    ),
+                )
+
+    def test_local_retrieval_maps_corrupt_store_to_literal_fallback(self) -> None:
+        if str(_GENERIC_RAG_SOURCE) not in sys.path:
+            sys.path.insert(0, str(_GENERIC_RAG_SOURCE))
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Workspace(temporary).initialize()
+            store = rag_store.ConversationRagGenerationStore(workspace)
+            with mock.patch.object(
+                composition.metadata,
+                "version",
+                return_value="0.1.0",
+            ):
+                composed = composition.compose_local_conversation_rag(
+                    store,
+                    _EmptyLexicalRetriever(),
+                )
+                projected = composed.rebuild_projection(
+                    _projection_request(),
+                    _missing_state(),
+                )
+                active = workspace.root.joinpath(
+                    "agent_states",
+                    "orchestrator_state",
+                    "conversation_rag",
+                    "sessions",
+                    "session-a",
+                    "active.json",
+                )
+                active.write_bytes(b"[" * 2_048 + b"0" + b"]" * 2_048 + b"\n")
+                observed = composed.retrieve_semantic(
+                    rag.ConversationRagRetrievalRequest("session-a", "alpha", 2),
+                    rag.ConversationRagProjectionState(
+                        rag.ConversationRagProjectionStateAvailability.PRESENT,
+                        projected.checkpoint,
+                    ),
+                )
+                self.assertEqual(
+                    (observed.outcome, observed.reason, observed.candidates),
+                    (
+                        rag.ConversationRagOutcome.LITERAL_FALLBACK,
+                        rag.ConversationRagReason.CORRUPT,
+                        (),
+                    ),
+                )
+
+    def test_local_missing_dependency_and_invalid_inputs_do_not_touch_storage(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Workspace(temporary).initialize()
+            store = rag_store.ConversationRagGenerationStore(workspace)
+            rag_root = (
+                workspace.root / "agent_states/orchestrator_state/conversation_rag"
+            )
+            with (
+                mock.patch.object(
+                    composition.metadata,
+                    "version",
+                    side_effect=metadata.PackageNotFoundError("secret"),
+                ),
+                self.assertRaises(
+                    composition.ConversationRagCompositionError
+                ) as caught,
+            ):
+                composition.compose_local_conversation_rag(
+                    store,
+                    _EmptyLexicalRetriever(),
+                )
+            self.assertCompositionFailure(
+                caught.exception,
+                composition.ConversationRagCompositionFailure.DEPENDENCY_MISSING,
+            )
+            self.assertFalse(rag_root.exists())
+            with self.assertRaisesRegex(TypeError, "exact type"):
+                composition.compose_local_conversation_rag(  # type: ignore[arg-type]
+                    object(),
+                    _EmptyLexicalRetriever(),
+                )
+            with self.assertRaisesRegex(TypeError, "provide search"):
+                composition.LocalConversationRagComposition(store, object())  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":
