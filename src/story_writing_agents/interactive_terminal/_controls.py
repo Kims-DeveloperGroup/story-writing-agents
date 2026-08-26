@@ -135,6 +135,23 @@ def transition_prompt_input(
     return transition_line_input(state, event)
 
 
+def transition_prefilled_prompt_input(
+    state: LineInputState,
+    event: KeyEvent,
+) -> tuple[LineInputState, ControlOutcome | None]:
+    """Apply one prefilled prompt key with unconditional EOF exit."""
+
+    if type(state) is not LineInputState:
+        raise TypeError("state must be a LineInputState")
+    if type(event) is not KeyEvent:
+        raise TypeError("event must be a KeyEvent")
+    if event.kind is KeyKind.ESCAPE:
+        return state, ControlOutcome(ControlOutcomeKind.CANCEL)
+    if event.kind is KeyKind.EOF:
+        return state, ControlOutcome(ControlOutcomeKind.EOF)
+    return transition_prompt_input(state, event)
+
+
 def append_main_input_history(
     history: MainInputHistoryState,
     text: str,
