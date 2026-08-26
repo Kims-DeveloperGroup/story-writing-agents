@@ -2353,6 +2353,26 @@ print(
                     compact_opened,
                 )
                 self.assertIn("Maximumdebaterounds—Current:1", compact_opened)
+                ordered_settings = (
+                    f"Language—Current:{current_language}",
+                    "Persona—Current:default_kim_eun_hee",
+                    "Maximumdebaterounds—Current:1",
+                    "Conversationstorage—Current:filesystem",
+                    "Messagedetails—Current:Off",
+                    "Agents",
+                )
+                self.assertEqual(
+                    tuple(
+                        compact_opened.index(value)
+                        for value in ordered_settings
+                    ),
+                    tuple(
+                        sorted(
+                            compact_opened.index(value)
+                            for value in ordered_settings
+                        )
+                    ),
+                )
                 self.assertIn(
                     b"\x1b[35mSettings [focused] [open] >\x1b[0m",
                     process.raw_bytes,
@@ -2445,7 +2465,7 @@ print(
                 )
                 self.assertNotIn(b"\x1b[33mCurrent:", idle_pending)
                 returned_mark = process.output_mark()
-                process.send_text(("\x1b[B" * 4) + "\n")
+                process.send_text(("\x1b[B" * 5) + "\n")
                 process.send_text("\n")
                 saved = process.wait_for_text(
                     "[saved and applied]",
@@ -2513,7 +2533,7 @@ print(
             after=mark,
         )
 
-        process.send_text(("\x1b[B" * 4) + "\n")
+        process.send_text(("\x1b[B" * 5) + "\n")
         agents_picker = process.wait_for_text(
             "Select an agent to configure",
             after=mark,
@@ -2654,6 +2674,138 @@ print(
             process.original_terminal_attributes,
         )
 
+    def test_settings_message_details_only_applies_live_on_capable_pty(
+        self,
+    ) -> None:
+        """Persist one live presentation toggle without unrelated provider work."""
+
+        process = self._spawn_cli(
+            (),
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=48,
+            decorative_color=True,
+        )
+        process.wait_for_text("story[lobby]> ")
+        auth_before = self._auth_records()
+        self._set_auth_state(
+            codex="unauthenticated",
+            antigravity="unauthenticated",
+        )
+        agent_path = self.workspace.path("config/agent_configs.json")
+        agent_before = agent_path.read_bytes()
+        route_path = self.workspace.path(
+            "agent_states/orchestrator_state/provider_route_generations.json"
+        )
+        route_before = route_path.read_bytes() if route_path.exists() else None
+        thread_root = self.workspace.path(_SESSION_DIRECTORY)
+        threads_before = _durable_tree(thread_root)
+
+        settings_mark = process.output_mark()
+        process.send_text("/settings\n\n")
+        opened = process.wait_for_text(
+            "Choose a setting to edit.",
+            after=settings_mark,
+        )
+        compact_opened = "".join(
+            re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", opened).split()
+        )
+        ordered_settings = (
+            "Language—Current:KO",
+            "Persona—Current:default_kim_eun_hee",
+            "Maximumdebaterounds—Current:1",
+            "Conversationstorage—Current:filesystem",
+            "Messagedetails—Current:Off",
+            "Agents",
+        )
+        self.assertEqual(
+            tuple(compact_opened.index(value) for value in ordered_settings),
+            tuple(
+                sorted(
+                    compact_opened.index(value)
+                    for value in ordered_settings
+                )
+            ),
+        )
+
+        details_mark = process.output_mark()
+        process.send_text(("\x1b[B" * 4) + "\n")
+        details = process.wait_for_text(
+            "Message details [focused] [open]",
+            after=details_mark,
+        )
+        self.assertIn("Message details [focused] [open]", details)
+        self.assertIn(
+            "ChooseOffforcompactmessagesorOnfordetailedmessages.",
+            "".join(
+                re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", details).split()
+            ),
+        )
+        self.assertIn("[selected] [highlighted] Off", details)
+        self.assertIn("[available] On", details)
+
+        entered_mark = process.output_mark()
+        process.send_text("\x1b[B\n")
+        entered = process.wait_for_text(
+            "[entered] Pending message details entered:",
+            after=entered_mark,
+        )
+        self.assertEqual(
+            "".join(
+                re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", entered).split()
+            ).count("[entered]Pendingmessagedetailsentered:On."),
+            1,
+        )
+        returned_mark = process.output_mark()
+        process.send_text("\n")
+        returned = process.wait_for_text("[save required]", after=returned_mark)
+        self.assertIn(
+            "Messagedetails—Pending:On",
+            "".join(
+                re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", returned).split()
+            ),
+        )
+
+        apply_mark = process.output_mark()
+        process.send_text(("\x1b[B" * 2) + "\n")
+        process.wait_for_text("Apply changes?", after=apply_mark)
+        save_mark = process.output_mark()
+        process.send_text("\n")
+        process.wait_for_text("[saved and applied]", after=save_mark)
+        process.wait_for_text("story[lobby]> ", after=save_mark)
+        saved = process.text_after(save_mark)
+        compact_saved = "".join(
+            re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", saved).split()
+        )
+        self.assertEqual(saved.count("[saved and applied]"), 1)
+        self.assertEqual(
+            compact_saved.count(
+                "Settingssavedandappliedtothisrunningshellnow."
+            ),
+            1,
+        )
+        self.assertNotIn("[profiles changed]", saved)
+        self.assertIs(
+            self.workspace.read_json("config/system_defaults.json")[
+                "show_message_details"
+            ],
+            True,
+        )
+        self.assertEqual(agent_path.read_bytes(), agent_before)
+        self.assertEqual(
+            route_path.read_bytes() if route_path.exists() else None,
+            route_before,
+        )
+        self.assertEqual(_durable_tree(thread_root), threads_before)
+        self.assertEqual(self._auth_records(), auth_before)
+        self.assertFalse(self.provider_log.exists())
+
+        process.send_text("/quit\n\n")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
     def test_settings_delayed_option_reads_animate_until_each_picker_is_ready(
         self,
     ) -> None:
@@ -2674,7 +2826,7 @@ print(
 
         process.send_text("/settings\n\n")
         process.wait_for_text("Choose a setting to edit.")
-        process.send_text(("\x1b[B" * 4) + "\n")
+        process.send_text(("\x1b[B" * 5) + "\n")
         process.wait_for_text("Select an agent to configure")
         process.send_text("\x1b[B\n")
         process.wait_for_text("Choose a provider, model, or effort setting")
@@ -2758,7 +2910,7 @@ print(
         mark = process.output_mark()
         process.send_text("/settings\n\n")
         process.wait_for_text("[highlighted] Language", after=mark)
-        process.send_text(("\x1b[B" * 4) + "\n")
+        process.send_text(("\x1b[B" * 5) + "\n")
         agents = process.wait_for_text("Agents [focused] [open]", after=mark)
         self.assertIn(
             "Plot&StructureArchitect—Current:"
@@ -2821,6 +2973,12 @@ print(
         self.assertIn(
             "ChooseApplyChangestopersistpendingchanges",
             "".join(process.normalized_text.split()),
+        )
+        discard_view_mark = process.output_mark()
+        process.send_text("\x1b[B" * 2)
+        returned_settings += process.wait_for_text(
+            "Discard Changes",
+            after=discard_view_mark,
         )
         self.assertIn(
             "Pendingchangeswillbediscarded.",
@@ -2915,8 +3073,12 @@ print(
         process.wait_for_text("story[lobby]> ")
         mark = process.output_mark()
         process.send_line("/settings")
-        process.wait_for_text("5. [available] Agents", after=mark)
-        process.send_line("5")
+        settings = process.wait_for_text("6. [available] Agents", after=mark)
+        self.assertIn(
+            "5.[available]Messagedetails—Current:Off",
+            "".join(settings.split()),
+        )
+        process.send_line("6")
         process.wait_for_text("Agents > ", after=mark)
         process.send_line("2")
         process.wait_for_text("Agent settings", after=mark)
@@ -2947,21 +3109,21 @@ print(
         process.wait_for_text("Agents > ", after=model_mark)
         process.send_line("/cancel")
         returned_settings = process.wait_for_text(
-            "7. [available] Discard Changes",
+            "8. [available] Discard Changes",
             after=model_mark,
         )
         self.assertIn("[save required]", returned_settings)
         compact_returned = "".join(returned_settings.split())
         self.assertIn(
-            "6.[available]ApplyChanges(*Required)",
+            "7.[available]ApplyChanges(*Required)",
             compact_returned,
         )
-        self.assertNotIn("6.[available]Save", compact_returned)
+        self.assertNotIn("7.[available]Save", compact_returned)
         self.assertIn(
             "ChooseApplyChangestopersistpendingchanges",
             "".join(returned_settings.split()),
         )
-        process.send_line("6")
+        process.send_line("7")
         process.send_line("1")
         process.wait_for_text("Settings saved", after=mark)
         process.wait_for_text("story[lobby]> ", after=mark)
@@ -3191,7 +3353,7 @@ print(
 
         settings_mark = process.output_mark()
         process.send_line("/settings")
-        process.wait_for_text("5. [available] Agents", after=settings_mark)
+        process.wait_for_text("6. [available] Agents", after=settings_mark)
         process.send_line("1")
         process.wait_for_text("Language >", after=settings_mark)
         process.send_line("2")
@@ -3202,7 +3364,7 @@ print(
         process.send_line("/cancel")
         process.wait_for_text("Apply Changes (*Required)", after=settings_mark)
         self._set_auth_state(codex="unauthenticated")
-        process.send_line("6")
+        process.send_line("7")
         process.wait_for_text("Apply changes?", after=settings_mark)
         process.send_line("1")
         process.wait_for_text("Provider authentication", after=settings_mark)
