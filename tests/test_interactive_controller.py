@@ -112,6 +112,14 @@ from story_writing_agents.provider_auth import (
     ProviderAuthState,
     ProviderAuthStatus,
 )
+from story_writing_agents.provider_catalog import (
+    ProviderCatalog,
+    ProviderCatalogDiscovery,
+    ProviderCatalogService,
+    ProviderCatalogState,
+    ProviderEffort,
+    ProviderModel,
+)
 from story_writing_agents import interactive_terminal as terminal_module
 from story_writing_agents.interactive_terminal._render import render_plain
 from story_writing_agents.interactive_terminal._reference_activation import (
@@ -288,6 +296,40 @@ class ScriptedAuthCoordinator:
         if isinstance(value, BaseException):
             raise value
         return value  # type: ignore[return-value]
+
+
+class ScriptedProviderCatalog:
+    """Return deterministic fresh catalog outcomes and record provider reads."""
+
+    def __init__(self, *outcomes: object) -> None:
+        if not outcomes:
+            raise ValueError("at least one catalog outcome is required")
+        self.outcomes = list(outcomes)
+        self.events: list[str] = []
+
+    def discover(self, provider: str) -> object:
+        """Return the next outcome, repeating a sole retained outcome."""
+
+        self.events.append(provider)
+        value = self.outcomes[0]
+        if len(self.outcomes) > 1:
+            value = self.outcomes.pop(0)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+
+def _ready_provider_catalog(
+    provider: str,
+    *models: ProviderModel,
+) -> ProviderCatalogDiscovery:
+    """Build one exact ready discovery for controller-only tests."""
+
+    return ProviderCatalogDiscovery(
+        provider,
+        ProviderCatalogState.READY,
+        ProviderCatalog(provider, models),
+    )
 
 
 def _tree_snapshot(root: Path) -> dict[str, tuple[bytes, int, int]]:
@@ -675,6 +717,7 @@ class ControllerTestCase(unittest.TestCase):
         conversation_catalog: ConversationCatalog | None = None,
         conversation_storage_services: ConversationStorageServices | None = None,
         auth_coordinator: object | None = None,
+        provider_catalog: object | None = None,
         terminal_width: int = 80,
     ) -> tuple[
         InteractiveController,
@@ -700,6 +743,8 @@ class ControllerTestCase(unittest.TestCase):
             )
         if auth_coordinator is not None:
             controller_keywords["auth_coordinator"] = auth_coordinator
+        if provider_catalog is not None:
+            controller_keywords["provider_catalog"] = provider_catalog
         return (
             InteractiveController(
                 workspace,
@@ -742,6 +787,7 @@ class ControllerContractTests(ControllerTestCase):
                 "conversation_catalog",
                 "conversation_storage_services",
                 "auth_coordinator",
+                "provider_catalog",
             ),
         )
         self.assertTrue(
@@ -768,6 +814,12 @@ class ControllerContractTests(ControllerTestCase):
         auth_parameter = constructor.parameters["auth_coordinator"]
         self.assertIs(auth_parameter.kind, inspect.Parameter.KEYWORD_ONLY)
         self.assertIsNone(auth_parameter.default)
+        provider_catalog_parameter = constructor.parameters["provider_catalog"]
+        self.assertIs(
+            provider_catalog_parameter.kind,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+        self.assertIsNone(provider_catalog_parameter.default)
         self.assertEqual(
             get_type_hints(InteractiveController.__init__),
             {
@@ -778,6 +830,7 @@ class ControllerContractTests(ControllerTestCase):
                 "conversation_catalog": ConversationCatalog | None,
                 "conversation_storage_services": ConversationStorageServices | None,
                 "auth_coordinator": InteractiveAuthCoordinator | None,
+                "provider_catalog": ProviderCatalogService | None,
                 "return": type(None),
             },
         )
@@ -829,6 +882,14 @@ class ControllerContractTests(ControllerTestCase):
                 backend,
                 terminal,
                 auth_coordinator=object(),  # type: ignore[arg-type]
+            )
+        with self.assertRaisesRegex(TypeError, "provider_catalog"):
+            InteractiveController(
+                workspace,
+                CliContext(),
+                backend,
+                terminal,
+                provider_catalog=object(),  # type: ignore[arg-type]
             )
 
         with mock.patch.object(backend, "close", wraps=backend.close) as close:
@@ -1108,6 +1169,7 @@ class ControllerContractTests(ControllerTestCase):
                 "models",
                 "orchestrator",
                 "provider_auth",
+                "provider_catalog",
                 "run_inputs",
                 "session_lifecycle",
                 "workspace",
@@ -1381,8 +1443,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 68)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 269)
+        self.assertEqual(len(modules), 69)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 271)
         self.assertTrue(
             {
                 "story_writing_agents.conversation_storage.archive",
@@ -1392,6 +1454,7 @@ class ControllerContractTests(ControllerTestCase):
                 "story_writing_agents.conversation_storage.sqlite",
                 "story_writing_agents.conversation_storage.sqlite_search_index",
                 "story_writing_agents.conversation_literal_search",
+                "story_writing_agents.provider_catalog",
             }
             <= modules
         )
@@ -2207,10 +2270,27 @@ class ControllerConversationStartupTests(ControllerTestCase):
             events.index("detach:source"),
         )
         rendered = "".join(callbacks.records)
-        self.assertIn("Subject: Source subject", rendered)
-        self.assertIn("Subject:", rendered)
-        self.assertIn("Destination subject", rendered)
-        self.assertGreaterEqual(rendered.count("Agent: lead"), 2)
+        self.assertEqual(
+            [
+                record
+                for record in callbacks.records
+                if record.startswith("--- Conversation scope")
+            ],
+            [
+                _conversation_scope_record(
+                    "source",
+                    source.conversation_id[:12],
+                    "Source subject",
+                    width=80,
+                ),
+                _conversation_scope_record(
+                    "destination",
+                    destination.conversation_id[:12],
+                    "Destination subject",
+                    width=80,
+                ),
+            ],
+        )
         self.assertEqual(
             load_cli_context(workspace).default_session_id,
             "destination",
@@ -2278,7 +2358,17 @@ class ControllerConversationStartupTests(ControllerTestCase):
             _error_record(InteractiveErrorCode.WORKSPACE_INVALID),
             rendered,
         )
-        self.assertEqual(rendered.count("Subject: Source subject"), 2)
+        self.assertEqual(
+            callbacks.records.count(
+                _conversation_scope_record(
+                    "source",
+                    source.conversation_id[:12],
+                    "Source subject",
+                    width=80,
+                )
+            ),
+            1,
+        )
 
     def test_archived_destination_selection_switches_to_lobby_without_rewrite(
         self,
@@ -3265,6 +3355,26 @@ class ControllerAuthTests(ControllerTestCase):
 class ControllerSettingsTests(ControllerTestCase):
     """Verify isolated settings UI, validation, persistence, and cancellation."""
 
+    VALUE_SAVE_GUIDANCE = (
+        "Entered changes remain pending in memory and are not saved; choose Save in "
+        "Settings to persist them."
+    )
+
+    def assert_value_save_guidance(self, instruction: str) -> None:
+        """Require one exact terminal-visible persistence warning."""
+
+        self.assertEqual(instruction.count(self.VALUE_SAVE_GUIDANCE), 1)
+        self.assertTrue(instruction.endswith(self.VALUE_SAVE_GUIDANCE))
+
+    @staticmethod
+    def expected_pending_save_notice() -> terminal_module.Notice:
+        return terminal_module.Notice(
+            "Choose Save to persist pending changes",
+            label="save required",
+            role=terminal_module.SemanticRole.WARNING,
+            state=terminal_module.ViewState.IDLE,
+        )
+
     @staticmethod
     def expected_panel(state) -> object:
         """Return the exact public semantic tree for one settings snapshot."""
@@ -3283,9 +3393,17 @@ class ControllerSettingsTests(ControllerTestCase):
             for agent_id in ROSTER:
                 display_name = AGENT_SPECS[agent_id].display_name
                 agent = configuration.agent_configs[agent_id]
+                provider = (
+                    agent.backend
+                    or configuration.system_defaults.default_backend
+                    or "codex"
+                )
                 values.extend(
                     (
-                        (f"{display_name} Provider", agent.backend or "codex (default)"),
+                        (
+                            f"{display_name} Provider",
+                            provider if agent.backend is not None else f"{provider} (default)",
+                        ),
                         (
                             f"{display_name} Codex model",
                             agent.codex_model or "inherit",
@@ -3354,6 +3472,18 @@ class ControllerSettingsTests(ControllerTestCase):
             state=terminal_module.ViewState.OPEN,
         )
 
+    @staticmethod
+    def expected_entered_notice(
+        field: str,
+        display_value: str,
+    ) -> terminal_module.Notice:
+        return terminal_module.Notice(
+            f"Pending {field} entered: {display_value}.",
+            label="entered",
+            role=terminal_module.SemanticRole.SUCCESS,
+            state=terminal_module.ViewState.COMPLETED,
+        )
+
     def test_provider_assignment_requires_fresh_auth_before_candidate_change(
         self,
     ) -> None:
@@ -3367,7 +3497,7 @@ class ControllerSettingsTests(ControllerTestCase):
             ProviderAuthState.AUTHENTICATED,
         )
         coordinator = ScriptedAuthCoordinator(
-            snapshots=(codex_only, codex_only, both, both),
+            snapshots=(codex_only, codex_only, both, both, both),
             results=(_auth_result(both, "antigravity"),),
         )
         controller, _backend, callbacks = self.make_controller(
@@ -3377,6 +3507,9 @@ class ControllerSettingsTests(ControllerTestCase):
             "2",
             "1",
             "2",
+            "/cancel",
+            "/cancel",
+            "/cancel",
             "6",
             "1",
             "/quit",
@@ -3400,19 +3533,36 @@ class ControllerSettingsTests(ControllerTestCase):
                 ("run", "antigravity"),
                 ("probe_all", None),
                 ("probe_all", None),
+                ("choices", "antigravity"),
+                ("probe_all", None),
             ],
         )
         self.assertIn("Settings saved", "".join(callbacks.records))
+        self.assertEqual(
+            "".join(callbacks.prompts).count(
+                "[entered] Pending Provider entered: Antigravity."
+            ),
+            1,
+        )
 
-    def test_failed_provider_auth_never_assigns_route_but_keeps_default(self) -> None:
+    def test_authenticated_provider_assignment_is_discarded_without_save(
+        self,
+    ) -> None:
         workspace = self.make_workspace()
+        defaults_path = workspace.root / "config/system_defaults.json"
+        agents_path = workspace.root / "config/agent_configs.json"
+        durable_before = (defaults_path.read_bytes(), agents_path.read_bytes())
         codex_only = _auth_snapshot(
             ProviderAuthState.AUTHENTICATED,
             ProviderAuthState.UNAUTHENTICATED,
         )
+        both = _auth_snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.AUTHENTICATED,
+        )
         coordinator = ScriptedAuthCoordinator(
-            snapshots=(codex_only, codex_only, codex_only),
-            results=(_auth_result(codex_only, "antigravity"),),
+            snapshots=(codex_only, codex_only, both, both),
+            results=(_auth_result(both, "antigravity"),),
         )
         controller, _backend, callbacks = self.make_controller(
             workspace,
@@ -3421,6 +3571,104 @@ class ControllerSettingsTests(ControllerTestCase):
             "2",
             "1",
             "2",
+            "/cancel",
+            "/cancel",
+            "/cancel",
+            "7",
+            "1",
+            "/quit",
+            auth_coordinator=coordinator,
+            terminal_width=160,
+        )
+        returned_states = []
+        edit_provider = controller._edit_settings_agent_provider
+
+        def capture_returned_state(_controller, state, agent_id):
+            result = edit_provider(state, agent_id)
+            returned_states.append(result)
+            self.assertEqual(
+                (defaults_path.read_bytes(), agents_path.read_bytes()),
+                durable_before,
+            )
+            return result
+
+        with (
+            mock.patch.object(
+                InteractiveController,
+                "_edit_settings_agent_provider",
+                autospec=True,
+                side_effect=capture_returned_state,
+            ),
+            mock.patch.object(
+                controller_core_module,
+                "establish_settings_default_backend",
+                wraps=controller_core_module.establish_settings_default_backend,
+            ) as establish_default,
+            mock.patch.object(
+                controller_core_module,
+                "select_conversation_storage",
+            ) as select_storage,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        self.assertEqual(len(returned_states), 1)
+        returned, whole_cancel = returned_states[0]
+        self.assertFalse(whole_cancel)
+        self.assertIsNone(returned.pending.system_defaults.default_backend)
+        self.assertEqual(
+            returned.pending.agent_configs[PLOT_ARCHITECT].backend,
+            "antigravity",
+        )
+        establish_default.assert_not_called()
+        select_storage.assert_not_called()
+        self.assertEqual(
+            (defaults_path.read_bytes(), agents_path.read_bytes()),
+            durable_before,
+        )
+        durable = settings_module.load_settings_state(workspace).pending
+        self.assertIsNone(durable.system_defaults.default_backend)
+        self.assertIsNone(durable.agent_configs[PLOT_ARCHITECT].backend)
+        self.assertEqual(
+            coordinator.events,
+            [
+                ("probe_all", None),
+                ("choices", "codex"),
+                ("probe_all", None),
+                ("run", "antigravity"),
+                ("probe_all", None),
+                ("probe_all", None),
+                ("choices", "antigravity"),
+            ],
+        )
+        rendered = "".join(callbacks.records)
+        self.assertEqual(
+            rendered.count("[cancelled] Pending changes discarded.\n"),
+            1,
+        )
+        self.assertNotIn("Settings saved", rendered)
+
+    def test_failed_provider_auth_never_assigns_route_but_keeps_default(self) -> None:
+        workspace = self.make_workspace()
+        codex_only = _auth_snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.UNAUTHENTICATED,
+        )
+        coordinator = ScriptedAuthCoordinator(
+            snapshots=(codex_only,) * 9,
+            results=(_auth_result(codex_only, "antigravity"),),
+        )
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "/settings",
+            "5",
+            "2",
+            "1",
+            "1",
+            "2",
+            "1",
+            "1",
+            "/cancel",
+            "/cancel",
             "7",
             "1",
             "/quit",
@@ -3437,8 +3685,129 @@ class ControllerSettingsTests(ControllerTestCase):
             "was not assigned because fresh authentication was not confirmed",
             rendered,
         )
-        self.assertIn("Settings cancelled", rendered)
+        self.assertEqual(
+            rendered.count("[cancelled] Pending changes discarded.\n"),
+            1,
+        )
         self.assertNotIn("Settings saved", rendered)
+        self.assertEqual(
+            coordinator.events.count(("run", "antigravity")),
+            1,
+        )
+        self.assertEqual(
+            coordinator.events.count(("probe_all", None)),
+            9,
+        )
+
+    def test_provider_auth_cancel_returns_to_picker_before_parent_cancel(self) -> None:
+        workspace = self.make_workspace()
+        codex_only = _auth_snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.UNAUTHENTICATED,
+        )
+        coordinator = ScriptedAuthCoordinator(
+            snapshots=(codex_only,) * 8,
+            results=(
+                InteractiveAuthResult(
+                    InteractiveAuthResultKind.CANCEL,
+                    codex_only,
+                ),
+            ),
+        )
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "/settings",
+            "5",
+            "2",
+            "1",
+            "1",
+            "2",
+            "1",
+            "1",
+            "/cancel",
+            "/cancel",
+            "7",
+            "1",
+            "/quit",
+            auth_coordinator=coordinator,
+            terminal_width=160,
+        )
+        self.assertEqual(controller.run_session_lobby(), 0)
+
+        self.assertEqual(
+            coordinator.events.count(("run", "antigravity")),
+            1,
+        )
+        self.assertEqual(
+            coordinator.events.count(("probe_all", None)),
+            8,
+        )
+        provider_prompts = [
+            prompt
+            for prompt in callbacks.prompts
+            if prompt.endswith("Provider [Plot & Structure Architect] > ")
+        ]
+        self.assertEqual(len(provider_prompts), 4)
+        configuration = settings_module.load_settings_state(workspace).pending
+        self.assertIsNone(configuration.agent_configs[PLOT_ARCHITECT].backend)
+        self.assertEqual(
+            "".join(callbacks.records).count(
+                "[cancelled] Pending changes discarded.\n"
+            ),
+            1,
+        )
+
+    def test_provider_auth_interrupt_and_eof_cancel_whole_settings(self) -> None:
+        codex_only = _auth_snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.UNAUTHENTICATED,
+        )
+        for kind in (
+            InteractiveAuthResultKind.INTERRUPT,
+            InteractiveAuthResultKind.EOF,
+        ):
+            with self.subTest(kind=kind):
+                workspace = self.make_workspace()
+                before = _tree_snapshot(workspace.root)
+                coordinator = ScriptedAuthCoordinator(
+                    snapshots=(codex_only, codex_only),
+                    results=(InteractiveAuthResult(kind, codex_only),),
+                )
+                controller, _backend, _callbacks = self.make_controller(
+                    workspace,
+                    auth_coordinator=coordinator,
+                )
+                choose_antigravity = terminal_module.ControlOutcome(
+                    terminal_module.ControlOutcomeKind.COMMIT,
+                    text="antigravity",
+                )
+                with mock.patch.object(
+                    terminal_module.InteractivePickerInput,
+                    "read_picker",
+                    autospec=True,
+                    return_value=choose_antigravity,
+                ):
+                    unchanged, whole_cancel = (
+                        controller._edit_settings_agent_provider(
+                            settings_module.load_settings_state(workspace),
+                            PLOT_ARCHITECT,
+                        )
+                    )
+
+                self.assertTrue(whole_cancel)
+                self.assertIsNone(
+                    unchanged.pending.agent_configs[PLOT_ARCHITECT].backend
+                )
+                self.assertEqual(_tree_snapshot(workspace.root), before)
+                self.assertEqual(
+                    coordinator.events,
+                    [
+                        ("probe_all", None),
+                        ("choices", "codex"),
+                        ("probe_all", None),
+                        ("run", "antigravity"),
+                    ],
+                )
 
     def test_save_freshly_gates_each_distinct_effective_provider_once(self) -> None:
         workspace = self.make_workspace()
@@ -3554,18 +3923,261 @@ class ControllerSettingsTests(ControllerTestCase):
             rendered,
         )
 
-    def test_settings_open_is_exact_seven_item_provider_free_snapshot(self) -> None:
+    def test_top_level_pending_notice_tracks_actual_diff_and_full_revert(
+        self,
+    ) -> None:
         workspace = self.make_workspace()
         before = _tree_snapshot(workspace.root)
+        baseline = settings_module.load_settings_state(
+            workspace
+        ).pending.system_defaults.language
+        changed = "JA" if baseline != "JA" else "EN"
+        controller, _backend, _callbacks = self.make_controller(workspace)
+
+        def commit(value: str) -> terminal_module.ControlOutcome:
+            return terminal_module.ControlOutcome(
+                terminal_module.ControlOutcomeKind.COMMIT,
+                text=value,
+            )
+
+        cancel = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.CANCEL
+        )
+        with mock.patch.object(
+            terminal_module.InteractivePickerInput,
+            "read_picker",
+            autospec=True,
+            side_effect=(
+                commit("language"),
+                commit(changed),
+                cancel,
+                commit("language"),
+                commit(baseline),
+                cancel,
+                cancel,
+            ),
+        ) as picker:
+            controller._run_settings()
+
+        pending_notice = self.expected_pending_save_notice()
+        top_level_calls = [
+            call
+            for call in picker.call_args_list
+            if call.args[1].name == "Settings"
+        ]
+        self.assertEqual(
+            tuple(call.kwargs.get("notice") for call in top_level_calls),
+            (None, pending_notice, None),
+        )
+        self.assertEqual(
+            tuple(
+                tuple(choice.description for choice in call.args[2])
+                for call in top_level_calls
+            ),
+            (
+                (
+                    f"Current: {baseline}",
+                    "Current: default_kim_eun_hee",
+                    "Current: 1",
+                    "Current: filesystem",
+                    None,
+                    None,
+                    None,
+                ),
+                (
+                    f"Pending: {changed}",
+                    "Current: default_kim_eun_hee",
+                    "Current: 1",
+                    "Current: filesystem",
+                    None,
+                    None,
+                    "Pending changes will be discarded.",
+                ),
+                (
+                    f"Current: {baseline}",
+                    "Current: default_kim_eun_hee",
+                    "Current: 1",
+                    "Current: filesystem",
+                    None,
+                    None,
+                    None,
+                ),
+            ),
+        )
+        self.assertEqual(
+            tuple(
+                next(
+                    choice
+                    for choice in call.args[2]
+                    if choice.identity == "save"
+                ).warning_suffix
+                for call in top_level_calls
+            ),
+            (None, "(*Required)", None),
+        )
+        self.assertEqual(
+            sum(
+                call.kwargs.get("notice") == pending_notice
+                for call in picker.call_args_list
+            ),
+            1,
+        )
+        self.assertTrue(
+            all(
+                call.kwargs.get("notice") != pending_notice
+                for call in picker.call_args_list
+                if call.args[1].name != "Settings"
+            )
+        )
+        self.assertEqual(_tree_snapshot(workspace.root), before)
+
+    def test_agents_root_description_counts_every_ordered_pending_agent_value(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        baseline = settings_module.load_settings_state(workspace)
+        edits = (
+            (
+                "explicit default provider",
+                lambda state: settings_module.update_agent_backend(
+                    state,
+                    PLOT_ARCHITECT,
+                    "codex",
+                ),
+            ),
+            (
+                "codex model",
+                lambda state: settings_module.update_agent_codex_model(
+                    state,
+                    PLOT_ARCHITECT,
+                    "gpt-pending",
+                ),
+            ),
+            (
+                "codex reasoning",
+                lambda state: settings_module.update_agent_codex_reasoning_effort(
+                    state,
+                    PLOT_ARCHITECT,
+                    "future_2",
+                ),
+            ),
+            (
+                "inactive antigravity model",
+                lambda state: settings_module.update_agent_antigravity_model(
+                    state,
+                    PLOT_ARCHITECT,
+                    "agy-pending",
+                ),
+            ),
+            (
+                "inactive antigravity effort",
+                lambda state: settings_module.update_agent_antigravity_effort(
+                    state,
+                    PLOT_ARCHITECT,
+                    "high",
+                ),
+            ),
+        )
+
+        def agents_description(state) -> str | None:
+            controller, _backend, _callbacks = self.make_controller(workspace)
+            interrupt = terminal_module.ControlOutcome(
+                terminal_module.ControlOutcomeKind.INTERRUPT
+            )
+            with (
+                mock.patch.object(
+                    controller_core_module,
+                    "load_settings_state",
+                    return_value=state,
+                ),
+                mock.patch.object(
+                    terminal_module.InteractivePickerInput,
+                    "read_picker",
+                    autospec=True,
+                    return_value=interrupt,
+                ) as picker,
+                mock.patch.object(
+                    controller_core_module,
+                    "select_conversation_storage",
+                ) as select_storage,
+            ):
+                controller._run_settings()
+            select_storage.assert_not_called()
+            choices = picker.call_args.args[2]
+            return next(
+                choice.description
+                for choice in choices
+                if choice.identity == "providers"
+            )
+
+        self.assertIsNone(agents_description(baseline))
+        for label, edit in edits:
+            with self.subTest(label=label):
+                self.assertEqual(agents_description(edit(baseline)), "1 pending change")
+
+        plural = baseline
+        for _label, edit in edits:
+            plural = edit(plural)
+        self.assertEqual(agents_description(plural), "5 pending changes")
+
+        panel = InteractiveController._settings_panel(edits[0][1](baseline))
+        current, pending, _activation = panel.items
+        self.assertEqual(
+            current.items[0].value,
+            "codex (default) (Changed)",
+        )
+        self.assertEqual(pending.items[0].value, "codex (Changed)")
+
+    def test_settings_panel_qualifies_current_and_pending_provider_routes(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        settings_module.establish_default_backend(workspace, "antigravity")
+        state = settings_module.load_settings_state(workspace)
+        changed = settings_module.update_agent_backend(
+            state,
+            PLOT_ARCHITECT,
+            "codex",
+        )
+        changed = settings_module.update_agent_codex_model(
+            changed,
+            PLOT_ARCHITECT,
+            "pending-codex-model",
+        )
+
+        panel = InteractiveController._settings_panel(changed)
+        self.assertEqual(panel, self.expected_panel(changed))
+        rendered = render_plain(panel, width=72).text
+        compact = "".join(rendered.split())
+        self.assertIn("antigravity(default)(Changed)", compact)
+        self.assertIn("codex(Changed)", compact)
+        self.assertIn("pending-codex-model(Changed)", compact)
+
+    def test_settings_open_is_exact_seven_item_discovery_free_snapshot(self) -> None:
+        workspace = self.make_workspace()
+        before = _tree_snapshot(workspace.root)
+        catalog = ScriptedProviderCatalog(
+            ProviderCatalogDiscovery(
+                "codex",
+                ProviderCatalogState.UNAVAILABLE,
+            )
+        )
         controller, backend, callbacks = self.make_controller(
             workspace,
             "/settings",
             "7",
-            "1",
             "/quit",
+            provider_catalog=catalog,
             terminal_width=120,
         )
+        original_picker = terminal_module.InteractivePickerInput.read_picker
         with (
+            mock.patch.object(
+                terminal_module.InteractivePickerInput,
+                "read_picker",
+                autospec=True,
+                side_effect=original_picker,
+            ) as picker,
             mock.patch.object(
                 controller_core_module,
                 "parse_interactive_line",
@@ -3580,15 +4192,23 @@ class ControllerSettingsTests(ControllerTestCase):
         popen.assert_not_called()
         run.assert_not_called()
         connect.assert_not_called()
+        self.assertEqual(catalog.events, [])
         self.assertEqual(_tree_snapshot(workspace.root), before)
+        self.assertIn("Current: KO", callbacks.prompts[1])
+        self.assertIn("Current: default_kim_eun_hee", callbacks.prompts[1])
+        self.assertIn("Current: 1", callbacks.prompts[1])
+        self.assertIn("Current: filesystem", callbacks.prompts[1])
+        settings_call = picker.call_args_list[0]
+        self.assertEqual(settings_call.args[1].name, "Settings")
+        self.assertIsNone(settings_call.kwargs["notice"])
         self.assertEqual(
             callbacks.prompts[1],
             "Choices (highlighted 1/7) [open]\n"
-            "  1. [highlighted] Language\n"
-            "  2. [available] Persona\n"
-            "  3. [available] Maximum debate rounds\n"
-            "  4. [available] Conversation storage\n"
-            "  5. [available] Providers\n"
+            "  1. [highlighted] Language — Current: KO\n"
+            "  2. [available] Persona — Current: default_kim_eun_hee\n"
+            "  3. [available] Maximum debate rounds — Current: 1\n"
+            "  4. [available] Conversation storage — Current: filesystem\n"
+            "  5. [available] Agents\n"
             "  6. [available] Save\n"
             "  7. [available] Cancel\n"
             "[input] Enter a choice number, press Enter for the highlighted choice, or enter /cancel.\n"
@@ -3596,12 +4216,1369 @@ class ControllerSettingsTests(ControllerTestCase):
             "Settings > ",
         )
         self.assertEqual(
+            tuple(choice.identity for choice in settings_call.args[2]),
+            (
+                "language",
+                "persona",
+                "max_debate_rounds",
+                "conversation_storage",
+                "providers",
+                "save",
+                "cancel",
+            ),
+        )
+        self.assertEqual(
+            tuple(choice.label for choice in settings_call.args[2]),
+            (
+                "Language",
+                "Persona",
+                "Maximum debate rounds",
+                "Conversation storage",
+                "Agents",
+                "Save",
+                "Cancel",
+            ),
+        )
+        self.assertEqual(
+            tuple(choice.description for choice in settings_call.args[2]),
+            (
+                "Current: KO",
+                "Current: default_kim_eun_hee",
+                "Current: 1",
+                "Current: filesystem",
+                None,
+                None,
+                None,
+            ),
+        )
+        self.assertTrue(
+            all(choice.warning_suffix is None for choice in settings_call.args[2])
+        )
+        self.assertFalse(
+            any("Cancel settings?" in prompt for prompt in callbacks.prompts)
+        )
+        self.assertEqual(
             "".join(callbacks.records).count(
-                "[cancelled] Settings cancelled; no pending changes were saved.\n"
+                "[cancelled] Pending changes discarded.\n"
+            ),
+            0,
+        )
+        self.assertTrue(backend._closed)
+
+    def test_provider_navigation_does_not_discover_until_model_or_effort(self) -> None:
+        workspace = self.make_workspace()
+        catalog = ScriptedProviderCatalog(
+            ProviderCatalogDiscovery("codex", ProviderCatalogState.EMPTY)
+        )
+        controller, _backend, _callbacks = self.make_controller(
+            workspace,
+            "/settings",
+            "5",
+            "2",
+            "1",
+            "1",
+            "/cancel",
+            "/cancel",
+            "/cancel",
+            "7",
+            "1",
+            "/quit",
+            provider_catalog=catalog,
+            terminal_width=80,
+        )
+        self.assertEqual(controller.run_session_lobby(), 0)
+        self.assertEqual(catalog.events, [])
+
+    def test_simple_value_editors_reopen_with_latest_notice_and_selection(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        controller, _backend, _callbacks = self.make_controller(workspace)
+        state = settings_module.load_settings_state(workspace)
+        persona_values = tuple(
+            entry.name for entry in state.baseline.persona_catalog
+        )
+        self.assertTrue(persona_values)
+
+        def commit(value: str) -> terminal_module.ControlOutcome:
+            return terminal_module.ControlOutcome(
+                terminal_module.ControlOutcomeKind.COMMIT,
+                text=value,
+            )
+
+        cancel = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.CANCEL
+        )
+        cases = (
+            (
+                "Language",
+                controller._edit_settings_language,
+                ("EN", "JA"),
+                lambda candidate: candidate.pending.system_defaults.language,
+            ),
+            (
+                "Persona",
+                controller._edit_settings_persona,
+                (persona_values[0], persona_values[0]),
+                lambda candidate: candidate.pending.system_defaults.persona,
+            ),
+        )
+        for field, editor, values, pending_value in cases:
+            with self.subTest(field=field):
+                with mock.patch.object(
+                    terminal_module.InteractivePickerInput,
+                    "read_picker",
+                    autospec=True,
+                    side_effect=(commit(values[0]), commit(values[1]), cancel),
+                ) as picker:
+                    updated, whole_cancel = editor(state)
+
+                self.assertFalse(whole_cancel)
+                self.assertEqual(pending_value(updated), values[1])
+                expected_calls = 2 if values[0] == values[1] else 3
+                self.assertEqual(picker.call_count, expected_calls)
+                self.assertIn("Enter applies", picker.call_args_list[0].args[1].instruction)
+                self.assertIn("press Esc", picker.call_args_list[0].args[1].instruction)
+                self.assert_value_save_guidance(
+                    picker.call_args_list[0].args[1].instruction
+                )
+                self.assertEqual(
+                    picker.call_args_list[1].kwargs["notice"],
+                    self.expected_entered_notice(field, values[0]),
+                )
+                last_call = picker.call_args_list[-1]
+                self.assertEqual(
+                    last_call.kwargs["notice"],
+                    self.expected_entered_notice(field, values[1]),
+                )
+                self.assertEqual(
+                    (
+                        last_call.kwargs["highlighted_id"],
+                        last_call.kwargs["selected_id"],
+                    ),
+                    (values[1], values[1]),
+                )
+
+    def test_rounds_editor_retains_valid_value_and_clears_stale_success(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        controller, _backend, callbacks = self.make_controller(workspace)
+
+        def commit(value: str) -> terminal_module.ControlOutcome:
+            return terminal_module.ControlOutcome(
+                terminal_module.ControlOutcomeKind.COMMIT,
+                text=value,
+            )
+
+        cancel = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.CANCEL
+        )
+        with mock.patch.object(
+            terminal_module.InteractivePromptInput,
+            "read_prompt",
+            autospec=True,
+            side_effect=(commit("2"), commit("bad"), commit("3"), cancel),
+        ) as prompt:
+            updated, whole_cancel = controller._edit_settings_rounds(
+                settings_module.load_settings_state(workspace)
+            )
+
+        self.assertFalse(whole_cancel)
+        self.assertEqual(updated.pending.system_defaults.max_debate_rounds, 3)
+        self.assertEqual(prompt.call_count, 4)
+        self.assertIn("Enter applies", prompt.call_args_list[0].args[1].instruction)
+        self.assertIn("press Esc", prompt.call_args_list[0].args[1].instruction)
+        self.assert_value_save_guidance(
+            prompt.call_args_list[0].args[1].instruction
+        )
+        self.assertEqual(
+            prompt.call_args_list[1].kwargs["context"],
+            (self.expected_entered_notice("Maximum debate rounds", "2"),),
+        )
+        self.assertEqual(prompt.call_args_list[2].kwargs["context"], ())
+        self.assertTrue(
+            all(call.args[1].default is None for call in prompt.call_args_list)
+        )
+        self.assertEqual(
+            tuple(call.kwargs["initial_value"] for call in prompt.call_args_list),
+            ("1", "2", "2", "3"),
+        )
+        self.assertEqual(
+            prompt.call_args_list[3].kwargs["context"],
+            (self.expected_entered_notice("Maximum debate rounds", "3"),),
+        )
+        self.assertEqual(
+            "".join(callbacks.records).count(
+                "[validation] Maximum debate rounds must be a nonnegative "
+                "ASCII integer.\n"
             ),
             1,
         )
-        self.assertTrue(backend._closed)
+
+        with mock.patch.object(
+            terminal_module.InteractivePromptInput,
+            "read_prompt",
+            autospec=True,
+            side_effect=(commit("1"), commit("1")),
+        ) as unchanged_prompt:
+            unchanged, whole_cancel = controller._edit_settings_rounds(
+                settings_module.load_settings_state(workspace)
+            )
+        self.assertFalse(whole_cancel)
+        self.assertEqual(
+            unchanged.pending.system_defaults.max_debate_rounds,
+            1,
+        )
+        self.assertEqual(unchanged_prompt.call_count, 2)
+        self.assertEqual(
+            tuple(
+                call.kwargs["initial_value"]
+                for call in unchanged_prompt.call_args_list
+            ),
+            ("1", "1"),
+        )
+
+    def test_provider_editor_reopens_with_latest_notice_and_selection(self) -> None:
+        workspace = self.make_workspace()
+        controller, _backend, _callbacks = self.make_controller(workspace)
+        commit_antigravity = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.COMMIT,
+            text="antigravity",
+        )
+        commit_codex = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.COMMIT,
+            text="codex",
+        )
+        cancel = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.CANCEL
+        )
+        with mock.patch.object(
+            terminal_module.InteractivePickerInput,
+            "read_picker",
+            autospec=True,
+            side_effect=(commit_antigravity, commit_codex, cancel),
+        ) as picker:
+            updated, whole_cancel = controller._edit_settings_agent_provider(
+                settings_module.load_settings_state(workspace),
+                PLOT_ARCHITECT,
+            )
+
+        self.assertFalse(whole_cancel)
+        self.assertEqual(
+            updated.pending.agent_configs[PLOT_ARCHITECT].backend,
+            "codex",
+        )
+        self.assert_value_save_guidance(
+            picker.call_args_list[0].args[1].instruction
+        )
+        self.assertEqual(
+            picker.call_args_list[1].kwargs["notice"],
+            self.expected_entered_notice("Provider", "Antigravity"),
+        )
+        self.assertEqual(
+            picker.call_args_list[2].kwargs["notice"],
+            self.expected_entered_notice("Provider", "Codex"),
+        )
+        self.assertEqual(
+            (
+                picker.call_args_list[2].kwargs["highlighted_id"],
+                picker.call_args_list[2].kwargs["selected_id"],
+            ),
+            ("codex", "codex"),
+        )
+
+        codex_only = _auth_snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.UNAUTHENTICATED,
+        )
+        authenticated_controller, _backend, _callbacks = self.make_controller(
+            workspace,
+            auth_coordinator=ScriptedAuthCoordinator(snapshots=(codex_only,)),
+        )
+        with mock.patch.object(
+            terminal_module.InteractivePickerInput,
+            "read_picker",
+            autospec=True,
+            return_value=cancel,
+        ) as authenticated_picker:
+            unchanged, whole_cancel = (
+                authenticated_controller._edit_settings_agent_provider(
+                    settings_module.load_settings_state(workspace),
+                    PLOT_ARCHITECT,
+                )
+            )
+        self.assertFalse(whole_cancel)
+        self.assertEqual(
+            unchanged,
+            settings_module.load_settings_state(workspace),
+        )
+        self.assert_value_save_guidance(
+            authenticated_picker.call_args.args[1].instruction
+        )
+
+    def test_all_value_editors_double_commit_and_reentry_are_call_local(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        models = (
+            ProviderModel(
+                "gpt-a",
+                "GPT Alpha",
+                None,
+                "low",
+                (
+                    ProviderEffort("low", "low"),
+                    ProviderEffort("high", "high"),
+                ),
+            ),
+            ProviderModel(
+                "gpt-b",
+                "GPT Beta",
+                None,
+                "high",
+                (
+                    ProviderEffort("low", "low"),
+                    ProviderEffort("high", "high"),
+                ),
+            ),
+        )
+        catalog = ScriptedProviderCatalog(
+            _ready_provider_catalog("codex", *models)
+        )
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            provider_catalog=catalog,
+        )
+        state = settings_module.load_settings_state(workspace)
+        persona_values = tuple(
+            entry.name for entry in state.baseline.persona_catalog
+        )
+        self.assertTrue(persona_values)
+
+        def commit(value: str) -> terminal_module.ControlOutcome:
+            return terminal_module.ControlOutcome(
+                terminal_module.ControlOutcomeKind.COMMIT,
+                text=value,
+            )
+
+        cancel = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.CANCEL
+        )
+
+        def exercise_picker(
+            label,
+            candidate,
+            editor,
+            first,
+            second,
+            expected_value,
+            pending_value,
+            updater_name,
+        ):
+            with self.subTest(editor=label, phase="armed"):
+                updater = getattr(controller_core_module, updater_name)
+                with (
+                    mock.patch.object(
+                        terminal_module.InteractivePickerInput,
+                        "read_picker",
+                        autospec=True,
+                        side_effect=(
+                            commit(first),
+                            commit(second),
+                            commit(second),
+                        ),
+                    ) as picker,
+                    mock.patch.object(
+                        controller_core_module,
+                        updater_name,
+                        wraps=updater,
+                    ) as update,
+                ):
+                    updated, whole_cancel = editor(candidate)
+                self.assertFalse(whole_cancel)
+                self.assertEqual(picker.call_count, 3)
+                self.assertEqual(update.call_count, 2)
+                self.assertEqual(pending_value(updated), expected_value)
+
+            with self.subTest(editor=label, phase="reentry"):
+                updater = getattr(controller_core_module, updater_name)
+                with (
+                    mock.patch.object(
+                        terminal_module.InteractivePickerInput,
+                        "read_picker",
+                        autospec=True,
+                        side_effect=(commit(second), cancel),
+                    ) as picker,
+                    mock.patch.object(
+                        controller_core_module,
+                        updater_name,
+                        wraps=updater,
+                    ) as update,
+                ):
+                    reentered, whole_cancel = editor(updated)
+                self.assertFalse(whole_cancel)
+                self.assertEqual(picker.call_count, 2)
+                self.assertEqual(update.call_count, 1)
+                self.assertEqual(reentered, updated)
+            return updated
+
+        with mock.patch.object(
+            controller_core_module,
+            "select_conversation_storage",
+        ) as select_storage:
+            state = exercise_picker(
+                "Language",
+                state,
+                controller._edit_settings_language,
+                "EN",
+                "JA",
+                "JA",
+                lambda candidate: candidate.pending.system_defaults.language,
+                "update_language",
+            )
+            with mock.patch.object(
+                terminal_module.InteractivePickerInput,
+                "read_picker",
+                autospec=True,
+                side_effect=(
+                    commit(persona_values[0]),
+                    commit(persona_values[0]),
+                ),
+            ) as picker, mock.patch.object(
+                controller_core_module,
+                "update_persona",
+                wraps=controller_core_module.update_persona,
+            ) as update:
+                persona_state, whole_cancel = controller._edit_settings_persona(
+                    state
+                )
+            self.assertFalse(whole_cancel)
+            self.assertEqual(picker.call_count, 2)
+            self.assertEqual(update.call_count, 1)
+            with mock.patch.object(
+                terminal_module.InteractivePickerInput,
+                "read_picker",
+                autospec=True,
+                side_effect=(commit(persona_values[0]), cancel),
+            ) as picker, mock.patch.object(
+                controller_core_module,
+                "update_persona",
+                wraps=controller_core_module.update_persona,
+            ) as update:
+                reentered, whole_cancel = controller._edit_settings_persona(
+                    persona_state
+                )
+            self.assertFalse(whole_cancel)
+            self.assertEqual(picker.call_count, 2)
+            self.assertEqual(update.call_count, 1)
+            self.assertEqual(reentered, persona_state)
+            state = persona_state
+            state = exercise_picker(
+                "Provider",
+                state,
+                lambda candidate: controller._edit_settings_agent_provider(
+                    candidate,
+                    PLOT_ARCHITECT,
+                ),
+                "antigravity",
+                "codex",
+                "codex",
+                lambda candidate: candidate.pending.agent_configs[
+                    PLOT_ARCHITECT
+                ].backend,
+                "update_agent_backend",
+            )
+            state = exercise_picker(
+                "Model",
+                state,
+                lambda candidate: controller._edit_settings_agent_model(
+                    candidate,
+                    PLOT_ARCHITECT,
+                ),
+                "settings:model:0",
+                "settings:model:1",
+                "gpt-b",
+                lambda candidate: candidate.pending.agent_configs[
+                    PLOT_ARCHITECT
+                ].codex_model,
+                "update_agent_codex_model",
+            )
+            self.assertEqual(
+                state.pending.agent_configs[PLOT_ARCHITECT].codex_model,
+                "gpt-b",
+            )
+            state = exercise_picker(
+                "Effort",
+                state,
+                lambda candidate: controller._edit_settings_agent_reasoning(
+                    candidate,
+                    PLOT_ARCHITECT,
+                ),
+                "settings:effort:0",
+                "settings:effort:1",
+                "high",
+                lambda candidate: candidate.pending.agent_configs[
+                    PLOT_ARCHITECT
+                ].codex_reasoning_effort,
+                "update_agent_codex_reasoning_effort",
+            )
+            self.assertEqual(
+                state.pending.agent_configs[
+                    PLOT_ARCHITECT
+                ].codex_reasoning_effort,
+                "high",
+            )
+
+            with mock.patch.object(
+                terminal_module.InteractivePromptInput,
+                "read_prompt",
+                autospec=True,
+                side_effect=(commit("02"), commit("3"), commit("03")),
+            ) as prompt, mock.patch.object(
+                controller_core_module,
+                "update_max_debate_rounds",
+                wraps=controller_core_module.update_max_debate_rounds,
+            ) as update:
+                state, whole_cancel = controller._edit_settings_rounds(state)
+            self.assertFalse(whole_cancel)
+            self.assertEqual(prompt.call_count, 3)
+            self.assertEqual(update.call_count, 2)
+            self.assertEqual(state.pending.system_defaults.max_debate_rounds, 3)
+
+            with mock.patch.object(
+                terminal_module.InteractivePromptInput,
+                "read_prompt",
+                autospec=True,
+                side_effect=(commit("bad"), commit("03"), commit("3")),
+            ) as prompt, mock.patch.object(
+                controller_core_module,
+                "update_max_debate_rounds",
+                wraps=controller_core_module.update_max_debate_rounds,
+            ) as update:
+                reentered, whole_cancel = controller._edit_settings_rounds(state)
+            self.assertFalse(whole_cancel)
+            self.assertEqual(prompt.call_count, 3)
+            self.assertEqual(update.call_count, 1)
+            self.assertEqual(reentered, state)
+
+            with mock.patch.object(
+                terminal_module.InteractivePromptInput,
+                "read_prompt",
+                autospec=True,
+                side_effect=(commit("custom-a"), commit(""), commit("")),
+            ) as prompt, mock.patch.object(
+                controller_core_module,
+                "update_agent_codex_model",
+                wraps=controller_core_module.update_agent_codex_model,
+            ) as update:
+                state, whole_cancel = controller._edit_settings_custom_model(
+                    state,
+                    PLOT_ARCHITECT,
+                    "codex",
+                )
+            self.assertFalse(whole_cancel)
+            self.assertEqual(prompt.call_count, 3)
+            self.assertEqual(update.call_count, 2)
+            self.assertIsNone(
+                state.pending.agent_configs[PLOT_ARCHITECT].codex_model
+            )
+
+            with mock.patch.object(
+                terminal_module.InteractivePromptInput,
+                "read_prompt",
+                autospec=True,
+                side_effect=(commit("-unsafe"), commit(""), commit("")),
+            ) as prompt, mock.patch.object(
+                controller_core_module,
+                "update_agent_codex_model",
+                wraps=controller_core_module.update_agent_codex_model,
+            ) as update:
+                reentered, whole_cancel = controller._edit_settings_custom_model(
+                    state,
+                    PLOT_ARCHITECT,
+                    "codex",
+                )
+            self.assertFalse(whole_cancel)
+            self.assertEqual(prompt.call_count, 3)
+            self.assertEqual(update.call_count, 2)
+            self.assertEqual(reentered, state)
+            select_storage.assert_not_called()
+
+        self.assertEqual(catalog.events, ["codex"] * 4)
+        rendered = "".join(callbacks.records)
+        self.assertEqual(
+            rendered.count(
+                "[validation] Maximum debate rounds must be a nonnegative "
+                "ASCII integer.\n"
+            ),
+            1,
+        )
+        self.assertEqual(
+            rendered.count(
+                "[validation] Codex model must be safe nonempty text, or "
+                "blank to inherit.\n"
+            ),
+            1,
+        )
+
+    def test_nested_agent_editors_return_one_level_and_retain_highlights(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        catalog = ScriptedProviderCatalog(
+            _ready_provider_catalog(
+                "antigravity",
+                ProviderModel(
+                    "agy-a",
+                    "AGY Alpha",
+                    None,
+                    None,
+                    (ProviderEffort("high", "high"),),
+                ),
+            )
+        )
+        controller, _backend, _callbacks = self.make_controller(
+            workspace,
+            provider_catalog=catalog,
+        )
+        commit = lambda value: terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.COMMIT,
+            text=value,
+        )
+        cancel = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.CANCEL
+        )
+        picker_outcomes = (
+            commit(PLOT_ARCHITECT),
+            commit("provider"),
+            cancel,
+            commit("model"),
+            cancel,
+            commit("reasoning"),
+            cancel,
+            cancel,
+            commit(ROSTER[0]),
+            cancel,
+            cancel,
+        )
+        with mock.patch.object(
+            terminal_module.InteractivePickerInput,
+            "read_picker",
+            autospec=True,
+            side_effect=picker_outcomes,
+        ) as picker:
+            updated, whole_cancel = controller._edit_settings_provider(
+                settings_module.load_settings_state(workspace)
+            )
+
+        self.assertFalse(whole_cancel)
+        self.assertEqual(
+            updated,
+            settings_module.load_settings_state(workspace),
+        )
+        calls = picker.call_args_list
+        self.assertEqual(
+            tuple(call.args[1].name for call in calls),
+            (
+                "Agents",
+                "Agent settings",
+                "Provider",
+                "Agent settings",
+                "Model",
+                "Agent settings",
+                "Effort",
+                "Agent settings",
+                "Agents",
+                "Agent settings",
+                "Agents",
+            ),
+        )
+        self.assertIn("press Esc to return to Settings", calls[0].args[1].instruction)
+        self.assertEqual(
+            tuple(calls[index].kwargs["highlighted_id"] for index in (0, 8, 10)),
+            (ROSTER[0], PLOT_ARCHITECT, ROSTER[0]),
+        )
+        self.assertEqual(
+            tuple(
+                calls[index].kwargs["highlighted_id"]
+                for index in (1, 3, 5, 7, 9)
+            ),
+            (
+                "provider",
+                "provider",
+                "model",
+                "reasoning",
+                "provider",
+            ),
+        )
+        self.assertEqual(catalog.events, ["codex", "codex"])
+
+    def test_model_picker_exact_order_identities_highlights_and_custom_fallback(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        models = (
+            ProviderModel(
+                "gpt-a",
+                "GPT Alpha",
+                "First model",
+                "low",
+                (ProviderEffort("low", "low", "Quick"),),
+            ),
+            ProviderModel(
+                "gpt-b",
+                "GPT Beta",
+                None,
+                "future_2",
+                (
+                    ProviderEffort("low", "low"),
+                    ProviderEffort("future_2", "future_2", "Future mode"),
+                ),
+            ),
+        )
+        catalog = ScriptedProviderCatalog(_ready_provider_catalog("codex", *models))
+        controller, _backend, _callbacks = self.make_controller(
+            workspace,
+            provider_catalog=catalog,
+            terminal_width=48,
+        )
+        state = settings_module.update_agent_antigravity_model(
+            settings_module.update_agent_codex_model(
+                settings_module.load_settings_state(workspace),
+                PLOT_ARCHITECT,
+                "legacy-custom",
+            ),
+            PLOT_ARCHITECT,
+            "inactive-agy",
+        )
+        commit_gpt_b = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.COMMIT,
+            text="settings:model:1",
+        )
+        commit_gpt_a = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.COMMIT,
+            text="settings:model:0",
+        )
+        cancel = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.CANCEL
+        )
+        with mock.patch.object(
+            terminal_module.InteractivePickerInput,
+            "read_picker",
+            autospec=True,
+            side_effect=(commit_gpt_b, commit_gpt_a, cancel),
+        ) as picker:
+            updated, whole_cancel = controller._edit_settings_agent_model(
+                state,
+                PLOT_ARCHITECT,
+            )
+
+        self.assertFalse(whole_cancel)
+        self.assertEqual(catalog.events, ["codex"])
+        call = picker.call_args_list[0]
+        prompt = call.args[1]
+        choices = call.args[2]
+        self.assertEqual(prompt.name, "Model")
+        self.assertIn("Codex", prompt.scope)
+        self.assert_value_save_guidance(prompt.instruction)
+        self.assertEqual(
+            tuple(choice.identity for choice in choices),
+            (
+                "settings:inherit",
+                "settings:model:0",
+                "settings:model:1",
+                "settings:model:current-custom",
+                "settings:model:custom",
+            ),
+        )
+        self.assertEqual(
+            tuple(choice.label for choice in choices),
+            ("Inherit", "GPT Alpha", "GPT Beta", "Current custom", "Custom model"),
+        )
+        self.assertEqual(choices[1].description, "gpt-a — First model")
+        self.assertEqual(
+            choices[3].description,
+            "Exact pending model: legacy-custom",
+        )
+        self.assertEqual(call.kwargs["highlighted_id"], "settings:model:current-custom")
+        self.assertEqual(call.kwargs["selected_id"], "settings:model:current-custom")
+        self.assertTrue(call.kwargs["transient"])
+        agent = updated.pending.agent_configs[PLOT_ARCHITECT]
+        self.assertEqual(agent.codex_model, "gpt-a")
+        self.assertEqual(agent.antigravity_model, "inactive-agy")
+        self.assertEqual(
+            picker.call_args_list[1].kwargs["notice"],
+            self.expected_entered_notice("Model", "GPT Beta"),
+        )
+        self.assertEqual(
+            picker.call_args_list[2].kwargs["notice"],
+            self.expected_entered_notice("Model", "GPT Alpha"),
+        )
+        self.assertEqual(
+            (
+                picker.call_args_list[2].kwargs["highlighted_id"],
+                picker.call_args_list[2].kwargs["selected_id"],
+            ),
+            ("settings:model:0", "settings:model:0"),
+        )
+
+        selected_state = settings_module.update_agent_codex_model(
+            state,
+            PLOT_ARCHITECT,
+            "gpt-b",
+        )
+        cancel = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.CANCEL
+        )
+        with mock.patch.object(
+            terminal_module.InteractivePickerInput,
+            "read_picker",
+            autospec=True,
+            return_value=cancel,
+        ) as picker:
+            unchanged, whole_cancel = controller._edit_settings_agent_model(
+                selected_state,
+                PLOT_ARCHITECT,
+            )
+        self.assertFalse(whole_cancel)
+        self.assertEqual(unchanged, selected_state)
+        choices = picker.call_args.args[2]
+        self.assertEqual(
+            tuple(choice.identity for choice in choices),
+            (
+                "settings:inherit",
+                "settings:model:0",
+                "settings:model:1",
+                "settings:model:custom",
+            ),
+        )
+        self.assertEqual(picker.call_args.kwargs["selected_id"], "settings:model:1")
+
+    def test_custom_model_cancel_reuses_picker_without_mutation_or_rediscovery(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        catalog = ScriptedProviderCatalog(
+            _ready_provider_catalog(
+                "codex",
+                ProviderModel("gpt-a", "GPT Alpha", None, None, ()),
+            )
+        )
+        controller, _backend, _callbacks = self.make_controller(
+            workspace,
+            provider_catalog=catalog,
+        )
+        state = settings_module.update_agent_codex_model(
+            settings_module.load_settings_state(workspace),
+            PLOT_ARCHITECT,
+            "existing-custom",
+        )
+        choose_custom = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.COMMIT,
+            text="settings:model:custom",
+        )
+        cancel = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.CANCEL
+        )
+        with (
+            mock.patch.object(
+                terminal_module.InteractivePickerInput,
+                "read_picker",
+                autospec=True,
+                side_effect=(choose_custom, cancel),
+            ) as picker,
+            mock.patch.object(
+                terminal_module.InteractivePromptInput,
+                "read_prompt",
+                autospec=True,
+                return_value=cancel,
+            ) as prompt,
+        ):
+            unchanged, whole_cancel = controller._edit_settings_agent_model(
+                state,
+                PLOT_ARCHITECT,
+            )
+
+        self.assertFalse(whole_cancel)
+        self.assertEqual(unchanged, state)
+        self.assertEqual(catalog.events, ["codex"])
+        self.assertEqual(prompt.call_count, 1)
+        self.assertEqual(picker.call_count, 2)
+        returned_picker = picker.call_args_list[1]
+        self.assertEqual(returned_picker.args[1].name, "Model")
+        self.assertEqual(
+            returned_picker.kwargs["highlighted_id"],
+            "settings:model:custom",
+        )
+        self.assertEqual(
+            tuple(choice.identity for choice in returned_picker.args[2]),
+            (
+                "settings:inherit",
+                "settings:model:0",
+                "settings:model:current-custom",
+                "settings:model:custom",
+            ),
+        )
+
+    def test_custom_model_reopens_replaces_notice_and_clears_it_on_validation(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        catalog = ScriptedProviderCatalog(
+            _ready_provider_catalog(
+                "codex",
+                ProviderModel("gpt-a", "GPT Alpha", None, None, ()),
+            )
+        )
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            provider_catalog=catalog,
+        )
+
+        def commit(value: str) -> terminal_module.ControlOutcome:
+            return terminal_module.ControlOutcome(
+                terminal_module.ControlOutcomeKind.COMMIT,
+                text=value,
+            )
+
+        cancel = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.CANCEL
+        )
+        with (
+            mock.patch.object(
+                terminal_module.InteractivePickerInput,
+                "read_picker",
+                autospec=True,
+                side_effect=(commit("settings:model:custom"), cancel),
+            ) as picker,
+            mock.patch.object(
+                terminal_module.InteractivePromptInput,
+                "read_prompt",
+                autospec=True,
+                side_effect=(
+                    commit("first-custom"),
+                    commit("-unsafe"),
+                    commit(""),
+                    commit("/cancel"),
+                    cancel,
+                ),
+            ) as prompt,
+        ):
+            updated, whole_cancel = controller._edit_settings_agent_model(
+                settings_module.load_settings_state(workspace),
+                PLOT_ARCHITECT,
+            )
+
+        self.assertFalse(whole_cancel)
+        self.assertEqual(
+            updated.pending.agent_configs[PLOT_ARCHITECT].codex_model,
+            "/cancel",
+        )
+        self.assertEqual(catalog.events, ["codex"])
+        self.assertEqual(picker.call_count, 2)
+        self.assertEqual(prompt.call_count, 5)
+        self.assert_value_save_guidance(
+            prompt.call_args_list[0].args[1].instruction
+        )
+        self.assertEqual(
+            prompt.call_args_list[1].kwargs["context"],
+            (self.expected_entered_notice("Custom model", "first-custom"),),
+        )
+        self.assertEqual(prompt.call_args_list[2].kwargs["context"], ())
+        self.assertEqual(prompt.call_args_list[2].args[1].default, "first-custom")
+        self.assertEqual(
+            prompt.call_args_list[3].kwargs["context"],
+            (self.expected_entered_notice("Custom model", "Inherit"),),
+        )
+        self.assertEqual(
+            prompt.call_args_list[4].kwargs["context"],
+            (self.expected_entered_notice("Custom model", "/cancel"),),
+        )
+        self.assertEqual(
+            "".join(callbacks.records).count(
+                "[validation] Codex model must be safe nonempty text, or "
+                "blank to inherit.\n"
+            ),
+            1,
+        )
+
+    def test_effort_picker_uses_selected_codex_model_and_current_compatibility(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        models = (
+            ProviderModel(
+                "gpt-a",
+                "GPT Alpha",
+                None,
+                "low",
+                (ProviderEffort("low", "low"),),
+            ),
+            ProviderModel(
+                "gpt-b",
+                "GPT Beta",
+                None,
+                "future_2",
+                (
+                    ProviderEffort("low", "low", "Quick"),
+                    ProviderEffort("future_2", "future_2", "Future mode"),
+                ),
+            ),
+        )
+        catalog = ScriptedProviderCatalog(_ready_provider_catalog("codex", *models))
+        controller, _backend, _callbacks = self.make_controller(
+            workspace,
+            provider_catalog=catalog,
+        )
+        state = settings_module.update_agent_codex_reasoning_effort(
+            settings_module.update_agent_codex_model(
+                settings_module.load_settings_state(workspace),
+                PLOT_ARCHITECT,
+                "gpt-b",
+            ),
+            PLOT_ARCHITECT,
+            "future_2",
+        )
+        choose_low = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.COMMIT,
+            text="settings:effort:0",
+        )
+        choose_future = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.COMMIT,
+            text="settings:effort:1",
+        )
+        cancel = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.CANCEL
+        )
+        with mock.patch.object(
+            terminal_module.InteractivePickerInput,
+            "read_picker",
+            autospec=True,
+            side_effect=(choose_low, choose_future, cancel),
+        ) as picker:
+            updated, whole_cancel = controller._edit_settings_agent_reasoning(
+                state,
+                PLOT_ARCHITECT,
+            )
+
+        self.assertFalse(whole_cancel)
+        self.assertEqual(catalog.events, ["codex"])
+        choices = picker.call_args_list[0].args[2]
+        self.assert_value_save_guidance(
+            picker.call_args_list[0].args[1].instruction
+        )
+        self.assertEqual(
+            tuple(choice.identity for choice in choices),
+            ("settings:inherit", "settings:effort:0", "settings:effort:1"),
+        )
+        self.assertEqual(
+            tuple(choice.label for choice in choices),
+            ("Inherit", "low", "future_2"),
+        )
+        self.assertEqual(
+            choices[2].description,
+            "Future mode Default for the selected model.",
+        )
+        self.assertEqual(
+            picker.call_args_list[0].kwargs["selected_id"],
+            "settings:effort:1",
+        )
+        self.assertEqual(
+            updated.pending.agent_configs[PLOT_ARCHITECT].codex_reasoning_effort,
+            "future_2",
+        )
+        self.assertEqual(
+            picker.call_args_list[1].kwargs["notice"],
+            self.expected_entered_notice("Effort", "low"),
+        )
+        self.assertEqual(
+            picker.call_args_list[2].kwargs["notice"],
+            self.expected_entered_notice("Effort", "future_2"),
+        )
+        self.assertEqual(
+            (
+                picker.call_args_list[2].kwargs["highlighted_id"],
+                picker.call_args_list[2].kwargs["selected_id"],
+            ),
+            ("settings:effort:1", "settings:effort:1"),
+        )
+
+        compatibility = settings_module.update_agent_codex_reasoning_effort(
+            state,
+            PLOT_ARCHITECT,
+            "legacy_mode",
+        )
+        keep_current = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.COMMIT,
+            text="settings:effort:current-compatibility",
+        )
+        with mock.patch.object(
+            terminal_module.InteractivePickerInput,
+            "read_picker",
+            autospec=True,
+            side_effect=(keep_current, cancel),
+        ) as picker:
+            unchanged, whole_cancel = controller._edit_settings_agent_reasoning(
+                compatibility,
+                PLOT_ARCHITECT,
+            )
+        self.assertFalse(whole_cancel)
+        self.assertEqual(unchanged, compatibility)
+        choices = picker.call_args_list[0].args[2]
+        self.assertEqual(choices[-1].identity, "settings:effort:current-compatibility")
+        self.assertEqual(choices[-1].label, "Current compatibility")
+        self.assertEqual(
+            choices[-1].description,
+            "Keep exact pending effort: legacy_mode",
+        )
+        self.assertEqual(
+            picker.call_args_list[0].kwargs["highlighted_id"],
+            "settings:effort:current-compatibility",
+        )
+        self.assertEqual(
+            picker.call_args_list[1].kwargs["notice"],
+            self.expected_entered_notice("Effort", "legacy_mode"),
+        )
+
+    def test_pending_provider_precedence_controls_discovery_without_mutation(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        settings_module.establish_default_backend(workspace, "antigravity")
+        agy_model = ProviderModel(
+            "agy-model",
+            "Antigravity Model",
+            None,
+            None,
+            (
+                ProviderEffort("low", "low"),
+                ProviderEffort("medium", "medium"),
+                ProviderEffort("high", "high"),
+            ),
+        )
+        codex_model = ProviderModel("codex-model", "Codex Model", None, None, ())
+        catalog = ScriptedProviderCatalog(
+            _ready_provider_catalog("antigravity", agy_model),
+            _ready_provider_catalog("codex", codex_model),
+        )
+        controller, _backend, _callbacks = self.make_controller(
+            workspace,
+            provider_catalog=catalog,
+        )
+        cancel = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.CANCEL
+        )
+        state = settings_module.load_settings_state(workspace)
+        with mock.patch.object(
+            terminal_module.InteractivePickerInput,
+            "read_picker",
+            autospec=True,
+            return_value=cancel,
+        ):
+            inherited, inherited_cancel = controller._edit_settings_agent_model(
+                state,
+                PLOT_ARCHITECT,
+            )
+            pending = settings_module.update_agent_backend(
+                state,
+                PLOT_ARCHITECT,
+                "codex",
+            )
+            overridden, overridden_cancel = controller._edit_settings_agent_model(
+                pending,
+                PLOT_ARCHITECT,
+            )
+        self.assertEqual(catalog.events, ["antigravity", "codex"])
+        self.assertEqual(inherited, state)
+        self.assertEqual(overridden, pending)
+        self.assertFalse(inherited_cancel)
+        self.assertFalse(overridden_cancel)
+
+    def test_catalog_failure_notices_are_fixed_for_model_and_effort_pickers(
+        self,
+    ) -> None:
+        state_copy = {
+            ProviderCatalogState.UNAVAILABLE: "is unavailable",
+            ProviderCatalogState.TIMED_OUT: "timed out",
+            ProviderCatalogState.COMMAND_FAILED: "did not complete successfully",
+            ProviderCatalogState.MALFORMED: "returned an unsupported format",
+            ProviderCatalogState.EMPTY: "returned no visible models",
+            ProviderCatalogState.OVERSIZED: "exceeded the safe output limit",
+            ProviderCatalogState.FAILED: "could not be completed",
+        }
+        for discovery_state, detail in state_copy.items():
+            with self.subTest(state=discovery_state):
+                workspace = self.make_workspace()
+                discovery = ProviderCatalogDiscovery("codex", discovery_state)
+                catalog = ScriptedProviderCatalog(discovery)
+                controller, _backend, _callbacks = self.make_controller(
+                    workspace,
+                    provider_catalog=catalog,
+                )
+                state = settings_module.load_settings_state(workspace)
+                cancel = terminal_module.ControlOutcome(
+                    terminal_module.ControlOutcomeKind.CANCEL
+                )
+                with mock.patch.object(
+                    terminal_module.InteractivePickerInput,
+                    "read_picker",
+                    autospec=True,
+                    side_effect=(cancel, cancel),
+                ) as picker:
+                    controller._edit_settings_agent_model(state, PLOT_ARCHITECT)
+                    controller._edit_settings_agent_reasoning(state, PLOT_ARCHITECT)
+                model_notice = picker.call_args_list[0].kwargs["notice"]
+                effort_notice = picker.call_args_list[1].kwargs["notice"]
+                self.assertEqual(
+                    model_notice.text,
+                    f"Codex catalog discovery {detail}. Inherit, keep the current "
+                    "custom value, or enter a custom model. Retry later.",
+                )
+                self.assertEqual(
+                    effort_notice.text,
+                    f"Codex catalog discovery {detail}. Inherit or keep the "
+                    "current compatibility value. Retry later.",
+                )
+                self.assertIs(model_notice.role, terminal_module.SemanticRole.WARNING)
+                self.assertIs(effort_notice.role, terminal_module.SemanticRole.WARNING)
+                self.assertEqual(catalog.events, ["codex", "codex"])
+
+        hostile_outcomes = (
+            RuntimeError("PRIVATE_CATALOG_FAILURE"),
+            object(),
+            ProviderCatalogDiscovery("antigravity", ProviderCatalogState.EMPTY),
+        )
+        for outcome in hostile_outcomes:
+            with self.subTest(outcome=type(outcome).__name__):
+                workspace = self.make_workspace()
+                catalog = ScriptedProviderCatalog(outcome)
+                controller, _backend, _callbacks = self.make_controller(
+                    workspace,
+                    provider_catalog=catalog,
+                )
+                with mock.patch.object(
+                    terminal_module.InteractivePickerInput,
+                    "read_picker",
+                    autospec=True,
+                    return_value=terminal_module.ControlOutcome(
+                        terminal_module.ControlOutcomeKind.CANCEL
+                    ),
+                ) as picker:
+                    controller._edit_settings_agent_model(
+                        settings_module.load_settings_state(workspace),
+                        PLOT_ARCHITECT,
+                    )
+                notice = picker.call_args.kwargs["notice"]
+                self.assertIn("could not be completed", notice.text)
+                self.assertNotIn("PRIVATE_CATALOG_FAILURE", notice.text)
+
+    def test_model_and_effort_cancel_return_while_interrupt_and_eof_cancel_all(
+        self,
+    ) -> None:
+        model = ProviderModel("gpt", "GPT", None, None, ())
+        for kind in (
+            terminal_module.ControlOutcomeKind.CANCEL,
+            terminal_module.ControlOutcomeKind.INTERRUPT,
+            terminal_module.ControlOutcomeKind.EOF,
+        ):
+            with self.subTest(kind=kind):
+                workspace = self.make_workspace()
+                catalog = ScriptedProviderCatalog(
+                    _ready_provider_catalog("codex", model)
+                )
+                controller, _backend, _callbacks = self.make_controller(
+                    workspace,
+                    provider_catalog=catalog,
+                )
+                state = settings_module.load_settings_state(workspace)
+                outcome = terminal_module.ControlOutcome(kind)
+                with mock.patch.object(
+                    terminal_module.InteractivePickerInput,
+                    "read_picker",
+                    autospec=True,
+                    side_effect=(outcome, outcome),
+                ):
+                    model_state, model_cancel = controller._edit_settings_agent_model(
+                        state,
+                        PLOT_ARCHITECT,
+                    )
+                    effort_state, effort_cancel = (
+                        controller._edit_settings_agent_reasoning(
+                            state,
+                            PLOT_ARCHITECT,
+                        )
+                    )
+                expected_cancel = kind in {
+                    terminal_module.ControlOutcomeKind.INTERRUPT,
+                    terminal_module.ControlOutcomeKind.EOF,
+                }
+                self.assertEqual(model_state, state)
+                self.assertEqual(effort_state, state)
+                self.assertIs(model_cancel, expected_cancel)
+                self.assertIs(effort_cancel, expected_cancel)
+
+    def test_interrupt_and_eof_cancel_once_from_every_nested_settings_level(
+        self,
+    ) -> None:
+        paths = {
+            "agents": ("5",),
+            "agent-settings": ("5", "2"),
+            "provider": ("5", "2", "1"),
+            "model": ("5", "2", "2"),
+            "effort": ("5", "2", "3"),
+            "custom-model": ("5", "2", "2", "3"),
+        }
+        for dirty in (False, True):
+            for failure_type in (KeyboardInterrupt, EOFError):
+                for level, path in paths.items():
+                    with self.subTest(
+                        dirty=dirty,
+                        control=failure_type.__name__,
+                        level=level,
+                    ):
+                        prefix = ("1", "2", "/cancel") if dirty else ()
+                        workspace = self.make_workspace()
+                        before = _tree_snapshot(workspace.root)
+                        catalog = ScriptedProviderCatalog(
+                            _ready_provider_catalog(
+                                "codex",
+                                ProviderModel("gpt-a", "GPT Alpha", None, None, ()),
+                            )
+                        )
+                        controller, _backend, callbacks = self.make_controller(
+                            workspace,
+                            "/settings",
+                            *prefix,
+                            *path,
+                            failure_type(),
+                            "/quit",
+                            provider_catalog=catalog,
+                            terminal_width=80,
+                        )
+                        self.assertEqual(controller.run_session_lobby(), 0)
+                        self.assertEqual(_tree_snapshot(workspace.root), before)
+                        self.assertEqual(
+                            "".join(callbacks.records).count(
+                                "[cancelled] Pending changes discarded.\n"
+                            ),
+                            1 if dirty else 0,
+                        )
+                        self.assertEqual(callbacks.reads, [])
+
+    def test_catalog_process_controls_propagate_from_controller_collaborator(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        for failure in (KeyboardInterrupt("catalog"), SystemExit("catalog")):
+            with self.subTest(failure=type(failure).__name__):
+                controller, _backend, _callbacks = self.make_controller(
+                    workspace,
+                    provider_catalog=ScriptedProviderCatalog(failure),
+                )
+                with self.assertRaises(type(failure)) as caught:
+                    controller._discover_settings_catalog("codex")
+                self.assertIs(caught.exception, failure)
 
     def test_settings_routes_picker_and_prompt_inputs_as_transient_only(
         self,
@@ -3612,6 +5589,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "/settings",
             "3",
             "0",
+            "\x1b",
             "6",
             "1",
             "/quit",
@@ -3639,9 +5617,16 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertTrue(
             all(call.kwargs.get("transient") is True for call in picker.call_args_list)
         )
-        self.assertEqual(len(prompt.call_args_list), 1)
+        self.assertEqual(len(prompt.call_args_list), 2)
         self.assertTrue(
             all(call.kwargs.get("transient") is True for call in prompt.call_args_list)
+        )
+        self.assertEqual(
+            tuple(call.kwargs.get("initial_value") for call in prompt.call_args_list),
+            ("1", "0"),
+        )
+        self.assertTrue(
+            all(call.args[1].default is None for call in prompt.call_args_list)
         )
 
         ordinary_controller, _ordinary_backend, _ordinary_callbacks = (
@@ -3677,6 +5662,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "/settings",
             "1",
             "2",
+            "/cancel",
             "6",
             "1",
             "/quit",
@@ -3693,6 +5679,7 @@ class ControllerSettingsTests(ControllerTestCase):
 
         self.assertGreaterEqual(len(picker.call_args_list), 3)
         picker_call = picker.call_args_list[-1]
+        self.assertIsNone(picker_call.kwargs.get("notice"))
         self.assertEqual(
             picker_call.args[2],
             (terminal_module.Choice("yes", "YES"), terminal_module.Choice("no", "NO")),
@@ -3725,16 +5712,130 @@ class ControllerSettingsTests(ControllerTestCase):
         self,
     ) -> None:
         cases = (
-            ("save-no-then-cancel-yes", ("/settings", "6", "2", "7", "1", "/quit")),
             (
-                "save-fallback-cancel-then-cancel-yes",
-                ("/settings", "6", "/cancel", "7", "1", "/quit"),
+                "save-no-then-clean-cancel",
+                ("/settings", "6", "2", "7", "/quit"),
+                1,
+                False,
+                0,
             ),
-            ("cancel-no-then-cancel-yes", ("/settings", "7", "2", "7", "1", "/quit")),
-            ("save-interrupt", ("/settings", "6", KeyboardInterrupt(), "/quit")),
-            ("save-eof", ("/settings", "6", EOFError(), "/quit")),
+            (
+                "save-fallback-cancel-then-clean-cancel",
+                ("/settings", "6", "/cancel", "7", "/quit"),
+                1,
+                False,
+                0,
+            ),
+            ("clean-explicit-cancel", ("/settings", "7", "/quit"), 0, False, 0),
+            ("clean-root-escape", ("/settings", "/cancel", "/quit"), 0, False, 0),
+            (
+                "clean-root-interrupt",
+                ("/settings", KeyboardInterrupt(), "/quit"),
+                0,
+                False,
+                0,
+            ),
+            (
+                "clean-root-eof",
+                ("/settings", EOFError(), "/quit"),
+                0,
+                False,
+                0,
+            ),
+            (
+                "dirty-cancel-no-then-yes",
+                (
+                    "/settings",
+                    "1",
+                    "2",
+                    "/cancel",
+                    "7",
+                    "2",
+                    "7",
+                    "1",
+                    "/quit",
+                ),
+                2,
+                True,
+                1,
+            ),
+            (
+                "dirty-root-escape-confirmation-escape-then-yes",
+                (
+                    "/settings",
+                    "1",
+                    "2",
+                    "/cancel",
+                    "/cancel",
+                    "/cancel",
+                    "7",
+                    "1",
+                    "/quit",
+                ),
+                2,
+                True,
+                1,
+            ),
+            (
+                "dirty-cancel-interrupt",
+                (
+                    "/settings",
+                    "1",
+                    "2",
+                    "/cancel",
+                    "7",
+                    KeyboardInterrupt(),
+                    "/quit",
+                ),
+                1,
+                False,
+                1,
+            ),
+            (
+                "dirty-root-escape-eof",
+                (
+                    "/settings",
+                    "1",
+                    "2",
+                    "/cancel",
+                    "/cancel",
+                    EOFError(),
+                    "/quit",
+                ),
+                1,
+                False,
+                1,
+            ),
+            (
+                "dirty-root-interrupt",
+                ("/settings", "1", "2", "/cancel", KeyboardInterrupt(), "/quit"),
+                0,
+                False,
+                1,
+            ),
+            (
+                "dirty-root-eof",
+                ("/settings", "1", "2", "/cancel", EOFError(), "/quit"),
+                0,
+                False,
+                1,
+            ),
+            (
+                "save-interrupt",
+                ("/settings", "6", KeyboardInterrupt(), "/quit"),
+                1,
+                False,
+                0,
+            ),
+            (
+                "save-eof",
+                ("/settings", "6", EOFError(), "/quit"),
+                1,
+                False,
+                0,
+            ),
         )
-        for label, reads in cases:
+        for label, reads, confirmation_count, returns_to_cancel, discard_count in cases:
             with self.subTest(label=label):
                 workspace = self.make_workspace()
                 before = _tree_snapshot(workspace.root)
@@ -3743,53 +5844,125 @@ class ControllerSettingsTests(ControllerTestCase):
                     *reads,
                     terminal_width=80,
                 )
-                self.assertEqual(controller.run_session_lobby(), 0)
+                original_picker = terminal_module.InteractivePickerInput.read_picker
+                with mock.patch.object(
+                    terminal_module.InteractivePickerInput,
+                    "read_picker",
+                    autospec=True,
+                    side_effect=original_picker,
+                ) as picker:
+                    self.assertEqual(controller.run_session_lobby(), 0)
                 self.assertEqual(_tree_snapshot(workspace.root), before)
                 rendered = "".join(callbacks.records)
                 self.assertEqual(
                     rendered.count(
-                        "[cancelled] Settings cancelled; no pending changes were saved.\n"
+                        "[cancelled] Pending changes discarded.\n"
                     ),
-                    1,
+                    discard_count,
                 )
-                self.assertTrue(any("YES" in prompt and "NO" in prompt for prompt in callbacks.prompts))
+                confirmation_prompts = [
+                    prompt
+                    for prompt in callbacks.prompts
+                    if "Save settings?" in prompt or "Cancel settings?" in prompt
+                ]
+                self.assertEqual(len(confirmation_prompts), confirmation_count)
+                if discard_count:
+                    dirty_settings_calls = [
+                        call
+                        for call in picker.call_args_list
+                        if call.args[1].name == "Settings"
+                        and next(
+                            choice
+                            for choice in call.args[2]
+                            if choice.identity == "cancel"
+                        ).description
+                        == "Pending changes will be discarded."
+                    ]
+                    self.assertTrue(dirty_settings_calls)
+                if returns_to_cancel:
+                    settings_calls = [
+                        call
+                        for call in picker.call_args_list
+                        if call.args[1].name == "Settings"
+                    ]
+                    self.assertEqual(
+                        settings_calls[-1].kwargs["highlighted_id"],
+                        "cancel",
+                    )
 
-    def test_settings_edit_save_isolated_candidate_and_literal_cancel_text(self) -> None:
+    def test_settings_edit_save_isolated_discovered_candidate_and_literal_cancel(
+        self,
+    ) -> None:
         workspace = self.make_workspace()
         agent_configs = workspace.read_json("config/agent_configs.json")
         agent_configs[PLOT_ARCHITECT].update(
             {
-                "backend": "antigravity",
                 "antigravity_model": "inactive-agy-model",
                 "antigravity_effort": "medium",
             }
         )
         workspace.write_json("config/agent_configs.json", agent_configs)
+        catalog = ScriptedProviderCatalog(
+            _ready_provider_catalog(
+                "codex",
+                ProviderModel(
+                    "gpt-a",
+                    "GPT Alpha",
+                    None,
+                    "low",
+                    (ProviderEffort("low", "low"),),
+                ),
+                ProviderModel(
+                    "gpt-b",
+                    "GPT Beta",
+                    None,
+                    "future_2",
+                    (
+                        ProviderEffort("low", "low"),
+                        ProviderEffort("future_2", "future_2"),
+                    ),
+                ),
+            )
+        )
         before = _tree_snapshot(workspace.root)
         controller, _backend, callbacks = self.make_controller(
             workspace,
             "/settings",
             "1",
             "2",
+            "/cancel",
             "3",
             "bad",
             "0",
-            "5",
-            "2",
-            "1",
-            "1",
+            "\x1b",
             "5",
             "2",
             "2",
+            "3",
+            "/cancel",
+            "/cancel",
             "/cancel",
             "5",
             "2",
             "3",
-            "6",
+            "3",
+            "/cancel",
+            "/cancel",
+            "/cancel",
+            "5",
+            "2",
+            "2",
+            "4",
+            "/cancel",
+            "\x1b",
+            "/cancel",
+            "/cancel",
+            "/cancel",
             "6",
             "1",
             "/quit",
-            terminal_width=160,
+            provider_catalog=catalog,
+            terminal_width=48,
         )
         real_select = controller_core_module.select_conversation_storage
 
@@ -3823,7 +5996,7 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         self.assertEqual(
             configured.agent_configs[PLOT_ARCHITECT].codex_reasoning_effort,
-            "xhigh",
+            "future_2",
         )
         self.assertEqual(
             configured.agent_configs[PLOT_ARCHITECT].antigravity_model,
@@ -3835,27 +6008,26 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         self.assertEqual(
             configured.agent_configs[PLOT_ARCHITECT].backend,
-            "codex",
+            None,
         )
         rendered = "".join(callbacks.records)
+        compact_rendered = "".join(rendered.split())
         self.assertEqual(
-            rendered.count(
-                "[validation] Maximum debate rounds must be a nonnegative ASCII integer.\n"
+            compact_rendered.count(
+                "[validation]MaximumdebateroundsmustbeanonnegativeASCIIinteger."
             ),
             1,
         )
         self.assertEqual(
-            rendered.count(
-                "[saved] Settings saved. Changes apply to the next shell.\n"
+            compact_rendered.count(
+                "[saved]Settingssaved.Changesapplytothenextshell."
             ),
             1,
         )
-        self.assertTrue(
-            any(
-                "Choose Codex or Antigravity." in prompt
-                for prompt in callbacks.prompts
-            )
-        )
+        self.assertEqual(catalog.events, ["codex", "codex", "codex"])
+        compact_prompts = "".join("".join(prompt.split()) for prompt in callbacks.prompts)
+        self.assertIn("pendingCodexprovider", compact_prompts)
+        self.assertIn("effectivemodel", compact_prompts)
         self.assertGreaterEqual(
             sum("Choose a setting to edit" in prompt for prompt in callbacks.prompts),
             1,
@@ -3874,6 +6046,18 @@ class ControllerSettingsTests(ControllerTestCase):
             }
         )
         workspace.write_json("config/agent_configs.json", agent_configs)
+        efforts = (
+            ProviderEffort("low", "low"),
+            ProviderEffort("medium", "medium"),
+            ProviderEffort("high", "high"),
+        )
+        catalog = ScriptedProviderCatalog(
+            _ready_provider_catalog(
+                "antigravity",
+                ProviderModel("agy-one", "AGY One", None, None, efforts),
+                ProviderModel("agy-two", "AGY Two", None, None, efforts),
+            )
+        )
         controller, _backend, callbacks = self.make_controller(
             workspace,
             "/settings",
@@ -3881,18 +6065,30 @@ class ControllerSettingsTests(ControllerTestCase):
             "2",
             "1",
             "2",
+            "/cancel",
+            "/cancel",
+            "/cancel",
             "5",
             "2",
             "2",
+            "4",
             "-unsafe",
             "agy-model",
+            "\x1b",
+            "/cancel",
+            "/cancel",
+            "/cancel",
             "5",
             "2",
             "3",
             "4",
+            "/cancel",
+            "/cancel",
+            "/cancel",
             "6",
             "1",
             "/quit",
+            provider_catalog=catalog,
             terminal_width=160,
         )
 
@@ -3928,7 +6124,7 @@ class ControllerSettingsTests(ControllerTestCase):
         effort_prompt = next(
             prompt
             for prompt in callbacks.prompts
-            if "Antigravity effort [Plot & Structure Architect]" in prompt
+            if "Effort [Plot & Structure Architect · Antigravity]" in prompt
         )
         self.assertIn("[available] low", effort_prompt)
         self.assertIn("[available] medium", effort_prompt)
@@ -3943,10 +6139,24 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         self.assertIn("Antigravity model", rendered)
         self.assertIn("[saved] Settings saved", rendered)
+        self.assertEqual(catalog.events, ["antigravity", "antigravity"])
 
-    def test_nested_escape_returns_but_interrupt_and_eof_cancel_all(self) -> None:
+    def test_nested_return_but_interrupt_and_eof_cancel_all(self) -> None:
         scenarios = (
-            (("/settings", "5", "2", "2", "\x1b", "7", "1", "/quit"),),
+            (
+                (
+                    "/settings",
+                    "5",
+                    "2",
+                    "2",
+                    "/cancel",
+                    "/cancel",
+                    "/cancel",
+                    "7",
+                    "1",
+                    "/quit",
+                ),
+            ),
             (("/settings", KeyboardInterrupt(), "/quit"),),
             (("/settings", EOFError(), "/quit"),),
         )
@@ -3954,9 +6164,16 @@ class ControllerSettingsTests(ControllerTestCase):
             with self.subTest(reads=reads):
                 workspace = self.make_workspace()
                 before = _tree_snapshot(workspace.root)
+                catalog = ScriptedProviderCatalog(
+                    ProviderCatalogDiscovery(
+                        "codex",
+                        ProviderCatalogState.UNAVAILABLE,
+                    )
+                )
                 controller, _backend, callbacks = self.make_controller(
                     workspace,
                     *reads,
+                    provider_catalog=catalog,
                     terminal_width=160,
                 )
                 self.assertEqual(controller.run_session_lobby(), 0)
@@ -3967,9 +6184,9 @@ class ControllerSettingsTests(ControllerTestCase):
                 )
                 self.assertEqual(
                     rendered.count(
-                        "[cancelled] Settings cancelled; no pending changes were saved.\n"
+                        "[cancelled] Pending changes discarded.\n"
                     ),
-                    1,
+                    0,
                 )
 
     def test_storage_edit_is_desired_only_and_keeps_current_shell_bundle(self) -> None:
@@ -3978,6 +6195,7 @@ class ControllerSettingsTests(ControllerTestCase):
             workspace,
             "/settings",
             "4",
+            "2",
             "2",
             "6",
             "1",
@@ -4021,6 +6239,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "/settings",
             "1",
             "2",
+            "/cancel",
             "6",
             "1",
             "7",
@@ -4106,9 +6325,9 @@ class ControllerSettingsTests(ControllerTestCase):
                 self.assertNotIn("settings validation failed", rendered)
                 self.assertEqual(
                     rendered.count(
-                        "[cancelled] Settings cancelled; no pending changes were saved.\n"
+                        "[cancelled] Pending changes discarded.\n"
                     ),
-                    1,
+                    0,
                 )
 
 
@@ -4296,6 +6515,24 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
         self.assertEqual(query.limit, 10)
         self.assertFalse(query.include_archived)
         rendered = "".join(callbacks.records)
+        request = terminal_module.Record(
+            "context",
+            title="Search request",
+            fields=(
+                terminal_module.Field("Query", "council"),
+                terminal_module.Field("Scope", "active"),
+            ),
+            state=terminal_module.ViewState.COMPLETED,
+        )
+        self.assertEqual(
+            [
+                component
+                for component in components
+                if type(component) is terminal_module.Record
+                and component.title == "Search request"
+            ],
+            [request],
+        )
         search_views = [
             component
             for component in components
@@ -4349,6 +6586,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
             ),
         ]
         self.assertEqual(search_views, expected_views)
+        self.assertLess(components.index(request), components.index(search_views[0]))
         self.assertEqual(
             [
                 record
@@ -4453,6 +6691,25 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
 
         self.assertEqual(memory.search_calls, [query])
         self.assertEqual(_tree_snapshot(workspace.root), before)
+        self.assertEqual(
+            [
+                component
+                for component in components
+                if type(component) is terminal_module.Record
+                and component.title == "Search request"
+            ],
+            [
+                terminal_module.Record(
+                    "context",
+                    title="Search request",
+                    fields=(
+                        terminal_module.Field("Query", "missing"),
+                        terminal_module.Field("Scope", "active"),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                )
+            ],
+        )
         self.assertFalse(
             any(
                 type(component) is terminal_module.ListView
@@ -4502,6 +6759,12 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
             )
         )
         context_before = workspace.path(_CONTEXT_PATH).read_bytes()
+        components: list[object] = []
+        real_write_component = terminal_module.InteractiveSemanticOutput.write_component
+
+        def capture_component(output, component):
+            components.append(component)
+            return real_write_component(output, component)
 
         with (
             mock.patch.object(
@@ -4510,6 +6773,12 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                 return_value=memory,
             ),
             mock.patch.object(controller_core_module.asyncio, "run") as async_run,
+            mock.patch.object(
+                terminal_module.InteractiveSemanticOutput,
+                "write_component",
+                autospec=True,
+                side_effect=capture_component,
+            ),
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
 
@@ -4521,6 +6790,47 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
         self.assertEqual(
             memory.transcript_calls,
             [(entry.conversation_id, 1, 24)],
+        )
+        self.assertEqual(
+            [
+                component
+                for component in components
+                if type(component) is terminal_module.Record
+                and component.title in {"Search request", "Transcript request"}
+            ],
+            [
+                terminal_module.Record(
+                    "context",
+                    title="Search request",
+                    fields=(
+                        terminal_module.Field("Query", "council"),
+                        terminal_module.Field("Scope", "active"),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                ),
+                terminal_module.Record(
+                    "context",
+                    title="Search request",
+                    fields=(
+                        terminal_module.Field("Query", "valid"),
+                        terminal_module.Field("Scope", "active"),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                ),
+                terminal_module.Record(
+                    "context",
+                    title="Transcript request",
+                    fields=(
+                        terminal_module.Field(
+                            "Conversation",
+                            entry.conversation_id[:12],
+                        ),
+                        terminal_module.Field("Start", "1"),
+                        terminal_module.Field("Count", "24"),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                ),
+            ],
         )
         rendered = "".join(callbacks.records)
         self.assertIn(
@@ -4792,6 +7102,33 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                 (entry.conversation_id, 1, 1),
                 (entry.conversation_id, 1, 24),
                 (entry.conversation_id, 1, 24),
+            ],
+        )
+        self.assertEqual(
+            [
+                component
+                for component in components
+                if type(component) is terminal_module.Record
+                and component.title == "Transcript request"
+            ],
+            [
+                terminal_module.Record(
+                    "context",
+                    title="Transcript request",
+                    fields=(
+                        terminal_module.Field("Conversation", handle),
+                        terminal_module.Field("Start", start),
+                        terminal_module.Field("Count", count),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                )
+                for start, count in (
+                    ("1", "24"),
+                    ("3", "24"),
+                    ("1", "1"),
+                    ("1", "24"),
+                    ("1", "24"),
+                )
             ],
         )
         rendered = "".join(callbacks.records)
@@ -5105,9 +7442,20 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                 ):
                     self.assertEqual(controller.run_session_lobby(), 0)
                 rendered = "".join(callbacks.records)
+                request_context = (
+                    "[context] Transcript request [completed]\n"
+                    f"  Conversation: {conversation_id[:12]}\n"
+                    "  Start: 1\n"
+                    "  Count: 24\n"
+                )
+                self.assertEqual(rendered.count(request_context), 1)
                 self.assertEqual(
                     rendered.count("[error transcript_invalid]"),
                     1,
+                )
+                self.assertLess(
+                    rendered.index(request_context),
+                    rendered.index("[error transcript_invalid]"),
                 )
                 self.assertNotIn("private transcript detail", rendered)
                 self.assertIsNone(controller._conversation_memory_service)
@@ -5404,6 +7752,26 @@ class ControllerConversationCommandTests(ControllerTestCase):
             load_default_conversation(workspace, "session"),
             catalog.entries[1].conversation_id,
         )
+        self.assertEqual(
+            [
+                record
+                for record in callbacks.records
+                if record.startswith("--- Conversation scope")
+            ],
+            [
+                _conversation_scope_record("session", None, None),
+                _conversation_scope_record(
+                    "session",
+                    catalog.entries[0].conversation_id[:12],
+                    "Opening scene",
+                ),
+                _conversation_scope_record(
+                    "session",
+                    catalog.entries[1].conversation_id,
+                    "Opening scene",
+                ),
+            ],
+        )
         rendered = "".join(callbacks.records)
         self.assertEqual(rendered.count("Created and focused"), 2)
         self.assertIn(
@@ -5560,6 +7928,45 @@ class ControllerConversationCommandTests(ControllerTestCase):
             side_effect=capture_component,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
+
+        self.assertEqual(
+            [
+                component
+                for component in components
+                if type(component) is terminal_module.Record
+                and component.title == "Conversation list request"
+            ],
+            [
+                terminal_module.Record(
+                    "context",
+                    title="Conversation list request",
+                    fields=(
+                        terminal_module.Field("Query", "motivation"),
+                        terminal_module.Field("Scope", "all"),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                ),
+                terminal_module.Record(
+                    "context",
+                    title="Conversation list request",
+                    fields=(
+                        terminal_module.Field("Query", "opening"),
+                        terminal_module.Field("Scope", "active"),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                ),
+            ],
+        )
+        self.assertEqual(
+            callbacks.records.count(
+                _conversation_scope_record(
+                    "session",
+                    _COLLIDING_A,
+                    "Ｍara   Motivation",
+                )
+            ),
+            1,
+        )
 
         def conversation_view(
             handle: str,
@@ -5733,6 +8140,84 @@ class ControllerConversationCommandTests(ControllerTestCase):
             ],
             [f"{render_plain(expected, width=200).text}\n"],
         )
+
+    def test_filtered_conversation_list_context_precedes_empty_and_error(
+        self,
+    ) -> None:
+        cases = (
+            ("empty", None, False),
+            ("catalog error", OSError("catalog-secret"), True),
+        )
+        for label, failure, expects_error in cases:
+            with self.subTest(case=label):
+                workspace, _backend, catalog, controller, callbacks = (
+                    self.prepared_controller(
+                        "/conversation list --all  MISSING  ",
+                        "/quit",
+                    )
+                )
+                components: list[object] = []
+                real_write_component = (
+                    terminal_module.InteractiveSemanticOutput.write_component
+                )
+
+                def capture_component(output, component):
+                    components.append(component)
+                    return real_write_component(output, component)
+
+                list_patch = (
+                    mock.patch.object(catalog, "list", side_effect=failure)
+                    if failure is not None
+                    else mock.patch.object(catalog, "list", wraps=catalog.list)
+                )
+                with (
+                    list_patch,
+                    mock.patch.object(
+                        terminal_module.InteractiveSemanticOutput,
+                        "write_component",
+                        autospec=True,
+                        side_effect=capture_component,
+                    ),
+                ):
+                    self.assertEqual(controller.run_session_lobby(), 0)
+
+                expected_context = terminal_module.Record(
+                    "context",
+                    title="Conversation list request",
+                    fields=(
+                        terminal_module.Field("Query", "missing"),
+                        terminal_module.Field("Scope", "all"),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                )
+                self.assertEqual(
+                    [
+                        component
+                        for component in components
+                        if type(component) is terminal_module.Record
+                        and component.title == "Conversation list request"
+                    ],
+                    [expected_context],
+                )
+                rendered = "".join(callbacks.records)
+                context_text = render_plain(expected_context, width=200).text
+                self.assertIn(context_text, rendered)
+                if expects_error:
+                    self.assertNotIn("catalog-secret", rendered)
+                    self.assertNotIn("No conversations found.", rendered)
+                    self.assertLess(
+                        rendered.index(context_text),
+                        rendered.index("[error workspace_invalid]"),
+                    )
+                else:
+                    self.assertIn("No conversations found.", rendered)
+                    self.assertLess(
+                        rendered.index(context_text),
+                        rendered.index("No conversations found."),
+                    )
+                self.assertFalse(
+                    workspace.path(_default_relative("session")).exists()
+                )
 
     def test_main_conversation_resume_provider_is_live_and_freshly_validated(
         self,
@@ -6227,7 +8712,16 @@ class ControllerConversationCommandTests(ControllerTestCase):
                         _error_record(expected_error, width=200),
                         rendered,
                     )
-                    self.assertGreaterEqual(rendered.count("Subject: Prior"), 2)
+                    self.assertEqual(
+                        callbacks.records.count(
+                            _conversation_scope_record(
+                                "session",
+                                prior.conversation_id[:12],
+                                "Prior",
+                            )
+                        ),
+                        1,
+                    )
 
     def test_omitted_use_selection_write_failure_preserves_prior_choice(
         self,
@@ -6264,7 +8758,16 @@ class ControllerConversationCommandTests(ControllerTestCase):
             _error_record(InteractiveErrorCode.WORKSPACE_INVALID, width=200),
             rendered,
         )
-        self.assertGreaterEqual(rendered.count("Subject: Prior"), 2)
+        self.assertEqual(
+            callbacks.records.count(
+                _conversation_scope_record(
+                    "session",
+                    prior.conversation_id[:12],
+                    "Prior",
+                )
+            ),
+            1,
+        )
         self.assertNotIn("selection-secret", rendered)
 
     def test_use_selection_write_failure_preserves_prior_effective_choice(
@@ -6302,15 +8805,25 @@ class ControllerConversationCommandTests(ControllerTestCase):
             _error_record(InteractiveErrorCode.WORKSPACE_INVALID, width=200),
             rendered,
         )
-        self.assertGreaterEqual(rendered.count("Subject: Prior"), 2)
+        self.assertEqual(
+            callbacks.records.count(
+                _conversation_scope_record(
+                    "session",
+                    prior.conversation_id[:12],
+                    "Prior",
+                )
+            ),
+            1,
+        )
         self.assertNotIn("selection-secret", rendered)
 
-    def test_external_missing_or_archived_selection_enters_lobby_in_memory_only(
+    def test_external_rename_archive_or_delete_is_detected_at_next_prompt(
         self,
     ) -> None:
         cases = (
-            ("missing", InteractiveErrorCode.CONVERSATION_NOT_FOUND),
+            ("renamed", None),
             ("archived", InteractiveErrorCode.CONVERSATION_ARCHIVED),
+            ("deleted", InteractiveErrorCode.CONVERSATION_NOT_FOUND),
         )
         for change, expected_code in cases:
             with self.subTest(change=change):
@@ -6318,14 +8831,19 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 catalog = MemoryConversationCatalog((selected,))
 
                 def change_catalog(_prompt: str) -> str:
-                    if change == "missing":
+                    if change == "deleted":
                         catalog.entries.clear()
+                    elif change == "renamed":
+                        catalog.entries[0] = replace(
+                            catalog.entries[0],
+                            subject="Externally revised",
+                        )
                     else:
                         catalog.entries[0] = replace(
                             catalog.entries[0],
                             status=ConversationStatus.ARCHIVED,
                         )
-                    return "/conversation subject Revised"
+                    return "/help"
 
                 workspace, _backend, _catalog, controller, callbacks = (
                     self.prepared_controller(
@@ -6354,10 +8872,37 @@ class ControllerConversationCommandTests(ControllerTestCase):
                     any(event.startswith("rename:") for event in catalog.events)
                 )
                 rendered = "".join(callbacks.records)
-                self.assertIn(_error_record(expected_code, width=200), rendered)
-                self.assertIn(
-                    _conversation_scope_record("session", None, None),
-                    rendered,
+                expected_scopes = [
+                    _conversation_scope_record(
+                        "session",
+                        selected.conversation_id[:12],
+                        "Selected",
+                    )
+                ]
+                if expected_code is None:
+                    expected_scopes.append(
+                        _conversation_scope_record(
+                            "session",
+                            selected.conversation_id[:12],
+                            "Externally revised",
+                        )
+                    )
+                    self.assertNotIn("[error conversation_", rendered)
+                else:
+                    expected_scopes.append(
+                        _conversation_scope_record("session", None, None)
+                    )
+                    self.assertIn(
+                        _error_record(expected_code, width=200),
+                        rendered,
+                    )
+                self.assertEqual(
+                    [
+                        record
+                        for record in callbacks.records
+                        if record.startswith("--- Conversation scope")
+                    ],
+                    expected_scopes,
                 )
 
     def test_selected_archive_selection_failure_is_compensated_or_fatal(
@@ -6730,6 +9275,72 @@ class ControllerConversationCommandTests(ControllerTestCase):
             rendered,
         )
         self.assertIn("Renamed c_fedcba9876 | Subject: Revised subject", rendered)
+        self.assertEqual(
+            [
+                record
+                for record in callbacks.records
+                if record.startswith("--- Conversation scope")
+            ],
+            [
+                _conversation_scope_record(
+                    "session",
+                    entry.conversation_id[:12],
+                    "Original",
+                ),
+                _conversation_scope_record(
+                    "session",
+                    entry.conversation_id[:12],
+                    "Revised subject",
+                ),
+            ],
+        )
+
+    def test_failed_scope_write_is_not_cached_then_success_is_cached(self) -> None:
+        entry = _conversation_metadata(_UNIQUE_C, "Selected")
+        _workspace, _backend, _catalog, controller, callbacks = (
+            self.prepared_controller(
+                entries=(entry,),
+                selected_id=entry.conversation_id,
+            )
+        )
+        controller._attached_session_id = "session"
+        controller._focused_conversation = entry
+        attempts = 0
+        real_write_scope = InteractiveTerminal.write_conversation_scope
+
+        def fail_once(output: object, **kwargs: object) -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise OSError("scope writer unavailable")
+            real_write_scope(output, **kwargs)
+
+        unpresented = object()
+        with mock.patch.object(
+            InteractiveTerminal,
+            "write_conversation_scope",
+            autospec=True,
+            side_effect=fail_once,
+        ):
+            with self.assertRaisesRegex(OSError, "scope writer unavailable"):
+                controller._write_attached_conversation_scope(unpresented)
+            presented = controller._write_attached_conversation_scope(
+                unpresented
+            )
+            repeated = controller._write_attached_conversation_scope(presented)
+
+        self.assertEqual(repeated, presented)
+        self.assertEqual(attempts, 2)
+        self.assertEqual(
+            callbacks.records,
+            [
+                _conversation_scope_record(
+                    "session",
+                    entry.conversation_id[:12],
+                    "Selected",
+                )
+            ],
+        )
 
     def test_selected_archive_chooses_first_active_successor_or_persists_null(
         self,
@@ -6995,7 +9606,16 @@ class ControllerConversationCommandTests(ControllerTestCase):
             "ready",
         )
         rendered = "".join(callbacks.records)
-        self.assertEqual(rendered.count("Subject: Persistent subject"), 2)
+        self.assertEqual(
+            callbacks.records.count(
+                _conversation_scope_record(
+                    "session",
+                    selected.conversation_id[:12],
+                    "Persistent subject",
+                )
+            ),
+            2,
+        )
         self.assertIn("Paused session; default retained", rendered)
         self.assertIn("Session: session (reopened)", rendered)
         self.assertTrue(

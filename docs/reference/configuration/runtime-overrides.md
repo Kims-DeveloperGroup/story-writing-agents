@@ -76,7 +76,7 @@ and backend-routing cascades. First non-null value wins:
 Passing a constructor model or effort as `None` is inheritance, not an explicit
 request to clear a persisted value. There is no Codex reasoning CLI flag or
 constructor argument. No provider model/effort is a session runtime override or
-directive. The interactive `/settings Providers` editor is the installed
+directive. The interactive `/settings` Agents editor is the installed
 workflow for changing an agent's persisted active-provider model or effort; it
 preserves inactive-provider values. Each `AgentBackend` validates and snapshots
 the complete persisted system-default and per-agent configuration pair once
@@ -90,13 +90,25 @@ Session-wide and per-agent runtime language/persona overrides remain live above
 that snapshot, and explicit backend and run arguments retain their higher
 precedence. `/settings` changes persistent fallbacks only; it does not clear or
 rewrite those overrides, refresh provider threads, or alter the precedence
-table. Its provider editor authenticates before changing a pending route, and
-Save freshly gates every distinct effective provider outside the configuration
-transaction. Any absent-default write performed during authentication is
-durable even if pending settings are cancelled.
+table. Its Provider-editor authentication is subordinate and returns to
+Provider; the route and any missing workspace default remain pending in memory.
+Escape or cancellation before confirmed Save leaves configuration bytes
+unchanged, and no configuration value is persisted before Save is confirmed.
+After Save confirmation, Save freshly gates every distinct effective provider
+outside the configuration transaction. Save-time authentication may rebase a
+missing default only in the pending candidate, and that value becomes durable
+only when conversation-storage readiness, parity, and the final guarded
+settings write complete. This `/settings` boundary does not change startup
+authentication or global `/auth`, which retain immediate absent-default
+durability.
 
-Codex reasoning accepts `minimal`, `low`, `medium`, `high`, and `xhigh`.
-Antigravity effort accepts `low`, `medium`, and `high`. See
+Persisted Codex reasoning accepts any forward-compatible lowercase token
+matching `[a-z][a-z0-9_-]{0,31}`. Interactive Effort choices come from the
+pending effective Codex model's fresh catalog, while an unreported existing
+token remains preservable as Current compatibility. Antigravity effort accepts
+only `low`, `medium`, and `high`. Catalog membership is not an additional
+precedence or persistence gate, and discovery data is never a runtime
+override. See
 [Use Antigravity agents](../../guides/antigravity.md) for mixed routing and
 provider-boundary details.
 

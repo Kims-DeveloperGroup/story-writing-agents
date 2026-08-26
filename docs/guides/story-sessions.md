@@ -5,7 +5,9 @@
 > focus on an active conversation. Inline canonical artifact references work in
 > provider-bound routed, sticky, ordinary, retrieval, and `/run` prompt text.
 > After session attachment and conversation focus, `$`, `$${path}`, and `$$`
-> discover or select them without submitting.
+> discover or select them without submitting. Accepted advisory and consensus
+> prompt content remains readable in terminal scrollback, with live capable
+> input reprojected after cleanup and ordinary-line fallback left unduplicated.
 
 Key terms: **defaults** are persisted fallbacks; **current attachment** is the
 session held by this shell; **current focus** and **agent focus** select the
@@ -106,7 +108,10 @@ completion adds one ASCII trailing space at the end of a token and does not
 submit, so a later Enter is required. Dynamic resume Enter commits immediately.
 Plain fallback has no pre-Enter palette. All capable submitted input clears its
 complete live frame before persistent results are written; fallback prompts and
-echoed input remain visible. See the
+echoed input remain visible. For accepted provider-bound content, capable
+streams then render one attributed exact-body message before progress, while
+fallback adds no duplicate of its already visible submission. Control-only
+commands and editor values are not automatically echoed. See the
 [terminal contract](../reference/interactive-terminal.md#main-prompt-live-suggestions).
 
 ## Edit persistent settings
@@ -119,42 +124,114 @@ any default already established.
 
 `/settings` is global, alias-free, and works in the lobby or while attached. It
 shows separate Current and Pending values for Language,
-Persona, Maximum debate rounds, Conversation storage, and Providers. The exact
+Persona, Maximum debate rounds, Conversation storage, and Agents. The exact
 top-level order is Language, Persona, Maximum debate rounds, Conversation
-storage, Providers, Save, Cancel. Conversation storage offers Filesystem and
-SQLite as an independent workspace choice; it is not an agent provider route.
-Choose Providers to select an agent in canonical roster order, then choose
-Provider, Model, or Reasoning effort for that agent. Provider choices are Codex
-and Antigravity. Changing the route does not erase the inactive provider's
-saved model or effort.
+storage, Agents, Save, Cancel. Conversation storage offers Filesystem and
+SQLite as an independent next-shell workspace choice; it is not an agent
+provider route. Choose Agents to select an agent in
+canonical roster order, then use Agent settings to choose Provider, Model, or
+Effort for that agent. Provider remains the field-level configuration concept;
+its choices are Codex and Antigravity. Changing the route does not erase the
+inactive provider's saved model or effort.
+Editor labels are provider-neutral; Current/Pending confirmation remains
+provider-qualified so both providers' inactive values stay identifiable.
 
-On a capable terminal, Up/Down moves the current picker highlight and Enter
-opens or commits it. Escape from a nested picker or prompt restores that
-field's prior pending value and returns to its parent. Escape at the top level,
-Cancel, Ctrl-C, or EOF cancels the whole workflow without saving. Plain
-fallback uses the picker's numbered grammar. In the per-agent active-provider
-model text prompt, blank means inherit that provider's workspace system model
-and `/cancel` is literal model text rather than a command.
+On a capable terminal, Up/Down moves the current picker highlight. Enter opens
+a selected settings level or applies a pending value. Language, Persona,
+Maximum debate rounds, Conversation storage, Provider, Model, Custom model,
+and Effort stay active after a valid Enter: the picker selection or prompt
+default updates immediately, and the editor shows one inline completed success
+result for the latest value, replacing the previous result. Guidance states
+that Enter applies the pending value and keeps the editor open. A second
+consecutive valid Enter with the same normalized value returns one level
+silently. Entering a different valid value applies it, keeps the editor open,
+and makes that value the new same-value comparison. Invalid input,
+authentication failure, Custom model navigation, or leaving and re-entering
+the editor resets the comparison. This is semantic commit sequencing, not a
+raw-key timing gesture.
+
+Escape returns one level through Custom model > Model > Agent settings > Agents
+> Settings; Provider and Effort return directly to Agent settings, while
+Conversation storage returns directly to Settings. At root,
+Escape invokes the same action as explicit Cancel: clean settings exit
+immediately, while dirty settings open the existing YES/NO Cancel confirmation.
+NO or Escape there returns to Settings. Ctrl-C or EOF still cancels the whole
+transaction without saving. Plain fallback uses the picker's numbered grammar
+and the same level hierarchy. In the per-agent active-provider Custom model
+prompt, blank means inherit that provider's workspace system model and
+`/cancel` is literal model text rather than a command.
+
+Every retained value editor, including Conversation storage, always says
+`Entered changes remain pending in
+memory and are not saved; choose Save in Settings to persist them.` This stays
+visible when the editor first opens, after a valid value is entered, and while
+fixing validation. Entering a value changes only the pending in-memory settings;
+the completed result confirms that pending change, not a file save.
+
+When you return to the top-level Settings picker, it shows `[save required]
+Pending changes are in memory only and are not saved. Choose Save to persist
+them.` exactly while the complete pending settings differ from the values at
+opening. Its Save choice is exact plain `Save (*Required)` in that state and
+exact plain `Save` otherwise. Eligible ANSI decorates only `(*Required)`; the
+preceding separator space remains unstyled. Reverting every change removes the
+suffix and warning. Nested Agents, Agent settings, value editors, and
+Save/Cancel confirmations do not show the warning. Narrow, `NO_COLOR`, and
+fallback terminals keep the full plain guidance; fallback may leave an older
+prompt in scrollback, but the newest top-level prompt reports the current state.
+
+This retained-editor and same-value exit behavior is specific to the `/settings`
+controller, not a global picker or prompt rule. Individual picker and prompt
+reads, Save/Cancel confirmations, and context-changing pickers stay one-shot.
+In particular, `/session resume` and `/conversation resume` close after
+selection; capable mode clears the selected picker, and fallback may leave only
+inactive prompt text in scrollback. All input components retain the universal
+transient-after-submit policy.
 
 Language offers `KO`, `EN`, `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, and `RU`.
 Persona uses the safe lexical template catalog. Debate rounds accept a
-nonnegative ASCII integer, including audit-only `0`. Providers are edited per
-agent in roster order: Codex and Antigravity are available, with the workspace
+nonnegative ASCII integer, including audit-only `0`. Provider routes are edited
+per agent in roster order: Codex and Antigravity are available, with the workspace
 default and final Codex fallback used by nullable agent routes.
-Model accepts exact safe text or blank to inherit the active provider's
-workspace system model. Codex effort offers Inherit, `minimal`, `low`,
-`medium`, `high`, and `xhigh`; Antigravity effort offers Inherit, `low`,
-`medium`, and `high`. Inherit uses the active provider's workspace system
-value, then its provider default. The legacy backend name `gemini` is rejected;
-use `antigravity`.
+
+Only entering Model or Effort discovers a catalog; opening Settings or Agents
+and navigating Provider do not launch provider commands. Each editor entry
+discovers the pending effective provider afresh; retained commits and redraws
+within that entry do not repeat discovery. Model choices are
+ordered Inherit, provider-order discovered models, Current custom when the
+pending model is absent, and Custom model. Effort choices are ordered Inherit,
+the pending effective Codex model's exact efforts or Antigravity's global
+`low`, `medium`, `high`, and Current compatibility when a pending effort is
+unreported.
+
+Codex uses `codex debug models --bundled` and exact list-visible model effort
+rows instead of freezing OpenAI's
+[current model guidance](https://developers.openai.com/api/docs/guides/latest-model).
+Antigravity uses `agy models`, preserves aligned opaque slug/display order, and
+does not infer effort from names; Google's
+[headless/CLI guide](https://antigravity.google/docs/cli/headless/) documents
+the command and global effort values. Each attempt is limited to five seconds
+and one MiB retained stdout, with no automatic retry, cache, persistence,
+stderr, or raw diagnostic. Fixed failures preserve inherit/current/custom
+paths; leave and re-enter to retry.
+
+Save writes only the chosen opaque value or null. Custom models remain valid,
+Codex effort tokens match `[a-z][a-z0-9_-]{0,31}`, and Antigravity effort
+remains exactly `low`, `medium`, or `high`. The legacy backend name `gemini` is
+rejected; use `antigravity`.
 
 Selecting a provider freshly authenticates it before changing that pending
-route. Save freshly gates every distinct effective provider before the guarded
-file update; a stale or failed status prevents Save. A default established by
-completed authentication is rebased into the pending candidate rather than
-written through an intermediate settings save. Conversation-storage readiness
-and selection itself are provider-free, but the whole settings Save retains
-this provider-authentication gate.
+route. Authentication is subordinate to the Provider editor and returns there
+after its result. The provider route and any missing workspace default remain
+pending in memory; Escape or cancellation before confirmed Save leaves both
+configuration files byte-for-byte unchanged. No configuration value is
+persisted before Save is confirmed.
+
+After Save is confirmed, Save freshly gates every distinct effective provider
+before the guarded file update; a stale or failed status prevents the settings
+file transaction. A missing workspace default learned during that gate remains
+in the pending candidate and becomes durable only through the same complete
+Save. Conversation-storage readiness and selection are provider-free, but the
+whole Settings Save retains this provider-authentication gate.
 
 Selecting SQLite records only a pending next-shell choice. On Save, Story
 checks workspace coordination and the active Python interpreter's functional
@@ -236,11 +313,27 @@ it. `/conversation list` remains active-only unless `--all` is supplied. The
 picker does not change startup default restoration, routing, noninteractive
 commands, storage/provider schemas, or package APIs.
 
+The shell shows `Conversation scope` on initial attachment and again only when
+the session, visible conversation handle, subject, or sticky agent changes.
+Commands that leave those facts unchanged do not repeat the panel. Catalog and
+focus freshness are still checked before every attached prompt, so an external
+rename, archive, deletion, or handle-collision change is reflected on the next
+prompt. Detaching clears the presentation snapshot; reattaching shows scope
+again even when the semantic values match the earlier attachment.
+
 References follow the same routing: `@plot Review ${core_documents/global_outline.md}`
 addresses one agent once, while ordinary text after `/to character` addresses
 the sticky character focus. Every provider-bound turn captures its own ordered
 batch; a previous agent's read cannot satisfy the next turn. See
 [Canonical artifact references](artifact-references.md).
+
+After attachment, focus, target, and runner validation, an accepted ordinary,
+`/say`, or `@agent` turn appears as `you → ALIAS [completed]> BODY` before
+retrieval progress or the reply. `ALIAS` is the resolved preferred prompt
+alias, and `BODY` is the exact semantic message text without `/say` or route
+syntax. The record remains visible through later success, handled provider
+failure, cancellation, or post-acceptance interrupt. It is terminal context;
+the conversation runtime remains the authority for durable user/outcome events.
 
 Artifact controls require all three of: an attached session, a focused active
 conversation, and a cursor in provider-bound prompt text. Shell orientation and
@@ -294,6 +387,13 @@ prompt submission.
 | `/transcript ID [COUNT] [--from N]` | Fresh bounded page from active or archived identity; focus unchanged. |
 | One advisory question | Agent may answer or request bounded active same-session search/read actions. |
 
+Accepted local reads identify the request before their result. `/search` shows
+its normalized query and active scope. A filtered `/conversation list` shows
+its normalized query and active/all scope; an unfiltered list adds no request
+record. `/transcript` shows the resolved visible handle and effective start and
+count after identity resolution but before the page read. These records remain
+if later work is empty, fails safely, or is cancelled.
+
 Agent retrieval is conditional. The shell shows `[context]` progress, reply,
 and sources. Only user and outcome enter the transcript; local reads never call
 a provider or alter defaults/focus.
@@ -319,7 +419,15 @@ control lines, and ordinary fallback input shows no panel.
 The runtime supplies every debate phase one bounded focus snapshot.
 `/run --fresh --output PART/PATH.md PROMPT` records its identity without
 transcript; `/draft-file PATH` reads strict UTF-8, includes the snapshot, and
-prompts for the required output path. Runs do not change conversations.
+prompts for the required output path. After validation, inline, fresh, and
+committed composer prompts appear once as
+`you → consensus [completed]> PROMPT`, followed by `Consensus request` with the
+safe output path, before debate progress. `/draft-file` emits no message copy of
+its bytes; its request record names only the validated source and output paths.
+Capable streams use the post-cleanup message, while fallback keeps its already
+visible prompt without a duplicate. These terminal records survive later
+success, deadlock, handled failure, cancellation, or post-acceptance interrupt
+but add no separate storage guarantee. Runs do not change conversations.
 
 ## Inspect outcomes and recover
 

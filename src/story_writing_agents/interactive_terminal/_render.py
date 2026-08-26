@@ -99,6 +99,21 @@ _StartupSpan: TypeAlias = tuple[str, str]
 _StartupLine: TypeAlias = tuple[_StartupSpan, ...]
 
 
+class _InlineWarningRole:
+    """Decorate one already-wrapped warning suffix within its base row."""
+
+    __slots__ = ("base", "start", "stop")
+
+    def __init__(self, base: SemanticRole, start: int, stop: int) -> None:
+        self.base = base
+        self.start = start
+        self.stop = stop
+
+
+_LineRole: TypeAlias = SemanticRole | _InlineWarningRole
+_SemanticLine: TypeAlias = tuple[str, _LineRole]
+
+
 def render_advisory_progress_frame(frame: int) -> str:
     """Render one pure fixed-cell advisory progress frame."""
 
@@ -404,6 +419,14 @@ def render_input_prompt(
     lines: list[tuple[str, SemanticRole]] = []
     for item in view.context:
         lines.extend(_component_lines(item, capabilities.width, indent=0))
+    if view.initial_value is not None:
+        lines.extend(
+            _component_lines(
+                Field("Current value", view.initial_value),
+                capabilities.width,
+                indent=0,
+            )
+        )
     lines.extend(_input_prompt_lines(view.prompt, capabilities.width))
     plain = "\n".join(line for line, _role in lines)
     if not plain.endswith(" "):
@@ -484,7 +507,7 @@ def strip_decorative_sgr(text: str) -> str:
 
 
 def _render_semantic_lines(
-    lines: list[tuple[str, SemanticRole]],
+    lines: list[_SemanticLine],
     capabilities: TerminalCapabilities,
 ) -> RenderedFrame:
     """Render validated semantic lines with equivalent fixed decoration."""
@@ -550,10 +573,13 @@ def _picker_viewport_lines(
         )
         if not viewport.start <= selected_index < viewport.stop:
             selected = picker.choices[selected_index]
+            selected_label = selected.label
+            if selected.warning_suffix is not None:
+                selected_label += f" {selected.warning_suffix}"
             lines.extend(
                 (line, SemanticRole.SUCCESS)
                 for line in _wrap(
-                    selected.label,
+                    selected_label,
                     width,
                     indent=child_indent,
                     initial_prefix=(
@@ -645,7 +671,7 @@ def _numbered_picker_choice_lines(
     indent: int,
     highlighted: bool,
     selected: bool,
-) -> list[tuple[str, SemanticRole]]:
+) -> list[_SemanticLine]:
     """Render one absolute ordinal with explicit non-color-only state cues."""
 
     if not choice.enabled:
@@ -666,11 +692,29 @@ def _numbered_picker_choice_lines(
             else SemanticRole.DEFAULT
         )
     text = choice.label
+    if choice.warning_suffix is not None:
+        text += f" {choice.warning_suffix}"
     if choice.description is not None:
         text += f" — {choice.description}"
     if choice.disabled_reason is not None:
         text += f" (disabled: {choice.disabled_reason})"
     prefix = f"{ordinal}. {cues} "
+    if choice.warning_suffix is not None and role is SemanticRole.DEFAULT:
+        tail = ""
+        if choice.description is not None:
+            tail += f" — {choice.description}"
+        if choice.disabled_reason is not None:
+            tail += f" (disabled: {choice.disabled_reason})"
+        return _wrap_warning_suffix(
+            choice.label,
+            choice.warning_suffix,
+            tail,
+            width,
+            indent=indent,
+            initial_prefix=prefix,
+            continuation_prefix=" " * len(prefix),
+            base_role=role,
+        )
     return [
         (line, role)
         for line in _wrap(
@@ -1087,7 +1131,7 @@ def _choice_lines(
     indent: int,
     highlighted: bool,
     selected: bool,
-) -> list[tuple[str, SemanticRole]]:
+) -> list[_SemanticLine]:
     if not choice.enabled:
         marker = "- [disabled] "
         role = SemanticRole.MUTED
@@ -1101,10 +1145,28 @@ def _choice_lines(
         marker = "- "
         role = SemanticRole.DEFAULT
     text = choice.label
+    if choice.warning_suffix is not None:
+        text += f" {choice.warning_suffix}"
     if choice.description is not None:
         text += f" — {choice.description}"
     if choice.disabled_reason is not None:
         text += f" ({choice.disabled_reason})"
+    if choice.warning_suffix is not None and role is SemanticRole.DEFAULT:
+        tail = ""
+        if choice.description is not None:
+            tail += f" — {choice.description}"
+        if choice.disabled_reason is not None:
+            tail += f" ({choice.disabled_reason})"
+        return _wrap_warning_suffix(
+            choice.label,
+            choice.warning_suffix,
+            tail,
+            width,
+            indent=indent,
+            initial_prefix=marker,
+            continuation_prefix=" " * len(marker),
+            base_role=role,
+        )
     return [
         (line, role)
         for line in _wrap(
@@ -1211,6 +1273,86 @@ def _wrap(
     return rendered or [base_indent.rstrip()]
 
 
+def _wrap_warning_suffix(
+    label: str,
+    warning_suffix: str,
+    tail: str,
+    width: int,
+    *,
+    indent: int,
+    initial_prefix: str,
+    continuation_prefix: str,
+    base_role: SemanticRole,
+) -> list[_SemanticLine]:
+    """Wrap one choice while retaining its plain warning-suffix boundaries."""
+
+    safe_label = _inline(label)
+    safe_warning_suffix = _inline(warning_suffix)
+    safe_text = f"{safe_label} {safe_warning_suffix}{_inline(tail)}"
+    warning_start = len(safe_label) + 1
+    warning_stop = warning_start + len(safe_warning_suffix)
+    base_indent = " " * max(0, min(indent, max(width - 1, 0)))
+    return _prefixed_warning_lines(
+        safe_text,
+        warning_start,
+        warning_stop,
+        width,
+        first_prefix=f"{base_indent}{initial_prefix}",
+        continuation_prefix=f"{base_indent}{continuation_prefix}",
+        base_role=base_role,
+    )
+
+
+def _prefixed_warning_lines(
+    text: str,
+    warning_start: int,
+    warning_stop: int,
+    width: int,
+    *,
+    first_prefix: str,
+    continuation_prefix: str,
+    base_role: SemanticRole,
+) -> list[_SemanticLine]:
+    """Fit safe choice text while mapping its warning interval to each row."""
+
+    rendered: list[_SemanticLine] = []
+    remaining = text
+    offset = 0
+    prefix = first_prefix
+    while remaining:
+        prefix_chunks = _cell_chunks(prefix, width)
+        active_prefix = ""
+        if prefix_chunks:
+            for prefix_chunk in prefix_chunks[:-1]:
+                if prefix_chunk.rstrip():
+                    rendered.append((prefix_chunk.rstrip(), base_role))
+            active_prefix = prefix_chunks[-1]
+            if _cell_width(active_prefix) >= width:
+                if active_prefix.rstrip():
+                    rendered.append((active_prefix.rstrip(), base_role))
+                active_prefix = ""
+
+        available = max(1, width - _cell_width(active_prefix))
+        content = _cell_chunks(remaining, available)[0]
+        line = f"{active_prefix}{content}"
+        content_stop = offset + len(content)
+        overlap_start = max(offset, warning_start)
+        overlap_stop = min(content_stop, warning_stop)
+        if overlap_start < overlap_stop:
+            role: _LineRole = _InlineWarningRole(
+                base_role,
+                len(active_prefix) + overlap_start - offset,
+                len(active_prefix) + overlap_stop - offset,
+            )
+        else:
+            role = base_role
+        rendered.append((line, role))
+        remaining = remaining[len(content) :]
+        offset = content_stop
+        prefix = continuation_prefix
+    return rendered
+
+
 def _prefixed_cell_lines(
     text: str,
     width: int,
@@ -1277,9 +1419,17 @@ def _cell_width(text: str) -> int:
     return sum(display_character_width(character) for character in text)
 
 
-def _decorate(text: str, role: SemanticRole) -> str:
+def _decorate(text: str, role: _LineRole) -> str:
     """Apply one fixed local style without parsing dynamic text as markup."""
 
+    if isinstance(role, _InlineWarningRole):
+        return "".join(
+            (
+                _decorate(text[: role.start], role.base),
+                _decorate(text[role.start : role.stop], SemanticRole.WARNING),
+                _decorate(text[role.stop :], role.base),
+            )
+        )
     sgr = _ROLE_SGR[role]
     if not sgr or not text:
         return text

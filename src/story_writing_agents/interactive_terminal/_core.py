@@ -39,6 +39,7 @@ from ._controls import (
     transition_picker,
     transition_picker_fallback,
     transition_line_input,
+    transition_prefilled_prompt_input,
     transition_prompt_input,
 )
 from ._driver import (
@@ -492,6 +493,7 @@ class InteractiveTerminal:
     """Render plain terminal records and collect one input operation at a time."""
 
     __slots__ = (
+        "_accepted_input_write",
         "_capability_provider",
         "_composition_read_line",
         "_composition_reference_read_line",
@@ -539,6 +541,7 @@ class InteractiveTerminal:
             raise TypeError("width must be an integer")
         if width < 20:
             raise ValueError("width must be at least 20")
+        self._accepted_input_write: Callable[[str], None] = lambda _text: None
         self._read_line = read_line
         self._main_read_line = read_line if main_read_line is None else main_read_line
         self._main_choice_read_line = (
@@ -1327,6 +1330,12 @@ class InteractiveTerminal:
         frame = render_component(component, self._capability_provider())
         self._write_text(f"{frame.text}\n")
 
+    def _write_accepted_input(self, component: Component) -> None:
+        """Render one accepted input through the bound mode-aware callback."""
+
+        frame = render_component(component, self._capability_provider())
+        self._accepted_input_write(f"{frame.text}\n")
+
     def _write_startup_welcome(self) -> None:
         """Write one prefix-free final welcome through the callback boundary."""
 
@@ -1346,9 +1355,9 @@ class InteractiveTerminal:
 
 
 class InteractiveSemanticOutput:
-    """Retain only one terminal's package-internal semantic write capability."""
+    """Bind one terminal's ordinary and mode-gated semantic write paths."""
 
-    __slots__ = ("_write",)
+    __slots__ = ("_write", "_write_accepted")
 
     def __init__(self, terminal: InteractiveTerminal) -> None:
         """Bind semantic output without inspecting capabilities or streams."""
@@ -1356,11 +1365,19 @@ class InteractiveSemanticOutput:
         if not isinstance(terminal, InteractiveTerminal):
             raise TypeError("terminal must be an InteractiveTerminal")
         self._write: Callable[[Component], None] = terminal._write_component
+        self._write_accepted: Callable[[Component], None] = (
+            terminal._write_accepted_input
+        )
 
     def write_component(self, component: Component) -> None:
         """Delegate one closed semantic component to exactly one terminal write."""
 
         self._write(component)
+
+    def write_accepted_input(self, component: Component) -> None:
+        """Delegate accepted input without exposing terminal mode to its caller."""
+
+        self._write_accepted(component)
 
 
 class InteractiveStartupPresentation:
@@ -1650,6 +1667,7 @@ class InteractivePromptInput:
         prompt: Prompt,
         *,
         context: tuple[Panel | Section | Field | Notice, ...] = (),
+        initial_value: str | None = None,
         transient: bool = True,
     ) -> ControlOutcome:
         """Read one exact line with a distinct nested-cancel outcome."""
@@ -1657,7 +1675,7 @@ class InteractivePromptInput:
         if type(transient) is not bool:
             raise TypeError("transient must be a bool")
 
-        view = InputPromptView(context, prompt)
+        view = InputPromptView(context, prompt, initial_value=initial_value)
         outcome = self._read(view, transient=True)
         if type(outcome) is not ControlOutcome:
             raise TypeError("prompt reader must return a ControlOutcome")
@@ -1828,6 +1846,8 @@ def _plain_prompt_reader(
             return ControlOutcome(ControlOutcomeKind.EOF)
         if line == "\x1b":
             return ControlOutcome(ControlOutcomeKind.CANCEL)
+        if line == "" and view.initial_value is not None:
+            line = view.initial_value
         return ControlOutcome(ControlOutcomeKind.COMMIT, text=line)
 
     return read_prompt
@@ -2249,6 +2269,7 @@ def build_stream_terminal(
         width=max(20, capabilities.width),
         main_read_line=lambda prompt: read_main_command_line(driver, prompt),
     )
+    terminal._accepted_input_write = driver.write_accepted_input
     terminal._main_choice_read_line = lambda prompt, provider: (
         read_main_command_line(
             driver,
@@ -2310,7 +2331,12 @@ def build_stream_terminal(
     def read_prompt(view, *, transient=True):
         if type(transient) is not bool:
             raise TypeError("transient must be a bool")
-        arguments = (view, render_input_prompt, transition_prompt_input)
+        transition = (
+            transition_prefilled_prompt_input
+            if view.initial_value is not None
+            else transition_prompt_input
+        )
+        arguments = (view, render_input_prompt, transition)
         return driver.read_prompt(*arguments, transient=True)
 
     terminal._picker_read = read_picker

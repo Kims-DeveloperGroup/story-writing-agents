@@ -4,7 +4,10 @@
 > output, established package-supported terminal records, and the unlisted
 > supplied-text ranged viewer. Provider-bound `$`/`$$` editing now invokes that
 > private viewer through the controller, without adding a standalone command or
-> public API. These rules do not make scrollback or process memory private.
+> public API. #274 also adds an unlisted mode-gated accepted-input projection
+> seam, and #275 uses it for accepted advisory and consensus prompts plus safe
+> result-defining request context. These rules do not make scrollback or process
+> memory private.
 
 Key terms: **TTY guard**—check for interactive streams; **typed error**—trusted
 public code instead of exception prose; **display escaping**—showing a control
@@ -53,6 +56,14 @@ driver-local history store. The fallback itself provides no component-owned
 live Up/Down navigation, and the same driver never upgrades from `FALLBACK` to
 `LIVE`. The entry remains in that process-local store, but users cannot recall
 it through that driver's fallback input UI.
+
+After an input read selects the permanent mode, the driver's accepted-input
+projection is likewise mode-gated. `LIVE` writes one already rendered semantic
+record through the existing progress-safe persistent path. `FALLBACK` writes
+nothing because the ordinary prompt and submitted input already remain
+visible. `UNDECIDED` rejects before output; projection cannot select a mode.
+The driver interprets no component and retains no accepted payload or commit
+token.
 
 The output descriptor supplies width. During capability observation, a missing,
 failing, nonpositive, or invalid result falls back to 80 columns; a reliable
@@ -253,9 +264,33 @@ the same current/selection meaning when all viewer decoration is removed.
 
 The controller constructs semantic components only from trusted roles/states
 and validated facts. Its unlisted `InteractiveSemanticOutput` adapter acquires
-no resource when constructed and performs exactly one render and one callback
-write for each established component record. It neither reads input nor owns a
-second stream, raw mode, cursor, width, or restoration lifecycle.
+no resource when constructed. `write_component()` performs exactly one render
+and one ordinary component write. The separate
+`write_accepted_input()` operation also renders exactly one closed component,
+then delegates the complete LF-terminated string to a no-op callback sink or
+the stream driver's mode-gated sink. It neither reads input nor owns a second
+stream, raw mode, cursor, width, restoration lifecycle, payload store, or
+commit token. #275 supplies only validated controller call sites: exact-body
+advisory messages use a resolved prompt alias, prompt-based consensus uses the
+fixed consensus target, and request records use validated paths, normalized
+queries/scopes, or resolved transcript page facts.
+
+Conversation-scope deduplication is also controller-owned. Before each attached
+prompt, the controller freshly validates any current focus against the complete
+catalog, then compares one loop-local tuple of session ID, visible handle,
+subject, and sticky agent. It caches the tuple only after the semantic write
+succeeds, drops it on detach, and therefore never treats a failed write as
+presented; reattachment also presents again. The terminal owns no comparison
+snapshot, catalog state, payload, token, or storage; its existing scope
+operation remains a stateless one-call render.
+
+All such values pass through the established semantic renderer, so hostile
+controls and format characters become visible escapes before any eligible ANSI
+styling. The projection includes no draft-file bytes, referenced source bytes,
+settings/configuration values merely because they were edited, picker choices,
+confirmations, credentials, provider-native input, raw diagnostics, or commit
+token. It creates no separate storage, transcript-retention, provider-history,
+or audit record.
 
 Dense list commands preserve callback granularity by rendering each row as one
 positioned, one-record `ListView`. If search, transcript, or history rendering
@@ -347,6 +382,15 @@ only byte consumer and prevents bytes already decoded into a `TextIOWrapper`
 queue from disappearing when a later interaction reads its raw buffer.
 External concurrent reads, or mixing another wrapper/raw reader with this
 driver, are unsupported.
+
+Accepted-input projection is downstream of this state machine and cannot
+mutate it. The terminal core first validates and renders one semantic component
+under the current output-capability profile. Callback construction discards
+that rendered record; stream construction delegates it to the sole driver.
+The driver requires an already selected mode, writes only for `LIVE`, and is
+silent for `FALLBACK`. This avoids both removal after capable cleanup and a
+second verbatim representation in ordinary-line fallback without exposing the
+latch to the controller.
 
 Before selecting `LIVE`, decoder preflight admits only registry-canonical
 ASCII, UTF-8, or ISO-8859-1 with the resolved built-in `strict` or
@@ -466,6 +510,22 @@ so its frame remains active and no history entry exists yet. See the exact
 [composition](../reference/interactive-terminal.md#composition-live-suggestions)
 tokens.
 
+Once that cleanup and restoration have completed, #275 uses the accepted-input
+seam to emit one new persistent semantic record for validated ordinary,
+`/say`, and routed advisory text or inline, fresh, and committed composer
+consensus prompts. That record is outside the erased frame and uses the
+existing progress-aware writer before coroutine construction or progress. It
+therefore remains visible through later success, handled provider failure,
+cancellation, deadlock, or post-acceptance interrupt. The seam does not retain
+or recover the editable frame. `FALLBACK` and callback construction remain
+silent so already visible ordinary input is not duplicated.
+
+Separate ordinary semantic request records identify safe context without
+reprinting a raw submitted snapshot: consensus output and optional draft-source
+paths, normalized search and filtered-list queries with scope, and resolved
+transcript handle/start/count. They are written before the corresponding later
+work as applicable and remain visible through its handled outcomes.
+
 Main palette projection, filtering, highlight, replacement, snapshot restore,
 and dismissal call no parser, story provider, runtime, filesystem, persistence,
 subprocess, storage, or network. They change only call-local editor/terminal
@@ -494,14 +554,15 @@ from the nested editor; Ctrl-C and EOF cancel the whole workflow. Nested
 settings input does not navigate or mutate main history and receives no command
 completion. These reads follow the same universal capable cleanup and
 honest fallback visibility as every other input route; nested Escape returns
-silently without a snapshot or cancellation record. Save and Cancel each open a
-transient yes/no confirmation. Its context shows only changed Current/Pending
-fields and marks
-each displayed value `(Changed)`, and shows `No pending settings changes.` when
-there is no diff. Committed YES proceeds; committed NO or nested Escape returns
-to the settings picker; invalid fallback input retries with a
-trusted notice. Top-level cancellation does not claim a snapshot that was not
-rendered.
+silently without a snapshot or cancellation record. Save opens a transient
+yes/no confirmation. Cancel and root Settings Escape share a controller-owned
+action: they exit directly when Current and Pending are equal and open that
+transient confirmation only when they differ. Confirmation context shows only
+changed Current/Pending fields and marks each displayed value `(Changed)`;
+unchanged Save confirmation shows `No pending settings changes.` Committed YES
+proceeds; committed NO or confirmation Escape returns to the root settings
+picker; invalid fallback input retries with a trusted notice. Top-level
+cancellation does not claim a snapshot that was not rendered.
 
 Capable main reads render the existing semantic `SuggestionPalette` in plain or
 fixed ANSI at the active width. `NO_COLOR` removes only decoration. Opening

@@ -226,8 +226,8 @@ does not import migration or consume migration checkpoints. `story storage use`
 dispatches to it before debug logging and provider/runtime construction.
 `/settings` supplies its complete pending configuration plus the
 settings-owned fresh persona-catalog guard. Storage choice is independent from
-agent Providers, although the complete Settings Save retains provider
-authentication before selection begins.
+the Agents editor and provider routing, although the complete Settings Save
+retains provider authentication before selection begins.
 
 Selection first briefly proves the workspace coordinator, then releases it
 during any consent interaction and host installer. For SQLite it functionally

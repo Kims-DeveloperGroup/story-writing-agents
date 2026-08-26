@@ -652,6 +652,7 @@ class Choice:
     identity: str
     label: str
     _: KW_ONLY
+    warning_suffix: str | None = None
     description: str | None = None
     enabled: bool = True
     disabled_reason: str | None = None
@@ -659,6 +660,7 @@ class Choice:
     def __post_init__(self) -> None:
         _require_text("identity", self.identity)
         _require_text("label", self.label)
+        _require_optional_text("warning_suffix", self.warning_suffix)
         _require_optional_text("description", self.description)
         if type(self.enabled) is not bool:
             raise TypeError("enabled must be a bool")
@@ -813,6 +815,8 @@ class InputPromptView:
 
     context: tuple[InputContext, ...]
     prompt: Prompt
+    _: KW_ONLY
+    initial_value: str | None = None
 
     def __post_init__(self) -> None:
         """Require only approved context components and one focused prompt."""
@@ -828,6 +832,11 @@ class InputPromptView:
             raise TypeError("prompt must be a Prompt")
         if self.prompt.state is not ViewState.FOCUSED:
             raise ValueError("input prompt must be focused")
+        if self.initial_value is not None:
+            if type(self.initial_value) is not str:
+                raise TypeError("initial_value must be a string or None")
+            if "\r" in self.initial_value or "\n" in self.initial_value:
+                raise ValueError("initial_value must not contain CR or LF")
 
 
 def _validate_choices(

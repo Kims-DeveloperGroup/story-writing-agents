@@ -8,7 +8,9 @@
 > source in the independent viewer. A completed `$${path}` marker opens that
 > source directly on Enter/Tab. These controls augment prompt editing; `$` is
 > not a command and does not submit the prompt. Ordinary-line fallback uses the
-> numbered flows described below.
+> numbered flows described below. After a later accepted advisory or consensus
+> submission, capable terminals retain the attributed prompt containing the
+> indicator; fallback retains its original visible input without a duplicate.
 
 An artifact reference tells every addressed story agent which existing output
 it must read before its reply can be accepted. It carries an eligible
@@ -174,6 +176,13 @@ amended draft and asks for a second confirmation. Press Enter to submit that
 draft, type a replacement draft to reevaluate it, or resolve another active
 marker. This extra confirmation prevents a fallback selection from dispatching
 implicitly. Fallback input remains visible in scrollback.
+
+When the amended prompt is later accepted, capable input cleanup removes the
+editor frame and the shell writes one attributed exact-body advisory or
+consensus `Message` before progress. That message contains the `${path}` or
+`${path}#Lx-Ly` indicator exactly as accepted, never the selected file bytes.
+Fallback already shows the amended input and therefore adds no duplicate
+accepted-input message.
 
 Cancellation, interrupt, EOF, and handled activation failures restore the
 exact modeled draft, cursor, focus, and input mode. They add no main history and
@@ -343,6 +352,9 @@ history, durable evidence, and diagnostics. Local release is not secure-memory
 erasure, and a provider or remote thread may retain content after receipt under
 its own policy. Acceptance proves the read/delivery/result sequence, not that a
 model understood or obeyed the material.
+The terminal's accepted prompt record contains only the indicator text supplied
+by the user; it does not change any selected-byte exclusion or add a storage,
+transcript-retention, provider-history, or audit guarantee.
 
 ## From editing to an accepted agent result
 
@@ -391,6 +403,11 @@ history retain the exact indicator text, not selected bytes. Runtime inspection
 then records content-free operation and per-invocation evidence as described
 above, and writing-artifact provenance shows only agent-authored publications.
 Displaying or referencing a manual file does not adopt it into that history.
+The capable terminal's attributed message follows the same indicator-only
+boundary; ordinary-line fallback does not add a second copy. `/draft-file`
+source bytes are likewise never projected merely because consensus consumes
+them—the terminal request context names only the validated source and output
+paths.
 
 Automation and noninteractive commands do not receive this UI. Supply literal
 `${...}` indicators in their quoted prompt text. The independent viewer is not

@@ -19,7 +19,13 @@
 > successful read with eligible rows invokes a generic picker that is live on
 > capable streams and numbered in fallback, while empty or failed reads report
 > without opening it. Every capable input frame clears before return; fallback
-> input remains visible without a synthetic final control frame. Advisory and
+> input remains visible without a synthetic final control frame. #274 adds an
+> unlisted mode-gated accepted-input projection operation, and #275 uses it for
+> accepted advisory and consensus prompt content. Capable streams render one
+> exact-body attributed message after input cleanup and before progress;
+> callback and ordinary-line fallback input remain visible without a duplicate.
+> Consensus and local-read request records add safe result-defining context.
+> Advisory and
 > consensus turns additionally use
 > one unlisted terminal-owned rolling indicator on capable raw streams;
 > callback and incapable paths remain silent, and these waits emit no
@@ -32,6 +38,14 @@
 > does not wait for Enter, Tab, or newline. The viewer remains an
 > unlisted supplied-text component rather than a public command or selection
 > API; downstream agent-read enforcement remains runtime-owned.
+> The Settings editor exposes provider-neutral Provider, Model, and Effort
+> fields; entering Model or Effort performs one fresh bounded discovery for the
+> pending effective provider. Within `/settings` only, valid value commits keep
+> the active editor open with updated selection/default and one replacing inline
+> completed success result; a second consecutive commit of the same normalized
+> value returns one level. The controller also marks dirty Save labels and
+> unifies explicit Cancel with root Settings Escape. Generic picker/prompt reads,
+> resume pickers, and Save/Cancel confirmations remain one-shot.
 
 ## Public API
 
@@ -130,6 +144,7 @@ The narrow internal adapters have these signatures:
 ```python
 InteractiveSemanticOutput(terminal: InteractiveTerminal) -> None
 write_component(component: Component) -> None
+write_accepted_input(component: Component) -> None
 
 InteractiveMainInput(terminal: InteractiveTerminal) -> None
 read_main(choice_provider: Callable[[str, int], Picker | None], *,
@@ -170,10 +185,16 @@ The viewer result contains only an exit kind and, for `selected`, a one-based
 inclusive `(start_line, end_line)` tuple. It never carries supplied text,
 display metadata, a path, a reference, a viewport, or terminal state.
 
-Construction validates and retains the terminal's bound component writer but
-does not render, read, write, observe a stream, or acquire a resource. Each
-accepted component call performs one render and one callback write, including
-the final LF; failures propagate without a retry. The main-input adapter binds
+Construction validates and retains the terminal's bound ordinary-component
+writer and accepted-input writer but does not render, read, write, observe a
+stream, or acquire a resource. `write_component()` performs one render and one
+ordinary component write, including the final LF. `write_accepted_input()`
+performs the same one-component render, then delegates the LF-terminated text
+to the terminal's distinct mode-aware sink: callback construction is silent;
+stream `LIVE` writes once; stream `FALLBACK` is silent; and stream `UNDECIDED`
+rejects the lifecycle violation. Render and writer failures propagate without
+a retry. Neither operation retains the component, rendered payload, or a
+commit token. The main-input adapter binds
 a call-local choice provider; the picker adapter likewise binds only the
 terminal's picker reader without observing capabilities or acquiring I/O. The
 controller supplies disposable session/conversation snapshots to the main
@@ -327,6 +348,11 @@ driver. That driver alone owns its streams, capability/width observation, key
 decoding, functional cursor sequences, raw-mode activation/restoration, writes,
 flushes, and one bounded process-local main history store. Each separate stream
 terminal or compatibility editor therefore has an isolated store.
+The factory also binds the terminal's accepted-input sink to that same driver's
+selected-mode projection; it does not add a second raw owner or expose the
+driver's latch to controller code. Callback construction retains a no-op sink,
+so callback readers that already leave their submitted text visible receive no
+duplicate record.
 `interactive_line_editor.InteractiveMainLineEditor` remains a
 standalone compatibility facade with its exact constructor and `read_line`
 surface, delegating to the same driver implementation rather than owning a
@@ -359,6 +385,26 @@ and performs no stream observation or resource acquisition.
   continuation hint; and
 - positioned focused-history events followed by one context-accounting record.
 
+#275 completes the informative-content consumers:
+
+- accepted ordinary, `/say`, and one-shot routed advisory text becomes one
+  exact-body `Message` attributed as `you → ALIAS`, where `ALIAS` is
+  the resolved preferred prompt alias;
+- accepted inline, fresh, and committed multiline consensus prompt text becomes
+  one `you → consensus` `Message` followed by a `Consensus request` record;
+- every consensus request names its validated `Output`, while `/draft-file`
+  names only its validated `Source` path and never projects the file bytes;
+- search and filtered conversation-list requests name their normalized `Query`
+  and `Scope`; unfiltered lists add no request record; and
+- transcript requests name the resolved visible `Conversation` handle plus
+  effective `Start` and `Count` before the memory read.
+
+The controller writes these components after acceptance and before coroutine
+construction, progress, catalog/service work, or result output as applicable.
+They remain visible through later success, handled failure, cancellation, or
+post-acceptance interrupt. They are call-local terminal presentation and add no
+storage, transcript-retention, provider-history, or audit guarantee.
+
 The controller composes typed components and sends one component through the
 adapter for each established callback record. The plain form preserves the
 established facts, copy, order, and callback boundaries while adding explicit
@@ -368,6 +414,12 @@ ANSI; `NO_COLOR` removes only that decoration. Callback construction renders
 the same structure in plain text at its fixed width.
 
 ### Consensus progress records
+
+Before consensus progress, an accepted prompt run emits its attributed user
+`Message` and every run emits its request record. Draft input emits the request
+record without a user-message copy of its source bytes. These records precede
+coroutine construction, so a later cancellation, provider failure, deadlock, or
+other handled outcome does not erase them.
 
 Consensus-phase rendering now emits per-event metadata as fields (`Event`,
 `Round`, `Revision`, `Handoff`, and `Action`, with optional `Conflicts`) in
@@ -445,12 +497,18 @@ or a first input call that cannot safely preflight live mode, renders the
 complete numbered list through the ordinary line callback. Opaque choice
 identities are control state and are never rendered.
 
-Settings free-text and numeric values use a separate context-free semantic
+Settings custom-model and numeric values use a separate context-free semantic
 `Prompt`. That route is history- and completion-free. Enter commits the exact
-line, Escape cancels only the nested editor, and Ctrl-C or EOF cancels the whole
-settings workflow. In fallback an exact ESC line cancels, while `/cancel`
-remains literal input. The same sole driver owns raw input, redraw, cleanup,
-and restoration.
+line for validation. A valid commit applies the pending value and immediately
+reopens the same prompt with its default updated and one inline `Notice` using
+`SemanticRole.SUCCESS` and `ViewState.COMPLETED`; a later valid commit replaces
+that result. The prompt remains `ViewState.FOCUSED`. The `/settings` controller
+may consume the next commit of that same normalized value as a silent return to
+the parent; the Prompt itself still completes once per read and has no key-timing
+policy. Escape returns one settings level without undoing applied pending
+values, while Ctrl-C or EOF cancels the whole settings transaction. In fallback
+an exact ESC line returns one level, while `/cancel` remains literal input. The
+same sole driver owns raw input, redraw, cleanup, and restoration.
 
 One permanent input latch now serves every input route on a stream-backed
 terminal. Construction is resource-free; the first actual input read makes the
@@ -472,6 +530,19 @@ later interaction are not lost by mixing wrapper-level text reads with raw
 byte reads. See the [terminal safety contract](../operations/terminal-safety.md#permanent-input-ownership)
 for decoder and drift details.
 
+After a read has selected the mode and returned, the unlisted
+`InteractiveSemanticOutput.write_accepted_input(component)` operation renders
+one closed semantic component in terminal core, appends its final LF, and
+delegates the resulting string to the driver. `LIVE` uses the established
+progress-safe persistent writer, so a consumer can project one accepted record
+after the complete live frame has been cleaned up. `FALLBACK` deliberately
+writes nothing because its ordinary prompt and submitted input already remain
+visible. `UNDECIDED` raises before output because projection cannot choose a
+mode. The driver interprets no component, stores no accepted payload or token,
+and owns no additional cleanup. #275 invokes this operation only after
+attachment, focus, collaborator, runner, and accepted prompt validation; the
+controller still cannot inspect or alter terminal mode.
+
 Every successful capable input operation clears its complete live frame before returning:
 semantic context and prompt, editable text, suggestions or choices, validation,
 and redraws. This applies to submit, commit, cancel, interrupt, and EOF across
@@ -483,7 +554,9 @@ A static highlighted Enter only completes and leaves the main read active, so
 it does not clear or enter history until later submission. Cleanup is display
 only: an eligible main line is appended to driver-local history after cleanup
 and restoration, and persistent semantic validation, cancellation, discard,
-error, orientation, and result records remain in scrollback.
+error, orientation, and result records remain in scrollback. A later
+accepted-input projection is a new semantic record; it is not the restored or
+retained editable frame.
 
 Callback and ordinary-line fallback cannot erase printed prompt or input text,
 so it stays visible. These paths do not add a synthetic final `completed` or
@@ -494,14 +567,113 @@ semantic reads. Under `FALLBACK` it keeps the ordinary callback appearance.
 The submitted subject text and its controller meaning are unchanged. The
 normative lifecycle is in the [design contract](../design/interactive-cli-design-system.md#submitted-input-lifecycle).
 
-Save and Cancel each show a transient selectable confirmation with highlighted
-`YES` and `NO` choices. Its preceding context contains only fields whose
-Current and Pending values differ, and both displayed values carry the
-`(Changed)` cue; an unchanged state shows only `No pending settings changes.`
-without empty Current or Pending sections. Selecting `YES` commits the
-requested action, while `NO` or nested Escape returns to the settings picker.
-Top-level Escape, Ctrl-C, and EOF cancel without writing and do not imply a
-snapshot was rendered.
+Save shows a transient selectable confirmation with highlighted `YES` and `NO`
+choices. Explicit Cancel and root Settings Escape invoke the same controller
+action: clean state exits immediately without a confirmation, while dirty state
+shows the existing transient Cancel confirmation. Its preceding context
+contains only fields whose Current and Pending values differ, and both
+displayed values carry the `(Changed)` cue; unchanged Save confirmation shows
+only `No pending settings changes.` without empty Current or Pending sections.
+These confirmations are one-shot: selecting `YES` commits and closes the
+requested action, while `NO` or confirmation Escape returns to the root
+Settings picker. Ctrl-C and EOF still cancel the whole flow without writing and
+do not imply a snapshot was rendered.
+
+<a id="provider-model-and-effort-pickers"></a>
+
+## Provider Model and Effort pickers
+
+Within `/settings`, the visible per-agent fields and editor titles are exactly
+Provider, Model, and Effort. Current/Pending confirmations remain
+provider-qualified—Codex model/reasoning and Antigravity model/effort rows—so
+inactive persisted values remain unambiguous.
+
+The visible top-level roster choice and roster picker are both named Agents.
+Selecting an agent opens Agent settings; Provider remains the field-level
+configuration concept rather than the roster name.
+
+Only entering Model or Effort starts discovery. Opening Settings or Agents,
+selecting an agent, navigating providers, and editing Provider launch no
+catalog command. Each entry runs one fresh command for the pending effective
+provider. Valid retained commits and redraws within that editor do not run
+discovery again; leaving and re-entering does. Effort additionally resolves the
+pending effective model from the agent value and then workspace fallback.
+
+Language, Persona, Maximum debate rounds, Conversation storage, Provider,
+Model, Custom model, and Effort remain active after a first valid Enter. A
+picker reopens in
+`ViewState.OPEN` with its prompt focused and selection updated; a prompt reopens
+in `ViewState.FOCUSED` with its default updated. The latest applied value appears
+as the only visible inline `SemanticRole.SUCCESS`/`ViewState.COMPLETED` notice,
+replacing the previous result. The next valid commit returns one level silently
+when it has the same normalized value; a different valid value applies, remains
+active, and re-arms that comparison. Invalid input, authentication failure,
+Custom model navigation, and editor re-entry reset it. This controller state is
+semantic and consecutive, with no raw-key timing window. Escape returns one
+level through Custom model > Model > Agent settings > Agents > Settings;
+Provider and Effort return directly to Agent settings, while Conversation
+storage returns directly to Settings. Authentication launched while choosing
+Provider is a subordinate action and returns to Provider after its result.
+Ctrl-C or EOF at any level cancels the whole settings transaction.
+
+Every one of those retained value editors also always renders the instruction
+`Entered changes remain pending in memory and are not saved; choose Save in
+Settings to persist them.` It remains present on initial entry, after a valid
+commit reopens the editor, and during validation. It does not replace, duplicate,
+or become the exact entered-value success result, which remains the only inline
+completed result.
+
+Each read of the top-level Settings picker structurally compares the complete
+pending configuration with the opening baseline. Only a difference adds
+`[save required] Pending changes are in memory only and are not saved. Choose
+Save to persist them.` as a `SemanticRole.WARNING`/`ViewState.IDLE` notice. The
+notice is absent initially, after a complete revert, and in Agents, Agent
+settings, every value editor, and Save/Cancel confirmations. Capable, narrow,
+`NO_COLOR`, and fallback projections keep the complete text. Fallback may retain
+an older prompt in historical scrollback, but the current top-level prompt is
+recomputed and truthful. Existing instruction and `Notice` semantics are used;
+there is no new terminal primitive or global picker policy.
+
+The same comparison projects the Save label as exact plain `Save` when clean
+and exact plain `Save (*Required)` when dirty. Fixed ANSI warning decoration,
+when eligible, is limited to `(*Required)`; the preceding separator space and
+`Save` prefix stay ordinary. Plain, `NO_COLOR`, narrow, and fallback projections
+preserve the exact plain label. The label does not replace the existing warning
+`Notice`.
+
+Model choices are ordered Inherit, discovered models in provider order,
+Current custom when the pending value is not in that projection, and Custom
+model. Effort choices are ordered Inherit, the exact effort rows for the
+selected Codex model or Antigravity's global `low`, `medium`, `high`, and
+Current compatibility when a non-null pending effort is unreported. Inherit
+stores null, Current custom/compatibility preserve exact pending values, and
+Custom model retains the safe text prompt. Persisted Codex efforts accept
+`[a-z][a-z0-9_-]{0,31}`; Antigravity persists only `low`, `medium`, or `high`.
+
+Codex runs exact `codex debug models --bundled`, keeps only
+`visibility="list"` rows, and projects exact per-model
+`supported_reasoning_levels` and `default_reasoning_level`. It does not
+hard-code names from OpenAI's
+[current model guidance](https://developers.openai.com/api/docs/guides/latest-model).
+Antigravity runs exact `agy models` (or the resolved executable with `models`),
+projects aligned opaque slug/display rows in provider order, and never infers
+effort from model text. Its effort vocabulary follows Google's
+[Antigravity headless/CLI guide](https://antigravity.google/docs/cli/headless/).
+
+One attempt has a five-second deadline and a one-MiB retained-stdout ceiling.
+It discards stdin and stderr, drops raw bytes after strict projection, and has
+no automatic retry, cache, persistence, or raw diagnostic. Fixed failure
+guidance leaves Inherit and applicable Current custom/compatibility or Custom
+model paths available; re-entering the editor retries later. Save persists
+only the selected opaque model/effort value or null and activates it on the
+next shell/backend construction.
+
+Every capable picker and input component follows the universal transient
+lifecycle: commit, cancellation, interrupt, EOF, and failure erase or replace
+the submitted control instead of leaving its snapshot in terminal display
+history. Durable result/event components are separate. Numbered fallback
+cannot erase bytes already printed, but adds no duplicate or synthetic final
+control frame.
 
 ## Current semantic plain shapes
 
@@ -530,6 +702,16 @@ use records headed by stable bracketed identities such as `[session]`,
 `[conversation]`, `[context]`, and `[run DEBATE_ID]`. Values stack under their
 labels at narrow widths instead of being dropped.
 
+An attached controller presents `Conversation scope` initially, then only when
+the semantic tuple `(session ID, visible conversation handle, subject, sticky
+agent)` changes. It still revalidates any current focus against a complete
+conversation-catalog read before every attached prompt, so an external rename,
+archive, deletion, or handle-collision change can produce a new scope even
+without a local focus command. Detachment discards the controller's loop-local
+presented tuple, and reattachment therefore presents scope again. The terminal
+remains stateless: `write_conversation_scope()` renders every call, retains no
+tuple, and does not cache a failed write.
+
 Agent and run output preserve content boundaries:
 
 ```text
@@ -539,6 +721,38 @@ ALIAS [completed]> FIRST LINE
 [run DEBATE_ID]
   CONTENT
 ```
+
+Accepted user-to-agent content uses the same message boundary. Command
+envelopes and options are excluded from the body:
+
+```text
+you → lead [completed]> EXACT ADVISORY BODY
+you → consensus [completed]> EXACT CONSENSUS PROMPT
+```
+
+The sender label uses the resolved preferred advisory alias or `consensus`.
+Embedded LF, wrapping, visible control escaping, and narrow continuation
+indentation follow the ordinary safe `Message` renderer; “exact” refers to the
+accepted semantic body, not unsanitized terminal bytes.
+
+Request-defining context uses completed `Record` values. Consensus field order
+is `Output`, then `Source` only for draft input. Search and filtered-list field
+order is `Query`, `Scope`; transcript field order is `Conversation`, `Start`,
+`Count`. For example:
+
+```text
+[context] Consensus request [completed]
+  Output: part-01/opening.md
+
+[context] Search request [completed]
+  Query: opening scene
+  Scope: active
+```
+
+`Conversation list request` uses `Scope: active` or `Scope: all`.
+`Transcript request` uses the resolved visible handle and the effective page
+values, including defaults. `/draft-file` adds its safe source path to the
+consensus record but never renders its loaded bytes.
 
 Agent replies receive a presentation-only JSON projection before the semantic
 message or record is rendered. The projection runs only when the entire
@@ -818,6 +1032,16 @@ read. A successful read with eligible rows opens this picker live on a capable
 stream or numbered in fallback; an empty or failed read does not open it. A
 caller supplies one semantic prompt and immutable choices whose opaque
 identities are returned on commit but never rendered as picker identities.
+
+The generic picker remains commit-once. `/settings` alone may consume that
+commit, immediately open a new value-editor read with updated state and an
+inline success notice, then interpret a consecutive commit of the same
+normalized value as a silent parent return. The generic Picker has no retained
+state, second-Enter rule, or raw-key timing window. Save/Cancel confirmations
+and context-changing consumers remain one-shot, especially
+`/session resume` and `/conversation resume`: after selection the picker is no
+longer active, its capable frame is cleared, and fallback text may remain only
+as inactive scrollback.
 
 Initialization highlights an explicit enabled choice, otherwise an enabled
 selection, otherwise the first enabled choice. Empty and all-disabled choice
@@ -1107,6 +1331,15 @@ byte is never guessed into a live key role.
 <a id="exact-search-and-transcript-records"></a>
 
 ## Dense search, transcript, and history records
+
+Before search catalog/service work, one completed `Search request` record names
+the NFKC-normalized, case-folded, whitespace-collapsed query and `active` scope.
+A filtered `/conversation list` similarly emits `Conversation list request`
+with its normalized query and `active` or `all` scope before its catalog read;
+an unfiltered list emits no request record. After transcript identity resolution
+and before its memory read, `Transcript request` names the visible handle and
+effective start/count. Each accepted request record remains visible if later
+work is empty, fails safely, or is cancelled.
 
 Search rows retain these fields in exact order: `Status`, `Match`, `Subject`,
 `Citation`, `Snippet`. A conversation-level citation is

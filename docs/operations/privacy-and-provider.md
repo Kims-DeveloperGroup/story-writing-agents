@@ -11,6 +11,8 @@
 > Inline canonical references in provider-bound prompt text are active.
 > `$`/`$$` discovery and viewer attachment are active in eligible interactive
 > prompt spans; they remain local until the user normally submits the prompt.
+> Settings Model/Effort catalog discovery is also bounded and local; only a
+> user's selected opaque value can be persisted, never provider catalog data.
 
 Key terms: **plaintext**—unencrypted content; **visible context**—events sent in
 a request; **provider-private history**—vendor thread state; **diagnostic**—
@@ -222,6 +224,39 @@ have no authentication-state or provider-output field. A sign-in exit code,
 authorization-code text, and prior state are never treated as authorization;
 the runtime uses fresh status during login completion and again at each
 effective-route gate.
+
+<a id="provider-catalog-discovery-boundary"></a>
+
+## Provider catalog discovery boundary
+
+Settings discovery is separate from authentication and story-provider turns.
+It occurs only on entering Model or Effort, not when Settings opens or while
+agents/providers are navigated. Each entry launches one fresh pending-provider
+command without a shell: `codex debug models --bundled` or the resolved
+Antigravity executable with `models` (`agy models` by default). Effort also
+uses the pending effective model.
+
+The command runs at the workspace root with inherited environment and PATH,
+null stdin, piped stdout, and null stderr. Story retains at most one MiB of
+stdout, enforces a five-second deadline, and boundedly cleans up the exact child
+and reader. There is no automatic retry, cache, persistence, stderr capture, or
+raw diagnostic. These limits constrain Story's capture; the executable can
+still access its inherited environment and workspace-visible data.
+
+Strict parsing projects only safe immutable model/effort values. Codex keeps
+list-visible rows and exact model-specific effort/default sequences.
+Antigravity keeps aligned opaque slug/display rows in provider order and uses
+global `low`/`medium`/`high` effort without inferring it from model text. Raw
+bytes are dropped after projection. Fixed content-free states replace missing,
+timed-out, nonzero, malformed, empty, oversized, and unexpected failure
+details; stdout, stderr, return codes, and exception prose do not enter terminal
+output or the workspace debug log.
+
+No discovery fact is written to configuration. Save can persist only the
+selected opaque model/effort token or null for inheritance—not labels,
+descriptions, defaults, supported-effort lists, failure state, stderr, or raw
+stdout. Chosen tokens remain plaintext local process settings and may later
+appear in provider process arguments as described below.
 
 ## Explicit-reference data boundary
 

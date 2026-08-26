@@ -1,4 +1,4 @@
-"""Provider-free process verification for the interactive CLI over a POSIX PTY."""
+"""Deterministic process verification for the interactive CLI over a POSIX PTY."""
 
 from __future__ import annotations
 
@@ -122,6 +122,32 @@ signal.signal(signal.SIGINT, signal.SIG_IGN)
 signal.signal(signal.SIGTERM, terminate)
 
 argv = sys.argv[1:]
+if argv == ["debug", "models", "--bundled"]:
+    sys.stdout.write(
+        json.dumps(
+            {
+                "models": [
+                    {
+                        "slug": "gpt-pty",
+                        "display_name": "GPT PTY",
+                        "description": "Deterministic PTY catalog model",
+                        "visibility": "list",
+                        "supported_reasoning_levels": [
+                            {"effort": "low", "description": "Quick"},
+                            {
+                                "effort": "future_2",
+                                "description": "Future-safe",
+                            },
+                        ],
+                        "default_reasoning_level": "future_2",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+    )
+    sys.stdout.flush()
+    raise SystemExit(0)
 if argv in (["login", "status"], ["login"]):
     state = json.loads(AUTH_STATE_PATH.read_text(encoding="utf-8"))
     operation = "probe" if argv == ["login", "status"] else "login"
@@ -340,6 +366,11 @@ append_record(
     }
 )
 if operation == "probe":
+    sys.stdout.write(
+        "agy-pty  Antigravity PTY\n"
+        "agy-pty-next  Antigravity PTY Next\n"
+    )
+    sys.stdout.flush()
     raise SystemExit(
         0
         if state["antigravity"] == "authenticated"
@@ -1888,6 +1919,127 @@ print("RESULT=" + outcome.kind.value)
                     process.original_terminal_attributes,
                 )
 
+    def test_prefilled_prompt_live_controls_edit_and_restore_in_one_process(
+        self,
+    ) -> None:
+        """Exercise seeded Enter, editing, Escape, VINTR, and VEOF on a real PTY."""
+
+        source = r'''
+import json
+import sys
+
+from story_writing_agents.interactive_terminal import (
+    InteractivePromptInput,
+    Prompt,
+    build_stream_terminal,
+)
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+reader = InteractivePromptInput(terminal)
+results = []
+for label in ("Enter", "Edit", "Escape", "Interrupt", "EOF"):
+    outcome = reader.read_prompt(
+        Prompt(label, instruction="Keep or edit the current value."),
+        initial_value="seed",
+    )
+    text = outcome.text or ""
+    results.append([outcome.kind.value, text])
+    print(
+        "STEP=" + label + ":" + outcome.kind.value + ":" + text,
+        flush=True,
+    )
+print("RESULT=" + json.dumps(results, separators=(",", ":")))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=36,
+            decorative_color=True,
+        )
+
+        opened = process.wait_for_text("Enter >")
+        self.assertIn("Current value", opened)
+        self.assertIn("seed", opened)
+        process.send_line("")
+        process.wait_for_text("STEP=Enter:commit:seed")
+
+        process.wait_for_text("Edit >")
+        process.send_line("X")
+        process.wait_for_text("STEP=Edit:commit:seedX")
+
+        process.wait_for_text("Escape >")
+        process.send_text("\x1b")
+        process.wait_for_text("STEP=Escape:cancel:")
+
+        process.wait_for_text("Interrupt >")
+        process.send_interrupt()
+        process.wait_for_text("STEP=Interrupt:interrupt:")
+
+        process.wait_for_text("EOF >")
+        process.send_eof()
+        result = process.wait_for_text(
+            'RESULT=[["commit","seed"],["commit","seedX"],'
+            '["cancel",""],["interrupt",""],["eof",""]]'
+        )
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertIn("STEP=EOF:eof:", result)
+        self.assertIn("\x1b[J", result)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
+    def test_live_accepted_input_follows_cleanup_once_and_restores(self) -> None:
+        """Project one accepted message only after the capable frame is gone."""
+
+        source = r'''
+import sys
+
+from story_writing_agents.interactive_terminal import (
+    InteractivePromptInput,
+    InteractiveSemanticOutput,
+    Message,
+    Prompt,
+    build_stream_terminal,
+)
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+outcome = InteractivePromptInput(terminal).read_prompt(
+    Prompt("Accepted-input prelude", instruction="Enter one value."),
+    transient=True,
+)
+assert outcome.text == "value"
+InteractiveSemanticOutput(terminal).write_accepted_input(
+    Message("user", "accepted marker 🌊")
+)
+print("RESULT=" + outcome.kind.value)
+'''
+        before = _durable_tree(self.workspace.root)
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=40,
+            decorative_color=True,
+        )
+        process.wait_for_text("Accepted-input prelude >")
+        submit_mark = process.output_mark()
+        process.send_line("value")
+        submitted = process.wait_for_text("RESULT=commit", after=submit_mark)
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+
+        record = "user [completed]> accepted marker 🌊"
+        self.assertEqual(submitted.count(record), 1)
+        record_offset = submitted.index(record)
+        cleanup_offset = submitted.rfind("\x1b[J", 0, record_offset)
+        self.assertNotEqual(cleanup_offset, -1)
+        self.assertLess(cleanup_offset, record_offset)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+
     def test_internal_main_dynamic_choices_focus_commit_clear_and_restore(self) -> None:
         """Exercise call-local live choices without exposing opaque identities."""
 
@@ -2030,6 +2182,73 @@ print(
             line.original_terminal_attributes,
         )
 
+    def test_settings_rounds_prefill_double_enter_edit_and_discard_on_pty(
+        self,
+    ) -> None:
+        """Keep, re-enter, edit, and discard seeded rounds on one real PTY."""
+
+        process = self._spawn_cli(
+            (),
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=42,
+            decorative_color=True,
+        )
+        process.wait_for_text("story[lobby]> ")
+        before = _durable_tree(self.workspace.root)
+        mark = process.output_mark()
+        process.send_text("/settings\n\n")
+        process.wait_for_text("Settings [focused] [open]", after=mark)
+        process.send_text(("\x1b[B" * 2) + "\n")
+        opened = process.wait_for_text("Current value", after=mark)
+        compact_opened = "".join(
+            re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", opened).split()
+        )
+        self.assertIn("Currentvalue:1", compact_opened)
+        self.assertIn("Maximumdebaterounds", compact_opened)
+
+        first_enter = process.output_mark()
+        process.send_text("\n")
+        process.wait_for_text("Current value", after=first_enter)
+        second_enter = process.output_mark()
+        process.send_text("\n")
+        process.wait_for_text("Settings [focused] [open]", after=second_enter)
+
+        edit_mark = process.output_mark()
+        process.send_text("\n")
+        process.wait_for_text("Current value", after=edit_mark)
+        process.send_text("\x7f2\n")
+        process.wait_for_text(
+            "Current value: 2",
+            after=edit_mark,
+        )
+        process.send_text("\x1b")
+        returned = process.wait_for_text("[save required]", after=edit_mark)
+        compact_returned = "".join(
+            re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", returned).split()
+        )
+        self.assertIn("Maximumdebaterounds—Pending:2", compact_returned)
+        self.assertIn("ChooseSavetopersistpendingchanges", compact_returned)
+
+        cancel_mark = process.output_mark()
+        process.send_text("\x1b")
+        process.wait_for_text("Cancel settings?", after=cancel_mark)
+        process.send_text("\n")
+        discarded = process.wait_for_text("story[lobby]> ", after=cancel_mark)
+        self.assertEqual(
+            "".join(discarded.split()).count(
+                "[cancelled]Pendingchangesdiscarded."
+            ),
+            1,
+        )
+        process.send_text("/quit\n\n")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
     def test_settings_ansi_picker_save_history_isolation_and_restore_repeatedly(
         self,
     ) -> None:
@@ -2038,6 +2257,9 @@ print(
         expected_languages = ("EN", "JA", "ZH")
         for attempt, expected_language in enumerate(expected_languages):
             with self.subTest(attempt=attempt):
+                current_language = (
+                    "KO" if attempt == 0 else expected_languages[attempt - 1]
+                )
                 process = self._spawn_cli(
                     (),
                     environment_overrides={"TERM": "xterm-256color"},
@@ -2053,6 +2275,18 @@ print(
                 )
                 self.assertIn("Settings [focused] [open]", opened)
                 self.assertIn("[highlighted] Language", opened)
+                compact_opened = "".join(
+                    re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", opened).split()
+                )
+                self.assertIn(
+                    f"Language—Current:{current_language}",
+                    compact_opened,
+                )
+                self.assertIn(
+                    "Persona—Current:default_kim_eun_hee",
+                    compact_opened,
+                )
+                self.assertIn("Maximumdebaterounds—Current:1", compact_opened)
                 self.assertIn(
                     b"\x1b[35mSettings [focused] [open] >\x1b[0m",
                     process.raw_bytes,
@@ -2066,13 +2300,58 @@ print(
                 )
                 process.send_text("\x1b[B\n")
                 language_result = process.wait_for_text(
-                    "Language [focused] [open]",
+                    f"[entered] Pending Language entered: {expected_language}.",
                     after=language_mark,
                 )
+                self.assertIn("Language [focused] [open]", language_result)
                 self.assertIn(expected_language, language_result)
+                self.assertIn(
+                    "Enteredchangesremainpendinginmemoryandarenotsaved;"
+                    "chooseSaveinSettingstopersistthem.",
+                    "".join(
+                        re.sub(
+                            r"\x1b\[[0-9;]*[A-Za-z]",
+                            "",
+                            process.normalized_text,
+                        ).split()
+                    ),
+                )
+                process.send_text("\n")
                 returned_settings = process.wait_for_text(
-                    "Choose a setting to edit, save, or cancel.",
+                    "[save required]",
                     after=language_mark,
+                )
+                self.assertIn(
+                    "Save (*Required)",
+                    re.sub(
+                        r"\x1b\[[0-9;]*[A-Za-z]",
+                        "",
+                        returned_settings,
+                    ),
+                )
+                self.assertIn(
+                    b"Save \x1b[33m(*Required)\x1b[0m",
+                    bytes(process.raw_bytes[language_mark:]),
+                )
+                self.assertIn(
+                    "ChooseSavetopersistpendingchanges",
+                    "".join(
+                        re.sub(
+                            r"\x1b\[[0-9;]*[A-Za-z]",
+                            "",
+                            process.normalized_text,
+                        ).split()
+                    ),
+                )
+                self.assertIn(
+                    f"Language—Pending:{expected_language}",
+                    "".join(
+                        re.sub(
+                            r"\x1b\[[0-9;]*[A-Za-z]",
+                            "",
+                            returned_settings,
+                        ).split()
+                    ),
                 )
                 self.assertEqual(
                     returned_settings.count("Settings [focused] [open]"),
@@ -2118,8 +2397,194 @@ print(
                     process.original_terminal_attributes,
                 )
 
-    def test_settings_no_color_cancel_events_clear_and_restore_repeatedly(self) -> None:
-        """Cancel settings through Escape, VINTR, and VEOF without mutation."""
+    def test_settings_ansi_discovered_model_and_future_effort_save_on_capable_pty(
+        self,
+    ) -> None:
+        """Drive both discovered pickers through raw ANSI input and persist IDs."""
+
+        process = self._spawn_cli(
+            (),
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=48,
+            decorative_color=True,
+        )
+        process.wait_for_text("story[lobby]> ")
+        mark = process.output_mark()
+        process.send_text("/settings\n\n")
+        process.wait_for_text(
+            "Choose a setting to edit, save, or cancel.",
+            after=mark,
+        )
+
+        process.send_text(("\x1b[B" * 4) + "\n")
+        process.wait_for_text("Select an agent to configure", after=mark)
+        process.send_text("\x1b[B\n")
+        process.wait_for_text(
+            "Choose a provider, model, or effort setting",
+            after=mark,
+        )
+        model_picker_mark = process.output_mark()
+        process.send_text("\x1b[B\n")
+        model_picker = process.wait_for_text("GPT PTY", after=model_picker_mark)
+        self.assertIn("GPT PTY", model_picker)
+        self.assertIn("gpt-pty", model_picker)
+        model_commit_mark = process.output_mark()
+        process.send_text("\x1b[B\n")
+        model_result = process.wait_for_text(
+            "[entered] Pending Model entered: GPT PTY.",
+            after=model_commit_mark,
+        )
+        self.assertIn("[selected] [highlighted] GPT PTY", model_result)
+        model_parent_mark = process.output_mark()
+        process.send_text("\n")
+        process.wait_for_text(
+            "Agent settings [Plot & Structure Architect]",
+            after=model_parent_mark,
+        )
+        effort_picker_mark = process.output_mark()
+        process.send_text("\x1b[B\n")
+        effort_picker = process.wait_for_text("future_2", after=effort_picker_mark)
+        self.assertIn("future_2", effort_picker)
+        effort_commit_mark = process.output_mark()
+        process.send_text(("\x1b[B" * 2) + "\n")
+        effort_result = process.wait_for_text(
+            "[entered] Pending Effort entered: future_2.",
+            after=effort_commit_mark,
+        )
+        self.assertIn("[selected] [highlighted] future_2", effort_result)
+        effort_parent_mark = process.output_mark()
+        process.send_text("\n")
+        process.wait_for_text(
+            "Agent settings [Plot & Structure Architect]",
+            after=effort_parent_mark,
+        )
+        agents_parent_mark = process.output_mark()
+        process.send_text("\x1b")
+        process.wait_for_text(
+            "Agents [focused] [open]",
+            after=agents_parent_mark,
+        )
+        settings_parent_mark = process.output_mark()
+        process.send_text("\x1b")
+        process.wait_for_text(
+            "Settings [focused] [open]",
+            after=settings_parent_mark,
+        )
+
+        save_prompt_mark = process.output_mark()
+        process.send_text("\x1b[B\n")
+        process.wait_for_text("Save settings?", after=save_prompt_mark)
+        save_commit_mark = process.output_mark()
+        process.send_text("\n")
+        saved = process.wait_for_text(
+            "[saved] Settings saved.",
+            after=save_commit_mark,
+        )
+        process.wait_for_text("story[lobby]> ", after=save_commit_mark)
+        self.assertIn(b"\x1b[", bytes(process.raw_bytes[mark:]))
+        process.send_text("/quit\n\n")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+
+        agent = self.workspace.read_json("config/agent_configs.json")[
+            "plot_architect"
+        ]
+        self.assertEqual(agent["codex_model"], "gpt-pty")
+        self.assertEqual(agent["codex_reasoning_effort"], "future_2")
+        self.assertFalse(self.provider_log.exists())
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
+    def test_settings_no_color_discovered_model_cancel_has_no_sgr_or_mutation(
+        self,
+    ) -> None:
+        """Render one discovered picker without decoration and cancel it safely."""
+
+        process = self._spawn_cli(
+            (),
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=36,
+        )
+        process.wait_for_text("story[lobby]> ")
+        before = _durable_tree(self.workspace.root)
+        mark = process.output_mark()
+        process.send_text("/settings\n\n")
+        process.wait_for_text("[highlighted] Language", after=mark)
+        process.send_text(("\x1b[B" * 4) + "\n")
+        process.wait_for_text("Agents [focused] [open]", after=mark)
+        process.send_text("\x1b[B\n")
+        process.wait_for_text("Agent settings", after=mark)
+        process.send_text("\x1b[B\n")
+        process.wait_for_text("GPT PTY", after=mark)
+        self.assertNotRegex(
+            process.text_after(mark),
+            r"\x1b\[(?:0|1|3[1-7])m",
+        )
+        model_result_mark = process.output_mark()
+        process.send_text("\x1b[B\n")
+        process.wait_for_text(
+            "[entered] Pending Model entered:",
+            after=model_result_mark,
+        )
+        normalized = "".join(process.normalized_text.split())
+        self.assertIn(
+            "Enteredchangesremainpendinginmemoryandarenotsaved;"
+            "chooseSaveinSettingstopersistthem.",
+            normalized,
+        )
+        returned_mark = process.output_mark()
+        process.send_text("\x1b")
+        process.wait_for_text("Agent settings", after=returned_mark)
+        process.send_text("\x1b")
+        process.wait_for_text("Agents [focused] [open]", after=returned_mark)
+        process.send_text("\x1b")
+        returned_settings = process.wait_for_text(
+            "[save required]",
+            after=returned_mark,
+        )
+        self.assertIn("[save required]", returned_settings)
+        self.assertIn("Save (*Required)", returned_settings)
+        self.assertIn(
+            "ChooseSavetopersistpendingchanges",
+            "".join(process.normalized_text.split()),
+        )
+        self.assertIn(
+            "Pendingchangeswillbediscarded.",
+            "".join(returned_settings.split()),
+        )
+        cancelled_mark = process.output_mark()
+        process.send_text("\x1b")
+        confirmation = process.wait_for_text(
+            "Cancel settings?",
+            after=cancelled_mark,
+        )
+        self.assertNotRegex(
+            confirmation,
+            r"\x1b\[(?:0|1|3[1-7])m",
+        )
+        process.send_text("\n")
+        discarded = process.wait_for_text("story[lobby]> ", after=cancelled_mark)
+        compact_discarded = "".join(discarded.split())
+        self.assertIn(
+            "[cancelled]Pendingchangesdiscarded.",
+            compact_discarded,
+        )
+        self.assertEqual(
+            compact_discarded.count("[cancelled]Pendingchangesdiscarded."),
+            1,
+        )
+        process.send_text("/quit\n\n")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
+    def test_clean_settings_controls_exit_silently_and_restore_repeatedly(self) -> None:
+        """Exit clean settings through Escape, VINTR, and VEOF without a record."""
 
         for event_name in ("escape", "interrupt", "eof"):
             for attempt in range(3):
@@ -2144,18 +2609,11 @@ print(
                         process.send_interrupt()
                     else:
                         process.send_eof()
-                    process.wait_for_text(
-                        "[cancelled] Settings",
-                        after=event_mark,
-                    )
                     cancelled = process.wait_for_text(
                         "story[lobby]> ",
                         after=event_mark,
                     )
-                    self.assertIn(
-                        "Settingscancelled;nopendingchangesweresaved.",
-                        "".join(cancelled.split()),
-                    )
+                    self.assertNotIn("[cancelled]", cancelled)
                     self.assertNotRegex(
                         cancelled,
                         r"\x1b\[(?:0|1|3[1-7])m",
@@ -2173,8 +2631,8 @@ print(
                         process.original_terminal_attributes,
                     )
 
-    def test_settings_dumb_fallback_keeps_cancel_literal_and_provider_free(self) -> None:
-        """Use numbered settings fallback and preserve model text literally."""
+    def test_settings_dumb_fallback_keeps_cancel_literal_with_catalog(self) -> None:
+        """Use numbered discovered settings and preserve custom model text."""
 
         process = self._spawn_cli((), terminal_columns=36)
         process.wait_for_text("story[lobby]> ")
@@ -2182,17 +2640,45 @@ print(
         process.send_line("/settings")
         process.wait_for_text("7. [available] Cancel", after=mark)
         process.send_line("5")
-        process.wait_for_text("Providers > ", after=mark)
+        process.wait_for_text("Agents > ", after=mark)
         process.send_line("2")
         process.wait_for_text("Agent settings", after=mark)
         process.send_line("2")
         process.wait_for_text(
-            "Codex model [Plot & Structure Archit",
+            "Model [Plot & Structure Architect",
             after=mark,
         )
         model_mark = process.output_mark()
+        process.send_line("3")
+        process.wait_for_text("Custom model", after=model_mark)
         process.send_line("/cancel")
-        process.wait_for_text("7. [available] Cancel", after=model_mark)
+        entered = process.wait_for_text("Pending Custom model", after=model_mark)
+        self.assertIn(
+            "[entered]PendingCustommodelentered:/cancel.",
+            "".join(entered.split()),
+        )
+        self.assertIn(
+            "Enteredchangesremainpendinginmemoryandarenotsaved;"
+            "chooseSaveinSettingstopersistthem.",
+            "".join(entered.split()),
+        )
+        process.send_text("\x1b\n")
+        process.wait_for_text("Model [Plot & Structure Architect", after=model_mark)
+        process.send_line("/cancel")
+        process.wait_for_text("Agent settings", after=model_mark)
+        process.send_line("/cancel")
+        process.wait_for_text("Agents > ", after=model_mark)
+        process.send_line("/cancel")
+        returned_settings = process.wait_for_text(
+            "7. [available] Cancel",
+            after=model_mark,
+        )
+        self.assertIn("[save required]", returned_settings)
+        self.assertIn("6. [available] Save (*Required)", returned_settings)
+        self.assertIn(
+            "ChooseSavetopersistpendingchanges",
+            "".join(returned_settings.split()),
+        )
         process.send_line("6")
         process.send_line("1")
         process.wait_for_text("Settings saved", after=mark)
@@ -4536,6 +5022,10 @@ print(
         process.send_line("ordinary sticky turn")
         process.wait_for_text("plot [completed]> deterministic advisory reply", after=mark)
         process.wait_for_text("story[alpha:plot]> ", after=mark)
+        ordinary_output = process.text_after(mark)
+        self.assertNotIn("you → plot", ordinary_output)
+        self.assertEqual(ordinary_output.count("ordinary sticky turn"), 1)
+        self.assertNotIn("--- Conversation scope ", ordinary_output)
 
         mark = process.output_mark()
         process.send_line("@character one-shot turn")
@@ -4545,6 +5035,10 @@ print(
         )
         process.wait_for_text("story[alpha:plot]> ", after=mark)
         self.assertNotIn("[routing] One-shot route", routed)
+        routed_output = process.text_after(mark)
+        self.assertNotIn("you → character", routed_output)
+        self.assertEqual(routed_output.count("@character one-shot turn"), 1)
+        self.assertNotIn("--- Conversation scope ", routed_output)
 
         mark = process.output_mark()
         process.send_line("show visible controls")
@@ -4561,6 +5055,10 @@ print(
         process.wait_for_text("story[alpha:plot]> ", after=mark)
         process.send_line("/quit")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(
+            process.normalized_text.count("--- Conversation scope "),
+            7,
+        )
 
         catalog = FilesystemConversationCatalog(self.workspace)
         conversations = catalog.list("alpha", include_archived=True)
@@ -4816,6 +5314,17 @@ print(
         process.send_line("harbor beacon beside the vessel")
         process.wait_for_text("lead [completed]> deterministic advisory reply", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
+        advisory_output = process.text_after(mark)
+        accepted_message = (
+            "you → lead [completed]> harbor beacon beside the vessel"
+        )
+        self.assertEqual(advisory_output.count(accepted_message), 1)
+        self.assertLess(
+            advisory_output.index(accepted_message),
+            advisory_output.index(
+                "lead [completed]> deterministic advisory reply"
+            ),
+        )
         provider_calls_before_reads = len(
             [
                 record
@@ -4841,6 +5350,17 @@ print(
             after=mark,
         )
         process.wait_for_text("story[alpha:lead]> ", after=mark)
+        search_output = process.text_after(mark)
+        search_context = (
+            "[context] Search request [completed]\n"
+            "  Query: harbor beacon\n"
+            "  Scope: active"
+        )
+        self.assertEqual(search_output.count(search_context), 1)
+        self.assertLess(
+            search_output.index(search_context),
+            search_output.index("Search results (1/1) [completed]"),
+        )
         self.assertIn("Citation: conversation", search_output)
         self.assertIn(selected.subject, " ".join(search_output.split()))
 
@@ -4856,6 +5376,18 @@ print(
             after=mark,
         )
         process.wait_for_text("story[alpha:lead]> ", after=mark)
+        transcript_output = process.text_after(mark)
+        transcript_context = (
+            "[context] Transcript request [completed]\n"
+            f"  Conversation: {selected.conversation_id[:12]}\n"
+            "  Start: 1\n"
+            "  Count: 2"
+        )
+        self.assertEqual(transcript_output.count(transcript_context), 1)
+        self.assertLess(
+            transcript_output.index(transcript_context),
+            transcript_output.index("Transcript (1/2) [completed]"),
+        )
         self.assertIn("deterministic advisory reply", transcript_output)
         self.assertEqual(
             len(
@@ -4906,6 +5438,10 @@ print(
         )
         process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(
+            process.normalized_text.count("--- Conversation scope "),
+            1,
+        )
 
         catalog = FilesystemConversationCatalog(self.workspace)
         events = FilesystemConversationEventStore(
@@ -4984,6 +5520,19 @@ print(
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         successful_output = process.text_after(mark)
         collapsed = "".join(successful_output.split())
+        accepted_prompt = (
+            "you→consensus[completed]>/send/cancelfinalliteralline"
+        )
+        self.assertEqual(collapsed.count(accepted_prompt), 1)
+        self.assertLess(
+            collapsed.index(accepted_prompt),
+            collapsed.index("Startedpromptconsensus."),
+        )
+        self.assertIn(
+            "[context]Consensusrequest[completed]"
+            "Output:part-01/composed.md",
+            collapsed,
+        )
         self.assertIn(
             "[compose]Sending4lines,33characterstoconsensus.",
             collapsed,
@@ -5060,6 +5609,7 @@ print(
             _durable_tree_without_access(self.workspace.root),
             durable_after_success,
         )
+        self.assertEqual(process.normalized_text.count("you → consensus"), 1)
 
         inspection = self.workspace.inspect_session("alpha")
         self.assertEqual(len(inspection["debates"]), 1)

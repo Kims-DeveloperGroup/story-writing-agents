@@ -33,18 +33,8 @@ SETTINGS_LANGUAGES: tuple[str, ...] = (
     "IT",
     "RU",
 )
-SETTINGS_REASONING_EFFORTS: tuple[str, ...] = (
-    "minimal",
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-)
-SETTINGS_ANTIGRAVITY_EFFORTS: tuple[str, ...] = (
-    "low",
-    "medium",
-    "high",
-)
+
+
 class SettingsErrorKind(StrEnum):
     """Fixed settings persistence failure categories."""
 

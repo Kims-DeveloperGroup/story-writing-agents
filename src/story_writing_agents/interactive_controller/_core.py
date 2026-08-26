@@ -82,9 +82,7 @@ from ..interactive_commands import (
     project_provider_text_span,
 )
 from ..interactive_settings import (
-    SETTINGS_ANTIGRAVITY_EFFORTS,
     SETTINGS_LANGUAGES,
-    SETTINGS_REASONING_EFFORTS,
     SettingsError,
     SettingsErrorKind,
     SettingsState,
@@ -148,6 +146,13 @@ from ..models import (
 )
 from ..orchestrator import StoryRuntime
 from ..provider_auth import ProviderAuthSnapshot
+from ..provider_catalog import (
+    ProviderCatalogDiscovery,
+    ProviderCatalogService,
+    ProviderCatalogState,
+    ProviderEffort,
+    ProviderModel,
+)
 from ..run_inputs import read_draft_file
 from ..session_lifecycle import (
     SessionAccessState,
@@ -231,6 +236,18 @@ _CONVERSATION_CATALOG_OPERATIONS = (
     "unarchive",
 )
 _AUTH_COORDINATOR_OPERATIONS = ("choices", "probe_all", "run")
+_PROVIDER_CATALOG_OPERATIONS = ("discover",)
+_SETTINGS_INHERIT_ID = "settings:inherit"
+_SETTINGS_MODEL_ID_PREFIX = "settings:model:"
+_SETTINGS_CURRENT_CUSTOM_MODEL_ID = "settings:model:current-custom"
+_SETTINGS_CUSTOM_MODEL_ID = "settings:model:custom"
+_SETTINGS_EFFORT_ID_PREFIX = "settings:effort:"
+_SETTINGS_CURRENT_EFFORT_ID = "settings:effort:current-compatibility"
+_SETTINGS_VALUE_SAVE_GUIDANCE = (
+    "Entered changes remain pending in memory and are not saved; choose Save in "
+    "Settings to persist them."
+)
+_SETTINGS_UNARMED = object()
 
 
 _ExceptionState = tuple[BaseException, TracebackType | None]
@@ -263,6 +280,197 @@ def _provider_display_name(provider: str) -> str:
     if provider == "antigravity":
         return "Antigravity"
     raise ValueError("provider must be codex or antigravity")
+
+
+def _settings_catalog_notice(
+    provider: str,
+    state: ProviderCatalogState,
+    *,
+    model_picker: bool,
+) -> Notice | None:
+    """Project one fixed discovery state without provider output or diagnostics."""
+
+    if state is ProviderCatalogState.READY:
+        return None
+    provider_name = _provider_display_name(provider)
+    state_copy = {
+        ProviderCatalogState.UNAVAILABLE: "is unavailable",
+        ProviderCatalogState.TIMED_OUT: "timed out",
+        ProviderCatalogState.COMMAND_FAILED: "did not complete successfully",
+        ProviderCatalogState.MALFORMED: "returned an unsupported format",
+        ProviderCatalogState.EMPTY: "returned no visible models",
+        ProviderCatalogState.OVERSIZED: "exceeded the safe output limit",
+        ProviderCatalogState.FAILED: "could not be completed",
+    }
+    detail = state_copy.get(state, "could not be completed")
+    controls = (
+        "Inherit, keep the current custom value, or enter a custom model."
+        if model_picker
+        else "Inherit or keep the current compatibility value."
+    )
+    return Notice(
+        f"{provider_name} catalog discovery {detail}. {controls} Retry later.",
+        label="catalog discovery",
+        role=SemanticRole.WARNING,
+        state=ViewState.IDLE,
+    )
+
+
+def _settings_model_description(model: ProviderModel) -> str:
+    """Render exact validated model identity plus optional safe description."""
+
+    if model.description is None:
+        return model.identity
+    return f"{model.identity} — {model.description}"
+
+
+def _settings_current_model_description(model: str) -> str:
+    """Expose a bounded exact compatibility value when terminal-safe."""
+
+    if not model.isspace() and len(model.encode("utf-8")) <= 256:
+        return f"Exact pending model: {model}"
+    return "Keep the pending model that is not listed in this catalog."
+
+
+def _settings_effort_description(
+    effort: ProviderEffort,
+    *,
+    is_default: bool,
+) -> str | None:
+    """Add model-default guidance without changing the provider projection."""
+
+    if effort.description is None:
+        return "Default for the selected model." if is_default else None
+    if is_default:
+        return f"{effort.description} Default for the selected model."
+    return effort.description
+
+
+def _settings_entered_notice(field: str, display_value: str) -> Notice:
+    """Project one successful value result into the reopened editor."""
+
+    return Notice(
+        f"Pending {field} entered: {display_value}.",
+        label="entered",
+        role=SemanticRole.SUCCESS,
+        state=ViewState.COMPLETED,
+    )
+
+
+def _settings_value_instruction(instruction: str) -> str:
+    """Append save guidance to one retained settings value editor."""
+
+    return f"{instruction} {_SETTINGS_VALUE_SAVE_GUIDANCE}"
+
+
+def _settings_pending_save_notice(state: SettingsState) -> Notice | None:
+    """Project unsaved pending changes onto the top-level Settings picker."""
+
+    if state.pending == state.baseline.configuration:
+        return None
+    return Notice(
+        "Choose Save to persist pending changes",
+        label="save required",
+        role=SemanticRole.WARNING,
+        state=ViewState.IDLE,
+    )
+
+
+def _settings_projection(
+    state: SettingsState,
+) -> tuple[tuple[str, str | None, str, str, str], ...]:
+    """Project ordered root and agent identities with current/pending values."""
+
+    current = state.baseline.configuration
+    pending = state.pending
+    rows: list[tuple[str, str | None, str, str, str]] = [
+        (
+            "language",
+            None,
+            "Language",
+            current.system_defaults.language,
+            pending.system_defaults.language,
+        ),
+        (
+            "persona",
+            None,
+            "Persona",
+            current.system_defaults.persona,
+            pending.system_defaults.persona,
+        ),
+        (
+            "max_debate_rounds",
+            None,
+            "Maximum debate rounds",
+            str(current.system_defaults.max_debate_rounds),
+            str(pending.system_defaults.max_debate_rounds),
+        ),
+        (
+            "conversation_storage",
+            None,
+            "Conversation storage",
+            current.system_defaults.conversation_storage_backend or "filesystem",
+            pending.system_defaults.conversation_storage_backend or "filesystem",
+        ),
+    ]
+    for agent_id in ROSTER:
+        display_name = AGENT_SPECS[agent_id].display_name
+        current_agent = current.agent_configs[agent_id]
+        pending_agent = pending.agent_configs[agent_id]
+        current_provider = _effective_settings_provider(
+            state,
+            agent_id,
+            pending=False,
+        )
+        pending_provider = _effective_settings_provider(state, agent_id)
+        rows.extend(
+            (
+                (
+                    "providers",
+                    agent_id,
+                    f"{display_name} Provider",
+                    (
+                        current_provider
+                        if current_agent.backend is not None
+                        else f"{current_provider} (default)"
+                    ),
+                    (
+                        pending_provider
+                        if pending_agent.backend is not None
+                        else f"{pending_provider} (default)"
+                    ),
+                ),
+                (
+                    "providers",
+                    agent_id,
+                    f"{display_name} Codex model",
+                    current_agent.codex_model or "inherit",
+                    pending_agent.codex_model or "inherit",
+                ),
+                (
+                    "providers",
+                    agent_id,
+                    f"{display_name} Codex reasoning",
+                    current_agent.codex_reasoning_effort or "inherit",
+                    pending_agent.codex_reasoning_effort or "inherit",
+                ),
+                (
+                    "providers",
+                    agent_id,
+                    f"{display_name} Antigravity model",
+                    current_agent.antigravity_model or "inherit",
+                    pending_agent.antigravity_model or "inherit",
+                ),
+                (
+                    "providers",
+                    agent_id,
+                    f"{display_name} Antigravity effort",
+                    current_agent.antigravity_effort or "inherit",
+                    pending_agent.antigravity_effort or "inherit",
+                ),
+            )
+        )
+    return tuple(rows)
 
 
 def _remember_first_process_control(
@@ -326,6 +534,7 @@ class InteractiveController:
         "_main_input",
         "_picker_input",
         "_prompt_input",
+        "_provider_catalog",
         "_advisory_progress",
         "_debate_progress",
         "_runner",
@@ -350,16 +559,19 @@ class InteractiveController:
         conversation_catalog: ConversationCatalog | None = None,
         conversation_storage_services: ConversationStorageServices | None = None,
         auth_coordinator: InteractiveAuthCoordinator | None = None,
+        provider_catalog: ProviderCatalogService | None = None,
     ) -> None:
         """Bind collaborators and construct one shared transcript adapter.
 
         The four positional arguments remain the established construction
         contract. An omitted keyword-only catalog creates the workspace-backed
-        adapter; injected catalog and authentication coordinators are retained
-        as borrowed state and are never closed by this controller. The event
-        store is shared by the retained runtime and later attachment-scoped
-        memory services. Construction performs no provider call, filesystem
-        write, or access claim.
+        adapter; injected conversation-catalog, authentication, and provider-
+        catalog collaborators are retained as borrowed state and are never
+        closed by this controller. An omitted provider catalog creates the
+        command-free workspace-bound default. The event store is shared by the
+        retained runtime and later attachment-scoped memory services.
+        Construction performs no provider call, filesystem write, or access
+        claim.
         """
 
         if not isinstance(workspace, Workspace):
@@ -377,6 +589,16 @@ class InteractiveController:
             raise TypeError(
                 "auth_coordinator must provide choices, probe_all, and run"
             )
+        resolved_provider_catalog = (
+            ProviderCatalogService(workspace.root)
+            if provider_catalog is None
+            else provider_catalog
+        )
+        if any(
+            not callable(getattr(resolved_provider_catalog, operation, None))
+            for operation in _PROVIDER_CATALOG_OPERATIONS
+        ):
+            raise TypeError("provider_catalog must provide discover")
         self._workspace = workspace
         self._debug_log = WorkspaceDebugLog(workspace)
         self._error_write_count = 0
@@ -384,6 +606,7 @@ class InteractiveController:
         self._backend = backend
         self._terminal = terminal
         self._auth_coordinator = auth_coordinator
+        self._provider_catalog = resolved_provider_catalog
         self._semantic_output = InteractiveSemanticOutput(terminal)
         self._picker_input = InteractivePickerInput(terminal)
         self._prompt_input = InteractivePromptInput(terminal)
@@ -1479,14 +1702,23 @@ class InteractiveController:
 
         Main Ctrl-C clears only the current input operation. Main EOF, quit, or
         EOF during a call-local subject or confirmation read returns 0. Each
-        attached input is preceded immediately by its current conversation
-        scope; advisory turns run sequentially, and fatal transition or turn
-        uncertainty reaches the outer backend cleanup boundary.
+        attached input revalidates its current conversation scope and presents
+        it only when its semantic snapshot changed. Advisory turns run
+        sequentially, and fatal transition or turn uncertainty reaches the
+        outer backend cleanup boundary.
         """
 
+        unpresented_scope = object()
+        last_presented_scope: (
+            object | tuple[str, str | None, str | None, str]
+        ) = unpresented_scope
         while True:
-            if self._attached_session_id is not None:
-                self._write_attached_conversation_scope()
+            if self._attached_session_id is None:
+                last_presented_scope = unpresented_scope
+            else:
+                last_presented_scope = self._write_attached_conversation_scope(
+                    last_presented_scope
+                )
             terminal_action = self._main_input.read_main_with_references(
                 self._main_resume_choices,
                 self._main_reference_scope,
@@ -2037,16 +2269,84 @@ class InteractiveController:
             return
 
         top_highlight = "language"
-        choices = (
-            Choice("language", "Language"),
-            Choice("persona", "Persona"),
-            Choice("max_debate_rounds", "Maximum debate rounds"),
-            Choice("conversation_storage", "Conversation storage"),
-            Choice("providers", "Providers"),
-            Choice("save", "Save"),
-            Choice("cancel", "Cancel"),
-        )
         while True:
+            dirty = state.pending != state.baseline.configuration
+            projection = _settings_projection(state)
+            root_values = {
+                root_id: (current_value, pending_value)
+                for root_id, agent_id, _label, current_value, pending_value in projection
+                if agent_id is None
+            }
+            agent_change_count = sum(
+                current_value != pending_value
+                for root_id, agent_id, _label, current_value, pending_value in projection
+                if root_id == "providers" and agent_id is not None
+            )
+            choices = (
+                Choice(
+                    "language",
+                    "Language",
+                    description=(
+                        f"Pending: {root_values['language'][1]}"
+                        if root_values["language"][0] != root_values["language"][1]
+                        else f"Current: {root_values['language'][0]}"
+                    ),
+                ),
+                Choice(
+                    "persona",
+                    "Persona",
+                    description=(
+                        f"Pending: {root_values['persona'][1]}"
+                        if root_values["persona"][0] != root_values["persona"][1]
+                        else f"Current: {root_values['persona'][0]}"
+                    ),
+                ),
+                Choice(
+                    "max_debate_rounds",
+                    "Maximum debate rounds",
+                    description=(
+                        f"Pending: {root_values['max_debate_rounds'][1]}"
+                        if root_values["max_debate_rounds"][0]
+                        != root_values["max_debate_rounds"][1]
+                        else f"Current: {root_values['max_debate_rounds'][0]}"
+                    ),
+                ),
+                Choice(
+                    "conversation_storage",
+                    "Conversation storage",
+                    description=(
+                        f"Pending: {root_values['conversation_storage'][1]}"
+                        if root_values["conversation_storage"][0]
+                        != root_values["conversation_storage"][1]
+                        else f"Current: {root_values['conversation_storage'][0]}"
+                    ),
+                ),
+                Choice(
+                    "providers",
+                    "Agents",
+                    description=(
+                        None
+                        if agent_change_count == 0
+                        else (
+                            "1 pending change"
+                            if agent_change_count == 1
+                            else f"{agent_change_count} pending changes"
+                        )
+                    ),
+                ),
+                Choice(
+                    "save",
+                    "Save",
+                    warning_suffix="(*Required)" if dirty else None,
+                ),
+                Choice(
+                    "cancel",
+                    "Cancel",
+                    description=(
+                        "Pending changes will be discarded." if dirty else None
+                    ),
+                ),
+            )
             outcome = self._picker_input.read_picker(
                 Prompt(
                     "Settings",
@@ -2054,29 +2354,37 @@ class InteractiveController:
                 ),
                 choices,
                 highlighted_id=top_highlight,
+                notice=_settings_pending_save_notice(state),
                 transient=True,
             )
             if outcome.kind in {
-                ControlOutcomeKind.CANCEL,
                 ControlOutcomeKind.INTERRUPT,
                 ControlOutcomeKind.EOF,
             }:
-                self._write_settings_cancelled()
+                self._write_settings_cancelled(state)
                 return
+            if outcome.kind is ControlOutcomeKind.CANCEL:
+                top_highlight = "cancel"
+                if self._settings_cancel_action(state):
+                    self._write_settings_cancelled(state)
+                    return
+                continue
             selected = self._require_settings_commit(outcome)
             top_highlight = selected
-            if selected in {"save", "cancel"}:
+            if selected == "cancel":
+                if self._settings_cancel_action(state):
+                    self._write_settings_cancelled(state)
+                    return
+                continue
+            if selected == "save":
                 confirmation = self._settings_save_confirmation(
                     state,
-                    action=selected,
+                    action="save",
                 )
                 if confirmation == "return":
                     continue
                 if confirmation == "cancel":
-                    self._write_settings_cancelled()
-                    return
-                if selected == "cancel":
-                    self._write_settings_cancelled()
+                    self._write_settings_cancelled(state)
                     return
                 if self._auth_coordinator is not None:
                     try:
@@ -2086,7 +2394,7 @@ class InteractiveController:
                     except _SettingsFlowAbort:
                         return
                     if auth_outcome == "cancel":
-                        self._write_settings_cancelled()
+                        self._write_settings_cancelled(state)
                         return
                     if auth_outcome == "return":
                         continue
@@ -2132,7 +2440,7 @@ class InteractiveController:
             except _SettingsFlowAbort:
                 return
             if cancelled:
-                self._write_settings_cancelled()
+                self._write_settings_cancelled(state)
                 return
 
     def _authenticate_settings_routes(
@@ -2263,6 +2571,16 @@ class InteractiveController:
             InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
         )
 
+    def _settings_cancel_action(self, state: SettingsState) -> bool:
+        """Return whether one root Cancel action should discard and exit."""
+
+        if state.pending == state.baseline.configuration:
+            return True
+        return self._settings_save_confirmation(
+            state,
+            action="cancel",
+        ) == "cancel"
+
     def _edit_settings_value(
         self,
         state: SettingsState,
@@ -2290,20 +2608,38 @@ class InteractiveController:
     ) -> tuple[SettingsState, bool]:
         """Select one of the fixed workspace language choices."""
 
-        pending = state.pending.system_defaults.language
-        outcome = self._picker_input.read_picker(
-            Prompt("Language", instruction="Choose the workspace language."),
-            tuple(Choice(language, language) for language in SETTINGS_LANGUAGES),
-            highlighted_id=pending,
-            selected_id=pending,
-            transient=True,
-        )
-        value, whole_cancel = self._nested_settings_value(outcome)
-        if whole_cancel:
-            return state, True
-        if value is None:
-            return state, False
-        return update_language(state, value), False
+        notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
+        while True:
+            pending = state.pending.system_defaults.language
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Language",
+                    instruction=_settings_value_instruction(
+                        "Choose the workspace language. Enter applies the value "
+                        "and keeps this editor open; press Esc to return to "
+                        "Settings."
+                    ),
+                ),
+                tuple(
+                    Choice(language, language)
+                    for language in SETTINGS_LANGUAGES
+                ),
+                highlighted_id=pending,
+                selected_id=pending,
+                notice=notice,
+                transient=True,
+            )
+            value, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel:
+                return state, True
+            if value is None:
+                return state, False
+            if armed_value == value:
+                return state, False
+            state = update_language(state, value)
+            armed_value = state.pending.system_defaults.language
+            notice = _settings_entered_notice("Language", value)
 
     def _edit_settings_persona(
         self,
@@ -2311,7 +2647,6 @@ class InteractiveController:
     ) -> tuple[SettingsState, bool]:
         """Select one persona from the immutable opening catalog."""
 
-        pending = state.pending.system_defaults.persona
         choices = tuple(
             Choice(
                 entry.name,
@@ -2320,19 +2655,34 @@ class InteractiveController:
             )
             for entry in state.baseline.persona_catalog
         )
-        outcome = self._picker_input.read_picker(
-            Prompt("Persona", instruction="Choose a persona template."),
-            choices,
-            highlighted_id=pending,
-            selected_id=pending,
-            transient=True,
-        )
-        value, whole_cancel = self._nested_settings_value(outcome)
-        if whole_cancel:
-            return state, True
-        if value is None:
-            return state, False
-        return update_persona(state, value), False
+        notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
+        while True:
+            pending = state.pending.system_defaults.persona
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Persona",
+                    instruction=_settings_value_instruction(
+                        "Choose a persona template. Enter applies the value and "
+                        "keeps this editor open; press Esc to return to Settings."
+                    ),
+                ),
+                choices,
+                highlighted_id=pending,
+                selected_id=pending,
+                notice=notice,
+                transient=True,
+            )
+            value, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel:
+                return state, True
+            if value is None:
+                return state, False
+            if armed_value == value:
+                return state, False
+            state = update_persona(state, value)
+            armed_value = state.pending.system_defaults.persona
+            notice = _settings_entered_notice("Persona", value)
 
     def _edit_settings_rounds(
         self,
@@ -2340,15 +2690,22 @@ class InteractiveController:
     ) -> tuple[SettingsState, bool]:
         """Read and validate one pending nonnegative debate limit."""
 
+        notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
         while True:
             outcome = self._prompt_input.read_prompt(
                 Prompt(
                     "Maximum debate rounds",
                     scope="settings",
-                    instruction="Enter a nonnegative integer; 0 is audit-only.",
-                    default=str(
-                        state.pending.system_defaults.max_debate_rounds
+                    instruction=_settings_value_instruction(
+                        "Enter a nonnegative integer; 0 is audit-only. Enter "
+                        "applies the value and keeps this editor open; press Esc "
+                        "to return to Settings."
                     ),
+                ),
+                context=(notice,) if notice is not None else (),
+                initial_value=str(
+                    state.pending.system_defaults.max_debate_rounds
                 ),
                 transient=True,
             )
@@ -2358,6 +2715,8 @@ class InteractiveController:
             if value is None:
                 return state, False
             if not value or any(character not in "0123456789" for character in value):
+                notice = None
+                armed_value = _SETTINGS_UNARMED
                 self._write_settings_validation(
                     "Maximum debate rounds must be a nonnegative ASCII integer."
                 )
@@ -2365,11 +2724,20 @@ class InteractiveController:
             try:
                 rounds = int(value)
             except ValueError:
+                notice = None
+                armed_value = _SETTINGS_UNARMED
                 self._write_settings_validation(
                     "Maximum debate rounds is too large."
                 )
                 continue
-            return update_max_debate_rounds(state, rounds), False
+            if armed_value == rounds:
+                return state, False
+            state = update_max_debate_rounds(state, rounds)
+            armed_value = state.pending.system_defaults.max_debate_rounds
+            notice = _settings_entered_notice(
+                "Maximum debate rounds",
+                str(rounds),
+            )
 
     def _edit_settings_storage(
         self,
@@ -2377,35 +2745,55 @@ class InteractiveController:
     ) -> tuple[SettingsState, bool]:
         """Select a desired next-shell storage backend without activating it."""
 
-        pending = (
-            state.pending.system_defaults.conversation_storage_backend
-            or "filesystem"
-        )
-        outcome = self._picker_input.read_picker(
-            Prompt(
-                "Conversation storage",
-                instruction="Choose the desired backend for the next shell.",
-            ),
-            (
-                Choice("filesystem", "Filesystem"),
-                Choice("sqlite", "SQLite"),
-            ),
-            highlighted_id=pending,
-            selected_id=pending,
-            transient=True,
-        )
-        value, whole_cancel = self._nested_settings_value(outcome)
-        if whole_cancel:
-            return state, True
-        if value is None:
-            return state, False
-        try:
-            return update_conversation_storage_backend(state, value), False
-        except ConfigurationError:
-            self._write_settings_validation(
-                "Conversation storage must be filesystem or sqlite."
+        notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
+        while True:
+            pending = (
+                state.pending.system_defaults.conversation_storage_backend
+                or "filesystem"
             )
-            return state, False
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Conversation storage",
+                    instruction=_settings_value_instruction(
+                        "Choose the desired backend for the next shell. Enter "
+                        "applies the value and keeps this editor open; press Esc "
+                        "to return to Settings."
+                    ),
+                ),
+                (
+                    Choice("filesystem", "Filesystem"),
+                    Choice("sqlite", "SQLite"),
+                ),
+                highlighted_id=pending,
+                selected_id=pending,
+                notice=notice,
+                transient=True,
+            )
+            value, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel:
+                return state, True
+            if value is None:
+                return state, False
+            if armed_value == value:
+                return state, False
+            try:
+                state = update_conversation_storage_backend(state, value)
+            except ConfigurationError:
+                notice = None
+                armed_value = _SETTINGS_UNARMED
+                self._write_settings_validation(
+                    "Conversation storage must be filesystem or sqlite."
+                )
+                continue
+            armed_value = (
+                state.pending.system_defaults.conversation_storage_backend
+                or "filesystem"
+            )
+            notice = _settings_entered_notice(
+                "conversation storage",
+                armed_value,
+            )
 
     def _confirm_storage_installation(
         self,
@@ -2458,11 +2846,15 @@ class InteractiveController:
         """Select one agent, then one provider/model/reasoning setting."""
 
         agent_highlight = ROSTER[0]
+        field_highlights = {agent_id: "provider" for agent_id in ROSTER}
         while True:
             agent_outcome = self._picker_input.read_picker(
                 Prompt(
-                    "Providers",
-                    instruction="Choose an agent provider route to edit.",
+                    "Agents",
+                    instruction=(
+                        "Select an agent to configure; press Esc to return to "
+                        "Settings."
+                    ),
                 ),
                 tuple(
                     Choice(agent_id, AGENT_SPECS[agent_id].display_name)
@@ -2477,47 +2869,47 @@ class InteractiveController:
             if agent_id is None:
                 return state, False
             agent_highlight = agent_id
-            provider = _effective_settings_provider(state, agent_id)
-            provider_name = (
-                "Antigravity" if provider == "antigravity" else "Codex"
-            )
-            field_outcome = self._picker_input.read_picker(
-                Prompt(
-                    "Agent settings",
-                    scope=AGENT_SPECS[agent_id].display_name,
-                    instruction="Choose a provider, model, or effort setting.",
-                ),
-                (
-                    Choice("provider", "Provider"),
-                    Choice("model", f"{provider_name} model"),
-                    Choice("reasoning", f"{provider_name} effort"),
-                ),
-                highlighted_id="provider",
-                transient=True,
-            )
-            field, whole_cancel = self._nested_settings_value(field_outcome)
-            if whole_cancel:
-                return state, True
-            if field is None:
-                return state, False
-            if field == "provider":
-                state, whole_cancel = self._edit_settings_agent_provider(
-                    state,
-                    agent_id,
+            while True:
+                field_outcome = self._picker_input.read_picker(
+                    Prompt(
+                        "Agent settings",
+                        scope=AGENT_SPECS[agent_id].display_name,
+                        instruction=(
+                            "Choose a provider, model, or effort setting; press "
+                            "Esc to return to Agents."
+                        ),
+                    ),
+                    (
+                        Choice("provider", "Provider"),
+                        Choice("model", "Model"),
+                        Choice("reasoning", "Effort"),
+                    ),
+                    highlighted_id=field_highlights[agent_id],
+                    transient=True,
                 )
-            elif field == "model":
-                state, whole_cancel = self._edit_settings_agent_model(
-                    state,
-                    agent_id,
-                )
-            else:
-                state, whole_cancel = self._edit_settings_agent_reasoning(
-                    state,
-                    agent_id,
-                )
-            if whole_cancel:
-                return state, True
-            return state, False
+                field, whole_cancel = self._nested_settings_value(field_outcome)
+                if whole_cancel:
+                    return state, True
+                if field is None:
+                    break
+                field_highlights[agent_id] = field
+                if field == "provider":
+                    state, whole_cancel = self._edit_settings_agent_provider(
+                        state,
+                        agent_id,
+                    )
+                elif field == "model":
+                    state, whole_cancel = self._edit_settings_agent_model(
+                        state,
+                        agent_id,
+                    )
+                else:
+                    state, whole_cancel = self._edit_settings_agent_reasoning(
+                        state,
+                        agent_id,
+                    )
+                if whole_cancel:
+                    return state, True
 
     def _edit_settings_agent_provider(
         self,
@@ -2532,41 +2924,56 @@ class InteractiveController:
                 agent_id,
             )
 
-        current = _effective_settings_provider(state, agent_id)
-        outcome = self._picker_input.read_picker(
-            Prompt(
+        notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
+        while True:
+            current = _effective_settings_provider(state, agent_id)
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Provider",
+                    scope=AGENT_SPECS[agent_id].display_name,
+                    instruction=_settings_value_instruction(
+                        "Choose Codex or Antigravity. Enter applies the value "
+                        "and keeps this editor open; press Esc to return to "
+                        "Agent settings."
+                    ),
+                ),
+                (
+                    Choice(
+                        "codex",
+                        "Codex",
+                        description=(
+                            "Current saved provider."
+                            if current == "codex"
+                            else "Available provider."
+                        ),
+                    ),
+                    Choice(
+                        "antigravity",
+                        "Antigravity",
+                        description=(
+                            "Current saved provider."
+                            if current == "antigravity"
+                            else "Available provider."
+                        ),
+                    ),
+                ),
+                highlighted_id=current,
+                selected_id=current,
+                notice=notice,
+                transient=True,
+            )
+            provider, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel or provider is None:
+                return state, whole_cancel
+            if armed_value == provider:
+                return state, False
+            state = update_agent_backend(state, agent_id, provider)
+            armed_value = _effective_settings_provider(state, agent_id)
+            notice = _settings_entered_notice(
                 "Provider",
-                scope=AGENT_SPECS[agent_id].display_name,
-                instruction="Choose Codex or Antigravity.",
-            ),
-            (
-                Choice(
-                    "codex",
-                    "Codex",
-                    description=(
-                        "Current saved provider."
-                        if current == "codex"
-                        else "Available provider."
-                    ),
-                ),
-                Choice(
-                    "antigravity",
-                    "Antigravity",
-                    description=(
-                        "Current saved provider."
-                        if current == "antigravity"
-                        else "Available provider."
-                    ),
-                ),
-            ),
-            highlighted_id=current,
-            selected_id=current,
-            transient=True,
-        )
-        provider, whole_cancel = self._nested_settings_value(outcome)
-        if whole_cancel or provider is None:
-            return state, whole_cancel
-        return update_agent_backend(state, agent_id, provider), False
+                _provider_display_name(provider),
+            )
 
     def _edit_authenticated_settings_agent_provider(
         self,
@@ -2577,110 +2984,191 @@ class InteractiveController:
 
         coordinator = self._auth_coordinator
         assert coordinator is not None
-        snapshot = coordinator.probe_all()
-        state = self._rebase_missing_settings_default(state, snapshot)
-        current = _effective_settings_provider(state, agent_id)
-        choices = coordinator.choices(
-            snapshot,
-            selected_provider=current,
-        )
-        current_choice = next(
-            choice for choice in choices if choice.identity == current
-        )
-        selected_id = current if current_choice.enabled else None
-        highlighted_id = selected_id or next(
-            (choice.identity for choice in choices if choice.enabled),
-            None,
-        )
-        outcome = self._picker_input.read_picker(
-            Prompt(
-                "Provider",
-                scope=AGENT_SPECS[agent_id].display_name,
-                instruction=(
-                    "Choose an authenticated provider, or select an available "
-                    "provider to authenticate it first."
+        notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
+        while True:
+            snapshot = coordinator.probe_all()
+            current = _effective_settings_provider(state, agent_id)
+            choices = coordinator.choices(
+                snapshot,
+                selected_provider=current,
+            )
+            current_choice = next(
+                choice for choice in choices if choice.identity == current
+            )
+            selected_id = current if current_choice.enabled else None
+            highlighted_id = selected_id or next(
+                (choice.identity for choice in choices if choice.enabled),
+                None,
+            )
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Provider",
+                    scope=AGENT_SPECS[agent_id].display_name,
+                    instruction=_settings_value_instruction(
+                        "Choose an authenticated provider, or select an available "
+                        "provider to authenticate it first. Enter applies the "
+                        "value and keeps this editor open; press Esc to return "
+                        "to Agent settings."
+                    ),
                 ),
-            ),
-            choices,
-            highlighted_id=highlighted_id,
-            selected_id=selected_id,
-            transient=True,
-        )
-        provider, whole_cancel = self._nested_settings_value(outcome)
-        if whole_cancel or provider is None:
-            return state, whole_cancel
+                choices,
+                highlighted_id=highlighted_id,
+                selected_id=selected_id,
+                notice=notice,
+                transient=True,
+            )
+            provider, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel or provider is None:
+                return state, whole_cancel
 
-        snapshot = coordinator.probe_all()
-        state = self._rebase_missing_settings_default(state, snapshot)
-        if snapshot.is_authenticated(provider):
-            return update_agent_backend(state, agent_id, provider), False
+            notice = None
+            snapshot = coordinator.probe_all()
+            if snapshot.is_authenticated(provider):
+                if armed_value == provider:
+                    return state, False
+                state = update_agent_backend(state, agent_id, provider)
+                armed_value = _effective_settings_provider(state, agent_id)
+                notice = _settings_entered_notice(
+                    "Provider",
+                    _provider_display_name(provider),
+                )
+                continue
 
-        before = snapshot
-        result = coordinator.run(
-            snapshot,
-            selected_provider=provider,
-        )
-        if result.kind is InteractiveAuthResultKind.CANCEL:
-            return state, False
-        if result.kind in {
-            InteractiveAuthResultKind.INTERRUPT,
-            InteractiveAuthResultKind.EOF,
-        }:
-            return state, True
+            result = coordinator.run(
+                snapshot,
+                selected_provider=provider,
+            )
+            if result.kind is InteractiveAuthResultKind.CANCEL:
+                armed_value = _SETTINGS_UNARMED
+                continue
+            if result.kind in {
+                InteractiveAuthResultKind.INTERRUPT,
+                InteractiveAuthResultKind.EOF,
+            }:
+                return state, True
 
-        snapshot = coordinator.probe_all()
-        newly_authenticated = self._newly_authenticated_provider(
-            before,
-            result,
-            snapshot,
-        )
-        state = self._rebase_missing_settings_default(
-            state,
-            snapshot,
-            newly_authenticated_provider=newly_authenticated,
-        )
-        if (
-            result.kind is InteractiveAuthResultKind.AUTHENTICATED
-            and result.provider == provider
-            and snapshot.is_authenticated(provider)
-        ):
-            return update_agent_backend(state, agent_id, provider), False
+            snapshot = coordinator.probe_all()
+            if (
+                result.kind is InteractiveAuthResultKind.AUTHENTICATED
+                and result.provider == provider
+                and snapshot.is_authenticated(provider)
+            ):
+                if armed_value == provider:
+                    return state, False
+                state = update_agent_backend(state, agent_id, provider)
+                armed_value = _effective_settings_provider(state, agent_id)
+                notice = _settings_entered_notice(
+                    "Provider",
+                    _provider_display_name(provider),
+                )
+                continue
 
-        self._write_notice(
-            (
-                f"{_provider_display_name(provider)} was not assigned because "
-                "fresh authentication was not confirmed."
-            ),
-            label="authentication required",
-            role=SemanticRole.ERROR,
-            state=ViewState.ERROR,
-        )
-        return state, False
+            armed_value = _SETTINGS_UNARMED
+            self._write_notice(
+                (
+                    f"{_provider_display_name(provider)} was not assigned because "
+                    "fresh authentication was not confirmed."
+                ),
+                label="authentication required",
+                role=SemanticRole.ERROR,
+                state=ViewState.ERROR,
+            )
 
     def _edit_settings_agent_model(
         self,
         state: SettingsState,
         agent_id: str,
     ) -> tuple[SettingsState, bool]:
-        """Read one agent's exact active-provider model or clear it."""
+        """Select one discovered active-provider model or a custom value."""
 
+        provider = _effective_settings_provider(state, agent_id)
+        antigravity = provider == "antigravity"
+        provider_name = _provider_display_name(provider)
+        discovery = self._discover_settings_catalog(provider)
+        catalog = discovery.catalog
+        highlighted_id: str | None = None
+        notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
         while True:
             agent = state.pending.agent_configs[agent_id]
-            provider = _effective_settings_provider(state, agent_id)
-            antigravity = provider == "antigravity"
-            provider_name = "Antigravity" if antigravity else "Codex"
-            current = (
+            pending = (
                 agent.antigravity_model if antigravity else agent.codex_model
             )
-            outcome = self._prompt_input.read_prompt(
-                Prompt(
-                    f"{provider_name} model",
-                    scope=AGENT_SPECS[agent_id].display_name,
-                    instruction=(
-                        f"Enter an exact {provider_name} model or leave blank "
-                        "to inherit the system setting."
+            choices: list[Choice] = [
+                Choice(
+                    _SETTINGS_INHERIT_ID,
+                    "Inherit",
+                    description=(
+                        f"Use the workspace {provider_name} model, then the "
+                        "provider default."
                     ),
-                    default=current or "inherit",
+                )
+            ]
+            discovered_values: dict[str, tuple[str, str]] = {}
+            selected_id = _SETTINGS_INHERIT_ID
+            matched_model: ProviderModel | None = None
+            if catalog is not None:
+                for index, model in enumerate(catalog.models):
+                    choice_id = f"{_SETTINGS_MODEL_ID_PREFIX}{index}"
+                    discovered_values[choice_id] = (
+                        model.identity,
+                        model.label,
+                    )
+                    choices.append(
+                        Choice(
+                            choice_id,
+                            model.label,
+                            description=_settings_model_description(model),
+                        )
+                    )
+                    if pending == model.identity:
+                        selected_id = choice_id
+                        matched_model = model
+            if pending is not None and matched_model is None:
+                choices.append(
+                    Choice(
+                        _SETTINGS_CURRENT_CUSTOM_MODEL_ID,
+                        "Current custom",
+                        description=_settings_current_model_description(pending),
+                    )
+                )
+                selected_id = _SETTINGS_CURRENT_CUSTOM_MODEL_ID
+            choices.append(
+                Choice(
+                    _SETTINGS_CUSTOM_MODEL_ID,
+                    "Custom model",
+                    description=(
+                        f"Enter an exact safe {provider_name} model value."
+                    ),
+                )
+            )
+            choice_ids = {choice.identity for choice in choices}
+            if highlighted_id not in choice_ids:
+                highlighted_id = selected_id
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Model",
+                    scope=(
+                        f"{AGENT_SPECS[agent_id].display_name} · {provider_name}"
+                    ),
+                    instruction=_settings_value_instruction(
+                        f"Choose a model for the pending {provider_name} "
+                        "provider. Enter applies a value and keeps Model open; "
+                        "Custom model opens its editor. Press Esc to return to "
+                        "Agent settings."
+                    ),
+                ),
+                tuple(choices),
+                highlighted_id=highlighted_id,
+                selected_id=selected_id,
+                notice=(
+                    notice
+                    or _settings_catalog_notice(
+                        provider,
+                        discovery.state,
+                        model_picker=True,
+                    )
                 ),
                 transient=True,
             )
@@ -2689,73 +3177,354 @@ class InteractiveController:
                 return state, True
             if value is None:
                 return state, False
+            highlighted_id = value
+            notice = None
+            updater = (
+                update_agent_antigravity_model
+                if antigravity
+                else update_agent_codex_model
+            )
+            if value == _SETTINGS_CURRENT_CUSTOM_MODEL_ID:
+                display_value = (
+                    pending
+                    if pending is not None
+                    and not pending.isspace()
+                    and len(pending.encode("utf-8")) <= 256
+                    else "Current custom"
+                )
+                if armed_value == pending:
+                    return state, False
+                state = updater(state, agent_id, pending)
+                armed_value = pending
+                notice = _settings_entered_notice("Model", display_value)
+                continue
+            if value == _SETTINGS_CUSTOM_MODEL_ID:
+                state, whole_cancel = self._edit_settings_custom_model(
+                    state,
+                    agent_id,
+                    provider,
+                )
+                if whole_cancel:
+                    return state, True
+                armed_value = _SETTINGS_UNARMED
+                continue
+            if value == _SETTINGS_INHERIT_ID:
+                if armed_value is None:
+                    return state, False
+                state = updater(state, agent_id, None)
+                armed_value = None
+                notice = _settings_entered_notice("Model", "Inherit")
+                continue
+            if value not in discovered_values:
+                raise _ControllerAbort(
+                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                )
+            model_value, display_value = discovered_values[value]
+            if armed_value == model_value:
+                return state, False
+            state = updater(state, agent_id, model_value)
+            agent = state.pending.agent_configs[agent_id]
+            armed_value = (
+                agent.antigravity_model if antigravity else agent.codex_model
+            )
+            notice = _settings_entered_notice("Model", display_value)
+
+    def _edit_settings_custom_model(
+        self,
+        state: SettingsState,
+        agent_id: str,
+        provider: str,
+    ) -> tuple[SettingsState, bool]:
+        """Read safe custom models until return or whole-settings cancellation."""
+
+        antigravity = provider == "antigravity"
+        provider_name = _provider_display_name(provider)
+        notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
+        while True:
+            agent = state.pending.agent_configs[agent_id]
+            pending = (
+                agent.antigravity_model if antigravity else agent.codex_model
+            )
+            outcome = self._prompt_input.read_prompt(
+                Prompt(
+                    "Custom model",
+                    scope=(
+                        f"{AGENT_SPECS[agent_id].display_name} · {provider_name}"
+                    ),
+                    instruction=_settings_value_instruction(
+                        f"Enter an exact {provider_name} model, or leave blank "
+                        "to inherit the workspace setting. Enter applies the "
+                        "value and keeps this editor open; press Esc to return "
+                        "to Model."
+                    ),
+                    default=(
+                        pending
+                        if pending is not None and not pending.isspace()
+                        else None
+                    ),
+                ),
+                context=(notice,) if notice is not None else (),
+                transient=True,
+            )
+            value, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel:
+                return state, True
+            if value is None:
+                return state, False
+            normalized_value = None if value == "" else value
+            if armed_value == normalized_value:
+                return state, False
             try:
                 updater = (
                     update_agent_antigravity_model
                     if antigravity
                     else update_agent_codex_model
                 )
-                return updater(
-                    state, agent_id, None if value == "" else value
-                ), False
+                state = updater(
+                    state,
+                    agent_id,
+                    normalized_value,
+                )
             except ConfigurationError:
+                notice = None
+                armed_value = _SETTINGS_UNARMED
                 self._write_settings_validation(
                     f"{provider_name} model must be safe nonempty text, "
                     "or blank to inherit."
                 )
+                continue
+            agent = state.pending.agent_configs[agent_id]
+            armed_value = (
+                agent.antigravity_model if antigravity else agent.codex_model
+            )
+            notice = _settings_entered_notice(
+                "Custom model",
+                "Inherit" if armed_value is None else str(armed_value),
+            )
 
     def _edit_settings_agent_reasoning(
         self,
         state: SettingsState,
         agent_id: str,
     ) -> tuple[SettingsState, bool]:
-        """Select one active-provider effort or inherited system value."""
+        """Select exact discovered effort for the pending effective model."""
 
         agent = state.pending.agent_configs[agent_id]
+        defaults = state.pending.system_defaults
         provider = _effective_settings_provider(state, agent_id)
         antigravity = provider == "antigravity"
-        provider_name = "Antigravity" if antigravity else "Codex"
+        provider_name = _provider_display_name(provider)
         pending = (
             agent.antigravity_effort
             if antigravity
             else agent.codex_reasoning_effort
         )
-        efforts = (
-            SETTINGS_ANTIGRAVITY_EFFORTS
+        inherited_effort = (
+            defaults.antigravity_effort
             if antigravity
-            else SETTINGS_REASONING_EFFORTS
+            else defaults.codex_reasoning_effort
         )
-        selected = "default" if pending is None else pending
-        outcome = self._picker_input.read_picker(
-            Prompt(
-                f"{provider_name} effort",
-                scope=AGENT_SPECS[agent_id].display_name,
-                instruction="Choose inheritance or one fixed effort level.",
-            ),
-            (
-                Choice("default", "Inherit"),
-                *tuple(
-                    Choice(effort, effort)
-                    for effort in efforts
+        effective_model = (
+            (agent.antigravity_model or defaults.antigravity_model)
+            if antigravity
+            else (agent.codex_model or defaults.codex_model)
+        )
+        discovery = self._discover_settings_catalog(provider)
+        catalog = discovery.catalog
+        selected_model: ProviderModel | None = None
+        efforts: tuple[ProviderEffort, ...] = ()
+        if catalog is not None:
+            if antigravity:
+                efforts = catalog.models[0].efforts
+            else:
+                selected_model = catalog.model_for(effective_model)
+                if selected_model is not None:
+                    efforts = selected_model.efforts
+
+        if inherited_effort is not None:
+            inherit_description = (
+                f"Use the workspace {provider_name} effort: "
+                f"{inherited_effort}."
+            )
+        elif (
+            selected_model is not None
+            and selected_model.default_effort is not None
+        ):
+            inherit_description = (
+                f"Use the selected model default: {selected_model.default_effort}."
+            )
+        else:
+            inherit_description = (
+                "Use the workspace setting, then provider default."
+            )
+
+        catalog_notice = _settings_catalog_notice(
+            provider,
+            discovery.state,
+            model_picker=False,
+        )
+        if discovery.ready and not antigravity and selected_model is None:
+            catalog_notice = Notice(
+                "The inherited or selected Codex model does not match this "
+                "catalog. Choose a matching Model before selecting a model-"
+                "specific effort; pending settings were preserved.",
+                label="model-specific effort",
+                role=SemanticRole.WARNING,
+            )
+        elif discovery.ready and not efforts:
+            catalog_notice = Notice(
+                f"The selected {provider_name} model reports no effort choices. "
+                "Inherit or keep the current compatibility value.",
+                label="effort catalog",
+                role=SemanticRole.WARNING,
+            )
+
+        highlighted_id: str | None = None
+        notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
+        while True:
+            agent = state.pending.agent_configs[agent_id]
+            pending = (
+                agent.antigravity_effort
+                if antigravity
+                else agent.codex_reasoning_effort
+            )
+            choices: list[Choice] = [
+                Choice(
+                    _SETTINGS_INHERIT_ID,
+                    "Inherit",
+                    description=inherit_description,
+                )
+            ]
+            effort_values: dict[str, tuple[str, str]] = {}
+            selected_id = _SETTINGS_INHERIT_ID
+            for index, effort in enumerate(efforts):
+                choice_id = f"{_SETTINGS_EFFORT_ID_PREFIX}{index}"
+                effort_values[choice_id] = (
+                    effort.identity,
+                    effort.label,
+                )
+                choices.append(
+                    Choice(
+                        choice_id,
+                        effort.label,
+                        description=_settings_effort_description(
+                            effort,
+                            is_default=(
+                                selected_model is not None
+                                and selected_model.default_effort
+                                == effort.identity
+                            ),
+                        ),
+                    )
+                )
+                if pending == effort.identity:
+                    selected_id = choice_id
+            if (
+                pending is not None
+                and pending not in {
+                    effort_value
+                    for effort_value, _display_value in effort_values.values()
+                }
+            ):
+                choices.append(
+                    Choice(
+                        _SETTINGS_CURRENT_EFFORT_ID,
+                        "Current compatibility",
+                        description=f"Keep exact pending effort: {pending}",
+                    )
+                )
+                selected_id = _SETTINGS_CURRENT_EFFORT_ID
+
+            choice_ids = {choice.identity for choice in choices}
+            if highlighted_id not in choice_ids:
+                highlighted_id = selected_id
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Effort",
+                    scope=(
+                        f"{AGENT_SPECS[agent_id].display_name} · "
+                        f"{provider_name}"
+                    ),
+                    instruction=_settings_value_instruction(
+                        f"Choose effort for the pending {provider_name} "
+                        "provider and effective model. Enter applies the value "
+                        "and keeps this editor open; press Esc to return to "
+                        "Agent settings."
+                    ),
                 ),
-            ),
-            highlighted_id=selected,
-            selected_id=selected,
-            transient=True,
-        )
-        value, whole_cancel = self._nested_settings_value(outcome)
-        if whole_cancel:
-            return state, True
-        if value is None:
-            return state, False
-        updater = (
-            update_agent_antigravity_effort
-            if antigravity
-            else update_agent_codex_reasoning_effort
-        )
-        return updater(
-            state, agent_id, None if value == "default" else value
-        ), False
+                tuple(choices),
+                highlighted_id=highlighted_id,
+                selected_id=selected_id,
+                notice=notice or catalog_notice,
+                transient=True,
+            )
+            value, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel:
+                return state, True
+            if value is None:
+                return state, False
+            highlighted_id = value
+            notice = None
+            updater = (
+                update_agent_antigravity_effort
+                if antigravity
+                else update_agent_codex_reasoning_effort
+            )
+            if value == _SETTINGS_CURRENT_EFFORT_ID:
+                assert pending is not None
+                if armed_value == pending:
+                    return state, False
+                state = updater(state, agent_id, pending)
+                armed_value = pending
+                notice = _settings_entered_notice("Effort", pending)
+                continue
+            if value == _SETTINGS_INHERIT_ID:
+                if armed_value is None:
+                    return state, False
+                state = updater(state, agent_id, None)
+                armed_value = None
+                notice = _settings_entered_notice("Effort", "Inherit")
+                continue
+            if value not in effort_values:
+                raise _ControllerAbort(
+                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                )
+            effort_value, display_value = effort_values[value]
+            if armed_value == effort_value:
+                return state, False
+            state = updater(state, agent_id, effort_value)
+            agent = state.pending.agent_configs[agent_id]
+            armed_value = (
+                agent.antigravity_effort
+                if antigravity
+                else agent.codex_reasoning_effort
+            )
+            notice = _settings_entered_notice("Effort", display_value)
+
+    def _discover_settings_catalog(
+        self,
+        provider: str,
+    ) -> ProviderCatalogDiscovery:
+        """Contain collaborator failures behind one fixed discovery state."""
+
+        try:
+            discovery = self._provider_catalog.discover(provider)
+        except Exception:
+            return ProviderCatalogDiscovery(
+                provider,
+                ProviderCatalogState.FAILED,
+            )
+        if (
+            type(discovery) is not ProviderCatalogDiscovery
+            or discovery.provider != provider
+        ):
+            return ProviderCatalogDiscovery(
+                provider,
+                ProviderCatalogState.FAILED,
+            )
+        return discovery
 
     @staticmethod
     def _require_settings_commit(outcome: ControlOutcome) -> str:
@@ -2798,82 +3567,30 @@ class InteractiveController:
     ) -> Panel:
         """Project a stable current/pending settings diff for confirmation."""
 
-        current = state.baseline.configuration
-        pending = state.pending
-
-        def values(*, pending_configuration: bool) -> tuple[tuple[str, str], ...]:
-            configuration = pending if pending_configuration else current
-            defaults = configuration.system_defaults
-            rows = [
-                ("Language", defaults.language),
-                ("Persona", defaults.persona),
-                ("Maximum debate rounds", str(defaults.max_debate_rounds)),
-                (
-                    "Conversation storage",
-                    defaults.conversation_storage_backend or "filesystem",
-                ),
-            ]
-            for agent_id in ROSTER:
-                display_name = AGENT_SPECS[agent_id].display_name
-                agent = configuration.agent_configs[agent_id]
-                provider = _effective_settings_provider(
-                    state,
-                    agent_id,
-                    pending=pending_configuration,
-                )
-                provider_value = (
-                    provider
-                    if agent.backend is not None
-                    else f"{provider} (default)"
-                )
-                rows.extend(
-                    (
-                        (f"{display_name} Provider", provider_value),
-                        (
-                            f"{display_name} Codex model",
-                            agent.codex_model or "inherit",
-                        ),
-                        (
-                            f"{display_name} Codex reasoning",
-                            agent.codex_reasoning_effort or "inherit",
-                        ),
-                        (
-                            f"{display_name} Antigravity model",
-                            agent.antigravity_model or "inherit",
-                        ),
-                        (
-                            f"{display_name} Antigravity effort",
-                            agent.antigravity_effort or "inherit",
-                        ),
-                    )
-                )
-            return tuple(rows)
-
-        current_values = values(pending_configuration=False)
-        pending_values = values(pending_configuration=True)
-
-        changed_indices = tuple(
-            index
-            for index, (_current, pending_value) in enumerate(pending_values)
-            if pending_value != current_values[index][1]
+        changed_rows = tuple(
+            row
+            for row in _settings_projection(state)
+            if row[3] != row[4]
         )
         current_fields = tuple(
             Field(
-                current_values[index][0],
-                f"{current_values[index][1]} (Changed)",
+                label,
+                f"{current_value} (Changed)",
                 role=SemanticRole.WARNING,
             )
-            for index in changed_indices
+            for _root_id, _agent_id, label, current_value, _pending_value
+            in changed_rows
         )
         pending_fields = tuple(
             Field(
-                pending_values[index][0],
-                f"{pending_values[index][1]} (Changed)",
+                label,
+                f"{pending_value} (Changed)",
                 role=SemanticRole.WARNING,
             )
-            for index in changed_indices
+            for _root_id, _agent_id, label, _current_value, pending_value
+            in changed_rows
         )
-        if changed_indices:
+        if changed_rows:
             panel_items: list[Section | Notice] = [
                 Section("Current", current_fields),
                 Section("Pending", pending_fields),
@@ -2998,12 +3715,15 @@ class InteractiveController:
             )
         )
 
-    def _write_settings_cancelled(self) -> None:
-        """Render one semantic whole-settings cancellation notice."""
+    def _write_settings_cancelled(self, state: SettingsState) -> None:
+        """Render one cancellation notice only when pending changes are discarded."""
+
+        if state.pending == state.baseline.configuration:
+            return
 
         self._semantic_output.write_component(
             Notice(
-                "Settings cancelled; no pending changes were saved.",
+                "Pending changes discarded.",
                 label="cancelled",
                 role=SemanticRole.WARNING,
                 state=ViewState.CANCELLED,
@@ -3643,6 +4363,19 @@ class InteractiveController:
             raise _ControllerAbort(
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
             )
+        runner = self._runner
+        if runner is None:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        self._semantic_output.write_accepted_input(
+            Message(
+                f"you → {_AGENT_PROMPT_ALIASES[agent_id]}",
+                action.text,
+                role=SemanticRole.DEFAULT,
+                state=ViewState.COMPLETED,
+            )
+        )
         progress_events: list[ConversationRetrievalProgressEvent] = []
         progress_callback_failure: BaseException | None = None
 
@@ -3690,11 +4423,6 @@ class InteractiveController:
             finally:
                 operation_joined = True
 
-        runner = self._runner
-        if runner is None:
-            raise _ControllerAbort(
-                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-            )
         operation_coroutine = run_joined_advisory_operation()
         progress_coroutine = self._advisory_progress.run(operation_coroutine)
         try:
@@ -3996,6 +4724,7 @@ class InteractiveController:
                 output_path = None
                 continue
             break
+        assert output_path is not None
 
         if action.kind is ActionKind.RUN:
             prompt = action.text
@@ -4046,6 +4775,32 @@ class InteractiveController:
         request = DebateContextRequest(
             conversation_id=focused.conversation_id,
             mode=context_mode,
+        )
+        runner = self._runner
+        if runner is None:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        if input_kind is InputKind.PROMPT:
+            self._semantic_output.write_accepted_input(
+                Message(
+                    "you → consensus",
+                    payload,
+                    role=SemanticRole.DEFAULT,
+                    state=ViewState.COMPLETED,
+                )
+            )
+        context_fields = [Field("Output", output_path)]
+        if input_kind is InputKind.DRAFT:
+            assert action.argument is not None
+            context_fields.append(Field("Source", action.argument))
+        self._semantic_output.write_component(
+            Record(
+                "context",
+                title="Consensus request",
+                fields=tuple(context_fields),
+                state=ViewState.COMPLETED,
+            )
         )
         progress_events: list[DebateProgressEvent] = []
         progress_callback_failure: BaseException | None = None
@@ -4099,11 +4854,6 @@ class InteractiveController:
             finally:
                 operation_joined = True
 
-        runner = self._runner
-        if runner is None:
-            raise _ControllerAbort(
-                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-            )
         operation_coroutine = run_joined_consensus_operation()
         progress_coroutine = self._debate_progress.run(operation_coroutine)
         try:
@@ -4542,9 +5292,10 @@ class InteractiveController:
     ) -> None:
         """Search the attached session and render ordered active-only hits.
 
-        The parsed action supplies one query. Catalog and service validation
-        precede primitive rendering; expected failures retain attachment and
-        routing state, while Ctrl-C acknowledges cancellation without cleanup.
+        The parsed action supplies one query. Its validated normalized context
+        is rendered before catalog and service work; expected failures retain
+        attachment and routing state, while Ctrl-C acknowledges cancellation
+        without cleanup.
         """
 
         assert action.kind is ActionKind.SEARCH
@@ -4560,6 +5311,18 @@ class InteractiveController:
                     InteractiveError(InteractiveErrorCode.COMMAND_INVALID)
                 )
                 return
+            normalized_query = normalize_conversation_subject(query.text)
+            self._semantic_output.write_component(
+                Record(
+                    "context",
+                    title="Search request",
+                    fields=(
+                        Field("Query", normalized_query),
+                        Field("Scope", "active"),
+                    ),
+                    state=ViewState.COMPLETED,
+                )
+            )
 
             try:
                 entries = self._catalog_entries(session_id)
@@ -4701,6 +5464,19 @@ class InteractiveController:
                 action.count
                 or CONVERSATION_MEMORY_POLICY.default_page_events
             )
+            handle = visible_conversation_handle(metadata, entries)
+            self._semantic_output.write_component(
+                Record(
+                    "context",
+                    title="Transcript request",
+                    fields=(
+                        Field("Conversation", handle),
+                        Field("Start", str(start_sequence)),
+                        Field("Count", str(page_limit)),
+                    ),
+                    state=ViewState.COMPLETED,
+                )
+            )
             try:
                 page = memory_service.read_transcript(
                     metadata.conversation_id,
@@ -4718,7 +5494,6 @@ class InteractiveController:
                 self._present_transcript_service_failure(exc)
                 return
 
-            handle = visible_conversation_handle(metadata, entries)
             total_count = len(page.events)
             for position, event in enumerate(page.events, start=1):
                 self._write_counted_list_row(
@@ -4832,77 +5607,79 @@ class InteractiveController:
             self._confirm_attachment_after_command_failure()
         self._write_error(error)
 
-    def _write_attached_conversation_scope(self) -> None:
-        """Render the effective current focus immediately before main input.
+    def _write_attached_conversation_scope(
+        self,
+        last_presented: object | tuple[str, str | None, str | None, str],
+    ) -> tuple[str, str | None, str | None, str]:
+        """Revalidate current focus and present it only when semantically changed.
 
         The current metadata is revalidated against the complete catalog so a
         unique display handle can be derived across active and archived IDs.
         Missing or archived external state drops only in-memory focus and
         reports its typed category; the durable default is not rewritten here.
+        The returned snapshot is produced only after any required terminal
+        write succeeds, so callers never remember a failed presentation.
         """
 
         session_id = self._attached_session_id
         assert session_id is not None
         focused = self._focused_conversation
         if focused is None:
+            handle = None
+            subject = None
+        else:
+            try:
+                entries = self._catalog_entries(session_id)
+            except Exception as exc:
+                self._present_conversation_failure(exc)
+                handle = focused.conversation_id
+                subject = focused.subject
+            else:
+                current = next(
+                    (
+                        entry
+                        for entry in entries
+                        if entry.conversation_id == focused.conversation_id
+                    ),
+                    None,
+                )
+                if current is None:
+                    self._focused_conversation = None
+                    self._write_error(
+                        InteractiveError(
+                            InteractiveErrorCode.CONVERSATION_NOT_FOUND
+                        )
+                    )
+                    handle = None
+                    subject = None
+                elif current.status is ConversationStatus.ARCHIVED:
+                    self._focused_conversation = None
+                    self._write_error(
+                        InteractiveError(
+                            InteractiveErrorCode.CONVERSATION_ARCHIVED
+                        )
+                    )
+                    handle = None
+                    subject = None
+                else:
+                    self._focused_conversation = current
+                    handle = visible_conversation_handle(current, entries)
+                    subject = current.subject
+
+        current_scope = (
+            session_id,
+            handle,
+            subject,
+            self._target_agent_id,
+        )
+        if current_scope != last_presented:
             self._terminal.write_conversation_scope(
                 session_id=session_id,
-                conversation_handle=None,
-                conversation_subject=None,
+                conversation_handle=handle,
+                conversation_subject=subject,
                 agent_id=self._target_agent_id,
             )
-            return
-
-        try:
-            entries = self._catalog_entries(session_id)
-        except Exception as exc:
-            self._present_conversation_failure(exc)
-            handle = focused.conversation_id
-        else:
-            current = next(
-                (
-                    entry
-                    for entry in entries
-                    if entry.conversation_id == focused.conversation_id
-                ),
-                None,
-            )
-            if current is None:
-                self._focused_conversation = None
-                self._write_error(
-                    InteractiveError(
-                        InteractiveErrorCode.CONVERSATION_NOT_FOUND
-                    )
-                )
-                self._terminal.write_conversation_scope(
-                    session_id=session_id,
-                    conversation_handle=None,
-                    conversation_subject=None,
-                    agent_id=self._target_agent_id,
-                )
-                return
-            if current.status is ConversationStatus.ARCHIVED:
-                self._focused_conversation = None
-                self._write_error(
-                    InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
-                )
-                self._terminal.write_conversation_scope(
-                    session_id=session_id,
-                    conversation_handle=None,
-                    conversation_subject=None,
-                    agent_id=self._target_agent_id,
-                )
-                return
-            self._focused_conversation = current
-            focused = current
-            handle = visible_conversation_handle(current, entries)
-
-        self._terminal.write_conversation_scope(
-            session_id=session_id,
-            conversation_handle=handle,
-            conversation_subject=focused.subject,
-            agent_id=self._target_agent_id,
-        )
+        return current_scope
 
     def _create_subject_conversation(self, subject: str | None) -> bool:
         """Create and focus one active conversation, returning EOF exit intent.
@@ -5010,6 +5787,25 @@ class InteractiveController:
                 if query is None
                 else normalize_conversation_input(query)
             )
+        except Exception as exc:
+            self._present_conversation_failure(exc)
+            return
+        if normalized_query is not None:
+            self._semantic_output.write_component(
+                Record(
+                    "context",
+                    title="Conversation list request",
+                    fields=(
+                        Field("Query", normalized_query),
+                        Field(
+                            "Scope",
+                            "all" if include_archived else "active",
+                        ),
+                    ),
+                    state=ViewState.COMPLETED,
+                )
+            )
+        try:
             entries = self._catalog_entries(session_id)
         except Exception as exc:
             self._present_conversation_failure(exc)

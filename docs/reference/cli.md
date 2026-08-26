@@ -471,9 +471,13 @@ options, so a configured Antigravity route requires `agy` on `PATH`.
 
 There is no `--codex-reasoning-effort` option or supported public
 system-default save API. Global `/settings` provides the installed interactive
-edit/save workflow; choose `Providers`, then an agent, then Provider, Model, or
-Reasoning effort. It supports Codex and Antigravity and edits only the active
+edit/save workflow; choose `Agents`, then an agent, then Provider, Model, or
+Effort. It supports Codex and Antigravity and edits only the active
 provider's per-agent model/effort while retaining inactive-provider values.
+Entering Model or Effort discovers the pending effective provider afresh;
+opening Settings and provider navigation do not launch catalog commands.
+Custom models and inheritance remain supported. See the exact
+[picker contract](interactive-terminal.md#provider-model-and-effort-pickers).
 Direct edits to the validated JSON documents remain possible. An active backend
 and runtime keep their construction-time configuration snapshot. Existing
 three-key system-default files remain valid and provide no provider-specific
@@ -498,6 +502,18 @@ attempts the same cleanup before propagating. Persistent semantic
 orientation, validation, cancellation, discard, error, and result records are
 written after that boundary and remain visible. Conversation-subject input is
 always an ordinary read.
+
+Accepted provider-bound content is informative output, not a retained control
+frame. On a capable stream, ordinary, `/say`, and `@agent` advisory text is
+rendered once after cleanup as `you → ALIAS`, using the resolved preferred
+target alias and exact semantic body without the command envelope. Inline,
+fresh, and committed composer consensus prompts use `you → consensus`. These
+messages appear before progress or provider work and remain through later
+success, handled failure, cancellation, or post-acceptance interrupt. In
+ordinary-line fallback the submitted input already remains visible, so the
+terminal adds no duplicate accepted-input message. This is terminal
+presentation only, not a storage, transcript-retention, provider-history, or
+audit guarantee.
 
 After workspace resolution, a capable POSIX terminal shows a bounded,
 width-aware four-frame welcome before the authentication gate. Physical widths
@@ -640,41 +656,95 @@ text so the invoking shell does not expand `$`.
 `/auth` and `/settings` are alias-free, take no argument, and are available with
 or without an attached session. `/auth` follows the authentication contract
 above. `/settings` edits isolated Current and Pending snapshots for
-Language, Persona, Maximum debate rounds, Conversation storage, and Providers
+Language, Persona, Maximum debate rounds, Conversation storage, and Agents
 through a seven-choice editor in this exact order: those five fields, Save,
 Cancel. Conversation storage independently offers Filesystem and SQLite for
-the next shell; it is not an agent-provider route. `Providers` opens a
-nested canonical-agent picker, then a Provider/Model/Reasoning effort picker;
-Model and Reasoning edit only that agent and `null`/Inherit falls back to the
-system defaults. Settings pickers and prompts follow the same transient input
+the next shell; it is not an agent-provider route. `Agents` opens a
+nested canonical-agent picker, then a provider-neutral Provider/Model/Effort
+picker. Current/Pending confirmations retain provider-qualified rows for both
+providers so inactive values remain identifiable.
+
+Every retained Language, Persona, Maximum debate rounds, Conversation storage,
+Provider, Model, Custom model, and Effort editor always shows `Entered changes
+remain pending in memory and are not saved; choose Save in Settings to persist
+them.` The text is present on initial entry, after a valid Enter reopens the
+editor, and during validation. The established entered-value success result
+remains unchanged and is still the only inline completed result.
+
+The top-level Settings picker shows `[save required] Pending changes are in
+memory only and are not saved. Choose Save to persist them.` if and only if the
+complete pending configuration differs structurally from its opening baseline.
+This is recomputed on every top-level read, so the warning is absent initially
+and after a complete revert. It is also absent from Agents, Agent settings,
+value editors, and Save/Cancel confirmations. Capable, narrow, `NO_COLOR`, and
+fallback views expose the complete text. Fallback cannot erase historical
+scrollback, but the current prompt reflects the current comparison.
+
+That same comparison labels the top-level choice exact plain `Save` while clean
+and exact plain `Save (*Required)` while dirty. When ANSI decoration is
+eligible, only `(*Required)` receives warning styling; the preceding separator
+space remains unstyled. The existing `[save required]` notice remains present,
+including in plain, `NO_COLOR`, narrow, and fallback views.
+
+Only entering Model or Effort runs discovery. Each entry uses the pending
+effective provider; Effort also uses the pending effective model. Model order
+is Inherit, provider-order discovered models, Current custom when the pending
+value is absent, then Custom model. Effort order is Inherit, exact selected-
+model Codex efforts or Antigravity's global `low`, `medium`, `high`, then
+Current compatibility when a pending effort is unreported.
+
+Codex runs `codex debug models --bundled` and projects list-visible rows with
+exact per-model supported/default reasoning. Antigravity runs `agy models` or
+the resolved executable's `models` subcommand, preserves aligned opaque
+slug/display order, and never infers effort from model text. Each fresh attempt
+is limited to five seconds and one MiB of retained stdout; stderr/raw
+diagnostics are discarded, with no automatic retry, cache, or catalog
+persistence. Fixed failure guidance preserves inherit/current/custom paths.
+Only the chosen opaque model/effort value is saved.
+
+Settings pickers and prompts follow the same transient input
 lifecycle as all capable input; fallback readers retain printed input and add no
 synthetic final picker frame. Nested Escape returns to
 the parent silently without a Current/Pending snapshot or cancellation record.
-Save and Cancel each open a transient yes/no confirmation with a changed-only
-Current/Pending context: only differing fields appear in both sections, each
-with a `(Changed)` cue, while no differences show `No pending settings changes.`
-YES commits the requested action; NO or nested Escape returns to the settings
-picker, and invalid fallback input retries. Top-
-level Escape, Ctrl-C, or EOF cancels the whole workflow without writing. The
+In Language, Persona, Maximum debate rounds, Conversation storage, Provider,
+Model, Custom model, and Effort, the first valid commit applies the normalized
+pending value and keeps the editor active. The next valid commit of that same
+normalized value returns one level silently; a different valid value applies,
+stays active, and re-arms the comparison. Invalid input, authentication
+failure, Custom model navigation, and editor re-entry reset it. This is
+consecutive semantic commit policy in the `/settings` controller, not raw-key
+timing or generic Picker/Prompt behavior.
+
+Save always opens its transient yes/no confirmation. Explicit Cancel and root
+Settings Escape share one action: clean settings exit immediately without a
+confirmation, while dirty settings open the existing Cancel confirmation. Each
+confirmation has changed-only Current/Pending context: only differing fields
+appear in both sections, each with a `(Changed)` cue, while no differences in
+Save confirmation show `No pending settings changes.` YES commits the requested
+action; NO or confirmation Escape returns to the root Settings picker, and
+invalid fallback input retries. Ctrl-C or EOF still cancels the whole workflow
+without writing. The
 submitted `/settings` line has already been cleared with the capable main frame;
 its history entry remains. Ordinary-line fallback leaves its printed input
 visible, with the same history semantics. `/cancel` is literal model text in the
-free-text prompt.
+Custom model prompt.
 
 Choosing a provider starts authentication before changing that agent's pending
 route. A failed or cancelled authentication leaves the route candidate
-unchanged. During Settings, a newly established missing workspace default is
-rebased into the pending candidate rather than written separately.
+unchanged. Successful authentication is subordinate and returns to Provider;
+the route and any missing workspace default remain pending in memory. Escape or
+cancellation before confirmed Save leaves configuration bytes unchanged. No
+configuration value is persisted before Save is confirmed.
 
 After Save confirmation, the controller freshly gates each distinct effective
 provider once before entering the configuration transaction. A stale,
 unavailable, unauthenticated, indeterminate, failed, cancelled, or interrupted
-status prevents Save. Authentication/default writes already completed remain
-durable outside Settings; the Settings route rebase remains pending. Save then
-runs conversation-storage readiness, optional explicit installer confirmation,
-provisioning, and parity before validating the complete pending pair. It
-rejects any exact-byte change to either configuration document or any
-persona-catalog change since opening.
+status prevents the settings file transaction. A missing workspace default
+learned during this gate remains in the pending candidate. Save then runs
+conversation-storage readiness, optional explicit installer confirmation,
+create-only provisioning, and fresh parity before validating the complete
+pending pair. It rejects any exact-byte change to either configuration
+document or any persona-catalog change since opening.
 Only changed documents are canonically replaced, in system-defaults then
 agent-configs order. A write failure attempts reverse-order restoration of
 every attempted target, including the failing target; rollback uncertainty is
@@ -682,8 +752,14 @@ reported separately. Success returns to the main prompt and applies
 configuration and desired storage to the next shell/backend construction only.
 It does not refresh the active backend, runtime, or conversation-storage
 bundle; migrate or activate storage; invoke a story-model turn; alter
-session/explicit overrides; or add credentials, model discovery, or automatic
-save.
+session/explicit overrides; or add credentials, persisted catalog data, or
+automatic save.
+
+Entering or validating a value remains in-memory only; no configuration value
+is persisted before the complete Save. This does not change startup or global
+`/auth` default persistence. It adds no terminal primitive, public API, or
+global picker rule; the #270 one-level Escape and one-shot Save, Cancel, and
+resume contracts remain unchanged.
 
 On capable real-CLI streams, orientation/current context, `/status`, `/inspect`,
 central errors/recovery, and accepted management, advisory, retrieval, and
@@ -699,6 +775,26 @@ order, or noninteractive success stdout, JSON, ordering, or exit contracts. The
 documented availability line is the sole additive noninteractive stderr
 contract for a caught exception after CLI workspace initialization or discovery
 succeeds, independently of whether a diagnostic handle or file is available.
+
+After attachment, `Conversation scope` appears before the first prompt and is
+then repeated only when its session ID, visible conversation handle, subject,
+or sticky agent changes. An unchanged panel is suppressed, but the controller
+still revalidates any current focus against a fresh complete-catalog read before
+every attached prompt. External rename, archive, deletion, and prefix-collision
+changes are therefore detected at the same boundary. Detaching resets only
+this presentation snapshot, so a later attachment presents scope again. This
+controller-local cadence changes no command grammar, terminal API, persisted
+selection, conversation storage, or capable/fallback semantics.
+
+Before local result work, accepted request context keeps output interpretable.
+`/search` shows its normalized query and active scope; a filtered
+`/conversation list` shows its normalized query and active/all scope, while an
+unfiltered list adds no request record. After transcript identity resolution,
+`/transcript` shows the visible conversation handle and effective start/count
+before reading the page. These safe semantic records remain visible when later
+work returns empty, fails safely, or is cancelled; fallback may therefore show
+both its original command and the normalized result context without repeating
+the same verbatim snapshot.
 
 During one advisory turn, a capable raw stream may show the terminal-owned
 four-glyph rolling indicator `◐`, `◓`, `◑`, `◒`. The driver clears the active
@@ -821,6 +917,17 @@ reads can include archives. See [grammar](interactive-command-parser.md) and
 | `/run --output PART/PATH.md PROMPT` or `/run --output PART/PATH.md` then `/send` | One bounded snapshot of current focus. |
 | `/run --fresh --output PART/PATH.md PROMPT` | Records focused identity; sends no transcript. |
 | `/draft-file PATH` | Strict-UTF-8 draft plus one focused snapshot; prompts for `PART/PATH.md`. |
+
+After prompt and path validation, inline, fresh, and committed composer runs
+write one exact-body `you → consensus` message before the `Consensus request`
+record and before progress. Every request record names the validated `Output`.
+`/draft-file` instead adds only its validated `Source` path: loaded draft bytes
+are never echoed as a terminal message. Prompt messages and request context
+remain visible through later debate success, deadlock, handled failure,
+cancellation, or post-acceptance interrupt. Ordinary-line fallback retains its
+already printed prompt text and receives no duplicate message; the distinct
+output/source context is still written. None of this changes `story run` or
+other noninteractive output.
 
 In both `/run --output ...` and `/run --fresh --output ...`, option boundaries
 use ASCII space or tab only. Unicode whitespace cannot separate `--output` from

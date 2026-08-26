@@ -5,6 +5,8 @@
 > conversations. Interactive onboarding invokes the resolved Antigravity
 > executable without arguments for native sign-in; it defaults to `agy`. Codex
 > remains the final route fallback.
+> Settings Model/Effort editors also use bounded `agy models` discovery for a
+> pending Antigravity route without persisting the catalog.
 
 Key terms: **backend name**—the configuration value `antigravity`;
 **executable**—the resolved Antigravity command, `agy` by default; **provider
@@ -75,12 +77,22 @@ both providers and open the same native authentication picker. A completed new
 authentication may fill a missing workspace default; cancellation keeps any
 existing default and explicit routes unchanged.
 
-For a persistent route, use global `/settings`, choose Providers, choose an
-agent, and select Antigravity. If needed, native authentication runs before the
-pending route changes. Model and effort then edit that agent's active provider
-settings. Switching providers preserves the inactive provider's saved
-settings. Direct JSON editing is also supported; this excerpt routes only the
-plot architect and leaves omitted agents to inherit the workspace default:
+For a persistent route, use global `/settings`, choose Agents, choose an agent,
+and select Antigravity. If needed, native authentication runs as a subordinate
+Provider-editor action and returns to Provider. The route and any missing
+workspace default remain pending in memory; Escape or cancellation before
+confirmed Save leaves configuration bytes unchanged. No configuration value is
+persisted before Save is confirmed. Model and effort then edit that agent's
+active provider settings. Switching providers preserves the inactive provider's
+saved settings.
+
+After Save is confirmed, save-time authentication may rebase a missing
+workspace default only in the pending candidate. It becomes durable only when
+conversation-storage readiness, parity, and the final guarded settings write
+complete. This does not change startup authentication or explicit global
+`/auth`, which retain immediate absent-default durability. Direct JSON editing
+is also supported; this excerpt routes only the plot architect and leaves
+omitted agents to inherit the workspace default:
 
 ```json
 {
@@ -95,6 +107,23 @@ plot architect and leaves omitted agents to inherit the workspace default:
   }
 }
 ```
+
+Entering Model or Effort runs one fresh `agy models` discovery for the pending
+effective provider. This is separate from the startup status probe even though
+both use the same command: Settings open, Agents open, agent/provider
+navigation, and Provider editing launch no discovery process. Model choices are
+Inherit, aligned opaque slug/display rows in provider order, Current custom
+when needed, and Custom model. The picker does not freeze the example list in
+Google's
+[Antigravity headless/CLI guide](https://antigravity.google/docs/cli/headless/).
+
+Effort choices are Inherit, global `low`, `medium`, `high`, and Current
+compatibility when needed. Story does not infer effort from a model slug or
+display name. Each attempt is bounded to five seconds and one MiB retained
+stdout, discards stderr/raw diagnostics, and has no automatic retry or cache.
+Fixed failure guidance preserves inherit/current/custom paths; re-entering
+retries later. Save writes only the selected opaque value or null and affects
+the next shell/backend construction; no catalog row is persisted.
 
 The complete persistent schemas are in
 [Agent configuration](../reference/configuration/agent-configuration.md).
@@ -134,10 +163,12 @@ backend, not one already running.
 | Antigravity model | `--antigravity-model` or constructor value; per-agent `antigravity_model`; system `antigravity_model`; provider default. |
 | Antigravity effort | `--antigravity-effort` or constructor value; per-agent `antigravity_effort`; system `antigravity_effort`; provider default. |
 
-Codex reasoning accepts `minimal`, `low`, `medium`, `high`, or `xhigh`.
-Antigravity effort accepts only `low`, `medium`, or `high`. Model strings are
-passed through after flag-safety validation; the runtime does not query a model
-catalog or prove provider support.
+Codex reasoning accepts any lowercase forward-compatible token matching
+`[a-z][a-z0-9_-]{0,31}`. Antigravity effort accepts only `low`, `medium`, or
+`high`. Model strings are passed through after flag-safety validation; backend
+construction does not query a catalog or prove provider support. Interactive
+discovery is advisory and does not make membership a persistence requirement,
+so safe custom models remain supported.
 
 ## Capability preflight and fixed errors
 

@@ -1726,6 +1726,7 @@ class CliTests(unittest.TestCase):
                 stderr = io.StringIO()
                 cli_context = CliContext(default_session_id="saved")
                 backend_value = mock.Mock()
+                catalog_value = mock.Mock()
                 controller_value = mock.Mock()
                 controller_value.run_session_lobby.return_value = 7
                 main_reader = mock.Mock(return_value="/status")
@@ -1755,6 +1756,11 @@ class CliTests(unittest.TestCase):
                     ) as backend_factory,
                     mock.patch.object(
                         cli_module,
+                        "ProviderCatalogService",
+                        return_value=catalog_value,
+                    ) as catalog_factory,
+                    mock.patch.object(
+                        cli_module,
                         "build_stream_terminal",
                         return_value=terminal_value,
                     ) as terminal_factory,
@@ -1782,6 +1788,10 @@ class CliTests(unittest.TestCase):
                     antigravity_model=antigravity_model,
                     antigravity_effort=antigravity_effort,
                 )
+                catalog_factory.assert_called_once_with(
+                    workspace.root,
+                    antigravity_executable=antigravity_executable,
+                )
                 terminal_factory.assert_called_once_with(input, stdin, stdout)
                 controller_args = controller_factory.call_args.args
                 self.assertEqual(
@@ -1796,6 +1806,10 @@ class CliTests(unittest.TestCase):
                 )
                 terminal = controller_args[3]
                 self.assertIsInstance(terminal, InteractiveTerminal)
+                self.assertIs(
+                    controller_factory.call_args.kwargs["provider_catalog"],
+                    catalog_value,
+                )
                 action = terminal.read_main()
                 self.assertEqual((action.kind.value, action.text), ("line", "/status"))
                 main_reader.assert_called_once_with(
@@ -1806,6 +1820,7 @@ class CliTests(unittest.TestCase):
                     requested_session=requested
                 )
                 backend_value.close.assert_not_called()
+                catalog_value.discover.assert_not_called()
                 self.assertEqual(stdout.getvalue(), "")
                 self.assertEqual(stderr.getvalue(), "")
 
@@ -1820,6 +1835,7 @@ class CliTests(unittest.TestCase):
             snapshots=(both, both),
         )
         auth_service = object()
+        catalog_service = object()
         terminal = InteractiveTerminal(lambda _prompt: "", lambda _text: None)
         backend = mock.Mock()
         controller = mock.Mock()
@@ -1866,6 +1882,7 @@ class CliTests(unittest.TestCase):
                 kwargs["conversation_storage_services"],
                 storage_startups[0].services,
             )
+            self.assertIs(kwargs["provider_catalog"], catalog_service)
             return controller
 
         def run_lobby(*, requested_session: str | None = None) -> int:
@@ -1907,6 +1924,19 @@ class CliTests(unittest.TestCase):
                 "ProviderAuthService",
                 side_effect=lambda *args, **kwargs: (
                     events.append(("auth_service", args[0])) or auth_service
+                ),
+            ),
+            mock.patch.object(
+                cli_module,
+                "ProviderCatalogService",
+                side_effect=lambda *args, **kwargs: (
+                    self.assertEqual(args, (workspace.root,))
+                    or self.assertEqual(
+                        kwargs,
+                        {"antigravity_executable": "agy"},
+                    )
+                    or events.append(("catalog_service", args[0]))
+                    or catalog_service
                 ),
             ),
             mock.patch.object(
@@ -1976,6 +2006,7 @@ class CliTests(unittest.TestCase):
                 "snapshot",
                 "terminal",
                 "auth_service",
+                "catalog_service",
                 "auth_coordinator",
                 "welcome",
                 "probe_all",
@@ -1990,6 +2021,7 @@ class CliTests(unittest.TestCase):
             ],
         )
         self.assertEqual(events[5][1], workspace.root)
+        self.assertEqual(events[6][1], workspace.root)
         backend.close.assert_not_called()
         self.assertEqual(stderr.getvalue(), "")
 
@@ -2393,6 +2425,14 @@ class CliTests(unittest.TestCase):
         )
 
     def test_noninteractive_and_non_tty_forms_never_construct_auth(self) -> None:
+        provider_catalog_factory = mock.Mock()
+        provider_catalog_patcher = mock.patch.object(
+            cli_module,
+            "ProviderCatalogService",
+            provider_catalog_factory,
+        )
+        provider_catalog_patcher.start()
+        self.addCleanup(provider_catalog_patcher.stop)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             workspace_path = root / "workspace"
@@ -2401,6 +2441,7 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["init", str(workspace_path)]), 0)
             self.provider_auth_factory.assert_not_called()
             self.auth_coordinator_factory.assert_not_called()
+            provider_catalog_factory.assert_not_called()
 
             with contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(
@@ -2417,6 +2458,7 @@ class CliTests(unittest.TestCase):
                 )
             self.provider_auth_factory.assert_not_called()
             self.auth_coordinator_factory.assert_not_called()
+            provider_catalog_factory.assert_not_called()
 
         stdin = TtyStringIO(is_terminal=False)
         stdout = TtyStringIO(is_terminal=True)
@@ -2428,6 +2470,7 @@ class CliTests(unittest.TestCase):
         ):
             self.assertEqual(main([]), 2)
         self.provider_auth_factory.assert_not_called()
+        provider_catalog_factory.assert_not_called()
         self.auth_coordinator_factory.assert_not_called()
 
     def test_run_passes_separate_antigravity_options_without_provider_work(
