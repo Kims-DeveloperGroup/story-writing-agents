@@ -1593,10 +1593,15 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
             predicates={1: lambda: runtime.entered},
         )
         accepted_components: list[object] = []
+        semantic_components: list[object] = []
         with (
             _capture_semantic_method(
                 "write_accepted_input",
                 accepted_components,
+            ),
+            _capture_semantic_method(
+                "write_component",
+                semantic_components,
             ),
             mock.patch.object(
                 controller_core_module.asyncio,
@@ -1614,12 +1619,41 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
         self.assertEqual(controller._last_started_debate_by_session, {})
         self.assertEqual(_file_bytes(workspace), before)
         self.assertEqual(all_manuscripts(workspace), [])
+        interrupted_panels = [
+            component
+            for component in semantic_components
+            if type(component) is terminal_module.Panel
+            and component.title == "Debate phase"
+        ]
+        self.assertEqual(
+            interrupted_panels,
+            [
+                terminal_module.Panel(
+                    "Debate phase",
+                    (
+                        terminal_module.Field("Debate ID", debate_id),
+                        terminal_module.Field("Phase", "interrupted"),
+                        terminal_module.Field("Round", "0"),
+                        terminal_module.Field("Revision", "n/a"),
+                        terminal_module.Field(
+                            "Action",
+                            "Persist interrupted state and return for retry.",
+                        ),
+                        terminal_module.Field(
+                            "Outcome",
+                            "Run interrupted after durable state transition.",
+                            role=terminal_module.SemanticRole.WARNING,
+                            state=terminal_module.ViewState.CANCELLED,
+                        ),
+                        terminal_module.Field("Conflicts", "none"),
+                    ),
+                    state=terminal_module.ViewState.CANCELLED,
+                )
+            ],
+        )
         rendered = "".join(callbacks.records)
         self.assertEqual(
-            rendered.count(
-                f"[run {debate_id}] [cancelled] [warning]\n"
-                "  Run interrupted after durable state transition.\n"
-            ),
+            rendered.count("Run interrupted after durable state transition."),
             1,
         )
         for record in (
@@ -1679,7 +1713,12 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
             interruptions={1: "joined"},
             predicates={1: audits_started},
         )
+        semantic_components: list[object] = []
         with (
+            _capture_semantic_method(
+                "write_component",
+                semantic_components,
+            ),
             mock.patch.object(controller_core_module.asyncio, "Runner", runner_factory),
             mock.patch.object(backend, "bind", new=bind),
             mock.patch.object(
@@ -1714,12 +1753,54 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
         self.assertEqual(len(manuscripts), 1)
         self.assertNotIn("cancelled_debate", manuscripts[0].name)
         self.assertEqual(manuscripts[0].name, "interactive-4.md")
+        interrupted_panels = []
+        for component in semantic_components:
+            if (
+                type(component) is not terminal_module.Panel
+                or component.title != "Debate phase"
+            ):
+                continue
+            fields = {
+                item.label: item.value
+                for item in component.items
+                if type(item) is terminal_module.Field
+            }
+            if fields.get("Debate ID") == "cancelled_debate" and fields.get(
+                "Phase"
+            ) == "interrupted":
+                interrupted_panels.append(component)
+        self.assertEqual(len(interrupted_panels), 1)
+        interrupted_panel = interrupted_panels[0]
+        self.assertIs(interrupted_panel.state, terminal_module.ViewState.CANCELLED)
+        interrupted_fields = {
+            item.label: item
+            for item in interrupted_panel.items
+            if type(item) is terminal_module.Field
+        }
+        self.assertEqual(
+            tuple(interrupted_fields),
+            (
+                "Debate ID",
+                "Phase",
+                "Round",
+                "Revision",
+                "Action",
+                "Outcome",
+                "Conflicts",
+            ),
+        )
+        self.assertEqual(
+            interrupted_fields["Outcome"],
+            terminal_module.Field(
+                "Outcome",
+                "Run interrupted after durable state transition.",
+                role=terminal_module.SemanticRole.WARNING,
+                state=terminal_module.ViewState.CANCELLED,
+            ),
+        )
         rendered = "".join(callbacks.records)
         self.assertEqual(
-            rendered.count(
-                "[run cancelled_debate] [cancelled] [warning]\n"
-                "  Run interrupted after durable state transition.\n"
-            ),
+            rendered.count("Run interrupted after durable state transition."),
             1,
         )
         self.assertIn(

@@ -5779,6 +5779,12 @@ print(
         self.assertEqual(consensus.count("fallback consensus body"), 1)
         self.assertNotIn("You → Consensus", consensus)
         self.assertNotIn("\x1b", consensus)
+        self.assertEqual(consensus.count("--- Debate phase"), 6)
+        self.assertEqual(consensus.count("deterministic candidate"), 1)
+        self.assertLess(
+            consensus.rfind("--- Debate phase"),
+            consensus.index("Consensus [completed] [success]"),
+        )
 
         process.send_line("/quit")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
@@ -6417,6 +6423,20 @@ print(
         process.wait_for_text("revision rounds:", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         successful_output = process.text_after(mark)
+        successful_plain = _ANSI_SGR_BYTES.sub(
+            b"",
+            successful_output.encode("utf-8"),
+        ).decode("utf-8")
+        self.assertIn("\x1b[", successful_output)
+        self.assertEqual(successful_plain.count("--- Debate phase"), 6)
+        successful_compact = "".join(
+            successful_plain.replace("│", "").split()
+        )
+        self.assertEqual(successful_compact.count("deterministiccandidate"), 1)
+        self.assertLess(
+            successful_compact.rfind("---Debatephase"),
+            successful_compact.index("Consensus[completed][success]"),
+        )
         collapsed = "".join(successful_output.split())
         accepted_prompt = (
             "You→Consensus[completed]││/send│/cancel│finalliteralline"
@@ -6876,6 +6896,23 @@ asyncio.run(main())
         process.wait_for_text("It cannot resume.", after=mark)
         process.wait_for_text('"alpha" remains ready and attached.', after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
+        cancelled_output = process.text_after(mark)
+        cancelled_plain = _ANSI_SGR_BYTES.sub(
+            b"",
+            cancelled_output.encode("utf-8"),
+        ).decode("utf-8")
+        self.assertEqual(cancelled_plain.count("--- Debate phase"), 2)
+        self.assertEqual(cancelled_plain.count("Phase: interrupted"), 1)
+        self.assertEqual(
+            cancelled_plain.count(
+                "Run interrupted after durable state transition."
+            ),
+            1,
+        )
+        self.assertLess(
+            cancelled_plain.index("Phase: interrupted"),
+            cancelled_plain.index("[cancelled] Debate "),
+        )
 
         blocked_pid = blocked["pid"]
 

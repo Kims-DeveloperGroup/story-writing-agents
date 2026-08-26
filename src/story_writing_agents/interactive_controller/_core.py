@@ -995,14 +995,6 @@ class InteractiveController:
 
         return (event.session_id, event.debate_id)
 
-    @staticmethod
-    def _truncate_for_display(text: str, limit: int = 1200) -> str:
-        """Shorten long speech content before printing an event log."""
-
-        if len(text) <= limit:
-            return text
-        return f"{text[: limit - 20]} ... [truncated]"
-
     def _debate_handoff_for_phase(
         self,
         event: DebateProgressEvent,
@@ -1082,96 +1074,133 @@ class InteractiveController:
             "Persist interrupted state and return for retry.",
         )
 
-    def _write_debate_progress_context(self, event: DebateProgressEvent) -> None:
-        """Render event-handoff metadata before the phase status row."""
+    @staticmethod
+    def _debate_progress_outcome(event: DebateProgressEvent) -> str:
+        """Return the fixed phase-specific outcome sentence."""
 
-        role, state = self._debate_progress_style(event.phase)
-        from_agents, to_agents, action = self._debate_handoff_for_phase(event)
-        fields = (
-            Field("Event", event.phase.value),
-            Field("Round", str(event.round_number)),
-            Field("Revision", event.revision_id or "n/a"),
-            Field(
-                "Handoff",
-                f"{self._agent_display_chain(from_agents)} -> "
-                f"{self._agent_display_chain(to_agents)}",
-            ),
-            Field("Action", action),
-        )
-        if event.conflicting_agents:
-            fields = (*fields,)
-            fields += (
-                Field(
-                    "Conflicts",
-                    self._agent_display_chain(event.conflicting_agents),
-                ),
+        phase = event.phase
+        if phase is DebateProgressPhase.STARTED:
+            return f"Started {event.input_kind.value} consensus."
+        if phase is DebateProgressPhase.DRAFTED:
+            return "Drafted revision r0."
+        if phase is DebateProgressPhase.AUDIT_STARTED:
+            return (
+                f"Audit started for {event.revision_id} at round "
+                f"{event.round_number}."
             )
-        self._semantic_output.write_component(
-            Record(
-                "event",
-                title=f"{event.debate_id} phase",
-                fields=fields,
-                role=role,
-                state=state,
+        if phase is DebateProgressPhase.AUDIT_COMPLETED:
+            conflicts = (
+                ", ".join(event.conflicting_agents)
+                if event.conflicting_agents
+                else "none"
             )
-        )
+            return (
+                f"Audit completed for {event.revision_id} at round "
+                f"{event.round_number}; conflicts: {conflicts}."
+            )
+        if phase is DebateProgressPhase.SYNTHESIZED:
+            return (
+                f"Synthesized {event.revision_id} at round "
+                f"{event.round_number}."
+            )
+        if phase is DebateProgressPhase.ARTIFACTS_COMMITTED:
+            updates = ", ".join(event.core_updates) if event.core_updates else "none"
+            return (
+                f"Artifacts committed for {event.revision_id}: "
+                f"{event.manuscript_path}; core updates: {updates}."
+            )
+        if phase is DebateProgressPhase.CONSENSUS:
+            return (
+                f"Consensus reached on {event.revision_id} after "
+                f"{event.round_number} revision rounds."
+            )
+        if phase is DebateProgressPhase.DEADLOCK:
+            return (
+                f"Deadlock on {event.revision_id} after "
+                f"{event.round_number} revision rounds."
+            )
+        if phase is DebateProgressPhase.FAILED:
+            assert event.failure_kind is not None
+            return f"Run failed ({event.failure_kind.value})."
+        assert phase is DebateProgressPhase.INTERRUPTED
+        return "Run interrupted after durable state transition."
 
-    def _render_debate_agent_sayings(self, event: DebateProgressEvent) -> None:
-        """Render only the new agent messages since the previous phase."""
+    def _debate_speech_sections(
+        self,
+        event: DebateProgressEvent,
+        *,
+        start: int,
+    ) -> tuple[tuple[Section, ...], Notice | None, int]:
+        """Read and group one uncommitted chronological speech suffix."""
 
-        key = self._debate_message_key(event)
-        start = self._debate_message_offsets.get(key, 0)
         try:
             messages = self._workspace.read_debate_messages(
                 event.session_id,
                 event.debate_id,
             )
         except (OSError, WorkspaceFormatError, WorkspaceSecurityError):
-            self._debate_message_offsets[key] = start
-            self._write_notice(
-                "Agent sayings unavailable; the debate log could not be read.",
-                label="agent-saying",
-                role=SemanticRole.WARNING,
-                state=ViewState.ERROR,
+            return (
+                (),
+                Notice(
+                    "Agent sayings unavailable; the debate log could not be read.",
+                    label="agent-saying",
+                    role=SemanticRole.WARNING,
+                    state=ViewState.ERROR,
+                ),
+                start,
             )
-            return
+
         if start > len(messages):
             start = 0
-        items = tuple(
-            item for item in messages[start:] if item.sender in AGENT_SPECS
-        )
-        if not items:
-            self._debate_message_offsets[key] = len(messages)
-            return
+        sections: list[Section] = []
+        group_key: tuple[str, int, str] | None = None
+        group_messages: list[Message] = []
 
-        panel_items: list[Message] = []
-        for item in items:
-            label = self._agent_display_name(item.sender)
-            metadata = f"[{item.kind}] {item.phase} {item.revision} round {item.round}:"
-            panel_items.append(
-                Message(
-                    label,
+        def append_group() -> None:
+            """Append the current nonempty persisted speech group."""
+
+            if group_key is None:
+                return
+            phase, round_number, revision = group_key
+            sections.append(
+                Section(
                     (
-                        f"{metadata}\n{self._truncate_for_display(item.content)}"
-                        if item.kind != "error"
-                        else f"{metadata}\nAgent error details are unavailable."
+                        f"Speeches · {phase} · round {round_number} · "
+                        f"revision {revision or 'n/a'}"
                     ),
-                    role=(
-                        SemanticRole.AGENT
-                        if item.sender in AGENT_SPECS
-                        else SemanticRole.DEFAULT
+                    tuple(group_messages),
+                )
+            )
+
+        for item in messages[start:]:
+            if item.sender not in AGENT_SPECS:
+                continue
+            item_group_key = (item.phase, item.round, item.revision)
+            if group_key is not None and item_group_key != group_key:
+                append_group()
+                group_messages = []
+            group_key = item_group_key
+            group_messages.append(
+                Message(
+                    self._agent_display_name(item.sender),
+                    (
+                        "Agent error details are unavailable."
+                        if item.kind == "error"
+                        else format_agent_reply_content(item.content)
                     ),
+                    role=SemanticRole.AGENT,
                     state=ViewState.COMPLETED,
-                ),
+                    presentation=MessagePresentation.CHAT_BLOCK,
+                    metadata=(
+                        f"Kind: {item.kind}"
+                        if self._show_message_details
+                        else None
+                    ),
+                    accent=_AGENT_SPEAKER_ACCENTS[item.sender],
+                )
             )
-        self._semantic_output.write_component(
-            Panel(
-                "Agent saying",
-                tuple(panel_items),
-                state=ViewState.COMPLETED,
-            )
-        )
-        self._debate_message_offsets[key] = len(messages)
+        append_group()
+        return tuple(sections), None, len(messages)
 
     @staticmethod
     def _debate_inspection_record(facts: DebateInspectionFacts) -> Record:
@@ -6073,114 +6102,105 @@ class InteractiveController:
             previous=events[-1] if events else None,
         )
         key = self._debate_message_key(canonical)
+        candidate_offset = self._render_debate_progress(canonical)
+        self._debate_message_offsets[key] = candidate_offset
         if canonical.phase is DebateProgressPhase.STARTED:
-            self._debate_message_offsets[key] = 0
             self._debate_last_conflict_targets[key] = ()
         elif canonical.phase is DebateProgressPhase.AUDIT_COMPLETED:
             self._debate_last_conflict_targets[key] = canonical.conflicting_agents
-        self._render_debate_progress(canonical)
         events.append(canonical)
         if canonical.phase is DebateProgressPhase.STARTED:
             self._last_started_debate_by_session[
                 canonical.session_id
             ] = canonical.debate_id
 
-    def _render_debate_progress(self, event: DebateProgressEvent) -> None:
-        """Render one validated event using only typed fields and fixed labels."""
+    def _render_debate_progress(self, event: DebateProgressEvent) -> int:
+        """Build and atomically write one validated phase presentation."""
 
+        key = self._debate_message_key(event)
         phase = event.phase
+        role, state = self._debate_progress_style(phase)
+        committed_offset = self._debate_message_offsets.get(key, 0)
+        start = (
+            0
+            if phase is DebateProgressPhase.STARTED
+            else committed_offset
+        )
         if phase is DebateProgressPhase.STARTED:
-            self._write_debate_progress_context(event)
-            self._write_run_record(
-                event.debate_id,
-                content=f"Started {event.input_kind.value} consensus.",
-                role=SemanticRole.INFO,
-                state=ViewState.LOADING,
+            conflicts: tuple[str, ...] = ()
+        elif phase is DebateProgressPhase.AUDIT_COMPLETED:
+            conflicts = event.conflicting_agents
+        else:
+            conflicts = self._debate_last_conflict_targets.get(key, ())
+
+        from_agents, to_agents, action = self._debate_handoff_for_phase(event)
+        fields = [
+            Field("Debate ID", event.debate_id),
+            Field("Phase", phase.value),
+            Field("Round", str(event.round_number)),
+            Field("Revision", event.revision_id or "n/a"),
+        ]
+        if self._show_message_details:
+            fields.append(
+                Field(
+                    "Handoff",
+                    f"{self._agent_display_chain(from_agents)} -> "
+                    f"{self._agent_display_chain(to_agents)}",
+                )
             )
+        fields.extend(
+            (
+                Field("Action", action),
+                Field(
+                    "Outcome",
+                    self._debate_progress_outcome(event),
+                    role=role,
+                    state=state,
+                ),
+                Field(
+                    "Conflicts",
+                    self._agent_display_chain(conflicts) if conflicts else "none",
+                ),
+            )
+        )
+
+        panel_items: list[Field | Notice | Section] = list(fields)
+        if phase is DebateProgressPhase.STARTED:
             if event.context_mode is DebateContextMode.INCLUDED:
-                self._write_notice(
-                    (
-                        f"Included {event.context_event_count} focused-conversation "
-                        f"events; {event.context_omitted_turns} earlier turns omitted."
-                    ),
-                    label="context",
-                    state=ViewState.COMPLETED,
+                panel_items.append(
+                    Notice(
+                        (
+                            f"Included {event.context_event_count} "
+                            "focused-conversation events; "
+                            f"{event.context_omitted_turns} earlier turns omitted."
+                        ),
+                        label="context",
+                        state=ViewState.COMPLETED,
+                    )
                 )
             elif event.context_mode is DebateContextMode.FRESH:
-                self._write_notice(
-                    "Fresh run; no conversation events were included.",
-                    label="context",
-                    state=ViewState.COMPLETED,
+                panel_items.append(
+                    Notice(
+                        "Fresh run; no conversation events were included.",
+                        label="context",
+                        state=ViewState.COMPLETED,
+                    )
                 )
-            self._render_debate_agent_sayings(event)
-            return
-        if phase is DebateProgressPhase.DRAFTED:
-            text = "Drafted revision r0."
-        elif phase is DebateProgressPhase.AUDIT_STARTED:
-            text = (
-                f"Audit started for {event.revision_id} at round "
-                f"{event.round_number}."
-            )
-        elif phase is DebateProgressPhase.AUDIT_COMPLETED:
-            conflicts = (
-                ", ".join(event.conflicting_agents)
-                if event.conflicting_agents
-                else "none"
-            )
-            text = (
-                f"Audit completed for {event.revision_id} at round "
-                f"{event.round_number}; conflicts: {conflicts}."
-            )
-        elif phase is DebateProgressPhase.SYNTHESIZED:
-            text = (
-                f"Synthesized {event.revision_id} at round "
-                f"{event.round_number}."
-            )
-        elif phase is DebateProgressPhase.ARTIFACTS_COMMITTED:
-            updates = ", ".join(event.core_updates) if event.core_updates else "none"
-            text = (
-                f"Artifacts committed for {event.revision_id}: "
-                f"{event.manuscript_path}; core updates: {updates}."
-            )
-        elif phase is DebateProgressPhase.CONSENSUS:
-            text = (
-                f"Consensus reached on {event.revision_id} after "
-                f"{event.round_number} revision rounds."
-            )
-        elif phase is DebateProgressPhase.DEADLOCK:
-            text = (
-                f"Deadlock on {event.revision_id} after "
-                f"{event.round_number} revision rounds."
-            )
-        elif phase is DebateProgressPhase.FAILED:
-            assert event.failure_kind is not None
-            text = f"Run failed ({event.failure_kind.value})."
-        else:
-            assert phase is DebateProgressPhase.INTERRUPTED
-            text = "Run interrupted after durable state transition."
-        if phase is DebateProgressPhase.CONSENSUS:
-            role = SemanticRole.SUCCESS
-            state = ViewState.COMPLETED
-        elif phase in {
-            DebateProgressPhase.DEADLOCK,
-            DebateProgressPhase.FAILED,
-        }:
-            role = SemanticRole.ERROR
-            state = ViewState.ERROR
-        elif phase is DebateProgressPhase.INTERRUPTED:
-            role = SemanticRole.WARNING
-            state = ViewState.CANCELLED
-        else:
-            role = SemanticRole.INFO
-            state = ViewState.LOADING
-        self._write_debate_progress_context(event)
-        self._write_run_record(
-            event.debate_id,
-            content=text,
-            role=role,
+
+        sections, warning, candidate_offset = self._debate_speech_sections(
+            event,
+            start=start,
+        )
+        if warning is not None:
+            panel_items.append(warning)
+        panel_items.extend(sections)
+        panel = Panel(
+            "Debate phase",
+            tuple(panel_items),
             state=state,
         )
-        self._render_debate_agent_sayings(event)
+        self._semantic_output.write_component(panel)
+        return candidate_offset
 
     def _present_consensus_result(
         self,

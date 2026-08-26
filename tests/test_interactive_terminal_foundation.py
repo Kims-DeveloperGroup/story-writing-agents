@@ -1236,9 +1236,9 @@ class RenderingFoundationTests(unittest.TestCase):
                 ("--- Interactive erro", "    r [error] ------"),
             ),
             (
-                "Agent saying",
-                ViewState.COMPLETED,
-                ("--- Agent saying", "    [completed] ----"),
+                "Debate phase",
+                ViewState.LOADING,
+                ("--- Debate phase", "    [loading] ------"),
             ),
             ("Settings", ViewState.OPEN, ("--- Settings [open]",)),
             (
