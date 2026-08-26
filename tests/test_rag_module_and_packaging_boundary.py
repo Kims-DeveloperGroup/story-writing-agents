@@ -21,6 +21,7 @@ from story_writing_agents import (
     conversation_rag,
     conversation_rag_composition,
     conversation_rag_local,
+    conversation_rag_runtime,
     conversation_rag_store,
 )
 
@@ -196,8 +197,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 74)
-        self.assertEqual(len(edges), 280)
+        self.assertEqual(len(modules), 75)
+        self.assertEqual(len(edges), 288)
         self.assertIsNone(_cycle_witness(modules, edges))
         self.assertEqual(
             _generic_importers(modules),
@@ -254,6 +255,35 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.generic_rag_adapter",
             },
         )
+        self.assertEqual(
+            {
+                target
+                for source, target in edges
+                if source == "story_writing_agents.conversation_rag_runtime"
+            },
+            {
+                "story_writing_agents.conversation_literal_search",
+                "story_writing_agents.conversation_rag",
+                "story_writing_agents.conversation_retrieval",
+                "story_writing_agents.conversation_search",
+                "story_writing_agents.conversation_storage.contracts",
+                "story_writing_agents.conversations",
+            },
+        )
+        self.assertEqual(
+            {
+                target
+                for source, target in edges
+                if source == "story_writing_agents.conversation_retrieval"
+            },
+            {
+                "story_writing_agents.agents",
+                "story_writing_agents.conversation_rag",
+                "story_writing_agents.conversation_search",
+                "story_writing_agents.conversations",
+                "story_writing_agents.errors",
+            },
+        )
 
     def test_supported_module_surfaces_do_not_expand_the_root_facade(self) -> None:
         self.assertEqual(len(story_writing_agents.__all__), 120)
@@ -261,6 +291,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             conversation_rag.__all__,
             conversation_rag_composition.__all__,
             conversation_rag_local.__all__,
+            conversation_rag_runtime.__all__,
             conversation_rag_store.__all__,
         )
         self.assertTrue(rag_names.isdisjoint(story_writing_agents.__all__))
@@ -272,6 +303,19 @@ class RagModuleBoundaryTests(unittest.TestCase):
         self.assertFalse(hasattr(story_writing_agents, "LocalConversationRagEmbedder"))
         self.assertFalse(
             hasattr(story_writing_agents, "ConversationRagGenerationStore")
+        )
+        self.assertFalse(hasattr(story_writing_agents, "ConversationRagRuntimeService"))
+        self.assertEqual(
+            tuple(conversation_rag_runtime.__all__),
+            (
+                "CONVERSATION_RAG_RUNTIME_POLICY",
+                "CONVERSATION_RAG_RUNTIME_SCHEMA_ID",
+                "ConversationRagRuntimeError",
+                "ConversationRagRuntimePolicy",
+                "ConversationRagRuntimeService",
+                "ConversationRagRuntimeState",
+                "ConversationRagRuntimeStateSnapshot",
+            ),
         )
 
 
@@ -412,6 +456,14 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                         for name in names
                     )
                 )
+                self.assertTrue(
+                    any(
+                        name.endswith(
+                            "story_writing_agents/conversation_rag_runtime.py"
+                        )
+                        for name in names
+                    )
+                )
                 self.assertFalse(any("/vendor/" in f"/{name}/" for name in names))
                 self.assertFalse(any("/generic_rag/" in f"/{name}/" for name in names))
 
@@ -426,11 +478,14 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents
                 import story_writing_agents.conversation_rag_composition as composition
                 import story_writing_agents.conversation_rag_local as local
+                import story_writing_agents.conversation_rag_runtime as runtime
                 import story_writing_agents.conversation_rag_store as store
                 assert len(story_writing_agents.__all__) == 120
                 assert len(composition.__all__) == 6
                 assert len(local.__all__) == 5
+                assert len(runtime.__all__) == 7
                 assert len(store.__all__) == 8
+                assert runtime.CONVERSATION_RAG_RUNTIME_SCHEMA_ID == "story-conversation-rag-visible-turn-v1"
                 assert local.LocalConversationRagEmbedder().identity.dimensions == 256
                 assert store.CONVERSATION_RAG_STORE_SCHEMA_ID == "story-conversation-rag-store-v1"
                 assert not any(

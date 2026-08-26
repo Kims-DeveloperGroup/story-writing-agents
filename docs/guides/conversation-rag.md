@@ -1,15 +1,16 @@
 # Optional conversation RAG integration
 
-> **Current availability:** Issues #262 and #283 provide a direct Python
-> boundary, a fixed pure local provider, and a disposable per-session generation
-> store for optional conversation RAG. Explicit local composition still needs
-> the pinned `generic-rag` package. There is no runtime authorization or
-> projection scheduling, agent context/citation integration, CLI command,
-> `/rag`, or RAG field in `/settings`. Existing literal `/search` is unchanged.
+> **Current availability:** Issues #262, #283, and #263 provide a direct Python
+> boundary, a fixed pure local provider, a disposable per-session generation
+> store, and provider/store-neutral runtime authorization, projection, and
+> agent-context integration. Explicit local composition still needs the pinned
+> `generic-rag` package, and an application must inject the low-level service
+> plus its restart-safe state port. There is no RAG CLI command, `/rag`, or RAG
+> field in `/settings`. Existing literal `/search` is unchanged.
 >
-> **Planned availability:** Issue #263 adds runtime/agent orchestration and
-> Issue #264 adds user commands/settings. Commands and flows labeled **planned**
-> below are delivery contracts, not current behavior.
+> **Planned availability:** Issue #264 adds user commands and storage-backed
+> provider/settings selection. Commands and flows labeled **planned** below are
+> delivery contracts, not current behavior.
 
 Key terms: **authoritative source**—the current conversation store whose bytes
 must be reread before use; **derived projection**—disposable fragments and
@@ -52,9 +53,10 @@ first installation normally needs `git`, network access, and repository access.
 The submodule is review/development evidence; pip resolves the VCS URL rather
 than using `vendor/generic-rag` as its dependency source. A populated local
 Git/pip cache can avoid a new fetch, but an offline install from an empty cache
-is not supported. Installing the extra does not enable runtime RAG: #283 allows
-direct local composition over an explicit caller-owned store and lexical
-retriever. See the
+is not supported. Installing the extra does not enable runtime RAG by itself.
+Direct local composition still requires an explicit caller-owned store and
+lexical retriever; runtime use additionally requires an injected restart-safe
+state port and `ConversationRagRuntimeService`. See the
 [direct-module API](../reference/package-api.md#optional-conversation-rag-boundary).
 
 ## Verify the pin offline
@@ -112,6 +114,7 @@ Commit the gitlink, `pyproject.toml`, and generated lock change together.
 | `story_writing_agents.conversation_rag_store` | Identity-bound disposable generation construction, verification, active/status pointers, reading, and confirmed purge | Imports no provider or generic package; construction performs no I/O |
 | `story_writing_agents.generic_rag_adapter` | Exact translation to/from `generic-rag` 0.1.0 | Sole production module importing both projects; direct import needs the optional package |
 | `story_writing_agents.conversation_rag_composition` | Deferred generic composition plus fixed local-provider/store composition, capability checks, fallback mapping, and sanitized diagnostics | Safe to import without the optional package; an explicit composition call performs the version check and adapter import |
+| `story_writing_agents.conversation_rag_runtime` | Active-turn projection, literal-first merge, authoritative reread, citation construction, bounded context, and restart-safe runtime-state coordination | Imports only story-owned contracts and conversation-storage ports; owns no store, provider, settings, network, or credentials |
 
 The root facade remains unchanged at 120 exports. The provider allowlist is
 exactly `("local",)`. Composition does not discover plugins, inspect provider
@@ -127,11 +130,11 @@ configuration, create credentials, or own an external provider lifecycle.
 
 Provider candidate text is untrusted adapter input. Story-facing retrieval
 returns stable source references and ranks, not provider text or scores. A
-future runtime must reauthorize and reread each range. Callers own the embedder,
-vector writer/resetter/reader, and lexical retriever for their full lifetimes;
-the adapter borrows them only during an operation. Ordinary failures cross the
-boundary as fixed content-free categories. `KeyboardInterrupt` and `SystemExit`
-propagate.
+configured runtime reauthorizes and rereads each range before agent use.
+Callers own the embedder, vector writer/resetter/reader, lexical retriever, and
+runtime-state port for their full lifetimes; adapters borrow them only during an
+operation. Ordinary failures cross the boundary as fixed content-free
+categories. `KeyboardInterrupt` and `SystemExit` propagate.
 
 ## Current local provider
 
@@ -255,16 +258,80 @@ present state inspects against that checkpoint's schema. A different stored
 schema becomes an `incompatible` literal fallback, while drift from the same
 schema checkpoint becomes a `stale` fallback.
 Missing/incompatible optional-package state raises the sanitized composition
-error before storage is touched. No runtime or shell path invokes this API yet.
+error before storage is touched. Composition alone does not register the
+service with a runtime or expose it to the shell.
 
-## Planned agent utilization
+## Use the current programmatic runtime integration
 
-The completed integration will use RAG as a bounded preflight, never as memory
+The direct runtime boundary exports seven names and remains outside the
+120-name package-root facade:
+
+```python
+from story_writing_agents.conversation_rag_runtime import (
+    CONVERSATION_RAG_RUNTIME_POLICY,
+    CONVERSATION_RAG_RUNTIME_SCHEMA_ID,
+    ConversationRagRuntimeError,
+    ConversationRagRuntimePolicy,
+    ConversationRagRuntimeService,
+    ConversationRagRuntimeState,
+    ConversationRagRuntimeStateSnapshot,
+)
+```
+
+An application constructs `ConversationRagRuntimeService(low_level_service,
+state_port, automatic_enabled=False)`. The low-level object implements the four
+`ConversationRagService` operations. The application-owned state port exposes
+the same workspace key and embedding identity plus synchronous
+`inspect_projection_state(session_id)` and
+`mark_projection_stale(session_id)` operations. This release does not provide
+a settings-owned state-port factory; the application must explicitly compose
+and retain that collaborator.
+
+`StoryRuntime(..., conversation_rag_service=service)` accepts only that exact
+runtime-service type. It uses the default composed filesystem
+`ConversationStorageServices` bundle when no conversation-storage argument is
+given, or an explicitly supplied complete bundle. RAG cannot be combined with
+the legacy raw `conversation_event_store` compatibility argument because that
+argument has no catalog, search, provenance, or mutation-coordinator authority.
+
+The additive retrieval call is:
+
+```python
+await runtime.converse_with_retrieval(
+    session_id,
+    conversation_id,
+    agent_id,
+    text,
+    memory_service=memory_service,
+    progress_sink=None,
+    rag_query=None,
+)
+```
+
+Automatic preflight is off by default. A non-`None` `rag_query` forces one
+attempt and takes precedence over automatic query derivation. If no RAG service
+is configured, that forced attempt returns the fixed disabled literal-fallback
+outcome; with no forced query, no attempt occurs and the established request and
+result shapes omit RAG values. An application may opt into automatic preflight
+only when constructing the runtime service with `automatic_enabled=True`; the
+normalized current turn is then capped at 200 codepoints for the query.
+
+`ConversationRagRuntimeService.project_authorized()` is also available for an
+explicit programmatic projection or rebuild. A configured `StoryRuntime`
+automatically calls it after each successfully committed ordinary or retrieval
+reply, even when that turn did not run a preflight. Ordinary projection failure
+is isolated from the committed reply and marks state stale best-effort;
+`KeyboardInterrupt`, `SystemExit`, and cancellation controls propagate after
+the reply commit.
+
+## Current runtime and agent utilization
+
+The programmatic integration uses RAG as a bounded preflight, never as memory
 authority:
 
-1. Automatic retrieval starts off. `/rag QUERY` may explicitly request one
-   preflight; enabled automatic policy may run at most one before an eligible
-   turn. Retrieval cannot invoke itself recursively.
+1. Automatic retrieval starts off. A Python caller can pass `rag_query=QUERY`
+   to request one preflight; enabled automatic policy may run at most one before
+   an eligible retrieval turn. Retrieval cannot invoke itself recursively.
 2. The runtime authorizes the workspace/session and sends only normalized scope
    and fixed budgets. Agents receive no vector handle, credential, or permission
    to widen scope.
@@ -282,10 +349,22 @@ authority:
    a sanitized reason. Disabled, unavailable, stale, corrupt, incompatible, or
    failed state degrades explicitly to authorized literal retrieval.
 
-The deterministic local provider and generation store now supply these direct
-building blocks. Planned Issue #263 still owns authorization, projection
-scheduling, authoritative rereads, citations, bounded context, and failure
-isolation; #283 does not make derived state authoritative or agent-visible.
+Only active conversations and complete visible `user_message`/`agent_reply`
+pairs enter the fixed `story-conversation-rag-visible-turn-v1` projection. Each
+document is framed as `Subject`, `User`, and addressed `Agent` content with
+length-framed SHA-256 identity and revision values. A preflight merges exact
+literal hits first, accepts at most one semantic excerpt per current document,
+reauthorizes every stable reference against a fresh complete target, and emits
+at most 20 `g1` through `g20` citations. Each excerpt is at most 800 codepoints;
+the complete context is at most 32,768 UTF-8 bytes. Rejected or changed semantic
+references mark derived state stale best-effort rather than trusting old text.
+
+The initial retrieval-provider request receives attempted `rag_context` with a
+content-free outcome/reason and bounded authoritative excerpts explicitly
+labeled as untrusted story data. Continuation requests omit that context. The
+Python result carries the optional content-free `rag_outcome`; no-attempt turns
+leave it `None`. See the exact
+[payload and citation contract](../reference/conversation-retrieval.md#optional-conversation-rag-preflight).
 
 ## Planned user utilization
 

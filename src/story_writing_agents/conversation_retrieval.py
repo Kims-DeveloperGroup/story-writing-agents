@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Callable, Protocol, TypeAlias
+from typing import Callable, Protocol, TypeAlias  # noqa: UP035 - public alias parity
 
 from .agents import ROSTER
+from .conversation_rag import (
+    CONVERSATION_RAG_POLICY,
+    ConversationRagOutcome,
+    ConversationRagReason,
+    ConversationRagSourceReference,
+)
 from .conversation_search import (
     CONVERSATION_MEMORY_POLICY,
     ConversationCitation,
@@ -22,9 +28,9 @@ from .conversations import (
 )
 from .errors import SessionIdError
 
-
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 _SAFE_REFERENCE_OPERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+_RAG_CITATION_ID = re.compile(r"g(?:[1-9]|1[0-9]|20)")
 _BEGIN_UNTRUSTED_STORY_DATA = "<<<BEGIN_UNTRUSTED_STORY_DATA>>>"
 _END_UNTRUSTED_STORY_DATA = "<<<END_UNTRUSTED_STORY_DATA>>>"
 
@@ -136,6 +142,201 @@ class ConversationRetrievalProgressPhase(StrEnum):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class ConversationRagAttemptOutcome:
+    """Content-free result of one optional semantic-retrieval attempt."""
+
+    outcome: ConversationRagOutcome
+    reason: ConversationRagReason
+
+    def __post_init__(self) -> None:
+        """Validate the exact outcome/reason combinations without I/O."""
+
+        if type(self.outcome) is not ConversationRagOutcome:
+            raise TypeError("conversation RAG outcome must use the exact enum")
+        if type(self.reason) is not ConversationRagReason:
+            raise TypeError("conversation RAG reason must use the exact enum")
+        if self.outcome is ConversationRagOutcome.COMPLETE:
+            if self.reason is not ConversationRagReason.NONE:
+                raise ValueError("complete conversation RAG requires reason none")
+            return
+        if self.outcome is ConversationRagOutcome.PARTIAL:
+            if self.reason is not ConversationRagReason.PARTIAL:
+                raise ValueError("partial conversation RAG requires reason partial")
+            return
+        if self.reason not in (
+            ConversationRagReason.DISABLED,
+            ConversationRagReason.UNAVAILABLE,
+            ConversationRagReason.STALE,
+            ConversationRagReason.CORRUPT,
+            ConversationRagReason.INCOMPATIBLE,
+            ConversationRagReason.FAILED,
+        ):
+            raise ValueError("literal fallback requires a failure reason")
+
+    def to_dict(self) -> dict[str, str]:
+        """Return the exact provider-visible content-free outcome shape."""
+
+        return {
+            "outcome": self.outcome.value,
+            "reason": self.reason.value,
+        }
+
+
+def _rag_reference_to_dict(
+    reference: ConversationRagSourceReference,
+) -> dict[str, object]:
+    """Project one validated RAG source reference without provider text."""
+
+    document = reference.document
+    return {
+        "document": {
+            "key": {
+                "session_id": document.key.session_id,
+                "document_id": document.key.document_id,
+            },
+            "conversation_id": document.conversation_id,
+            "start_turn_id": document.start_turn_id,
+            "end_turn_id": document.end_turn_id,
+            "start_sequence": document.start_sequence,
+            "end_sequence": document.end_sequence,
+            "revision_id": document.revision_id,
+        },
+        "fragment_id": reference.fragment_id,
+        "start_codepoint": reference.start_codepoint,
+        "end_codepoint": reference.end_codepoint,
+    }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ConversationRagExcerpt:
+    """One bounded authoritative excerpt supplied as untrusted story data."""
+
+    citation_id: str
+    source: ConversationRetrievalSource
+    reference: ConversationRagSourceReference
+    content: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        """Validate correlation, range width, and fixed excerpt bounds."""
+
+        if (
+            type(self.citation_id) is not str
+            or _RAG_CITATION_ID.fullmatch(self.citation_id) is None
+        ):
+            raise ValueError("conversation RAG citation ID is invalid")
+        if type(self.source) is not ConversationRetrievalSource:
+            raise TypeError("conversation RAG source must use the exact type")
+        if type(self.reference) is not ConversationRagSourceReference:
+            raise TypeError("conversation RAG reference must use the exact type")
+        content = _strict_utf8(
+            self.content,
+            label="conversation RAG excerpt content",
+            nonempty=True,
+        )
+        document = self.reference.document
+        if (
+            self.source.citation.session_id != document.key.session_id
+            or self.source.citation.conversation_id != document.conversation_id
+        ):
+            raise ValueError("conversation RAG excerpt source crossed its document")
+        citation = self.source.citation
+        if citation.sequence is not None and (
+            citation.turn_id not in {
+                document.start_turn_id,
+                document.end_turn_id,
+            }
+            or citation.sequence < document.start_sequence
+            or citation.sequence > document.end_sequence
+        ):
+            raise ValueError("conversation RAG excerpt citation crossed its range")
+        width = self.reference.end_codepoint - self.reference.start_codepoint
+        if len(content) != width:
+            raise ValueError("conversation RAG excerpt width is inconsistent")
+        if width > CONVERSATION_RAG_POLICY.max_fragment_codepoints:
+            raise ValueError("conversation RAG excerpt exceeds the fixed limit")
+
+    def to_dict(self) -> dict[str, object]:
+        """Return the exact provider-visible authoritative excerpt shape."""
+
+        return {
+            "citation_id": self.citation_id,
+            "source": self.source.to_dict(),
+            "reference": _rag_reference_to_dict(self.reference),
+            "content": self.content,
+        }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ConversationRagContext:
+    """Bounded preflight context included only when RAG was attempted."""
+
+    outcome: ConversationRagAttemptOutcome
+    excerpts: tuple[ConversationRagExcerpt, ...]
+    retained_utf8_bytes: int
+    truncated: bool
+
+    @classmethod
+    def disabled(cls) -> ConversationRagContext:
+        """Return the canonical empty context for a forced disabled attempt."""
+
+        return cls(
+            outcome=ConversationRagAttemptOutcome(
+                outcome=ConversationRagOutcome.LITERAL_FALLBACK,
+                reason=ConversationRagReason.DISABLED,
+            ),
+            excerpts=(),
+            retained_utf8_bytes=0,
+            truncated=False,
+        )
+
+    def __post_init__(self) -> None:
+        """Validate deterministic citations, exact byte count, and budgets."""
+
+        if type(self.outcome) is not ConversationRagAttemptOutcome:
+            raise TypeError("conversation RAG context outcome must use the exact type")
+        if type(self.excerpts) is not tuple or any(
+            type(excerpt) is not ConversationRagExcerpt
+            for excerpt in self.excerpts
+        ):
+            raise TypeError(
+                "conversation RAG excerpts must be a tuple of exact values"
+            )
+        if len(self.excerpts) > CONVERSATION_RAG_POLICY.max_candidates:
+            raise ValueError("conversation RAG context exceeds the excerpt limit")
+        for ordinal, excerpt in enumerate(self.excerpts, start=1):
+            if excerpt.citation_id != f"g{ordinal}":
+                raise ValueError("conversation RAG citation IDs are inconsistent")
+        references = tuple(excerpt.reference for excerpt in self.excerpts)
+        if len(set(references)) != len(references):
+            raise ValueError("conversation RAG context contains duplicate references")
+        retained = _non_negative_integer(
+            self.retained_utf8_bytes,
+            label="conversation RAG retained UTF-8 bytes",
+        )
+        actual = sum(len(excerpt.content.encode("utf-8")) for excerpt in self.excerpts)
+        if retained != actual:
+            raise ValueError("conversation RAG retained byte count is inconsistent")
+        if retained > 32_768:
+            raise ValueError("conversation RAG context exceeds the UTF-8 byte limit")
+        _boolean(self.truncated, label="conversation RAG context truncated")
+        if (
+            self.truncated
+            and self.outcome.outcome is ConversationRagOutcome.COMPLETE
+        ):
+            raise ValueError("truncated conversation RAG context must be partial")
+
+    def to_dict(self) -> dict[str, object]:
+        """Return the exact initial-provider payload member."""
+
+        return {
+            **self.outcome.to_dict(),
+            "excerpts": [excerpt.to_dict() for excerpt in self.excerpts],
+            "retained_utf8_bytes": self.retained_utf8_bytes,
+            "truncated": self.truncated,
+        }
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class ConversationRetrievalPolicy:
     """Fixed whole-turn provider, search, transcript, and framing limits."""
 
@@ -216,6 +417,7 @@ class ConversationRetrievalRequest:
     agent_id: str
     content: str
     context: ConversationContextWindow
+    rag_context: ConversationRagContext | None = None
 
     def __post_init__(self) -> None:
         """Validate identity, content, and context without I/O or durability."""
@@ -247,6 +449,18 @@ class ConversationRetrievalRequest:
                 excluded_turn_id=self.turn_id,
             ),
         )
+        if self.rag_context is not None:
+            if type(self.rag_context) is not ConversationRagContext:
+                raise TypeError(
+                    "conversation retrieval RAG context must use the exact type"
+                )
+            if any(
+                excerpt.reference.document.key.session_id != self.session_id
+                for excerpt in self.rag_context.excerpts
+            ):
+                raise ValueError(
+                    "conversation retrieval RAG context crossed its session"
+                )
 
 
 def _validate_action_common(
@@ -730,6 +944,7 @@ class ConversationRetrievalResult:
     context: ConversationContextWindow
     sources: tuple[ConversationRetrievalSource, ...]
     reference_operation_id: str | None = None
+    rag_outcome: ConversationRagAttemptOutcome | None = None
 
     def __post_init__(self) -> None:
         """Validate result identity, context, content, and canonical sources."""
@@ -769,6 +984,12 @@ class ConversationRetrievalResult:
             ) is None
         ):
             raise ValueError("reference operation ID is invalid")
+        if self.rag_outcome is not None and (
+            type(self.rag_outcome) is not ConversationRagAttemptOutcome
+        ):
+            raise TypeError(
+                "conversation retrieval RAG outcome must use the exact type"
+            )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -908,6 +1129,9 @@ def serialize_conversation_retrieval_observation(
 
 __all__ = [
     "CONVERSATION_RETRIEVAL_POLICY",
+    "ConversationRagAttemptOutcome",
+    "ConversationRagContext",
+    "ConversationRagExcerpt",
     "ConversationRetrievalAction",
     "ConversationRetrievalActionHandler",
     "ConversationRetrievalActionKind",

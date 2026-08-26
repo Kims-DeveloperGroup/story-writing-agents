@@ -59,7 +59,17 @@ from story_writing_agents import (
 )
 from story_writing_agents.conversation_retrieval import (
     CONVERSATION_RETRIEVAL_POLICY,
+    ConversationRagAttemptOutcome,
+    ConversationRagContext,
+    ConversationRagExcerpt,
     serialize_conversation_retrieval_observation,
+)
+from story_writing_agents.conversation_rag import (
+    ConversationRagDocumentIdentity,
+    ConversationRagDocumentKey,
+    ConversationRagOutcome,
+    ConversationRagReason,
+    ConversationRagSourceReference,
 )
 from story_writing_agents.conversation_search import (
     ConversationCitation,
@@ -410,6 +420,7 @@ def _retrieval_request(
     agent_id: str = PLOT_ARCHITECT,
     content: str = "visible retrieval request",
     context: ConversationContextWindow | None = None,
+    rag_context: ConversationRagContext | None = None,
 ) -> ConversationRetrievalRequest:
     """Build one exact bounded-retrieval provider request."""
 
@@ -420,6 +431,54 @@ def _retrieval_request(
         agent_id=agent_id,
         content=content,
         context=_context_window() if context is None else context,
+        rag_context=rag_context,
+    )
+
+
+def _provider_rag_context() -> ConversationRagContext:
+    """Build one attempted context whose full reference must reach call one."""
+
+    identity = ConversationRagDocumentIdentity(
+        key=ConversationRagDocumentKey(
+            session_id="story_session",
+            document_id="a" * 64,
+        ),
+        conversation_id="source_conversation",
+        start_turn_id="source_turn",
+        end_turn_id="source_turn",
+        start_sequence=1,
+        end_sequence=2,
+        revision_id="sha256:" + "b" * 64,
+    )
+    content = "authoritative excerpt 🙂"
+    excerpt = ConversationRagExcerpt(
+        citation_id="g1",
+        source=ConversationRetrievalSource(
+            subject="Authoritative subject",
+            citation=ConversationCitation(
+                "story_session",
+                "source_conversation",
+                "source_turn",
+                2,
+                ConversationEventKind.AGENT_REPLY,
+            ),
+        ),
+        reference=ConversationRagSourceReference(
+            document=identity,
+            fragment_id="fragment-authorized",
+            start_codepoint=0,
+            end_codepoint=len(content),
+        ),
+        content=content,
+    )
+    return ConversationRagContext(
+        outcome=ConversationRagAttemptOutcome(
+            outcome=ConversationRagOutcome.COMPLETE,
+            reason=ConversationRagReason.NONE,
+        ),
+        excerpts=(excerpt,),
+        retained_utf8_bytes=len(content.encode("utf-8")),
+        truncated=False,
     )
 
 
@@ -4364,6 +4423,94 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             await bound.converse(
                 self.conversation_request(session_id="closed_session")
             )
+
+    def test_retrieval_rag_context_is_first_call_only_and_reference_authoritative(
+        self,
+    ) -> None:
+        contexts = (_provider_rag_context(), ConversationRagContext.disabled())
+        for context in contexts:
+            with self.subTest(outcome=context.outcome):
+                request = _retrieval_request(rag_context=context)
+                initial = AgentBackend._conversation_retrieval_initial_payload(
+                    request,
+                    allowed_actions=(
+                        ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
+                        ConversationRetrievalActionKind.ANSWER,
+                    ),
+                )
+                self.assertEqual(
+                    tuple(initial),
+                    (
+                        "operation",
+                        "session_id",
+                        "conversation_id",
+                        "turn_id",
+                        "agent_id",
+                        "content",
+                        "context",
+                        "rag_context",
+                        "retrieval",
+                    ),
+                )
+                self.assertEqual(initial["rag_context"], context.to_dict())
+                self.assertTrue(
+                    any("rag_context" in rule for rule in initial["retrieval"]["rules"])
+                )
+                continuation = (
+                    AgentBackend._conversation_retrieval_continuation_payload(
+                        request,
+                        action_index=2,
+                        allowed_actions=(ConversationRetrievalActionKind.ANSWER,),
+                        observation="framed observation",
+                    )
+                )
+                self.assertNotIn("rag_context", continuation)
+                self.assertNotIn("content", continuation)
+                self.assertNotIn("context", continuation)
+                self.assertTrue(
+                    any(
+                        "rag_context" in rule
+                        for rule in continuation["retrieval"]["rules"]
+                    )
+                )
+
+        complete = contexts[0]
+        reference = complete.excerpts[0].reference
+        wire_reference = complete.to_dict()["excerpts"][0]["reference"]
+        self.assertEqual(
+            wire_reference,
+            {
+                "document": {
+                    "key": {
+                        "session_id": reference.document.key.session_id,
+                        "document_id": reference.document.key.document_id,
+                    },
+                    "conversation_id": reference.document.conversation_id,
+                    "start_turn_id": reference.document.start_turn_id,
+                    "end_turn_id": reference.document.end_turn_id,
+                    "start_sequence": reference.document.start_sequence,
+                    "end_sequence": reference.document.end_sequence,
+                    "revision_id": reference.document.revision_id,
+                },
+                "fragment_id": reference.fragment_id,
+                "start_codepoint": reference.start_codepoint,
+                "end_codepoint": reference.end_codepoint,
+            },
+        )
+        serialized = json.dumps(
+            AgentBackend._conversation_retrieval_initial_payload(
+                _retrieval_request(rag_context=complete),
+                allowed_actions=(ConversationRetrievalActionKind.ANSWER,),
+            ),
+            ensure_ascii=False,
+        )
+        for forbidden in (
+            "provider-candidate-secret",
+            "/private/provider/path",
+            "provider-credential",
+            "hidden-handle",
+        ):
+            self.assertNotIn(forbidden, serialized)
 
     async def test_retrieval_exact_initial_continuation_payload_rules_schema_and_frame(
         self,

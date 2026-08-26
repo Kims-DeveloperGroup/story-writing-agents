@@ -6,7 +6,8 @@
 > for `$`/`$$` prompt editing; the viewer still has no standalone command or
 > supported public API. Optional conversation RAG currently has direct Python
 > contracts, a deterministic local provider, a disposable generation store, and
-> explicit composition; runtime, agent, and shell integration remain planned.
+> explicit composition plus programmatic runtime/agent integration; shell and
+> settings integration remain planned.
 
 Key terms: **controller**—owner of interactive transition order;
 **adapter**—provider-specific process/protocol implementation;
@@ -52,18 +53,22 @@ conversation without deleting prior data. See the
 | `conversation_rag_store` | Identity-bound disposable per-session generation construction, full verification, active/status pointers, reader contexts, and confirmed derived-only purge |
 | `generic_rag_adapter` | Sole production translation boundary that imports story contracts and the exact optional `generic-rag` API |
 | `conversation_rag_composition` | Import-safe deferred generic/local composition, fixed `local` allowlist, version/capability checks, store-aware fallback, and sanitized diagnostics |
+| `conversation_rag_runtime` | Provider/store-neutral authoritative projection, literal-first merge, current reread, citations, bounded agent context, and restart-safe state coordination |
 
 `generic-rag` has no dependency on this project. The package root does not
 re-export these modules, the base install does not need the generic package,
 and importing the provider/store/composition path neither probes package
 metadata nor imports `generic-rag`. Explicit composition requires the pinned
-optional package. #283 supplies only direct local provider/store behavior: it
-does not authorize sources, schedule projection, reread or cite authoritative
-bytes, inject agent context, or add commands/settings. Provider fragment text
-and every derived generation remain non-authoritative. Callers own their
-workspace, store, and lexical collaborator lifecycles. See
+optional package. `conversation_rag_runtime` consumes only story-owned contracts
+and a complete `ConversationStorageServices` authority; it does not import the
+generic package, store, provider, controller, or settings. It authorizes active
+complete visible turns, schedules projection, reauthorizes stable references,
+rereads exact current bytes, and constructs bounded cited agent context.
+Provider fragment text and every derived generation remain non-authoritative.
+Callers own their workspace, store, lexical collaborator, low-level service,
+and restart-safe runtime-state-port lifecycles. See
 [Optional conversation RAG](../guides/conversation-rag.md) for installation,
-the current weak-local/persistence boundary, and the planned agent/user flow.
+the current weak-local/persistence/runtime boundary, and the planned user flow.
 
 `Workspace` owns generic path-safe persistence, inspection, and atomic
 replacement. Its retained root identity is a narrower internal

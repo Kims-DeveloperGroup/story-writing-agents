@@ -15,7 +15,9 @@
 > Python SQLite conversation storage use one workspace coordinator; SQLite has
 > its own fixed database, derived search companion, transaction, and sidecar
 > boundary. Direct Python conversation RAG also has a separate identity-bound,
-> disposable per-session generation store; no runtime or shell path uses it yet.
+> disposable per-session generation store. An explicitly injected runtime
+> service can authorize and schedule its use; no shell or settings path selects
+> it yet.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -631,8 +633,9 @@ an actively hostile same-user process.
 Status/snapshot/error values and diagnostic records are content-free and do not
 include source or query text. The verified source-map file does contain derived
 plaintext fragments, so filesystem permissions do not replace workspace-level
-data protection. Derived vectors and fragments are never authority; #263 must
-reauthorize stable references and reread conversation bytes before use. See the
+data protection. Derived vectors and fragments are never authority; the
+injected runtime service reauthorizes stable references and rereads conversation
+bytes before use. See the
 [persistence design](../design/persistence.md#optional-conversation-rag-derived-persistence),
 [direct API](../reference/package-api.md#optional-conversation-rag-boundary),
 and [current/planned workflow](../guides/conversation-rag.md).

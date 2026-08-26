@@ -12,8 +12,9 @@ Use this index to find one canonical answer instead of searching a long manual.
 > authentication gate and interactive runtime construction.
 > Optional conversation RAG currently has direct Python contracts, a
 > deterministic local provider, a disposable generation store, and explicit
-> composition. Runtime/agent integration, commands, and `/settings` RAG fields
-> remain planned and unavailable.
+> composition plus programmatic runtime/agent authorization, projection, and
+> cited context. Commands and `/settings` RAG fields remain planned and
+> unavailable.
 > Inline `${path}` and `${path}#Lx-Ly` references are active in provider-bound
 > prompts. In those shell spans, `$` discovers current safe reference sources.
 > Exact `$$` immediately shows ranged-source choices; Enter/Tab opens the
@@ -44,7 +45,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Append/read transcripts; derive bounded complete-turn context | Shell turns append/consume context and `/transcript` reads fresh bounded pages; Python API |
 | Search one session and cite hits | Attached shell `/search` for active records; Python API can explicitly include archived records |
 | Ask an agent to retrieve cited conversation history | Focused shell conversation; additive Python runtime API; active records in the current session only |
-| Use the optional local conversation RAG boundary | Direct Python modules provide provider-neutral contracts, deterministic local embedding/ranking, disposable generations, and explicit composition. Composition requires the pinned `rag` extra; no RAG shell/runtime integration exists yet. [Current boundary and plan](guides/conversation-rag.md) |
+| Use the optional local conversation RAG boundary | Direct Python modules provide provider-neutral contracts, deterministic local embedding/ranking, disposable generations, explicit composition, and programmatic `StoryRuntime` integration. Composition requires the pinned `rag` extra and an application-owned state port; no RAG shell/settings integration exists yet. [Current boundary and plan](guides/conversation-rag.md) |
 | Persist and send one explicitly addressed one-step turn | Existing `StoryRuntime.converse()` Python API |
 | Run consensus with included, fresh, or draft-file input | Focused active shell conversation; noninteractive CLI and Python API remain available |
 | Publish and identify canonical agent-produced writing artifacts | Every unanimous consensus run; exact source paths and separate publication provenance in the writing-artifact reference |
@@ -69,7 +70,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 - [Story sessions and subject conversations](guides/story-sessions.md)
 - [Glasswater interactive end-to-end journey](guides/glasswater-scenario.md)
 - [Provider-free smoke test](guides/smoke-test.md)
-- [Optional conversation RAG setup, boundary, and delivery plan](guides/conversation-rag.md)
+- [Optional conversation RAG setup, runtime boundary, and planned user flow](guides/conversation-rag.md)
 - [Antigravity setup, routing, and safety](guides/antigravity.md)
 - [Consensus runs](guides/consensus-runs.md)
 - [Directives](guides/directives.md)
