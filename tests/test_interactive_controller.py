@@ -5935,6 +5935,10 @@ class ControllerSettingsTests(ControllerTestCase):
             "[savedandapplied]Settingssavedandappliedtothisrunningshellnow.",
             "".join("".join(callbacks.records).split()),
         )
+        self.assertNotIn(
+            "Restart is required for",
+            "".join(callbacks.records),
+        )
         self.assertEqual(
             settings_module.load_settings_state(workspace).pending.system_defaults.language,
             "EN",
@@ -6851,8 +6855,7 @@ class ControllerSettingsTests(ControllerTestCase):
             workspace.path(CONVERSATION_STORAGE_ACTIVATION_STATE_PATH).exists()
         )
         self.assertIn(
-            "Settings saved. Desired conversation storage is sqlite and applies to "
-            "the next shell.",
+            "Restart is required for sqlite.",
             "".join(callbacks.records),
         )
 

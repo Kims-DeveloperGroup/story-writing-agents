@@ -2822,10 +2822,7 @@ class InteractiveController:
         if storage_changed:
             items.append(
                 Notice(
-                    (
-                        "Settings saved. Desired conversation storage is "
-                        f"{storage_after} and applies to the next shell."
-                    ),
+                    f"Restart is required for {storage_after}.",
                     label="saved",
                     role=SemanticRole.SUCCESS,
                     state=ViewState.COMPLETED,
