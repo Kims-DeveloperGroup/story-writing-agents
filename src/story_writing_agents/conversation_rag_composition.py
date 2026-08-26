@@ -430,11 +430,19 @@ class LocalConversationRagComposition:
         if type(state) is not ConversationRagProjectionState:
             raise TypeError("retrieval state must use the exact RAG state")
         try:
-            snapshot = self._store.inspect(
-                request.session_id,
-                LOCAL_CONVERSATION_RAG_PROVIDER_ID,
-                self._embedder.identity,
-            )
+            if state.checkpoint is None:
+                snapshot = self._store.inspect(
+                    request.session_id,
+                    LOCAL_CONVERSATION_RAG_PROVIDER_ID,
+                    self._embedder.identity,
+                )
+            else:
+                snapshot = self._store.inspect(
+                    request.session_id,
+                    LOCAL_CONVERSATION_RAG_PROVIDER_ID,
+                    self._embedder.identity,
+                    expected_projection_schema_id=state.checkpoint.schema_id,
+                )
         except ConversationRagStoreError as exc:
             return _literal_fallback(request, _store_failure_reason(exc.failure))
         if snapshot.status is not ConversationRagStoreStatus.READY:

@@ -291,8 +291,13 @@ from story_writing_agents.conversation_rag_store import (
 )
 ```
 
-The schema ID is exactly `"story-conversation-rag-store-v1"`. Status values are
-`missing`, `ready`, `stale`, `corrupt`, `incompatible`, and `provider_failed`.
+`CONVERSATION_RAG_STORE_SCHEMA_ID` is exactly
+`"story-conversation-rag-store-v1"` and versions only the persisted store
+envelopes. It is not the projection-content schema. The caller owns
+`ConversationRagProjectionRequest.schema_id`; the store preserves that value as
+the generation's `projection_schema_id` and as the checkpoint's `schema_id`.
+Status values are `missing`, `ready`, `stale`, `corrupt`, `incompatible`, and
+`provider_failed`.
 Failure values are `unsupported`, `busy`, `unsafe`, `corrupt`, `incompatible`,
 `provider_failed`, `confirmation_required`, and `operation_failed`.
 `ConversationRagStoreCounts` contains these exact nonnegative fields:
@@ -308,7 +313,14 @@ The store constructs without I/O and retains the supplied identity-bound
 
 ```python
 ConversationRagGenerationStore(workspace: Workspace, /)
-store.inspect(session_id, provider_id, embedding, /) -> ConversationRagStoreSnapshot
+store.inspect(
+    session_id: str,
+    provider_id: str,
+    embedding: ConversationRagEmbeddingIdentity,
+    /,
+    *,
+    expected_projection_schema_id: str = CONVERSATION_RAG_STORE_SCHEMA_ID,
+) -> ConversationRagStoreSnapshot
 store.begin_generation(
     provider_id,
     request,
@@ -322,10 +334,27 @@ store.set_status(session_id, status, /) -> None
 store.purge(session_id, /, *, confirmed: bool) -> ConversationRagStoreCounts
 ```
 
+`expected_projection_schema_id` is additive and keyword-only. It must be an
+exact nonblank, non-whitespace strict-UTF-8 string and is validated before any
+store I/O. The default preserves the original fail-closed expectation for
+generations whose projection schema was the store-v1 value. Callers using a
+different projection format must supply its exact ID.
+
+The snapshot's `status` describes compatibility with the provider, embedding,
+and projection schema requested by this inspection; its `state` describes the
+verified checkpoint itself. A completely verified generation with one of
+those identity mismatches returns `incompatible` with a `present` checkpoint
+and safe provider, generation, and count fields. An incompatible store envelope
+or otherwise unverifiable identity exposes no trusted checkpoint. Advisory
+`ready`, `stale`, or `provider_failed` state cannot mask an identity mismatch.
+
 The builder is an operation-scoped context manager. Its `state` is the exact
 store-loaded state; it implements `replace_document()`, `delete_document()`,
 and `reset_session()` for the generic projection bridge, and
 `publish(result, /)` completely verifies and commits a successful target.
+Generation construction uses the request's projection schema. Incremental
+projection requires a compatible active generation; an explicit rebuild can
+replace a verified incompatible generation without relabeling it.
 An active reader is likewise call-scoped and exposes `search(request,
 embedding, /)` only while its exact snapshot remains current. Advisory status
 accepts only `stale` or `provider_failed`. Purge requires exact
@@ -379,11 +408,14 @@ itself and `store` is the retained caller-owned generation store. The fixed
 embedder/ranker and supplied lexical retriever are combined with a fresh
 call-local generic adapter for every projection or retrieval that reaches
 generic work. Successful projection publishes one fully verified inactive
-generation. Retrieval opens only the exact verified active snapshot; missing,
-stale, corrupt, incompatible, provider-failed, or failed storage/provider state
-returns `literal_fallback` with a fixed content-free reason. A missing or
-incompatible optional package at initial composition raises the sanitized
-composition error before store I/O.
+generation. Retrieval with a present caller state inspects against that
+checkpoint's projection schema, then opens only the exact verified active
+snapshot. A different stored schema therefore returns `literal_fallback` with
+reason `incompatible`; drift from the same-schema caller checkpoint returns
+reason `stale`. Missing, stale, corrupt, provider-failed, or failed
+storage/provider state also returns `literal_fallback` with a fixed content-free
+reason. A missing or incompatible optional package at initial composition
+raises the sanitized composition error before store I/O.
 
 These modules implement only direct local provider and disposable derived-state
 behavior. They do not authorize sources, schedule projection, reread or cite

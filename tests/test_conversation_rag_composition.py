@@ -19,6 +19,7 @@ from story_writing_agents import conversation_rag_store as rag_store
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _GENERIC_RAG_SOURCE = _REPOSITORY_ROOT / "vendor" / "generic-rag" / "src"
+_VISIBLE_TURN_SCHEMA_ID = "story-conversation-rag-visible-turn-v1"
 
 
 def _collaborators() -> rag.ConversationRagCollaborators:
@@ -42,6 +43,7 @@ class _EmptyLexicalRetriever:
 
 def _projection_request(
     *,
+    schema_id: str = _VISIBLE_TURN_SCHEMA_ID,
     revision_id: str = "revision-a",
     text: str = "Alpha beta 한글",
 ) -> rag.ConversationRagProjectionRequest:
@@ -56,7 +58,7 @@ def _projection_request(
     )
     return rag.ConversationRagProjectionRequest(
         "session-a",
-        rag_store.CONVERSATION_RAG_STORE_SCHEMA_ID,
+        schema_id,
         local.LocalConversationRagEmbedder().identity,
         (rag.ConversationRagSourceDocument(identity, text),),
     )
@@ -427,15 +429,54 @@ class ConversationRagCompositionTests(unittest.TestCase):
                     "session-a",
                     local.LOCAL_CONVERSATION_RAG_PROVIDER_ID,
                     local.LocalConversationRagEmbedder().identity,
+                    expected_projection_schema_id=request.schema_id,
                 )
                 self.assertIs(
                     snapshot.status, rag_store.ConversationRagStoreStatus.READY
                 )
                 self.assertEqual(snapshot.state.checkpoint, projected.checkpoint)
-                semantic = composed.retrieve_semantic(
-                    rag.ConversationRagRetrievalRequest("session-a", "alpha", 3),
-                    snapshot.state,
-                )
+                inspection_schemas: list[str] = []
+                real_inspect = rag_store.ConversationRagGenerationStore.inspect
+
+                def record_inspection(
+                    current_store: rag_store.ConversationRagGenerationStore,
+                    session_id: str,
+                    provider_id: str,
+                    embedding: rag.ConversationRagEmbeddingIdentity,
+                    /,
+                    *,
+                    expected_projection_schema_id: str = (
+                        rag_store.CONVERSATION_RAG_STORE_SCHEMA_ID
+                    ),
+                ) -> rag_store.ConversationRagStoreSnapshot:
+                    inspection_schemas.append(expected_projection_schema_id)
+                    return real_inspect(
+                        current_store,
+                        session_id,
+                        provider_id,
+                        embedding,
+                        expected_projection_schema_id=(expected_projection_schema_id),
+                    )
+
+                with mock.patch.object(
+                    rag_store.ConversationRagGenerationStore,
+                    "inspect",
+                    new=record_inspection,
+                ):
+                    semantic = composed.retrieve_semantic(
+                        rag.ConversationRagRetrievalRequest("session-a", "alpha", 3),
+                        snapshot.state,
+                    )
+                    fresh = composition.compose_local_conversation_rag(
+                        rag_store.ConversationRagGenerationStore(
+                            Workspace(workspace.root)
+                        ),
+                        lexical,
+                    )
+                    reopened = fresh.retrieve_semantic(
+                        rag.ConversationRagRetrievalRequest("session-a", "beta", 3),
+                        snapshot.state,
+                    )
                 self.assertEqual(
                     (semantic.outcome, semantic.reason, len(semantic.candidates)),
                     (
@@ -448,15 +489,11 @@ class ConversationRagCompositionTests(unittest.TestCase):
                     semantic.candidates[0].source.document.key.document_id,
                     "document-a",
                 )
-                fresh = composition.compose_local_conversation_rag(
-                    rag_store.ConversationRagGenerationStore(Workspace(workspace.root)),
-                    lexical,
-                )
-                reopened = fresh.retrieve_semantic(
-                    rag.ConversationRagRetrievalRequest("session-a", "beta", 3),
-                    snapshot.state,
-                )
                 self.assertEqual(reopened.candidates, semantic.candidates)
+                self.assertEqual(
+                    inspection_schemas,
+                    [_VISIBLE_TURN_SCHEMA_ID, _VISIBLE_TURN_SCHEMA_ID],
+                )
 
             # Construction, projection, retrieval, fresh construction, and
             # fresh retrieval each validate and create a call-local adapter.
@@ -557,6 +594,7 @@ class ConversationRagCompositionTests(unittest.TestCase):
                         "session-a",
                         "local",
                         local.LocalConversationRagEmbedder().identity,
+                        expected_projection_schema_id=_VISIBLE_TURN_SCHEMA_ID,
                     )
                     self.assertEqual(observed.state.checkpoint, projected.checkpoint)
                     # A later operation reacquires the same session lock.
@@ -564,7 +602,9 @@ class ConversationRagCompositionTests(unittest.TestCase):
                         "session-a", rag_store.ConversationRagStoreStatus.STALE
                     )
 
-    def test_local_retrieval_maps_store_state_and_rejects_stale_callers(self) -> None:
+    def test_local_retrieval_distinguishes_schema_mismatch_and_state_drift(
+        self,
+    ) -> None:
         if str(_GENERIC_RAG_SOURCE) not in sys.path:
             sys.path.insert(0, str(_GENERIC_RAG_SOURCE))
         with tempfile.TemporaryDirectory() as temporary:
@@ -577,15 +617,54 @@ class ConversationRagCompositionTests(unittest.TestCase):
                     store,
                     _EmptyLexicalRetriever(),
                 )
-                request = _projection_request()
-                result = composed.rebuild_projection(request, _missing_state())
+                legacy = composed.rebuild_projection(
+                    _projection_request(
+                        schema_id=rag_store.CONVERSATION_RAG_STORE_SCHEMA_ID,
+                        revision_id="revision-legacy",
+                        text="Legacy alpha",
+                    ),
+                    _missing_state(),
+                )
+                legacy_state = rag.ConversationRagProjectionState(
+                    rag.ConversationRagProjectionStateAvailability.PRESENT,
+                    legacy.checkpoint,
+                )
+                visible = composed.rebuild_projection(
+                    _projection_request(),
+                    legacy_state,
+                )
+                visible_state = rag.ConversationRagProjectionState(
+                    rag.ConversationRagProjectionStateAvailability.PRESENT,
+                    visible.checkpoint,
+                )
                 query = rag.ConversationRagRetrievalRequest("session-a", "alpha", 2)
-                stale = composed.retrieve_semantic(query, _missing_state())
+                incompatible = composed.retrieve_semantic(query, legacy_state)
                 self.assertEqual(
-                    (stale.outcome, stale.reason),
+                    (
+                        incompatible.outcome,
+                        incompatible.reason,
+                        incompatible.candidates,
+                    ),
+                    (
+                        rag.ConversationRagOutcome.LITERAL_FALLBACK,
+                        rag.ConversationRagReason.INCOMPATIBLE,
+                        (),
+                    ),
+                )
+                updated = composed.rebuild_projection(
+                    _projection_request(
+                        revision_id="revision-b",
+                        text="Updated visible alpha",
+                    ),
+                    visible_state,
+                )
+                stale = composed.retrieve_semantic(query, visible_state)
+                self.assertEqual(
+                    (stale.outcome, stale.reason, stale.candidates),
                     (
                         rag.ConversationRagOutcome.LITERAL_FALLBACK,
                         rag.ConversationRagReason.STALE,
+                        (),
                     ),
                 )
                 store.set_status(
@@ -595,7 +674,7 @@ class ConversationRagCompositionTests(unittest.TestCase):
                     query,
                     rag.ConversationRagProjectionState(
                         rag.ConversationRagProjectionStateAvailability.PRESENT,
-                        result.checkpoint,
+                        updated.checkpoint,
                     ),
                 )
                 self.assertEqual(

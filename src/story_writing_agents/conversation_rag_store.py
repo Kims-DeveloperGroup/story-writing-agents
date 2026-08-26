@@ -155,6 +155,21 @@ def _identifier(label: str, value: object) -> str:
     return value
 
 
+def _expected_projection_schema_id(value: object) -> str:
+    if type(value) is not str:
+        raise TypeError("expected projection schema ID must be a string")
+    assert isinstance(value, str)
+    if not value or value.isspace():
+        raise ValueError(
+            "expected projection schema ID must not be empty or whitespace-only"
+        )
+    try:
+        value.encode("utf-8", errors="strict")
+    except UnicodeEncodeError as exc:
+        raise ValueError("expected projection schema ID must be valid UTF-8") from exc
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class ConversationRagStoreCounts:
     """Safe bounded counts for one inspected derived-state subtree."""
@@ -1666,6 +1681,7 @@ def _inspect_locked(
     scope: _SessionScope,
     expected_provider: str,
     expected_embedding: ConversationRagEmbeddingIdentity,
+    expected_projection_schema_id: str,
 ) -> ConversationRagStoreSnapshot:
     scope.verify()
     for name in os.listdir(scope.session):
@@ -1750,7 +1766,7 @@ def _inspect_locked(
     compatible = True
     if (
         verified.provider_id != expected_provider
-        or verified.checkpoint.schema_id != CONVERSATION_RAG_STORE_SCHEMA_ID
+        or verified.checkpoint.schema_id != expected_projection_schema_id
         or verified.checkpoint.embedding != expected_embedding
     ):
         compatible = False
@@ -1785,7 +1801,7 @@ def _inspect_locked(
             ConversationRagStoreStatus.PROVIDER_FAILED,
         ):
             _fault(ConversationRagStoreFailure.CORRUPT)
-        if advisory is ConversationRagStoreStatus.PROVIDER_FAILED:
+        if compatible and advisory is ConversationRagStoreStatus.PROVIDER_FAILED:
             status = advisory
         elif compatible and (
             advisory is ConversationRagStoreStatus.STALE
@@ -1823,8 +1839,6 @@ def _inspect_locked(
 
 
 def _validate_request_bounds(request: ConversationRagProjectionRequest) -> None:
-    if request.schema_id != CONVERSATION_RAG_STORE_SCHEMA_ID:
-        raise ValueError("projection schema is incompatible with the local store")
     source_bytes = 0
     fragments = 0
     for document in request.documents:
@@ -2664,9 +2678,14 @@ class ConversationRagGenerationStore:
         provider_id: str,
         embedding: ConversationRagEmbeddingIdentity,
         /,
+        *,
+        expected_projection_schema_id: str = CONVERSATION_RAG_STORE_SCHEMA_ID,
     ) -> ConversationRagStoreSnapshot:
         """Inspect and completely verify one active generation, if present."""
 
+        projection_schema = _expected_projection_schema_id(
+            expected_projection_schema_id
+        )
         session = _identifier("session ID", session_id)
         provider = _identifier("RAG provider ID", provider_id)
         if type(embedding) is not ConversationRagEmbeddingIdentity:
@@ -2677,7 +2696,7 @@ class ConversationRagGenerationStore:
             scope = _open_session_scope(self._workspace, session, create=False)
             if scope is None:
                 return _missing_snapshot(session)
-            return _inspect_locked(scope, provider, embedding)
+            return _inspect_locked(scope, provider, embedding, projection_schema)
         except _StoreFault as exc:
             if exc.failure is ConversationRagStoreFailure.CORRUPT:
                 return _corrupt_snapshot(session)
@@ -2727,7 +2746,12 @@ class ConversationRagGenerationStore:
             assert scope is not None
             unusable_active = False
             try:
-                observed = _inspect_locked(scope, provider, request.embedding)
+                observed = _inspect_locked(
+                    scope,
+                    provider,
+                    request.embedding,
+                    request.schema_id,
+                )
             except _StoreFault as exc:
                 if rebuild and exc.failure in (
                     ConversationRagStoreFailure.CORRUPT,
@@ -2875,6 +2899,7 @@ class ConversationRagGenerationStore:
                 scope,
                 snapshot.provider_id,
                 snapshot.state.checkpoint.embedding,
+                snapshot.state.checkpoint.schema_id,
             )
             if (
                 current != snapshot

@@ -852,13 +852,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ConversationRagStoreFailure`, `ConversationRagStoreCounts`,
   `ConversationRagStoreSnapshot`, `ConversationRagGenerationBuilder`,
   `ConversationRagGenerationStore`, and `ConversationRagStoreError`. The fixed
-  schema is `story-conversation-rag-store-v1`; construction retains an exact
-  identity-bound `Workspace` without I/O. The generation store exposes
-  inspection, operation-scoped generation creation, verified active-reader
-  creation with an injected ranker, advisory status, and exact-confirmed
-  session purge. The builder implements the existing story writer/resetter
-  methods plus successful-result publication. None is re-exported by the
-  package-root facade.
+  store-envelope schema is `story-conversation-rag-store-v1`; caller-owned
+  projection schemas remain separate and are bound by the persisted checkpoint.
+  Construction retains an exact identity-bound `Workspace` without I/O. The
+  generation store exposes inspection, operation-scoped generation creation,
+  verified active-reader creation with an injected ranker, advisory status, and
+  exact-confirmed session purge. Inspection accepts the additive keyword-only
+  `expected_projection_schema_id`, validates it before I/O, and defaults it to
+  the store schema for legacy callers. The builder implements the existing
+  story writer/resetter methods plus successful-result publication. None is
+  re-exported by the package-root facade.
 - **Direct internal dependencies:** `conversation_rag` and `workspace`.
 - **State, resources, and side effects:** The store is the sole owner of the
   derived `agent_states/orchestrator_state/conversation_rag` subtree. Each
@@ -874,8 +877,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   failures are enforced. Streaming bounded record reads/digests,
   manifest/source/vector digests, source reconstruction, identities, counts,
   and fixed 800/80 chunking are completely reverified.
-  Projection writes remain in restartable, nonresumable inactive generations;
-  after preverification they are renamed, reopened, and reverified. Advisory
+  Inspection first verifies the envelope and complete active generation, then
+  compares the expected provider, embedding, and caller projection schema. A
+  verified mismatch is `INCOMPATIBLE` while retaining PRESENT checkpoint,
+  provider, generation, and safe-count metadata; an incompatible envelope or
+  unverifiable generation exposes no checkpoint. Advisory status is applied
+  only after compatibility is established, so stale or provider-failed state
+  cannot mask provider, model, or projection-schema incompatibility.
+  Projection writes remain in restartable, nonresumable inactive generations.
+  Generation creation inspects against the request's projection schema, and
+  active-reader reopening inspects against the verified snapshot checkpoint's
+  schema. Legacy generations remain structurally verifiable, but a caller with
+  a different schema must rebuild rather than treating them as current; no
+  on-disk migration occurs. After preverification, inactive generations are
+  renamed, reopened, and reverified. Advisory
   status is persisted before `active.json`, while that four-field pointer is
   the sole commit record. Its complete temporary file and session-directory
   entry are fsynced before the atomic rename, which is the commit point and
@@ -958,9 +973,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   ranker, retains only the supplied store and lexical retriever, and constructs
   a call-local generic service for every projection or retrieval. Projection
   publishes through an inactive builder only after generic success; retrieval
-  borrows only a completely verified active generation and otherwise returns a
-  fixed literal-fallback reason. No descriptor or provider lifecycle is
-  retained by the composition.
+  forwards a present caller checkpoint's schema to store inspection, borrows
+  only a completely verified compatible active generation, maps a projection-
+  schema mismatch to incompatible, and treats same-schema checkpoint drift as
+  stale. Missing-state inspection keeps the store's legacy default; every
+  unavailable path returns a fixed literal-fallback reason. No descriptor or
+  provider lifecycle is retained by the composition.
   It performs no provider discovery, dynamic module-name loading, environment
   or `sys.path` inspection, settings/storage access, credential work, or
   resource acquisition. Ordinary metadata, import, capability, and
