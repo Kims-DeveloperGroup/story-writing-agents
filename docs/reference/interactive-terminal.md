@@ -44,8 +44,9 @@
 > the active editor open with updated selection/default and one replacing inline
 > completed success result; a second consecutive commit of the same normalized
 > value returns one level. The controller also marks dirty Save labels and
-> unifies explicit Cancel with root Settings Escape. Generic picker/prompt reads,
-> resume pickers, and Save/Cancel confirmations remain one-shot.
+> unifies explicit Cancel with root Settings Escape. Generic picker/prompt reads
+> and resume pickers remain one-shot; dirty Save/Cancel confirmations remain
+> one-shot, while clean Save silently retains the Settings root.
 
 ## Public API
 
@@ -623,8 +624,8 @@ completed result.
 
 Each read of the top-level Settings picker structurally compares the complete
 pending configuration with the opening baseline. Only a difference adds
-`[save required] Pending changes are in memory only and are not saved. Choose
-Save to persist them.` as a `SemanticRole.WARNING`/`ViewState.IDLE` notice. The
+`[save required] Choose Save to persist pending changes` as a
+`SemanticRole.WARNING`/`ViewState.IDLE` notice. The
 notice is absent initially, after a complete revert, and in Agents, Agent
 settings, every value editor, and Save/Cancel confirmations. Capable, narrow,
 `NO_COLOR`, and fallback projections keep the complete text. Fallback may retain
@@ -1030,6 +1031,18 @@ read. A successful read with eligible rows opens this picker live on a capable
 stream or numbered in fallback; an empty or failed read does not open it. A
 caller supplies one semantic prompt and immutable choices whose opaque
 identities are returned on commit but never rendered as picker identities.
+
+`Choice` has an additive package-internal `description_role` field whose
+default is `SemanticRole.DEFAULT`. Existing callers therefore retain their
+output unless they opt into another role. The role applies only to explicit
+description text and reinforces meaning already carried by words such as
+`Pending`; color is never the only state cue, and plain and `NO_COLOR`
+projections retain the same text. The warning suffix and description are
+independent inline spans and keep their own roles through wrapping. Disabled
+styling takes precedence over selected styling, selected over highlighted, and
+those interaction states over suffix or description roles. `Choice` and this
+field remain unlisted internal contracts, with no supported package or root
+export added.
 
 The generic picker remains commit-once. `/settings` alone may consume that
 commit, immediately open a new value-editor read with updated state and an

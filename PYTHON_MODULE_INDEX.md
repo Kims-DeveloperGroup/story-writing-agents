@@ -1121,19 +1121,29 @@ every intermediate arrow. The current runtime graph is acyclic.
   gives every value editor pending, not-saved, and top-level Save guidance. One
   private ordered settings projection supplies root Current/Pending
   descriptions, the nested Agents pending-change count, and changed-only
-  confirmation fields in stable settings and roster order. On every top-level
-  read, structural inequality between the pending configuration and opening
-  baseline adds `(*Required)` to the Save label and retains the existing
-  save-required warning notice; both are absent initially and after a complete
-  revert, while the notice remains absent from nested editors and Save/Cancel
+  confirmation fields in stable settings and roster order. Structurally
+  unchanged root values retain explicit `Current:` descriptions with default
+  semantic roles; changed root values retain explicit `Pending:` descriptions
+  with warning roles. A clean Agents row has no description, while its nonzero
+  pending-change count has a warning role. On every top-level read, structural
+  inequality between the pending configuration and opening baseline adds
+  `(*Required)` to the Save label and retains the existing warning-styled
+  save-required notice; both are absent initially and after a complete revert,
+  while the notice remains absent from nested editors and Save/Cancel
   confirmations. The shared projection names both providers' model/effort rows,
   so root visibility and changed-only confirmations identify pending changes
   without changing the active backend or runtime snapshot. Editors contain no
-  repeated Current/Pending context panel. Explicit Save uses one selectable YES/NO
-  confirmation whose preceding context contains only changed Current/Pending
-  properties in stable settings and roster order; each changed value has an
-  explicit text cue and warning role, and an unchanged candidate contains only
-  an explicit no-changes notice without empty sections. Explicit Cancel and
+  repeated Current/Pending context panel. Structurally clean Save is a silent
+  no-op that performs no confirmation, authentication, persistence, panel or
+  event output, or Settings exit, and loops at the root with Save highlighted.
+  Dirty Save uses one selectable YES/NO confirmation whose preceding context
+  contains only changed Current/Pending properties in stable settings and
+  roster order; Current fields use default styling and Pending fields use
+  warning styling, with the explicit changed text cues preserved. After any
+  authentication/default rebase, the controller rechecks structural dirtiness
+  at the persistence boundary and loops silently when clean. Exactly one saved
+  event follows only a successful dirty persistence; failed, cancelled, or
+  rejected saves emit none. Explicit Cancel and
   root Settings Escape share one action: an unchanged candidate exits
   immediately, while a structurally changed candidate uses the same selectable
   confirmation context. Any whole-flow cancellation is silent for a clean

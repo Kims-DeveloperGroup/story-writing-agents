@@ -3387,7 +3387,7 @@ class ControllerSettingsTests(ControllerTestCase):
             terminal_module.Field(
                 current_values[index][0],
                 f"{current_values[index][1]} (Changed)",
-                role=terminal_module.SemanticRole.WARNING,
+                role=terminal_module.SemanticRole.DEFAULT,
             )
             for index in changed_indices
         )
@@ -3786,6 +3786,9 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(
             workspace,
             "/settings",
+            "1",
+            "2",
+            "/cancel",
             "5",
             "1",
             "/quit",
@@ -3818,6 +3821,9 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(
             second_workspace,
             "/settings",
+            "1",
+            "2",
+            "/cancel",
             "5",
             "1",
             "6",
@@ -3885,7 +3891,7 @@ class ControllerSettingsTests(ControllerTestCase):
             workspace
         ).pending.system_defaults.language
         changed = "JA" if baseline != "JA" else "EN"
-        controller, _backend, _callbacks = self.make_controller(workspace)
+        controller, _backend, callbacks = self.make_controller(workspace)
 
         def commit(value: str) -> terminal_module.ControlOutcome:
             return terminal_module.ControlOutcome(
@@ -3896,20 +3902,27 @@ class ControllerSettingsTests(ControllerTestCase):
         cancel = terminal_module.ControlOutcome(
             terminal_module.ControlOutcomeKind.CANCEL
         )
-        with mock.patch.object(
-            terminal_module.InteractivePickerInput,
-            "read_picker",
-            autospec=True,
-            side_effect=(
-                commit("language"),
-                commit(changed),
-                cancel,
-                commit("language"),
-                commit(baseline),
-                cancel,
-                cancel,
-            ),
-        ) as picker:
+        with (
+            mock.patch.object(
+                terminal_module.InteractivePickerInput,
+                "read_picker",
+                autospec=True,
+                side_effect=(
+                    commit("language"),
+                    commit(changed),
+                    cancel,
+                    commit("language"),
+                    commit(baseline),
+                    cancel,
+                    commit("save"),
+                    cancel,
+                ),
+            ) as picker,
+            mock.patch.object(
+                controller_core_module,
+                "save_settings_state",
+            ) as save,
+        ):
             controller._run_settings()
 
         pending_notice = self.expected_pending_save_notice()
@@ -3920,7 +3933,7 @@ class ControllerSettingsTests(ControllerTestCase):
         ]
         self.assertEqual(
             tuple(call.kwargs.get("notice") for call in top_level_calls),
-            (None, pending_notice, None),
+            (None, pending_notice, None, None),
         )
         self.assertEqual(
             tuple(
@@ -3952,6 +3965,28 @@ class ControllerSettingsTests(ControllerTestCase):
                     None,
                     None,
                 ),
+                (
+                    f"Current: {baseline}",
+                    "Current: default_kim_eun_hee",
+                    "Current: 1",
+                    None,
+                    None,
+                    None,
+                ),
+            ),
+        )
+        default = terminal_module.SemanticRole.DEFAULT
+        warning = terminal_module.SemanticRole.WARNING
+        self.assertEqual(
+            tuple(
+                tuple(choice.description_role for choice in call.args[2])
+                for call in top_level_calls
+            ),
+            (
+                (default, default, default, default, default, default),
+                (warning, default, default, default, default, default),
+                (default, default, default, default, default, default),
+                (default, default, default, default, default, default),
             ),
         )
         self.assertEqual(
@@ -3963,7 +3998,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 ).warning_suffix
                 for call in top_level_calls
             ),
-            (None, "(*Required)", None),
+            (None, "(*Required)", None, None),
         )
         self.assertEqual(
             sum(
@@ -3980,6 +4015,9 @@ class ControllerSettingsTests(ControllerTestCase):
             )
         )
         self.assertEqual(_tree_snapshot(workspace.root), before)
+        save.assert_not_called()
+        self.assertNotIn("[saved] Settings saved.", "".join(callbacks.records))
+        self.assertEqual(top_level_calls[-1].kwargs["highlighted_id"], "save")
 
     def test_agents_root_description_counts_every_ordered_pending_agent_value(
         self,
@@ -4029,7 +4067,7 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
         )
 
-        def agents_description(state) -> str | None:
+        def agents_description(state) -> tuple[str | None, object]:
             controller, _backend, _callbacks = self.make_controller(workspace)
             interrupt = terminal_module.ControlOutcome(
                 terminal_module.ControlOutcomeKind.INTERRUPT
@@ -4054,21 +4092,31 @@ class ControllerSettingsTests(ControllerTestCase):
                 controller._run_settings()
             save.assert_not_called()
             choices = picker.call_args.args[2]
-            return next(
-                choice.description
+            choice = next(
+                choice
                 for choice in choices
                 if choice.identity == "providers"
             )
+            return choice.description, choice.description_role
 
-        self.assertIsNone(agents_description(baseline))
+        self.assertEqual(
+            agents_description(baseline),
+            (None, terminal_module.SemanticRole.DEFAULT),
+        )
         for label, edit in edits:
             with self.subTest(label=label):
-                self.assertEqual(agents_description(edit(baseline)), "1 pending change")
+                self.assertEqual(
+                    agents_description(edit(baseline)),
+                    ("1 pending change", terminal_module.SemanticRole.WARNING),
+                )
 
         plural = baseline
         for _label, edit in edits:
             plural = edit(plural)
-        self.assertEqual(agents_description(plural), "5 pending changes")
+        self.assertEqual(
+            agents_description(plural),
+            ("5 pending changes", terminal_module.SemanticRole.WARNING),
+        )
 
         panel = InteractiveController._settings_panel(edits[0][1](baseline))
         current, pending, _activation = panel.items
@@ -4182,6 +4230,12 @@ class ControllerSettingsTests(ControllerTestCase):
                 None,
                 None,
             ),
+        )
+        self.assertTrue(
+            all(
+                choice.description_role is terminal_module.SemanticRole.DEFAULT
+                for choice in settings_call.args[2]
+            )
         )
         self.assertTrue(
             all(choice.warning_suffix is None for choice in settings_call.args[2])
@@ -5645,18 +5699,38 @@ class ControllerSettingsTests(ControllerTestCase):
     ) -> None:
         cases = (
             (
-                "save-no-then-clean-cancel",
-                ("/settings", "5", "2", "6", "/quit"),
-                1,
+                "save-no-then-dirty-cancel",
+                (
+                    "/settings",
+                    "1",
+                    "2",
+                    "/cancel",
+                    "5",
+                    "2",
+                    "6",
+                    "1",
+                    "/quit",
+                ),
+                2,
                 False,
-                0,
+                1,
             ),
             (
-                "save-fallback-cancel-then-clean-cancel",
-                ("/settings", "5", "/cancel", "6", "/quit"),
-                1,
+                "save-fallback-cancel-then-dirty-cancel",
+                (
+                    "/settings",
+                    "1",
+                    "2",
+                    "/cancel",
+                    "5",
+                    "/cancel",
+                    "6",
+                    "1",
+                    "/quit",
+                ),
+                2,
                 False,
-                0,
+                1,
             ),
             ("clean-explicit-cancel", ("/settings", "6", "/quit"), 0, False, 0),
             ("clean-root-escape", ("/settings", "/cancel", "/quit"), 0, False, 0),
@@ -5754,17 +5828,33 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
             (
                 "save-interrupt",
-                ("/settings", "5", KeyboardInterrupt(), "/quit"),
+                (
+                    "/settings",
+                    "1",
+                    "2",
+                    "/cancel",
+                    "5",
+                    KeyboardInterrupt(),
+                    "/quit",
+                ),
                 1,
                 False,
-                0,
+                1,
             ),
             (
                 "save-eof",
-                ("/settings", "5", EOFError(), "/quit"),
+                (
+                    "/settings",
+                    "1",
+                    "2",
+                    "/cancel",
+                    "5",
+                    EOFError(),
+                    "/quit",
+                ),
                 1,
                 False,
-                0,
+                1,
             ),
         )
         for label, reads, confirmation_count, returns_to_cancel, discard_count in cases:
@@ -5792,6 +5882,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     ),
                     discard_count,
                 )
+                self.assertNotIn("[saved] Settings saved.", rendered)
                 confirmation_prompts = [
                     prompt
                     for prompt in callbacks.prompts
@@ -5820,6 +5911,139 @@ class ControllerSettingsTests(ControllerTestCase):
                     self.assertEqual(
                         settings_calls[-1].kwargs["highlighted_id"],
                         "cancel",
+                    )
+
+    def test_clean_save_is_silent_and_reopens_with_save_highlighted(self) -> None:
+        workspace = self.make_workspace()
+        controller, _backend, callbacks = self.make_controller(workspace)
+        commit_save = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.COMMIT,
+            text="save",
+        )
+        cancel = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.CANCEL
+        )
+
+        with (
+            mock.patch.object(
+                terminal_module.InteractivePickerInput,
+                "read_picker",
+                autospec=True,
+                side_effect=(commit_save, cancel),
+            ) as picker,
+            mock.patch.object(
+                InteractiveController,
+                "_settings_save_confirmation",
+                autospec=True,
+            ) as confirmation,
+            mock.patch.object(
+                InteractiveController,
+                "_authenticate_settings_routes",
+                autospec=True,
+            ) as authenticate,
+            mock.patch.object(
+                controller_core_module,
+                "save_settings_state",
+            ) as save,
+            mock.patch.object(
+                InteractiveController,
+                "_settings_panel",
+            ) as panel,
+            mock.patch.object(
+                type(controller._semantic_output),
+                "write_component",
+                autospec=True,
+            ) as output,
+        ):
+            controller._run_settings()
+
+        confirmation.assert_not_called()
+        authenticate.assert_not_called()
+        save.assert_not_called()
+        panel.assert_not_called()
+        output.assert_not_called()
+        self.assertEqual(callbacks.records, [])
+        self.assertEqual(len(picker.call_args_list), 2)
+        self.assertEqual(
+            picker.call_args_list[1].kwargs["highlighted_id"],
+            "save",
+        )
+
+    def test_save_auth_exits_and_clean_rebase_never_persist_or_emit_saved(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        baseline = settings_module.load_settings_state(workspace)
+        changed = settings_module.update_language(baseline, "EN")
+        commit_save = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.COMMIT,
+            text="save",
+        )
+        interrupt = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.INTERRUPT
+        )
+        cancel = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.CANCEL
+        )
+        cases = (
+            ("auth-return", changed, "return", (commit_save, interrupt)),
+            ("auth-cancel", changed, "cancel", (commit_save,)),
+            ("clean-rebase", baseline, "ready", (commit_save, cancel)),
+        )
+
+        for label, authenticated_state, auth_outcome, picker_outcomes in cases:
+            with self.subTest(label=label):
+                controller, _backend, callbacks = self.make_controller(
+                    workspace,
+                    auth_coordinator=mock.Mock(),
+                )
+                with (
+                    mock.patch.object(
+                        controller_core_module,
+                        "load_settings_state",
+                        return_value=changed,
+                    ),
+                    mock.patch.object(
+                        terminal_module.InteractivePickerInput,
+                        "read_picker",
+                        autospec=True,
+                        side_effect=picker_outcomes,
+                    ) as picker,
+                    mock.patch.object(
+                        InteractiveController,
+                        "_settings_save_confirmation",
+                        autospec=True,
+                        return_value="confirm",
+                    ) as confirmation,
+                    mock.patch.object(
+                        InteractiveController,
+                        "_authenticate_settings_routes",
+                        autospec=True,
+                        return_value=(authenticated_state, auth_outcome),
+                    ) as authenticate,
+                    mock.patch.object(
+                        controller_core_module,
+                        "save_settings_state",
+                    ) as save,
+                ):
+                    controller._run_settings()
+
+                confirmation.assert_called_once()
+                authenticate.assert_called_once()
+                save.assert_not_called()
+                self.assertNotIn(
+                    "[saved] Settings saved.",
+                    "".join(callbacks.records),
+                )
+                if label == "clean-rebase":
+                    self.assertEqual(len(picker.call_args_list), 2)
+                    self.assertEqual(
+                        picker.call_args_list[1].kwargs["highlighted_id"],
+                        "save",
+                    )
+                    self.assertNotIn(
+                        "[cancelled] Pending changes discarded.",
+                        "".join(callbacks.records),
                     )
 
     def test_settings_edit_save_isolated_discovered_candidate_and_literal_cancel(
@@ -5900,6 +6124,10 @@ class ControllerSettingsTests(ControllerTestCase):
 
         def save_after_isolation(saved_workspace, state):
             self.assertEqual(_tree_snapshot(workspace.root), before)
+            self.assertNotIn(
+                "[saved] Settings saved.",
+                "".join(callbacks.records),
+            )
             return real_save(saved_workspace, state)
 
         with (
@@ -6144,6 +6372,9 @@ class ControllerSettingsTests(ControllerTestCase):
                 controller, _backend, callbacks = self.make_controller(
                     workspace,
                     "/settings",
+                    "1",
+                    "2",
+                    "/cancel",
                     "5",
                     "1",
                     "6",
@@ -6165,11 +6396,12 @@ class ControllerSettingsTests(ControllerTestCase):
                     1,
                 )
                 self.assertNotIn("settings validation failed", rendered)
+                self.assertNotIn("[saved] Settings saved.", rendered)
                 self.assertEqual(
                     rendered.count(
                         "[cancelled] Pending changes discarded.\n"
                     ),
-                    0,
+                    1,
                 )
 
 

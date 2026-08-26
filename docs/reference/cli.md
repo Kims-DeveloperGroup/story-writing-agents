@@ -426,6 +426,13 @@ nested canonical-agent picker, then a provider-neutral Provider/Model/Effort
 picker. Current/Pending confirmations retain provider-qualified rows for both
 providers so inactive values remain identifiable.
 
+At the Settings root, each one-level value shows one effective description:
+neutral `Current` when unchanged or warning-semantic `Pending` when changed.
+Agents similarly warning-marks its explicit nonzero nested pending-change
+count. Dirty confirmation context keeps Current neutral and Pending warning.
+These roles reinforce the visible words and counts; plain and `NO_COLOR` text
+remain unchanged, so color is never required to identify pending state.
+
 Every retained Language, Persona, Maximum debate rounds, Provider, Model,
 Custom model, and Effort editor always shows `Entered changes remain pending in
 memory and are not saved; choose Save in Settings to persist them.` The text is
@@ -433,8 +440,8 @@ present on initial entry, after a valid Enter reopens the editor, and during
 validation. The established entered-value success result remains unchanged and
 is still the only inline completed result.
 
-The top-level Settings picker shows `[save required] Pending changes are in
-memory only and are not saved. Choose Save to persist them.` if and only if the
+The top-level Settings picker shows `[save required] Choose Save to persist
+pending changes` if and only if the
 complete pending configuration differs structurally from its opening baseline.
 This is recomputed on every top-level read, so the warning is absent initially
 and after a complete revert. It is also absent from Agents, Agent settings,
@@ -476,15 +483,18 @@ the comparison. Invalid input, authentication failure, Custom model navigation,
 and editor re-entry reset it. This is consecutive semantic commit policy in the
 `/settings` controller, not raw-key timing or generic Picker/Prompt behavior.
 
-Save always opens its transient yes/no confirmation. Explicit Cancel and root
-Settings Escape share one action: clean settings exit immediately without a
-confirmation, while dirty settings open the existing Cancel confirmation. Each
-confirmation has changed-only Current/Pending context: only differing fields
-appear in both sections, each with a `(Changed)` cue, while no differences in
-Save confirmation show `No pending settings changes.` YES commits the requested
-action; NO or confirmation Escape returns to the root Settings picker, and
-invalid fallback input retries. Ctrl-C or EOF still cancels the whole workflow
-without writing. The
+Clean Save is a silent no-op: it keeps the root Settings picker open with Save
+highlighted and performs no confirmation, authentication, persistence, output,
+exit, or saved event. Dirty Save alone opens its transient yes/no confirmation.
+Explicit Cancel and root Settings Escape share one action: clean settings exit
+immediately without a confirmation, while dirty settings open the existing
+Cancel confirmation. Each dirty confirmation has changed-only Current/Pending
+context: only differing fields appear in both sections, each with a `(Changed)`
+cue. The existing `No pending settings changes.` Save panel remains a defensive
+internal projection and is not the normal clean root Save experience. YES
+commits the requested dirty action; NO or confirmation Escape returns to the
+root Settings picker, and invalid fallback input retries. Ctrl-C or EOF still
+cancels the whole workflow without writing. The
 submitted `/settings` line has already been cleared with the capable main frame;
 its history entry remains. Ordinary-line fallback leaves its printed input
 visible, with the same history semantics. `/cancel` is literal model text in the
@@ -494,11 +504,14 @@ Choosing a provider starts authentication before changing that agent's pending
 route. A failed or cancelled authentication leaves the route candidate
 unchanged. Successful authentication is subordinate and returns to Provider;
 the route and any missing workspace default remain pending in memory. Escape or
-cancellation before confirmed Save leaves configuration bytes unchanged. No
-configuration value is persisted before Save is confirmed.
+cancellation before confirmed dirty Save leaves configuration bytes unchanged.
+No configuration value is persisted before dirty Save is confirmed.
 
-After Save confirmation, the controller freshly gates each distinct effective
-provider once before entering the configuration transaction. A stale,
+After dirty Save confirmation, the controller rechecks that pending still
+differs from the opening baseline, then freshly gates each distinct effective
+provider once before entering the configuration transaction. A clean final
+recheck returns to the Settings root without authentication, persistence,
+output, exit, or a saved event. A stale,
 unavailable, unauthenticated, indeterminate, failed, cancelled, or interrupted
 status prevents the settings file transaction. Save-time authentication may
 durably establish a missing workspace default before that transaction; the
@@ -509,17 +522,21 @@ change since opening.
 Only changed documents are canonically replaced, in system-defaults then
 agent-configs order. A write failure attempts reverse-order restoration of
 every attempted target, including the failing target; rollback uncertainty is
-reported separately. Success returns to the main prompt and applies to the next
-shell/backend construction only. It does not refresh the active backend or
+reported separately. Only successful dirty persistence emits the saved event
+and returns to the main prompt. Cancellation, interruption, authentication or
+validation gating, conflicts, write failure, and rollback outcomes emit no
+saved event. A successful save applies to the next shell/backend construction
+only. It does not refresh the active backend or
 runtime, invoke a story-model turn, alter session/explicit overrides, or add
 credentials, persisted catalog data, or automatic save.
 
 Entering or validating a value remains in-memory only; no configuration value
-is persisted before confirmed Save. This does not change global `/auth` default
+is persisted before confirmed dirty Save. This does not change global `/auth` default
 persistence or the separately documented post-confirmation Save-time default
 persistence. It adds no terminal primitive, public API, or global picker rule;
-the #270 one-level Escape and one-shot Save, Cancel, and resume contracts remain
-unchanged.
+the #270 one-level Escape, submitted-input retention, Cancel behavior, and
+closing session-resume picker remain unchanged. Clean-Save root retention is a
+`/settings` controller policy, not a global navigation or picker rule.
 
 On capable real-CLI streams, orientation/current context, `/status`, `/inspect`,
 central errors/recovery, and accepted management, advisory, retrieval, and
