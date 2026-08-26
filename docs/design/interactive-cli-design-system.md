@@ -1169,7 +1169,7 @@ one control is focused:
   backend/runtime generation becomes active, but the current conversation-
   storage bundle remains unchanged. A non-storage Apply reports
   `Settings saved and applied to this running shell now.` A storage-only Apply
-  reports `Settings saved. Desired conversation storage is sqlite. Changes apply to the next shell.`
+  reports `Settings saved. Desired conversation storage is sqlite and applies to the next shell.`
   when selecting SQLite (`filesystem` appears on the reverse change).
   A mixed Apply reports both notices. Changed profiles remain `pending`
   until their first complete logical provider call succeeds.
