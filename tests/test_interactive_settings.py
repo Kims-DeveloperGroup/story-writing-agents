@@ -754,6 +754,72 @@ class SettingsPersistenceTests(SettingsTestCase):
                 },
             )
 
+    def test_provider_and_conversation_storage_pending_edits_save_independently(
+        self,
+    ) -> None:
+        state = self.load()
+        original = state.pending
+        provider_pending = update_agent_backend(
+            state,
+            PLOT_ARCHITECT,
+            "antigravity",
+        )
+        combined = update_conversation_storage_backend(
+            provider_pending,
+            "sqlite",
+        )
+
+        self.assertIs(provider_pending.baseline, state.baseline)
+        self.assertIs(combined.baseline, state.baseline)
+        self.assertEqual(state.pending, original)
+        self.assertEqual(
+            provider_pending.pending.system_defaults,
+            original.system_defaults,
+        )
+        self.assertEqual(
+            combined.pending.agent_configs[PLOT_ARCHITECT].backend,
+            "antigravity",
+        )
+        self.assertEqual(
+            combined.pending.system_defaults.conversation_storage_backend,
+            "sqlite",
+        )
+
+        expected_agents = dict(original.agent_configs)
+        expected_agents[PLOT_ARCHITECT] = replace(
+            expected_agents[PLOT_ARCHITECT],
+            backend="antigravity",
+        )
+        expected = ConfigurationSnapshot(
+            replace(
+                original.system_defaults,
+                conversation_storage_backend="sqlite",
+            ),
+            expected_agents,
+        )
+        self.assertEqual(combined.pending, expected)
+        with mock.patch.object(
+            self.workspace,
+            "write_text",
+            wraps=self.workspace.write_text,
+        ) as write:
+            save_settings_state(self.workspace, combined)
+
+        self.assertEqual(
+            [call.args[0] for call in write.call_args_list],
+            [_SYSTEM_PATH, _AGENT_PATH],
+        )
+        loaded = self.load().pending
+        self.assertEqual(loaded, expected)
+        self.assertEqual(
+            loaded.system_defaults.conversation_storage_backend,
+            "sqlite",
+        )
+        self.assertEqual(
+            loaded.agent_configs[PLOT_ARCHITECT].backend,
+            "antigravity",
+        )
+
     def test_antigravity_system_and_agent_values_round_trip_canonically(
         self,
     ) -> None:

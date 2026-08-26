@@ -24,6 +24,7 @@ from story_writing_agents import (
     ConversationEvent,
     ConversationEventKind,
     ConversationEventStore,
+    ConversationMemoryService,
     ConversationSearchQuery,
     ConversationSearchScope,
     ReferenceConversationSearch,
@@ -79,6 +80,7 @@ from story_writing_agents.conversation_storage.sqlite_search_index import (
 from tests.conversation_event_store_contract import (
     ConversationEventStoreContractMixin,
 )
+from tests.conversation_catalog_contract import ConversationCatalogContractMixin
 from tests.conversation_search_contract import ConversationSearchContractMixin
 from tests.sqlite_conversation_storage_fixture import (
     database_path,
@@ -89,7 +91,6 @@ from tests.sqlite_conversation_storage_fixture import (
     raw_connection,
     storage_snapshot,
 )
-from tests.test_conversation_catalog import _ConversationCatalogContractMixin
 
 
 def _archive_conversations(archive):  # type: ignore[no-untyped-def]
@@ -103,7 +104,7 @@ def _archive_conversations(archive):  # type: ignore[no-untyped-def]
 
 
 class SQLiteConversationCatalogContractTests(
-    _ConversationCatalogContractMixin,
+    ConversationCatalogContractMixin,
     unittest.TestCase,
 ):
     def make_catalog(self) -> ConversationCatalog:
@@ -579,6 +580,10 @@ class SQLiteConversationSearchContractTests(
             os.fspath(self.workspace.root),
             normalization_version=CONVERSATION_LITERAL_NORMALIZATION_VERSION,
         )
+        try:
+            search_index_module._runtime()
+        except SQLiteConversationSearchIndexError:
+            self.skipTest("host SQLite does not provide a usable FTS5 runtime")
         hints = index.candidates(
             source_generation=generation,
             session_id=self.session_id,
@@ -599,6 +604,52 @@ class SQLiteConversationSearchContractTests(
             (self.records["transcript"].conversation_id, 1),
             hints,
         )
+
+
+class SQLiteConversationSearchFallbackContractTests(
+    ConversationSearchContractMixin,
+    unittest.TestCase,
+):
+    def setUp(self) -> None:
+        self.fts_runtime = self.enterContext(
+            mock.patch.object(
+                search_index_module,
+                "_runtime",
+                side_effect=SQLiteConversationSearchIndexError(),
+            )
+        )
+        super().setUp()
+        self.assertGreater(self.fts_runtime.call_count, 0)
+        self.assertFalse(
+            self.workspace.path(SQLITE_CONVERSATION_SEARCH_INDEX_PATH).exists()
+        )
+
+    def make_adapters(
+        self,
+    ) -> tuple[SQLiteConversationCatalog, SQLiteConversationEventStore]:
+        self.workspace = initialized_workspace(self)
+        provision(self.workspace)
+        self.services = compose_sqlite_conversation_storage(self.workspace)
+        if not isinstance(self.services.catalog, SQLiteConversationCatalog):
+            raise AssertionError("SQLite composition returned the wrong catalog")
+        if not isinstance(
+            self.services.event_store,
+            SQLiteConversationEventStore,
+        ):
+            raise AssertionError("SQLite composition returned the wrong event store")
+        if not isinstance(self.services.search, SQLiteConversationSearch):
+            raise AssertionError("SQLite composition returned the wrong search")
+        return self.services.catalog, self.services.event_store
+
+    def make_search(
+        self,
+        catalog: object,
+        store: object,
+    ) -> SQLiteConversationSearch:
+        del catalog, store
+        if not isinstance(self.services.search, SQLiteConversationSearch):
+            raise AssertionError("SQLite composition returned the wrong search")
+        return self.services.search
 
 
 class SQLiteConversationSearchBehaviorTests(unittest.TestCase):
@@ -1983,9 +2034,10 @@ assert all(name not in package.__all__ for name in literal_owner.__all__)
         fresh = compose_sqlite_conversation_storage(workspace)
         runtime = StoryRuntime(
             workspace,
-            None,
-            conversation_event_store=fresh.event_store,
+            conversation_storage_services=fresh,
         )
+        self.assertIsNone(runtime.backend)
+        self.assertIs(runtime.conversation_storage_services, fresh)
         self.assertIs(runtime.conversation_event_store, fresh.event_store)
         self.assertEqual(
             fresh.event_store.read("session_a", metadata.conversation_id),
@@ -1997,6 +2049,26 @@ assert all(name not in package.__all__ for name in literal_owner.__all__)
             ).events,
             (user, reply),
         )
+        memory = ConversationMemoryService(
+            ConversationSearchScope("session_a"),
+            conversation_storage_services=fresh,
+        )
+        self.assertIs(memory._conversation_storage_services, fresh)
+        self.assertIs(memory._catalog, fresh.catalog)
+        self.assertIs(memory._event_store, fresh.event_store)
+        self.assertIs(memory._search, fresh.search)
+        search = memory.search(ConversationSearchQuery("persistent subject"))
+        self.assertEqual(
+            tuple(hit.citation.conversation_id for hit in search.hits),
+            (metadata.conversation_id,),
+        )
+
+        legacy = StoryRuntime(
+            workspace,
+            conversation_event_store=fresh.event_store,
+        )
+        self.assertIsNone(legacy.conversation_storage_services)
+        self.assertIs(legacy.conversation_event_store, fresh.event_store)
 
 
 class SQLitePreflightAndProvisionTests(unittest.TestCase):
