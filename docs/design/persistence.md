@@ -9,6 +9,11 @@
 > available through direct Python modules and as an explicitly selected
 > next-shell bundle. Provider-free storage commands can select desired storage
 > or migrate and verify two already-ready stores in one workspace.
+> Optional conversation RAG has a separate disposable generation store, an
+> injectable runtime authorization/projection path, persisted default-disabled
+> local provider/automatic values, and noninteractive lifecycle/search
+> commands. Interactive `/settings` persists next-shell selection, while the
+> controller retains any armed one-turn query only in process memory.
 > `StoryRuntime` creates and finalizes reference evidence for inline referenced
 > operations; Python callers can inspect it by operation ID.
 
@@ -33,6 +38,9 @@ provisioning nor migration alone selects runtime authority.
 | Canonical conversation archive value and bytes | `conversation_storage.archive`; caller owns any stored or transmitted bytes |
 | Same-workspace conversation migration and checkpoints | `conversation_storage.migration`; canonical archive adapters remain the data boundary |
 | Desired storage, readiness, and startup activation | Configuration owns desired value; `conversation_storage.selection` owns preparation/parity and next-shell marker CAS |
+| Disposable conversation RAG generations | `conversation_rag_store`; derived per-session state only, never conversation authority; the local composition or an injected runtime service schedules and verifies use through an explicit state port |
+| Conversation RAG opt-in defaults and CLI reports | Configuration owns nullable provider/exact automatic values; `conversation_rag_cli` owns complete noninteractive CAS workflows and ephemeral schema-v1 reports; interactive Settings reuses its guarded configuration transaction |
+| Pending one-turn RAG query | Controller memory only; exact session/conversation scope, never configuration or transcript persistence |
 | Bounded runtime diagnostics | Internal `debug_log` writer |
 | Retrieval actions, observations, progress, sources | Process/terminal only |
 | Current conversation and agent focus | Controller memory only |
@@ -83,6 +91,105 @@ mechanism. The separate migration coordinator described below composes the
 archive adapters for one same-workspace copy/parity workflow. See the exact
 [archive reference](../reference/conversation-archives.md) and
 [filesystem boundary](../operations/filesystem-safety.md#conversation-archive-filesystem-safety).
+
+<a id="optional-conversation-rag-derived-persistence"></a>
+
+## Optional conversation RAG derived persistence
+
+`ConversationRagGenerationStore` solely owns the derived subtree
+`agent_states/orchestrator_state/conversation_rag/`. Construction retains the
+supplied identity-bound `Workspace` without I/O. Each stateful operation opens
+and verifies the established root and fixed hierarchy by descriptor, then
+acquires process-local and bounded POSIX advisory locking for the addressed
+session. This is independent of filesystem and SQLite conversation authority;
+neither backend imports, selects, migrates, or validates it.
+
+```text
+conversation_rag/
+├── .lock
+└── sessions/
+    └── SESSION_ID/
+        ├── .lock
+        ├── active.json
+        ├── status.json
+        └── generations/
+            ├── build-RANDOM/       # inactive, nonresumable work
+            └── gen-SHA256/
+                ├── generation.json
+                ├── generic-manifest.json
+                ├── source-map.jsonl
+                └── vectors.jsonl
+```
+
+Owned directories/files require modes `0700`/`0600`. Completed generations
+contain the generic checkpoint manifest, stable story source map, finite local
+vectors, provider/model/schema/chunking identity, content digests, and bounded
+counts. `story-conversation-rag-store-v1` versions each persisted envelope;
+the caller-owned projection schema is recorded separately as
+`projection_schema_id` and as the checkpoint's `schema_id`. The source map
+repeats plaintext conversation fragments; derived and disposable does not mean
+redacted or encrypted. The pointers, public snapshots, errors, and diagnostics
+contain no query or source text.
+
+Reads require canonical strict-UTF-8 JSON/JSONL and exact fields, ordering,
+modes, identities, sizes, digests, counts, ranges/overlap, reconstructed source,
+checkpoint identity, and finite canonical float values. Bounded parsing maps
+duplicate fields, deep recursion, non-finite constants, numeric overflow,
+malformed bytes, and noncanonical re-encoding to fixed content-free corruption.
+Inspection validates its exact nonblank strict-UTF-8 expected projection schema
+before I/O. The default expects the legacy store-v1 projection schema. For a
+fully verified generation, provider/model/projection mismatch yields
+`incompatible` status while retaining a `present` checkpoint and safe
+generation/count fields. Store-envelope or otherwise unverifiable
+incompatibility exposes no trusted checkpoint. Status is advisory: `ready`,
+`stale`, or `provider_failed` can qualify a compatible identified checkpoint
+but cannot mask incompatibility or commit another generation.
+
+Projection writes one inactive `build-*` directory. On success it synchronizes
+and verifies the payload, renames it to a content-derived `gen-*`, synchronizes
+the generations directory, reopens/verifies it, and prepares advisory status.
+`active.json` is the sole commit record and is replaced last. Its complete
+temporary pointer and session directory are synchronized before the atomic
+rename, which is the final callable publication operation. There is no forced
+post-rename synchronization: an immediate crash may retain either the old or
+new valid pointer. A reported precommit failure leaves the prior pointer
+byte-for-byte unchanged.
+
+An interrupted build is an orphan, not resumable progress. `inspect()` reports
+validated orphan counts without cleanup. A later generation mutation removes
+validated partial builds and nonactive completed generations before new work.
+Rebuild restarts deterministically; incremental projection may use a compatible
+verified active generation as its base. Local retrieval converts missing,
+stale, corrupt, incompatible, and provider-failed state to fixed literal
+fallback rather than trusting partial state.
+
+Generations built with the store-v1 value as their projection schema remain
+legacy-ready. A caller expecting another projection schema receives a verified
+incompatible state; no persisted generation is relabeled or migrated. Explicit
+rebuild writes the request's projection schema into a new inactive generation
+and publishes it only after complete verification. A failed precommit rebuild
+preserves the prior active pointer and generation.
+
+Confirmed purge prevalidates one session namespace, removes its active pointer
+first, then removes only advisory status and derived generation contents. It
+does not remove the session locks/directories or touch authoritative
+conversations, storage activation, configuration, SQLite, manuscripts,
+artifacts, provider state, or another RAG session. Derived state remains
+rebuildable from separately authorized authoritative sources through the
+programmatic `conversation_rag_runtime` orchestration or confirmed CLI rebuild.
+
+`story rag status` is observational across configuration, the persisted active
+conversation backend, and this derived subtree. It uses a bounded optimistic
+double read and creates no storage coordinator lock, RAG directory, or rewritten
+configuration. Confirmed rebuild holds the authoritative mutation lease across
+target construction, derived publication, and final target revalidation. Search
+may activate an already-ready desired authoritative backend but does not write a
+generation; purge consults no authoritative backend. Enable/disable modify only
+the canonical system-default configuration through exact-byte compare-and-set.
+See the
+[direct API](../reference/package-api.md#optional-conversation-rag-boundary),
+[filesystem guarantees](../operations/filesystem-safety.md#conversation-rag-generation-store-safety),
+and [current commands, runtime, and interactive workflow](../guides/conversation-rag.md).
 
 <a id="optional-sqlite-conversation-persistence"></a>
 
@@ -204,8 +311,9 @@ and save SQLite as desired storage, but neither activates or migrates it. The
 explicit migration coordinator can copy canonical conversations between an
 already-ready database and the filesystem, but it does not install, provision,
 or activate SQLite. Shell startup never installs or provisions. There is no
-live switch, dual write, source deletion, RAG, MySQL, or FTS-dependent search
-behavior in this adapter. See the
+live switch, dual write, source deletion, RAG coupling, MySQL, or FTS-dependent
+search behavior in this adapter. The separate disposable RAG store is neither a
+SQLite table nor a conversation backend. See the
 [direct API](../reference/package-api.md#optional-sqlite-conversation-storage),
 [filesystem boundary](../operations/filesystem-safety.md#sqlite-conversation-storage-safety),
 and [recovery table](../operations/recovery-and-limitations.md#sqlite-conversation-storage-recovery).
@@ -229,7 +337,11 @@ settings-owned fresh persona-catalog guard. Storage choice is independent from
 the Agents editor and provider routing. A mixed Settings Apply retains provider
 authentication before selection begins. A Message-details-only Apply never
 enters selection: it prepares, verifies, and commits the presentation preference
-without provider, storage, backend/runtime, route, or thread activation work.
+without provider, storage, backend/runtime, route, or thread activation work. A
+Conversation-RAG-only Apply also bypasses selection and authentication: it
+prepares, verifies, and commits only the startup-fixed system configuration,
+with no backend/runtime, route/thread, composition, optional-package probe,
+provider catalog, subprocess, socket, or network work.
 
 Selection first briefly proves the workspace coordinator, then releases it
 during any consent interaction and host installer. For SQLite it functionally

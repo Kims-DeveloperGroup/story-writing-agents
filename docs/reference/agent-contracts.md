@@ -148,20 +148,24 @@ ConversationReply(session_id: str, conversation_id: str,
                   turn_id: str, content: str)
 ConversationRetrievalRequest(*, session_id: str, conversation_id: str,
     turn_id: str, agent_id: str, content: str, context: ConversationContextWindow,
-    story_session_context: StorySessionContext | None = None)
+    story_session_context: StorySessionContext | None = None,
+    rag_context: ConversationRagContext | None = None)
 ConversationRetrievalReply(*, session_id: str, conversation_id: str,
     turn_id: str, content: str, sources: tuple[ConversationRetrievalSource, ...])
 ```
 
-The one-step pair is frozen and slotted; only the request's trailing continuity
+The one-step pair is frozen and slotted; its request's trailing continuity
 envelope defaults to `None`. IDs are safe, agents are canonical, and content is
 nonempty exact strict UTF-8. `context` must be a
 bounded, increasing window of complete turns from the same session and
 conversation and exclude the current turn. Retrieval values are keyword-only;
-their reply adds ordered validated sources without changing the one-step pair.
-When present, the envelope must match the request session, agent, and any
-focused conversation identity. Backend payloads use it instead of a duplicate
-legacy `context`; omission retains compatibility for direct package callers.
+their two trailing context fields default to `None`, and their reply adds
+ordered validated sources without changing the one-step pair.
+When present, the story-session envelope must match the request session, agent,
+and any focused conversation identity. Backend payloads use it instead of a
+duplicate legacy `context`; omitting it retains compatibility for direct
+package callers. An omitted `rag_context` means there was no attempted RAG
+envelope.
 See [Conversation transcripts](conversation-transcripts.md) for windows and
 [Bounded retrieval](conversation-retrieval.md) for actions and persistence.
 

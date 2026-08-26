@@ -78,15 +78,19 @@ request to clear a persisted value. There is no Codex reasoning CLI flag or
 constructor argument. No provider model/effort is a session runtime override or
 directive. The interactive `/settings` Agents editor is the installed
 workflow for changing an agent's persisted active-provider model or effort; it
-preserves inactive-provider values. An Apply Changes candidate with any change
-beyond Message details uses the full path: it validates and authenticates the
-candidate, persists it, and activates the prepared backend/runtime generation
-so non-storage settings take effect in that running shell. A
+preserves inactive-provider values. A candidate with live-capable execution
+changes uses the full path: it validates and authenticates the candidate,
+persists it, and activates the prepared backend/runtime generation in that
+running shell. A
 Message-details-only Apply Changes instead prepares, verifies, and commits the
 configuration, then updates the active presentation flag; it bypasses provider
 authentication, conversation-storage, backend/runtime activation, route, and
-thread work. Desired conversation storage remains a next-shell setting and
-does not replace the current controller/runtime bundle. Any effective value
+thread work. A Conversation-RAG-only Apply prepares, verifies, and commits only
+the system configuration without authentication, storage, backend/runtime,
+route/thread, composition, optional-package probe/install, provider-catalog,
+subprocess, socket, network, or live activation work. Desired conversation
+storage and RAG remain next-shell settings and do not replace the current
+controller/runtime bundles. Any effective value
 whose source is `launch_override` remains masked by the first-precedence row
 and is disabled/read-only in `/settings`.
 
@@ -94,8 +98,8 @@ Direct file editing follows a different lifecycle. There is no file watcher;
 the next `AgentBackend` construction reads, validates, and reconciles the then-
 persisted pair, while already running shells keep their captured configuration
 and route-generation map. Thus `/settings` is the no-restart path for the
-current shell's non-storage runtime settings, not a live storage switch or a
-broadcast update to other backends.
+current shell's live-capable runtime settings, not a live storage or RAG switch
+or a broadcast update to other backends.
 
 Session-wide and per-agent runtime language/persona overrides remain live above
 the configured values, and explicit backend and run arguments retain their

@@ -20,6 +20,14 @@ from .cli_context import (
     save_default_session,
 )
 from .config import ConfigurationSnapshot, ConfigManager
+from .conversation_rag_cli import (
+    ConversationRagCliFailure,
+    ConversationRagCliOperation,
+    ConversationRagCliReport,
+    ConversationRagCliRequest,
+    dispatch_conversation_rag,
+)
+from .conversation_storage.contracts import ConversationStorageCoordinationError
 from .conversation_storage.selection import (
     ConversationStorageSelectionFailure,
     ConversationStorageSelectionReport,
@@ -257,6 +265,32 @@ def build_parser() -> argparse.ArgumentParser:
     use.add_argument("--install-missing", action="store_true")
     use.add_argument("--yes", action="store_true")
     use.add_argument("--workspace", help=_WORKSPACE_HELP)
+
+    rag = subcommands.add_parser(
+        "rag",
+        help="inspect and operate the local conversation RAG index",
+    )
+    rag_actions = rag.add_subparsers(dest="rag_action", required=True)
+    rag_status = rag_actions.add_parser("status")
+    rag_status.add_argument("--workspace", help=_WORKSPACE_HELP)
+    rag_status.add_argument("--session", help=_SESSION_HELP)
+    rag_enable = rag_actions.add_parser("enable")
+    rag_enable.add_argument("--provider", required=True, metavar="PROVIDER")
+    rag_enable.add_argument("--workspace", help=_WORKSPACE_HELP)
+    rag_rebuild = rag_actions.add_parser("rebuild")
+    rag_rebuild.add_argument("--yes", action="store_true")
+    rag_rebuild.add_argument("--workspace", help=_WORKSPACE_HELP)
+    rag_rebuild.add_argument("--session", help=_SESSION_HELP)
+    rag_search = rag_actions.add_parser("search")
+    rag_search.add_argument("query", metavar="QUERY")
+    rag_search.add_argument("--workspace", help=_WORKSPACE_HELP)
+    rag_search.add_argument("--session", help=_SESSION_HELP)
+    rag_disable = rag_actions.add_parser("disable")
+    rag_disable.add_argument("--workspace", help=_WORKSPACE_HELP)
+    rag_purge = rag_actions.add_parser("purge")
+    rag_purge.add_argument("--yes", action="store_true")
+    rag_purge.add_argument("--workspace", help=_WORKSPACE_HELP)
+    rag_purge.add_argument("--session", help=_SESSION_HELP)
 
     smoke = subcommands.add_parser(
         "smoke",
@@ -1057,6 +1091,89 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
     return result
 
 
+def _run_conversation_rag_cli(arguments: argparse.Namespace) -> int:
+    """Resolve CLI scope and emit exactly one sanitized schema-v1 report."""
+
+    operation = ConversationRagCliOperation(arguments.rag_action)
+    try:
+        workspace = resolve_workspace(arguments.workspace)
+    except Exception:
+        report = ConversationRagCliReport.failed(
+            operation,
+            ConversationRagCliFailure.WORKSPACE_INVALID,
+        )
+        print(report.to_json())
+        return report.exit_code
+
+    session_id: str | None = None
+    if operation in {
+        ConversationRagCliOperation.STATUS,
+        ConversationRagCliOperation.REBUILD,
+        ConversationRagCliOperation.SEARCH,
+        ConversationRagCliOperation.PURGE,
+    }:
+        try:
+            session_id = resolve_session(
+                workspace=workspace,
+                context=load_cli_context(workspace),
+                option_session=arguments.session,
+            )
+        except Exception:
+            report = ConversationRagCliReport.failed(
+                operation,
+                ConversationRagCliFailure.SESSION_INVALID,
+            )
+            print(report.to_json())
+            return report.exit_code
+
+    try:
+        request = ConversationRagCliRequest(
+            operation=operation,
+            session_id=session_id,
+            provider=getattr(arguments, "provider", None),
+            query=getattr(arguments, "query", None),
+            confirmed=bool(getattr(arguments, "yes", False)),
+        )
+    except Exception:
+        report = ConversationRagCliReport.failed(
+            operation,
+            ConversationRagCliFailure.INVALID_REQUEST,
+        )
+        print(report.to_json())
+        return report.exit_code
+
+    services = None
+    if operation is ConversationRagCliOperation.SEARCH or (
+        operation is ConversationRagCliOperation.REBUILD and request.confirmed
+    ):
+        try:
+            services = activate_configured_conversation_storage(workspace).services
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except ConversationStorageCoordinationError:
+            report = ConversationRagCliReport.failed(
+                operation,
+                ConversationRagCliFailure.COORDINATION_FAILED,
+            )
+            print(report.to_json())
+            return report.exit_code
+        except Exception:
+            report = ConversationRagCliReport.failed(
+                operation,
+                ConversationRagCliFailure.STORAGE_UNAVAILABLE,
+            )
+            print(report.to_json())
+            return report.exit_code
+
+    report = dispatch_conversation_rag(
+        workspace,
+        request,
+        conversation_storage_services=services,
+    )
+    print(report.to_json())
+    return report.exit_code
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Dispatch one CLI invocation through the canonical command contracts.
 
@@ -1068,6 +1185,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     if arguments.command is None or arguments.command == "chat":
         return _run_interactive_cli(arguments)
+    if arguments.command == "rag":
+        return _run_conversation_rag_cli(arguments)
     debug_log: WorkspaceDebugLog | None = None
     debug_log_hint_available = False
     session_id: str | None = None

@@ -1,8 +1,13 @@
 # Runtime API
 
 > **Availability:** `StoryRuntime` provides unchanged one-step and additive
-> bounded-retrieval turns, plus context-aware debates. Interactive `$`/`$$`
-> discovery is a controller/terminal workflow and adds no runtime method.
+> bounded-retrieval turns, optional programmatic conversation-RAG preflight and
+> projection, plus context-aware debates. Interactive `$`/`$$` discovery is a
+> controller/terminal workflow and adds no runtime method. Separate
+> noninteractive `story rag` lifecycle/search commands are implemented without
+> adding a `StoryRuntime` method; the installed controller composes saved
+> `/settings` policy and passes an armed `/rag QUERY` through the existing
+> `rag_query` parameter on the next eligible focused turn.
 
 Key terms: **context-omitted run**—no `conversation_context`; **included
 snapshot**—one transcript window reused for a debate; **progress
@@ -14,7 +19,8 @@ sink**—a synchronous observer; **retrieval turn**—one bounded answer.
 StoryRuntime(workspace: Workspace | str | pathlib.Path,
              backend: AgentBackend | None = None, *,
              conversation_event_store: ConversationEventStore | None = None,
-             conversation_storage_services: ConversationStorageServices | None = None)
+             conversation_storage_services: ConversationStorageServices | None = None,
+             conversation_rag_service: ConversationRagRuntimeService | None = None)
 StoryRuntime.session(session_id: str) -> RuntimeSession
 StoryRuntime.apply_directive(session_id: str, text: str) -> dict[str, object]
 StoryRuntime.set_runtime_overrides(session_id: str, overrides: Mapping[str, Any]) -> dict[str, Any]
@@ -24,7 +30,7 @@ StoryRuntime.inspect_debate_context(session_id: str, debate_id: str) -> dict[str
 StoryRuntime.inspect_reference_operation(operation_id: str) -> ReferenceOperationHistory | None
 await StoryRuntime.converse(session_id: str, conversation_id: str,
                             agent_id: str, text: str) -> ConversationResult
-await StoryRuntime.converse_with_retrieval(session_id, conversation_id, agent_id, text, *, memory_service, progress_sink=None) -> ConversationRetrievalResult
+await StoryRuntime.converse_with_retrieval(session_id, conversation_id, agent_id, text, *, memory_service, progress_sink=None, rag_query=None) -> ConversationRetrievalResult
 await StoryRuntime.run_prompt(session_id: str, prompt: str, *,
     output_path: str,
     max_debate_rounds: int | None = None, debate_id: str | None = None,
@@ -56,6 +62,17 @@ use. With neither argument, direct Python construction composes the established
 filesystem bundle and exposes it as `runtime.conversation_storage_services`.
 Passing only the legacy raw event store remains compatible, but does not supply
 catalog/search/coordinator provenance.
+
+`conversation_rag_service` is additive and accepts only the exact direct-module
+`ConversationRagRuntimeService`. A configured service requires a complete
+`ConversationStorageServices` authority: callers may supply that bundle, or let
+ordinary construction compose the default filesystem bundle. Pairing RAG with
+the legacy raw `conversation_event_store` raises `TypeError` before conversation
+use. The service is application-composed; construction does not read a RAG
+setting, select a provider, or import the optional generic package. The direct
+composition module provides a concrete fixed-local store/state/service bundle,
+but a caller must still pass its service explicitly. The noninteractive CLI
+uses that helper only after its own configuration and compatibility gates.
 
 The installed shell does not ask `StoryRuntime` to read desired or active
 storage configuration. Before provider authentication it completes the
@@ -211,7 +228,9 @@ ConversationResult(session_id: str, conversation_id: str, turn_id: str,
 ConversationRetrievalResult(*, session_id: str, conversation_id: str,
     turn_id: str, agent_id: str, content: str,
     context: ConversationContextWindow, sources: tuple[ConversationRetrievalSource, ...],
-    reference_operation_id: str | None = None)
+    reference_operation_id: str | None = None,
+    rag_outcome: ConversationRagAttemptOutcome | None = None,
+    rag_sources: tuple[ConversationRetrievalSource, ...] = ())
 ```
 
 Validation, observer errors, cancellation, and uncertain persistence raise.
@@ -231,9 +250,27 @@ when a referenced operation fails.
 `converse()` remains one substantive provider call with one user and
 reply/error pair; a referenced turn first adds one content-free read prelude.
 `converse_with_retrieval()` requires an exact same-session memory service and
-optional synchronous sink. Its actions, sources, locking, and durability are in
-[Bounded conversation retrieval](conversation-retrieval.md). Debate context
-never appends or modifies a transcript.
+optional synchronous sink. Its optional `rag_query` forces one bounded RAG
+preflight and overrides automatic policy. Without a configured RAG service, a
+forced query supplies a disabled literal-fallback context; without a forced
+query, no attempt occurs. A configured service may derive one automatic query
+only when its application-owned `automatic_enabled` policy is true. No-attempt
+requests omit `rag_context` and return `rag_outcome=None` plus
+`rag_sources=()`, preserving the old provider and source shapes.
+
+An attempted preflight supplies bounded authoritative excerpts only on the
+initial retrieval-provider request. The result copies its content-free
+outcome/reason to `rag_outcome` and the exact selected preflight-authorized
+source subset to `rag_sources`; continuations omit the context. RAG-only
+sources need no literal progress, while every source outside that subset still
+requires completed correlated search/read progress. Once a reply is
+committed, both `converse()` and `converse_with_retrieval()` ask the configured
+service to project the complete current active visible-turn target. Ordinary
+projection failure is isolated from the committed reply and recorded safely;
+`KeyboardInterrupt`, `SystemExit`, and cancellation controls propagate after
+commit. Exact authorization, citation, payload, stale-state, and failure rules
+are in [Bounded conversation retrieval](conversation-retrieval.md#optional-conversation-rag-preflight).
+Debate context never appends or modifies a transcript.
 
 For every runtime-built advisory, retrieval initial call, and consensus phase,
 the runtime builds the bounded belonging-session envelope from the receiving

@@ -20,6 +20,7 @@ _CODEX_REASONING_EFFORT = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 _ANTIGRAVITY_EFFORTS: tuple[str, ...] = ("low", "medium", "high")
 KNOWN_AGENT_BACKENDS: tuple[str, ...] = ("codex", "antigravity")
 KNOWN_CONVERSATION_STORAGE_BACKENDS: tuple[str, ...] = ("filesystem", "sqlite")
+KNOWN_CONVERSATION_RAG_PROVIDERS: tuple[str, ...] = ("local",)
 _SYSTEM_DEFAULTS_PATH = "config/system_defaults.json"
 _AGENT_CONFIGS_PATH = "config/agent_configs.json"
 
@@ -36,6 +37,8 @@ class SystemDefaults:
     default_backend: str | None = None
     conversation_storage_backend: str | None = None
     show_message_details: bool = False
+    conversation_rag_provider: str | None = None
+    conversation_rag_automatic: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,18 +75,14 @@ class ConfigurationSnapshot:
         if set(self.agent_configs) != set(ROSTER):
             raise ValueError("agent_configs must contain the complete roster")
         if any(
-            type(self.agent_configs[agent_id]) is not AgentConfig
-            for agent_id in ROSTER
+            type(self.agent_configs[agent_id]) is not AgentConfig for agent_id in ROSTER
         ):
             raise TypeError("agent_configs values must be AgentConfig values")
         object.__setattr__(
             self,
             "agent_configs",
             MappingProxyType(
-                {
-                    agent_id: self.agent_configs[agent_id]
-                    for agent_id in ROSTER
-                }
+                {agent_id: self.agent_configs[agent_id] for agent_id in ROSTER}
             ),
         )
 
@@ -135,9 +134,7 @@ class ConfigManager:
         if value is None and allow_none:
             return None
         if not isinstance(value, str) or _LANGUAGE.fullmatch(value) is None:
-            raise ConfigurationError(
-                "language must match [A-Za-z][A-Za-z0-9-]{0,15}"
-            )
+            raise ConfigurationError("language must match [A-Za-z][A-Za-z0-9-]{0,15}")
         return value
 
     @staticmethod
@@ -178,9 +175,32 @@ class ConfigManager:
         """Validate one strict compact/detailed presentation preference."""
 
         if type(value) is not bool:
+            raise ConfigurationError("show_message_details must be a boolean")
+        return value
+
+    @staticmethod
+    def validate_conversation_rag_provider(
+        value: Any,
+        *,
+        allow_none: bool = False,
+    ) -> str | None:
+        """Validate the persisted RAG provider independently of composition."""
+
+        if value is None and allow_none:
+            return None
+        if not isinstance(value, str) or value not in KNOWN_CONVERSATION_RAG_PROVIDERS:
+            expected = ", ".join(KNOWN_CONVERSATION_RAG_PROVIDERS)
             raise ConfigurationError(
-                "show_message_details must be a boolean"
+                f"conversation_rag_provider must be null or one of: {expected}"
             )
+        return value
+
+    @staticmethod
+    def validate_conversation_rag_automatic(value: Any) -> bool:
+        """Require the exact persisted opt-in boolean."""
+
+        if type(value) is not bool:
+            raise ConfigurationError("conversation_rag_automatic must be a boolean")
         return value
 
     @staticmethod
@@ -196,9 +216,7 @@ class ConfigManager:
                 for character in value
             )
         ):
-            raise ConfigurationError(
-                "codex_model must be safe non-empty text or null"
-            )
+            raise ConfigurationError("codex_model must be safe non-empty text or null")
         return value
 
     @staticmethod
@@ -210,8 +228,7 @@ class ConfigManager:
             or _CODEX_REASONING_EFFORT.fullmatch(value) is None
         ):
             raise ConfigurationError(
-                "codex_reasoning_effort must be null or match "
-                "[a-z][a-z0-9_-]{0,31}"
+                "codex_reasoning_effort must be null or match [a-z][a-z0-9_-]{0,31}"
             )
         return value
 
@@ -240,8 +257,7 @@ class ConfigManager:
         if not isinstance(value, str) or value not in _ANTIGRAVITY_EFFORTS:
             expected = ", ".join(_ANTIGRAVITY_EFFORTS)
             raise ConfigurationError(
-                "antigravity_effort must be null or one of: "
-                f"{expected}"
+                f"antigravity_effort must be null or one of: {expected}"
             )
         return value
 
@@ -267,12 +283,12 @@ class ConfigManager:
                 "default_backend",
                 "conversation_storage_backend",
                 "show_message_details",
+                "conversation_rag_provider",
+                "conversation_rag_automatic",
             }
         )
         if unknown:
-            raise ConfigurationError(
-                f"unknown system default: {sorted(unknown)[0]}"
-            )
+            raise ConfigurationError(f"unknown system default: {sorted(unknown)[0]}")
         language = self.validate_language(value.get("language"))
         persona = self._validate_persona(value.get("persona"))
         rounds = value.get("max_debate_rounds", 1)
@@ -298,6 +314,17 @@ class ConfigManager:
         show_message_details = self.validate_show_message_details(
             value.get("show_message_details", False)
         )
+        conversation_rag_provider = self.validate_conversation_rag_provider(
+            value.get("conversation_rag_provider"),
+            allow_none=True,
+        )
+        conversation_rag_automatic = self.validate_conversation_rag_automatic(
+            value.get("conversation_rag_automatic", False)
+        )
+        if conversation_rag_automatic and conversation_rag_provider != "local":
+            raise ConfigurationError(
+                "conversation_rag_automatic requires the local RAG provider"
+            )
         return SystemDefaults(
             language=language,
             persona=persona,
@@ -309,6 +336,8 @@ class ConfigManager:
             default_backend=default_backend,
             conversation_storage_backend=conversation_storage_backend,
             show_message_details=show_message_details,
+            conversation_rag_provider=conversation_rag_provider,
+            conversation_rag_automatic=conversation_rag_automatic,
         )
 
     def load_agent_configs(self) -> dict[str, AgentConfig]:
@@ -350,17 +379,11 @@ class ConfigManager:
                 raise ConfigurationError(
                     f"unknown {agent_id} config: {sorted(unknown_fields)[0]}"
                 )
-            backend = self.validate_backend(
-                raw.get("backend"), allow_none=True
-            )
-            language = self.validate_language(
-                raw.get("language"), allow_none=True
-            )
+            backend = self.validate_backend(raw.get("backend"), allow_none=True)
+            language = self.validate_language(raw.get("language"), allow_none=True)
             persona_value = raw.get("persona")
             persona = (
-                None
-                if persona_value is None
-                else self._validate_persona(persona_value)
+                None if persona_value is None else self._validate_persona(persona_value)
             )
             codex_model = self.validate_codex_model(raw.get("codex_model"))
             codex_reasoning_effort = self.validate_codex_reasoning_effort(
@@ -444,16 +467,12 @@ class ConfigManager:
             system_before = self._read_exact_bytes(_SYSTEM_DEFAULTS_PATH)
             agent_before = self._read_exact_bytes(_AGENT_CONFIGS_PATH)
         except Exception as exc:
-            raise ConfigurationCommitError(
-                ConfigurationCommitFailure.CONFLICT
-            ) from exc
+            raise ConfigurationCommitError(ConfigurationCommitFailure.CONFLICT) from exc
         if (
             system_before != baseline.system_defaults_bytes
             or agent_before != baseline.agent_configs_bytes
         ):
-            raise ConfigurationCommitError(
-                ConfigurationCommitFailure.CONFLICT
-            )
+            raise ConfigurationCommitError(ConfigurationCommitFailure.CONFLICT)
 
         system_bytes = self._canonical_json(system_value).encode("utf-8")
         agent_bytes = self._canonical_json(agent_value).encode("utf-8")
@@ -498,7 +517,7 @@ class ConfigManager:
 
     @staticmethod
     def system_defaults_value(defaults: SystemDefaults) -> dict[str, Any]:
-        """Project one system-default value to the canonical ten-key shape."""
+        """Project one system-default value to the canonical twelve-key shape."""
 
         if type(defaults) is not SystemDefaults:
             raise TypeError("defaults must be a SystemDefaults")
@@ -514,6 +533,8 @@ class ConfigManager:
             "default_backend": defaults.default_backend,
             "conversation_storage_backend": storage_backend,
             "show_message_details": defaults.show_message_details,
+            "conversation_rag_provider": defaults.conversation_rag_provider,
+            "conversation_rag_automatic": defaults.conversation_rag_automatic,
         }
 
     @staticmethod
@@ -553,9 +574,7 @@ class ConfigManager:
         try:
             value.decode("utf-8", errors="strict")
         except UnicodeDecodeError as exc:
-            raise WorkspaceFormatError(
-                f"file is not valid UTF-8: {relative}"
-            ) from exc
+            raise WorkspaceFormatError(f"file is not valid UTF-8: {relative}") from exc
         return value
 
     @staticmethod
@@ -569,12 +588,15 @@ class ConfigManager:
 
     @staticmethod
     def _canonical_json(value: Any) -> str:
-        return json.dumps(
-            value,
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        ) + "\n"
+        return (
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
 
     def validate_runtime_overrides(
         self, value: Mapping[str, Any] | Any
@@ -589,9 +611,7 @@ class ConfigManager:
         language = self.validate_language(value.get("language"), allow_none=True)
         persona_value = value.get("persona")
         persona = (
-            None
-            if persona_value is None
-            else self._validate_persona(persona_value)
+            None if persona_value is None else self._validate_persona(persona_value)
         )
         agents_value = value.get("agents", {})
         if not isinstance(agents_value, Mapping):

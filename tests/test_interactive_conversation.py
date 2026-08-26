@@ -182,6 +182,7 @@ class ScriptedRuntime:
         self.tasks: list[asyncio.Task[object] | None] = []
         self.memory_services: list[object] = []
         self.progress_sinks: list[object] = []
+        self.rag_queries: list[str | None] = []
         self.on_call: Callable[[], None] | None = None
 
     async def converse_with_retrieval(
@@ -193,6 +194,7 @@ class ScriptedRuntime:
         *,
         memory_service: object,
         progress_sink: object = None,
+        rag_query: str | None = None,
     ) -> object:
         """Return one scripted retrieval outcome and record selected scope."""
 
@@ -201,6 +203,7 @@ class ScriptedRuntime:
         self.tasks.append(asyncio.current_task())
         self.memory_services.append(memory_service)
         self.progress_sinks.append(progress_sink)
+        self.rag_queries.append(rag_query)
         if self.on_call is not None:
             self.on_call()
         outcome = self.outcomes.pop(0) if self.outcomes else "reply"
@@ -710,6 +713,213 @@ class RuntimeWiringAndGateTests(InteractiveConversationTestCase):
                 "discussion_logs/session/interactive"
             ).exists()
         )
+
+
+class ControllerRagWorkflowTests(InteractiveConversationTestCase):
+    """Verify private one-turn RAG arming, scope, and consumption lifecycle."""
+
+    def test_rag_arm_requires_attachment_and_active_conversation(self) -> None:
+        secret = "PRIVATE_RAG_QUERY_MUST_NOT_RENDER"
+
+        workspace = self.make_workspace()
+        runtime = ScriptedRuntime()
+        controller, _backend, callbacks, _store, _factory = self.make_controller(
+            workspace,
+            f"/rag {secret}",
+            "/quit",
+            runtime=runtime,
+        )
+        self.assertEqual(controller.run_session_lobby(), 0)
+        self.assertEqual(runtime.rag_queries, [])
+        self.assertIsNone(controller._pending_rag_query)
+        rendered = "".join(callbacks.records)
+        self.assertIn("[error session_not_attached]", rendered)
+        self.assertNotIn(secret, rendered)
+
+        workspace = self.make_workspace()
+        self.seed_session(workspace, "session")
+        save_default_session(workspace, "session")
+        catalog = FilesystemConversationCatalog(workspace)
+        runtime = ScriptedRuntime()
+        controller, _backend, callbacks, _store, _factory = self.make_controller(
+            workspace,
+            f"/rag {secret}",
+            "/quit",
+            catalog=catalog,
+            runtime=runtime,
+        )
+        self.assertEqual(controller.run_session_lobby(), 0)
+        self.assertEqual(runtime.rag_queries, [])
+        self.assertIsNone(controller._pending_rag_query)
+        rendered = "".join(callbacks.records)
+        self.assertIn("[error conversation_required]", rendered)
+        self.assertNotIn(secret, rendered)
+
+    def test_rag_rearm_is_private_with_details_and_each_turn_consumes_once(
+        self,
+    ) -> None:
+        cases = (
+            ("ordinary", "visible ordinary turn", LEAD_ORCHESTRATOR),
+            ("say", "/say visible literal turn", LEAD_ORCHESTRATOR),
+            ("routed", "@plot visible routed turn", PLOT_ARCHITECT),
+        )
+        for label, eligible, expected_agent in cases:
+            with self.subTest(kind=label):
+                private = f"PRIVATE_RAG_{label.upper()}_SENTINEL"
+                superseded = f"SUPERSEDED_RAG_{label.upper()}_SENTINEL"
+                script = (
+                    f"/rag {superseded}",
+                    "/status",
+                    f"/rag {private}",
+                    "/help",
+                    eligible,
+                    "visible follow-up turn",
+                    "/quit",
+                )
+                runtime = ScriptedRuntime("first reply", "second reply")
+                (
+                    workspace,
+                    _catalog,
+                    entries,
+                    controller,
+                    _backend,
+                    callbacks,
+                    _store,
+                ) = self.prepared_selected_controller(
+                    *script,
+                    runtime=runtime,
+                )
+                controller._show_message_details = True
+
+                self.assertEqual(controller.run_session_lobby(), 0)
+
+                self.assertTrue(controller._show_message_details)
+                self.assertEqual(runtime.rag_queries, [private, None])
+                self.assertEqual(len(runtime.calls), 2)
+                self.assertEqual(runtime.calls[0][2], expected_agent)
+                self.assertEqual(runtime.calls[1][2], LEAD_ORCHESTRATOR)
+                self.assertTrue(
+                    all(
+                        private not in text and superseded not in text
+                        for _session, _conversation, _agent, text in runtime.calls
+                    )
+                )
+                self.assertIsNone(controller._pending_rag_query)
+                rendered = "".join(callbacks.records)
+                prompts = "".join(callbacks.prompts)
+                self.assertEqual(
+                    rendered.count(
+                        "Conversation RAG is armed for the next ordinary, /say, "
+                        "or routed story turn in this conversation."
+                    ),
+                    2,
+                )
+                for sentinel in (private, superseded):
+                    self.assertNotIn(sentinel, rendered)
+                    self.assertNotIn(sentinel, prompts)
+                    sentinel_bytes = sentinel.encode("utf-8")
+                    self.assertFalse(
+                        any(
+                            sentinel_bytes in path.read_bytes()
+                            for path in workspace.root.rglob("*")
+                            if path.is_file()
+                        )
+                    )
+                self.assertIn(private, script[2])
+                self.assertEqual(runtime.calls[0][1], entries[0].conversation_id)
+
+    def test_rag_query_is_consumed_by_entered_failure_before_next_turn(
+        self,
+    ) -> None:
+        private = "PRIVATE_RAG_FAILURE_SENTINEL"
+        runtime = ScriptedRuntime(
+            ConversationRetrievalSemanticError(),
+            "recovered reply",
+        )
+        (
+            _workspace,
+            _catalog,
+            _entries,
+            controller,
+            _backend,
+            callbacks,
+            _store,
+        ) = self.prepared_selected_controller(
+            f"/rag {private}",
+            "first visible turn",
+            "second visible turn",
+            "/quit",
+            runtime=runtime,
+        )
+
+        self.assertEqual(controller.run_session_lobby(), 0)
+        self.assertEqual(runtime.rag_queries, [private, None])
+        self.assertIsNone(controller._pending_rag_query)
+        rendered = "".join(callbacks.records)
+        self.assertIn("[error retrieval_invalid]", rendered)
+        self.assertNotIn(private, rendered)
+
+    def test_rag_query_clears_when_attachment_scope_changes(self) -> None:
+        private = "PRIVATE_RAG_SCOPE_SENTINEL"
+        workspace = self.make_workspace()
+        self.seed_session(workspace, "source")
+        self.seed_session(workspace, "destination")
+        save_default_session(workspace, "source")
+        catalog = FilesystemConversationCatalog(workspace)
+        source = catalog.create("source", "Source focus")
+        destination = catalog.create("destination", "Destination focus")
+        save_default_conversation(workspace, "source", source.conversation_id)
+        save_default_conversation(
+            workspace,
+            "destination",
+            destination.conversation_id,
+        )
+        runtime = ScriptedRuntime("destination reply")
+        controller, _backend, callbacks, _store, _factory = self.make_controller(
+            workspace,
+            f"/rag {private}",
+            "/session resume destination",
+            "visible destination turn",
+            "/quit",
+            catalog=catalog,
+            runtime=runtime,
+        )
+
+        self.assertEqual(controller.run_session_lobby(), 0)
+        self.assertEqual(runtime.rag_queries, [None])
+        self.assertEqual(runtime.calls[0][0], "destination")
+        self.assertIsNone(controller._pending_rag_query)
+        self.assertNotIn(private, "".join(callbacks.records))
+
+    def test_rag_query_clears_when_attached_session_is_paused(self) -> None:
+        private = "PRIVATE_RAG_PAUSE_SENTINEL"
+        runtime = ScriptedRuntime()
+        retained: dict[str, InteractiveController] = {}
+
+        def verify_clear(_prompt: str) -> str:
+            self.assertIsNone(retained["controller"]._pending_rag_query)
+            return "/quit"
+
+        (
+            _workspace,
+            _catalog,
+            _entries,
+            controller,
+            _backend,
+            callbacks,
+            _store,
+        ) = self.prepared_selected_controller(
+            f"/rag {private}",
+            "/session pause",
+            "yes",
+            verify_clear,
+            runtime=runtime,
+        )
+        retained["controller"] = controller
+
+        self.assertEqual(controller.run_session_lobby(), 0)
+        self.assertEqual(runtime.rag_queries, [])
+        self.assertNotIn(private, "".join(callbacks.records))
 
 
 class ControllerRoutingTests(InteractiveConversationTestCase):

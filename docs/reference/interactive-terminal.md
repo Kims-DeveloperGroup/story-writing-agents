@@ -47,8 +47,10 @@
 > dirty state alone appends Apply Changes and Discard Changes. Root Settings
 > Escape retains its cancellation behavior. Generic picker/prompt reads, resume
 > pickers, and dirty Apply/Discard confirmations remain one-shot.
-> The root Settings picker also exposes Message details. Off is the compact
-> default; On reveals documented diagnostics without changing stored content.
+> The root Settings picker also exposes nested Conversation RAG before Message
+> details. RAG edits a startup-fixed Provider/Automatic policy; Message details
+> Off is the compact default and On reveals documented diagnostics without
+> changing stored content.
 > User/agent messages use readable speaker headers and railed bodies, and each
 > debate progress event is one atomic `Debate phase` panel containing newly
 > readable persisted speeches.
@@ -643,6 +645,8 @@ confirmation, while dirty state shows the transient discard confirmation. Its pr
 contains only fields whose Current and Pending values differ, and both
 displayed values carry the `(Changed)` cue; the defensive no-changes Apply confirmation shows
 only `No pending settings changes.` without empty Current or Pending sections.
+The activation notice contains only applicable current-shell runtime,
+next-shell storage, and next-shell Conversation RAG sentences.
 These confirmations are one-shot: selecting `YES` commits and closes the
 requested action, while `NO` or confirmation Escape returns to the root
 Settings picker. Ctrl-C and EOF still cancel the whole flow without writing and
@@ -652,10 +656,14 @@ do not imply a snapshot was rendered.
 
 ## Provider Model and Effort pickers
 
-The top-level Settings picker has exactly six rows in this order: Language,
-Persona, Maximum debate rounds, Conversation storage, Message details, and
-Agents. Message details offers Off and On. Off is the default compact
-presentation; it does not delete stored content.
+The top-level Settings picker has exactly seven rows in this order: Language,
+Persona, Maximum debate rounds, Conversation storage, Conversation RAG, Message
+details, and Agents. Conversation RAG opens a nested Provider/Automatic picker:
+Provider offers Disabled/Local and Automatic offers Off/On. Disabled forces
+Off, selecting Local leaves Off, and On requires pending Local. Message details
+offers Off and On. Off is the default compact presentation; it does not delete
+stored content. Dirty state appends Apply Changes and Discard Changes, for nine
+top-level choices.
 
 Within `/settings`, the visible per-agent fields and editor titles are exactly
 Provider, Model, and Effort. Current/Pending confirmations remain
@@ -681,8 +689,9 @@ drawn, so loading adds no durable row. Callback, ordinary fallback,
 the same option read silently. The indicator changes neither read frequency nor
 the established failure guidance, choice ordering, cancellation, or save state.
 
-Language, Persona, Maximum debate rounds, Conversation storage, Message details,
-Provider, Model, Custom model, and Effort remain active after a first valid Enter. A
+Language, Persona, Maximum debate rounds, Conversation storage, Conversation
+RAG Provider/Automatic, Message details, Provider, Model, Custom model, and
+Effort remain active after a first valid Enter. A
 picker reopens in
 `ViewState.OPEN` with its prompt focused and selection updated; a prompt reopens
 in `ViewState.FOCUSED` with its default updated. The latest applied value appears
@@ -694,7 +703,8 @@ Custom model navigation, and editor re-entry reset it. This controller state is
 semantic and consecutive, with no raw-key timing window. Escape returns one
 level through Custom model > Model > Agent settings > Agents > Settings;
 Provider and Effort return directly to Agent settings, while Conversation
-storage and Message details return directly to Settings. Authentication launched while choosing
+RAG Provider/Automatic return to Conversation RAG, and Conversation RAG,
+storage, and Message details return directly to Settings. Authentication launched while choosing
 Provider is a subordinate action and returns to Provider after its result.
 Ctrl-C or EOF at any level cancels the whole settings transaction.
 
@@ -759,8 +769,14 @@ After confirmation, a candidate whose sole difference is Message details uses
 the configuration prepare/verify/commit path. It skips authentication,
 backend/runtime staging or activation, storage readiness, route switching or
 generation, and provider/thread work; the active presentation flag changes only
-after commit. Any mixed change uses the complete activation path above and
-changes that flag only after full activation succeeds.
+after commit. A Conversation-RAG-only candidate prepares, verifies, and commits
+the system configuration without authentication, storage selection/readiness,
+backend/runtime prepare, commit, discard, or activation, route/thread work,
+composition, optional-package probing or installation, provider catalog,
+subprocess, socket, or network work. It emits only the fixed next-shell RAG
+notice and leaves the current service and automatic policy unchanged. Any other
+mixed change uses the complete activation path above, while storage and RAG
+effects remain next-shell-only.
 
 Every capable picker and input component follows the universal transient
 lifecycle: commit, cancellation, interrupt, EOF, and failure erase or replace
@@ -955,7 +971,7 @@ described below. A root `/` opens with its first candidate highlighted. Compact
 registry order (not output layout):
 
 ```text
-/say /to /agent /agents /auth /language /persona /reset /settings /run /draft-file /session
+/say /rag /to /agent /agents /auth /language /persona /reset /settings /run /draft-file /session
 /conversation /search /transcript /inspect /history /status /help /? /quit /exit
 ```
 
@@ -966,8 +982,8 @@ order derived from each `AGENT_ROUTES` entry's `prompt_alias`:
 @lead @plot @character @execution
 ```
 
-Exact case-sensitive prefixes filter in stable order. Root provides the 22
-tokens above; help provides 25 including `/compose`, `/send`, and `/cancel`;
+Exact case-sensitive prefixes filter in stable order. Root provides the 23
+tokens above; help provides 26 including `/compose`, `/send`, and `/cancel`;
 agent-valued slash positions provide the four preferred prompt aliases `lead`,
 `plot`, `character`, and `execution` in the same route order. The parser still
 accepts all ten declared route aliases for slash and routed-message input;
@@ -1488,6 +1504,16 @@ byte is never guessed into a live key role.
 <a id="exact-search-and-transcript-records"></a>
 
 ## Dense search, transcript, and history records
+
+An accepted `/rag QUERY` is control input rather than an accepted provider
+message. The terminal shows only the fixed arming notice and never renders the
+query as semantic output. The live editor necessarily displays the current
+typed buffer; process-local main-command history can recall the submitted line,
+and ordinary-line fallback or terminal infrastructure may retain it in
+scrollback. On the later attempted story turn, one content-free `context`
+record reports `Conversation RAG` outcome and `Reason` before the agent reply;
+normal source records follow the reply. No excerpt body is a terminal
+diagnostic.
 
 Before search catalog/service work, one completed `Search request` record names
 the NFKC-normalized, case-folded, whitespace-collapsed query and `active` scope.

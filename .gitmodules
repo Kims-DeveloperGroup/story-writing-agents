@@ -1,0 +1,3 @@
+[submodule "vendor/generic-rag"]
+	path = vendor/generic-rag
+	url = https://github.com/Kims-DeveloperGroup/generic-rag.git

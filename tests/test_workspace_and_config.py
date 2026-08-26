@@ -2366,6 +2366,8 @@ class WorkspaceTests(unittest.TestCase):
                 "default_backend": None,
                 "conversation_storage_backend": "filesystem",
                 "show_message_details": False,
+                "conversation_rag_provider": None,
+                "conversation_rag_automatic": False,
             },
         )
         expected_agent = {
@@ -2392,6 +2394,8 @@ class WorkspaceTests(unittest.TestCase):
             '  "antigravity_model": null,\n'
             '  "codex_model": null,\n'
             '  "codex_reasoning_effort": null,\n'
+            '  "conversation_rag_automatic": false,\n'
+            '  "conversation_rag_provider": null,\n'
             '  "conversation_storage_backend": "filesystem",\n'
             '  "default_backend": null,\n'
             '  "language": "KO",\n'
@@ -2900,10 +2904,13 @@ class ConfigurationCascadeTests(unittest.TestCase):
                 "default_backend",
                 "conversation_storage_backend",
                 "show_message_details",
+                "conversation_rag_provider",
+                "conversation_rag_automatic",
             ),
         )
-        self.assertTrue(
-            all(field.default is None for field in model_fields[3:-1])
+        self.assertEqual(
+            tuple(field.default for field in model_fields[3:]),
+            (None, None, None, None, None, None, False, None, False),
         )
         self.assertIs(model_fields[-1].default, False)
         legacy = SystemDefaults("KO", "global_persona", 1)
@@ -2920,6 +2927,8 @@ class ConfigurationCascadeTests(unittest.TestCase):
                 default_backend=None,
                 conversation_storage_backend=None,
                 show_message_details=False,
+                conversation_rag_provider=None,
+                conversation_rag_automatic=False,
             ),
         )
         self.assertFalse(hasattr(legacy, "__dict__"))
@@ -3607,7 +3616,91 @@ class ConversationStorageConfigurationTests(unittest.TestCase):
                     before,
                 )
 
-    def test_commit_noop_and_agent_only_save_preserve_canonical_ten_key_bytes(
+    def test_conversation_rag_legacy_defaults_and_exact_validation_are_read_only(
+        self,
+    ) -> None:
+        system_path = self.workspace.path("config/system_defaults.json")
+        legacy = self.workspace.read_json("config/system_defaults.json")
+        legacy.pop("conversation_rag_provider", None)
+        legacy.pop("conversation_rag_automatic", None)
+        self.workspace.write_text(
+            "config/system_defaults.json",
+            json.dumps(legacy, ensure_ascii=False, separators=(",", ":")) + "\n",
+        )
+        before = system_path.read_bytes()
+        defaults = self.manager.load_configuration_snapshot().system_defaults
+        self.assertIsNone(defaults.conversation_rag_provider)
+        self.assertIs(defaults.conversation_rag_automatic, False)
+        self.assertEqual(system_path.read_bytes(), before)
+
+        for provider in ("", "LOCAL", "remote", 1, False, [], {}):
+            with self.subTest(provider=provider):
+                value = dict(legacy, conversation_rag_provider=provider)
+                self.workspace.write_json("config/system_defaults.json", value)
+                invalid_before = system_path.read_bytes()
+                with self.assertRaises(ConfigurationError):
+                    self.manager.load_configuration_snapshot()
+                self.assertEqual(system_path.read_bytes(), invalid_before)
+        for automatic in (None, 0, 1, "false", [], {}):
+            with self.subTest(automatic=automatic):
+                value = dict(legacy, conversation_rag_automatic=automatic)
+                self.workspace.write_json("config/system_defaults.json", value)
+                invalid_before = system_path.read_bytes()
+                with self.assertRaises(ConfigurationError):
+                    self.manager.load_configuration_snapshot()
+                self.assertEqual(system_path.read_bytes(), invalid_before)
+
+        self.workspace.write_json(
+            "config/system_defaults.json",
+            dict(
+                legacy,
+                conversation_rag_provider=None,
+                conversation_rag_automatic=True,
+            ),
+        )
+        with self.assertRaises(ConfigurationError):
+            self.manager.load_configuration_snapshot()
+        self.workspace.write_json(
+            "config/system_defaults.json",
+            dict(
+                legacy,
+                conversation_rag_provider="local",
+                conversation_rag_automatic=True,
+            ),
+        )
+        enabled = self.manager.load_configuration_snapshot().system_defaults
+        self.assertEqual(
+            (enabled.conversation_rag_provider, enabled.conversation_rag_automatic),
+            ("local", True),
+        )
+
+    def test_conversation_rag_canonical_commit_preserves_unrelated_values_and_pair(
+        self,
+    ) -> None:
+        baseline = self.manager.load_configuration_baseline()
+        candidate = ConfigurationSnapshot(
+            replace(
+                baseline.configuration.system_defaults,
+                conversation_rag_provider="local",
+                conversation_rag_automatic=True,
+            ),
+            baseline.configuration.agent_configs,
+        )
+        self.assertTrue(self.manager.commit_configuration(baseline, candidate))
+        persisted = self.workspace.read_json("config/system_defaults.json")
+        self.assertEqual(len(persisted), 12)
+        self.assertEqual(
+            persisted["language"], baseline.configuration.system_defaults.language
+        )
+        self.assertEqual(
+            persisted["persona"], baseline.configuration.system_defaults.persona
+        )
+        self.assertEqual(persisted["conversation_storage_backend"], "filesystem")
+        self.assertIs(persisted["show_message_details"], False)
+        self.assertEqual(persisted["conversation_rag_provider"], "local")
+        self.assertIs(persisted["conversation_rag_automatic"], True)
+
+    def test_commit_noop_and_agent_only_save_preserve_canonical_twelve_key_bytes(
         self,
     ) -> None:
         baseline = self.manager.load_configuration_baseline()
@@ -3663,6 +3756,8 @@ class ConversationStorageConfigurationTests(unittest.TestCase):
                 "default_backend",
                 "conversation_storage_backend",
                 "show_message_details",
+                "conversation_rag_provider",
+                "conversation_rag_automatic",
             },
         )
 
@@ -3671,7 +3766,7 @@ class ConversationStorageConfigurationTests(unittest.TestCase):
         candidate = ConfigurationSnapshot(
             replace(
                 baseline.configuration.system_defaults,
-                conversation_storage_backend="sqlite",
+                conversation_rag_provider="local",
             ),
             baseline.configuration.agent_configs,
         )
@@ -3712,6 +3807,55 @@ class ConversationStorageConfigurationTests(unittest.TestCase):
         self.assertNotIn("private", str(caught.exception))
         self.assertEqual(system_path.read_bytes(), baseline.system_defaults_bytes)
         self.assertEqual(agent_path.read_bytes(), baseline.agent_configs_bytes)
+
+    def test_complete_rag_pair_rollback_failure_is_fixed_and_attempted_in_reverse(
+        self,
+    ) -> None:
+        baseline = self.manager.load_configuration_baseline()
+        agents = dict(baseline.configuration.agent_configs)
+        agents[PLOT_ARCHITECT] = replace(
+            agents[PLOT_ARCHITECT], backend="antigravity"
+        )
+        candidate = ConfigurationSnapshot(
+            replace(
+                baseline.configuration.system_defaults,
+                conversation_rag_provider="local",
+            ),
+            agents,
+        )
+        real_write = self.workspace.write_text
+        attempts: list[str] = []
+
+        def fail_second_write_and_final_rollback(relative: str, text: str) -> None:
+            attempts.append(relative)
+            if len(attempts) == 2:
+                raise OSError("PRIVATE_AGENT_WRITE")
+            if len(attempts) == 4:
+                raise OSError("PRIVATE_SYSTEM_ROLLBACK")
+            real_write(relative, text)
+
+        with mock.patch.object(
+            self.workspace,
+            "write_text",
+            side_effect=fail_second_write_and_final_rollback,
+        ):
+            with self.assertRaises(ConfigurationCommitError) as caught:
+                self.manager.commit_configuration(baseline, candidate)
+        self.assertIs(caught.exception.failure, ConfigurationCommitFailure.ROLLBACK)
+        self.assertEqual(
+            attempts,
+            [
+                "config/system_defaults.json",
+                "config/agent_configs.json",
+                "config/agent_configs.json",
+                "config/system_defaults.json",
+            ],
+        )
+        self.assertNotIn("PRIVATE", str(caught.exception))
+        self.assertEqual(
+            self.workspace.path("config/agent_configs.json").read_bytes(),
+            baseline.agent_configs_bytes,
+        )
 
 
 if __name__ == "__main__":

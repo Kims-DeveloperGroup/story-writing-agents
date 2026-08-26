@@ -122,8 +122,7 @@ class SettingsBaseline:
         if type(self.agent_configs_bytes) is not bytes:
             raise TypeError("agent_configs_bytes must be bytes")
         if type(self.persona_catalog) is not tuple or any(
-            type(entry) is not PersonaCatalogEntry
-            for entry in self.persona_catalog
+            type(entry) is not PersonaCatalogEntry for entry in self.persona_catalog
         ):
             raise TypeError("persona_catalog must contain PersonaCatalogEntry values")
         if tuple(sorted(entry.name for entry in self.persona_catalog)) != tuple(
@@ -136,9 +135,10 @@ class SettingsBaseline:
             raise ValueError("persona_catalog names must be unique")
         if type(self.configuration) is not ConfigurationSnapshot:
             raise TypeError("configuration must be a ConfigurationSnapshot")
-        if self.provider_route_bytes is not None and type(
-            self.provider_route_bytes
-        ) is not bytes:
+        if (
+            self.provider_route_bytes is not None
+            and type(self.provider_route_bytes) is not bytes
+        ):
             raise TypeError("provider_route_bytes must be bytes or None")
         if not isinstance(self.provider_routes, Mapping):
             raise TypeError("provider_routes must be a mapping")
@@ -249,8 +249,7 @@ def update_language(state: SettingsState, language: str) -> SettingsState:
     _require_state(state)
     if type(language) is not str or language not in SETTINGS_LANGUAGES:
         raise ConfigurationError(
-            "settings language must be one of: "
-            + ", ".join(SETTINGS_LANGUAGES)
+            "settings language must be one of: " + ", ".join(SETTINGS_LANGUAGES)
         )
     return _with_system_defaults(
         state,
@@ -279,13 +278,8 @@ def update_max_debate_rounds(
     """Return pending state with one nonnegative debate round limit."""
 
     _require_state(state)
-    if (
-        type(max_debate_rounds) is not int
-        or max_debate_rounds < 0
-    ):
-        raise ConfigurationError(
-            "max_debate_rounds must be a non-negative integer"
-        )
+    if type(max_debate_rounds) is not int or max_debate_rounds < 0:
+        raise ConfigurationError("max_debate_rounds must be a non-negative integer")
     return _with_system_defaults(
         state,
         replace(
@@ -326,6 +320,51 @@ def update_show_message_details(
         replace(
             state.pending.system_defaults,
             show_message_details=validated,
+        ),
+    )
+
+
+def update_conversation_rag_provider(
+    state: SettingsState,
+    provider: str | None,
+) -> SettingsState:
+    """Return pending state with one validated optional local RAG provider."""
+
+    _require_state(state)
+    validated = ConfigManager.validate_conversation_rag_provider(
+        provider,
+        allow_none=True,
+    )
+    defaults = state.pending.system_defaults
+    return _with_system_defaults(
+        state,
+        replace(
+            defaults,
+            conversation_rag_provider=validated,
+            conversation_rag_automatic=(
+                defaults.conversation_rag_automatic if validated == "local" else False
+            ),
+        ),
+    )
+
+
+def update_conversation_rag_automatic(
+    state: SettingsState,
+    automatic: bool,
+) -> SettingsState:
+    """Return pending state with one valid local-only automatic RAG policy."""
+
+    _require_state(state)
+    validated = ConfigManager.validate_conversation_rag_automatic(automatic)
+    if validated and state.pending.system_defaults.conversation_rag_provider != "local":
+        raise ConfigurationError(
+            "conversation_rag_automatic requires the local RAG provider"
+        )
+    return _with_system_defaults(
+        state,
+        replace(
+            state.pending.system_defaults,
+            conversation_rag_automatic=validated,
         ),
     )
 
@@ -432,9 +471,7 @@ def update_agent_codex_reasoning_effort(
     _require_state(state)
     if agent_id not in ROSTER:
         raise ConfigurationError(f"unknown agent: {agent_id}")
-    validated = ConfigManager.validate_codex_reasoning_effort(
-        codex_reasoning_effort
-    )
+    validated = ConfigManager.validate_codex_reasoning_effort(codex_reasoning_effort)
     configs = dict(state.pending.agent_configs)
     configs[agent_id] = replace(
         configs[agent_id],
@@ -478,9 +515,7 @@ def update_agent_antigravity_effort(
     _require_state(state)
     if agent_id not in ROSTER:
         raise ConfigurationError(f"unknown agent: {agent_id}")
-    validated = ConfigManager.validate_antigravity_effort(
-        antigravity_effort
-    )
+    validated = ConfigManager.validate_antigravity_effort(antigravity_effort)
     configs = dict(state.pending.agent_configs)
     configs[agent_id] = replace(
         configs[agent_id],
@@ -667,6 +702,7 @@ def commit_prepared_settings_save(
             raise SettingsError(SettingsErrorKind.ROLLBACK) from rollback_failure
         raise SettingsError(SettingsErrorKind.WRITE) from write_failure
 
+
 def restore_prepared_settings_save(
     workspace: Workspace,
     prepared: PreparedSettingsSave,
@@ -812,9 +848,7 @@ def read_provider_route_generations(
     if not target.exists():
         return None, _initial_provider_routes(
             configuration,
-            provider_overrides=_validated_provider_overrides(
-                provider_overrides
-            ),
+            provider_overrides=_validated_provider_overrides(provider_overrides),
         )
     content = _read_exact_bytes(workspace, _PROVIDER_ROUTE_GENERATIONS_PATH)
     return content, _decode_provider_routes(content)
@@ -902,6 +936,8 @@ def _persona_catalog(workspace: Workspace) -> tuple[PersonaCatalogEntry, ...]:
             if target.is_file() and name not in selected:
                 selected[name] = PersonaCatalogEntry(name, relative)
     return tuple(selected[name] for name in sorted(selected))
+
+
 def _configured_provider(
     snapshot: ConfigurationSnapshot,
     agent_id: str,
@@ -1022,9 +1058,12 @@ def _decode_provider_routes(
 def _canonical_json(value: Any) -> str:
     """Serialize one validated settings document deterministically."""
 
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        indent=2,
-        sort_keys=True,
-    ) + "\n"
+    return (
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )

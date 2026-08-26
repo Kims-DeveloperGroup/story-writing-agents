@@ -63,6 +63,9 @@ from story_writing_agents.conversation_storage import (
 from story_writing_agents.conversation_storage.selection import (
     ConversationStorageStartup,
 )
+from story_writing_agents.conversation_rag_runtime import (
+    ConversationRagRuntimeService,
+)
 from story_writing_agents.errors import (
     BackendProtocolError,
     ConfigurationError,
@@ -857,6 +860,7 @@ class PublicApiTests(unittest.TestCase):
                 "backend",
                 "conversation_event_store",
                 "conversation_storage_services",
+                "conversation_rag_service",
             ),
         )
         self.assertIs(
@@ -884,6 +888,13 @@ class PublicApiTests(unittest.TestCase):
             ],
             ConversationStorageServices | None,
         )
+        rag_service = constructor.parameters["conversation_rag_service"]
+        self.assertIs(rag_service.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIsNone(rag_service.default)
+        self.assertEqual(
+            get_type_hints(StoryRuntime.__init__)["conversation_rag_service"],
+            ConversationRagRuntimeService | None,
+        )
 
         workspace = initialized_workspace(self)
         bundle = compose_filesystem_conversation_storage(workspace)
@@ -893,6 +904,7 @@ class PublicApiTests(unittest.TestCase):
         )
         self.assertIs(runtime.conversation_storage_services, bundle)
         self.assertIs(runtime.conversation_event_store, bundle.event_store)
+        self.assertIsNone(runtime.conversation_rag_service)
         legacy = StoryRuntime(workspace)
         self.assertIsInstance(
             legacy.conversation_storage_services,
@@ -946,6 +958,7 @@ class PublicApiTests(unittest.TestCase):
                     "text",
                     "memory_service",
                     "progress_sink",
+                    "rag_query",
                 ),
                 5,
             ),
@@ -958,6 +971,7 @@ class PublicApiTests(unittest.TestCase):
                     "text",
                     "memory_service",
                     "progress_sink",
+                    "rag_query",
                 ),
                 4,
             ),
@@ -980,12 +994,16 @@ class PublicApiTests(unittest.TestCase):
                 progress = signature.parameters["progress_sink"]
                 self.assertIs(progress.kind, inspect.Parameter.KEYWORD_ONLY)
                 self.assertIsNone(progress.default)
+                rag_query = signature.parameters["rag_query"]
+                self.assertIs(rag_query.kind, inspect.Parameter.KEYWORD_ONLY)
+                self.assertIsNone(rag_query.default)
                 hints = get_type_hints(method)
                 self.assertIs(hints["memory_service"], ConversationMemoryService)
                 self.assertEqual(
                     hints["progress_sink"],
                     ConversationRetrievalProgressSink | None,
                 )
+                self.assertEqual(hints["rag_query"], str | None)
                 self.assertIs(hints["return"], ConversationRetrievalResult)
 
         required = {
@@ -1025,6 +1043,14 @@ class PublicApiTests(unittest.TestCase):
             "serialize_conversation_retrieval_observation",
             story_writing_agents.__all__,
         )
+        for direct_only in (
+            "ConversationRagAttemptOutcome",
+            "ConversationRagContext",
+            "ConversationRagExcerpt",
+            "ConversationRagRuntimeService",
+        ):
+            self.assertNotIn(direct_only, story_writing_agents.__all__)
+            self.assertFalse(hasattr(story_writing_agents, direct_only))
 
     def test_interactive_parser_exports_use_the_supported_package_facade(
         self,
@@ -1134,6 +1160,7 @@ class CliTests(unittest.TestCase):
             "directive",
             "run",
             "inspect",
+            "rag",
             "session",
             "storage",
             "smoke",
@@ -1229,6 +1256,13 @@ class CliTests(unittest.TestCase):
             ["--help"],
             ["chat", "--help"],
             ["run", "--help"],
+            ["rag", "--help"],
+            ["rag", "status", "--help"],
+            ["rag", "enable", "--help"],
+            ["rag", "rebuild", "--help"],
+            ["rag", "search", "--help"],
+            ["rag", "disable", "--help"],
+            ["rag", "purge", "--help"],
             ["session", "create", "--help"],
             ["session", "reopen", "--help"],
             ["session", "pause", "--help"],

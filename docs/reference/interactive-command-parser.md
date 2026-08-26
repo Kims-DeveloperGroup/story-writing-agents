@@ -10,7 +10,8 @@
 AgentRouteSpec(agent_id: str, prompt_alias: str, aliases: tuple[str, ...],
                advisory_domain: str)
 AGENT_ROUTES: tuple[AgentRouteSpec, ...]
-InteractiveAction(kind: ActionKind, *, text: str | None = None,
+InteractiveAction(kind: ActionKind, *, rag_query: str | None = None,
+                  text: str | None = None,
                   agent_id: str | None = None,
                   argument: str | None = None, output_path: str | None = None,
                   count: int | None = None,
@@ -31,7 +32,7 @@ and the terminal supported surface remain unchanged.
 
 ```text
 ignored message routed_message set_target list_agents compose send cancel
-run run_fresh draft_file search transcript inspect history status auth settings
+run run_fresh draft_file rag search transcript inspect history status auth settings
 set_language set_persona reset session_list session_create session_open session_pause
 conversation_new conversation_list conversation_list_all conversation_use
 conversation_subject conversation_archive help quit parse_error
@@ -60,7 +61,7 @@ only the four preferred prompt aliases—`lead`, `plot`, `character`, and
 
 | Group | Canonical registry rows |
 | --- | --- |
-| Conversation | `/compose`; `/send`; `/cancel`; `/say TEXT` |
+| Conversation | `/compose`; `/send`; `/cancel`; `/say TEXT`; `/rag QUERY` |
 | Agents | `/to NAME`; `/agents`; `/auth`; `/language LANG`; `/persona AGENT NAME`; `/reset`; `/settings` |
 | Consensus | `/run [--fresh] [--output PART/PATH.md] [PROMPT]`; `/draft-file PATH` |
 | Sessions | `/session list \| create NAME \| resume [NAME] \| pause` |
@@ -75,11 +76,15 @@ commands, and `may_write_artifacts=True` because fresh authentication may fill
 a missing workspace default immediately under the established global `/auth`
 policy. `/settings` has both flags: provider selection and a full-path Apply
 Changes may authenticate, while any confirmed Apply Changes may persist
-configuration. A Message-details-only Apply Changes never authenticates.
+configuration. Message-details-only and Conversation-RAG-only Apply Changes
+never authenticate; the RAG-only path also performs no storage readiness,
+runtime activation, route/thread work, or optional-package probe.
 Provider-editor authentication alone persists neither its route nor a missing
 workspace default. Only after Apply Changes is confirmed may Apply-time
 authentication establish a durable missing default or the guarded settings
 transaction replace configuration documents.
+`/rag` has both flags false because parsing and arming are private local control;
+only the subsequent eligible story turn may perform provider/RAG work.
 
 For `/run`, `--output` must be first, or immediately after `--fresh`. The parser
 recognizes only ASCII space or tab between `--output`, its `PART/PATH.md`, and
@@ -124,13 +129,13 @@ positions are:
 
 | Position | Ordered replacements |
 | --- | --- |
-| Root command | The 22 main-available canonical commands and aliases in registry order; standalone `/compose`, `/send`, and `/cancel` are excluded. |
+| Root command | The 23 main-available canonical commands and aliases in registry order; standalone `/compose`, `/send`, and `/cancel` are excluded. |
 | `/session` | `list`, `create`, `resume`, `pause` |
 | `/conversation` | `new`, `list`, `resume`, `subject`, `archive` |
 | `/to`, `/agent`, `/persona` agent | The four preferred prompt aliases—`lead`, `plot`, `character`, and `execution`—in route order. Other accepted aliases remain parser-compatible but are not duplicated as completion candidates. |
 | `/run` option | `--fresh` |
 | `/conversation list` option | `--all` |
-| `/help`, `/?` command | The 22 root replacements plus `/compose`, `/send`, and `/cancel` in registry order. |
+| `/help`, `/?` command | The 23 root replacements plus `/compose`, `/send`, and `/cancel` in registry order. |
 | `/inspect` argument | `last` |
 | `/transcript ID [COUNT]` option | `--from` |
 
@@ -153,8 +158,8 @@ projection. It returns only the cursor-active text that may reach a provider:
 the whole ordinary buffer, the tail after a valid `@agent` route or `/say`, or
 the `/run` prompt remainder after recognized `--fresh` and `--output` fields.
 It returns `None` for management commands, identities, output paths, options,
-invalid routes, and a cursor outside the provider span. It performs no catalog
-read, reference parse, authorization, or mutation.
+invalid routes, `/rag` query control, and a cursor outside the provider span.
+It performs no catalog read, reference parse, authorization, or mutation.
 
 The installed controller combines that projection with current attachment and
 conversation focus before giving the terminal call-local artifact callbacks.
@@ -166,6 +171,13 @@ visible buffer through this parser once; the runtime then parses `${...}`
 indicators. `$` is therefore never a submitted shell command.
 
 ## Search and transcript grammar
+
+`/rag QUERY` removes exactly one ASCII delimiter and preserves the remaining
+opaque query in the representation-hidden `rag_query` field. It is alias-free
+and rejects a missing/blank query, Unicode control/format characters, or more
+than 200 codepoints under the established bounded-query normalization. The
+parser performs no retrieval and does not enforce attachment/focus; the
+controller owns one-turn arming and scope.
 
 `/search QUERY` removes exactly one ASCII delimiter and preserves the remaining
 opaque query. See [Conversation search](conversation-search.md).

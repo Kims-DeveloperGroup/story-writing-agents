@@ -124,12 +124,16 @@ any default already established.
 
 `/settings` is global, alias-free, and works in the lobby or while attached. It
 shows Current and Pending values for Language, Persona, Maximum debate rounds,
-Conversation storage, Message details, and Agents. A clean top level contains
-exactly those six choices in that order. Dirty state appends `Apply Changes
-(*Required)` and `Discard Changes`. Conversation storage offers Filesystem and
-SQLite as an independent next-shell workspace choice; it is not an agent
-provider route. Message details offers Off and On. Off is the default compact
-presentation; it never removes stored message content.
+Conversation storage, Conversation RAG, Message details, and Agents. A clean
+top level contains exactly those seven choices in that order. Dirty state
+appends `Apply Changes (*Required)` and `Discard Changes`, for nine choices.
+Conversation storage
+offers Filesystem and SQLite as an independent next-shell workspace choice; it
+is not an agent provider route. Conversation RAG opens a nested editor with
+Provider Disabled/Local and Automatic Off/On. Disabled also forces Off;
+selecting Local leaves Automatic Off; On requires pending Local. Message
+details offers Off and On. Off is the default compact presentation; it never
+removes stored message content.
 
 Choose Agents to select an agent in canonical roster order. Each agent shows
 its effective `(Provider/model/effort)` values beside its name. Agent settings
@@ -163,9 +167,10 @@ so both providers' inactive values stay identifiable.
 
 On a capable terminal, Up/Down moves the current picker highlight. Enter opens
 a selected settings level or applies a pending value. Language, Persona,
-Maximum debate rounds, Conversation storage, Message details, Provider, Model,
-Custom model, and Effort stay active after a valid Enter: the picker selection
-or prompt default updates immediately, and the editor shows one inline completed success
+Maximum debate rounds, Conversation storage, Conversation RAG Provider,
+Conversation RAG Automatic, Message details, Provider, Model, Custom model, and
+Effort stay active after a valid Enter: the picker selection or prompt default
+updates immediately, and the editor shows one inline completed success
 result for the latest value, replacing the previous result. Guidance states
 that Enter applies the pending value and keeps the editor open. A second
 consecutive valid Enter with the same normalized value returns one level
@@ -177,7 +182,9 @@ raw-key timing gesture.
 
 Escape returns one level through Custom model > Model > Agent settings > Agents
 > Settings; Provider and Effort return directly to Agent settings, while
-Conversation storage and Message details return directly to Settings. At root,
+Conversation RAG Provider/Automatic return to Conversation RAG, and
+Conversation RAG, Conversation storage, and Message details return directly to
+Settings. At root,
 Escape invokes the same action as explicit Discard Changes: clean settings exit
 immediately, while dirty settings open the existing YES/NO discard confirmation.
 NO or Escape there returns to Settings. Ctrl-C or EOF still cancels the whole
@@ -186,7 +193,8 @@ and the same level hierarchy. In the per-agent active-provider Custom model
 prompt, blank means inherit that provider's workspace system model and
 `/cancel` is literal model text rather than a command.
 
-Every retained value editor, including Conversation storage, always says
+Every retained value editor, including Conversation storage, both Conversation
+RAG fields, and Message details, always says
 `Entered changes remain pending in
 memory and are not saved; choose Apply Changes in Settings to persist them.` This stays
 visible when the editor first opens, after a valid value is entered, and while
@@ -261,7 +269,12 @@ the provider-authentication gate. If Message details is the only change, Story
 instead prepares, verifies, and commits that exact configuration candidate. It
 skips authentication, storage readiness, backend/runtime activation, route
 generation, and provider/thread work, then changes the active presentation flag
-only after commit succeeds.
+only after commit succeeds. If only Conversation RAG changes, Story prepares,
+verifies, and commits the system configuration without authentication, storage
+selection or readiness, backend/runtime prepare, commit, discard, or activation,
+route/thread work, composition, optional-package probing or installation,
+provider catalog, subprocess, socket, or network work. The current RAG service
+and automatic policy remain unchanged.
 
 Selecting SQLite records only a pending next-shell choice. During Apply Changes, Story
 checks workspace coordination and the active Python interpreter's functional
@@ -288,16 +301,17 @@ complete prepared snapshot. Provider, Model, or Effort fixed by a launch
 override is disabled and read-only because that override remains higher
 precedence.
 
-A confirmed mixed Apply Changes applies non-storage runtime changes, including
+A confirmed mixed Apply Changes applies live-capable runtime changes, including
 provider/model/effort and Message details, to this running shell without a
 restart. A Message-details-only Apply uses the smaller path described above. A
-storage-only apply selecting SQLite instead reports `Restart is required for sqlite.`
-without claiming live activation (`filesystem` appears on the reverse change).
-A mixed apply reports both the current-shell runtime success and storage
-restart notices. The desired storage backend applies to the next shell; the
-current controller/runtime storage bundle
-remains unchanged, and other running shells keep the runtime state and storage
-bundle they captured.
+RAG-only Apply reports `Conversation RAG settings were saved for the next
+shell. This running shell retains its current Conversation RAG service and
+automatic policy.` A storage change reports `Restart is required for sqlite.`
+when selecting SQLite (`filesystem` appears on the reverse change). Mixed
+changes emit only the applicable current-shell, RAG-next-shell, and storage-
+restart notices. Desired storage and Conversation RAG apply to the next shell;
+the current controller/runtime bundles remain unchanged, and other running
+shells keep the runtime state and bundles they captured.
 
 If effective execution profiles changed, the completed Settings panel adds one
 compact `[profiles changed]` count. It does not repeat every agent or changed
@@ -310,8 +324,9 @@ and effort changes are already active in this shell and need no restart.
 
 Editing the JSON files directly is different: there is no file watcher. A
 manual edit is reconciled when a new backend launches, while already running
-shells remain unchanged. Use `/settings` when non-storage runtime settings in
-the current shell must change without restarting. See
+shells remain unchanged. Use `/settings` when live-capable runtime settings in
+the current shell must change without restarting; Conversation RAG remains a
+next-shell choice. See
 [Agent configuration](../reference/configuration/agent-configuration.md) and
 [Filesystem safety](../operations/filesystem-safety.md). Antigravity setup and
 provider-specific precedence are in the [Antigravity guide](antigravity.md).
@@ -376,6 +391,41 @@ carries the envelope. Retrieval call one carries it, while retrieval
 continuations do not repeat it. See the exact
 [provider envelope](../design/prompts-and-provider.md#story-session-continuity-envelope)
 and [session storage](../reference/configuration/session-storage.md#provider-route-generations).
+
+Conversation RAG field editing does not probe or install the optional package,
+use the network, or prompt for credentials. At the next shell startup,
+Disabled skips optional-package work. Local composes one runtime service beside
+the complete active conversation-storage bundle with the saved Automatic
+value. Missing or incompatible pinned dependencies leave configuration
+unchanged, emit one fixed warning, and keep a RAG-free shell and `/settings`
+usable. Install or restore the reviewed pin with
+`python -m pip install --editable '.[rag]'`, then restart.
+
+## Arm one private RAG preflight
+
+`/rag QUERY` does not retrieve immediately. It privately arms one forced
+preflight for the next eligible ordinary, `/say`, or routed `@agent` turn in
+the exact attached session and focused active conversation:
+
+```text
+/rag lighthouse bargain
+@plot Reconcile it with ${core_documents/global_outline.md} and ${manuscript/part-01/opening.md}#L20-L32.
+```
+
+The command is alias-free; its nonblank control-free query is limited to 200
+codepoints. Rearming replaces the pending query. Ineligible commands retain it;
+changing scope, pausing/detaching, quitting, or cleanup clears it. A
+cancellation before the runtime coroutine enters retains it, while entry
+consumes it even if the turn fails or is cancelled. The command does not echo
+or persist the query, alter Automatic, or replace literal `/search`.
+
+Artifact references belong in the following story message, as in the example.
+Distinct-path whole-file and line-range references can coexist with that one
+RAG attempt. The existing same-path whole/range rejection remains. The agent
+receives bounded reauthorized excerpts and stable citations; the shell shows
+only the content-free RAG outcome/reason, reply, and cited sources—not excerpt
+bodies as diagnostics. Automatic On applies the same preflight to eligible
+focused advisory turns only; debate and consensus remain unchanged.
 
 ## Manage conversations and routing
 
@@ -504,6 +554,7 @@ prompt submission.
 | --- | --- |
 | `/history [COUNT]` | Local snapshot of current focus plus context accounting; no provider. |
 | `/search QUERY` | Bounded literal search over active subjects/events; no focus required. |
+| `/rag QUERY` | Privately arm one forced preflight for the next eligible focused advisory turn; no immediate read. |
 | `/transcript ID [COUNT] [--from N]` | Fresh bounded page from active or archived identity; focus unchanged. |
 | One advisory question | Agent may answer or request bounded active same-session search/read actions. |
 

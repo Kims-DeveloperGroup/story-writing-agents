@@ -22,8 +22,10 @@ from story_writing_agents.conversation_storage import (
     CONVERSATION_STORAGE_ACTIVATION_STATE_PATH,
     ConversationStorageActivationConflictError,
     ConversationStorageActivationOutcomeKind,
+    ConversationStorageActivationState,
     ConversationStorageBackend,
     ConversationStorageCapability,
+    ConversationStorageCoordinationError,
     ConversationStorageMigrationReadiness,
     ConversationStorageParity,
     ConversationStoragePreflight,
@@ -31,6 +33,7 @@ from story_writing_agents.conversation_storage import (
     ConversationStorageUnavailableError,
     WorkspaceConversationStorageMutationCoordinator,
     compose_filesystem_conversation_archive,
+    compose_filesystem_conversation_storage,
     load_conversation_storage_activation_state,
 )
 from story_writing_agents.conversation_storage.provisioning import (
@@ -42,6 +45,7 @@ from story_writing_agents.conversation_storage.selection import (
     ConversationStorageSelectionReport,
     ConversationStorageStartup,
     activate_configured_conversation_storage,
+    compose_active_conversation_storage,
     inspect_conversation_storage_parity,
     select_conversation_storage,
 )
@@ -108,6 +112,7 @@ class ConversationStorageSelectionSurfaceTests(unittest.TestCase):
                 "ConversationStorageStartup",
                 "inspect_conversation_storage_parity",
                 "select_conversation_storage",
+                "compose_active_conversation_storage",
                 "activate_configured_conversation_storage",
             ),
         )
@@ -258,7 +263,7 @@ class ConversationStorageSelectionTests(unittest.TestCase):
         coordinator.assert_not_called()
         self.assertEqual(_configuration_bytes(self.workspace), before)
 
-    def test_explicit_default_noop_and_legacy_save_are_canonical_ten_key(self) -> None:
+    def test_explicit_default_noop_and_legacy_save_are_canonical_twelve_key(self) -> None:
         before = _configuration_bytes(self.workspace)
         report = select_conversation_storage(self.workspace, "filesystem")
         self.assertEqual(
@@ -282,7 +287,9 @@ class ConversationStorageSelectionTests(unittest.TestCase):
         persisted = self.workspace.read_json(_SYSTEM_PATH)
         self.assertEqual(persisted["conversation_storage_backend"], "filesystem")
         self.assertIs(persisted["show_message_details"], False)
-        self.assertEqual(len(persisted), 10)
+        self.assertIsNone(persisted["conversation_rag_provider"])
+        self.assertIs(persisted["conversation_rag_automatic"], False)
+        self.assertEqual(len(persisted), 12)
         self.assertEqual(self.workspace.path(_AGENT_PATH).read_bytes(), agent_before)
         self.assertFalse(
             self.workspace.path(CONVERSATION_STORAGE_ACTIVATION_STATE_PATH).exists()
@@ -846,6 +853,79 @@ class ConversationStorageStartupTests(unittest.TestCase):
                 baseline.configuration.agent_configs,
             ),
         )
+
+    def test_active_composition_is_read_only_on_a_fresh_workspace(self) -> None:
+        workspace = initialized_workspace(self)
+        marker = workspace.path(CONVERSATION_STORAGE_ACTIVATION_STATE_PATH)
+        lock = workspace.path("config/.conversation_storage.lock")
+
+        def snapshot() -> dict[str, bytes]:
+            return {
+                path.relative_to(workspace.root).as_posix(): path.read_bytes()
+                for path in sorted(workspace.root.rglob("*"))
+                if path.is_file()
+            }
+
+        before = snapshot()
+        with mock.patch.object(
+            composition_module.WorkspaceConversationStorageMutationCoordinator,
+            "borrow",
+            side_effect=AssertionError("read-only composition borrowed a lease"),
+        ):
+            services = compose_active_conversation_storage(workspace)
+        self.assertIs(services.backend, ConversationStorageBackend.FILESYSTEM)
+        self.assertEqual(snapshot(), before)
+        self.assertFalse(marker.exists())
+        self.assertFalse(lock.exists())
+
+    def test_active_composition_rejects_activation_drift_backend_mismatch_and_contention(
+        self,
+    ) -> None:
+        filesystem = ConversationStorageActivationState(
+            ConversationStorageBackend.FILESYSTEM,
+            0,
+        )
+        sqlite = ConversationStorageActivationState(
+            ConversationStorageBackend.SQLITE,
+            1,
+        )
+        services = compose_filesystem_conversation_storage(self.workspace)
+        cases = (
+            (filesystem, sqlite, services),
+            (sqlite, sqlite, services),
+        )
+        for before, after, composed in cases:
+            with (
+                self.subTest(before=before, after=after),
+                mock.patch.object(
+                    selection_module,
+                    "load_conversation_storage_activation_state",
+                    side_effect=(before, after),
+                ),
+                mock.patch.object(
+                    selection_module,
+                    "_compose_active_services",
+                    return_value=composed,
+                ),
+                self.assertRaises(ConversationStorageCoordinationError),
+            ):
+                compose_active_conversation_storage(self.workspace)
+
+        with (
+            mock.patch.object(
+                selection_module,
+                "load_conversation_storage_activation_state",
+                side_effect=ConversationStorageCoordinationError(),
+            ),
+            mock.patch.object(
+                selection_module,
+                "_compose_active_services",
+                side_effect=AssertionError("composition must not follow contention"),
+            ) as compose,
+            self.assertRaises(ConversationStorageCoordinationError),
+        ):
+            compose_active_conversation_storage(self.workspace)
+        compose.assert_not_called()
 
     def test_startup_activates_empty_backends_in_both_directions(self) -> None:
         self.set_desired("sqlite")

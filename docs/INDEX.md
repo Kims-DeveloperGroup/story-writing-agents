@@ -10,6 +10,14 @@ Use this index to find one canonical answer instead of searching a long manual.
 > controller-boundary cancellation for active operations and local reads.
 > Desired conversation storage is resolved and activated before the native
 > authentication gate and interactive runtime construction.
+> Optional conversation RAG currently has direct Python contracts, a
+> deterministic local provider, a disposable generation store, and explicit
+> composition plus programmatic runtime/agent authorization, projection, and
+> cited context. Noninteractive `story rag` status, opt-in, rebuild, cited
+> search, disable, and derived-only purge are implemented. Interactive
+> `/settings` persists Disabled/Local and Off/On policy for the next shell;
+> eligible focused turns can use automatic preflight or one private armed
+> `/rag QUERY` preflight.
 > Inline `${path}` and `${path}#Lx-Ly` references are active in provider-bound
 > prompts. In those shell spans, `$` discovers current safe reference sources.
 > Exact `$$` immediately shows ranged-source choices; Enter/Tab opens the
@@ -40,6 +48,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Append/read transcripts; derive bounded complete-turn context | Shell turns append/consume context and `/transcript` reads fresh bounded pages; Python API |
 | Search one session and cite hits | Attached shell `/search` for active records; Python API can explicitly include archived records |
 | Ask an agent to retrieve cited conversation history | Focused shell conversation; additive Python runtime API; active records in the current session only |
+| Inspect or operate optional local conversation RAG | Provider-free `story rag status`; explicit `enable`, `rebuild`, cited `search`, `disable`, and derived-only `purge`; shell `/settings` provider/automatic policy; private one-turn `/rag QUERY`; or supported direct Python modules. Local use requires the exact-pinned `rag` extra before opt-in. [Commands, interactive use, and boundary](guides/conversation-rag.md) |
 | Persist and send one explicitly addressed one-step turn | Existing `StoryRuntime.converse()` Python API |
 | Run consensus with included, fresh, or draft-file input | Focused active shell conversation; noninteractive CLI and Python API remain available |
 | Publish and identify canonical agent-produced writing artifacts | Every unanimous consensus run; exact source paths and separate publication provenance in the writing-artifact reference |
@@ -64,6 +73,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 - [Story sessions and subject conversations](guides/story-sessions.md)
 - [Glasswater interactive end-to-end journey](guides/glasswater-scenario.md)
 - [Provider-free smoke test](guides/smoke-test.md)
+- [Optional conversation RAG setup, commands, runtime boundary, and interactive use](guides/conversation-rag.md)
 - [Antigravity setup, routing, and safety](guides/antigravity.md)
 - [Consensus runs](guides/consensus-runs.md)
 - [Directives](guides/directives.md)
@@ -74,6 +84,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 
 - [CLI](reference/cli.md)
 - [Package API and exports](reference/package-api.md)
+- [Optional conversation RAG direct-module API](reference/package-api.md#optional-conversation-rag-boundary)
 - [Conversation catalog](reference/conversation-catalog.md)
 - [Conversation transcripts](reference/conversation-transcripts.md)
 - [Canonical conversation archives, transfer, and storage migration](reference/conversation-archives.md)
@@ -95,7 +106,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 
 - [Overview](design/overview.md)
 - [Interactive CLI design system contract](design/interactive-cli-design-system.md)
-- [Canonical Python module inventory (69 production units)](../PYTHON_MODULE_INDEX.md)
+- [Canonical Python module inventory (76 production units)](../PYTHON_MODULE_INDEX.md)
 - [Prompts and provider boundary](design/prompts-and-provider.md)
 - [Session lifecycle](design/session-lifecycle.md)
 - [Consensus workflow](design/consensus-workflow.md)

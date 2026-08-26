@@ -3,8 +3,11 @@
 > **Availability:** JSON defaults, per-agent routing, interactive guarded
 > settings, editable role prompts, and persona templates are implemented for
 > Codex and Antigravity. Desired filesystem/SQLite conversation storage is an
-> independent system default. Interactive authentication establishes a missing
-> provider default; Codex is the final route fallback.
+> independent system default. Optional local conversation RAG has separate
+> provider/automatic system defaults operated by noninteractive `story rag`
+> commands and interactive Settings for the next shell. Interactive
+> authentication establishes a missing agent-provider default; Codex is the
+> final route fallback.
 
 Key terms: **system default**—the workspace fallback below an agent-specific
 value; **agent configuration**—
@@ -13,8 +16,8 @@ agent's static instructions; **persona template**—a reusable behavior document
 
 ## System defaults
 
-`config/system_defaults.json` uses a closed ten-field schema. New workspaces are
-initialized with:
+`config/system_defaults.json` uses a closed twelve-field schema. New workspaces
+are initialized with:
 
 ```json
 {
@@ -22,6 +25,8 @@ initialized with:
   "antigravity_model": null,
   "codex_model": null,
   "codex_reasoning_effort": null,
+  "conversation_rag_automatic": false,
+  "conversation_rag_provider": null,
   "conversation_storage_backend": "filesystem",
   "default_backend": null,
   "language": "KO",
@@ -42,25 +47,33 @@ initialized with:
 | `antigravity_effort` | Optional Antigravity workspace fallback; absent or `null` inherits the provider default. The only string values are exactly `low`, `medium`, and `high`. |
 | `default_backend` | Optional workspace provider fallback; absent or `null` falls through to Codex. A value is exactly `codex` or `antigravity`. Interactive authentication fills a missing value once and does not replace an existing value. |
 | `conversation_storage_backend` | Independent desired conversation storage for the next shell. A non-null value is exactly `filesystem` or `sqlite`; missing or `null` is read as the effective filesystem default. |
+| `conversation_rag_provider` | Independent optional conversation-RAG provider. Missing or `null` means disabled; the only non-null value is exactly `local`. `story rag enable --provider local` preflights the pinned optional package before saving it. `/settings` edits Disabled/Local without probing it. |
+| `conversation_rag_automatic` | Exact boolean; missing means `false`. `true` is valid only when `conversation_rag_provider` is `local`. A newly constructed shell composes this exact automatic policy once when Local is selected. |
 | `show_message_details` | A strict JSON boolean when present. Missing means `false` without rewriting the file. `false` selects compact terminal presentation; it never deletes or truncates stored content. |
 
 Unknown fields are rejected. The complete object is validated before a backend
 accepts any explicit model/effort override, so malformed persisted fields are
 never hidden by CLI or `AgentBackend` constructor values.
 
-Existing three-key, eight-key, and prior nine-key files remain valid: all missing
-provider-specific keys and `default_backend` resolve as `null`, providing no
-workspace model/effort or provider fallback beyond Codex. Missing or null
-`conversation_storage_backend` resolves to filesystem. Loading does not rewrite
-legacy bytes; the next successful complete settings or `story storage use`
-save emits the canonical ten-key object with an explicit storage value and
-`show_message_details`. A binary that still enforces the older closed nine-key
-schema rejects that newly saved file because it does not recognize
-`show_message_details`; downgrading requires an explicit compatible migration.
+Existing legacy files remain valid: all missing provider-specific keys and
+`default_backend` resolve as `null`, providing no workspace model/effort or
+agent-provider fallback beyond Codex. Missing or null
+`conversation_storage_backend` resolves to filesystem; missing RAG keys resolve
+to `null`/`false`, and missing `show_message_details` resolves to `false`.
+Loading does not rewrite legacy bytes. The next successful complete
+`/settings`, `story storage use`, or `story rag enable|disable` persistence
+emits the canonical twelve-key object with explicit storage, RAG, and message-
+details values. A binary that enforces an older closed nine-, ten-, or eleven-
+key schema rejects that newly saved file because it does not recognize every
+new field; downgrading requires an explicit compatible migration.
 Running `story init` again, including with `--overwrite-prompts`, does not
 rewrite or migrate existing system-default bytes. Global `/settings` edits this
-canonical ten-field object and the per-agent object through an isolated
-current/pending view; it adds no supported public save API. The ten language
+canonical twelve-field object and the per-agent object through an isolated
+current/pending view. Its Conversation RAG editor offers Provider
+Disabled/Local and Automatic Off/On; Disabled canonicalizes both keys to
+`null`/`false`, selecting Local preserves Off, and On requires pending Local.
+These editors perform no optional-package probe or installation and add no
+supported public save API. The ten language
 choices are exactly `KO`, `EN`,
 `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, and `RU`. Persona choices come from
 the safe lexical catalog with top-level-template precedence. An existing
@@ -76,13 +89,30 @@ readiness, installation consent, provisioning, parity, and activation are
 described by the
 [CLI storage contract](../cli.md#conversation-storage-selection).
 
+Conversation RAG is independent of both agent-provider routing and desired
+conversation storage. `story rag enable --provider local` preserves the
+current automatic boolean; `story rag disable` clears the provider and forces
+automatic to `false`. Neither operation edits agent configurations. Direct
+validated JSON or `/settings` may set automatic to `true` only beside provider
+`local`. A successful Apply of those RAG values uses the established exact-byte
+guarded replacement, and the RAG change affects the next shell only. A RAG-only Apply performs no
+authentication, storage readiness, runtime activation, route/thread work, or
+optional-package probe. That shell reads its backend
+construction snapshot once and, when Local is selected, composes one runtime
+service with the exact automatic value. Disabled selection performs no
+optional-package probe; missing or incompatible Local dependencies leave the
+configuration unchanged and produce a usable RAG-free shell with one fixed
+warning. Exact command and shell behavior is in the
+[conversation RAG CLI contract](../cli.md#conversation-rag-operations) and
+[interactive RAG guide](../../guides/conversation-rag.md#interactive-conversation-rag).
+
 At interactive startup, `default_backend` is written only when missing. A
 provider authenticated by that immediate interaction wins; otherwise a sole
 authenticated provider wins; when both are already authenticated, Codex wins.
 The first durable default does not rewrite any explicit agent route. Later
 `/auth` or settings authentication follows the same absent-only rule. Within
 Settings, a newly authenticated missing default is rebased into the pending
-candidate and becomes durable only with the final complete save.
+candidate and becomes durable only with the final complete Apply Changes.
 
 ## Per-agent configuration
 
@@ -172,26 +202,33 @@ shell because the override remains higher precedence.
 Opening `/settings` captures exact bytes for both configuration documents and
 the optional provider-route generation record, a fully validated immutable
 configuration pair, and the safe persona catalog. The root picker has exactly
-six rows in this order: Language, Persona, Maximum debate rounds, Conversation
-storage, Message details, and Agents. The system object is the canonical
-ten-field shape, including independent desired conversation storage and the
-message-presentation preference. No configuration value is persisted before
-Apply Changes is confirmed; Escape or cancellation leaves the captured bytes
+seven rows in this order: Language, Persona, Maximum debate rounds,
+Conversation storage, Conversation RAG, Message details, and Agents. The
+system object is the canonical twelve-field shape, including independent
+desired conversation storage, startup-fixed RAG policy, and the message-
+presentation preference. No configuration value is persisted before Apply
+Changes is confirmed; Escape or cancellation leaves the captured bytes
 unchanged.
 
-After confirmation, Apply Changes uses one of two exact paths. If
+After confirmation, Apply Changes uses one of three exact paths. If
 `show_message_details` is the only difference from the immutable opening
 snapshot, the controller prepares, verifies, and commits that configuration
 change without authentication, backend or runtime staging/activation, storage
 readiness, route switching or generation work, or provider/thread changes. The
-active presentation flag changes only after the commit succeeds. Every mixed
-change uses the full path: it freshly authenticates every distinct effective
+active presentation flag changes only after the commit succeeds. If only the
+two Conversation RAG values differ, the controller prepares, verifies, and
+commits the system configuration without authentication, storage selection or
+readiness, backend/runtime prepare, commit, discard, or activation, route/thread
+work, composition, optional-package probing or installation, provider catalog,
+subprocess, socket, or network work. The running RAG service and automatic
+policy remain unchanged. Every other mixed change uses the full path: it
+freshly authenticates every distinct effective
 provider, preflights staged adapters, prepares runtime quiescence, validates the
 candidate, coordinates storage readiness and fresh parity, and requires the
 opening facts to remain exact. The active presentation flag changes only after
 full activation succeeds. A missing provider default learned inside Settings
 remains in the pending candidate and becomes durable only through this complete
-save.
+Apply Changes.
 
 The prepared boundary is exactly `config/system_defaults.json`,
 `config/agent_configs.json`, and optional
@@ -200,11 +237,13 @@ targets are written in that order; a write failure triggers reverse-order
 restoration of every attempted target, including the failing target, from its
 exact opening bytes. After persistence, the staged backend and runtime snapshot
 become active in the current shell without a restart, except that desired
-conversation storage applies only when the next shell selects a bundle. The
-current controller/runtime storage bundle is unchanged. A storage-only save
-therefore reports the desired backend and `Changes apply to the next shell`;
-a mixed save separately reports the current-shell runtime activation and the
-next-shell storage change.
+conversation storage and Conversation RAG apply only to the next shell. The
+current controller/runtime storage and RAG bundles remain unchanged. A
+RAG-only Apply reports `Conversation RAG settings were saved for the next
+shell. This running shell retains its current Conversation RAG service and
+automatic policy.` A storage change reports `Restart is required for BACKEND.`
+A mixed Apply emits only the applicable current-shell, RAG-next-shell, and
+storage-restart notices.
 
 A safe post-persist activation failure restores the exact configuration and
 route files and leaves the old runtime active. If the runtime cannot prove
@@ -232,8 +271,9 @@ backend construction validates and captures the complete persisted system and
 agent configuration pair. Direct on-disk edits have no watcher: a newly
 launched backend validates and reconciles them, while existing other shells
 retain their captured state. Confirmed `/settings` Apply Changes is the distinct
-current-shell hot-activation path for non-storage runtime settings described
-above; desired conversation storage remains a next-shell selection. Session
+current-shell hot-activation path for live-capable runtime settings described
+above; desired conversation storage and Conversation RAG remain next-shell
+selections. Session
 language and persona overrides remain live, and explicit applicable
 CLI/constructor provider settings remain higher precedence. Role, persona, and
 core-document content continues to follow its separate definition-snapshot and

@@ -344,7 +344,8 @@ provider change made directly in configuration while processes were stopped.
 Each provider change increments that agent's generation, including A→B→A.
 Only a confirmed full-path `/settings` Apply Changes updates it in the same
 prepared boundary as the two configuration files when a switch requires it. A
-Message-details-only Apply Changes performs no route-generation work.
+Message-details-only or Conversation-RAG-only Apply Changes performs no route-
+generation work.
 
 The generation is not a user preference. A nonzero value participates in the
 definition fingerprint and forces a fresh target-provider thread; zero keeps

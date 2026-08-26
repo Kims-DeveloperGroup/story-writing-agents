@@ -26,8 +26,18 @@ from story_writing_agents import (
 )
 from story_writing_agents import conversation_retrieval as retrieval_module
 from story_writing_agents.agents import PLOT_ARCHITECT
+from story_writing_agents.conversation_rag import (
+    ConversationRagDocumentIdentity,
+    ConversationRagDocumentKey,
+    ConversationRagOutcome,
+    ConversationRagReason,
+    ConversationRagSourceReference,
+)
 from story_writing_agents.conversation_retrieval import (
     CONVERSATION_RETRIEVAL_POLICY,
+    ConversationRagAttemptOutcome,
+    ConversationRagContext,
+    ConversationRagExcerpt,
     ConversationRetrievalAction,
     ConversationRetrievalActionHandler,
     ConversationRetrievalActionKind,
@@ -149,6 +159,63 @@ def _source(
     return ConversationRetrievalSource(
         subject=subject,
         citation=_conversation_citation() if citation is None else citation,
+    )
+
+
+def _rag_excerpt(
+    ordinal: int = 1,
+    *,
+    content: str = "authorized excerpt",
+    session_id: str = _SESSION,
+) -> ConversationRagExcerpt:
+    """Build one exact provider-visible authoritative RAG excerpt."""
+
+    identity = ConversationRagDocumentIdentity(
+        key=ConversationRagDocumentKey(
+            session_id=session_id,
+            document_id=f"{ordinal:064x}",
+        ),
+        conversation_id=f"source_{ordinal}",
+        start_turn_id=f"source_turn_{ordinal}",
+        end_turn_id=f"source_turn_{ordinal}",
+        start_sequence=1,
+        end_sequence=2,
+        revision_id="sha256:" + f"{ordinal:064x}",
+    )
+    return ConversationRagExcerpt(
+        citation_id=f"g{ordinal}",
+        source=_source(
+            _conversation_citation(
+                identity.conversation_id,
+                session_id=session_id,
+            )
+        ),
+        reference=ConversationRagSourceReference(
+            document=identity,
+            fragment_id=f"fragment-{ordinal}",
+            start_codepoint=0,
+            end_codepoint=len(content),
+        ),
+        content=content,
+    )
+
+
+def _rag_context(
+    excerpts: tuple[ConversationRagExcerpt, ...] = (),
+    *,
+    outcome: ConversationRagOutcome = ConversationRagOutcome.COMPLETE,
+    reason: ConversationRagReason = ConversationRagReason.NONE,
+    truncated: bool = False,
+) -> ConversationRagContext:
+    """Build one exact attempted RAG context with computed byte accounting."""
+
+    return ConversationRagContext(
+        outcome=ConversationRagAttemptOutcome(outcome=outcome, reason=reason),
+        excerpts=excerpts,
+        retained_utf8_bytes=sum(
+            len(excerpt.content.encode("utf-8")) for excerpt in excerpts
+        ),
+        truncated=truncated,
     )
 
 
@@ -391,6 +458,12 @@ class ConversationRetrievalContractTests(unittest.TestCase):
             context=_empty_context(),
             sources=(source,),
         )
+        rag_outcome = ConversationRagAttemptOutcome(
+            outcome=ConversationRagOutcome.COMPLETE,
+            reason=ConversationRagReason.NONE,
+        )
+        rag_excerpt = _rag_excerpt()
+        rag_context = _rag_context((rag_excerpt,))
         progress = ConversationRetrievalProgressEvent(
             session_id=_SESSION,
             conversation_id="selected_conversation",
@@ -400,10 +473,22 @@ class ConversationRetrievalContractTests(unittest.TestCase):
             phase=ConversationRetrievalProgressPhase.SEARCH_STARTED,
         )
         cases = (
+            (ConversationRagAttemptOutcome, rag_outcome, (
+                "outcome", "reason",
+            ), ()),
+            (ConversationRagExcerpt, rag_excerpt, (
+                "citation_id", "source", "reference", "content",
+            ), ()),
+            (ConversationRagContext, rag_context, (
+                "outcome", "excerpts", "retained_utf8_bytes", "truncated",
+            ), ()),
             (ConversationRetrievalRequest, request, (
                 "session_id", "conversation_id", "turn_id", "agent_id",
-                "content", "context", "story_session_context",
-            ), (("story_session_context", None),)),
+                "content", "context", "story_session_context", "rag_context",
+            ), (
+                ("story_session_context", None),
+                ("rag_context", None),
+            )),
             (ConversationRetrievalSearchAction, search_action, (
                 "kind", "session_id", "conversation_id", "turn_id",
                 "action_index", "query",
@@ -437,7 +522,12 @@ class ConversationRetrievalContractTests(unittest.TestCase):
             (ConversationRetrievalResult, result, (
                 "session_id", "conversation_id", "turn_id", "agent_id",
                 "content", "context", "sources", "reference_operation_id",
-            ), (("reference_operation_id", None),)),
+                "rag_outcome", "rag_sources",
+            ), (
+                ("reference_operation_id", None),
+                ("rag_outcome", None),
+                ("rag_sources", ()),
+            )),
             (ConversationRetrievalProgressEvent, progress, (
                 "session_id", "conversation_id", "turn_id", "agent_id",
                 "action_index", "phase", "search_hit_count",
@@ -477,6 +567,174 @@ class ConversationRetrievalContractTests(unittest.TestCase):
         self.assertIs(end.default, inspect.Parameter.empty)
         self.assertEqual(get_type_hints(ConversationRetrievalReadAction)["end_sequence"], int | None)
 
+    def test_rag_context_wire_authority_citations_repr_and_bounds_are_exact(
+        self,
+    ) -> None:
+        excerpt = _rag_excerpt(content="authoritative 🙂")
+        context = _rag_context((excerpt,))
+        document = excerpt.reference.document
+        expected_reference = {
+            "document": {
+                "key": {
+                    "session_id": _SESSION,
+                    "document_id": document.key.document_id,
+                },
+                "conversation_id": document.conversation_id,
+                "start_turn_id": document.start_turn_id,
+                "end_turn_id": document.end_turn_id,
+                "start_sequence": 1,
+                "end_sequence": 2,
+                "revision_id": document.revision_id,
+            },
+            "fragment_id": "fragment-1",
+            "start_codepoint": 0,
+            "end_codepoint": len(excerpt.content),
+        }
+        self.assertEqual(
+            excerpt.to_dict(),
+            {
+                "citation_id": "g1",
+                "source": excerpt.source.to_dict(),
+                "reference": expected_reference,
+                "content": "authoritative 🙂",
+            },
+        )
+        self.assertEqual(
+            context.to_dict(),
+            {
+                "outcome": "complete",
+                "reason": "none",
+                "excerpts": [excerpt.to_dict()],
+                "retained_utf8_bytes": len(excerpt.content.encode("utf-8")),
+                "truncated": False,
+            },
+        )
+        self.assertNotIn(excerpt.content, repr(excerpt))
+        self.assertNotIn(excerpt.content, repr(context))
+
+        valid_pairs = (
+            (ConversationRagOutcome.COMPLETE, ConversationRagReason.NONE),
+            (ConversationRagOutcome.PARTIAL, ConversationRagReason.PARTIAL),
+            *(
+                (ConversationRagOutcome.LITERAL_FALLBACK, reason)
+                for reason in (
+                    ConversationRagReason.DISABLED,
+                    ConversationRagReason.UNAVAILABLE,
+                    ConversationRagReason.STALE,
+                    ConversationRagReason.CORRUPT,
+                    ConversationRagReason.INCOMPATIBLE,
+                    ConversationRagReason.FAILED,
+                )
+            ),
+        )
+        for outcome, reason in valid_pairs:
+            with self.subTest(outcome=outcome, reason=reason):
+                ConversationRagAttemptOutcome(outcome=outcome, reason=reason)
+        for outcome, reason in (
+            (ConversationRagOutcome.COMPLETE, ConversationRagReason.PARTIAL),
+            (ConversationRagOutcome.PARTIAL, ConversationRagReason.NONE),
+            (ConversationRagOutcome.LITERAL_FALLBACK, ConversationRagReason.NONE),
+        ):
+            with self.subTest(invalid=(outcome, reason)), self.assertRaises(ValueError):
+                ConversationRagAttemptOutcome(outcome=outcome, reason=reason)
+
+        eight_hundred = _rag_excerpt(content="🙂" * 800)
+        self.assertEqual(len(eight_hundred.content), 800)
+        with self.assertRaisesRegex(ValueError, "fixed limit"):
+            _rag_excerpt(content="x" * 801)
+        with self.assertRaisesRegex(ValueError, "citation ID"):
+            replace(excerpt, citation_id="g0")
+        with self.assertRaisesRegex(ValueError, "citation ID"):
+            _rag_excerpt(21)
+
+        maximum = tuple(_rag_excerpt(index, content="x") for index in range(1, 21))
+        _rag_context(maximum)
+        duplicate = replace(maximum[0], citation_id="g2")
+        with self.assertRaisesRegex(ValueError, "duplicate references"):
+            _rag_context((maximum[0], duplicate))
+
+        exact_bytes = tuple(
+            _rag_excerpt(index, content="🙂" * (800 if index <= 10 else 192))
+            for index in range(1, 12)
+        )
+        self.assertEqual(_rag_context(exact_bytes).retained_utf8_bytes, 32_768)
+        one_over = (*exact_bytes[:-1], _rag_excerpt(11, content="🙂" * 193))
+        with self.assertRaisesRegex(ValueError, "UTF-8 byte limit"):
+            _rag_context(one_over)
+
+        with self.assertRaisesRegex(ValueError, "crossed its session"):
+            ConversationRetrievalRequest(
+                session_id=_SESSION,
+                conversation_id="selected_conversation",
+                turn_id=_FIXED_TURN,
+                agent_id=PLOT_ARCHITECT,
+                content="question",
+                context=_empty_context(),
+                rag_context=_rag_context((_rag_excerpt(session_id="foreign_session"),)),
+            )
+        with self.assertRaisesRegex(TypeError, "RAG outcome"):
+            ConversationRetrievalResult(
+                session_id=_SESSION,
+                conversation_id="selected_conversation",
+                turn_id=_FIXED_TURN,
+                agent_id=PLOT_ARCHITECT,
+                content="answer",
+                context=_empty_context(),
+                sources=(),
+                rag_outcome=object(),  # type: ignore[arg-type]
+            )
+
+    def test_result_rag_sources_are_an_exact_ordered_authorized_subset(self) -> None:
+        first = _source(subject="first")
+        second = _source(
+            _conversation_citation("second_conversation"),
+            subject="second",
+        )
+        outcome = ConversationRagAttemptOutcome(
+            outcome=ConversationRagOutcome.COMPLETE,
+            reason=ConversationRagReason.NONE,
+        )
+        values = dict(
+            session_id=_SESSION,
+            conversation_id="selected_conversation",
+            turn_id=_FIXED_TURN,
+            agent_id=PLOT_ARCHITECT,
+            content="answer",
+            context=_empty_context(),
+            sources=(first, second),
+        )
+        result = ConversationRetrievalResult(
+            **values,
+            rag_outcome=outcome,
+            rag_sources=(second,),
+        )
+        self.assertEqual(result.rag_sources, (second,))
+
+        with self.assertRaisesRegex(ValueError, "require an attempted outcome"):
+            ConversationRetrievalResult(**values, rag_sources=(first,))
+        with self.assertRaisesRegex(ValueError, "ordered result subset"):
+            ConversationRetrievalResult(
+                **values,
+                rag_outcome=outcome,
+                rag_sources=(second, first),
+            )
+        foreign = _source(
+            _conversation_citation(session_id="foreign_session"),
+            subject="foreign",
+        )
+        with self.assertRaisesRegex(ValueError, "crossed its session"):
+            ConversationRetrievalResult(
+                **values,
+                rag_outcome=outcome,
+                rag_sources=(foreign,),
+            )
+        with self.assertRaisesRegex(TypeError, "sources must be a tuple"):
+            ConversationRetrievalResult(
+                **values,
+                rag_outcome=outcome,
+                rag_sources=[first],  # type: ignore[arg-type]
+            )
+
     def test_unions_handler_signatures_exports_and_error_facade_are_exact(self) -> None:
         self.assertEqual(
             set(get_args(ConversationRetrievalAction)),
@@ -510,6 +768,9 @@ class ConversationRetrievalContractTests(unittest.TestCase):
         )
         expected = (
             "CONVERSATION_RETRIEVAL_POLICY",
+            "ConversationRagAttemptOutcome",
+            "ConversationRagContext",
+            "ConversationRagExcerpt",
             "ConversationRetrievalAction",
             "ConversationRetrievalActionHandler",
             "ConversationRetrievalActionKind",
@@ -532,8 +793,15 @@ class ConversationRetrievalContractTests(unittest.TestCase):
             "serialize_conversation_retrieval_observation",
         )
         self.assertEqual(tuple(retrieval_module.__all__), expected)
-        facade_names = set(expected) - {"serialize_conversation_retrieval_observation"}
+        direct_only = {
+            "ConversationRagAttemptOutcome",
+            "ConversationRagContext",
+            "ConversationRagExcerpt",
+            "serialize_conversation_retrieval_observation",
+        }
+        facade_names = set(expected) - direct_only
         self.assertTrue(facade_names.issubset(story_writing_agents.__all__))
+        self.assertTrue(direct_only.isdisjoint(story_writing_agents.__all__))
         self.assertNotIn("serialize_conversation_retrieval_observation", story_writing_agents.__all__)
         for name in facade_names:
             self.assertIs(getattr(story_writing_agents, name), getattr(retrieval_module, name))
@@ -721,7 +989,14 @@ class ConversationRetrievalContractTests(unittest.TestCase):
         }
         self.assertEqual(
             dependencies,
-            {"agents", "conversation_search", "conversations", "errors", "models"},
+            {
+                "agents",
+                "conversation_rag",
+                "conversation_search",
+                "conversations",
+                "errors",
+                "models",
+            },
         )
         environment = os.environ.copy()
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -734,7 +1009,7 @@ class ConversationRetrievalContractTests(unittest.TestCase):
                     "import sys; sys.path.insert(0, "
                     + repr(str(root / "src"))
                     + "); import story_writing_agents.conversation_retrieval as m; "
-                    "assert len(m.__all__) == 21; "
+                    "assert len(m.__all__) == 24; "
                     "assert m.CONVERSATION_RETRIEVAL_POLICY.max_provider_calls == 5"
                 ),
             ],

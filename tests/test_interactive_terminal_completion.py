@@ -75,6 +75,7 @@ from story_writing_agents.interactive_terminal._render import (
 
 ROOT_REPLACEMENTS = (
     "/say",
+    "/rag",
     "/to",
     "/agent",
     "/agents",

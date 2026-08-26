@@ -6,6 +6,11 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
 
+[project.optional-dependencies]
+rag = [
+    "generic-rag @ git+https://github.com/Kims-DeveloperGroup/generic-rag.git@c77456321c614518e420e45c033e3f71dc5363b8",
+]
+
 [project.scripts]
 story-writing-agents = "story_writing_agents.cli:main"
 story = "story_writing_agents.cli:main"

@@ -4,7 +4,12 @@
 > dependency direction, filesystem/SQLite conversation selection, and the
 > installed interactive controller. The controller now uses the package-internal supplied-text viewer
 > for `$`/`$$` prompt editing; the viewer still has no standalone command or
-> supported public API.
+> supported public API. Optional conversation RAG currently has direct Python
+> contracts, a deterministic local provider, a disposable generation store, and
+> explicit composition plus programmatic runtime/agent integration. Six
+> noninteractive local lifecycle/search commands are implemented; interactive
+> `/settings`, automatic eligible-turn wiring, and one-turn `/rag QUERY` are
+> also available.
 
 Key terms: **controller**—owner of interactive transition order;
 **adapter**—provider-specific process/protocol implementation;
@@ -43,6 +48,41 @@ Antigravity-native state; taint or a changed definition starts a fresh provider
 conversation without deleting prior data. See the
 [Backend/session contract](../reference/backend-and-sessions.md) and
 [Antigravity guide](../guides/antigravity.md).
+
+## Optional conversation RAG ownership
+
+| Module | Responsibility |
+| --- | --- |
+| `conversation_rag` | Standard-library-only story contracts, fixed projection/retrieval budgets, stable source identities, collaborator protocols, outcomes, reasons, and content-free failures |
+| `conversation_rag_local` | Pure fixed local embedding and deterministic vector ranking; no generic package, filesystem, network, credential, subprocess, environment, or lifecycle ownership |
+| `conversation_rag_store` | Identity-bound disposable per-session generation construction, full verification, active/status pointers, reader contexts, and confirmed derived-only purge |
+| `generic_rag_adapter` | Sole production translation boundary that imports story contracts and the exact optional `generic-rag` API |
+| `conversation_rag_composition` | Import-safe deferred generic/local composition, fixed `local` allowlist, version/capability inspection, concrete local store/state/runtime bundle, store-aware fallback, and sanitized diagnostics |
+| `conversation_rag_runtime` | Provider/store-neutral no-write inspection, authoritative projection, literal-first merge, direct authorized search, current reread, citations, bounded agent context, and restart-safe state coordination |
+| `conversation_rag_cli` | Direct-only immutable request/report vocabulary and six local configuration/lifecycle/search workflows; no interactive controller or storage-adapter ownership |
+
+`generic-rag` has no dependency on this project. The package root does not
+re-export these modules, the base install does not need the generic package,
+and importing the provider/store/composition path neither probes package
+metadata nor imports `generic-rag`. Explicit composition requires the pinned
+optional package. `conversation_rag_runtime` consumes only story-owned contracts
+and a complete `ConversationStorageServices` authority; it does not import the
+generic package, store, provider, controller, or settings. It authorizes active
+complete visible turns, schedules projection, reauthorizes stable references,
+rereads exact current bytes, and constructs bounded cited agent context.
+Provider fragment text and every derived generation remain non-authoritative.
+Callers own their workspace, store, lexical collaborator, low-level service,
+and restart-safe runtime-state-port lifecycles; fixed local composition can
+instead construct and retain those concrete resources for the CLI or another
+application. Configuration owns only nullable provider/exact automatic values,
+the noninteractive CLI owns its compare-and-set workflow, and interactive
+Settings owns one pending guarded edit transaction. The controller reads the
+backend construction snapshot once, composes Local exactly once beside a
+complete storage bundle, and owns only the process-local pending `/rag` query.
+See
+[Optional conversation RAG](../guides/conversation-rag.md) for installation,
+the weak-local/persistence/runtime boundary, current commands, and interactive
+flow.
 
 Provider switches also advance a durable per-agent route generation, including
 A→B→A, so each switch starts a fresh target-provider thread. Same-provider
@@ -267,10 +307,14 @@ Confirmed Apply Changes hot-applies runtime-affecting settings, including
 execution profiles, to the current backend/runtime without a restart. A
 Message details-only Apply uses prepare, verify, and commit without provider,
 storage, backend, runtime, route, or thread activation. Desired storage is
-persisted for the next shell; the current controller/runtime storage bundle is
-unchanged. Launch overrides remain higher precedence and read-only. Direct disk
-edits have no watcher and are reconciled only by a newly launched backend;
-other running shells retain their captured state.
+persisted for the next shell. A Conversation-RAG-only Apply likewise commits
+only system configuration, without authentication, storage readiness,
+backend/runtime activation, route/thread work, composition, or optional-package
+probing; the saved policy starts with the next shell. The current
+controller/runtime storage and RAG bundles remain unchanged. Launch overrides
+remain higher precedence and read-only. Direct disk edits have no watcher and
+are reconciled only by a newly launched backend; other running shells retain
+their captured state.
 
 The core gives immutable facts to policy validators and receives validated
 values, typed failures/errors, actions, or safe summaries. Leaves retain

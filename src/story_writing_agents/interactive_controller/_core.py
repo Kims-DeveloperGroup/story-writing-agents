@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import uuid
 import sys
+import uuid
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from types import TracebackType
 from typing import Mapping, TypeVar
 
@@ -38,6 +38,10 @@ from ..conversation_retrieval import (
     ConversationRetrievalProgressPhase,
     ConversationRetrievalResult,
     ConversationRetrievalSource,
+)
+from ..conversation_rag_composition import (
+    ConversationRagCompositionError,
+    compose_local_conversation_rag_runtime,
 )
 from ..conversation_storage.contracts import ConversationStorageServices
 from ..conversation_storage.selection import (
@@ -104,6 +108,8 @@ from ..interactive_settings import (
     update_agent_backend,
     update_agent_codex_model,
     update_agent_codex_reasoning_effort,
+    update_conversation_rag_automatic,
+    update_conversation_rag_provider,
     update_conversation_storage_backend,
     update_language,
     update_max_debate_rounds,
@@ -275,6 +281,29 @@ _SETTINGS_UNARMED = object()
 _ExceptionState = tuple[BaseException, TracebackType | None]
 
 
+@dataclass(frozen=True, slots=True)
+class _PendingConversationRagQuery:
+    """Retain one private next-turn query in its exact process-local scope."""
+
+    session_id: str
+    conversation_id: str
+    query: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        """Validate exact scope identifiers and the bounded private query."""
+
+        Workspace.validate_identifier(self.session_id)
+        Workspace.validate_identifier(
+            self.conversation_id,
+            label="conversation ID",
+        )
+        ConversationSearchQuery(
+            text=self.query,
+            limit=20,
+            include_archived=False,
+        )
+
+
 def _effective_settings_provider(
     state: SettingsState,
     agent_id: str,
@@ -284,9 +313,7 @@ def _effective_settings_provider(
 ) -> str:
     """Resolve one settings route through agent, workspace, then Codex."""
 
-    configuration = (
-        state.pending if pending else state.baseline.configuration
-    )
+    configuration = state.pending if pending else state.baseline.configuration
     agent = configuration.agent_configs[agent_id]
     return (
         (provider_overrides or {}).get(agent_id)
@@ -488,6 +515,28 @@ def _settings_projection(
             pending.system_defaults.conversation_storage_backend or "filesystem",
         ),
         (
+            "conversation_rag_provider",
+            None,
+            "Conversation RAG Provider",
+            (
+                "Local"
+                if current.system_defaults.conversation_rag_provider == "local"
+                else "Disabled"
+            ),
+            (
+                "Local"
+                if pending.system_defaults.conversation_rag_provider == "local"
+                else "Disabled"
+            ),
+        ),
+        (
+            "conversation_rag_automatic",
+            None,
+            "Conversation RAG Automatic",
+            "On" if current.system_defaults.conversation_rag_automatic else "Off",
+            "On" if pending.system_defaults.conversation_rag_automatic else "Off",
+        ),
+        (
             "show_message_details",
             None,
             "Message details",
@@ -612,6 +661,7 @@ class InteractiveController:
         "_conversation_catalog",
         "_conversation_event_store",
         "_conversation_memory_service",
+        "_conversation_rag_startup_unavailable",
         "_conversation_storage_services",
         "_composition_input",
         "_context",
@@ -622,6 +672,7 @@ class InteractiveController:
         "_picker_input",
         "_prompt_input",
         "_provider_catalog",
+        "_pending_rag_query",
         "_advisory_progress",
         "_debate_progress",
         "_runner",
@@ -674,9 +725,7 @@ class InteractiveController:
             not callable(getattr(auth_coordinator, operation, None))
             for operation in _AUTH_COORDINATOR_OPERATIONS
         ):
-            raise TypeError(
-                "auth_coordinator must provide choices, probe_all, and run"
-            )
+            raise TypeError("auth_coordinator must provide choices, probe_all, and run")
         resolved_provider_catalog = (
             ProviderCatalogService(workspace.root)
             if provider_catalog is None
@@ -692,10 +741,9 @@ class InteractiveController:
         self._error_write_count = 0
         self._context = context
         self._backend = backend
-        self._show_message_details = (
-            backend_configuration_snapshot(backend)
-            .system_defaults.show_message_details
-        )
+        self._show_message_details = backend_configuration_snapshot(
+            backend
+        ).system_defaults.show_message_details
         self._terminal = terminal
         self._auth_coordinator = auth_coordinator
         self._provider_catalog = resolved_provider_catalog
@@ -720,11 +768,27 @@ class InteractiveController:
             raise TypeError(
                 "conversation_storage_services must be ConversationStorageServices"
             )
+        startup_configuration = backend_configuration_snapshot(backend)
+        rag_service = None
+        self._conversation_rag_startup_unavailable = False
+        if startup_configuration.system_defaults.conversation_rag_provider == "local":
+            if conversation_storage_services is None:
+                self._conversation_rag_startup_unavailable = True
+            else:
+                try:
+                    rag_composition = compose_local_conversation_rag_runtime(
+                        workspace,
+                        automatic_enabled=(
+                            startup_configuration.system_defaults.conversation_rag_automatic
+                        ),
+                    )
+                except ConversationRagCompositionError:
+                    self._conversation_rag_startup_unavailable = True
+                else:
+                    rag_service = rag_composition.service
         if conversation_storage_services is None and conversation_catalog is None:
             self._runtime = StoryRuntime(workspace, backend)
-            conversation_storage_services = (
-                self._runtime.conversation_storage_services
-            )
+            conversation_storage_services = self._runtime.conversation_storage_services
             if type(conversation_storage_services) is not ConversationStorageServices:
                 raise TypeError("runtime storage services are invalid")
         elif conversation_storage_services is not None:
@@ -732,6 +796,7 @@ class InteractiveController:
                 workspace,
                 backend,
                 conversation_storage_services=conversation_storage_services,
+                conversation_rag_service=rag_service,
             )
         resolved_catalog = (
             conversation_storage_services.catalog
@@ -743,9 +808,7 @@ class InteractiveController:
             not callable(getattr(resolved_catalog, operation, None))
             for operation in _CONVERSATION_CATALOG_OPERATIONS
         ):
-            raise TypeError(
-                "conversation_catalog must implement ConversationCatalog"
-        )
+            raise TypeError("conversation_catalog must implement ConversationCatalog")
         self._conversation_storage_services = conversation_storage_services
         self._conversation_catalog = resolved_catalog
         self._conversation_event_store = (
@@ -762,17 +825,14 @@ class InteractiveController:
                 backend,
                 conversation_event_store=self._conversation_event_store,
             )
-        self._conversation_memory_service: (
-            ConversationMemoryService | None
-        ) = None
+        self._conversation_memory_service: ConversationMemoryService | None = None
+        self._pending_rag_query: _PendingConversationRagQuery | None = None
         self._attached_session_id: str | None = None
         self._focused_conversation: ConversationMetadata | None = None
         self._target_agent_id = LEAD_ORCHESTRATOR
         self._last_started_debate_by_session: dict[str, str] = {}
         self._debate_message_offsets: dict[tuple[str, str], int] = {}
-        self._debate_last_conflict_targets: dict[
-            tuple[str, str], tuple[str, ...]
-        ] = {}
+        self._debate_last_conflict_targets: dict[tuple[str, str], tuple[str, ...]] = {}
         self._runner: asyncio.Runner | None = None
         self._started = False
         self._closed = False
@@ -866,6 +926,22 @@ class InteractiveController:
             Notice(text, label=label, role=role, state=state)
         )
 
+    def _write_conversation_rag_startup_warning(self) -> None:
+        """Render one fixed warning when configured local RAG was unavailable."""
+
+        if not self._conversation_rag_startup_unavailable:
+            return
+        self._write_notice(
+            (
+                "Conversation RAG is unavailable for this shell. Verify the "
+                "pinned rag extra and restart; settings remain available and "
+                "configuration was not changed."
+            ),
+            label="conversation RAG",
+            role=SemanticRole.WARNING,
+            state=ViewState.ERROR,
+        )
+
     def _write_counted_list_row(
         self,
         title: str,
@@ -910,7 +986,9 @@ class InteractiveController:
         )
 
     @staticmethod
-    def _debate_progress_style(phase: DebateProgressPhase) -> tuple[SemanticRole, ViewState]:
+    def _debate_progress_style(
+        phase: DebateProgressPhase,
+    ) -> tuple[SemanticRole, ViewState]:
         """Return stable role/state decoration for one progress phase."""
 
         if phase is DebateProgressPhase.CONSENSUS:
@@ -969,11 +1047,7 @@ class InteractiveController:
                 if is_agent_reply
                 else event.content
             ),
-            role=(
-                SemanticRole.AGENT
-                if is_agent_reply
-                else SemanticRole.DEFAULT
-            ),
+            role=(SemanticRole.AGENT if is_agent_reply else SemanticRole.DEFAULT),
             state=ViewState.COMPLETED,
             presentation=MessagePresentation.CHAT_BLOCK,
             metadata=metadata,
@@ -1085,8 +1159,7 @@ class InteractiveController:
             return "Drafted revision r0."
         if phase is DebateProgressPhase.AUDIT_STARTED:
             return (
-                f"Audit started for {event.revision_id} at round "
-                f"{event.round_number}."
+                f"Audit started for {event.revision_id} at round {event.round_number}."
             )
         if phase is DebateProgressPhase.AUDIT_COMPLETED:
             conflicts = (
@@ -1099,10 +1172,7 @@ class InteractiveController:
                 f"{event.round_number}; conflicts: {conflicts}."
             )
         if phase is DebateProgressPhase.SYNTHESIZED:
-            return (
-                f"Synthesized {event.revision_id} at round "
-                f"{event.round_number}."
-            )
+            return f"Synthesized {event.revision_id} at round {event.round_number}."
         if phase is DebateProgressPhase.ARTIFACTS_COMMITTED:
             updates = ", ".join(event.core_updates) if event.core_updates else "none"
             return (
@@ -1192,9 +1262,7 @@ class InteractiveController:
                     state=ViewState.COMPLETED,
                     presentation=MessagePresentation.CHAT_BLOCK,
                     metadata=(
-                        f"Kind: {item.kind}"
-                        if self._show_message_details
-                        else None
+                        f"Kind: {item.kind}" if self._show_message_details else None
                     ),
                     accent=_AGENT_SPEAKER_ACCENTS[item.sender],
                 )
@@ -1297,9 +1365,8 @@ class InteractiveController:
         try:
             try:
                 self._runner = asyncio.Runner()
-                startup_requested_exit = self._enter_initial_session(
-                    requested_session
-                )
+                self._write_conversation_rag_startup_warning()
+                startup_requested_exit = self._enter_initial_session(requested_session)
                 if startup_requested_exit:
                     exit_code = 0
                 else:
@@ -1354,11 +1421,7 @@ class InteractiveController:
         self._trace_debug(
             DebugOperation.INTERACTIVE_LOBBY,
             DebugPhase.SUCCEEDED if exit_code == 0 else DebugPhase.FAILED,
-            outcome=(
-                DebugOutcome.COMPLETED
-                if exit_code == 0
-                else DebugOutcome.FAILED
-            ),
+            outcome=(DebugOutcome.COMPLETED if exit_code == 0 else DebugOutcome.FAILED),
         )
         return exit_code
 
@@ -1421,9 +1484,7 @@ class InteractiveController:
         """Validate configuration, create with access, and commit attachment."""
 
         if session_id == self._attached_session_id:
-            self._write_error(
-                InteractiveError(InteractiveErrorCode.SESSION_EXISTS)
-            )
+            self._write_error(InteractiveError(InteractiveErrorCode.SESSION_EXISTS))
             return
         access_acquired = False
         try:
@@ -1613,9 +1674,7 @@ class InteractiveController:
             memory_service = (
                 ConversationMemoryService(
                     ConversationSearchScope(session_id),
-                    conversation_storage_services=(
-                        self._conversation_storage_services
-                    ),
+                    conversation_storage_services=(self._conversation_storage_services),
                 )
                 if self._conversation_storage_services is not None
                 else ConversationMemoryService(
@@ -1848,9 +1907,7 @@ class InteractiveController:
         """Derive readiness from a read-only configuration validation and state."""
 
         try:
-            configured = self._backend.validate_provider_configuration(
-                state.session_id
-            )
+            configured = self._backend.validate_provider_configuration(state.session_id)
         except (BackendProtocolError, ConfigurationError):
             configured = False
         if type(configured) is not bool:
@@ -1874,9 +1931,9 @@ class InteractiveController:
         """
 
         unpresented_scope = object()
-        last_presented_scope: (
-            object | tuple[str, str | None, str | None, str]
-        ) = unpresented_scope
+        last_presented_scope: object | tuple[str, str | None, str | None, str] = (
+            unpresented_scope
+        )
         while True:
             if self._attached_session_id is None:
                 last_presented_scope = unpresented_scope
@@ -1939,11 +1996,7 @@ class InteractiveController:
                     break
             alias = buffer[1:token_end]
             routed = next(
-                (
-                    route.agent_id
-                    for route in AGENT_ROUTES
-                    if alias in route.aliases
-                ),
+                (route.agent_id for route in AGENT_ROUTES if alias in route.aliases),
                 None,
             )
             if routed is not None:
@@ -2035,13 +2088,9 @@ class InteractiveController:
             session_id = self._attached_session_id
             entries = self._catalog_entries(session_id)
             active_entries = tuple(
-                entry
-                for entry in entries
-                if entry.status is ConversationStatus.ACTIVE
+                entry for entry in entries if entry.status is ConversationStatus.ACTIVE
             )
-            active_ids = tuple(
-                entry.conversation_id for entry in active_entries
-            )
+            active_ids = tuple(entry.conversation_id for entry in active_entries)
             highlighted_id = (
                 None
                 if self._focused_conversation is None
@@ -2061,14 +2110,10 @@ class InteractiveController:
                 ),
                 tuple(
                     Choice(
-                        (
-                            f"{_CONVERSATION_RESUME_COMMAND} "
-                            f"{entry.conversation_id}"
-                        ),
+                        (f"{_CONVERSATION_RESUME_COMMAND} {entry.conversation_id}"),
                         entry.subject,
                         description=(
-                            "Handle: "
-                            f"{visible_conversation_handle(entry, entries)}"
+                            f"Handle: {visible_conversation_handle(entry, entries)}"
                         ),
                     )
                     for entry in active_entries
@@ -2076,9 +2121,7 @@ class InteractiveController:
                 highlighted_id=(
                     None
                     if highlighted_id is None
-                    else (
-                        f"{_CONVERSATION_RESUME_COMMAND} {highlighted_id}"
-                    )
+                    else (f"{_CONVERSATION_RESUME_COMMAND} {highlighted_id}")
                 ),
             )
         except Exception:
@@ -2091,10 +2134,7 @@ class InteractiveController:
     ) -> ReferenceInputScope | None:
         """Project only attached, focused provider text into terminal input."""
 
-        if (
-            self._attached_session_id is None
-            or self._focused_conversation is None
-        ):
+        if self._attached_session_id is None or self._focused_conversation is None:
             return None
         span = project_provider_text_span(buffer, cursor)
         if span is None:
@@ -2122,9 +2162,7 @@ class InteractiveController:
         try:
             return self._runtime.artifacts.list_paths()
         except (OSError, WorkspaceFormatError, WorkspaceSecurityError):
-            raise ReferenceInputFailure(
-                ReferenceInputFailureKind.UNAVAILABLE
-            ) from None
+            raise ReferenceInputFailure(ReferenceInputFailureKind.UNAVAILABLE) from None
 
     def _reference_text(self, path: str) -> str:
         """Borrow one revalidated bounded artifact body for the viewer."""
@@ -2135,17 +2173,11 @@ class InteractiveController:
                 max_bytes=MAX_VIEWER_UTF8_BYTES,
             )
         except WorkspaceSecurityError:
-            raise ReferenceInputFailure(
-                ReferenceInputFailureKind.STALE
-            ) from None
+            raise ReferenceInputFailure(ReferenceInputFailureKind.STALE) from None
         except WorkspaceFormatError:
-            raise ReferenceInputFailure(
-                ReferenceInputFailureKind.UNREADABLE
-            ) from None
+            raise ReferenceInputFailure(ReferenceInputFailureKind.UNREADABLE) from None
         except OSError:
-            raise ReferenceInputFailure(
-                ReferenceInputFailureKind.UNAVAILABLE
-            ) from None
+            raise ReferenceInputFailure(ReferenceInputFailureKind.UNAVAILABLE) from None
 
     def _dispatch_session_lobby_action(
         self,
@@ -2154,6 +2186,7 @@ class InteractiveController:
     ) -> bool:
         """Record and execute one fixed parsed interactive command."""
 
+        self._synchronize_pending_rag_scope()
         session_id = self._attached_session_id
         conversation_id = (
             None
@@ -2199,6 +2232,8 @@ class InteractiveController:
                 agent_id=agent_id,
             )
             raise
+        finally:
+            self._synchronize_pending_rag_scope()
         rejected = self._error_write_count > error_write_count
         self._trace_debug(
             DebugOperation.INTERACTIVE_COMMAND,
@@ -2210,15 +2245,9 @@ class InteractiveController:
                 else self._focused_conversation.conversation_id
             ),
             agent_id=(
-                self._target_agent_id
-                if self._attached_session_id is not None
-                else None
+                self._target_agent_id if self._attached_session_id is not None else None
             ),
-            outcome=(
-                DebugOutcome.REJECTED
-                if rejected
-                else DebugOutcome.COMPLETED
-            ),
+            outcome=(DebugOutcome.REJECTED if rejected else DebugOutcome.COMPLETED),
         )
         return should_exit
 
@@ -2264,6 +2293,7 @@ class InteractiveController:
         if action.kind is ActionKind.SESSION_PAUSE:
             return self._pause_attached_session()
         if action.kind is ActionKind.QUIT:
+            self._pending_rag_query = None
             return True
         if action.kind is ActionKind.PARSE_ERROR:
             self._write_parser_error(action, original_line)
@@ -2286,6 +2316,9 @@ class InteractiveController:
             return False
         if action.kind is ActionKind.SET_TARGET:
             self._set_target_agent(action)
+            return False
+        if action.kind is ActionKind.RAG:
+            self._arm_conversation_rag_query(action)
             return False
         if action.kind in {
             ActionKind.MESSAGE,
@@ -2330,9 +2363,7 @@ class InteractiveController:
                 ActionKind.CONVERSATION_LIST_ALL,
             }:
                 self._list_subject_conversations(
-                    include_archived=(
-                        action.kind is ActionKind.CONVERSATION_LIST_ALL
-                    ),
+                    include_archived=(action.kind is ActionKind.CONVERSATION_LIST_ALL),
                     query=action.argument,
                 )
                 return False
@@ -2343,10 +2374,7 @@ class InteractiveController:
                 self._rename_focused_conversation(action.argument)
                 return False
             return self._archive_subject_conversation(action.argument)
-        if (
-            self._attached_session_id is not None
-            and self._focused_conversation is None
-        ):
+        if self._attached_session_id is not None and self._focused_conversation is None:
             self._write_error(
                 InteractiveError(InteractiveErrorCode.CONVERSATION_REQUIRED)
             )
@@ -2429,13 +2457,9 @@ class InteractiveController:
                 InteractiveError(InteractiveErrorCode.CONFIGURATION_INVALID)
             )
         except WorkspaceSecurityError:
-            self._write_error(
-                InteractiveError(InteractiveErrorCode.WORKSPACE_UNSAFE)
-            )
+            self._write_error(InteractiveError(InteractiveErrorCode.WORKSPACE_UNSAFE))
         except (WorkspaceFormatError, OSError):
-            self._write_error(
-                InteractiveError(InteractiveErrorCode.WORKSPACE_INVALID)
-            )
+            self._write_error(InteractiveError(InteractiveErrorCode.WORKSPACE_INVALID))
         except SettingsError as failure:
             self._write_settings_error(failure.kind)
 
@@ -2494,14 +2518,10 @@ class InteractiveController:
             )
             return
         except WorkspaceSecurityError:
-            self._write_error(
-                InteractiveError(InteractiveErrorCode.WORKSPACE_UNSAFE)
-            )
+            self._write_error(InteractiveError(InteractiveErrorCode.WORKSPACE_UNSAFE))
             return
         except (WorkspaceFormatError, OSError):
-            self._write_error(
-                InteractiveError(InteractiveErrorCode.WORKSPACE_INVALID)
-            )
+            self._write_error(InteractiveError(InteractiveErrorCode.WORKSPACE_INVALID))
             return
 
         top_highlight: str | None = "language"
@@ -2524,6 +2544,14 @@ class InteractiveController:
                 current_value != pending_value
                 for root_id, agent_id, _label, current_value, pending_value in projection
                 if root_id == "providers" and agent_id is not None
+            )
+            current_rag = (
+                f"Provider {root_values['conversation_rag_provider'][0]}; "
+                f"Automatic {root_values['conversation_rag_automatic'][0]}"
+            )
+            pending_rag = (
+                f"Provider {root_values['conversation_rag_provider'][1]}; "
+                f"Automatic {root_values['conversation_rag_automatic'][1]}"
             )
             choices = (
                 Choice(
@@ -2584,6 +2612,20 @@ class InteractiveController:
                     ),
                 ),
                 Choice(
+                    "conversation_rag",
+                    "Conversation RAG",
+                    description=(
+                        f"Pending: {pending_rag}"
+                        if current_rag != pending_rag
+                        else f"Current: {current_rag}"
+                    ),
+                    description_role=(
+                        SemanticRole.WARNING
+                        if current_rag != pending_rag
+                        else SemanticRole.DEFAULT
+                    ),
+                ),
+                Choice(
                     "show_message_details",
                     "Message details",
                     description=(
@@ -2635,8 +2677,7 @@ class InteractiveController:
                 Prompt(
                     "Settings",
                     instruction=(
-                        "Choose a setting to edit, apply changes, or discard "
-                        "changes."
+                        "Choose a setting to edit, apply changes, or discard changes."
                         if dirty
                         else "Choose a setting to edit."
                     ),
@@ -2686,11 +2727,16 @@ class InteractiveController:
                     if save_outcome != "applied":
                         return
                     return
+                if self._settings_change_is_conversation_rag_only(state):
+                    save_outcome = self._save_conversation_rag_setting(state)
+                    if save_outcome == "retry":
+                        continue
+                    if save_outcome != "saved":
+                        return
+                    return
                 if self._auth_coordinator is not None:
                     try:
-                        state, auth_outcome = (
-                            self._authenticate_settings_routes(state)
-                        )
+                        state, auth_outcome = self._authenticate_settings_routes(state)
                     except _SettingsFlowAbort:
                         return
                     if auth_outcome == "cancel":
@@ -2727,8 +2773,26 @@ class InteractiveController:
             baseline,
             system_defaults=replace(
                 baseline.system_defaults,
-                show_message_details=(
-                    pending.system_defaults.show_message_details
+                show_message_details=(pending.system_defaults.show_message_details),
+            ),
+        )
+        return pending != baseline and pending == expected
+
+    @staticmethod
+    def _settings_change_is_conversation_rag_only(state: SettingsState) -> bool:
+        """Classify one exact immutable next-shell RAG candidate."""
+
+        baseline = state.baseline.configuration
+        pending = state.pending
+        expected = replace(
+            baseline,
+            system_defaults=replace(
+                baseline.system_defaults,
+                conversation_rag_provider=(
+                    pending.system_defaults.conversation_rag_provider
+                ),
+                conversation_rag_automatic=(
+                    pending.system_defaults.conversation_rag_automatic
                 ),
             ),
         )
@@ -2775,6 +2839,48 @@ class InteractiveController:
         )
         return "applied"
 
+    def _save_conversation_rag_setting(self, state: SettingsState) -> str:
+        """Persist only startup-fixed RAG settings without live resources."""
+
+        try:
+            prepared = prepare_settings_save(
+                self._workspace,
+                state,
+                provider_overrides=self._backend.backend_overrides,
+            )
+        except SettingsError as failure:
+            self._write_settings_error(failure.kind)
+            return "retry"
+        if prepared.configuration != state.pending or prepared.switched_agents:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        try:
+            commit_prepared_settings_save(self._workspace, prepared)
+        except SettingsError as failure:
+            self._write_settings_error(failure.kind)
+            return "retry"
+
+        self._semantic_output.write_component(
+            Panel(
+                "Settings",
+                (
+                    Notice(
+                        (
+                            "Conversation RAG settings were saved for the next "
+                            "shell. This running shell retains its current "
+                            "Conversation RAG service and automatic policy."
+                        ),
+                        label="saved for next shell",
+                        role=SemanticRole.SUCCESS,
+                        state=ViewState.COMPLETED,
+                    ),
+                ),
+                state=ViewState.COMPLETED,
+            )
+        )
+        return "saved"
+
     def _save_and_apply_settings(self, state: SettingsState) -> str:
         """Persist and activate one staged snapshot without false success."""
 
@@ -2805,9 +2911,7 @@ class InteractiveController:
                     },
                 )
             )
-            self._backend.validate_runtime_configuration_candidate(
-                backend_candidate
-            )
+            self._backend.validate_runtime_configuration_candidate(backend_candidate)
             report = select_conversation_storage(
                 self._workspace,
                 (
@@ -2943,6 +3047,13 @@ class InteractiveController:
                 active_defaults.show_message_details,
             )
         )
+        rag_changed = (
+            before_defaults.conversation_rag_provider,
+            before_defaults.conversation_rag_automatic,
+        ) != (
+            active_defaults.conversation_rag_provider,
+            active_defaults.conversation_rag_automatic,
+        )
         self._show_message_details = active_defaults.show_message_details
         self._write_settings_applied_result(
             before_profiles,
@@ -2955,6 +3066,7 @@ class InteractiveController:
             storage_after=(
                 active_defaults.conversation_storage_backend or "filesystem"
             ),
+            rag_changed=rag_changed,
         )
         return "applied"
 
@@ -2981,6 +3093,7 @@ class InteractiveController:
         live_settings_changed: bool,
         storage_before: str,
         storage_after: str,
+        rag_changed: bool,
     ) -> None:
         """Render truthful current-shell and next-shell settings scopes."""
 
@@ -2988,6 +3101,7 @@ class InteractiveController:
             len(before_profiles) != len(ROSTER)
             or len(active_profiles) != len(ROSTER)
             or type(live_settings_changed) is not bool
+            or type(rag_changed) is not bool
             or storage_before not in {"filesystem", "sqlite"}
             or storage_after not in {"filesystem", "sqlite"}
         ):
@@ -2997,17 +3111,28 @@ class InteractiveController:
         before = {profile.agent_id: profile for profile in before_profiles}
         active = {profile.agent_id: profile for profile in active_profiles}
         changed_agents = tuple(
-            agent_id
-            for agent_id in ROSTER
-            if before[agent_id] != active[agent_id]
+            agent_id for agent_id in ROSTER if before[agent_id] != active[agent_id]
         )
         storage_changed = storage_before != storage_after
         items: list[Section | Notice] = []
-        if live_settings_changed or not storage_changed:
+        if live_settings_changed:
             items.append(
                 Notice(
                     "Settings saved and applied to this running shell now.",
                     label="saved and applied",
+                    role=SemanticRole.SUCCESS,
+                    state=ViewState.COMPLETED,
+                )
+            )
+        if rag_changed:
+            items.append(
+                Notice(
+                    (
+                        "Conversation RAG settings were saved for the next "
+                        "shell. This running shell retains its current "
+                        "Conversation RAG service and automatic policy."
+                    ),
+                    label="saved for next shell",
                     role=SemanticRole.SUCCESS,
                     state=ViewState.COMPLETED,
                 )
@@ -3120,7 +3245,7 @@ class InteractiveController:
                 if status.state.value == "unauthenticated":
                     message = (
                         f"{provider_name} is not authenticated. Complete "
-                            "native sign-in, then retry Apply Changes."
+                        "native sign-in, then retry Apply Changes."
                     )
                 elif status.state.value == "unavailable":
                     message = (
@@ -3189,11 +3314,7 @@ class InteractiveController:
         )
         outcome = self._picker_input.read_picker(
             Prompt(
-                (
-                    "Apply changes?"
-                    if action == "save"
-                    else "Discard changes?"
-                ),
+                ("Apply changes?" if action == "save" else "Discard changes?"),
                 instruction=(
                     "Choose YES to apply changes, or NO to return."
                     if action == "save"
@@ -3219,19 +3340,20 @@ class InteractiveController:
             return "return"
         if outcome.text == "yes":
             return "save" if action == "save" else "cancel"
-        raise _ControllerAbort(
-            InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-        )
+        raise _ControllerAbort(InteractiveError(InteractiveErrorCode.INTERNAL_ERROR))
 
     def _settings_cancel_action(self, state: SettingsState) -> bool:
         """Return whether one root Cancel action should discard and exit."""
 
         if state.pending == state.baseline.configuration:
             return True
-        return self._settings_save_confirmation(
-            state,
-            action="cancel",
-        ) == "cancel"
+        return (
+            self._settings_save_confirmation(
+                state,
+                action="cancel",
+            )
+            == "cancel"
+        )
 
     def _edit_settings_value(
         self,
@@ -3250,11 +3372,11 @@ class InteractiveController:
             return self._edit_settings_storage(state)
         if selected == "show_message_details":
             return self._edit_settings_message_details(state)
+        if selected == "conversation_rag":
+            return self._edit_settings_conversation_rag(state)
         if selected == "providers":
             return self._edit_settings_provider(state)
-        raise _ControllerAbort(
-            InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-        )
+        raise _ControllerAbort(InteractiveError(InteractiveErrorCode.INTERNAL_ERROR))
 
     def _edit_settings_language(
         self,
@@ -3275,10 +3397,7 @@ class InteractiveController:
                         "Settings."
                     ),
                 ),
-                tuple(
-                    Choice(language, language)
-                    for language in SETTINGS_LANGUAGES
-                ),
+                tuple(Choice(language, language) for language in SETTINGS_LANGUAGES),
                 highlighted_id=pending,
                 selected_id=pending,
                 notice=notice,
@@ -3358,9 +3477,7 @@ class InteractiveController:
                     ),
                 ),
                 context=(notice,) if notice is not None else (),
-                initial_value=str(
-                    state.pending.system_defaults.max_debate_rounds
-                ),
+                initial_value=str(state.pending.system_defaults.max_debate_rounds),
                 transient=True,
             )
             value, whole_cancel = self._nested_settings_value(outcome)
@@ -3380,9 +3497,7 @@ class InteractiveController:
             except ValueError:
                 notice = None
                 armed_value = _SETTINGS_UNARMED
-                self._write_settings_validation(
-                    "Maximum debate rounds is too large."
-                )
+                self._write_settings_validation("Maximum debate rounds is too large.")
                 continue
             if armed_value == rounds:
                 return state, False
@@ -3449,6 +3564,178 @@ class InteractiveController:
                 armed_value,
             )
 
+    def _edit_settings_conversation_rag(
+        self,
+        state: SettingsState,
+    ) -> tuple[SettingsState, bool]:
+        """Edit pending local RAG policy without probing optional resources."""
+
+        highlighted = "provider"
+        while True:
+            current = state.baseline.configuration.system_defaults
+            pending = state.pending.system_defaults
+            current_provider = (
+                "Local" if current.conversation_rag_provider == "local" else "Disabled"
+            )
+            pending_provider = (
+                "Local" if pending.conversation_rag_provider == "local" else "Disabled"
+            )
+            current_automatic = "On" if current.conversation_rag_automatic else "Off"
+            pending_automatic = "On" if pending.conversation_rag_automatic else "Off"
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Conversation RAG",
+                    instruction=(
+                        "Choose Provider or Automatic to edit; press Esc to "
+                        "return to Settings. Optional-package compatibility is "
+                        "checked only when the next shell starts."
+                    ),
+                ),
+                (
+                    Choice(
+                        "provider",
+                        "Provider",
+                        description=(
+                            f"Pending: {pending_provider}"
+                            if current_provider != pending_provider
+                            else f"Current: {current_provider}"
+                        ),
+                    ),
+                    Choice(
+                        "automatic",
+                        "Automatic",
+                        description=(
+                            f"Pending: {pending_automatic}"
+                            if current_automatic != pending_automatic
+                            else f"Current: {current_automatic}"
+                        ),
+                    ),
+                ),
+                highlighted_id=highlighted,
+                transient=True,
+            )
+            selected, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel:
+                return state, True
+            if selected is None:
+                return state, False
+            highlighted = selected
+            if selected == "provider":
+                state, cancelled = self._edit_settings_rag_provider(state)
+            elif selected == "automatic":
+                state, cancelled = self._edit_settings_rag_automatic(state)
+            else:
+                raise _ControllerAbort(
+                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                )
+            if cancelled:
+                return state, True
+
+    def _edit_settings_rag_provider(
+        self,
+        state: SettingsState,
+    ) -> tuple[SettingsState, bool]:
+        """Select Disabled or Local while retaining the pending transaction."""
+
+        notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
+        while True:
+            pending = state.pending.system_defaults.conversation_rag_provider
+            pending_id = "local" if pending == "local" else "disabled"
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Conversation RAG Provider",
+                    instruction=_settings_value_instruction(
+                        "Choose Disabled or Local. Disabling also turns "
+                        "Automatic off. Enter applies the value and keeps this "
+                        "editor open; press Esc to return to Conversation RAG."
+                    ),
+                ),
+                (
+                    Choice("disabled", "Disabled"),
+                    Choice("local", "Local"),
+                ),
+                highlighted_id=pending_id,
+                selected_id=pending_id,
+                notice=notice,
+                transient=True,
+            )
+            value, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel:
+                return state, True
+            if value is None:
+                return state, False
+            if armed_value == value:
+                return state, False
+            if value not in {"disabled", "local"}:
+                raise _ControllerAbort(
+                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                )
+            state = update_conversation_rag_provider(
+                state,
+                "local" if value == "local" else None,
+            )
+            armed_value = value
+            notice = _settings_entered_notice(
+                "Conversation RAG provider",
+                "Local" if value == "local" else "Disabled",
+            )
+
+    def _edit_settings_rag_automatic(
+        self,
+        state: SettingsState,
+    ) -> tuple[SettingsState, bool]:
+        """Select Off or On while enforcing the local-provider invariant."""
+
+        notice: Notice | None = None
+        armed_value: object = _SETTINGS_UNARMED
+        while True:
+            automatic = state.pending.system_defaults.conversation_rag_automatic
+            pending_id = "on" if automatic else "off"
+            outcome = self._picker_input.read_picker(
+                Prompt(
+                    "Conversation RAG Automatic",
+                    instruction=_settings_value_instruction(
+                        "Choose Off or On. On requires the pending Local "
+                        "provider. Enter applies the value and keeps this editor "
+                        "open; press Esc to return to Conversation RAG."
+                    ),
+                ),
+                (Choice("off", "Off"), Choice("on", "On")),
+                highlighted_id=pending_id,
+                selected_id=pending_id,
+                notice=notice,
+                transient=True,
+            )
+            value, whole_cancel = self._nested_settings_value(outcome)
+            if whole_cancel:
+                return state, True
+            if value is None:
+                return state, False
+            if armed_value == value:
+                return state, False
+            if value not in {"off", "on"}:
+                raise _ControllerAbort(
+                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+                )
+            try:
+                state = update_conversation_rag_automatic(
+                    state,
+                    value == "on",
+                )
+            except ConfigurationError:
+                notice = None
+                armed_value = _SETTINGS_UNARMED
+                self._write_settings_validation(
+                    "Automatic Conversation RAG requires the Local provider."
+                )
+                continue
+            armed_value = value
+            notice = _settings_entered_notice(
+                "Conversation RAG automatic",
+                "On" if value == "on" else "Off",
+            )
+
     def _edit_settings_message_details(
         self,
         state: SettingsState,
@@ -3459,9 +3746,7 @@ class InteractiveController:
         armed_value: object = _SETTINGS_UNARMED
         while True:
             pending = (
-                "on"
-                if state.pending.system_defaults.show_message_details
-                else "off"
+                "on" if state.pending.system_defaults.show_message_details else "off"
             )
             outcome = self._picker_input.read_picker(
                 Prompt(
@@ -3538,10 +3823,7 @@ class InteractiveController:
             highlighted_id="NO",
             transient=True,
         )
-        return (
-            outcome.kind is ControlOutcomeKind.COMMIT
-            and outcome.text == "YES"
-        )
+        return outcome.kind is ControlOutcomeKind.COMMIT and outcome.text == "YES"
 
     def _edit_settings_provider(
         self,
@@ -3577,9 +3859,7 @@ class InteractiveController:
                             f"{_compact_execution_profile(pending_profile)}"
                         ),
                         description_role=(
-                            SemanticRole.DEFAULT
-                            if is_current
-                            else SemanticRole.WARNING
+                            SemanticRole.DEFAULT if is_current else SemanticRole.WARNING
                         ),
                     )
                 )
@@ -3587,8 +3867,7 @@ class InteractiveController:
                 Prompt(
                     "Agents",
                     instruction=(
-                        "Select an agent to configure; press Esc to return to "
-                        "Settings."
+                        "Select an agent to configure; press Esc to return to Settings."
                     ),
                 ),
                 tuple(agent_choices),
@@ -3612,8 +3891,7 @@ class InteractiveController:
                     is ExecutionValueSource.LAUNCH_OVERRIDE
                 )
                 model_masked = (
-                    pending_profile.model_source
-                    is ExecutionValueSource.LAUNCH_OVERRIDE
+                    pending_profile.model_source is ExecutionValueSource.LAUNCH_OVERRIDE
                 )
                 effort_masked = (
                     pending_profile.effort_source
@@ -3623,9 +3901,7 @@ class InteractiveController:
                     pending_profile.provider == active_profile.provider
                 )
                 model_is_current = pending_profile.model == active_profile.model
-                effort_is_current = (
-                    pending_profile.effort == active_profile.effort
-                )
+                effort_is_current = pending_profile.effort == active_profile.effort
                 field_choices = (
                     Choice(
                         "provider",
@@ -3985,9 +4261,7 @@ class InteractiveController:
         armed_value: object = _SETTINGS_UNARMED
         while True:
             agent = state.pending.agent_configs[agent_id]
-            pending = (
-                agent.antigravity_model if antigravity else agent.codex_model
-            )
+            pending = agent.antigravity_model if antigravity else agent.codex_model
             choices: list[Choice] = [
                 Choice(
                     _SETTINGS_INHERIT_ID,
@@ -4031,9 +4305,7 @@ class InteractiveController:
                 Choice(
                     _SETTINGS_CUSTOM_MODEL_ID,
                     "Custom model",
-                    description=(
-                        f"Enter an exact safe {provider_name} model value."
-                    ),
+                    description=(f"Enter an exact safe {provider_name} model value."),
                 )
             )
             choice_ids = {choice.identity for choice in choices}
@@ -4042,9 +4314,7 @@ class InteractiveController:
             outcome = self._picker_input.read_picker(
                 Prompt(
                     "Model",
-                    scope=(
-                        f"{AGENT_SPECS[agent_id].display_name} · {provider_name}"
-                    ),
+                    scope=(f"{AGENT_SPECS[agent_id].display_name} · {provider_name}"),
                     instruction=_settings_value_instruction(
                         f"Choose a model for the pending {provider_name} "
                         "provider. Enter applies a value and keeps Model open; "
@@ -4117,9 +4387,7 @@ class InteractiveController:
                 return state, False
             state = updater(state, agent_id, model_value)
             agent = state.pending.agent_configs[agent_id]
-            armed_value = (
-                agent.antigravity_model if antigravity else agent.codex_model
-            )
+            armed_value = agent.antigravity_model if antigravity else agent.codex_model
             notice = _settings_entered_notice("Model", display_value)
 
     def _edit_settings_custom_model(
@@ -4136,15 +4404,11 @@ class InteractiveController:
         armed_value: object = _SETTINGS_UNARMED
         while True:
             agent = state.pending.agent_configs[agent_id]
-            pending = (
-                agent.antigravity_model if antigravity else agent.codex_model
-            )
+            pending = agent.antigravity_model if antigravity else agent.codex_model
             outcome = self._prompt_input.read_prompt(
                 Prompt(
                     "Custom model",
-                    scope=(
-                        f"{AGENT_SPECS[agent_id].display_name} · {provider_name}"
-                    ),
+                    scope=(f"{AGENT_SPECS[agent_id].display_name} · {provider_name}"),
                     instruction=_settings_value_instruction(
                         f"Enter an exact {provider_name} model, or leave blank "
                         "to inherit the workspace setting. Enter applies the "
@@ -4188,9 +4452,7 @@ class InteractiveController:
                 )
                 continue
             agent = state.pending.agent_configs[agent_id]
-            armed_value = (
-                agent.antigravity_model if antigravity else agent.codex_model
-            )
+            armed_value = agent.antigravity_model if antigravity else agent.codex_model
             notice = _settings_entered_notice(
                 "Custom model",
                 "Inherit" if armed_value is None else str(armed_value),
@@ -4216,9 +4478,7 @@ class InteractiveController:
         antigravity = provider == "antigravity"
         provider_name = _provider_display_name(provider)
         pending = (
-            agent.antigravity_effort
-            if antigravity
-            else agent.codex_reasoning_effort
+            agent.antigravity_effort if antigravity else agent.codex_reasoning_effort
         )
         inherited_effort = (
             defaults.antigravity_effort
@@ -4244,20 +4504,14 @@ class InteractiveController:
 
         if inherited_effort is not None:
             inherit_description = (
-                f"Use the workspace {provider_name} effort: "
-                f"{inherited_effort}."
+                f"Use the workspace {provider_name} effort: {inherited_effort}."
             )
-        elif (
-            selected_model is not None
-            and selected_model.default_effort is not None
-        ):
+        elif selected_model is not None and selected_model.default_effort is not None:
             inherit_description = (
                 f"Use the selected model default: {selected_model.default_effort}."
             )
         else:
-            inherit_description = (
-                "Use the workspace setting, then provider default."
-            )
+            inherit_description = "Use the workspace setting, then provider default."
 
         catalog_notice = _settings_catalog_notice(
             provider,
@@ -4313,21 +4567,16 @@ class InteractiveController:
                             effort,
                             is_default=(
                                 selected_model is not None
-                                and selected_model.default_effort
-                                == effort.identity
+                                and selected_model.default_effort == effort.identity
                             ),
                         ),
                     )
                 )
                 if pending == effort.identity:
                     selected_id = choice_id
-            if (
-                pending is not None
-                and pending not in {
-                    effort_value
-                    for effort_value, _display_value in effort_values.values()
-                }
-            ):
+            if pending is not None and pending not in {
+                effort_value for effort_value, _display_value in effort_values.values()
+            }:
                 choices.append(
                     Choice(
                         _SETTINGS_CURRENT_EFFORT_ID,
@@ -4343,10 +4592,7 @@ class InteractiveController:
             outcome = self._picker_input.read_picker(
                 Prompt(
                     "Effort",
-                    scope=(
-                        f"{AGENT_SPECS[agent_id].display_name} · "
-                        f"{provider_name}"
-                    ),
+                    scope=(f"{AGENT_SPECS[agent_id].display_name} · {provider_name}"),
                     instruction=_settings_value_instruction(
                         f"Choose effort for the pending {provider_name} "
                         "provider and effective model. Enter applies the value "
@@ -4486,8 +4732,7 @@ class InteractiveController:
                 f"{current_value} (Changed)",
                 role=SemanticRole.DEFAULT,
             )
-            for _root_id, _agent_id, label, current_value, _pending_value
-            in changed_rows
+            for _root_id, _agent_id, label, current_value, _pending_value in changed_rows
         )
         pending_fields = tuple(
             Field(
@@ -4495,18 +4740,49 @@ class InteractiveController:
                 f"{pending_value} (Changed)",
                 role=SemanticRole.WARNING,
             )
-            for _root_id, _agent_id, label, _current_value, pending_value
-            in changed_rows
+            for _root_id, _agent_id, label, _current_value, pending_value in changed_rows
         )
         if changed_rows:
+            live_changes = any(
+                root_id
+                not in {
+                    "conversation_storage",
+                    "conversation_rag_provider",
+                    "conversation_rag_automatic",
+                }
+                for root_id, *_rest in changed_rows
+            )
+            storage_changes = any(
+                root_id == "conversation_storage" for root_id, *_rest in changed_rows
+            )
+            rag_changes = any(
+                root_id
+                in {
+                    "conversation_rag_provider",
+                    "conversation_rag_automatic",
+                }
+                for root_id, *_rest in changed_rows
+            )
+            activation_parts: list[str] = []
+            if live_changes:
+                activation_parts.append(
+                    "Runtime changes apply to this shell after Apply Changes."
+                )
+            if storage_changes:
+                activation_parts.append(
+                    "Desired storage changes apply to the next shell."
+                )
+            if rag_changes:
+                activation_parts.append(
+                    "Conversation RAG changes apply to the next shell; this "
+                    "running shell retains its current RAG service and "
+                    "automatic policy."
+                )
             panel_items: list[Section | Notice] = [
                 Section("Current", current_fields),
                 Section("Pending", pending_fields),
                 Notice(
-                    (
-                        "Runtime changes apply to this shell after Apply Changes; "
-                        "desired storage changes apply to the next shell."
-                    ),
+                    " ".join(activation_parts),
                     label="activation",
                     role=SemanticRole.INFO,
                 ),
@@ -4686,8 +4962,7 @@ class InteractiveController:
         """Render canonical agents with their compact active execution profiles."""
 
         profiles = {
-            profile.agent_id: profile
-            for profile in self._backend.execution_profiles()
+            profile.agent_id: profile for profile in self._backend.execution_profiles()
         }
         records = tuple(
             Record(
@@ -4704,9 +4979,7 @@ class InteractiveController:
                     ),
                     Field(
                         "Confirmation",
-                        self._backend.execution_profile_confirmation(
-                            route.agent_id
-                        ),
+                        self._backend.execution_profile_confirmation(route.agent_id),
                         role=(
                             SemanticRole.SUCCESS
                             if self._backend.execution_profile_confirmation(
@@ -4974,9 +5247,7 @@ class InteractiveController:
                 self._debate_inspection_record(debate_facts)
             ]
             if debate_facts.status != "not_found":
-                last_items.append(
-                    self._debate_context_component(context_facts)
-                )
+                last_items.append(self._debate_context_component(context_facts))
             self._semantic_output.write_component(
                 Panel(
                     "Result",
@@ -5012,12 +5283,9 @@ class InteractiveController:
         elif action.kind is ActionKind.SET_PERSONA:
             assert action.agent_id is not None
             assert action.argument is not None
-            directive = (
-                f"[OVERRIDE: {action.agent_id} Persona={action.argument}]"
-            )
+            directive = f"[OVERRIDE: {action.agent_id} Persona={action.argument}]"
             acknowledgement = (
-                f"Persona override for {action.agent_id} set to "
-                f"{action.argument}."
+                f"Persona override for {action.agent_id} set to {action.argument}."
             )
         else:
             assert action.kind is ActionKind.RESET
@@ -5041,9 +5309,7 @@ class InteractiveController:
             return
         except WorkspaceVersionUnsupportedError:
             self._present_memory_error(
-                InteractiveError(
-                    InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED
-                )
+                InteractiveError(InteractiveErrorCode.WORKSPACE_VERSION_UNSUPPORTED)
             )
             return
         except (WorkspaceFormatError, OSError):
@@ -5084,13 +5350,9 @@ class InteractiveController:
             "agents",
         }:
             return False
-        if result["language"] is not None and not isinstance(
-            result["language"], str
-        ):
+        if result["language"] is not None and not isinstance(result["language"], str):
             return False
-        if result["persona"] is not None and not isinstance(
-            result["persona"], str
-        ):
+        if result["persona"] is not None and not isinstance(result["persona"], str):
             return False
         agents = result["agents"]
         if type(agents) is not dict or set(agents).difference(ROSTER):
@@ -5205,9 +5467,7 @@ class InteractiveController:
                         f"{'yes' if context.truncated else 'no'}.",
                     ),
                 ),
-                state=(
-                    ViewState.EMPTY if not displayed else ViewState.COMPLETED
-                ),
+                state=(ViewState.EMPTY if not displayed else ViewState.COMPLETED),
             ),
         )
 
@@ -5264,14 +5524,8 @@ class InteractiveController:
                     f"{'debate' if len(summaries) == 1 else 'debates'}."
                 ),
                 label="result",
-                role=(
-                    SemanticRole.MUTED
-                    if not summaries
-                    else SemanticRole.SUCCESS
-                ),
-                state=(
-                    ViewState.EMPTY if not summaries else ViewState.COMPLETED
-                ),
+                role=(SemanticRole.MUTED if not summaries else SemanticRole.SUCCESS),
+                state=(ViewState.EMPTY if not summaries else ViewState.COMPLETED),
             )
             for facts in summaries:
                 self._semantic_output.write_component(
@@ -5349,6 +5603,71 @@ class InteractiveController:
 
         self._present_memory_error(classify_inspection_failure(failure))
 
+    def _synchronize_pending_rag_scope(self) -> None:
+        """Discard a pending query after its exact attachment scope changes."""
+
+        pending = self._pending_rag_query
+        if pending is None:
+            return
+        conversation_id = (
+            None
+            if self._focused_conversation is None
+            else self._focused_conversation.conversation_id
+        )
+        if (
+            pending.session_id != self._attached_session_id
+            or pending.conversation_id != conversation_id
+        ):
+            self._pending_rag_query = None
+
+    def _arm_conversation_rag_query(self, action: InteractiveAction) -> None:
+        """Replace one exact-scope private query without provider or durability."""
+
+        assert action.kind is ActionKind.RAG
+        assert action.rag_query is not None
+        if self._attached_session_id is None:
+            self._write_error(
+                InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
+            )
+            return
+        focused = self._require_active_conversation_focus()
+        if focused is None:
+            return
+        self._pending_rag_query = _PendingConversationRagQuery(
+            session_id=self._attached_session_id,
+            conversation_id=focused.conversation_id,
+            query=action.rag_query,
+        )
+        self._write_notice(
+            (
+                "Conversation RAG is armed for the next ordinary, /say, or "
+                "routed story turn in this conversation."
+            ),
+            label="conversation RAG",
+            role=SemanticRole.SUCCESS,
+            state=ViewState.COMPLETED,
+        )
+
+    def _consume_pending_rag_query(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+    ) -> str | None:
+        """Consume one matching query only after its advisory coroutine enters."""
+
+        pending = self._pending_rag_query
+        if pending is None:
+            return None
+        if (
+            pending.session_id != session_id
+            or pending.conversation_id != conversation_id
+        ):
+            self._pending_rag_query = None
+            return None
+        self._pending_rag_query = None
+        return pending.query
+
     def _set_target_agent(self, action: InteractiveAction) -> None:
         """Set one attached process's sticky responder without provider work.
 
@@ -5400,6 +5719,7 @@ class InteractiveController:
         session_id = self._attached_session_id
         assert session_id is not None
         assert action.text is not None
+        turn_text = action.text
         if action.kind is ActionKind.ROUTED_MESSAGE:
             assert action.agent_id is not None
             agent_id = action.agent_id
@@ -5426,7 +5746,7 @@ class InteractiveController:
         self._semantic_output.write_accepted_input(
             Message(
                 f"You → {display_name}",
-                action.text,
+                turn_text,
                 role=SemanticRole.DEFAULT,
                 state=ViewState.COMPLETED,
                 presentation=MessagePresentation.CHAT_BLOCK,
@@ -5466,13 +5786,18 @@ class InteractiveController:
             nonlocal operation_joined
             operation_entered = True
             try:
+                rag_query = self._consume_pending_rag_query(
+                    session_id=session_id,
+                    conversation_id=focused.conversation_id,
+                )
                 return await self._runtime.converse_with_retrieval(
                     session_id,
                     focused.conversation_id,
                     agent_id,
-                    action.text,
+                    turn_text,
                     memory_service=memory_service,
                     progress_sink=accept_and_render_progress,
+                    rag_query=rag_query,
                 )
             except asyncio.CancelledError:
                 cancellation_reached_operation = True
@@ -5487,9 +5812,7 @@ class InteractiveController:
         except KeyboardInterrupt:
             if progress_callback_failure is not None:
                 raise _ControllerAbort(
-                    classify_progress_callback_failure(
-                        progress_callback_failure
-                    )
+                    classify_progress_callback_failure(progress_callback_failure)
                 ) from None
             if not operation_entered:
                 cancellation_is_safe = self._interactive_runner_is_quiescent()
@@ -5499,9 +5822,7 @@ class InteractiveController:
                 )
             if not cancellation_is_safe:
                 raise _ControllerAbort(
-                    InteractiveError(
-                        InteractiveErrorCode.OPERATION_INTERRUPTED
-                    )
+                    InteractiveError(InteractiveErrorCode.OPERATION_INTERRUPTED)
                 ) from None
             self._write_notice(
                 f"{display_name} turn was interrupted.",
@@ -5535,9 +5856,7 @@ class InteractiveController:
         except Exception as exc:
             if progress_callback_failure is not None:
                 raise _ControllerAbort(
-                    classify_progress_callback_failure(
-                        progress_callback_failure
-                    )
+                    classify_progress_callback_failure(progress_callback_failure)
                 ) from None
             self._present_advisory_turn_failure(exc)
             return
@@ -5558,6 +5877,7 @@ class InteractiveController:
             raise _ControllerAbort(
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
             ) from None
+        self._render_conversation_rag_outcome(result)
         if result.context.truncated:
             event_count = len(result.context.events)
             retained_turns = result.context.retained_turns
@@ -5614,6 +5934,31 @@ class InteractiveController:
             )
         )
         self._render_conversation_retrieval_sources(result.sources)
+
+    def _render_conversation_rag_outcome(
+        self,
+        result: ConversationRetrievalResult,
+    ) -> None:
+        """Render only the fixed content-free facts of one attempted preflight."""
+
+        attempt = result.rag_outcome
+        if attempt is None:
+            return
+        self._semantic_output.write_component(
+            Record(
+                "context",
+                fields=(
+                    Field("Conversation RAG", attempt.outcome.value),
+                    Field("Reason", attempt.reason.value),
+                ),
+                role=(
+                    SemanticRole.SUCCESS
+                    if attempt.outcome.value == "complete"
+                    else SemanticRole.WARNING
+                ),
+                state=ViewState.COMPLETED,
+            )
+        )
 
     def _accept_conversation_retrieval_progress(
         self,
@@ -5940,24 +6285,18 @@ class InteractiveController:
         except KeyboardInterrupt:
             if progress_callback_failure is not None:
                 raise _ControllerAbort(
-                    classify_progress_callback_failure(
-                        progress_callback_failure
-                    )
+                    classify_progress_callback_failure(progress_callback_failure)
                 ) from None
             if not operation_entered:
                 if not self._interactive_runner_is_quiescent():
                     raise _ControllerAbort(
-                        InteractiveError(
-                            InteractiveErrorCode.OPERATION_INTERRUPTED
-                        )
+                        InteractiveError(InteractiveErrorCode.OPERATION_INTERRUPTED)
                     ) from None
                 self._write_consensus_cancelled_before_start()
                 return False
             if not cancellation_reached_operation or not operation_joined:
                 raise _ControllerAbort(
-                    InteractiveError(
-                        InteractiveErrorCode.OPERATION_INTERRUPTED
-                    )
+                    InteractiveError(InteractiveErrorCode.OPERATION_INTERRUPTED)
                 ) from None
             self._present_joined_consensus_cancellation(
                 session_id,
@@ -5981,9 +6320,7 @@ class InteractiveController:
         except Exception as exc:
             if progress_callback_failure is not None:
                 raise _ControllerAbort(
-                    classify_progress_callback_failure(
-                        progress_callback_failure
-                    )
+                    classify_progress_callback_failure(progress_callback_failure)
                 ) from None
             self._present_consensus_execution_failure(
                 exc,
@@ -6110,9 +6447,9 @@ class InteractiveController:
             self._debate_last_conflict_targets[key] = canonical.conflicting_agents
         events.append(canonical)
         if canonical.phase is DebateProgressPhase.STARTED:
-            self._last_started_debate_by_session[
-                canonical.session_id
-            ] = canonical.debate_id
+            self._last_started_debate_by_session[canonical.session_id] = (
+                canonical.debate_id
+            )
 
     def _render_debate_progress(self, event: DebateProgressEvent) -> int:
         """Build and atomically write one validated phase presentation."""
@@ -6121,11 +6458,7 @@ class InteractiveController:
         phase = event.phase
         role, state = self._debate_progress_style(phase)
         committed_offset = self._debate_message_offsets.get(key, 0)
-        start = (
-            0
-            if phase is DebateProgressPhase.STARTED
-            else committed_offset
-        )
+        start = 0 if phase is DebateProgressPhase.STARTED else committed_offset
         if phase is DebateProgressPhase.STARTED:
             conflicts: tuple[str, ...] = ()
         elif phase is DebateProgressPhase.AUDIT_COMPLETED:
@@ -6234,9 +6567,7 @@ class InteractiveController:
             code = InteractiveErrorCode.CONSENSUS_DEADLOCK
         else:
             assert terminal_event.failure_kind is not None
-            code = interactive_code_for_debate_failure(
-                terminal_event.failure_kind
-            )
+            code = interactive_code_for_debate_failure(terminal_event.failure_kind)
         self._present_consensus_error_after_required_attachment_check(code)
 
     def _present_consensus_execution_failure(
@@ -6263,9 +6594,7 @@ class InteractiveController:
         )
         if error.code is InteractiveErrorCode.INTERNAL_ERROR:
             raise _ControllerAbort(error) from None
-        self._present_consensus_error_after_required_attachment_check(
-            error.code
-        )
+        self._present_consensus_error_after_required_attachment_check(error.code)
 
     def _present_consensus_error_after_required_attachment_check(
         self,
@@ -6432,8 +6761,7 @@ class InteractiveController:
                     citation_value = f"conversation {handle}"
                 elif any(value is None for value in citation_values):
                     raise ValueError(
-                        "citation turn ID, sequence, and kind must be "
-                        "present together"
+                        "citation turn ID, sequence, and kind must be present together"
                     )
                 else:
                     citation_value = (
@@ -6456,11 +6784,7 @@ class InteractiveController:
                             Field("Citation", citation_value),
                             Field("Snippet", hit.snippet),
                         ),
-                        role=(
-                            SemanticRole.MUTED
-                            if archived
-                            else SemanticRole.DEFAULT
-                        ),
+                        role=(SemanticRole.MUTED if archived else SemanticRole.DEFAULT),
                         state=ViewState.COMPLETED,
                     ),
                     position=position,
@@ -6472,16 +6796,8 @@ class InteractiveController:
                     f"{result.matched_conversations} matching conversations."
                 ),
                 label="result",
-                role=(
-                    SemanticRole.MUTED
-                    if not result.hits
-                    else SemanticRole.SUCCESS
-                ),
-                state=(
-                    ViewState.EMPTY
-                    if not result.hits
-                    else ViewState.COMPLETED
-                ),
+                role=(SemanticRole.MUTED if not result.hits else SemanticRole.SUCCESS),
+                state=(ViewState.EMPTY if not result.hits else ViewState.COMPLETED),
             )
             if result.truncated:
                 self._write_notice(
@@ -6530,10 +6846,7 @@ class InteractiveController:
                     InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
                 )
             start_sequence = action.start_sequence or 1
-            page_limit = (
-                action.count
-                or CONVERSATION_MEMORY_POLICY.default_page_events
-            )
+            page_limit = action.count or CONVERSATION_MEMORY_POLICY.default_page_events
             handle = visible_conversation_handle(metadata, entries)
             self._semantic_output.write_component(
                 Record(
@@ -6575,16 +6888,8 @@ class InteractiveController:
             self._write_notice(
                 f"Transcript page returned {len(page.events)} events.",
                 label="result",
-                role=(
-                    SemanticRole.MUTED
-                    if not page.events
-                    else SemanticRole.SUCCESS
-                ),
-                state=(
-                    ViewState.EMPTY
-                    if not page.events
-                    else ViewState.COMPLETED
-                ),
+                role=(SemanticRole.MUTED if not page.events else SemanticRole.SUCCESS),
+                state=(ViewState.EMPTY if not page.events else ViewState.COMPLETED),
             )
             if page.next_cursor is not None:
                 self._write_notice(
@@ -6635,9 +6940,7 @@ class InteractiveController:
         or unsafe identifiers are workspace-invalid, and unknowns are fatal.
         """
 
-        self._present_memory_error(
-            classify_transcript_service_failure(failure)
-        )
+        self._present_memory_error(classify_transcript_service_failure(failure))
 
     def _present_memory_error(self, error: InteractiveError) -> None:
         """Render one trusted read error after any required access proof.
@@ -6695,18 +6998,14 @@ class InteractiveController:
                 if current is None:
                     self._focused_conversation = None
                     self._write_error(
-                        InteractiveError(
-                            InteractiveErrorCode.CONVERSATION_NOT_FOUND
-                        )
+                        InteractiveError(InteractiveErrorCode.CONVERSATION_NOT_FOUND)
                     )
                     handle = None
                     subject = None
                 elif current.status is ConversationStatus.ARCHIVED:
                     self._focused_conversation = None
                     self._write_error(
-                        InteractiveError(
-                            InteractiveErrorCode.CONVERSATION_ARCHIVED
-                        )
+                        InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
                     )
                     handle = None
                     subject = None
@@ -6832,9 +7131,7 @@ class InteractiveController:
         assert session_id is not None
         try:
             normalized_query = (
-                None
-                if query is None
-                else normalize_conversation_input(query)
+                None if query is None else normalize_conversation_input(query)
             )
         except Exception as exc:
             self._present_conversation_failure(exc)
@@ -6864,14 +7161,10 @@ class InteractiveController:
         visible_entries = tuple(
             entry
             for entry in entries
-            if (
-                include_archived
-                or entry.status is ConversationStatus.ACTIVE
-            )
+            if (include_archived or entry.status is ConversationStatus.ACTIVE)
             and (
                 normalized_query is None
-                or normalized_query
-                in normalize_conversation_subject(entry.subject)
+                or normalized_query in normalize_conversation_subject(entry.subject)
             )
         )
         if not visible_entries:
@@ -6916,11 +7209,7 @@ class InteractiveController:
                         ),
                         Field("Subject", entry.subject),
                     ),
-                    role=(
-                        SemanticRole.MUTED
-                        if archived
-                        else SemanticRole.DEFAULT
-                    ),
+                    role=(SemanticRole.MUTED if archived else SemanticRole.DEFAULT),
                     state=ViewState.COMPLETED,
                 ),
                 position=position,
@@ -6957,9 +7246,7 @@ class InteractiveController:
                     for entry in entries
                     if entry.status is ConversationStatus.ACTIVE
                 )
-                active_ids = tuple(
-                    entry.conversation_id for entry in active_entries
-                )
+                active_ids = tuple(entry.conversation_id for entry in active_entries)
                 highlighted_id = (
                     None
                     if self._focused_conversation is None
@@ -6980,9 +7267,7 @@ class InteractiveController:
                     active_entries,
                     active_ids,
                     highlighted_id,
-                ) = self._run_picker_preparation(
-                    prepare_resume_choices
-                )
+                ) = self._run_picker_preparation(prepare_resume_choices)
             except _ControllerAbort:
                 raise
             except Exception as exc:
@@ -7007,8 +7292,7 @@ class InteractiveController:
                         entry.conversation_id,
                         entry.subject,
                         description=(
-                            "Handle: "
-                            f"{visible_conversation_handle(entry, entries)}"
+                            f"Handle: {visible_conversation_handle(entry, entries)}"
                         ),
                     )
                     for entry in active_entries
@@ -7056,9 +7340,7 @@ class InteractiveController:
             )
         except Exception as exc:
             self._confirm_attachment_after_command_failure()
-            self._write_error(
-                classify_conversation_failure(exc)
-            )
+            self._write_error(classify_conversation_failure(exc))
             return False
 
         self._focused_conversation = focused
@@ -7258,18 +7540,13 @@ class InteractiveController:
         )
         target_handle = visible_conversation_handle(target, entries)
         decision = self._terminal.request_confirmation(
-            (
-                f'Archive current conversation "{target.subject}" '
-                f"({target_handle})?"
-            ),
+            (f'Archive current conversation "{target.subject}" ({target_handle})?'),
             default=False,
         )
         if decision is ConfirmationResult.EOF:
             return True
         if decision is not ConfirmationResult.YES:
-            self._write_conversation_cancelled_status(
-                "Conversation archive cancelled."
-            )
+            self._write_conversation_cancelled_status("Conversation archive cancelled.")
             return False
 
         try:
@@ -7298,11 +7575,7 @@ class InteractiveController:
             save_default_conversation(
                 self._workspace,
                 session_id,
-                (
-                    None
-                    if successor is None
-                    else successor.conversation_id
-                ),
+                (None if successor is None else successor.conversation_id),
             )
         except Exception as exc:
             self._compensate_failed_focused_archive(target, exc)
@@ -7383,9 +7656,7 @@ class InteractiveController:
             self._abandon_known_attachment_for_cleanup_abort()
 
         self._focused_conversation = confirmed
-        self._write_error(
-            classify_conversation_failure(default_failure)
-        )
+        self._write_error(classify_conversation_failure(default_failure))
         self._write_notice(
             "Archive did not complete; the original conversation remains focused.",
             label="conversation",
@@ -7532,10 +7803,7 @@ class InteractiveController:
         """
 
         session_id = self._attached_session_id
-        if (
-            session_id is None
-            or not self._attachment_is_safely_retained(session_id)
-        ):
+        if session_id is None or not self._attachment_is_safely_retained(session_id):
             self._abandon_known_attachment_for_cleanup_abort()
 
     def _present_conversation_failure(
@@ -7643,8 +7911,7 @@ class InteractiveController:
                             "Default session",
                             (
                                 "yes"
-                                if self._context.default_session_id
-                                == state.session_id
+                                if self._context.default_session_id == state.session_id
                                 else "no"
                             ),
                         ),
@@ -7697,6 +7964,7 @@ class InteractiveController:
         self._attached_session_id = None
         self._focused_conversation = None
         self._conversation_memory_service = None
+        self._pending_rag_query = None
         self._target_agent_id = LEAD_ORCHESTRATOR
         self._trace_debug(
             DebugOperation.ATTACHMENT,
@@ -7786,9 +8054,7 @@ class InteractiveController:
             return False
         arguments = tuple(
             token
-            for token in original_line[first_delimiter:]
-            .replace("\t", " ")
-            .split(" ")
+            for token in original_line[first_delimiter:].replace("\t", " ").split(" ")
             if token
         )
         return bool(arguments) and arguments[0] not in _AGENT_ROUTE_ALIASES
@@ -7857,9 +8123,8 @@ class InteractiveController:
         self._attached_session_id = None
         self._focused_conversation = None
         self._conversation_memory_service = None
-        raise _ControllerAbort(
-            InteractiveError(InteractiveErrorCode.CLEANUP_FAILED)
-        )
+        self._pending_rag_query = None
+        raise _ControllerAbort(InteractiveError(InteractiveErrorCode.CLEANUP_FAILED))
 
     def _write_error_best_effort(self, error: InteractiveError) -> bool:
         """Attempt one diagnostic without delaying lifecycle cleanup.
@@ -7907,6 +8172,7 @@ class InteractiveController:
         runner = self._runner
         discard_runner_state_after_cleanup = runner is None
         attached_session = self._attached_session_id
+        self._pending_rag_query = None
         if runner is not None:
             try:
                 runner.close()
@@ -7935,9 +8201,7 @@ class InteractiveController:
 
         if attached_session is not None:
             try:
-                released = self._backend.release_session_access(
-                    attached_session
-                )
+                released = self._backend.release_session_access(attached_session)
                 require_released_state(
                     released,
                     attached_session,
@@ -7989,6 +8253,7 @@ class InteractiveController:
         self._attached_session_id = None
         self._focused_conversation = None
         self._conversation_memory_service = None
+        self._pending_rag_query = None
         self._closed = True
 
         if cleanup_failed and not cleanup_error_reported:

@@ -48,6 +48,8 @@ from story_writing_agents.interactive_settings import (
     update_agent_backend,
     update_agent_codex_model,
     update_agent_codex_reasoning_effort,
+    update_conversation_rag_automatic,
+    update_conversation_rag_provider,
     update_conversation_storage_backend,
     update_language,
     update_max_debate_rounds,
@@ -163,6 +165,8 @@ class SettingsModelContractTests(SettingsTestCase):
             update_persona: ("state", "persona"),
             update_max_debate_rounds: ("state", "max_debate_rounds"),
             update_conversation_storage_backend: ("state", "backend"),
+            update_conversation_rag_provider: ("state", "provider"),
+            update_conversation_rag_automatic: ("state", "automatic"),
             update_show_message_details: ("state", "enabled"),
             update_agent_backend: ("state", "agent_id", "backend"),
             establish_default_backend: ("workspace", "backend"),
@@ -531,6 +535,63 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
         self.assertEqual(agent_after.language, agent_before.language)
         self.assertEqual(agent_after.persona, agent_before.persona)
 
+    def test_conversation_rag_updates_are_immutable_and_enforce_provider_relation(
+        self,
+    ) -> None:
+        state = self.load()
+        original = state.pending
+
+        local = update_conversation_rag_provider(state, "local")
+        self.assertIs(local.baseline, state.baseline)
+        self.assertEqual(local.pending.system_defaults.conversation_rag_provider, "local")
+        self.assertFalse(local.pending.system_defaults.conversation_rag_automatic)
+        self.assertEqual(state.pending, original)
+
+        automatic = update_conversation_rag_automatic(local, True)
+        self.assertIs(automatic.baseline, state.baseline)
+        self.assertTrue(automatic.pending.system_defaults.conversation_rag_automatic)
+        self.assertFalse(local.pending.system_defaults.conversation_rag_automatic)
+
+        disabled = update_conversation_rag_provider(automatic, None)
+        self.assertIsNone(disabled.pending.system_defaults.conversation_rag_provider)
+        self.assertFalse(disabled.pending.system_defaults.conversation_rag_automatic)
+        self.assertTrue(automatic.pending.system_defaults.conversation_rag_automatic)
+
+        with self.assertRaises(ConfigurationError):
+            update_conversation_rag_automatic(state, True)
+        with self.assertRaises(ConfigurationError):
+            update_conversation_rag_provider(state, "remote")
+        with self.assertRaises(ConfigurationError):
+            update_conversation_rag_automatic(local, 1)  # type: ignore[arg-type]
+
+    def test_conversation_rag_save_uses_the_existing_exact_cas_contract(self) -> None:
+        state = update_conversation_rag_automatic(
+            update_conversation_rag_provider(self.load(), "local"),
+            True,
+        )
+        save_settings_state(self.workspace, state)
+        loaded = self.load().pending.system_defaults
+        self.assertEqual(loaded.conversation_rag_provider, "local")
+        self.assertTrue(loaded.conversation_rag_automatic)
+
+        stale = update_conversation_rag_provider(state, None)
+        self.workspace.write_text(
+            _SYSTEM_PATH,
+            json.dumps(self.workspace.read_json(_SYSTEM_PATH), separators=(",", ":"))
+            + "\n",
+        )
+        before = _files(self.workspace.root)
+        with mock.patch.object(
+            self.workspace,
+            "write_text",
+            wraps=self.workspace.write_text,
+        ) as write:
+            with self.assertRaises(SettingsError) as caught:
+                save_settings_state(self.workspace, stale)
+        self.assertIs(caught.exception.kind, SettingsErrorKind.CONFLICT)
+        write.assert_not_called()
+        self.assertEqual(_files(self.workspace.root), before)
+
     def test_updates_reject_types_closed_vocabularies_and_unsafe_values(self) -> None:
         state = self.load()
         invalid = (
@@ -549,6 +610,10 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
             ),
             (
                 lambda: update_conversation_storage_backend(state, "mysql"),
+                ConfigurationError,
+            ),
+            (
+                lambda: update_conversation_rag_provider(state, "LOCAL"),
                 ConfigurationError,
             ),
             (
@@ -647,6 +712,8 @@ class SettingsDefaultPersistenceTests(SettingsTestCase):
                     "default_backend": "codex",
                     "conversation_storage_backend": "filesystem",
                     "show_message_details": False,
+                    "conversation_rag_automatic": False,
+                    "conversation_rag_provider": None,
                 }
             ),
         )
@@ -803,6 +870,8 @@ class SettingsPersistenceTests(SettingsTestCase):
                     "default_backend": None,
                     "conversation_storage_backend": "filesystem",
                     "show_message_details": True,
+                    "conversation_rag_automatic": False,
+                    "conversation_rag_provider": None,
                 }
             ),
         )
@@ -1055,6 +1124,8 @@ class SettingsPersistenceTests(SettingsTestCase):
                     "default_backend": None,
                     "conversation_storage_backend": "filesystem",
                     "show_message_details": False,
+                    "conversation_rag_automatic": False,
+                    "conversation_rag_provider": None,
                 }
             ),
         )
@@ -1264,6 +1335,8 @@ class SettingsPersistenceTests(SettingsTestCase):
                     "default_backend": None,
                     "conversation_storage_backend": "filesystem",
                     "show_message_details": False,
+                    "conversation_rag_automatic": False,
+                    "conversation_rag_provider": None,
                 }
             ),
         )

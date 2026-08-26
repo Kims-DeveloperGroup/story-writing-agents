@@ -85,8 +85,10 @@ never receives a search, catalog, transcript, or filesystem collaborator.
 
 On the established `StoryRuntime` path, every substantive provider turn receives
 the bounded belonging-session envelope described below. The first retrieval
-call also receives current input; later calls receive only runtime-authorized
-observations framed as untrusted story data and do not repeat input or context.
+call also receives current input. An attempted conversation-RAG preflight adds
+its separate bounded `rag_context` beside `story_session_context` on that first
+call only. Later calls receive only runtime-authorized observations framed as
+untrusted story data and do not repeat input or either context envelope.
 Exact payloads and action order live in
 [Bounded retrieval](../reference/conversation-retrieval.md). Direct Python
 `converse()` with no reference coordinator and its `ConversationRequest`

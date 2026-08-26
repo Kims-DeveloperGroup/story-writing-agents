@@ -116,13 +116,15 @@ ordinal sequence. `StoryRuntime` owns those values and allocates each
 invocation with attempt `1`; another agent, phase, replacement, or operation
 cannot reuse prior evidence.
 
-Construction first validates the complete ten-field
+Construction first validates the complete twelve-field
 `config/system_defaults.json` object and closed per-agent objects in
 `config/agent_configs.json`, even when non-null constructor model/effort values
 would override persisted fields. Optional fields and canonical agents may be
 absent; nullable routes and `default_backend` still produce a complete roster
-snapshot through the final Codex fallback. It then captures provider routes and
-resolved per-agent model/effort values. Direct edits have no watcher: the next
+snapshot through the final Codex fallback. The independent conversation-storage
+and conversation-RAG defaults are validated with the same closed object but do
+not alter backend routing. It then captures provider routes and resolved
+per-agent model/effort values. Direct edits have no watcher: the next
 backend construction observes and reconciles valid persisted changes, while
 existing other shells retain their captured state. The installed interactive
 `/settings` path is different: it stages and preflights a complete candidate,
@@ -131,6 +133,12 @@ restart. The one exception is a candidate that changes only Message details:
 that presentation-only fast path prepares, verifies, and commits configuration
 without authentication, storage readiness, backend/runtime, route-generation,
 or provider/thread work, then updates the active flag.
+An exact Conversation-RAG-only candidate instead prepares, verifies, and
+commits only the startup-fixed configuration without authentication, storage
+readiness, backend/runtime work, route-generation, provider/thread work, or an
+optional-package probe. It leaves the current RAG service and automatic policy
+unchanged until the next shell. Mixed changes activate only their live-capable
+settings; desired storage and RAG remain next-shell choices.
 Launch overrides remain higher precedence and therefore mask the corresponding
 editor fields.
 

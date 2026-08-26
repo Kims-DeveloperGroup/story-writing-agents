@@ -2497,6 +2497,7 @@ print(
                     "Persona—Current:default_kim_eun_hee",
                     "Maximumdebaterounds—Current:1",
                     "Conversationstorage—Current:filesystem",
+                    "ConversationRAG—Current:ProviderDisabled;AutomaticOff",
                     "Messagedetails—Current:Off",
                     "Agents",
                 )
@@ -2552,18 +2553,6 @@ print(
                     after=language_mark,
                 )
                 self.assertIn(
-                    "Apply Changes (*Required)",
-                    re.sub(
-                        r"\x1b\[[0-9;]*[A-Za-z]",
-                        "",
-                        returned_settings,
-                    ),
-                )
-                self.assertIn(
-                    b"Apply Changes \x1b[33m(*Required)\x1b[0m",
-                    bytes(process.raw_bytes[language_mark:]),
-                )
-                self.assertIn(
                     "ChooseApplyChangestopersistpendingchanges",
                     "".join(
                         re.sub(
@@ -2592,7 +2581,17 @@ print(
                     1,
                 )
                 idle_pending_mark = process.output_mark()
-                process.send_text("\x1b[B")
+                process.send_text("\x1b[B" * 8)
+                apply_view = process.wait_for_text(
+                    "Discard Changes",
+                    after=idle_pending_mark,
+                )
+                self.assertIn("Apply Changes (*Required)", apply_view)
+                self.assertIn(
+                    b"Apply Changes \x1b[33m(*Required)\x1b[0m",
+                    bytes(process.raw_bytes[idle_pending_mark:]),
+                )
+                process.send_text("\x1b[A" * 7)
                 process.wait_for_text(
                     "[highlighted] Persona",
                     after=idle_pending_mark,
@@ -2604,7 +2603,7 @@ print(
                 )
                 self.assertNotIn(b"\x1b[33mCurrent:", idle_pending)
                 returned_mark = process.output_mark()
-                process.send_text(("\x1b[B" * 5) + "\n")
+                process.send_text(("\x1b[B" * 6) + "\n")
                 process.send_text("\n")
                 saved = process.wait_for_text(
                     "[saved and applied]",
@@ -2672,7 +2671,7 @@ print(
             after=mark,
         )
 
-        process.send_text(("\x1b[B" * 5) + "\n")
+        process.send_text(("\x1b[B" * 6) + "\n")
         agents_picker = process.wait_for_text(
             "Select an agent to configure",
             after=mark,
@@ -2853,6 +2852,7 @@ print(
             "Persona—Current:default_kim_eun_hee",
             "Maximumdebaterounds—Current:1",
             "Conversationstorage—Current:filesystem",
+            "ConversationRAG—Current:ProviderDisabled;AutomaticOff",
             "Messagedetails—Current:Off",
             "Agents",
         )
@@ -2867,7 +2867,7 @@ print(
         )
 
         details_mark = process.output_mark()
-        process.send_text(("\x1b[B" * 4) + "\n")
+        process.send_text(("\x1b[B" * 5) + "\n")
         details = process.wait_for_text(
             "Message details [focused] [open]",
             after=details_mark,
@@ -2965,7 +2965,7 @@ print(
 
         process.send_text("/settings\n\n")
         process.wait_for_text("Choose a setting to edit.")
-        process.send_text(("\x1b[B" * 5) + "\n")
+        process.send_text(("\x1b[B" * 6) + "\n")
         process.wait_for_text("Select an agent to configure")
         process.send_text("\x1b[B\n")
         process.wait_for_text("Choose a provider, model, or effort setting")
@@ -3049,7 +3049,7 @@ print(
         mark = process.output_mark()
         process.send_text("/settings\n\n")
         process.wait_for_text("[highlighted] Language", after=mark)
-        process.send_text(("\x1b[B" * 5) + "\n")
+        process.send_text(("\x1b[B" * 6) + "\n")
         agents = process.wait_for_text("Agents [focused] [open]", after=mark)
         self.assertIn(
             "Plot&StructureArchitect—Current:"
@@ -3106,15 +3106,21 @@ print(
             after=returned_mark,
         )
         self.assertIn("[save required]", returned_settings)
-        compact_returned = "".join(returned_settings.split())
-        self.assertIn("ApplyChanges(*Required)", compact_returned)
-        self.assertNotIn("Save(*Required)", compact_returned)
         self.assertIn(
             "ChooseApplyChangestopersistpendingchanges",
             "".join(process.normalized_text.split()),
         )
+        apply_view_mark = process.output_mark()
+        process.send_text("\x1b[B")
+        apply_view = process.wait_for_text(
+            "Apply Changes",
+            after=apply_view_mark,
+        )
+        compact_apply_view = "".join(apply_view.split())
+        self.assertIn("ApplyChanges(*Required)", compact_apply_view)
+        self.assertNotIn("Save(*Required)", compact_apply_view)
         discard_view_mark = process.output_mark()
-        process.send_text("\x1b[B" * 2)
+        process.send_text("\x1b[B")
         returned_settings += process.wait_for_text(
             "Discard Changes",
             after=discard_view_mark,
@@ -3212,12 +3218,16 @@ print(
         process.wait_for_text("story[lobby]> ")
         mark = process.output_mark()
         process.send_line("/settings")
-        settings = process.wait_for_text("6. [available] Agents", after=mark)
+        settings = process.wait_for_text("7. [available] Agents", after=mark)
         self.assertIn(
-            "5.[available]Messagedetails—Current:Off",
+            "5.[available]ConversationRAG—Current:ProviderDisabled;AutomaticOff",
             "".join(settings.split()),
         )
-        process.send_line("6")
+        self.assertIn(
+            "6.[available]Messagedetails—Current:Off",
+            "".join(settings.split()),
+        )
+        process.send_line("7")
         process.wait_for_text("Agents > ", after=mark)
         process.send_line("2")
         process.wait_for_text("Agent settings", after=mark)
@@ -3248,21 +3258,21 @@ print(
         process.wait_for_text("Agents > ", after=model_mark)
         process.send_line("/cancel")
         returned_settings = process.wait_for_text(
-            "8. [available] Discard Changes",
+            "9. [available] Discard Changes",
             after=model_mark,
         )
         self.assertIn("[save required]", returned_settings)
         compact_returned = "".join(returned_settings.split())
         self.assertIn(
-            "7.[available]ApplyChanges(*Required)",
+            "8.[available]ApplyChanges(*Required)",
             compact_returned,
         )
-        self.assertNotIn("7.[available]Save", compact_returned)
+        self.assertNotIn("8.[available]Save", compact_returned)
         self.assertIn(
             "ChooseApplyChangestopersistpendingchanges",
             "".join(returned_settings.split()),
         )
-        process.send_line("7")
+        process.send_line("8")
         process.send_line("1")
         process.wait_for_text("Settings saved", after=mark)
         process.wait_for_text("story[lobby]> ", after=mark)
@@ -3492,7 +3502,7 @@ print(
 
         settings_mark = process.output_mark()
         process.send_line("/settings")
-        process.wait_for_text("6. [available] Agents", after=settings_mark)
+        process.wait_for_text("7. [available] Agents", after=settings_mark)
         process.send_line("1")
         process.wait_for_text("Language >", after=settings_mark)
         process.send_line("2")
@@ -3503,7 +3513,7 @@ print(
         process.send_line("/cancel")
         process.wait_for_text("Apply Changes (*Required)", after=settings_mark)
         self._set_auth_state(codex="unauthenticated")
-        process.send_line("7")
+        process.send_line("8")
         process.wait_for_text("Apply changes?", after=settings_mark)
         process.send_line("1")
         process.wait_for_text("Provider authentication", after=settings_mark)
@@ -3889,6 +3899,7 @@ raise SystemExit(cli.main([]))
         compact_preview = "".join(preview.split())
         for token in (
             "/say",
+            "/rag",
             "/to",
             "/agent",
             "/agents",
@@ -5274,7 +5285,7 @@ print("RESULT=" + json.dumps({
         preview_mark = process.output_mark()
         process.send_text("/")
         process.wait_for_text("Suggestions [open]", after=preview_mark)
-        process.send_text("\x1b[B")
+        process.send_text("\x1b[B" * 2)
         process.wait_for_text("[highlighted] /to", after=preview_mark)
         close_mark = process.output_mark()
         process.send_text("\x1b")
@@ -5342,7 +5353,7 @@ print("RESULT=" + json.dumps({
         mark = process.output_mark()
         process.send_text("/")
         process.wait_for_text("Suggestions [open]", after=mark)
-        process.send_text("\x1b[B")
+        process.send_text("\x1b[B" * 2)
         process.wait_for_text("[highlighted] /to", after=mark)
         process.send_text("\t")
         process.wait_for_text("story[lobby]> /to", after=mark)

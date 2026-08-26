@@ -9,9 +9,12 @@
 > provider-free `story storage use` can prepare and save desired storage for the
 > next shell; host installation always requires explicit consent. Migration and
 > parity verification remain separate workflows between two already-ready
-> stores. Automatic retry, silent installation, general destructive cleanup,
-> event repair, live switching, automation picker UI, and Windows console
-> emulation are not available.
+> stores. Optional local conversation RAG has no-write status, explicit
+> opt-in/rebuild/search/disable, confirmed derived-only purge recovery,
+> next-shell settings, and private one-turn preflight arming.
+> Automatic retry, silent installation, general destructive cleanup, event
+> repair, live switching, automation picker UI, and Windows console emulation
+> are not available.
 > Explicit SQLite provisioning recognizes only one exact
 > interrupted-publication alias shape.
 
@@ -304,6 +307,7 @@ deadline.
 | Settings Provider-editor authentication is cancelled or fails | Fresh authorization was not proved before assignment. | The pending route is unchanged. Retry the provider choice or cancel settings; configuration bytes remain unchanged before confirmed Apply Changes. |
 | Apply-time status is stale or fails after confirmation | One distinct effective provider did not freshly authenticate before the mixed-candidate file transaction. | Repair or complete native sign-in, return to Apply Changes, and reprobe. No pending settings file update occurs. Any missing default learned during the gate remains in the pending candidate and becomes durable only when the final storage-coordinated Apply completes. |
 | Message-details-only Apply fails | The presentation-only fast path could not prepare, verify, or commit the exact candidate. It performs no provider, backend/runtime, storage, route-generation, or thread work. | The active display flag remains unchanged unless the configuration commit completed. Review the fixed settings error and retry Apply Changes. |
+| Conversation-RAG-only Apply fails | The startup-policy fast path could not prepare, verify, or commit the exact system candidate. It performs no authentication, storage, backend/runtime, route/thread, composition, optional-package probe/install, provider-catalog, subprocess, socket, or network work. | The current RAG service and automatic policy are unchanged regardless. Inspect the fixed settings result and persisted configuration before retrying Apply Changes. |
 
 Interactive startup first needs any authenticated provider, then every distinct
 effective route under CLI override → agent route → workspace default → Codex.
@@ -315,14 +319,18 @@ authentication before using their provider routes.
 
 ## Settings activation and route recovery
 
-Confirmed `/settings` Apply Changes normally is a current-shell operation:
-authenticate and preflight all effective providers, prepare/quiesce the
-runtime, validate the complete candidate, persist it, then activate it. A
-candidate whose sole difference is `show_message_details` instead uses the
+Confirmed `/settings` Apply Changes uses the current-shell operation for
+live-capable changes: authenticate and preflight all effective providers,
+prepare/quiesce the runtime, validate the complete candidate, persist it, then
+activate it. A candidate whose sole difference is `show_message_details`
+instead uses the
 prepare/verify/commit configuration path and updates the active presentation
 flag only after commit; it skips the full provider, runtime, storage, route, and
-thread activation path. Every mixed candidate uses the full operation. Its
-exact prepared boundary
+thread activation path. A Conversation-RAG-only candidate uses the same guarded
+configuration transaction without authentication, storage, runtime,
+route/thread, composition, optional-package, provider-catalog, subprocess,
+socket, or network work; its saved policy applies only to the next shell. Every
+other mixed candidate uses the full operation. Its exact prepared boundary
 is `config/system_defaults.json`, `config/agent_configs.json`, and optional
 `agent_states/orchestrator_state/provider_route_generations.json`. Launch
 overrides remain read-only and higher precedence.
@@ -334,10 +342,12 @@ overrides remain read-only and higher precedence.
 | After persistence, with proved compensation | Exact prior file state is restored and the old runtime remains active. | Review settings and retry in the same shell. |
 | Restoration or active generation cannot be proved | The shell reports `recovery_required`; persisted and in-memory state may not agree. | Stop using that shell immediately. Close it, inspect and back up the prepared targets, and restart against the persisted configuration. |
 
-Restart is exceptional recovery, not the normal activation path. A successful
-Apply Changes says it was applied to the running shell; changed profiles remain pending
-only until their first complete logical provider call succeeds. Other active
-shells are not updated and retain their captured state.
+Restart is exceptional recovery, not the normal activation path for live-
+capable changes. A successful live Apply says it was applied to the running
+shell; a RAG-only Apply says only that its policy was saved for the next shell.
+Changed profiles remain pending only until their first complete logical
+provider call succeeds. Other active shells are not updated and retain their
+captured state.
 
 There is no watcher for manual changes to the two configuration JSON files. A
 new backend launch validates those bytes and reconciles the runtime-owned route
@@ -685,6 +695,83 @@ not change provider conversations, operation results, transcripts, manifests,
 or durable session state. Users cannot require an obsolete definition for new
 work; the newest desired definition is selected instead.
 
+<a id="conversation-rag-recovery"></a>
+
+## Conversation RAG recovery
+
+Start with a no-write observation for the affected session:
+
+```bash
+story rag status --session SESSION
+```
+
+A valid status exits `0` even when its state is not ready. Interpret the fixed
+state and compatibility separately:
+
+| Observation | Safe next action |
+| --- | --- |
+| `disabled` | Install/review the optional dependency if needed, then explicitly run `story rag enable --provider local`. Enabling does not build a generation. |
+| `unavailable` / `dependency_missing` | Reinstall the exact pinned `.[rag]` extra under the approved non-redistributing policy; enable never writes configuration when preflight fails. |
+| `version_incompatible` / `capability_incompatible` | Restore the exact reviewed pin and capability version before retrying. Do not bypass the check or substitute an unreviewed package. |
+| `missing`, `stale`, or `failed` with compatible local provider | Run `story rag rebuild --session SESSION --yes`. Rebuild restarts from current authority; it does not resume partial bytes. |
+| `incompatible` with otherwise validated derived state | Rebuild explicitly so a separately verified generation is published with the current provider/model/projection identity. Existing bytes are never relabeled. |
+| `corrupt` | A confirmed rebuild may publish a separate fully verified generation without trusting or relabeling the corrupt active state. If it still fails, preserve the workspace and report before manual intervention. |
+| `unsafe` or repeated `operation_failed` | Preserve the workspace and report. Do not delete or rename unknown entries to force progress: mutations fail closed around an unsafe topology. Restore a known-good workspace or obtain repository-owner diagnosis before any manual derived-state quarantine. |
+
+An interrupted or failed rebuild leaves the previous active pointer valid when
+failure occurred before publication; a complete inactive generation may remain
+as an orphan. Rerunning confirmed rebuild is the supported restart path. The
+next safe generation mutation validates and cleans only recognized residue. It
+never treats partial bytes as resumable progress. If authoritative conversation
+state changes during publication validation, the operation fails and marks
+derived state stale best-effort; wait for writers to quiesce and rerun.
+
+`coordination_failed` means a bounded active participant or activation drift
+prevented a stable operation. There is no automatic retry; let the owning
+storage/RAG operation finish, then rerun status. `storage_unavailable` on search
+or confirmed rebuild belongs to the configured conversation-storage startup
+boundary. Repair/provision/migrate/select that authority through its documented
+workflow before retrying RAG; RAG never provisions or migrates it.
+
+If Local is saved but the next shell prints the fixed one-time Conversation RAG
+unavailable warning, the shell and `/settings` remain usable and configuration
+is unchanged. Restore the exact reviewed dependency with
+`python -m pip install --editable '.[rag]'`, verify its pin/version/capabilities,
+and restart. Startup never installs or silently disables the saved provider.
+Choose Disabled and confirm Apply Changes only when that is the intended
+durable policy.
+
+An armed `/rag QUERY` is not an immediate operation. Ineligible commands retain
+it, while scope change, pause/detach, quit, or cleanup clears it. If Ctrl-C
+arrives before the advisory runtime coroutine enters, retrying an eligible turn
+uses the retained query. Once the coroutine enters, the query is consumed even
+when that turn later fails or is cancelled; explicitly arm it again for a new
+attempt. The query is intentionally absent from logs/transcripts/results, so a
+user who needs to retry must retain it outside those channels.
+
+A successful search can still report `literal_fallback` with a non-ready reason
+and exit `0`. Its excerpts, if any, were reread from authority, but the result is
+not proof that semantic state was ready; inspect status and rebuild when semantic
+retrieval is required. Search never logs or echoes its query, so retain the
+original query yourself if it is needed for a retry. Its excerpt-bearing stdout
+is sensitive conversation data.
+
+Disable and purge solve different problems. `story rag disable` clears opt-in
+and automatic policy but deliberately leaves derived generations. Confirmed
+`story rag purge --session SESSION --yes` removes only one validated derived
+session and remains safe while disabled; it never deletes authoritative
+conversations. Purge is not secure erasure and cannot clean an unvalidated
+unsafe namespace.
+
+For `configuration_conflict`, reload current settings and retry the complete
+enable/disable decision. For `configuration_write_failed`, inspect both
+configuration documents because rollback uncertainty is collapsed into the
+same sanitized failure. Invalid workspace/session/provider and blank or
+invalid-UTF-8 query requests fail before RAG/storage dispatch; later bounded
+query-normalization failures remain sanitized by the operation boundary. RAG
+commands create no runtime debug record, so their one-line report and separately
+protected workspace are the recovery evidence.
+
 ## Current limits
 
 - Codex and Antigravity are supported. Nullable routes inherit the workspace
@@ -703,8 +790,14 @@ work; the newest desired definition is selected instead.
   explicitly confirmed allowlisted command, and startup never installs or
   provisions. Migration/verification remain separate operations over two ready
   stores and never select, activate, or delete one. There is no live switch,
-  dual write, automatic retry, RAG, MySQL, or FTS-dependent result behavior.
+  dual write, automatic retry, MySQL, or FTS-dependent result behavior.
   The private local FTS5 companion supplies non-authoritative hints only.
+- Optional local conversation RAG defaults off and has explicit noninteractive
+  status, enable, rebuild, cited search, disable, and derived-only purge.
+  `/settings` provider/automatic editors apply to the next shell; Automatic On
+  and private `/rag QUERY` use bounded preflight only for eligible focused
+  advisory turns. External/network RAG providers and MySQL coupling remain
+  unavailable. Literal `/search` is unchanged.
 - Parsing, repository authorization/evidence, top-level `StoryRuntime`
   propagation, and provider-enforced reads are active for inline canonical
   references. Provider-bound interactive spans add `$` completion and

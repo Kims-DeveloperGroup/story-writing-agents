@@ -8,6 +8,11 @@
 > interactive prompt spans, `$`, `$${path}`, and `$$` discover and attach them
 > without submitting. Separate provider-free `story storage` commands select a
 > desired next-shell backend or migrate and verify already-ready stores.
+> Noninteractive `story rag` commands inspect and operate the optional fixed
+> local conversation-RAG projection without authenticating a story-agent
+> provider. Interactive `/settings` persists the next-shell local/automatic
+> policy, and `/rag QUERY` privately arms one forced preflight for the next
+> eligible focused story-agent turn.
 
 `story` and `story-writing-agents` are aliases for
 `story_writing_agents.cli:main`.
@@ -27,6 +32,12 @@
 | Storage use | `story storage use BACKEND [--install-missing --yes] [--workspace PATH]` |
 | Storage migrate | `story storage migrate --from BACKEND --to BACKEND [--dry-run] [--workspace PATH]` |
 | Storage verify | `story storage verify --from BACKEND --to BACKEND [--workspace PATH]` |
+| RAG status | `story rag status [--workspace PATH] [--session ID]` |
+| RAG enable | `story rag enable --provider PROVIDER [--workspace PATH]` |
+| RAG rebuild | `story rag rebuild [--yes] [--workspace PATH] [--session ID]` |
+| RAG search | `story rag search QUERY [--workspace PATH] [--session ID]` |
+| RAG disable | `story rag disable [--workspace PATH]` |
+| RAG purge | `story rag purge [--yes] [--workspace PATH] [--session ID]` |
 | Smoke | `story smoke [--workspace PATH]` |
 
 Lifecycle commands have no `--session`. Omitted reopen/pause uses the default;
@@ -275,6 +286,107 @@ both stores. See [Conversation storage migration recovery](../operations/recover
 before retrying and [Session storage](configuration/session-storage.md#conversation-migration-checkpoints)
 for checkpoint contents.
 
+<a id="conversation-rag-operations"></a>
+
+## Conversation RAG operations
+
+The installed `story rag` family operates only the fixed network-free `local`
+provider. It performs no story-agent authentication, provider call, external
+provider discovery, or optional-package installation. The base installation
+can inspect status; enable, rebuild, and search require the exact-pinned
+`generic-rag` 0.1.0 distribution and capability manifest. Installing that
+extra does not change workspace configuration.
+
+The operation scopes are exact:
+
+| Operation | Scope and effect |
+| --- | --- |
+| `status` | Session-scoped. Uses `--session ID` or the saved default. Optimistically reads the persisted active filesystem/SQLite authority and derived state twice. It does not acquire/create the conversation-storage mutation lock, create the RAG subtree, rewrite configuration, activate desired storage, or clean orphans. Every valid observation—including non-ready state—has outcome `completed` and exit `0`. |
+| `enable` | Workspace-scoped. Requires exact `--provider local`; no session is accepted. It checks the optional distribution/version/capabilities before a complete configuration compare-and-set. Success saves provider `local` or reports configuration `unchanged`; it preserves the current automatic boolean and builds nothing. |
+| `rebuild` | Session-scoped. Without `--yes`, returns `confirmation_required` before storage activation. With confirmation, it runs configured-storage startup/activation, requires enabled compatible local RAG, rebuilds the complete authorized active target from the beginning, verifies publication while the mutation lease remains held, then returns the same inspection shape as status. It never provisions or migrates storage. |
+| `search` | Session-scoped. Requires one nonblank strict-UTF-8 positional `QUERY`, runs configured-storage startup/activation, requires enabled compatible local RAG, and performs bounded literal-first plus local-vector retrieval. Every retained range is reauthorized and reread from the current authoritative store. It invokes no story agent and never echoes the query. Quote multiword shell input. |
+| `disable` | Workspace-scoped. Accepts no session. A complete configuration compare-and-set clears the provider and sets automatic to `false`; derived and authoritative data remain. |
+| `purge` | Session-scoped. Requires `--yes` and removes only the addressed session's validated derived active/status/generation contents. It does not require provider enablement, compose authoritative storage, or alter configuration; authoritative conversations and other sessions remain. |
+
+Status composes only the persisted active backend. Confirmed rebuild and search
+instead call the normal desired-storage activation workflow before RAG
+dispatch, so a ready and canonically equal next-shell selection can advance the
+active marker. Neither operation installs/provisions SQLite, migrates data,
+falls back to another backend, or couples the derived generation store to a
+storage adapter. Purge does not consult either backend.
+
+Valid command grammar writes exactly one compact key-sorted schema-v1 JSON
+object plus LF to standard output, writes nothing to standard error, and
+creates no runtime debug record. Every report has this exact top-level key set:
+
+```text
+automatic, authoritative_checkpoint, compatibility, configuration, counts,
+excerpts, failure, indexed_checkpoint, operation, outcome, provider, purged,
+rebuild_required, retrieval_outcome, retrieval_reason, schema_version, state,
+truncated
+```
+
+`schema_version` is `1`; `operation` is `status`, `enable`, `rebuild`, `search`,
+`disable`, or `purge`; and `outcome` is `completed` or `failed`. `provider` is
+`"local"` or `null`. `automatic` reports the persisted boolean when applicable.
+`configuration` is `not_applicable`, `saved`, `unchanged`, or `preserved`.
+`state` is `disabled`, `unavailable`, `missing`, `ready`, `stale`, `failed`,
+`corrupt`, `incompatible`, or `null`. Compatibility is `compatible`, one of
+`provider_unsupported`, `dependency_missing`, `version_incompatible`, and
+`capability_incompatible`, or `null` when inapplicable.
+
+`counts` always contains exact `authoritative` and `indexed` objects:
+
+```text
+authoritative: conversations, documents, events, source_utf8_bytes
+indexed:       conversations, documents, events, fragments, generation_bytes,
+               generations, orphan_generations, payload_bytes,
+               source_utf8_bytes
+```
+
+Status and successful rebuild populate the counts plus SHA-256 authoritative
+and optional indexed checkpoints and `rebuild_required`. Enable/disable leave
+those payload fields empty. Purge reports only nonnegative `generations` and
+`orphan_generations` in the always-present `purged` object, sets state to
+`missing`, and sets `rebuild_required:true`.
+
+Search sets `retrieval_outcome` to `complete`, `partial`, or
+`literal_fallback`; `retrieval_reason` is `none`, `partial`, `disabled`,
+`unavailable`, `stale`, `corrupt`, `incompatible`, or `failed`; and `truncated`
+is a boolean. `excerpts` is ordered with contiguous `g1` through `g20`
+citations. Each item has exactly `citation_id`, `content`, `source`, and
+`reference`; `source` has `conversation_id`, `event_kind`, `sequence`,
+`session_id`, and `turn_id`; `reference` has `document_id`, `end_codepoint`,
+`fragment_id`, `revision_id`, and `start_codepoint`. Content is the bounded
+authoritative reread, not provider-returned text. Query text, subject, score,
+workspace path, credential, exception, and provider diagnostic are absent.
+
+`failure` is `null` on completion. A failed report keeps state/checkpoint/
+retrieval fields null and its counts, purge counts, and excerpt list empty; it
+uses exactly one of:
+
+```text
+invalid_request workspace_invalid session_invalid provider_disabled
+provider_unsupported dependency_missing version_incompatible
+capability_incompatible configuration_invalid configuration_conflict
+configuration_write_failed storage_unavailable coordination_failed
+confirmation_required unsafe corrupt incompatible provider_failed
+operation_failed
+```
+
+A semantic/precondition failure exits `2` with that single JSON line. Argparse
+syntax errors also exit `2`, but argparse owns their usage text on standard
+error and emits no report. Completed status/search results exit `0` even when
+state is non-ready or retrieval used an explicit literal fallback. There is no
+RAG exit `1`. `KeyboardInterrupt` and `SystemExit` remain process controls.
+
+The persisted keys, defaults, and compatibility invariant are in
+[Agent configuration](configuration/agent-configuration.md#system-defaults).
+The trust and output boundary is in
+[Privacy and provider exposure](../operations/privacy-and-provider.md#conversation-rag-command-privacy),
+and safe recovery is in
+[Recovery and limitations](../operations/recovery-and-limitations.md#conversation-rag-recovery).
+
 <a id="smoke-report"></a>
 
 ## Smoke report
@@ -304,12 +416,14 @@ unexpected failure. See the [smoke guide](../guides/smoke-test.md).
 
 ## Runtime debug logs and failure hints
 
-Installed commands best-effort append fixed operational records to
-`debug_logs/runtime.jsonl` only after workspace initialization or discovery
-succeeds. This includes successful commands and operations that are read-only
-with respect to story/session state, such as inspection, status, help, search,
-transcript, history, and lifecycle reads. The bounded log is a separate side
-effect; those operations retain their domain-state contract.
+Workspace-aware installed commands best-effort append fixed operational records
+to `debug_logs/runtime.jsonl` only after workspace initialization or discovery
+succeeds. This includes successful interactive operations that are read-only
+with respect to story/session state, such as inspection, shell status, help,
+literal shell search, transcript, history, and lifecycle reads. The bounded log
+is a separate side effect; those operations retain their domain-state contract.
+The compact machine workflows under `story storage` and `story rag` dispatch
+before debug-log construction and never create or append this log.
 
 After that successful workspace boundary, the CLI marks later application
 errors as hint-eligible before attempting to construct an optional diagnostic
@@ -488,13 +602,15 @@ models and inheritance remain supported. See the exact
 Direct edits to the validated JSON documents remain possible, but there is no
 file watcher: they are reconciled by a newly launched backend, and other
 running shells retain their captured state. Confirmed `/settings` Apply Changes
-instead validates, persists, and applies non-storage runtime settings to the
-current shell without a restart. Desired conversation storage remains a
-next-shell setting and the current storage bundle is unchanged. A
+instead validates, persists, and applies live-capable runtime settings to the
+current shell without a restart. Desired conversation storage and Conversation
+RAG remain next-shell settings and the current bundles are unchanged. A
 Message-details-only Apply uses the configuration prepare/verify/commit fast
 path and updates the active presentation flag without provider, storage,
-backend/runtime, route, or thread activation work. Mixed changes retain the
-full activation path. Launch
+backend/runtime, route, or thread activation work. A RAG-only Apply persists
+only the startup-fixed system configuration without provider, storage,
+backend/runtime, route/thread, composition, or optional-package work. Other
+mixed changes retain the full activation path. Launch
 overrides stay higher precedence, so the corresponding effective Provider,
 Model, or Effort editor is disabled and read-only. Existing
 three-key system-default files remain valid and provide no provider-specific
@@ -609,7 +725,7 @@ completion-only Enter, Escape dismissal, cancel, interrupt, EOF, and input
 failure add nothing.
 
 Main matching is exact and case-sensitive at the cursor, with ASCII space/tab
-token boundaries. Root offers 22 main-available registry tokens, help offers 25
+token boundaries. Root offers 23 main-available registry tokens, help offers 26
 including the composition-only commands, and agent-valued positions offer the
 four preferred prompt aliases—`lead`, `plot`, `character`, and `execution`—in
 route order. The parser still accepts all ten declared route aliases; runtime
@@ -693,20 +809,24 @@ text so the invoking shell does not expand `$`.
 `/auth` and `/settings` are alias-free, take no argument, and are available with
 or without an attached session. `/auth` follows the authentication contract
 above. `/settings` edits isolated Current and Pending snapshots for Language,
-Persona, Maximum debate rounds, Conversation storage, Message details, and
-Agents. A clean root shows exactly those six choices in that order, with no
-persistence action or save guidance. Dirty state appends `Apply Changes
-(*Required)` and then `Discard Changes`. Conversation storage independently
-offers Filesystem and SQLite for the next shell; it is not an agent-provider
-route. Message details offers Off and On. Off is the default compact
-presentation and does not delete stored content. `Agents` opens a nested
-canonical-agent picker. Each canonical agent is followed by `Current:` or
-`Pending:` and its effective `(Provider/model/effort)` profile. Selecting an
-agent opens a provider-neutral Provider/Model/Effort picker; each field
-independently shows `Current:` or `Pending:` followed by its effective value.
-An omitted effective model or effort is displayed as `provider default`.
-Current/Pending confirmation panels retain provider-qualified rows for both
-providers so inactive stored values remain identifiable.
+Persona, Maximum debate rounds, Conversation storage, Conversation RAG,
+Message details, and Agents. A clean root shows exactly those seven choices in
+that order, with no persistence action or save guidance. Dirty state appends
+`Apply Changes (*Required)` and then `Discard Changes`, for nine choices.
+Conversation storage
+independently offers Filesystem and SQLite for the next shell; it is not an
+agent-provider route. Conversation RAG opens a nested editor with Provider
+Disabled/Local and Automatic Off/On. Disabled forces Automatic Off, selecting
+Local does not enable Automatic, and On requires pending Local. Message details
+offers Off and On. Off is the default compact presentation and does not delete
+stored content. `Agents` opens a nested canonical-agent picker. Each canonical
+agent is followed by `Current:` or `Pending:` and its effective
+`(Provider/model/effort)` profile. Selecting an agent opens a provider-neutral
+Provider/Model/Effort picker; each field independently shows `Current:` or
+`Pending:` followed by its effective value. An omitted effective model or
+effort is displayed as `provider default`. Current/Pending confirmation panels
+retain provider-qualified rows for both providers so inactive stored values
+remain identifiable.
 
 The inline agent and field comparisons are against the active runtime profile,
 not a flattening of every configuration property. An edit to only an inactive
@@ -718,22 +838,22 @@ These summaries use only already validated local Settings and backend state;
 rendering them does not authenticate, discover a provider catalog, persist a
 value, or invoke a story provider.
 
-At the Settings root, each one-level value, including Conversation storage and
-Message details,
-shows one effective description: neutral `Current` when unchanged or
-warning-semantic `Pending` when changed. Agents similarly warning-marks its
-explicit nonzero nested pending-change count. In Agents and Agent settings,
-effective `Current` descriptions remain neutral and effective `Pending`
-descriptions use warning semantics. Dirty confirmation context keeps Current
-neutral and Pending warning. These roles reinforce the visible words and
-counts; warning suffix and description spans wrap independently, whole-row
-disabled/selected/highlighted precedence remains authoritative, and narrow,
-plain, fallback, and `NO_COLOR` output retain the complete textual values so
-color is never required to identify state. The additive Choice description
-role remains package-internal.
+At the Settings root, each one-level value, including Conversation storage,
+Conversation RAG, and Message details, shows one effective description: neutral
+`Current` when unchanged or warning-semantic `Pending` when changed. Agents
+similarly warning-marks its explicit nonzero nested pending-change count. In
+Agents and Agent settings, effective `Current` descriptions remain neutral and
+effective `Pending` descriptions use warning semantics. Dirty confirmation
+context keeps Current neutral and Pending warning. These roles reinforce the
+visible words and counts; warning suffix and description spans wrap
+independently, whole-row disabled/selected/highlighted precedence remains
+authoritative, and narrow, plain, fallback, and `NO_COLOR` output retain the
+complete textual values so color is never required to identify state. The
+additive Choice description role remains package-internal.
 
 Every retained Language, Persona, Maximum debate rounds, Conversation storage,
-Message details, Provider, Model, Custom model, and Effort editor always shows `Entered changes
+Conversation RAG Provider, Conversation RAG Automatic, Message details,
+Provider, Model, Custom model, and Effort editor always shows `Entered changes
 remain pending in memory and are not saved; choose Apply Changes in Settings to
 persist them.` The text is present on initial entry, after a valid Enter reopens
 the editor, and during validation. The established entered-value success result
@@ -775,14 +895,15 @@ Settings pickers and prompts follow the same transient input
 lifecycle as all capable input; fallback readers retain printed input and add no
 synthetic final picker frame. Nested Escape returns to
 the parent silently without a Current/Pending snapshot or cancellation record.
-In Language, Persona, Maximum debate rounds, Conversation storage, Message
-details, Provider, Model, Custom model, and Effort, the first valid commit applies the normalized
-pending value and keeps the editor active. The next valid commit of that same
-normalized value returns one level silently; a different valid value applies,
-stays active, and re-arms the comparison. Invalid input, authentication
-failure, Custom model navigation, and editor re-entry reset it. This is
-consecutive semantic commit policy in the `/settings` controller, not raw-key
-timing or generic Picker/Prompt behavior.
+In Language, Persona, Maximum debate rounds, Conversation storage,
+Conversation RAG Provider/Automatic, Message details, Provider, Model, Custom
+model, and Effort, the first valid commit applies the normalized pending value
+and keeps the editor active. The next valid commit of that same normalized
+value returns one level silently; a different valid value applies, stays
+active, and re-arms the comparison. Invalid input, authentication failure,
+Custom model navigation, and editor re-entry reset it. This is consecutive
+semantic commit policy in the `/settings` controller, not raw-key timing or
+generic Picker/Prompt behavior.
 
 Apply Changes alone opens the dirty transient yes/no persistence confirmation.
 Discard Changes opens the existing dirty discard confirmation. Root Settings
@@ -790,8 +911,11 @@ Escape retains the same cancellation action: clean settings exit immediately
 without confirmation, while dirty settings open the discard confirmation. Each
 dirty confirmation has changed-only Current/Pending
 context: only differing fields appear in both sections, each with a `(Changed)`
-cue. The confirmation also states exactly:
-`Runtime changes apply to this shell after Apply Changes; desired storage changes apply to the next shell.`
+cue. Its activation notice joins only the applicable exact sentences:
+`Runtime changes apply to this shell after Apply Changes.`, `Desired storage
+changes apply to the next shell.`, and `Conversation RAG changes apply to the
+next shell; this running shell retains its current RAG service and automatic
+policy.`
 The existing `No pending settings changes.` confirmation panel remains a
 defensive internal projection and is not selectable clean-root UX. YES
 commits the requested dirty action; NO or confirmation Escape returns to the
@@ -818,9 +942,15 @@ When `show_message_details` is the sole difference in that exact immutable
 candidate, the controller prepares and verifies the configuration, commits it,
 and updates the active presentation flag only after commit. This fast path does
 not authenticate, stage or activate a backend/runtime, check storage readiness,
-switch routes or generations, or perform provider/thread work. If any other
-field differs, including a mixed Message details change, the controller uses the
-full path: it freshly gates each distinct effective provider once before
+switch routes or generations, or perform provider/thread work. If only the two
+Conversation RAG values differ, the controller prepares, verifies, and commits
+the system configuration without authentication, storage selection or
+readiness, backend/runtime prepare, commit, discard, or activation, route/thread
+work, composition, optional-package probing or installation, provider catalog,
+subprocess, socket, or network work. The running RAG service and automatic
+policy remain unchanged. If any other field differs, including a mixed Message
+details or RAG change, the controller uses the full path: it freshly gates each
+distinct effective provider once before
 entering the configuration transaction. A stale,
 unavailable, unauthenticated, indeterminate, failed, cancelled, or interrupted
 status prevents the settings file transaction. A missing workspace default
@@ -846,14 +976,14 @@ leaves the old runtime active; if restoration or activation cannot be proved,
 the shell reports `recovery_required` and must not be used until restarted
 against the persisted state.
 
-A non-storage Apply, including Message-details-only, returns to the main prompt with
-`Settings saved and applied to this running shell now.` A storage-only Apply
-instead reports
-`Restart is required for sqlite.` when selecting SQLite (`filesystem` appears
-on the reverse change) and makes no live-activation claim. A mixed Apply emits
-both notices: runtime settings are active now, while the desired storage backend
-remains for the next shell. The current controller/runtime storage bundle never
-changes.
+A live-capable Apply, including Message-details-only, returns to the main prompt
+with `Settings saved and applied to this running shell now.` A RAG-only Apply
+instead reports `Conversation RAG settings were saved for the next shell. This
+running shell retains its current Conversation RAG service and automatic
+policy.` A storage change reports `Restart is required for sqlite.` when
+selecting SQLite (`filesystem` appears on the reverse change). Mixed changes
+emit only the applicable live, RAG-next-shell, and storage-restart notices. The
+current controller/runtime storage and RAG bundles never change.
 
 When effective profiles changed, the completed Settings panel adds one compact
 `[profiles changed]` summary with the number of changed agent profiles. It does
@@ -868,13 +998,25 @@ until their first complete logical provider call succeeds. A provider switch
 still requires a fresh target-provider thread, and a same-provider model/effort
 change remains eligible for native-thread reuse even though the completion
 panel does not list that eligibility.
-A successfully persisted and activated dirty snapshot emits those success
-notices and returns to the main prompt. Cancellation, interruption,
+A successfully persisted dirty snapshot, and activated snapshot where
+applicable, emits those success notices and returns to the main prompt.
+Cancellation, interruption,
 authentication or storage-readiness gating, declined installation,
 provisioning or parity failure, a clean final recheck, validation conflicts,
 write or activation failure, compensation, and rollback outcomes emit no false
 success. Apply Changes invokes no story-model turn, does not alter session or
 launch overrides, and stores no credentials or provider catalog data.
+
+Conversation RAG editing itself performs no optional-package probe, import,
+installation, network request, or credential prompt. At the next shell, the
+controller reads the backend construction snapshot once. Disabled skips local
+composition without writing. Local composes exactly once with the persisted
+automatic policy when the complete conversation-storage bundle is available.
+A missing or incompatible pinned extra leaves configuration unchanged, emits
+one fixed warning, and keeps a RAG-free shell and `/settings` usable. Reinstall
+the reviewed dependency with `python -m pip install --editable '.[rag]'`, then
+restart; startup never installs it. The current shell never adopts a setting
+saved after construction.
 
 Entering or validating a value remains in-memory only; no configuration value
 is persisted before confirmed Apply Changes. This does not change startup or
@@ -1077,6 +1219,19 @@ attachment. Advisory turns, `/history`, `/run`, and `/draft-file` also need
 current focus on an active conversation. Search is active-only; transcript
 reads can include archives. See [grammar](interactive-command-parser.md) and
 [lifecycle mapping](../design/session-lifecycle.md).
+
+`/rag QUERY` is alias-free and requires attachment plus an active current
+focus. Its query is nonblank, control/format-free, and at most 200 codepoints.
+The command performs no retrieval and emits no query text; it replaces one
+process-local pending query for that exact session/conversation. The next
+ordinary, `/say`, or routed `@agent` turn consumes it and forces one preflight,
+overriding automatic policy only for that turn. Ineligible commands retain it;
+scope change, pause/detach, quit, or cleanup clears it. Cancellation before the
+runtime coroutine enters retains it, while entry consumes it even if the turn
+then fails or is cancelled. The query is not provider-bound text, so artifact
+activation is inert there; put `${path}` or `${path}#Lx-Ly` references in the
+following eligible story message. Literal `/search` remains a separate
+immediate local read.
 
 <a id="interactive-consensus"></a>
 
