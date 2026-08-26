@@ -46,6 +46,19 @@ from story_writing_agents.conversation_search import (
     ConversationTranscriptCursor,
     ConversationTranscriptPage,
 )
+from story_writing_agents.conversation_storage import (
+    CONVERSATION_STORAGE_ACTIVATION_STATE_PATH,
+    ConversationStorageBackend,
+    ConversationStorageServices,
+    compose_filesystem_conversation_storage,
+)
+from story_writing_agents.conversation_storage.provisioning import (
+    ConversationStorageProvisioner,
+)
+from story_writing_agents.conversation_storage.selection import (
+    ConversationStorageSelectionFailure,
+    ConversationStorageSelectionReport,
+)
 from story_writing_agents.conversations import (
     CONVERSATION_EVENT_SCHEMA_VERSION,
     CONVERSATION_METADATA_SCHEMA_VERSION,
@@ -702,6 +715,7 @@ class ControllerTestCase(unittest.TestCase):
         context: CliContext | None = None,
         backend: AgentBackend | None = None,
         conversation_catalog: ConversationCatalog | None = None,
+        conversation_storage_services: ConversationStorageServices | None = None,
         auth_coordinator: object | None = None,
         provider_catalog: object | None = None,
         terminal_width: int = 80,
@@ -723,6 +737,10 @@ class ControllerTestCase(unittest.TestCase):
         controller_keywords: dict[str, object] = {}
         if conversation_catalog is not None:
             controller_keywords["conversation_catalog"] = conversation_catalog
+        if conversation_storage_services is not None:
+            controller_keywords["conversation_storage_services"] = (
+                conversation_storage_services
+            )
         if auth_coordinator is not None:
             controller_keywords["auth_coordinator"] = auth_coordinator
         if provider_catalog is not None:
@@ -767,6 +785,7 @@ class ControllerContractTests(ControllerTestCase):
                 "backend",
                 "terminal",
                 "conversation_catalog",
+                "conversation_storage_services",
                 "auth_coordinator",
                 "provider_catalog",
             ),
@@ -784,6 +803,14 @@ class ControllerContractTests(ControllerTestCase):
             inspect.Parameter.KEYWORD_ONLY,
         )
         self.assertIsNone(catalog_parameter.default)
+        services_parameter = constructor.parameters[
+            "conversation_storage_services"
+        ]
+        self.assertIs(
+            services_parameter.kind,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+        self.assertIsNone(services_parameter.default)
         auth_parameter = constructor.parameters["auth_coordinator"]
         self.assertIs(auth_parameter.kind, inspect.Parameter.KEYWORD_ONLY)
         self.assertIsNone(auth_parameter.default)
@@ -801,6 +828,7 @@ class ControllerContractTests(ControllerTestCase):
                 "backend": AgentBackend,
                 "terminal": InteractiveTerminal,
                 "conversation_catalog": ConversationCatalog | None,
+                "conversation_storage_services": ConversationStorageServices | None,
                 "auth_coordinator": InteractiveAuthCoordinator | None,
                 "provider_catalog": ProviderCatalogService | None,
                 "return": type(None),
@@ -1126,6 +1154,8 @@ class ControllerContractTests(ControllerTestCase):
                 "cli_context",
                 "conversation_retrieval",
                 "conversation_search",
+                "conversation_storage.contracts",
+                "conversation_storage.selection",
                 "conversations",
                 "debug_log",
                 "errors",
@@ -1413,7 +1443,21 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 57)
+        self.assertEqual(len(modules), 69)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 271)
+        self.assertTrue(
+            {
+                "story_writing_agents.conversation_storage.archive",
+                "story_writing_agents.conversation_storage.filesystem_archive",
+                "story_writing_agents.conversation_storage.migration",
+                "story_writing_agents.conversation_storage.sqlite_database",
+                "story_writing_agents.conversation_storage.sqlite",
+                "story_writing_agents.conversation_storage.sqlite_search_index",
+                "story_writing_agents.conversation_literal_search",
+                "story_writing_agents.provider_catalog",
+            }
+            <= modules
+        )
 
     def test_reference_callbacks_are_scoped_fresh_bounded_and_content_free(
         self,
@@ -3341,6 +3385,10 @@ class ControllerSettingsTests(ControllerTestCase):
                 ("Language", defaults.language),
                 ("Persona", defaults.persona),
                 ("Maximum debate rounds", str(defaults.max_debate_rounds)),
+                (
+                    "Conversation storage",
+                    defaults.conversation_storage_backend or "filesystem",
+                ),
             ]
             for agent_id in ROSTER:
                 display_name = AGENT_SPECS[agent_id].display_name
@@ -3455,14 +3503,14 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(
             workspace,
             "/settings",
-            "4",
+            "5",
             "2",
             "1",
             "2",
             "/cancel",
             "/cancel",
             "/cancel",
-            "5",
+            "6",
             "1",
             "/quit",
             auth_coordinator=coordinator,
@@ -3519,14 +3567,14 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(
             workspace,
             "/settings",
-            "4",
+            "5",
             "2",
             "1",
             "2",
             "/cancel",
             "/cancel",
             "/cancel",
-            "6",
+            "7",
             "1",
             "/quit",
             auth_coordinator=coordinator,
@@ -3558,9 +3606,8 @@ class ControllerSettingsTests(ControllerTestCase):
             ) as establish_default,
             mock.patch.object(
                 controller_core_module,
-                "save_settings_state",
-                wraps=controller_core_module.save_settings_state,
-            ) as save,
+                "select_conversation_storage",
+            ) as select_storage,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
 
@@ -3573,7 +3620,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "antigravity",
         )
         establish_default.assert_not_called()
-        save.assert_not_called()
+        select_storage.assert_not_called()
         self.assertEqual(
             (defaults_path.read_bytes(), agents_path.read_bytes()),
             durable_before,
@@ -3613,7 +3660,7 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(
             workspace,
             "/settings",
-            "4",
+            "5",
             "2",
             "1",
             "1",
@@ -3622,7 +3669,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "1",
             "/cancel",
             "/cancel",
-            "6",
+            "7",
             "1",
             "/quit",
             auth_coordinator=coordinator,
@@ -3670,7 +3717,7 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(
             workspace,
             "/settings",
-            "4",
+            "5",
             "2",
             "1",
             "1",
@@ -3679,7 +3726,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "1",
             "/cancel",
             "/cancel",
-            "6",
+            "7",
             "1",
             "/quit",
             auth_coordinator=coordinator,
@@ -3789,7 +3836,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "1",
             "2",
             "/cancel",
-            "5",
+            "6",
             "1",
             "/quit",
             auth_coordinator=coordinator,
@@ -3824,9 +3871,9 @@ class ControllerSettingsTests(ControllerTestCase):
             "1",
             "2",
             "/cancel",
-            "5",
-            "1",
             "6",
+            "1",
+            "7",
             "1",
             "/quit",
             auth_coordinator=coordinator,
@@ -3920,7 +3967,7 @@ class ControllerSettingsTests(ControllerTestCase):
             ) as picker,
             mock.patch.object(
                 controller_core_module,
-                "save_settings_state",
+                "select_conversation_storage",
             ) as save,
         ):
             controller._run_settings()
@@ -3941,17 +3988,36 @@ class ControllerSettingsTests(ControllerTestCase):
                 for call in top_level_calls
             ),
             (
-                ("language", "persona", "max_debate_rounds", "providers"),
                 (
                     "language",
                     "persona",
                     "max_debate_rounds",
+                    "conversation_storage",
+                    "providers",
+                ),
+                (
+                    "language",
+                    "persona",
+                    "max_debate_rounds",
+                    "conversation_storage",
                     "providers",
                     "save",
                     "cancel",
                 ),
-                ("language", "persona", "max_debate_rounds", "providers"),
-                ("language", "persona", "max_debate_rounds", "providers"),
+                (
+                    "language",
+                    "persona",
+                    "max_debate_rounds",
+                    "conversation_storage",
+                    "providers",
+                ),
+                (
+                    "language",
+                    "persona",
+                    "max_debate_rounds",
+                    "conversation_storage",
+                    "providers",
+                ),
             ),
         )
         self.assertEqual(
@@ -3960,17 +4026,36 @@ class ControllerSettingsTests(ControllerTestCase):
                 for call in top_level_calls
             ),
             (
-                ("Language", "Persona", "Maximum debate rounds", "Agents"),
                 (
                     "Language",
                     "Persona",
                     "Maximum debate rounds",
+                    "Conversation storage",
+                    "Agents",
+                ),
+                (
+                    "Language",
+                    "Persona",
+                    "Maximum debate rounds",
+                    "Conversation storage",
                     "Agents",
                     "Apply Changes",
                     "Discard Changes",
                 ),
-                ("Language", "Persona", "Maximum debate rounds", "Agents"),
-                ("Language", "Persona", "Maximum debate rounds", "Agents"),
+                (
+                    "Language",
+                    "Persona",
+                    "Maximum debate rounds",
+                    "Conversation storage",
+                    "Agents",
+                ),
+                (
+                    "Language",
+                    "Persona",
+                    "Maximum debate rounds",
+                    "Conversation storage",
+                    "Agents",
+                ),
             ),
         )
         self.assertEqual(
@@ -3992,12 +4077,14 @@ class ControllerSettingsTests(ControllerTestCase):
                     f"Current: {baseline}",
                     "Current: default_kim_eun_hee",
                     "Current: 1",
+                    "Current: filesystem",
                     None,
                 ),
                 (
                     f"Pending: {changed}",
                     "Current: default_kim_eun_hee",
                     "Current: 1",
+                    "Current: filesystem",
                     None,
                     None,
                     "Pending changes will be discarded.",
@@ -4006,12 +4093,14 @@ class ControllerSettingsTests(ControllerTestCase):
                     f"Current: {baseline}",
                     "Current: default_kim_eun_hee",
                     "Current: 1",
+                    "Current: filesystem",
                     None,
                 ),
                 (
                     f"Current: {baseline}",
                     "Current: default_kim_eun_hee",
                     "Current: 1",
+                    "Current: filesystem",
                     None,
                 ),
             ),
@@ -4024,10 +4113,10 @@ class ControllerSettingsTests(ControllerTestCase):
                 for call in top_level_calls
             ),
             (
-                (default, default, default, default),
-                (warning, default, default, default, default, default),
-                (default, default, default, default),
-                (default, default, default, default),
+                (default, default, default, default, default),
+                (warning, default, default, default, default, default, default),
+                (default, default, default, default, default),
+                (default, default, default, default, default),
             ),
         )
         self.assertEqual(
@@ -4036,10 +4125,10 @@ class ControllerSettingsTests(ControllerTestCase):
                 for call in top_level_calls
             ),
             (
-                (None, None, None, None),
-                (None, None, None, None, "(*Required)", None),
-                (None, None, None, None),
-                (None, None, None, None),
+                (None, None, None, None, None),
+                (None, None, None, None, None, "(*Required)", None),
+                (None, None, None, None, None),
+                (None, None, None, None, None),
             ),
         )
         self.assertEqual(
@@ -4128,11 +4217,11 @@ class ControllerSettingsTests(ControllerTestCase):
                 ) as picker,
                 mock.patch.object(
                     controller_core_module,
-                    "save_settings_state",
-                ) as save,
+                    "select_conversation_storage",
+                ) as select_storage,
             ):
                 controller._run_settings()
-            save.assert_not_called()
+            select_storage.assert_not_called()
             choices = picker.call_args.args[2]
             choice = next(
                 choice
@@ -4193,7 +4282,7 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertIn("codex(Changed)", compact)
         self.assertIn("pending-codex-model(Changed)", compact)
 
-    def test_settings_open_is_exact_four_item_discovery_free_snapshot(self) -> None:
+    def test_settings_open_is_exact_five_item_discovery_free_snapshot(self) -> None:
         workspace = self.make_workspace()
         before = _tree_snapshot(workspace.root)
         catalog = ScriptedProviderCatalog(
@@ -4237,15 +4326,29 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertIn("Current: KO", callbacks.prompts[1])
         self.assertIn("Current: default_kim_eun_hee", callbacks.prompts[1])
         self.assertIn("Current: 1", callbacks.prompts[1])
+        self.assertIn("Current: filesystem", callbacks.prompts[1])
         settings_call = picker.call_args_list[0]
         self.assertEqual(settings_call.args[1].name, "Settings")
         self.assertIsNone(settings_call.kwargs["notice"])
+        self.assertEqual(
+            callbacks.prompts[1],
+            "Choices (highlighted 1/5) [open]\n"
+            "  1. [highlighted] Language — Current: KO\n"
+            "  2. [available] Persona — Current: default_kim_eun_hee\n"
+            "  3. [available] Maximum debate rounds — Current: 1\n"
+            "  4. [available] Conversation storage — Current: filesystem\n"
+            "  5. [available] Agents\n"
+            "[input] Enter a choice number, press Enter for the highlighted choice, or enter /cancel.\n"
+            "Choose a setting to edit.\n"
+            "Settings > ",
+        )
         self.assertEqual(
             tuple(choice.identity for choice in settings_call.args[2]),
             (
                 "language",
                 "persona",
                 "max_debate_rounds",
+                "conversation_storage",
                 "providers",
             ),
         )
@@ -4255,6 +4358,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 "Language",
                 "Persona",
                 "Maximum debate rounds",
+                "Conversation storage",
                 "Agents",
             ),
         )
@@ -4264,6 +4368,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 "Current: KO",
                 "Current: default_kim_eun_hee",
                 "Current: 1",
+                "Current: filesystem",
                 None,
             ),
         )
@@ -4298,14 +4403,14 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, _callbacks = self.make_controller(
             workspace,
             "/settings",
-            "4",
+            "5",
             "2",
             "1",
             "1",
             "/cancel",
             "/cancel",
             "/cancel",
-            "6",
+            "7",
             "1",
             "/quit",
             provider_catalog=catalog,
@@ -4650,8 +4755,8 @@ class ControllerSettingsTests(ControllerTestCase):
 
         with mock.patch.object(
             controller_core_module,
-            "save_settings_state",
-        ) as save:
+            "select_conversation_storage",
+        ) as select_storage:
             state = exercise_picker(
                 "Language",
                 state,
@@ -4828,7 +4933,7 @@ class ControllerSettingsTests(ControllerTestCase):
             self.assertEqual(prompt.call_count, 3)
             self.assertEqual(update.call_count, 2)
             self.assertEqual(reentered, state)
-            save.assert_not_called()
+            select_storage.assert_not_called()
 
         self.assertEqual(catalog.events, ["codex"] * 4)
         rendered = "".join(callbacks.records)
@@ -5547,12 +5652,12 @@ class ControllerSettingsTests(ControllerTestCase):
         self,
     ) -> None:
         paths = {
-            "agents": ("4",),
-            "agent-settings": ("4", "2"),
-            "provider": ("4", "2", "1"),
-            "model": ("4", "2", "2"),
-            "effort": ("4", "2", "3"),
-            "custom-model": ("4", "2", "2", "3"),
+            "agents": ("5",),
+            "agent-settings": ("5", "2"),
+            "provider": ("5", "2", "1"),
+            "model": ("5", "2", "2"),
+            "effort": ("5", "2", "3"),
+            "custom-model": ("5", "2", "2", "3"),
         }
         for dirty in (False, True):
             for failure_type in (KeyboardInterrupt, EOFError):
@@ -5615,7 +5720,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "3",
             "0",
             "\x1b",
-            "5",
+            "6",
             "1",
             "/quit",
             terminal_width=120,
@@ -5688,7 +5793,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "1",
             "2",
             "/cancel",
-            "5",
+            "6",
             "1",
             "/quit",
             terminal_width=48,
@@ -5744,9 +5849,9 @@ class ControllerSettingsTests(ControllerTestCase):
                     "1",
                     "2",
                     "/cancel",
-                    "5",
-                    "2",
                     "6",
+                    "2",
+                    "7",
                     "1",
                     "/quit",
                 ),
@@ -5761,9 +5866,9 @@ class ControllerSettingsTests(ControllerTestCase):
                     "1",
                     "2",
                     "/cancel",
-                    "5",
-                    "/cancel",
                     "6",
+                    "/cancel",
+                    "7",
                     "1",
                     "/quit",
                 ),
@@ -5773,7 +5878,7 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
             (
                 "clean-action-ordinal-is-not-selectable",
-                ("/settings", "5", "/cancel", "/quit"),
+                ("/settings", "6", "/cancel", "/quit"),
                 0,
                 False,
                 0,
@@ -5800,9 +5905,9 @@ class ControllerSettingsTests(ControllerTestCase):
                     "1",
                     "2",
                     "/cancel",
-                    "6",
+                    "7",
                     "2",
-                    "6",
+                    "7",
                     "1",
                     "/quit",
                 ),
@@ -5819,7 +5924,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "/cancel",
                     "/cancel",
                     "/cancel",
-                    "6",
+                    "7",
                     "1",
                     "/quit",
                 ),
@@ -5834,7 +5939,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "1",
                     "2",
                     "/cancel",
-                    "6",
+                    "7",
                     KeyboardInterrupt(),
                     "/quit",
                 ),
@@ -5878,7 +5983,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "1",
                     "2",
                     "/cancel",
-                    "5",
+                    "6",
                     KeyboardInterrupt(),
                     "/quit",
                 ),
@@ -5893,7 +5998,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "1",
                     "2",
                     "/cancel",
-                    "5",
+                    "6",
                     EOFError(),
                     "/quit",
                 ),
@@ -5988,7 +6093,7 @@ class ControllerSettingsTests(ControllerTestCase):
             ) as authenticate,
             mock.patch.object(
                 controller_core_module,
-                "save_settings_state",
+                "select_conversation_storage",
             ) as save,
             mock.patch.object(
                 InteractiveController,
@@ -6012,7 +6117,13 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertTrue(
             all(
                 tuple(choice.identity for choice in call.args[2])
-                == ("language", "persona", "max_debate_rounds", "providers")
+                == (
+                    "language",
+                    "persona",
+                    "max_debate_rounds",
+                    "conversation_storage",
+                    "providers",
+                )
                 for call in picker.call_args_list
             )
         )
@@ -6072,7 +6183,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     ) as authenticate,
                     mock.patch.object(
                         controller_core_module,
-                        "save_settings_state",
+                        "select_conversation_storage",
                     ) as save,
                 ):
                     controller._run_settings()
@@ -6091,7 +6202,13 @@ class ControllerSettingsTests(ControllerTestCase):
                             choice.identity
                             for choice in picker.call_args_list[1].args[2]
                         ),
-                        ("language", "persona", "max_debate_rounds", "providers"),
+                        (
+                            "language",
+                            "persona",
+                            "max_debate_rounds",
+                            "conversation_storage",
+                            "providers",
+                        ),
                     )
                     self.assertIsNone(
                         picker.call_args_list[1].kwargs["highlighted_id"]
@@ -6146,21 +6263,21 @@ class ControllerSettingsTests(ControllerTestCase):
             "bad",
             "0",
             "\x1b",
-            "4",
+            "5",
             "2",
             "2",
             "3",
             "/cancel",
             "/cancel",
             "/cancel",
-            "4",
+            "5",
             "2",
             "3",
             "3",
             "/cancel",
             "/cancel",
             "/cancel",
-            "4",
+            "5",
             "2",
             "2",
             "4",
@@ -6169,35 +6286,34 @@ class ControllerSettingsTests(ControllerTestCase):
             "/cancel",
             "/cancel",
             "/cancel",
-            "5",
+            "6",
             "1",
             "/quit",
             provider_catalog=catalog,
             terminal_width=48,
         )
-        real_save = settings_module.save_settings_state
+        real_select = controller_core_module.select_conversation_storage
 
-        def save_after_isolation(saved_workspace, state):
+        def select_after_isolation(*args, **kwargs):
             self.assertEqual(_tree_snapshot(workspace.root), before)
             self.assertNotIn(
                 "[saved] Settings saved.",
                 "".join(callbacks.records),
             )
-            return real_save(saved_workspace, state)
+            return real_select(*args, **kwargs)
 
         with (
             mock.patch.object(
                 controller_core_module,
-                "save_settings_state",
-                autospec=True,
-                side_effect=save_after_isolation,
-            ) as save,
+                "select_conversation_storage",
+                side_effect=select_after_isolation,
+            ) as select,
             mock.patch.object(subprocess, "Popen") as popen,
             mock.patch.object(subprocess, "run") as run,
             mock.patch.object(socket, "create_connection") as connect,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
-        save.assert_called_once()
+        select.assert_called_once()
         popen.assert_not_called()
         run.assert_not_called()
         connect.assert_not_called()
@@ -6277,14 +6393,14 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, _backend, callbacks = self.make_controller(
             workspace,
             "/settings",
-            "4",
+            "5",
             "2",
             "1",
             "2",
             "/cancel",
             "/cancel",
             "/cancel",
-            "4",
+            "5",
             "2",
             "2",
             "4",
@@ -6294,14 +6410,14 @@ class ControllerSettingsTests(ControllerTestCase):
             "/cancel",
             "/cancel",
             "/cancel",
-            "4",
+            "5",
             "2",
             "3",
             "4",
             "/cancel",
             "/cancel",
             "/cancel",
-            "5",
+            "6",
             "1",
             "/quit",
             provider_catalog=catalog,
@@ -6362,7 +6478,7 @@ class ControllerSettingsTests(ControllerTestCase):
             (
                 (
                     "/settings",
-                    "4",
+                    "5",
                     "2",
                     "2",
                     "/cancel",
@@ -6404,23 +6520,111 @@ class ControllerSettingsTests(ControllerTestCase):
                     0,
                 )
 
-    def test_each_typed_save_failure_retains_candidate_and_redacts_details(self) -> None:
+    def test_storage_edit_is_desired_only_and_keeps_current_shell_bundle(self) -> None:
+        workspace = self.make_workspace()
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "/settings",
+            "4",
+            "2",
+            "2",
+            "6",
+            "1",
+            "/quit",
+            terminal_width=160,
+        )
+        bundle = controller._conversation_storage_services
+        self.assertIsNotNone(bundle)
+        self.assertIs(bundle.backend, ConversationStorageBackend.FILESYSTEM)
+        with mock.patch.object(
+            ConversationStorageProvisioner,
+            "install",
+            autospec=True,
+            side_effect=AssertionError("a real installer must not execute"),
+        ) as install:
+            self.assertEqual(controller.run_session_lobby(), 0)
+        install.assert_not_called()
+        self.assertEqual(
+            settings_module.load_settings_state(
+                workspace
+            ).pending.system_defaults.conversation_storage_backend,
+            "sqlite",
+        )
+        self.assertIs(controller._conversation_storage_services, bundle)
+        self.assertIs(controller._runtime.conversation_storage_services, bundle)
+        self.assertIs(bundle.backend, ConversationStorageBackend.FILESYSTEM)
+        self.assertFalse(
+            workspace.path(CONVERSATION_STORAGE_ACTIVATION_STATE_PATH).exists()
+        )
+        self.assertIn(
+            "Changes apply to the next shell",
+            "".join(callbacks.records),
+        )
+
+    def test_persona_catalog_race_reports_conflict_and_preserves_config(self) -> None:
+        workspace = self.make_workspace()
+        system_before = workspace.path("config/system_defaults.json").read_bytes()
+        agents_before = workspace.path("config/agent_configs.json").read_bytes()
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            "/settings",
+            "1",
+            "2",
+            "/cancel",
+            "6",
+            "1",
+            "7",
+            "1",
+            "/quit",
+            terminal_width=160,
+        )
+        real_select = controller_core_module.select_conversation_storage
+
+        def race_persona_catalog(*args, **kwargs):
+            workspace.write_text(
+                "config/persona_templates/alternative_templates/raced.md",
+                "raced persona",
+            )
+            self.assertTrue(callable(kwargs.get("precommit_guard")))
+            return real_select(*args, **kwargs)
+
+        with mock.patch.object(
+            controller_core_module,
+            "select_conversation_storage",
+            side_effect=race_persona_catalog,
+        ) as select:
+            self.assertEqual(controller.run_session_lobby(), 0)
+        select.assert_called_once()
+        self.assertEqual(
+            workspace.path("config/system_defaults.json").read_bytes(),
+            system_before,
+        )
+        self.assertEqual(
+            workspace.path("config/agent_configs.json").read_bytes(),
+            agents_before,
+        )
+        rendered = "".join(callbacks.records)
+        self.assertIn(
+            "[conversation storage] Settings changed on disk; cancel and "
+            "reopen /settings.\n",
+            rendered,
+        )
+        self.assertNotIn("Settings saved", rendered)
+
+    def test_each_selection_save_failure_retains_candidate_and_redacts_details(self) -> None:
         messages = {
-            settings_module.SettingsErrorKind.VALIDATION: (
+            ConversationStorageSelectionFailure.CONFIGURATION_INVALID: (
                 "Pending settings are invalid; correct them before saving."
             ),
-            settings_module.SettingsErrorKind.CONFLICT: (
+            ConversationStorageSelectionFailure.CONFIGURATION_CONFLICT: (
                 "Settings changed on disk; cancel and reopen /settings."
             ),
-            settings_module.SettingsErrorKind.WRITE: (
-                "Settings could not be saved; pending values were retained."
-            ),
-            settings_module.SettingsErrorKind.ROLLBACK: (
-                "Settings rollback failed; inspect both configuration files."
+            ConversationStorageSelectionFailure.CONFIGURATION_WRITE_FAILED: (
+                "Settings could not be saved; prior configuration was preserved."
             ),
         }
-        for kind, message in messages.items():
-            with self.subTest(kind=kind):
+        for failure, message in messages.items():
+            with self.subTest(failure=failure):
                 workspace = self.make_workspace()
                 before = _tree_snapshot(workspace.root)
                 controller, _backend, callbacks = self.make_controller(
@@ -6429,24 +6633,27 @@ class ControllerSettingsTests(ControllerTestCase):
                     "1",
                     "2",
                     "/cancel",
-                    "5",
-                    "1",
                     "6",
+                    "1",
+                    "7",
                     "1",
                     "/quit",
                     terminal_width=160,
                 )
                 with mock.patch.object(
                     controller_core_module,
-                    "save_settings_state",
-                    side_effect=settings_module.SettingsError(kind),
-                ) as save:
+                    "select_conversation_storage",
+                    return_value=ConversationStorageSelectionReport.failed(
+                        failure,
+                        desired_backend="filesystem",
+                    ),
+                ) as select:
                     self.assertEqual(controller.run_session_lobby(), 0)
-                save.assert_called_once()
+                select.assert_called_once()
                 self.assertEqual(_tree_snapshot(workspace.root), before)
                 rendered = "".join(callbacks.records)
                 self.assertEqual(
-                    rendered.count(f"[settings error] {message}\n"),
+                    rendered.count(f"[conversation storage] {message}\n"),
                     1,
                 )
                 self.assertNotIn("settings validation failed", rendered)
@@ -6461,6 +6668,64 @@ class ControllerSettingsTests(ControllerTestCase):
 
 class ControllerSearchAndTranscriptTests(ControllerTestCase):
     """Verify provider-free memory commands and attachment-scoped wiring."""
+
+    def test_one_explicit_bundle_identity_reaches_controller_runtime_and_memory(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        self.seed_session(
+            workspace,
+            "session",
+            durable_state=SessionDurableState.READY,
+        )
+        bundle = compose_filesystem_conversation_storage(workspace)
+        metadata = bundle.catalog.create("session", "Bundle identity")
+        save_default_session(workspace, "session")
+        save_default_conversation(
+            workspace,
+            "session",
+            metadata.conversation_id,
+        )
+        controller, _backend, _callbacks = self.make_controller(
+            workspace,
+            "/search identity",
+            "/quit",
+            conversation_storage_services=bundle,
+        )
+
+        with mock.patch.object(
+            controller_core_module,
+            "ConversationMemoryService",
+            wraps=controller_core_module.ConversationMemoryService,
+        ) as memory_factory:
+            self.assertEqual(controller.run_session_lobby(), 0)
+        self.assertIs(controller._conversation_storage_services, bundle)
+        self.assertIs(controller._runtime.conversation_storage_services, bundle)
+        self.assertIs(controller._conversation_catalog, bundle.catalog)
+        self.assertIs(controller._conversation_event_store, bundle.event_store)
+        memory_factory.assert_called_once()
+        self.assertIs(
+            memory_factory.call_args.kwargs["conversation_storage_services"],
+            bundle,
+        )
+
+    def test_bundle_and_legacy_catalog_injection_conflict_before_runtime_use(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        bundle = compose_filesystem_conversation_storage(workspace)
+        backend = self.make_backend(workspace)
+        callbacks = ScriptedTerminalCallbacks("/quit")
+        terminal = InteractiveTerminal(callbacks.read_line, callbacks.write_text)
+        with self.assertRaises(TypeError):
+            InteractiveController(
+                workspace,
+                load_cli_context(workspace),
+                backend,
+                terminal,
+                conversation_catalog=bundle.catalog,
+                conversation_storage_services=bundle,
+            )
 
     def prepared_attached_controller(
         self,

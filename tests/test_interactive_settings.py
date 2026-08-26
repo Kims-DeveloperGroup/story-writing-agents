@@ -17,6 +17,7 @@ from story_writing_agents.agents import PLOT_ARCHITECT, ROSTER
 from story_writing_agents.config import (
     AgentConfig,
     ConfigurationSnapshot,
+    ConfigManager,
 )
 from story_writing_agents.errors import (
     ConfigurationError,
@@ -39,9 +40,11 @@ from story_writing_agents.interactive_settings import (
     update_agent_backend,
     update_agent_codex_model,
     update_agent_codex_reasoning_effort,
+    update_conversation_storage_backend,
     update_language,
     update_max_debate_rounds,
     update_persona,
+    validate_settings_persona_catalog,
 )
 from story_writing_agents.workspace import Workspace
 
@@ -128,6 +131,7 @@ class SettingsModelContractTests(SettingsTestCase):
             update_language: ("state", "language"),
             update_persona: ("state", "persona"),
             update_max_debate_rounds: ("state", "max_debate_rounds"),
+            update_conversation_storage_backend: ("state", "backend"),
             update_agent_backend: ("state", "agent_id", "backend"),
             establish_default_backend: ("workspace", "backend"),
             establish_settings_default_backend: ("workspace", "state", "backend"),
@@ -148,6 +152,7 @@ class SettingsModelContractTests(SettingsTestCase):
                 "antigravity_effort",
             ),
             save_settings_state: ("workspace", "state"),
+            validate_settings_persona_catalog: ("workspace", "baseline"),
         }
         for function, expected in signatures.items():
             with self.subTest(function=function.__name__):
@@ -163,6 +168,7 @@ class SettingsModelContractTests(SettingsTestCase):
             "establish_settings_default_backend",
             "load_settings_state",
             "save_settings_state",
+            "validate_settings_persona_catalog",
         )
         for name in internal_names:
             with self.subTest(name=name):
@@ -281,13 +287,17 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
         system_bytes = b'{"persona":"default_kim_eun_hee","language":"KO","max_debate_rounds":1}\n'
         self.workspace.path(_SYSTEM_PATH).write_bytes(system_bytes)
         before = _files(self.workspace.root)
-        read_exact = settings_module._read_exact_bytes
+        read_exact = ConfigManager._read_exact_bytes
         persona_catalog = settings_module._persona_catalog
         with (
             mock.patch.object(
-                settings_module,
+                ConfigManager,
                 "_read_exact_bytes",
-                wraps=read_exact,
+                autospec=True,
+                side_effect=lambda manager, relative: read_exact(
+                    manager,
+                    relative,
+                ),
             ) as read,
             mock.patch.object(
                 settings_module,
@@ -376,6 +386,13 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
                 0,
             ),
             (
+                update_conversation_storage_backend(state, "sqlite"),
+                lambda value: (
+                    value.system_defaults.conversation_storage_backend
+                ),
+                "sqlite",
+            ),
+            (
                 update_agent_backend(state, PLOT_ARCHITECT, "antigravity"),
                 lambda value: value.agent_configs[PLOT_ARCHITECT].backend,
                 "antigravity",
@@ -423,28 +440,28 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
                 self.assertEqual(project(updated.pending), expected)
                 self.assertEqual(state.pending, original)
 
-        cleared_model = update_agent_codex_model(cases[4][0], PLOT_ARCHITECT, None)
-        cleared_effort = update_agent_codex_reasoning_effort(cases[5][0], PLOT_ARCHITECT, None)
+        cleared_model = update_agent_codex_model(cases[5][0], PLOT_ARCHITECT, None)
+        cleared_effort = update_agent_codex_reasoning_effort(cases[6][0], PLOT_ARCHITECT, None)
         self.assertIsNone(cleared_model.pending.agent_configs[PLOT_ARCHITECT].codex_model)
         self.assertIsNone(
             cleared_effort.pending.agent_configs[PLOT_ARCHITECT].codex_reasoning_effort
         )
         self.assertIsNone(
             update_agent_antigravity_model(
-                cases[6][0],
+                cases[7][0],
                 PLOT_ARCHITECT,
                 None,
             ).pending.agent_configs[PLOT_ARCHITECT].antigravity_model
         )
         self.assertIsNone(
             update_agent_antigravity_effort(
-                cases[7][0],
+                cases[8][0],
                 PLOT_ARCHITECT,
                 None,
             ).pending.agent_configs[PLOT_ARCHITECT].antigravity_effort
         )
         agent_before = state.pending.agent_configs[PLOT_ARCHITECT]
-        agent_after = cases[3][0].pending.agent_configs[PLOT_ARCHITECT]
+        agent_after = cases[4][0].pending.agent_configs[PLOT_ARCHITECT]
         self.assertEqual(agent_after.language, agent_before.language)
         self.assertEqual(agent_after.persona, agent_before.persona)
 
@@ -462,6 +479,10 @@ class SettingsLoadingAndUpdateTests(SettingsTestCase):
             ),
             (
                 lambda: update_agent_backend(state, PLOT_ARCHITECT, "CODEX"),
+                ConfigurationError,
+            ),
+            (
+                lambda: update_conversation_storage_backend(state, "mysql"),
                 ConfigurationError,
             ),
             (lambda: update_agent_codex_model(state, PLOT_ARCHITECT, "-unsafe"), ConfigurationError),
@@ -545,6 +566,7 @@ class SettingsDefaultPersistenceTests(SettingsTestCase):
                     "antigravity_model": None,
                     "antigravity_effort": None,
                     "default_backend": "codex",
+                    "conversation_storage_backend": "filesystem",
                 }
             ),
         )
@@ -583,9 +605,9 @@ class SettingsDefaultPersistenceTests(SettingsTestCase):
         )
         durable = self.load().pending
         self.assertEqual(durable.system_defaults.language, "KO")
-        self.assertEqual(durable.system_defaults.default_backend, "codex")
+        self.assertIsNone(durable.system_defaults.default_backend)
         self.assertEqual(self.workspace.path(_AGENT_PATH).read_bytes(), agent_before)
-        self.assertEqual(rebased.baseline.configuration, durable)
+        self.assertIs(rebased.baseline, pending.baseline)
         self.assertEqual(rebased.pending.system_defaults.language, "EN")
         self.assertEqual(rebased.pending.system_defaults.default_backend, "codex")
         self.assertEqual(
@@ -602,7 +624,7 @@ class SettingsDefaultPersistenceTests(SettingsTestCase):
             "antigravity",
         )
 
-    def test_default_rebase_conflicts_are_typed_prewrite_and_redacted(self) -> None:
+    def test_default_rebase_is_memory_only_and_keeps_existing_pending_choice(self) -> None:
         opened = self.load()
         pending_default = SettingsState(
             opened.baseline,
@@ -620,14 +642,12 @@ class SettingsDefaultPersistenceTests(SettingsTestCase):
             "write_text",
             wraps=self.workspace.write_text,
         ) as write:
-            with self.assertRaises(SettingsError) as caught:
-                establish_settings_default_backend(
-                    self.workspace,
-                    pending_default,
-                    "codex",
-                )
-        self.assertIs(caught.exception.kind, SettingsErrorKind.CONFLICT)
-        self.assertEqual(str(caught.exception), "settings changed on disk")
+            unchanged = establish_settings_default_backend(
+                self.workspace,
+                pending_default,
+                "codex",
+            )
+        self.assertIs(unchanged, pending_default)
         write.assert_not_called()
         self.assertEqual(_files(self.workspace.root), before)
 
@@ -645,13 +665,16 @@ class SettingsDefaultPersistenceTests(SettingsTestCase):
             "write_text",
             wraps=self.workspace.write_text,
         ) as write:
-            with self.assertRaises(SettingsError) as caught:
-                establish_settings_default_backend(
-                    self.workspace,
-                    opened,
-                    "codex",
-                )
-        self.assertIs(caught.exception.kind, SettingsErrorKind.CONFLICT)
+            rebased = establish_settings_default_backend(
+                self.workspace,
+                opened,
+                "codex",
+            )
+        self.assertEqual(
+            rebased.pending.system_defaults.default_backend,
+            "codex",
+        )
+        self.assertIs(rebased.baseline, opened.baseline)
         write.assert_not_called()
         self.assertEqual(_files(self.workspace.root), raced)
 
@@ -693,6 +716,7 @@ class SettingsPersistenceTests(SettingsTestCase):
                     "antigravity_model": None,
                     "antigravity_effort": None,
                     "default_backend": None,
+                    "conversation_storage_backend": "filesystem",
                 }
             ),
         )
@@ -731,6 +755,72 @@ class SettingsPersistenceTests(SettingsTestCase):
                     "antigravity_effort",
                 },
             )
+
+    def test_provider_and_conversation_storage_pending_edits_save_independently(
+        self,
+    ) -> None:
+        state = self.load()
+        original = state.pending
+        provider_pending = update_agent_backend(
+            state,
+            PLOT_ARCHITECT,
+            "antigravity",
+        )
+        combined = update_conversation_storage_backend(
+            provider_pending,
+            "sqlite",
+        )
+
+        self.assertIs(provider_pending.baseline, state.baseline)
+        self.assertIs(combined.baseline, state.baseline)
+        self.assertEqual(state.pending, original)
+        self.assertEqual(
+            provider_pending.pending.system_defaults,
+            original.system_defaults,
+        )
+        self.assertEqual(
+            combined.pending.agent_configs[PLOT_ARCHITECT].backend,
+            "antigravity",
+        )
+        self.assertEqual(
+            combined.pending.system_defaults.conversation_storage_backend,
+            "sqlite",
+        )
+
+        expected_agents = dict(original.agent_configs)
+        expected_agents[PLOT_ARCHITECT] = replace(
+            expected_agents[PLOT_ARCHITECT],
+            backend="antigravity",
+        )
+        expected = ConfigurationSnapshot(
+            replace(
+                original.system_defaults,
+                conversation_storage_backend="sqlite",
+            ),
+            expected_agents,
+        )
+        self.assertEqual(combined.pending, expected)
+        with mock.patch.object(
+            self.workspace,
+            "write_text",
+            wraps=self.workspace.write_text,
+        ) as write:
+            save_settings_state(self.workspace, combined)
+
+        self.assertEqual(
+            [call.args[0] for call in write.call_args_list],
+            [_SYSTEM_PATH, _AGENT_PATH],
+        )
+        loaded = self.load().pending
+        self.assertEqual(loaded, expected)
+        self.assertEqual(
+            loaded.system_defaults.conversation_storage_backend,
+            "sqlite",
+        )
+        self.assertEqual(
+            loaded.agent_configs[PLOT_ARCHITECT].backend,
+            "antigravity",
+        )
 
     def test_antigravity_system_and_agent_values_round_trip_canonically(
         self,
@@ -814,6 +904,7 @@ class SettingsPersistenceTests(SettingsTestCase):
                     "antigravity_model": None,
                     "antigravity_effort": None,
                     "default_backend": None,
+                    "conversation_storage_backend": "filesystem",
                 }
             ),
         )
@@ -834,8 +925,9 @@ class SettingsPersistenceTests(SettingsTestCase):
         )
         invalid_state = SettingsState(state.baseline, invalid_pending)
         with mock.patch.object(
-            settings_module,
+            ConfigManager,
             "_read_exact_bytes",
+            autospec=True,
             side_effect=AssertionError("save read must not occur"),
         ) as read:
             with self.assertRaises(SettingsError) as caught:

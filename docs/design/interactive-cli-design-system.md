@@ -107,10 +107,11 @@ current production behavior.
 | #86 composer/confirmation integration | Implemented: RUN/CHAT composition and yes/no confirmation build ordered semantic input views, render equivalent plain/fixed-ANSI projections at the active width, and use pure history-free controls. Established results, signatures, `/send`, `/cancel`, `/say`, defaults, Ctrl-C, EOF, callback cardinality, and controller/runtime behavior remain unchanged. |
 | #79 selectable completion | Implemented: capable main input projects canonical root, subcommand, and finite fixed-option candidates into a semantic palette. Up/Down moves its clamped highlight, Tab applies the highlighted candidate, Escape restores the first pre-completion snapshot when present and dismisses the exact state, and closed-palette Up/Down retains history behavior. Shift-Tab has no action. |
 | #87 picker foundation | Implemented: package-internal immutable picker/control/viewport state, pure initialization/reconciliation/live/fallback transitions, responsive live/full-list rendering, a dedicated history-free sole-driver lifecycle, and an unlisted resource-free adapter. #93 supplies its first installed consumer. |
-| #94 workspace Codex defaults | Implemented: the original slice added optional workspace fallback Codex model and reasoning values. The current closed eight-field system schema also contains Antigravity model/effort and nullable `default_backend`; new workspaces initialize provider fields to null, legacy files remain valid and byte-preserved, and each backend validates and snapshots effective invocation values at construction. |
+| #94 workspace Codex defaults | Implemented: the original slice added optional workspace fallback Codex model and reasoning values. The current closed nine-field system schema also contains Antigravity model/effort, nullable `default_backend`, and independent desired `conversation_storage_backend`; new workspaces initialize provider fields to null and storage to filesystem, legacy files remain valid and byte-preserved until a successful canonical save, and each backend validates and snapshots effective invocation values at construction. |
 | #93 settings UI | Implemented: global alias-free `/settings` edits isolated current/pending snapshots of workspace defaults and per-agent provider, model, and reasoning choices through shared picker and prompt controls. Save validates an exact opening baseline and persona catalog, writes only changed configuration documents in deterministic order, and attempts reverse exact-byte rollback after a write failure. The workflow adds no supported public save API. |
 | #252 provider-discovered settings | Implemented: the per-agent editor exposes provider-neutral Provider, Model, and Effort fields. Entering Model or Effort performs one fresh, bounded discovery for the pending effective provider; model choices preserve provider order and custom/inherit compatibility, while effort choices use the pending effective model for Codex and the fixed Antigravity vocabulary. Raw catalogs and diagnostics are never persisted. |
-| #270 retained settings value editors | Implemented: the top-level and roster path use Settings > Agents > Agent settings, while Provider remains the field-level configuration concept. Valid Enter in Language, Persona, Maximum debate rounds, Provider, Model, Custom model, or Effort applies the pending value and reopens that editor with updated selection/default plus one replacing inline completed success result. Escape returns one settings level; Ctrl-C/EOF cancel the whole settings transaction. This policy is local to `/settings`; resume pickers and Save/Cancel confirmations remain one-shot. |
+| #261 conversation storage selection | Implemented: `/settings` adds independent Filesystem/SQLite desired storage, explicit allowlisted prerequisite consent, create-only empty-database preparation, fresh canonical parity, and a final guarded complete configuration CAS; the current shell remains immutable and next-shell startup activates one complete ready bundle before provider authentication. Provider-free `story storage use` exposes the same desired-only workflow through an exact counts-free report. |
+| #270 retained settings value editors | Implemented: the top-level and roster path use Settings > Agents > Agent settings, while Provider remains the field-level configuration concept. Valid Enter in Language, Persona, Maximum debate rounds, Conversation storage, Provider, Model, Custom model, or Effort applies the pending value and reopens that editor with updated selection/default plus one replacing inline completed success result. Escape returns one settings level; Ctrl-C/EOF cancel the whole settings transaction. This policy is local to `/settings`; resume pickers and Save/Cancel confirmations remain one-shot. |
 | #271 settings Save guidance | Implemented: every retained value editor always states that entered changes remain pending in memory until Save, including initial entry, a valid-commit reopen, and validation. Each top-level Settings read independently compares the complete pending configuration with the opening baseline and shows the exact `save required` warning only when they differ. Complete guidance remains available in capable, narrow, `NO_COLOR`, and fallback presentation without changing persistence or picker policy. |
 | #287 settings pending actions | Implemented: while pending differs from the opening baseline, top-level Save is exactly `Save (*Required)` in plain content and only the suffix receives warning ANSI when eligible; the existing `[save required]` notice remains. Explicit Cancel and root Settings Escape exit immediately when clean or open the existing one-shot Cancel confirmation when dirty. Within retained value editors, a first valid commit applies and stays, while the next consecutive commit of the same normalized value returns one level silently; different valid values apply, stay, and re-arm. Invalid input, authentication failure, Custom model navigation, and editor re-entry reset that controller state. Save remains the only persistence boundary, and generic Picker/Prompt plus universal transient-after-submit behavior are unchanged. |
 | #303 visible Settings values and cancellation | Implemented: each one-level Settings root choice shows only its effective value, labeled `Current` when unchanged from the opening baseline or `Pending` when changed; Agents summarizes its nested pending-change count instead of flattening agent fields into the root. Dirty root state retains `Save (*Required)` and `[save required] Choose Save to persist pending changes`; every retained editor retains `Entered changes remain pending in memory and are not saved; choose Save in Settings to persist them.` Save is the only persistence boundary. Maximum debate rounds displays and preloads the effective value; the first Enter applies and reopens a fresh transient editor, and a second consecutive Enter of the same normalized value returns one Settings level, matching retained picker traversal. Escape remains the visible return command within Settings and the Cancel-equivalent at the root. Clean explicit Cancel or root Escape exits silently; dirty explicit Cancel or root Escape opens confirmation, and a confirmed Cancel or dirty Ctrl-C/EOF whole-flow exit reports that pending changes were discarded exactly once. Confirmation NO or Escape returns to Settings without discarding. This controller-local traversal does not retain a submitted picker/prompt frame, alter generic input retention, change session/conversation navigation, or prevent the session resume picker from closing after commitment. |
@@ -128,7 +129,7 @@ current production behavior.
 | #274 mode-gated accepted-input projection | Implemented package-internally: the unlisted semantic-output adapter renders one accepted-input component and delegates it to a terminal-owned projection sink. Stream construction binds that sink to the sole driver's already selected input mode: `LIVE` writes once through the existing persistent/progress-safe path, `FALLBACK` writes nothing because ordinary input remains visible, and `UNDECIDED` rejects the call. Callback construction also remains silent. The seam retains no submitted payload or commit token and changes no supported public API. |
 | #273 informative-content retention | Implemented through #274 and #275: control presentation remains transient, while accepted ordinary, `/say`, and routed advisory messages plus inline, fresh, and composed consensus prompts retain one attributed scrollback representation. Capable streams render the exact semantic body after input cleanup and before progress; fallback retains its original visible input without a duplicate. Consensus, search, filtered-list, and transcript requests identify their safe validated or normalized context without echoing draft-file or referenced source bytes. |
 | #284 deduplicated conversation scope | Implemented: an attached controller presents scope initially and when the semantic tuple of session ID, visible conversation handle, subject, or sticky agent changes. Any current focus is still validated against the complete catalog before every attached prompt; external rename, archive, deletion, and handle-collision changes are detected. Detach resets the loop-local presentation snapshot, failed writes are not cached, and terminal, public API, and storage contracts remain unchanged. |
-| #209 provider OAuth onboarding | Implemented: a four-frame accessible welcome precedes native Codex/Antigravity status and sign-in; startup hard-gates every distinct effective route, and `/auth` exposes the same global workflow. Startup authentication and global `/auth` may immediately establish an absent-only workspace default while preserving explicit routing. In `/settings`, Provider-editor authentication is subordinate and pre-Save state remains in memory; only authentication after confirmed Save may durably establish a missing default before the guarded settings-file transaction. Provider output, URLs, accounts, tokens, credentials, and native persistence remain provider-owned. |
+| #209 provider OAuth onboarding | Implemented: a four-frame accessible welcome precedes native Codex/Antigravity status and sign-in; startup hard-gates every distinct effective route, and `/auth` exposes the same global workflow. Startup authentication and global `/auth` may immediately establish an absent-only workspace default while preserving explicit routing. In `/settings`, Provider-editor and Save-time authentication are subordinate: a missing default remains in the pending candidate and becomes durable only through the final complete Save. Provider output, URLs, accounts, tokens, credentials, and native persistence remain provider-owned. |
 | #249 completion-aware native login | Implemented: while an inherited-terminal Codex or Antigravity login child remains open, silent bounded selected-provider probes use null streams. Fresh authenticated status stops and reaps only that exact child and returns automatically to startup, `/auth`, or Settings; Story adds no exit, confirmation, extra Enter, or second authorization-code paste. |
 | #237 high-visibility startup welcome | Implemented: the bounded four-frame startup lifecycle precedes native Codex/Antigravity authentication, preserves scrollback, and keeps provider output outside the terminal-owned presentation. |
 | #241 clean colored startup wordmark | Implemented: physical width selects the prefix-free ASCII wordmark tier at 48/32 columns; eligible ANSI uses bold cyan `S`, magenta `T`, yellow `O`, blue `R`, and green `Y` with local foreground resets. The wide final projection is nine rows and at most 44 cells for the logo; compact and narrow final projections are five rows. Capable animation has exactly three 0.4-second waits; reduced motion independently renders one final colored frame. `NO_COLOR` is color-eligible when unset, empty/whitespace, or trimmed exact `0`, and otherwise disables decoration without changing the environment. |
@@ -850,14 +851,16 @@ exceptional live outcomes. Picker reads never consult or mutate main history or
 completion state, parse a command, or call runtime, provider, filesystem,
 persistence, subprocess, storage, or network code.
 
-### Persisted provider defaults
+### Persisted provider and storage defaults
 
-> **Implemented:** `config/system_defaults.json` has a closed eight-field
+> **Implemented:** `config/system_defaults.json` has a closed nine-field
 > schema: required `language` and `persona`, optional `max_debate_rounds`, and
 > optional `codex_model`, `codex_reasoning_effort`, `antigravity_model`, and
-> `antigravity_effort`, plus nullable `default_backend`. New workspaces include
-> null values for both provider families; existing valid files with omitted
-> optional fields remain valid and initialization preserves their exact bytes.
+> `antigravity_effort`, plus nullable `default_backend` and independent nullable
+> `conversation_storage_backend`. New workspaces include null values for both
+> provider families and explicit filesystem storage; existing valid files with
+> omitted or null storage resolve to filesystem while initialization and reads
+> preserve their exact bytes.
 
 A non-null explicit `AgentBackend(model=...)` or CLI `--codex-model` wins over
 persisted Codex model values. Explicit `AgentBackend(antigravity_model=...,
@@ -880,6 +883,13 @@ authentication fills the workspace default only when it is missing, choosing
 an immediately newly authenticated provider, otherwise the sole authenticated
 provider, otherwise Codex when both are authenticated. Existing defaults and
 explicit agent routes are never rewritten by this policy.
+
+Conversation storage resolves independently from provider routing. Its desired
+value is exactly filesystem or SQLite, and affects only the next shell. The
+active shell retains its construction-time storage bundle. A successful
+settings or `storage use` save canonicalizes the complete nine-field system
+object; loading, cancellation, decline, readiness/parity failure, conflict, or
+write failure does not rewrite legacy bytes.
 
 Every backend validates the complete persisted schema before applying explicit
 provider settings and snapshots effective values at construction. Provider
@@ -905,11 +915,11 @@ described by
 per-agent provider, model, and effort selections in
 `config/agent_configs.json`. The system snapshot contains required `language`
 and `persona`, optional `max_debate_rounds`, and the optional workspace Codex
-and Antigravity fallback model/effort values. Provider, active-provider model,
-and active-provider effort selection is per agent. A successful save writes
-the canonical eight-field system object and canonical seven-field entries for
-each agent. The view preserves the inactive provider's settings and does not
-change identity, thread
+and Antigravity fallback model/effort values plus independent desired
+conversation storage. Provider, active-provider model, and active-provider
+effort selection is per agent. A successful save writes the canonical
+nine-field system object and canonical seven-field entries for each agent. The
+view preserves the inactive provider's settings and does not change identity, thread
 ownership, configuration precedence, or either implemented schema.
 
 The presentation uses one `Panel` with `Section`, `Field`, and `Notice` values,
@@ -936,8 +946,9 @@ control frame. Any implementation need for a new semantic
 component must first revise the closed vocabulary through the repository's
 modularity process.
 
-Every retained Language, Persona, Maximum debate rounds, Provider, Model,
-Custom model, and Effort value editor always includes this instruction:
+Every retained Language, Persona, Maximum debate rounds, Conversation storage,
+Provider, Model, Custom model, and Effort value editor always includes this
+instruction:
 
 ```text
 Entered changes remain pending in memory and are not saved; choose Save in Settings to persist them.
@@ -998,6 +1009,7 @@ choice; Provider remains the field-level route concept:
 Language
 Persona
 Maximum debate rounds
+Conversation storage
 Agents
 Save or Save (*Required), according to the opening-baseline comparison
 Cancel
@@ -1008,6 +1020,7 @@ Cancel
 | Language | The picker candidates are exactly `KO`, `EN`, `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, `RU`, in that order. A schema-valid existing value outside this UI catalog remains visible and may be preserved, but is not synthesized as a candidate. |
 | Persona | Candidates come only from the existing safe persona-template catalog. Duplicate identifiers resolve with the top-level template taking precedence over `alternative_templates`; the resulting identifiers are ordered lexically. The picker does not read, preview, create, or edit template content. |
 | Maximum debate rounds | A numeric `Prompt` accepts a pending nonnegative integer under the existing validation rule. Blank, negative, fractional, and nonnumeric values produce an inline error `Notice` and retain focus without changing the pending value. `0` remains valid and means audit-only consensus. |
+| Conversation storage | A nested picker offers Filesystem and SQLite. It changes only pending desired storage for the next shell and remains independent from Agents and provider routing. Selection performs no live switch or migration. |
 | Agents | A nested agent picker follows canonical `ROSTER` order, then an Agent settings picker exposes Provider/Model/Effort and edits only that agent's pending `agent_configs` values. Codex and Antigravity are selectable Provider values; nullable routes inherit the workspace default and final Codex fallback. Provider authentication is subordinate to this editor and returns to Provider; the route and any missing workspace default remain pending in memory until confirmed Save. Changing the route preserves the inactive provider's model/effort settings. Unsupported legacy provider names are not selectable or valid backends. The UI neither invents providers nor changes roster identity. |
 | Agent Model | The picker order is exact: Inherit; every validated discovered model in provider order; Current custom only when the pending model is absent from that catalog; then Custom model. Inherit stores null. Current custom preserves the pending value. Custom model opens the safe-model prompt, where blank stores null and inherits that provider's workspace model. |
 | Agent Effort | The picker order is exact: Inherit; the selected Codex model's exact discovered effort rows or Antigravity's global `low`, `medium`, `high` rows; then Current compatibility only when a non-null pending effort is not reported. Inherit uses the active provider's workspace value and then provider default. Current compatibility preserves the pending value. The UI adds no Codex reasoning CLI flag. |
@@ -1075,27 +1088,37 @@ one control is focused:
   success `Notice`, and keeps the prompt focused;
   invalid Enter leaves the prompt focused with a trusted validation notice.
   Escape returns to Settings without undoing applied pending values.
+- Enter on Conversation storage opens a Filesystem/SQLite picker whose prompt
+  explicitly says the choice is for the next shell. A valid Enter changes only
+  the pending system value, shows the replacing inline completed success
+  `Notice`, and keeps the picker open. A second consecutive Enter on that same
+  value returns to Settings silently; Escape also returns without undoing an
+  applied pending value.
 - Enter on Save opens a transient `Save settings?` picker with highlighted YES
   and NO choices plus the changed-only Current/Pending context. YES first
   freshly gates each distinct effective provider outside the candidate
-  transaction; this post-confirmation authentication may separately establish
-  and rebase a missing workspace default. That completed default is durable and
-  is not rolled back if a later Save gate or transaction step stops. A stale or
-  failed state returns to settings without writing the pending candidate files.
-  NO or nested Escape returns to the top-level picker. After authentication
-  succeeds, Save validates the complete pending snapshots and re-reads both
-  persisted documents and the persona catalog. Any exact-byte or catalog change
-  from the current opening or rebased baseline fails closed before a candidate
-  write. A valid authenticated baseline then crosses the sole
-  settings-candidate mutation boundary: each
-  changed file is replaced atomically
+  transaction. Authentication may rebase a missing workspace default only in
+  the pending candidate. A stale or failed state returns to Settings without
+  writing either configuration file. NO or nested Escape returns to the
+  top-level picker. After authentication succeeds, Save coordinates desired
+  storage readiness. Missing SQLite support first produces a separate panel
+  containing one exact allowlisted command and a host-package/real-terminal
+  warning, then a YES/NO picker highlighted on NO; only exact YES authorizes the
+  command. Save may provision an absent empty database but never migrates or
+  activates it. Under the storage lease it proves fresh canonical parity,
+  revalidates the opening persona catalog and both exact configuration byte
+  snapshots, and validates the complete pending pair. Any exact-byte or catalog
+  change fails closed before a candidate write. A valid baseline then crosses
+  the sole settings-candidate mutation boundary: each changed file is replaced
+  atomically
   in system-then-agent order, and any write failure triggers best-effort
   reverse-order rollback to the exact original bytes of every attempted target,
   including the target that reported failure. Success reports `completed`.
   Validation, conflict, replacement, or rollback failure reports `error` and
   retains the pending values for retry or cancellation. This is a guarded
   two-file update, not a global transaction or a power-loss-safe transaction
-  across both files.
+  across both files. Success applies desired storage only to the next shell;
+  the current bundle is immutable.
 - Enter on Cancel opens a transient `Cancel settings?` picker with highlighted
   YES and NO choices plus the same separately rendered changed-only or
   no-changes context `Panel`. Capable raw input initially highlights YES; Enter
@@ -1108,9 +1131,9 @@ one control is focused:
   Escape, Ctrl-C, or EOF cancels without writing. Before Save is confirmed,
   successful Provider-editor authentication also writes neither the pending
   route nor a missing workspace default. Opening, navigating,
-  highlighting, editing, validation preview, nested cancellation, and
-  rerendering likewise have no filesystem, runtime, provider, storage, or
-  configuration effect.
+  highlighting, editing apart from provider-native authentication, validation
+  preview, nested cancellation, and rerendering likewise have no workspace
+  filesystem, runtime, storage, or configuration effect.
 
 Saved values apply only to the next backend construction. The active backend
 and runtime retain their complete construction-time persisted configuration
@@ -1120,14 +1143,12 @@ Session and explicit overrides remain live and higher precedence. Save does not
 mutate an existing provider thread or current identity. The view manages no
 credentials, retained catalog or cache, provider implementation,
 persona file editing, theme, key binding,
-or automatic save. No configuration value is persisted before Save is
-confirmed. Provider-editor authentication is subordinate, returns to Provider,
-and leaves the route and any missing workspace default pending in memory, so
-Escape or cancellation before confirmed Save leaves configuration bytes
-unchanged. After Save is confirmed, save-time authentication may durably
-establish a missing default before the guarded settings-file transaction; that
-completed post-confirmation default is not rolled back if later Save gating or
-transaction work stops.
+or automatic save. Authentication can separately persist a missing workspace
+default outside Settings during startup or global `/auth`. Within Settings,
+Provider-editor and Save-time authentication are subordinate and leave the
+route and any missing default in the immutable pending candidate. No
+configuration value is persisted before the complete guarded Save; Escape or
+cancellation before Save preserves the prior configuration bytes.
 
 The same current/pending labels, choice identity, validation meaning, disabled
 provider meaning, and Save/Cancel outcomes must remain visible in wide, narrow,
@@ -1145,10 +1166,13 @@ preserves scrollback and adds no alternate screen, mouse handling, animation,
 background loop, dependency, persistent draft, arbitrary form framework, or
 automatic save.
 
-### Provider authentication and startup ceremony
+### Storage activation, provider authentication, and startup ceremony
 
 > **Implemented by #209:** authentication is the first interactive gate after
-> workspace resolution and the welcome. It is private orchestration over the
+> workspace resolution and the welcome. Before terminal construction and that
+> gate, #261 resolves desired conversation storage under one coordinator lease,
+> performs any required fresh parity and marker CAS, and supplies the complete
+> active bundle. Provider authentication remains private orchestration over the
 > existing semantic picker and terminal driver, not a public provider-auth API,
 > credential store, or new terminal component.
 
@@ -1202,8 +1226,9 @@ immediate absent-default durability policy. A process-level interrupt during
 native sign-in follows the shell's outer interruption cleanup. Settings
 Provider-editor authentication returns to Provider without persisting a route
 or missing default. After Save is confirmed, Save gates each distinct effective
-provider before its file transaction and may durably establish a missing
-default.
+provider before its file transaction and may rebase a missing default only in
+the pending candidate. That value becomes durable only through the same
+complete guarded Save.
 
 The welcome is exactly four fixed semantic frames. Physical width selects the
 prefix-free ASCII wordmark tier: at 48+ columns, `STORY` and `WRITING` use
@@ -1750,7 +1775,7 @@ and 218 edges remain canonical in the module index.
 | Retrieval progress and summaries | `Notice`, `Record`, `ListView`, `Field` | Loading, citations/context accounting, result/error/cancelled | #83 (implemented accepted views) |
 | Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field`, `Message` | Accepted exact-body inline/fresh/composed user prompt before request context and progress; validated output path; draft source path without source bytes; loading, debate identity, handoff/action metadata, agent messages, result/cancelled/completed/error | #83 and #119 progress/result views; #275 prompt and request context (implemented) |
 | Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics; post-workspace application errors supply one fixed sanitized debug-log availability notice, while pre-workspace errors include no debug-log path | #83, #131 terminal seam, and #132 application wiring (implemented) |
-| Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Exact Settings/Agents/Agent settings hierarchy; one effective-only neutral `Current` or warning-semantic `Pending` description for each one-level root value and warning-semantic nonzero nested Agents pending count; plain and `NO_COLOR` text remain explicit and unchanged; exactly four clean-root settings choices; dirty-only `Apply Changes (*Required)` then `Discard Changes`; provider-neutral Provider/Model/Effort editors; retained valid commits with updated selection/default and one replacing inline `SemanticRole.SUCCESS`/`ViewState.COMPLETED` result; effective numeric display and prefill; provider-qualified summary rows; field-entry-triggered bounded model/effort choices with inherit/custom/compatibility paths; changed-only neutral Current/warning Pending confirmation context with `(Changed)` cues and defensive no-diff projection; exact `Choose Apply Changes to persist pending changes` guidance; one-level nested Escape; transient cleanup and fallback honesty; fixed safe discovery failure guidance; guarded dirty-Apply-only two-file persistence boundary | #93, #106, #115, #252, #270, #271, #287, #303, #312, and #319 (implemented) |
+| Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Exact five-row clean Settings root for Language, Persona, Maximum debate rounds, Conversation storage, and Agents plus the Settings/Agents/Agent settings hierarchy; one effective-only neutral `Current` or warning-semantic `Pending` description for each one-level root value, including storage, and a warning-semantic nonzero nested Agents pending count; plain and `NO_COLOR` text remain explicit and unchanged; dirty-only `Apply Changes (*Required)` then `Discard Changes`; provider-neutral Provider/Model/Effort editors; retained valid commits with updated selection/default and one replacing inline `SemanticRole.SUCCESS`/`ViewState.COMPLETED` result; effective numeric display and prefill; provider-qualified summary rows; field-entry-triggered bounded model/effort choices with inherit/custom/compatibility paths; changed-only neutral Current/warning Pending confirmation context with `(Changed)` cues and defensive no-diff projection; exact `Choose Apply Changes to persist pending changes` guidance; storage selection, readiness, optional explicit provisioning, parity, next-shell activation, and fixed failure guidance; one-level nested Escape; transient cleanup and fallback honesty; guarded dirty-Apply-only configuration persistence boundary | #93, #106, #115, #252, #261, #270, #271, #287, #303, #312, and #319 (implemented) |
 | Welcome and provider authentication | Private startup wordmark renderer, `Prompt`, `Picker`, `Choice`, `Notice` | Four bounded capable welcome frames with physical-width wide/compact/narrow projections; clean prefix-free ASCII wordmark; static accessibility fallback; four explicit provider states; disabled unavailable choice; transient guidance/result; completion-aware exact-child return; no provider-controlled content | #209, #237, #241, #249 (implemented) |
 
 ### Control groups
@@ -1767,7 +1792,7 @@ and 218 edges remain canonical in the module index.
 | Independent ranged text viewer | Private viewer document/state/viewport/result values, not a `Component` | Ordinary versus anchored clamped navigation, inclusive commit, typed noncommit exits, height-bounded alternate-screen rendering, strict complete-text fallback, and no retained caller or composer state | #162 foundation; #164 provider-bound shell caller (implemented) |
 | Artifact-reference activation | Private marker projection plus existing palette/viewer controls | Provider-span-only `$` completion; immediate exact-`$$` ranged-source palette; direct `$${path}` or highlighted Enter/Tab viewer entry; exact origin restoration; multiple ordered indicators; fixed content-free errors; and fallback second confirmation | #164 (implemented) |
 | Live omitted-resume choices | `SuggestionPalette`, `Picker`, `Prompt`, `Field` | Exact capable command only; controller-owned ordered rows/highlight/fresh validation; Up/Down preview; one-Enter explicit commit; Escape dismissal; Tab no-op; submitted omitted command uses a live capable or numbered fallback picker only after a successful fresh read returns eligible rows; empty/error short-circuit | #142 (implemented) |
-| Settings field and action navigation | `Panel`, `Prompt`, `Picker`, `Field`, `Notice` | Single focus; Settings > Agents > Agent settings navigation; retained Language/Persona/rounds/Provider/Model/Custom model/Effort editors; first-commit reopen and second-consecutive-equivalent-commit return, including prefilled numeric input; explicit visible one-level Escape hierarchy; clean root Escape/cancellation silence with no selectable persistence actions; dirty root Escape/Discard confirmation and one whole-flow discard report; dirty-only Apply confirmation, final dirty recheck, persistence, and exact successful saved event; subordinate authentication return to Provider; per-entry discovery without retained-commit redraw discovery; no write before guarded dirty Apply; universal capable cleanup and honest fallback visibility; no generic navigation, picker-retention, or session-resume change | #93, #106, #115, #142, #252, #270, #271, #287, #303, #312, and #319 (implemented) |
+| Settings field and action navigation | `Panel`, `Prompt`, `Picker`, `Field`, `Notice` | Single focus; Settings > Agents > Agent settings navigation; retained Language/Persona/rounds/Conversation storage/Provider/Model/Custom model/Effort editors; first-commit reopen and second-consecutive-equivalent-commit return, including prefilled numeric input; explicit visible one-level Escape hierarchy; clean root Escape/cancellation silence with no selectable persistence actions or guidance; dirty root Escape/Discard confirmation and one whole-flow discard report; dirty-only Apply confirmation, final dirty recheck, storage readiness/provisioning/parity, configuration persistence, and exact successful `[saved] Settings saved. Changes apply to the next shell.` event; subordinate authentication return to Provider; per-entry discovery without retained-commit redraw discovery; no write before guarded dirty Apply; universal capable cleanup and honest fallback visibility; defensive clean route remains internal; no generic navigation, picker-retention, or session-resume change | #93, #106, #115, #142, #252, #261, #270, #271, #287, #303, #312, and #319 (implemented) |
 | Authentication and startup gate | Private `StartupWelcome`, `Picker`, `Choice`, `Notice` | Four stage-only startup values and dedicated projection; fresh probes; native-login handoff and completion-aware return; initial/effective-route loops; absent-only default; `/auth`; settings assignment/Save; capable cleanup and no-delay static fallback | #209, #241, #249 (implemented) |
 
 Contextual non-main-prompt suggestions from completed issue #73 use the same
@@ -1806,7 +1831,7 @@ commit/cancel/interrupt/EOF outcomes, exact numbered fallback, responsive
 plain/ANSI rendering, restoration, failure cleanup, and history/completion
 isolation. #93 covers its implemented settings interaction, persistence, and
 lifecycle snapshot contract. #94 covers the original five-key and legacy
-schema handling; current coverage also requires the eight-field system and
+schema handling; current coverage also requires the nine-field system and
 per-agent schemas, provider-specific safe model/effort validation,
 full-schema-first failure, precedence, backend-lifetime snapshots, exact
 fresh/resume invocation arguments, initialization preservation, and unchanged
@@ -1870,7 +1895,7 @@ privacy, and the bounded/static startup presentation matrix.
 | Picker and live resume choices | Highlight-versus-selection, disabled-skipping clamped navigation, exact resume ordering/highlights, Tab no-op and one-Enter dynamic commit, Escape cancel/dismissal, typed interrupt/EOF, empty/all-disabled/one/long lists, exact fallback acceptance/rejection, stable identity reconciliation and fresh controller validation, selected-outside-window summary, no synthetic final control frame, complete capable cleanup on every returned outcome/failure, honest fallback visibility, and resize on each live redraw. |
 | Permanent input lifecycle | Resource-free `UNDECIDED` construction; first-read irreversible `LIVE`/`FALLBACK`; sticky fallback and no post-live downgrade; stable source/decoder/configuration correlation; canonical ASCII/UTF-8/ISO-8859-1 plus built-in strict/surrogateescape admission; exact one-byte reads; fragmented code points; maximum four-code-point pending suffix before Escape readiness; clean and partial EOF; read/decode/shape poison; interrupt reset without mode change; synchronous reentry rejection; PENDIN-only tolerated configuration drift; capable history-free subject frames; and cross-prompt/viewer preservation without mixed wrapper/raw reads. |
 | Ranged text viewer | Exact `str`, display-name, strict-UTF-8, private 8 MiB source, exact 65,536-line and 16 MiB complete-fallback boundaries, initial-line, empty/final-LF validation before terminal access; ordinary and Shift+Arrow clamped selection including reversal; configured VINTR/VEOF raw-byte disable/decode/round-trip classification and priority; singleton/range commit; distinct cancel/interrupt/EOF; one row per logical line; safe CR/U+2028/control display; bounded-prefix plain/ANSI current and selected cues; wide/combining/ellipsis behavior; suffix-independent redraw work; bounded height and next-nonexit-key resize; exact untruncated `START-END` or `/cancel` fallback with reverse normalization and visible retry; content-free results; close-on-select/cancel, repeat-open disposal; and no workspace/artifact/runtime/controller dependencies. |
-| Settings | Two-snapshot current/pending separation; exact Settings/Agents/Agent settings and language/roster order; effective-only root `Current`/`Pending` descriptions and nested Agents pending count; exact pending and Save-only guidance; safe persona precedence and lexical order; effective numeric display/prefill plus `0`, positive, blank, negative, fractional, and nonnumeric cases; provider-neutral Provider/Model/Effort editors with provider-qualified summaries; retained valid commits with updated selection/default and one replacing inline completed success result; first commit versus second consecutive equivalent commit for picker and numeric traversal; exact visible one-level Escape hierarchy; silent clean root Escape/Cancel; confirmed dirty root Escape/Cancel; exactly one dirty whole-flow discard report on confirmed cancellation, Ctrl-C, or EOF; confirmation NO/Escape return without discard; one-shot Save/Cancel and closing resume-picker compatibility; selectable Codex/Antigravity routes with nullable agent/default fallback, subordinate Provider-editor authentication returning to Provider with route/default state still pending in memory, no configuration-byte change on pre-Save Escape/cancel, inactive-provider setting preservation, and unsupported legacy-provider rejection; fresh field-entry-triggered pending-provider discovery without retained-commit/redraw discovery; exact five-second/one-MiB capture bounds and cleanup; Codex list-only model rows and model-specific exact effort/default projection; Antigravity aligned opaque rows and global low/medium/high effort without inference; exact model/effort picker ordering; safe custom/inherit/current compatibility; fixed content-free failure states; forward-compatible Codex effort validation; no catalog persistence/cache/retry; fresh distinct-effective-provider gate only after confirmed Save and outside the transaction; one focused control and deterministic focus return; exact-byte and persona-catalog conflict before writes; changed-only canonical system-then-agent save; per-file atomic replacement; failing-target-inclusive reverse exact-byte rollback and rollback uncertainty; pending retention; no candidate write on open/edit/highlight/error/cancel; no submitted picker/prompt frame retained after return; durable post-confirmation auth/default writes that are not rolled back by later Save failure; next-lifecycle-only application with higher live overrides; `/settings`-only traversal and cancellation scope; plain/ANSI/`NO_COLOR`/narrow/line fallback; hostile display content; and unchanged identity, thread, precedence, public, and machine contracts. |
+| Settings | Two-snapshot current/pending separation; exact seven-row Language/Persona/Maximum debate rounds/Conversation storage/Agents/Save/Cancel order plus Settings > Agents > Agent settings hierarchy; effective-only root `Current`/`Pending` descriptions and nested Agents pending count; exact pending and Save-only guidance; safe persona precedence and lexical order; effective numeric display/prefill plus `0`, positive, blank, negative, fractional, and nonnumeric cases; independent retained Filesystem/SQLite pending choice for the next shell; provider-neutral Provider/Model/Effort editors with provider-qualified summaries; retained valid commits with updated selection/default and one replacing inline completed success result; first commit versus second consecutive equivalent commit for picker and numeric traversal; exact visible one-level Escape hierarchy; silent clean root Escape/Cancel; confirmed dirty root Escape/Cancel; exactly one dirty whole-flow discard report on confirmed cancellation, Ctrl-C, or EOF; confirmation NO/Escape return without discard; one-shot Save/Cancel and closing resume-picker compatibility; selectable Codex/Antigravity routes with nullable agent/default fallback, subordinate Provider-editor authentication returning to Provider with route/default state still pending in memory, no configuration-byte change on pre-Save Escape/cancel, inactive-provider setting preservation, and unsupported legacy-provider rejection; fresh field-entry-triggered pending-provider discovery without retained-commit/redraw discovery; exact five-second/one-MiB capture bounds and cleanup; Codex list-only model rows and model-specific exact effort/default projection; Antigravity aligned opaque rows and global low/medium/high effort without inference; exact model/effort picker ordering; safe custom/inherit/current compatibility; fixed content-free failure states; forward-compatible Codex effort validation; no catalog persistence/cache/retry; fresh distinct-effective-provider gate only after confirmed Save and outside the transaction; memory-only missing-default rebase within Settings; explicit allowlisted SQLite preview with NO-first consent, recognized-CI refusal, same-interpreter reprobe, create-only provisioning, and fresh canonical parity; one focused control and deterministic focus return; exact-byte and persona-catalog conflict before writes; changed-only canonical system-then-agent save; per-file atomic replacement; failing-target-inclusive reverse exact-byte rollback and rollback uncertainty; pending retention; no candidate write on open/edit/highlight/error/cancel; no submitted picker/prompt frame retained after return; no intermediate Settings configuration write; next-shell-only configuration/storage application with higher live overrides; `/settings`-only traversal and cancellation scope; plain/ANSI/`NO_COLOR`/narrow/line fallback; hostile display content; and unchanged identity, thread, precedence, public, and machine contracts. |
 | Authentication startup | Exact Codex and resolved-executable Antigravity probes and logins; four states; disabled unavailable choice; bounded null-stream monitoring while native login remains open; fresh-status-only authority; exact-child bounded stop/reap and automatic return; at most one provider-controlled code paste with no extra exit/confirmation; initial/effective-route hard gates; `/auth`; absent-only default policy; settings integration; inherited terminal/environment/root/process group; no output/URL/code/account/token/credential capture; four physical-width-aware welcome frames with exactly three 0.4-second waits; bold cyan/magenta/yellow/blue/green wordmark spans with local resets; reduced-motion one-final-colored-frame path; 0.8-second transient notices; right-margin/resize safety; foreground-process-group and termios restoration; no cursor hiding or alternate screen; static no-delay nonzero-`NO_COLOR`/callback/non-TTY/`TERM=dumb`/non-POSIX/uncertain fallbacks. |
 | Advisory progress | One four-glyph cycle only for capable raw advisory and consensus awaitables; `NO_COLOR` glyph preservation; clear/redraw around semantic writes; clear and task joining before result/cancel/error; silent callback/non-TTY/`TERM=dumb`/uncertain fallback; operation-error precedence; indicator-only internal-error mapping; no `[routing]`/`[waiting]` records or reusable animation API. |
 | Parser and mutation boundary | The exact visible committed main buffer reaches the established parser once; previews, recall, replacement, highlight, rerender, cancel, Ctrl-C, empty VEOF, and physical EOF cause no parser/runtime/storage call. |

@@ -9,7 +9,12 @@
 > attachment use the catalog-independent reference-source boundary
 > and add no artifact
 > write path. Bounded fail-open debug logging uses a separate identity-bound
-> storage path.
+> storage path. Privileged filesystem conversation archive transfer is
+> available only through a direct Python adapter under a caller-held mutation
+> lease. Explicit next-shell filesystem/SQLite selection and optional direct
+> Python SQLite conversation storage use one workspace coordinator; SQLite has
+> its own fixed database, derived search companion, transaction, and sidecar
+> boundary.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -338,6 +343,385 @@ path-mismatched record raises `WorkspaceFormatError`. Symlinks raise
 `WorkspaceSecurityError`. Exact event rules are in
 [Conversation transcripts](../reference/conversation-transcripts.md).
 
+<a id="conversation-archive-filesystem-safety"></a>
+
+## Conversation archive filesystem safety
+
+`compose_filesystem_conversation_archive()` captures one canonical absolute
+root and workspace key in a private immutable topology. It retains no caller
+`Workspace` or public mutable catalog/event-store collaborator and performs no
+archive scan or mutation. After pure import-payload canonicalization where
+applicable, every export and import validates an active, unexpired,
+owner-thread-bound lease for that key before constructing its one private
+operation-local `Workspace`, catalog, and event-store set. A wrong-root lease
+therefore fails before collaborator materialization or filesystem I/O, and
+later caller-root mutation cannot redirect root A transfer into root B.
+
+This archive-owned topology is independent of composed-service provenance and
+SQLite's pinned database owner. The caller must stop or otherwise coordinate
+ordinary catalog and transcript writers for the complete operation: those
+ordinary adapters do not acquire the archive lease, and the lease is not an
+authorization decision.
+
+Export strictly enumerates only the authoritative
+`discussion_logs/<session_id>/interactive/conversations/<conversation_id>/`
+namespace. Metadata is required; a transcript is absent for empty history and
+must be a nonempty canonical JSONL file when present. IDs, metadata, complete
+event history, pairing, and path correlation are revalidated through addressed
+`FilesystemConversationCatalog.get()` and
+`FilesystemConversationEventStore.read()` calls. No catalog-wide list is used.
+
+Every scanned directory must remain a real directory. Every included file must
+be regular and singly linked. Symlinks, hard links, nonregular files, malformed
+or empty present transcripts, orphan/unknown conversation artifacts, invalid
+identifiers, and unexpected interactive layout fail closed. Safe regular
+non-session root files and safe regular noninteractive session siblings are
+excluded without reading their content, but each consumes the one-million-entry
+inventory budget; a safe session without `interactive` is skipped. An unsafe
+excluded entry fails rather than being followed or silently ignored. The normal
+`discussion_logs/.gitkeep` sentinel must be a singly linked regular file whose
+zero size is verified from metadata; its bytes are not read.
+
+Export performs two complete scans and compares their canonical archive bytes
+under the same lease. A difference or second-scan archive failure becomes
+`ConversationArchiveSourceChangedError`. This is change detection, not a lock
+or filesystem snapshot: do not copy a live, ordinarily mutating source and
+rely on the second scan for consistency. A valid excluded-only change does not
+alter the compared bytes, although it remains bounded and validated in its
+scan.
+
+Import first canonicalizes and fully validates the bounded archive in memory.
+It then scans the complete destination namespace, classifies the full
+destination-plus-payload union, builds exact planned metadata/transcript bytes,
+projects paths, descendant entries, included bytes, logical text, and canonical
+wire, and checks every planned target and ancestor path before writing
+anything. A late divergent identity or projected bound failure therefore
+prevents an earlier absent identity from being installed. Missing state uses
+the existing create-only atomic workspace writers, metadata first and a
+transcript only for nonempty history. Exact domain-value collisions are
+accepted; divergent or unsafe collisions are preserved and rejected.
+
+The lease and containing path are revalidated around each installation. A
+complete destination rescan must then match the preflight inventory plus the
+requested archive. Import never overwrites, replaces, or deletes conversation
+or excluded state. It can add to a nonempty destination and preserves unrelated
+complete records byte-for-byte. A post-preflight exact target collision is
+accepted only after an addressed domain reread; a divergent collision or
+unrelated post-write mutation is preserved and reported without rollback.
+
+Operational failure may leave canonical directories, exact metadata, or
+complete exact earlier conversations. The same canonical payload can resume
+recognized metadata-first state under a fresh correct lease after the
+destination is quiescent. Unknown artifacts, divergence, unsafe topology, or a
+post-preflight change instead fail closed; the adapter performs no cleanup or
+automatic retry. Path revalidation narrows but cannot eliminate a hostile
+same-user race between the last check and a native filesystem call.
+
+Archive errors are content-free and never expose the rejected path or bytes.
+Exact values, bounds, exclusions, statuses, and error types are in
+[Canonical conversation archives](../reference/conversation-archives.md),
+including the exact
+[scan and projected-union limits](../reference/conversation-archives.md#filesystem-archive-bounds).
+
+<a id="composed-conversation-storage-provenance"></a>
+
+## Composed conversation-storage provenance
+
+Direct standalone filesystem catalog and event-store adapters retain their
+established borrowed-`Workspace` behavior. The stronger provenance guarantee
+begins only at `compose_filesystem_conversation_storage`: the returned
+catalog, event store, reference search, and mutation coordinator all derive
+from one construction-pinned canonical absolute root. Changing the caller's
+`Workspace.root` or rebinding the composed instances' inherited collaborators
+cannot split root A provenance from root B I/O. This does not make the general
+`Workspace` type immutable.
+
+The composed filesystem catalog's create, rename, archive, and unarchive plus
+the composed event store's append borrow this same coordinator. Their reads
+remain observational. Direct standalone filesystem adapters retain their
+uncoordinated compatibility behavior and therefore do not participate in
+selection, startup, or migration safety unless their caller stops or otherwise
+coordinates them.
+
+A separately constructed
+`WorkspaceConversationStorageMutationCoordinator` also pins its root at
+construction without opening a file. Its in-process coordination key refers to
+that root; each outer `borrow` opens its fixed
+`config/.conversation_storage.lock` guard and issues a lease for the same root.
+Later caller mutation cannot move the guard to another root; nested borrowing,
+expiry, timeout, and cleanup semantics are unchanged.
+
+Activation-state operations pin at call entry instead. Compare-and-set rejects
+a lease for another root with `ConversationStorageCoordinationError` before
+creating an operation workspace or performing filesystem I/O; a matching call
+reads, revalidates its lease, and publishes only within the captured root.
+Caller-root reassignment during a load or compare-and-set therefore cannot
+redirect its read or write. This path provenance is not an inode-pinned
+snapshot or a transaction with catalog, event, migration, or SQLite work.
+SQLite keeps its separate already-pinned database owner. See the
+[composition API](../reference/package-api.md#conversation-storage-composition).
+
+<a id="conversation-storage-migration-safety"></a>
+
+## Conversation storage migration safety
+
+The migration coordinator captures one canonical workspace root and acquires
+one outer `WorkspaceConversationStorageMutationCoordinator` lease for the
+complete operation. That lease covers activation/readiness checks, fresh
+canonical exports, planning, all destination work, checkpoint publication, and
+fresh final parity. Root and lease correlation are revalidated throughout, so
+later mutation of the caller's `Workspace.root` cannot redirect any phase.
+Acquiring the lease may create the empty, owner-only
+`config/.conversation_storage.lock` guard even for dry-run or verify; those
+workflows create no conversation rows/files or checkpoint.
+
+The coordinator serializes every supported filesystem/SQLite writer that uses
+the same guard. Direct low-level filesystem catalog/event-store writers do not
+acquire it automatically, and external database/file editors do not participate
+at all. Stop or otherwise coordinate those writers before migration. The guard
+is advisory coordination, not caller authorization, a hostile-process defense,
+or a transaction spanning both stores.
+
+Migration reads each per-direction checkpoint through a bounded no-follow file
+descriptor and requires the fixed name and descriptor to remain one regular,
+singly linked file with stable identity and size. Strict UTF-8 JSON parsing
+rejects duplicate, missing, extra, noncanonical, oversized, wrong-direction,
+unsupported-version, invalid-count, or unsafe-identity state. Symlinks, hard
+links, nonregular files, replacement races, and ambiguous state are preserved
+and fail closed. Publication uses the workspace's contained atomic JSON write,
+compares the expected prior checkpoint before and after writing, revalidates the
+lease, and rereads the exact result. Do not edit, relink, or replace a checkpoint
+to manufacture progress.
+
+Filesystem-to-SQLite destination work occurs in one `BEGIN IMMEDIATE`
+transaction, so an uncommitted failure rolls back the complete import.
+SQLite-to-filesystem work first preflights the complete destination union, then
+uses create-only archive publication. A progress callback runs only after one
+conversation's metadata and optional transcript are present as one complete
+canonical value and have been reread exactly. If checkpoint publication fails,
+those complete files remain; the next run accepts them only after fresh source
+and destination exports revalidate the fingerprint, counts, completed
+identities, and exact records.
+
+Conflict, unsupported SQLite values, or destination-only data blocks migration
+before checkpoint or destination mutation. Final parity still uses fresh
+canonical exports. A source change can therefore be discovered after a complete
+destination transaction, and a final mismatch can follow create-only
+filesystem publication; neither condition triggers destructive rollback. See
+[migration recovery](recovery-and-limitations.md#conversation-storage-migration-recovery)
+before retrying.
+
+<a id="conversation-storage-selection-and-startup-safety"></a>
+
+## Conversation storage selection and startup safety
+
+Desired selection captures one canonical workspace root and first borrows the
+workspace coordinator only long enough to prove safe mutation is available. It
+releases that proof lease before interactive consent or a host installer, so a
+long-running native package manager does not retain the conversation-storage
+guard. The installer receives only one allowlisted argument tuple, runs without
+a shell at the captured workspace root, and inherits stdin/environment; its
+stdout and stderr use the caller's diagnostic stream. No timeout, retry,
+privilege escalation, automatic flag, or arbitrary command is introduced.
+
+After installation, selection reacquires the coordinator and reprobes SQLite
+through the same active Python interpreter. That lease then spans create-only
+empty-database provisioning when needed, requested-backend composition, active-
+state read, fresh canonical source/target parity, and final configuration
+publication. Immediately before publication it validates the lease, invokes an
+optional caller guard, validates the lease again, and runs the config-owned
+exact-byte complete-document CAS. Settings supplies its fresh persona-catalog
+guard at this point. Guard, byte, validation, or write failure preserves prior
+configuration whenever the config rollback contract completes; an installed
+host package or empty database is deliberately outside that rollback.
+
+Selection never writes `config/conversation_storage_state.json`. Interactive
+startup owns that marker and holds one outer coordinator lease while it reloads
+configuration, composes current active services, freshly checks target
+readiness/parity, composes the complete target services, validates the lease,
+and compare-and-sets the expected generation. Failure before CAS preserves the
+marker and aborts without fallback. A completed CAS is the durable activation
+boundary and is not compensated if later terminal or provider startup fails.
+The current process never replaces its bundle live.
+
+Neither workflow is a transaction spanning host packages, both conversation
+stores, configuration, activation, sessions, providers, or other workspace
+channels. The advisory guard serializes only supported participants; direct
+standalone filesystem adapters and external file/database editors remain
+outside it. See the exact
+[CLI contract](../reference/cli.md#conversation-storage-selection) and
+[selection recovery](recovery-and-limitations.md#conversation-storage-selection-and-activation-recovery).
+
+<a id="sqlite-conversation-storage-safety"></a>
+
+## SQLite conversation-storage safety
+
+The optional adapter resolves only the fixed contained path
+`discussion_logs/conversation_storage.sqlite3`. The named and opened database
+must have the same meaningful regular-file identity with the exact link count
+required by the operation. A symlink at the database name raises
+`WorkspaceSecurityError`; a stable named entry that is nonregular but not a
+symlink raises `WorkspaceFormatError`. A nonmeaningful or mismatched identity,
+an unsafe opened type, replacement, or unexpected link count fails closed as
+`WorkspaceSecurityError`. The adapter rechecks identity after each operation.
+Its database owner reads the canonical workspace root once at construction and
+retains the resulting workspace key and database path; later mutation of the
+supplied `Workspace.root` cannot retarget the database. Connections use
+non-creating SQLite URI modes: `mode=ro` for reads and `mode=rw` for writes.
+Module import performs no I/O. Adapter construction never opens or creates the
+database and does not load `sqlite3`; resolving a string or path-like workspace
+still follows the ordinary `Workspace` construction contract. `sqlite3` is
+loaded and probed only when an operation is requested, and SQLite 3.7.16 or
+later is required.
+
+Header verification requires the SQLite format header, DELETE rollback-journal
+read/write versions, UTF-8 encoding, application ID `0x53574143` (`SWAC`), and
+schema version `1`. Every connection against an existing database also verifies
+the exact schema manifest and fingerprint and fixed schema cookie. Strict
+preflight and composition readiness, along with new-temporary, existing-target,
+race-winner, and recovered-target provisioning validation, additionally run
+`integrity_check`, a global foreign-key check, an orphan scan, and full
+catalog/event reconstruction. Routine reads and writes validate the rows
+involved in their requested operation; database constraints, triggers, and
+enabled foreign-key enforcement protect supported mutations. They do not scan
+unrelated database contents. Preflight and ordinary reads are observational;
+validation never repairs a value.
+
+Database `TEXT` is decoded as strict UTF-8 on every connection. Malformed
+stored text encountered by verification or the requested operation fails
+closed as content-free `WorkspaceFormatError`, without
+leaking the undecodable value or a cause. A `UnicodeDecodeError` raised by
+caller-owned operation code remains that caller exception instead of being
+misclassified as stored corruption.
+
+Sidecar handling deliberately differs by operation:
+
+- strict preflight, composition readiness, provisioning, and the boundaries of
+  supported writes require `-journal`, `-wal`, and `-shm` to be absent;
+- an ordinary adapter read may tolerate only a regular, singly linked
+  `-journal`, the shape needed while a concurrent supported DELETE-mode writer
+  is live; and
+- WAL and shared-memory sidecars are never accepted. No operation opens,
+  rewrites, removes, or treats an authoritative-path sidecar as recovery input;
+  provisioning cleanup is limited to sidecars of its own private temporary.
+
+An ordinary read opens one read-only connection, verifies connection policy,
+executes `BEGIN`, verifies bounded database/schema identity, validates the rows
+requested by one adapter operation, commits, closes, then rechecks the sidecar
+and database identity. This gives one stable snapshot for that operation. It
+does not run the exhaustive preflight scan. `SQLiteConversationSearch` uses one
+such main-database transaction for its complete bounded search rather than
+composing several catalog and event-store operations.
+
+### Derived FTS companion
+
+The direct SQLite search adapter may consult the fixed private
+`discussion_logs/.conversation_storage_fts5.sqlite3` companion while its main
+snapshot is open. The companion is a derived candidate source, not authority:
+all subject matches come from authoritative normalized subjects, and every
+scanned event is checked by exact normalized literal comparison against the
+main database regardless of its hint. False, missing, or reordered hints
+therefore cannot change hits, citations, snippets, counts, truncation, or
+result order.
+
+The companion owner derives its path from the main database's already-pinned
+workspace key. A usable companion is an owner-only, singly linked regular file
+with no journal, WAL, or shared-memory sidecar and exact schema, source
+generation, normalization, tokenizer, and SQLite-runtime identities. It is
+opened with a noncreating URI. Missing, stale, busy, malformed, unsafe,
+capability-mismatched, replaced, or otherwise unusable state becomes exact
+main-database fallback. Search never creates, removes, rewrites, repairs, or
+follows that state, and companion failure does not make the authoritative
+database unready.
+
+An effective supported mutation updates required searchable content and the
+main lexical generation inside its authoritative transaction. Failure there
+rolls back the mutation. Only after that commit, while the same workspace lease
+remains valid, may the owner create an absent companion or atomically refresh a
+recognized safe one. A companion publication or refresh failure leaves the
+main commit intact and exact fallback available. No-op archive/unarchive calls
+leave the generation and companion stable. Owner cleanup is limited to its own
+unchanged temporary resources and one exactly recognized interrupted
+create-only publication alias; unsafe or ambiguous names are preserved.
+
+Every supported mutation acquires an active workspace conversation-storage
+lease before database work. The coordinator uses a weakly shared in-process
+lock and the fixed `config/.conversation_storage.lock` POSIX advisory guard;
+same-thread nesting reuses the same owner-thread/workspace-bound lease without
+extending its expiry. After acquisition the adapter opens `mode=rw`, verifies
+the database and lease, starts `BEGIN IMMEDIATE`, validates and mutates the
+operation's affected rows under schema constraints and foreign-key
+enforcement, reverifies schema identity and the lease, commits, and checks
+named identity again. It does not globally scan unrelated rows. The connection
+uses `journal_mode=DELETE`, `synchronous=FULL`, foreign keys on, UTF-8, and a
+five-second SQLite busy timeout. The separately configurable mutation timeout
+bounds coordinator acquisition.
+
+Append is specifically history-bounded: it obtains one plus the indexed maximum
+sequence for the addressed conversation and reads at most the addressed turn's
+user/outcome pair through the unique turn-slot index. It validates that pair and
+the proposed event under the transaction and database triggers; it does not
+read or reconstruct the complete transcript.
+
+Context selection is also history-bounded. It obtains the exact total of
+complete outcomes, then uses the recent-outcome and turn-slot indexes to
+materialize at most the newest 25 complete pairs—50 events. That is sufficient
+to retain the fixed newest 24 pairs and detect the turn boundary without a
+full-history read. The complete `read()` operation remains a complete
+transcript validation.
+
+The privileged archive boundary is deliberately global. Export reconstructs
+and validates every metadata/event row and rejects any orphan event. Import
+validates the complete destination before mutation and again after mutation in
+the same transaction. Orphan or malformed destination rows therefore fail
+before insertion, and post-mutation invalidity rolls back every import rather
+than silently adopting or dropping rows.
+
+An uncommitted failure attempts rollback and every opened connection is closed.
+Rollback or close cleanup cannot suppress the primary body failure. A failure
+reported during post-commit close or synchronization can nevertheless leave
+one complete committed write or provisioned database; inspect before retrying.
+Busy or locked resources map to the public unavailable failure and are not
+retried automatically.
+
+Provisioning requires an explicit active lease. It creates the schema in one
+adapter-owned temporary file beside the target, commits and verifies it, writes
+and synchronizes its application ID, then installs it create-only with a hard
+link and synchronizes the installed file and parent directory. A competing
+complete installation is verified rather than overwritten. Cleanup removes
+only the provisioning call's own temporary path and its temporary sidecars in
+ordinary failure paths; the authoritative target and foreign sidecars are
+preserved.
+
+Explicit leased provisioning has one additional, narrow interrupted-publication
+cleanup. If and only if the target and exactly one provisioning-pattern sibling
+are regular names for the same two-link inode, with no sidecars or other link
+ambiguity, provisioning exhaustively validates the intact two-link target
+before any unlink. It then rechecks the lease, exact candidate set, sidecar
+absence, and target/alias identity. Only then does it remove that sibling alias
+and synchronize the target and directory; the recovered single-link target is
+exhaustively validated again before success. Preflight and ordinary reads never
+perform this cleanup. Symlinks, wrong or multiple candidates, a different
+inode, an extra link, any sidecar, and corrupt or unsupported target content
+remain fail-closed conditions; suspicious names and target content are not
+rewritten. This recognizes residue from the adapter's interrupted hard-link
+publication, not a general database-repair mechanism.
+
+On a host without POSIX `fcntl`, existing valid storage remains available to
+observational preflight and reads. The supported coordinator cannot acquire a
+mutation lease, so provisioning and supported writes fail with
+`ConversationStorageCoordinationError` before any database or conversation
+domain change. Explicit installation through selection, configuration save,
+and activation also fail closed because coordination is required. The lazy
+guard file retains its separately documented lifecycle.
+
+The guard serializes supported writers but does not authenticate a caller,
+acquire a story-session claim, or protect against an actively hostile same-user
+process changing live filesystem names between checks and native calls. Stop
+all workspace processes before external edits. See
+[Recovery](recovery-and-limitations.md#sqlite-conversation-storage-recovery)
+for fail-closed responses.
+
 ## Mutation guarantees
 
 The runtime never silently overwrites a manuscript. Any existing target raises
@@ -424,9 +808,13 @@ default after any reported save failure. See
 `/settings` coordinates `config/system_defaults.json` and
 `config/agent_configs.json` more narrowly. Opening captures both files' exact
 strict-UTF-8 bytes, their fully validated values, and the safe persona catalog.
-Save validates the complete pending pair before rereading anything, then
-requires both byte snapshots and the catalog to match the opening baseline.
-Any mismatch or read failure reports a conflict and performs no write.
+Save first completes its provider gate in memory, then delegates desired
+storage readiness, optional explicit installation, provisioning, and fresh
+parity to the selection owner. Under that workflow's active lease, the
+settings-owned precommit guard requires the persona catalog to match the
+opening baseline; the config owner then revalidates the complete pending pair
+and requires both exact byte snapshots to match. Any mismatch or read failure
+reports a conflict and performs no configuration or activation write.
 
 An unchanged candidate performs no write. Otherwise, only changed documents
 are serialized as canonical sorted, indented JSON and atomically replaced,
@@ -439,7 +827,10 @@ requires inspection of both files.
 
 This is guarded optimistic coordination, not one cross-file transaction. Each
 replacement is atomic, but an abrupt process, operating-system, hardware,
-filesystem, or power failure can still leave the pair partially durable.
+filesystem, or power failure can still leave the pair partially durable. Host
+installation and an empty SQLite database prepared before the config boundary
+are not rolled back. A successful Save changes desired storage only; startup
+owns later active-marker CAS.
 
 Invalid identifiers raise `SessionIdError`; unsafe paths or symlinks raise
 `WorkspaceSecurityError`; malformed or path-mismatched persisted data raises

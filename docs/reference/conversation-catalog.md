@@ -1,8 +1,11 @@
 # Conversation catalog
 
-> **Availability:** the provider-neutral catalog and filesystem adapter serve
-> the installed TTY lobby's subject metadata. The lobby adds defaults/focus and
-> display handles; `StoryRuntime` does not depend on the catalog.
+> **Availability:** the provider-neutral catalog serves the installed TTY
+> lobby's subject metadata through its startup-selected filesystem or SQLite
+> services bundle. Both adapters remain available through their documented
+> Python imports. The lobby adds defaults/focus and display handles; direct
+> `StoryRuntime` construction does not independently read or activate storage
+> selection.
 
 Key terms: **conversation ID**—an immutable identity scoped to one session;
 **display subject**—the exact stored title; **normalized key**—a derived
@@ -47,7 +50,29 @@ archive(session_id: str, conversation_id: str) -> ConversationMetadata
 unarchive(session_id: str, conversation_id: str) -> ConversationMetadata
 ```
 
-## Exact metadata schema
+The optional adapter implements the same operations and is imported from its
+owning module, not the package facade:
+
+```python
+from story_writing_agents.conversation_storage.sqlite import (
+    SQLiteConversationCatalog,
+)
+
+catalog = SQLiteConversationCatalog(
+    workspace,
+    mutation_coordinator=None,
+    mutation_timeout_seconds=5.0,
+)
+```
+
+Direct constructors do not provision storage. Prefer the same-provenance
+composition flow in the
+[package API](package-api.md#optional-sqlite-conversation-storage) when catalog,
+event-store, and search services are used together. The installed shell obtains
+that complete bundle through the separate
+[next-shell selection workflow](cli.md#conversation-storage-selection).
+
+## Filesystem metadata representation
 
 Each identity is stored at
 `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/metadata.json`:
@@ -75,6 +100,17 @@ A display subject must be a nonblank, strict-UTF-8-encodable string of at most
 trailing, and repeated whitespace is preserved. Normalization applies NFKC,
 case folding, then trims and collapses Unicode whitespace runs to one ASCII
 space. The key is derived, not stored, and does not enforce uniqueness.
+
+## SQLite metadata representation
+
+The optional database stores the same eight public fields in its normalized
+`conversations` table and additionally stores the derived normalized subject.
+Every read verifies that the stored normalized value still equals the exact
+normalization of the display subject. The database path, schema identity, and
+transaction boundary are documented in
+[Persistence](../design/persistence.md#optional-sqlite-conversation-persistence).
+SQLite does not change metadata values, ordering, archive meaning, or catalog
+domain semantics.
 
 The installed `/conversation list [--all] [QUERY]` reads catalog order and
 uses that same normalization for case-insensitive subject substring matching.
@@ -112,8 +148,10 @@ validate UTF-8, schema, values, timestamps, and path ownership. Failures use
 `ConversationNotFoundError`, `ConversationExistsError`, `SessionIdError`,
 `WorkspaceFormatError`, or `WorkspaceSecurityError` as applicable.
 
-Creation is exclusive and never overwrites an identity. Later mutations
-atomically replace only the complete metadata file. The catalog never invokes
-a provider or changes CLI defaults/focus, sessions, transcripts, debates,
-manuscripts, core documents, or agent state. Metadata is plaintext; archive is
-reversible status, not deletion.
+Filesystem creation is exclusive and never overwrites an identity; later
+filesystem mutations atomically replace only the complete metadata file.
+SQLite mutations instead run in one verified database transaction after the
+workspace conversation-storage coordinator is acquired. The catalog never
+invokes a provider or changes CLI defaults/focus, sessions, transcripts,
+debates, manuscripts, core documents, or agent state. Metadata is plaintext;
+archive is reversible status, not deletion.

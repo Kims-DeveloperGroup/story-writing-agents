@@ -95,11 +95,12 @@ Provider; the route and any missing workspace default remain pending in memory.
 Escape or cancellation before confirmed Save leaves configuration bytes
 unchanged, and no configuration value is persisted before Save is confirmed.
 After Save confirmation, Save freshly gates every distinct effective provider
-outside the configuration transaction. Save-time authentication may durably
-establish a missing default before that transaction, and the completed
-post-confirmation default is not rolled back if later Save gating or transaction
-work stops. This `/settings` boundary does not change startup authentication or
-global `/auth`, which retain immediate absent-default durability.
+outside the configuration transaction. Save-time authentication may rebase a
+missing default only in the pending candidate, and that value becomes durable
+only when conversation-storage readiness, parity, and the final guarded
+settings write complete. This `/settings` boundary does not change startup
+authentication or global `/auth`, which retain immediate absent-default
+durability.
 
 Persisted Codex reasoning accepts any forward-compatible lowercase token
 matching `[a-z][a-z0-9_-]{0,31}`. Interactive Effort choices come from the
