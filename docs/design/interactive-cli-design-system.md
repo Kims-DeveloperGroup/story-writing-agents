@@ -875,8 +875,10 @@ mutate an existing provider thread or current identity. The view manages no
 credentials, provider network access, model catalog, provider implementation,
 persona file editing, theme, key binding,
 or automatic save. Authentication can separately persist a missing workspace
-default before route assignment or Save; that completed default remains durable
-if pending settings later cancel.
+default outside Settings. Within Settings, authentication may rebase a missing
+default only in the immutable pending candidate. That value becomes durable
+only through the same guarded complete Save; cancel preserves the prior
+configuration bytes.
 
 The same current/pending labels, choice identity, validation meaning, disabled
 provider meaning, and Save/Cancel outcomes must remain visible in wide, narrow,
