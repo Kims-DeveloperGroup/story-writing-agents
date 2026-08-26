@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import os
 from contextlib import suppress
+from dataclasses import dataclass
 from enum import StrEnum
 from importlib import metadata
 from typing import NoReturn, cast
 
 from .conversation_rag import (
     ConversationRagCollaborators,
+    ConversationRagEmbeddingIdentity,
     ConversationRagError,
     ConversationRagLexicalRetriever,
     ConversationRagOutcome,
+    ConversationRagProviderCandidate,
     ConversationRagProjectionRequest,
     ConversationRagProjectionResult,
     ConversationRagProjectionState,
@@ -35,6 +39,12 @@ from .conversation_rag_store import (
     ConversationRagStoreSnapshot,
     ConversationRagStoreStatus,
 )
+from .conversation_rag_runtime import (
+    CONVERSATION_RAG_RUNTIME_SCHEMA_ID,
+    ConversationRagRuntimeService,
+    ConversationRagRuntimeStateSnapshot,
+)
+from .workspace import Workspace
 
 CONVERSATION_RAG_PROVIDER_ALLOWLIST = ("local",)
 
@@ -144,6 +154,73 @@ def _raise_composition_failure(
     raise ConversationRagCompositionError(failure)
 
 
+def _inspect_adapter_compatibility(
+    provider: object,
+) -> tuple[ConversationRagCompositionFailure | None, object | None]:
+    if type(provider) is not str or provider not in CONVERSATION_RAG_PROVIDER_ALLOWLIST:
+        return (
+            ConversationRagCompositionFailure.PROVIDER_UNSUPPORTED,
+            None,
+        )
+
+    metadata_failure: ConversationRagCompositionFailure | None = None
+    installed_version: str | None = None
+    try:
+        installed_version = metadata.version(_GENERIC_RAG_DISTRIBUTION)
+    except metadata.PackageNotFoundError:
+        metadata_failure = ConversationRagCompositionFailure.DEPENDENCY_MISSING
+    except Exception:  # noqa: BLE001 - sanitize optional metadata failures
+        metadata_failure = ConversationRagCompositionFailure.CAPABILITY_INCOMPATIBLE
+    if metadata_failure is not None:
+        return metadata_failure, None
+    if installed_version != _GENERIC_RAG_VERSION:
+        return ConversationRagCompositionFailure.VERSION_INCOMPATIBLE, None
+
+    import_failure = False
+    adapter_symbols: tuple[object, object] | None = None
+    try:
+        from .generic_rag_adapter import (
+            GenericRagConversationService,
+            inspect_generic_rag_capabilities,
+        )
+
+        adapter_symbols = (
+            GenericRagConversationService,
+            inspect_generic_rag_capabilities,
+        )
+    except Exception:  # noqa: BLE001 - sanitize optional import failures
+        import_failure = True
+    if import_failure or adapter_symbols is None:
+        return (
+            ConversationRagCompositionFailure.CAPABILITY_INCOMPATIBLE,
+            None,
+        )
+
+    service_type, capability_inspector = adapter_symbols
+    capability_failure = False
+    try:
+        snapshot = capability_inspector()  # type: ignore[operator]
+        capability_failure = not snapshot.supports(_GENERIC_RAG_REQUIREMENTS)
+    except Exception:  # noqa: BLE001 - sanitize capability probe failures
+        capability_failure = True
+    if capability_failure:
+        return (
+            ConversationRagCompositionFailure.CAPABILITY_INCOMPATIBLE,
+            None,
+        )
+    return None, service_type
+
+
+def inspect_conversation_rag_compatibility(
+    provider: object,
+    /,
+) -> ConversationRagCompositionFailure | None:
+    """Inspect the fixed optional dependency without constructing a service."""
+
+    failure, _service_type = _inspect_adapter_compatibility(provider)
+    return failure
+
+
 def compose_conversation_rag(
     provider: str,
     collaborators: ConversationRagCollaborators,
@@ -162,51 +239,11 @@ def compose_conversation_rag(
         )
     if type(collaborators) is not ConversationRagCollaborators:
         raise TypeError("collaborators must be exactly ConversationRagCollaborators")
-
-    metadata_failure: ConversationRagCompositionFailure | None = None
-    installed_version: str | None = None
-    try:
-        installed_version = metadata.version(_GENERIC_RAG_DISTRIBUTION)
-    except metadata.PackageNotFoundError:
-        metadata_failure = ConversationRagCompositionFailure.DEPENDENCY_MISSING
-    except Exception:  # noqa: BLE001 - sanitize optional metadata failures
-        metadata_failure = ConversationRagCompositionFailure.CAPABILITY_INCOMPATIBLE
-    if metadata_failure is not None:
-        _raise_composition_failure(metadata_failure)
-    if installed_version != _GENERIC_RAG_VERSION:
+    compatibility_failure, service_type = _inspect_adapter_compatibility(provider)
+    if compatibility_failure is not None or service_type is None:
         _raise_composition_failure(
-            ConversationRagCompositionFailure.VERSION_INCOMPATIBLE
-        )
-
-    import_failure = False
-    adapter_symbols: tuple[object, object] | None = None
-    try:
-        from .generic_rag_adapter import (
-            GenericRagConversationService,
-            inspect_generic_rag_capabilities,
-        )
-
-        adapter_symbols = (
-            GenericRagConversationService,
-            inspect_generic_rag_capabilities,
-        )
-    except Exception:  # noqa: BLE001 - sanitize optional import failures
-        import_failure = True
-    if import_failure or adapter_symbols is None:
-        _raise_composition_failure(
-            ConversationRagCompositionFailure.CAPABILITY_INCOMPATIBLE
-        )
-
-    service_type, capability_inspector = adapter_symbols
-    capability_failure = False
-    try:
-        snapshot = capability_inspector()  # type: ignore[operator]
-        capability_failure = not snapshot.supports(_GENERIC_RAG_REQUIREMENTS)
-    except Exception:  # noqa: BLE001 - sanitize capability probe failures
-        capability_failure = True
-    if capability_failure:
-        _raise_composition_failure(
-            ConversationRagCompositionFailure.CAPABILITY_INCOMPATIBLE
+            compatibility_failure
+            or ConversationRagCompositionFailure.CAPABILITY_INCOMPATIBLE
         )
 
     service: object | None = None
@@ -250,6 +287,7 @@ def _literal_fallback(
 def _status_reason(status: ConversationRagStoreStatus) -> ConversationRagReason:
     return {
         ConversationRagStoreStatus.MISSING: ConversationRagReason.UNAVAILABLE,
+        ConversationRagStoreStatus.READY: ConversationRagReason.NONE,
         ConversationRagStoreStatus.STALE: ConversationRagReason.STALE,
         ConversationRagStoreStatus.CORRUPT: ConversationRagReason.CORRUPT,
         ConversationRagStoreStatus.INCOMPATIBLE: ConversationRagReason.INCOMPATIBLE,
@@ -272,6 +310,51 @@ def _store_failure_reason(
         ),
         ConversationRagStoreFailure.OPERATION_FAILED: ConversationRagReason.FAILED,
     }[failure]
+
+
+class LocalConversationRagRuntimeState:
+    """Adapt one local generation store to the provider-neutral runtime port."""
+
+    __slots__ = ("_embedding", "_store", "_workspace_key")
+
+    def __init__(self, store: ConversationRagGenerationStore, /) -> None:
+        if type(store) is not ConversationRagGenerationStore:
+            raise TypeError("local runtime state requires the exact store type")
+        self._store = store
+        self._workspace_key = os.fspath(store.workspace.root)
+        self._embedding = LocalConversationRagEmbedder().identity
+
+    @property
+    def workspace_key(self) -> str:
+        return self._workspace_key
+
+    @property
+    def embedding(self) -> ConversationRagEmbeddingIdentity:
+        return self._embedding
+
+    @property
+    def store(self) -> ConversationRagGenerationStore:
+        return self._store
+
+    def inspect_projection_state(
+        self,
+        session_id: str,
+        /,
+    ) -> ConversationRagRuntimeStateSnapshot:
+        snapshot = self._store.inspect(
+            session_id,
+            LOCAL_CONVERSATION_RAG_PROVIDER_ID,
+            self._embedding,
+            expected_projection_schema_id=CONVERSATION_RAG_RUNTIME_SCHEMA_ID,
+        )
+        return ConversationRagRuntimeStateSnapshot(
+            session_id=session_id,
+            state=snapshot.state,
+            reason=_status_reason(snapshot.status),
+        )
+
+    def mark_projection_stale(self, session_id: str, /) -> None:
+        self._store.set_status(session_id, ConversationRagStoreStatus.STALE)
 
 
 class LocalConversationRagComposition:
@@ -497,11 +580,72 @@ def compose_local_conversation_rag(
     return LocalConversationRagComposition(store, lexical_retriever)
 
 
+class _EmptyLocalLexicalRetriever:
+    """Explicit empty collaborator because runtime fusion owns literal search."""
+
+    __slots__ = ()
+
+    def search(
+        self,
+        request: ConversationRagRetrievalRequest,
+        /,
+    ) -> tuple[ConversationRagProviderCandidate, ...]:
+        if type(request) is not ConversationRagRetrievalRequest:
+            raise TypeError("local lexical request must use the exact RAG request")
+        return ()
+
+
+@dataclass(frozen=True, slots=True)
+class LocalConversationRagRuntimeComposition:
+    """Expose one concrete runtime service and its explicit local resources."""
+
+    service: ConversationRagRuntimeService
+    store: ConversationRagGenerationStore
+    state: LocalConversationRagRuntimeState
+
+    def __post_init__(self) -> None:
+        if type(self.service) is not ConversationRagRuntimeService:
+            raise TypeError("local runtime service must use the exact type")
+        if type(self.store) is not ConversationRagGenerationStore:
+            raise TypeError("local runtime store must use the exact type")
+        if type(self.state) is not LocalConversationRagRuntimeState:
+            raise TypeError("local runtime state must use the exact type")
+        if self.state.store is not self.store:
+            raise ValueError("local runtime composition crossed its store")
+
+
+def compose_local_conversation_rag_runtime(
+    workspace: Workspace,
+    /,
+    *,
+    automatic_enabled: bool = False,
+) -> LocalConversationRagRuntimeComposition:
+    """Compose one fixed local runtime and retain its disposable store."""
+
+    if not isinstance(workspace, Workspace):
+        raise TypeError("local conversation RAG runtime requires a Workspace")
+    if type(automatic_enabled) is not bool:
+        raise TypeError("automatic conversation RAG must be a boolean")
+    store = ConversationRagGenerationStore(workspace)
+    state = LocalConversationRagRuntimeState(store)
+    low_level = compose_local_conversation_rag(store, _EmptyLocalLexicalRetriever())
+    service = ConversationRagRuntimeService(
+        low_level,
+        state,
+        automatic_enabled=automatic_enabled,
+    )
+    return LocalConversationRagRuntimeComposition(service, store, state)
+
+
 __all__ = [
     "CONVERSATION_RAG_PROVIDER_ALLOWLIST",
     "ConversationRagCompositionError",
     "ConversationRagCompositionFailure",
     "LocalConversationRagComposition",
+    "LocalConversationRagRuntimeComposition",
+    "LocalConversationRagRuntimeState",
     "compose_conversation_rag",
     "compose_local_conversation_rag",
+    "compose_local_conversation_rag_runtime",
+    "inspect_conversation_rag_compatibility",
 ]

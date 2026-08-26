@@ -5,7 +5,9 @@
 > runtime explicit-reference authorization and backend enforcement, plus direct
 > Python conversation archive values, filesystem transfer, and optional SQLite
 > conversation/search storage, provider-free desired selection, and
-> conversation migration.
+> conversation migration. They also cover the optional fixed-local
+> conversation-RAG store and noninteractive lifecycle/authorized-search
+> commands.
 > They do not make either provider, its executable, the workspace, or the
 > terminal trusted.
 > Inline canonical references in provider-bound prompt text are active.
@@ -151,6 +153,41 @@ canonical stores for parity, and write desired configuration. `/settings`
 uses the same storage selection boundary only after its separate provider-auth
 Save gate. The next shell activates the selected ready bundle before provider
 authentication.
+
+<a id="conversation-rag-command-privacy"></a>
+
+## Conversation RAG command privacy
+
+The `story rag` family never authenticates or invokes Codex, Antigravity, or an
+external RAG provider. Runtime provider `local` is a fixed deterministic
+in-process embedder/ranker and performs no network, credential, subprocess, or
+environment discovery. The separate `pip install '.[rag]'` step may need Git,
+network, and repository access to fetch the exact VCS pin; command-time
+compatibility checks do not install or fetch anything.
+
+The command/output boundaries differ by operation:
+
+| Operation | Local reads/writes and exposed output |
+| --- | --- |
+| `status` | Reads configuration, active authoritative conversation metadata/content, and derived metadata under bounded budgets so it can compute checkpoints and counts. It emits only fixed state, compatibility, checkpoints, counts, and rebuild facts. It creates no coordinator lock, RAG path, configuration rewrite, or runtime debug record. |
+| `enable` / `disable` | Read and compare-and-set the complete configuration pair. Reports expose only fixed provider/automatic/compatibility/configuration facts. They do not read conversations or delete derived state. |
+| confirmed `rebuild` | Reads all authorized active complete visible turns for the session and writes plaintext fragments/vectors into the derived generation store. Its report is content-free: only fixed state, checkpoints, aggregate counts, and compatibility/configuration values. |
+| `search` | Reads active conversation authority and derived state, then deliberately writes bounded authoritative excerpt text plus stable session/conversation/turn/event and derived-reference coordinates to standard output. It omits query text, subjects, scores, paths, credentials, provider text, exceptions, and diagnostics. Treat the JSON line, pipes, redirected files, and terminal scrollback as conversation data. |
+| confirmed `purge` | Deletes only validated derived contents for one session and exposes aggregate removed-generation counts. It is not secure erase; backups, process memory, terminal output, filesystem remnants, and independently authoritative conversation data remain outside its guarantee. |
+
+All six operations dispatch before runtime debug-log construction. Their fixed
+failure reports contain no query, excerpt, persisted malformed value, path, or
+exception text. Content-free output is not proof that no sensitive local read
+occurred: status/rebuild inspect authority, and search is intentionally
+content-bearing after authoritative reread.
+
+`conversation_rag_provider` and `conversation_rag_automatic` are plaintext
+configuration facts, not credentials. Automatic use defaults off; the current
+interactive shell does not consume that boolean, and `/settings` RAG controls
+and `/rag QUERY` remain planned. When interactive use is later enabled, agents
+must receive only bounded reauthorized excerpts/citations. Provider fragment
+text and vectors never become authority, and canonical writing-artifact
+references remain an independent authorization path.
 
 <a id="sqlite-installation-boundary"></a>
 

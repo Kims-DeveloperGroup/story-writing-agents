@@ -48,10 +48,13 @@ from story_writing_agents.conversation_rag_runtime import (
     CONVERSATION_RAG_RUNTIME_POLICY,
     CONVERSATION_RAG_RUNTIME_SCHEMA_ID,
     ConversationRagRuntimeError,
+    ConversationRagRuntimeInspection,
+    ConversationRagRuntimeInspectionStatus,
     ConversationRagRuntimePolicy,
     ConversationRagRuntimeService,
     ConversationRagRuntimeState,
     ConversationRagRuntimeStateSnapshot,
+    inspect_authorized_conversation_rag,
 )
 from story_writing_agents.conversation_retrieval import (
     ConversationRagContext,
@@ -615,6 +618,18 @@ class ConversationRagRuntimeTests(unittest.TestCase):
                 "rebuild",
             ),
         )
+        self.assertEqual(
+            tuple(
+                inspect.signature(
+                    ConversationRagRuntimeService.search_authorized
+                ).parameters
+            ),
+            ("self", "conversation_storage_services", "session_id", "query"),
+        )
+        self.assertEqual(
+            tuple(inspect.signature(inspect_authorized_conversation_rag).parameters),
+            ("conversation_storage_services", "state_port", "session_id"),
+        )
         self.assertFalse(self.runtime.automatic_enabled)
 
         missing = ConversationRagRuntimeStateSnapshot(
@@ -710,16 +725,15 @@ class ConversationRagRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(result.checkpoint.entries[0].document, document.identity)
         self.assertEqual(self.state.reason, ConversationRagReason.NONE)
-        self.assertEqual(self.coordinator.timeouts, [30.0, 30.0])
+        self.assertEqual(self.coordinator.timeouts, [3600.0])
         self.assertEqual(self.coordinator.active_count, 0)
-        self.assertEqual(self.low_level.provider_active_states, [False])
+        self.assertEqual(self.low_level.provider_active_states, [True])
 
         restarted = ConversationRagRuntimeService(self.low_level, self.state)
-        context = restarted.preflight(
+        context = restarted.search_authorized(
             self.services,
             _SESSION,
-            "current turn",
-            forced_query="Café",
+            "Café",
         )
         self.assertIsInstance(context, ConversationRagContext)
         assert context is not None
@@ -727,8 +741,241 @@ class ConversationRagRuntimeTests(unittest.TestCase):
         self.assertEqual(tuple(item.citation_id for item in context.excerpts), ("g1",))
         self.assertEqual(context.excerpts[0].content, "Café 🙂")
         self.assertEqual(len(self.low_level.semantic_calls), 1)
-        self.assertEqual(self.coordinator.timeouts, [30.0, 30.0, 30.0])
-        self.assertEqual(self.low_level.provider_active_states, [False, False])
+        self.assertEqual(self.coordinator.timeouts, [3600.0, 30.0])
+        self.assertEqual(self.low_level.provider_active_states, [True, False])
+
+    def test_read_only_inspection_is_namespace_byte_and_coordinator_free(self) -> None:
+        workspace = initialized_workspace(self)
+        raw = compose_filesystem_conversation_storage(workspace)
+
+        class ForbiddenCoordinator:
+            workspace_key = raw.provenance.workspace_key
+
+            def borrow(self, *, timeout_seconds: float):
+                del timeout_seconds
+                raise AssertionError("read-only inspection borrowed the coordinator")
+
+        services = _with_coordinator(raw, ForbiddenCoordinator())
+        store = rag_store.ConversationRagGenerationStore(workspace)
+        state = rag_composition.LocalConversationRagRuntimeState(store)
+        lock = workspace.root / "config/.conversation_storage.lock"
+        rag_root = workspace.root / "agent_states/orchestrator_state/conversation_rag"
+
+        def snapshot() -> tuple[tuple[str, str, bytes | None], ...]:
+            observed: list[tuple[str, str, bytes | None]] = []
+            for path in sorted(workspace.root.rglob("*")):
+                relative = path.relative_to(workspace.root).as_posix()
+                observed.append(
+                    (relative, "directory", None)
+                    if path.is_dir()
+                    else (relative, "file", path.read_bytes())
+                )
+            return tuple(observed)
+
+        self.assertFalse(lock.exists())
+        self.assertFalse(rag_root.exists())
+        before = snapshot()
+        first = inspect_authorized_conversation_rag(services, state, _SESSION)
+        second = inspect_authorized_conversation_rag(services, state, _SESSION)
+        self.assertIsInstance(first, ConversationRagRuntimeInspection)
+        self.assertEqual(first, second)
+        self.assertIs(first.status, ConversationRagRuntimeInspectionStatus.MISSING)
+        self.assertEqual(
+            (
+                first.authoritative_conversations,
+                first.authoritative_events,
+                first.authoritative_documents,
+                first.authoritative_source_utf8_bytes,
+                first.indexed_documents,
+                first.rebuild_required,
+            ),
+            (0, 0, 0, 0, 0, True),
+        )
+        self.assertEqual(snapshot(), before)
+        self.assertFalse(lock.exists())
+        self.assertFalse(rag_root.exists())
+        for secret in ("PRIVATE_SOURCE", str(workspace.root)):
+            self.assertNotIn(secret, repr(first))
+
+    def test_read_only_inspection_status_matrix_and_complete_turn_counts(self) -> None:
+        active = self._conversation("Counted subject")
+        self._append(active, "turn_complete", user="question", reply="answer")
+        self._append(active, "turn_incomplete", user="pending", reply=None)
+        archived = self._conversation("Archived subject")
+        self._append(archived, "turn_archived", user="hidden", reply="hidden reply")
+        self.services.catalog.archive(_SESSION, archived)
+        corrupt = ConversationRagProjectionState(
+            ConversationRagProjectionStateAvailability.CORRUPT,
+            None,
+        )
+        cases = (
+            (
+                ConversationRagReason.UNAVAILABLE,
+                _missing_state(),
+                ConversationRagRuntimeInspectionStatus.MISSING,
+            ),
+            (
+                ConversationRagReason.STALE,
+                _missing_state(),
+                ConversationRagRuntimeInspectionStatus.STALE,
+            ),
+            (
+                ConversationRagReason.FAILED,
+                _missing_state(),
+                ConversationRagRuntimeInspectionStatus.FAILED,
+            ),
+            (
+                ConversationRagReason.CORRUPT,
+                corrupt,
+                ConversationRagRuntimeInspectionStatus.CORRUPT,
+            ),
+            (
+                ConversationRagReason.INCOMPATIBLE,
+                corrupt,
+                ConversationRagRuntimeInspectionStatus.INCOMPATIBLE,
+            ),
+        )
+        for reason, state, expected in cases:
+            with self.subTest(reason=reason):
+                self.state.reason = reason
+                self.state.state = state
+                observed = inspect_authorized_conversation_rag(
+                    self.services, self.state, _SESSION
+                )
+                self.assertIs(observed.status, expected)
+                self.assertTrue(observed.rebuild_required)
+                self.assertEqual(
+                    (
+                        observed.authoritative_conversations,
+                        observed.authoritative_events,
+                        observed.authoritative_documents,
+                    ),
+                    (1, 3, 1),
+                )
+        self.runtime.project_authorized(self.services, _SESSION, rebuild=True)
+        ready = inspect_authorized_conversation_rag(
+            self.services, self.state, _SESSION
+        )
+        self.assertIs(ready.status, ConversationRagRuntimeInspectionStatus.READY)
+        self.assertFalse(ready.rebuild_required)
+        self.assertEqual(ready.indexed_documents, 1)
+
+    def test_read_only_inspection_detects_catalog_event_and_state_drift(self) -> None:
+        conversation = self._conversation("Drift sentinel")
+        self._append(conversation, "turn_one", user="question", reply="answer")
+
+        class CatalogProxy:
+            def __init__(proxy, mutate: Callable[[], None]) -> None:
+                proxy.calls = 0
+                proxy.mutate = mutate
+
+            def list(proxy, *args, **kwargs):  # type: ignore[no-untyped-def]
+                value = self.services.catalog.list(*args, **kwargs)
+                proxy.calls += 1
+                if proxy.calls == 1:
+                    proxy.mutate()
+                return value
+
+            def __getattr__(proxy, name: str) -> object:
+                return getattr(self.services.catalog, name)
+
+        class EventProxy:
+            def __init__(proxy) -> None:
+                proxy.calls = 0
+
+            def read(proxy, *args, **kwargs):  # type: ignore[no-untyped-def]
+                value = self.services.event_store.read(*args, **kwargs)
+                proxy.calls += 1
+                if proxy.calls == 1:
+                    self.services.event_store.append(
+                        ConversationEventAppend(
+                            session_id=_SESSION,
+                            conversation_id=conversation,
+                            turn_id="turn_drift",
+                            sender="user",
+                            recipient=PLOT_ARCHITECT,
+                            kind=ConversationEventKind.USER_MESSAGE,
+                            content="PRIVATE_EVENT_DRIFT",
+                        )
+                    )
+                return value
+
+            def __getattr__(proxy, name: str) -> object:
+                return getattr(self.services.event_store, name)
+
+        def replaced(*, catalog: object | None = None, events: object | None = None):
+            return ConversationStorageServices(
+                catalog_binding=ConversationStorageComponentBinding(
+                    self.services.provenance,
+                    self.services.catalog if catalog is None else catalog,
+                ),
+                event_store_binding=ConversationStorageComponentBinding(
+                    self.services.provenance,
+                    self.services.event_store if events is None else events,
+                ),
+                search_binding=self.services.search_binding,
+                mutation_coordinator=self.services.mutation_coordinator,
+            )
+
+        drifts = (
+            (
+                "rename",
+                replaced(
+                    catalog=CatalogProxy(
+                        lambda: self.services.catalog.rename(
+                            _SESSION, conversation, "Renamed during inspection"
+                        )
+                    )
+                ),
+            ),
+            ("event", replaced(events=EventProxy())),
+            (
+                "archive",
+                replaced(
+                    catalog=CatalogProxy(
+                        lambda: self.services.catalog.archive(_SESSION, conversation)
+                    )
+                ),
+            ),
+        )
+        for label, services in drifts:
+            with self.subTest(label=label), self.assertRaises(
+                ConversationRagRuntimeError
+            ) as caught:
+                inspect_authorized_conversation_rag(services, self.state, _SESSION)
+            self.assertEqual(
+                str(caught.exception), "conversation RAG runtime operation failed"
+            )
+            self.assertNotIn("PRIVATE", repr(caught.exception))
+
+        class DriftingState(_StatePort):
+            def inspect_projection_state(
+                drifting, session_id: str, /
+            ) -> ConversationRagRuntimeStateSnapshot:
+                observed = super().inspect_projection_state(session_id)
+                if len(drifting.inspections) == 1:
+                    drifting.reason = ConversationRagReason.STALE
+                return observed
+
+        drifting_state = DriftingState(self.services.provenance.workspace_key)
+        with self.assertRaises(ConversationRagRuntimeError):
+            inspect_authorized_conversation_rag(
+                self.services, drifting_state, _SESSION
+            )
+        for control in (KeyboardInterrupt(), SystemExit("inspection control")):
+            with (
+                self.subTest(control=type(control).__name__),
+                mock.patch.object(
+                    self.state,
+                    "inspect_projection_state",
+                    side_effect=control,
+                ),
+                self.assertRaises(type(control)),
+            ):
+                inspect_authorized_conversation_rag(
+                    self.services, self.state, _SESSION
+                )
+        self.assertEqual(self.coordinator.active_count, 0)
 
 
 class ConversationRagOrchestratorTests(unittest.IsolatedAsyncioTestCase):

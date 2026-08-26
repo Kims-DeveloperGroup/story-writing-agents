@@ -58,10 +58,13 @@ rehash
 That is the RAG-free base installation. Approved internal, non-redistributing
 evaluation can use the optional direct Python boundary, deterministic local
 provider, disposable generation store, and programmatic runtime/agent
-integration. Explicit composition requires the pinned `rag` extra plus an
-application-owned runtime state port; commands and settings remain unavailable.
+integration. Noninteractive `story rag` status, opt-in, rebuild, cited search,
+disable, and derived-only purge workflows are available; enabling or using the
+local provider requires the pinned `rag` extra, and installation alone never
+opts a workspace in. Interactive `/settings` RAG controls, automatic shell-turn
+wiring, and one-turn `/rag QUERY` remain planned.
 See [Optional conversation RAG](docs/guides/conversation-rag.md) for setup,
-trust/persistence limits, current agent use, and the planned user flow.
+commands, trust/persistence limits, current agent use, and the remaining plan.
 
 `story` and `story-writing-agents` are exact aliases. Smoke uses synthetic data
 without Codex or Antigravity, credential reads, a terminal, subprocesses, apps,
@@ -130,7 +133,7 @@ story run --output part-01/opening.md --prompt 'Draft the opening.'
 - [Workspace guide](docs/guides/workspaces.md) explains the editable project files.
 - [Writing artifacts](docs/reference/writing-artifacts.md) separates current reference sources from publication identity, provenance, and recovery.
 - [Conversation archives](docs/reference/conversation-archives.md) documents canonical conversation-only bytes and privileged filesystem transfer.
-- [Optional conversation RAG](docs/guides/conversation-rag.md) covers the direct local provider/store, programmatic runtime integration, and planned user commands/settings.
+- [Optional conversation RAG](docs/guides/conversation-rag.md) covers the local provider/store, noninteractive lifecycle and cited-search commands, programmatic runtime integration, and planned interactive controls.
 - [Antigravity guide](docs/guides/antigravity.md) covers `agy` setup, authentication, routing, safety, sessions, and provider-free verification.
 - [Story sessions](docs/guides/story-sessions.md) shows shell management, conversation reads, retrieval, and consensus.
 - [Session lifecycle](docs/design/session-lifecycle.md) maps internal state to commands, output, errors, and next actions.
@@ -155,7 +158,9 @@ The optional conversation RAG contracts, deterministic local provider,
 identity-bound generation store, exact generic adapter, composition, and
 provider/store-neutral runtime service are direct-module APIs and are not
 package-root exports. An application can inject the runtime service into
-`StoryRuntime`; RAG commands and `/settings` selection remain deferred. See
+`StoryRuntime`; the installed CLI also exposes explicit local lifecycle and
+cited-search commands. `/settings` selection, automatic shell-turn wiring, and
+one-turn `/rag QUERY` remain deferred. See
 the [RAG package boundary](docs/reference/package-api.md#optional-conversation-rag-boundary).
 
 Canonical conversation archive values and lease-bound filesystem export/import
@@ -237,14 +242,15 @@ See the [CLI contract](docs/reference/cli.md#conversation-storage-migration).
   the next shell. SQLite host installation requires explicit confirmation, and
   startup never installs or provisions it. Migration remains a separate
   provider-free copy/parity workflow over two ready same-workspace stores and
-  never activates or deletes one. There is no live switch, dual write, MySQL
-  adapter, or shell RAG integration. The optional direct Python RAG boundary
-  now has a deterministic local provider, separate disposable generation store,
-  and authorized programmatic scheduling/reread/citation path, but no commands
-  or settings yet. It consumes a complete filesystem or SQLite authority bundle
-  without coupling derived state to either backend. The derived FTS5 companion
-  does not change readiness, exact literal results, migration parity, or
-  selection.
+  never activates or deletes one. There is no live switch, dual write, or MySQL
+  adapter. Optional local conversation RAG is disabled by
+  default and has explicit provider-free status plus opt-in, rebuild, cited
+  search, disable, and derived-only purge commands. It consumes the active or
+  freshly activated complete filesystem/SQLite authority bundle without
+  coupling derived state to either backend. Interactive `/settings` RAG fields,
+  automatic shell-turn wiring, and `/rag QUERY` are not implemented yet. The
+  derived FTS5 companion does not change readiness, exact literal results,
+  migration parity, or selection.
 - Smoke's explicit workspace is not read-only and retains bounded plaintext
   diagnostics when they can be written; abrupt termination can interrupt
   cleanup. A pass does not validate provider/model, terminal behavior,

@@ -567,6 +567,8 @@ class SettingsDefaultPersistenceTests(SettingsTestCase):
                     "antigravity_effort": None,
                     "default_backend": "codex",
                     "conversation_storage_backend": "filesystem",
+                    "conversation_rag_automatic": False,
+                    "conversation_rag_provider": None,
                 }
             ),
         )
@@ -717,6 +719,8 @@ class SettingsPersistenceTests(SettingsTestCase):
                     "antigravity_effort": None,
                     "default_backend": None,
                     "conversation_storage_backend": "filesystem",
+                    "conversation_rag_automatic": False,
+                    "conversation_rag_provider": None,
                 }
             ),
         )
@@ -905,6 +909,8 @@ class SettingsPersistenceTests(SettingsTestCase):
                     "antigravity_effort": None,
                     "default_backend": None,
                     "conversation_storage_backend": "filesystem",
+                    "conversation_rag_automatic": False,
+                    "conversation_rag_provider": None,
                 }
             ),
         )

@@ -100,12 +100,14 @@ ordinal sequence. `StoryRuntime` owns those values and allocates each
 invocation with attempt `1`; another agent, phase, replacement, or operation
 cannot reuse prior evidence.
 
-Construction first validates the complete nine-field
+Construction first validates the complete eleven-field
 `config/system_defaults.json` object and closed per-agent objects in
 `config/agent_configs.json`, even when non-null constructor model/effort values
 would override persisted fields. Optional fields and canonical agents may be
 absent; nullable routes and `default_backend` still produce a complete roster
-snapshot through the final Codex fallback. It then snapshots
+snapshot through the final Codex fallback. The independent conversation-storage
+and conversation-RAG defaults are validated with the same closed object but do
+not alter backend routing. It then snapshots
 provider routes and resolved per-agent model/effort values for that backend's
 lifetime. Editing either file does not refresh an active backend, existing
 binding, provider thread, fingerprint, or request payload; the next backend

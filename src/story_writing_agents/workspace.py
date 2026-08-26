@@ -129,6 +129,8 @@ DEFAULT_SYSTEM_CONFIG: dict[str, Any] = {
     "antigravity_effort": None,
     "default_backend": None,
     "conversation_storage_backend": "filesystem",
+    "conversation_rag_provider": None,
+    "conversation_rag_automatic": False,
 }
 
 DEFAULT_AGENT_CONFIGS: dict[str, dict[str, str | None]] = {

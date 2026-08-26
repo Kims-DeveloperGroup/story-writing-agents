@@ -5,7 +5,9 @@
 > the optional conversation-RAG runtime service and force a preflight query.
 > Inline canonical references in either form are captured by `StoryRuntime` and
 > enforced through the optional `BoundAgent` reference coordinator before the
-> unchanged retrieval loop. RAG commands and `/settings` selection are deferred.
+> unchanged retrieval loop. Noninteractive `story rag search` exposes the same
+> bounded authorized excerpt/citation boundary without an agent. `/settings`,
+> automatic shell wiring, and `/rag QUERY` remain deferred.
 
 Key terms: **retrieval turn**—one message, action loop, and answer; **action**—a
 correlated provider request; **observation**—authorized untrusted story data;
