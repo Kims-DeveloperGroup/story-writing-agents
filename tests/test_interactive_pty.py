@@ -3193,7 +3193,9 @@ print(
             b"Provider authentication",
             maxsplit=1,
         )[0]
-        self.assertTrue(raw_before_auth.startswith(b"\x1b[1;36mS\x1b[0m"))
+        welcome_start = b"\x1b[1;36mS\x1b[0m"
+        self.assertIn(welcome_start, raw_before_auth)
+        self.assertGreater(raw_before_auth.index(welcome_start), 0)
         for sgr in (
             b"\x1b[1;36m",
             b"\x1b[1;35m",
@@ -3225,6 +3227,69 @@ print(
             process.final_terminal_attributes,
             process.original_terminal_attributes,
         )
+
+    def test_delayed_startup_storage_and_context_each_animate_until_ready(
+        self,
+    ) -> None:
+        """Keep startup visibly active before welcome and lobby rendering."""
+
+        source = r'''
+import time
+
+from story_writing_agents import cli
+
+
+activate = cli.activate_configured_conversation_storage
+load_context = cli.load_cli_context
+
+
+def delayed_activate(workspace):
+    time.sleep(0.36)
+    return activate(workspace)
+
+
+def delayed_context(workspace):
+    time.sleep(0.36)
+    return load_context(workspace)
+
+
+cli.activate_configured_conversation_storage = delayed_activate
+cli.load_cli_context = delayed_context
+raise SystemExit(cli.main([]))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=64,
+        )
+        output = process.wait_for_text("story[lobby]> ")
+        welcome = "Next: checking Codex + Antigravity access."
+        welcome_position = output.index(welcome)
+        first_positions = tuple(
+            output.index(frame) for frame in _VISIBLE_PROGRESS_FRAMES
+        )
+        self.assertEqual(first_positions, tuple(sorted(first_positions)))
+        self.assertLess(max(first_positions), welcome_position)
+
+        after_welcome = output[welcome_position + len(welcome) :]
+        second_positions = tuple(
+            after_welcome.index(frame) for frame in _VISIBLE_PROGRESS_FRAMES
+        )
+        self.assertEqual(second_positions, tuple(sorted(second_positions)))
+        self.assertLess(
+            max(second_positions),
+            after_welcome.index("story[lobby]> "),
+        )
+        self.assertGreaterEqual(output.count("\r\x1b[K"), 2)
+        self.assertNotIn(f"{_VISIBLE_PROGRESS_FRAMES[0]}\n", output)
+
+        process.send_text("/quit\n\n")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertFalse(self.provider_log.exists())
 
     def test_startup_welcome_scales_wide_and_narrow_without_provider_leakage(
         self,

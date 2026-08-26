@@ -432,10 +432,13 @@ one `Record`, then the phase status record. When phase messages exist, the
 controller also writes one bounded `Panel` titled `Agent saying`, where each
 message includes the sender label and its phase/revision metadata.
 
-### Advisory, consensus, and Settings progress
+### Startup, advisory, consensus, and Settings progress
 
-The controller brackets advisory and consensus runtime awaitables, plus each
-Settings Provider/Model/Effort option read, with the unlisted progress adapters.
+The CLI brackets conversation-storage activation before the welcome and one
+continuous authenticated CLI-context/backend/controller preparation span before
+the lobby with the unlisted progress adapter. The controller brackets advisory
+and consensus runtime awaitables, plus each Settings Provider/Model/Effort
+option read, through the same terminal-owned lifecycle.
 On a capable raw stream, the sole driver renders a text-free eight-cell
 block-shade shimmer that travels out and back, with a fixed bold color cycle on
 ANSI terminals. It clears the complete row around
