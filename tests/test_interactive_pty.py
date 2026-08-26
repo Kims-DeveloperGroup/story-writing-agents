@@ -71,6 +71,7 @@ import json
 import os
 import signal
 import sys
+import time
 from pathlib import Path
 
 
@@ -78,6 +79,14 @@ LOG_PATH = Path(os.environ["STORY_PTY_CODEX_LOG"])
 CONTROL_PATH = Path(os.environ["STORY_PTY_CODEX_CONTROL"])
 AUTH_LOG_PATH = Path(os.environ["STORY_PTY_AUTH_LOG"])
 AUTH_STATE_PATH = Path(os.environ["STORY_PTY_AUTH_STATE"])
+
+
+def delay_settings_option_read():
+    """Delay only after the host test marks Settings option reads active."""
+
+    marker = os.environ.get("STORY_PTY_OPTION_DELAY_MARKER")
+    if marker and Path(marker).is_file():
+        time.sleep(float(os.environ["STORY_PTY_OPTION_DELAY_SECONDS"]))
 
 
 def append_record(value, *, path=LOG_PATH):
@@ -123,6 +132,7 @@ signal.signal(signal.SIGTERM, terminate)
 
 argv = sys.argv[1:]
 if argv == ["debug", "models", "--bundled"]:
+    delay_settings_option_read()
     sys.stdout.write(
         json.dumps(
             {
@@ -166,6 +176,7 @@ if argv in (["login", "status"], ["login"]):
         path=AUTH_LOG_PATH,
     )
     if operation == "probe":
+        delay_settings_option_read()
         raise SystemExit(
             0
             if state["codex"] == "authenticated"
@@ -312,11 +323,20 @@ import json
 import os
 import signal
 import sys
+import time
 from pathlib import Path
 
 
 AUTH_LOG_PATH = Path(os.environ["STORY_PTY_AUTH_LOG"])
 AUTH_STATE_PATH = Path(os.environ["STORY_PTY_AUTH_STATE"])
+
+
+def delay_settings_option_read():
+    """Delay only after the host test marks Settings option reads active."""
+
+    marker = os.environ.get("STORY_PTY_OPTION_DELAY_MARKER")
+    if marker and Path(marker).is_file():
+        time.sleep(float(os.environ["STORY_PTY_OPTION_DELAY_SECONDS"]))
 
 
 def append_record(value):
@@ -366,6 +386,7 @@ append_record(
     }
 )
 if operation == "probe":
+    delay_settings_option_read()
     sys.stdout.write(
         "agy-pty  Antigravity PTY\n"
         "agy-pty-next  Antigravity PTY Next\n"
@@ -2512,6 +2533,95 @@ print(
         self.assertEqual(agent["codex_model"], "gpt-pty")
         self.assertEqual(agent["codex_reasoning_effort"], "future_2")
         self.assertFalse(self.provider_log.exists())
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
+    def test_settings_delayed_option_reads_animate_until_each_picker_is_ready(
+        self,
+    ) -> None:
+        """Replace the blank Provider/Model/Effort interval with progress."""
+
+        delay_marker = self.temporary_root / "delay-settings-options"
+        process = self._spawn_cli(
+            (),
+            environment_overrides={
+                "TERM": "xterm-256color",
+                "STORY_PTY_OPTION_DELAY_MARKER": str(delay_marker),
+                "STORY_PTY_OPTION_DELAY_SECONDS": "0.36",
+            },
+            terminal_columns=48,
+        )
+        process.wait_for_text("story[lobby]> ")
+        delay_marker.write_text("ready", encoding="utf-8")
+
+        process.send_text("/settings\n\n")
+        process.wait_for_text("Choose a setting to edit, save, or cancel.")
+        process.send_text(("\x1b[B" * 4) + "\n")
+        process.wait_for_text("Select an agent to configure")
+        process.send_text("\x1b[B\n")
+        process.wait_for_text("Choose a provider, model, or effort setting")
+
+        def open_delayed_picker(
+            navigation: str,
+            expected_picker: str,
+        ) -> str:
+            mark = process.output_mark()
+            process.send_text(navigation)
+            output = process.wait_for_text(expected_picker, after=mark)
+            positions = tuple(
+                output.index(frame) for frame in ("◐", "◓", "◑", "◒")
+            )
+            self.assertEqual(positions, tuple(sorted(positions)))
+            self.assertLess(max(positions), output.index(expected_picker))
+            self.assertIn("\r\x1b[K", output)
+            self.assertNotRegex(output, r"[◐◓◑◒]\n")
+            return output
+
+        provider = open_delayed_picker(
+            "\n",
+            "Provider [Plot & Structure Architect]",
+        )
+        self.assertIn("Codex", provider)
+        return_mark = process.output_mark()
+        process.send_text("\x1b")
+        process.wait_for_text(
+            "Agent settings [Plot & Structure Architect]",
+            after=return_mark,
+        )
+
+        model = open_delayed_picker("\x1b[B\n", "GPT PTY")
+        self.assertIn("Model [Plot & Structure Architect", model)
+        return_mark = process.output_mark()
+        process.send_text("\x1b")
+        process.wait_for_text(
+            "Agent settings [Plot & Structure Architect]",
+            after=return_mark,
+        )
+
+        effort = open_delayed_picker(
+            "\x1b[B\n",
+            "Effort [Plot & Structure Architect",
+        )
+        self.assertIn("Effort [Plot & Structure Architect", effort)
+        return_mark = process.output_mark()
+        process.send_text("\x1b")
+        process.wait_for_text(
+            "Agent settings [Plot & Structure Architect]",
+            after=return_mark,
+        )
+        return_mark = process.output_mark()
+        process.send_text("\x1b")
+        process.wait_for_text("Agents [focused] [open]", after=return_mark)
+        return_mark = process.output_mark()
+        process.send_text("\x1b")
+        process.wait_for_text("Settings [focused] [open]", after=return_mark)
+        return_mark = process.output_mark()
+        process.send_text("\x1b")
+        process.wait_for_text("story[lobby]> ", after=return_mark)
+        process.send_text("/quit\n\n")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(
             process.final_terminal_attributes,
             process.original_terminal_attributes,
