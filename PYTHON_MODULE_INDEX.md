@@ -1117,25 +1117,30 @@ every intermediate arrow. The current runtime graph is acyclic.
   paths; and edit only the active provider's values without discarding inactive
   provider values or auto-persisting model defaults. Codex effort choices come
   from the exact pending effective model, while Antigravity effort choices stay
-  globally low, medium, and high without slug inference. The summary projection
-  gives every settings value editor pending, not-saved, and top-level Save
-  guidance. On every top-level read, structural inequality between the pending
-  configuration and opening baseline adds `(*Required)` to the Save label and
-  retains the existing save-required warning notice; both are absent initially
-  and after a complete revert, while the notice remains absent from nested
-  editors and Save/Cancel confirmations. The projection
-  names both providers' model/effort
-  rows, so changed-only confirmations can identify changes to either without
-  changing the active backend or runtime snapshot. Editors contain no repeated
-  Current/Pending context panel. Explicit Save uses one selectable YES/NO
+  globally low, medium, and high without slug inference. The settings flow
+  gives every value editor pending, not-saved, and top-level Save guidance. One
+  private ordered settings projection supplies root Current/Pending
+  descriptions, the nested Agents pending-change count, and changed-only
+  confirmation fields in stable settings and roster order. On every top-level
+  read, structural inequality between the pending configuration and opening
+  baseline adds `(*Required)` to the Save label and retains the existing
+  save-required warning notice; both are absent initially and after a complete
+  revert, while the notice remains absent from nested editors and Save/Cancel
+  confirmations. The shared projection names both providers' model/effort rows,
+  so root visibility and changed-only confirmations identify pending changes
+  without changing the active backend or runtime snapshot. Editors contain no
+  repeated Current/Pending context panel. Explicit Save uses one selectable YES/NO
   confirmation whose preceding context contains only changed Current/Pending
   properties in stable settings and roster order; each changed value has an
   explicit text cue and warning role, and an unchanged candidate contains only
   an explicit no-changes notice without empty sections. Explicit Cancel and
   root Settings Escape share one action: an unchanged candidate exits
   immediately, while a structurally changed candidate uses the same selectable
-  confirmation context. Confirmation NO or nested Escape returns to the
-  settings menu, while Ctrl-C or EOF preserves whole-flow cancellation.
+  confirmation context. Any whole-flow cancellation is silent for a clean
+  candidate and emits exactly one discard report for a dirty candidate;
+  persistence remains exclusive to Save. Confirmation NO or nested Escape
+  returns to the settings menu, while Ctrl-C or EOF preserves whole-flow
+  cancellation.
   Provider-bound routes pass the submitted text
   unchanged to `StoryRuntime`; reference UI therefore emits only ordinary
   `${path}` or `${path}#Lx-Ly` tokens for the existing runtime parser and never

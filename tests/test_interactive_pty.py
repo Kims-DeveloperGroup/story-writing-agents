@@ -2179,6 +2179,73 @@ print(
             line.original_terminal_attributes,
         )
 
+    def test_settings_rounds_prefill_double_enter_edit_and_discard_on_pty(
+        self,
+    ) -> None:
+        """Keep, re-enter, edit, and discard seeded rounds on one real PTY."""
+
+        process = self._spawn_cli(
+            (),
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=42,
+            decorative_color=True,
+        )
+        process.wait_for_text("story[lobby]> ")
+        before = _durable_tree(self.workspace.root)
+        mark = process.output_mark()
+        process.send_text("/settings\n\n")
+        process.wait_for_text("Settings [focused] [open]", after=mark)
+        process.send_text(("\x1b[B" * 2) + "\n")
+        opened = process.wait_for_text("Current value", after=mark)
+        compact_opened = "".join(
+            re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", opened).split()
+        )
+        self.assertIn("Currentvalue:1", compact_opened)
+        self.assertIn("Maximumdebaterounds", compact_opened)
+
+        first_enter = process.output_mark()
+        process.send_text("\n")
+        process.wait_for_text("Current value", after=first_enter)
+        second_enter = process.output_mark()
+        process.send_text("\n")
+        process.wait_for_text("Settings [focused] [open]", after=second_enter)
+
+        edit_mark = process.output_mark()
+        process.send_text("\n")
+        process.wait_for_text("Current value", after=edit_mark)
+        process.send_text("\x7f2\n")
+        process.wait_for_text(
+            "Current value: 2",
+            after=edit_mark,
+        )
+        process.send_text("\x1b")
+        returned = process.wait_for_text("[save required]", after=edit_mark)
+        compact_returned = "".join(
+            re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", returned).split()
+        )
+        self.assertIn("Maximumdebaterounds—Pending:2", compact_returned)
+        self.assertIn("ChooseSavetopersistpendingchanges", compact_returned)
+
+        cancel_mark = process.output_mark()
+        process.send_text("\x1b")
+        process.wait_for_text("Cancel settings?", after=cancel_mark)
+        process.send_text("\n")
+        discarded = process.wait_for_text("story[lobby]> ", after=cancel_mark)
+        self.assertEqual(
+            "".join(discarded.split()).count(
+                "[cancelled]Pendingchangesdiscarded."
+            ),
+            1,
+        )
+        process.send_text("/quit\n\n")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
     def test_settings_ansi_picker_save_history_isolation_and_restore_repeatedly(
         self,
     ) -> None:
@@ -2187,6 +2254,9 @@ print(
         expected_languages = ("EN", "JA", "ZH")
         for attempt, expected_language in enumerate(expected_languages):
             with self.subTest(attempt=attempt):
+                current_language = (
+                    "KO" if attempt == 0 else expected_languages[attempt - 1]
+                )
                 process = self._spawn_cli(
                     (),
                     environment_overrides={"TERM": "xterm-256color"},
@@ -2202,6 +2272,18 @@ print(
                 )
                 self.assertIn("Settings [focused] [open]", opened)
                 self.assertIn("[highlighted] Language", opened)
+                compact_opened = "".join(
+                    re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", opened).split()
+                )
+                self.assertIn(
+                    f"Language—Current:{current_language}",
+                    compact_opened,
+                )
+                self.assertIn(
+                    "Persona—Current:default_kim_eun_hee",
+                    compact_opened,
+                )
+                self.assertIn("Maximumdebaterounds—Current:1", compact_opened)
                 self.assertIn(
                     b"\x1b[35mSettings [focused] [open] >\x1b[0m",
                     process.raw_bytes,
@@ -2249,13 +2331,22 @@ print(
                     bytes(process.raw_bytes[language_mark:]),
                 )
                 self.assertIn(
-                    "Pendingchangesareinmemoryonlyandarenotsaved."
-                    "ChooseSavetopersistthem.",
+                    "ChooseSavetopersistpendingchanges",
                     "".join(
                         re.sub(
                             r"\x1b\[[0-9;]*[A-Za-z]",
                             "",
                             process.normalized_text,
+                        ).split()
+                    ),
+                )
+                self.assertIn(
+                    f"Language—Pending:{expected_language}",
+                    "".join(
+                        re.sub(
+                            r"\x1b\[[0-9;]*[A-Za-z]",
+                            "",
+                            returned_settings,
                         ).split()
                     ),
                 )
@@ -2452,9 +2543,12 @@ print(
         self.assertIn("[save required]", returned_settings)
         self.assertIn("Save (*Required)", returned_settings)
         self.assertIn(
-            "Pendingchangesareinmemoryonlyandarenotsaved."
-            "ChooseSavetopersistthem.",
+            "ChooseSavetopersistpendingchanges",
             "".join(process.normalized_text.split()),
+        )
+        self.assertIn(
+            "Pendingchangeswillbediscarded.",
+            "".join(returned_settings.split()),
         )
         cancelled_mark = process.output_mark()
         process.send_text("\x1b")
@@ -2467,8 +2561,16 @@ print(
             r"\x1b\[(?:0|1|3[1-7])m",
         )
         process.send_text("\n")
-        process.wait_for_text("[cancelled] Settings", after=cancelled_mark)
-        process.wait_for_text("story[lobby]> ", after=cancelled_mark)
+        discarded = process.wait_for_text("story[lobby]> ", after=cancelled_mark)
+        compact_discarded = "".join(discarded.split())
+        self.assertIn(
+            "[cancelled]Pendingchangesdiscarded.",
+            compact_discarded,
+        )
+        self.assertEqual(
+            compact_discarded.count("[cancelled]Pendingchangesdiscarded."),
+            1,
+        )
         process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
         self.assertEqual(_durable_tree(self.workspace.root), before)
@@ -2478,8 +2580,8 @@ print(
             process.original_terminal_attributes,
         )
 
-    def test_settings_no_color_cancel_events_clear_and_restore_repeatedly(self) -> None:
-        """Cancel settings through Escape, VINTR, and VEOF without mutation."""
+    def test_clean_settings_controls_exit_silently_and_restore_repeatedly(self) -> None:
+        """Exit clean settings through Escape, VINTR, and VEOF without a record."""
 
         for event_name in ("escape", "interrupt", "eof"):
             for attempt in range(3):
@@ -2504,18 +2606,11 @@ print(
                         process.send_interrupt()
                     else:
                         process.send_eof()
-                    process.wait_for_text(
-                        "[cancelled] Settings",
-                        after=event_mark,
-                    )
                     cancelled = process.wait_for_text(
                         "story[lobby]> ",
                         after=event_mark,
                     )
-                    self.assertIn(
-                        "Settingscancelled;nopendingchangesweresaved.",
-                        "".join(cancelled.split()),
-                    )
+                    self.assertNotIn("[cancelled]", cancelled)
                     self.assertNotRegex(
                         cancelled,
                         r"\x1b\[(?:0|1|3[1-7])m",
@@ -2578,8 +2673,7 @@ print(
         self.assertIn("[save required]", returned_settings)
         self.assertIn("5. [available] Save (*Required)", returned_settings)
         self.assertIn(
-            "Pendingchangesareinmemoryonlyandarenotsaved."
-            "ChooseSavetopersistthem.",
+            "ChooseSavetopersistpendingchanges",
             "".join(returned_settings.split()),
         )
         process.send_line("5")
