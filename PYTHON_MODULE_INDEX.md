@@ -1091,8 +1091,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   and prompt adapters for its call-local edit flow. When the optional
   coordinator is supplied, global `/auth`, provider-status choices,
   authenticated route assignment, missing-default coordination, and a fresh
-  effective-route authentication gate before settings Save use that borrowed
-  collaborator. The controller owns no native authentication child, cursor
+  effective-route authentication gate before dirty settings Apply Changes use
+  that borrowed collaborator. The controller owns no native authentication child, cursor
   sequence, or terminal geometry.
   Retrieval results and persisted `agent_reply`
   history/transcript rows use the facade's pure `format_agent_reply_content`
@@ -1108,8 +1108,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   or sticky agent changes. Detachment resets that comparison, so a later
   attachment presents its scope again even when its values match the earlier
   attachment.
-  The settings editor exposes the exact six-row top level Language, Persona,
-  Maximum debate rounds, Agents, Save, and Cancel; Agents selects one
+  The clean settings editor exposes the exact four-row top level Language,
+  Persona, Maximum debate rounds, and Agents. A structurally dirty candidate
+  appends `Apply Changes (*Required)` and `Discard Changes` while retaining the
+  stable internal `save` and `cancel` routing identities; a previously retained
+  action highlight normalizes when its row becomes hidden. Agents selects one
   roster agent, enables Codex or Antigravity selection, and exposes the exact
   provider-neutral Provider, Model, and Effort fields. Model and Effort discover
   one fresh pending-effective-provider catalog only when selected; use opaque
@@ -1118,7 +1121,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   provider values or auto-persisting model defaults. Codex effort choices come
   from the exact pending effective model, while Antigravity effort choices stay
   globally low, medium, and high without slug inference. The settings flow
-  gives every value editor pending, not-saved, and top-level Save guidance. One
+  gives every value editor pending, not-saved, and dirty-only Apply Changes
+  guidance. One
   private ordered settings projection supplies root Current/Pending
   descriptions, the nested Agents pending-change count, and changed-only
   confirmation fields in stable settings and roster order. Structurally
@@ -1126,29 +1130,30 @@ every intermediate arrow. The current runtime graph is acyclic.
   semantic roles; changed root values retain explicit `Pending:` descriptions
   with warning roles. A clean Agents row has no description, while its nonzero
   pending-change count has a warning role. On every top-level read, structural
-  inequality between the pending configuration and opening baseline adds
-  `(*Required)` to the Save label and retains the existing warning-styled
-  save-required notice; both are absent initially and after a complete revert,
-  while the notice remains absent from nested editors and Save/Cancel
-  confirmations. The shared projection names both providers' model/effort rows,
+  inequality between the pending configuration and opening baseline exposes
+  the two persistence actions and retains both `(*Required)` on Apply Changes
+  and the exact warning-styled `Choose Apply Changes to persist pending
+  changes` notice; all are absent initially and after a complete revert, while
+  the notice remains absent from nested editors and Apply/Discard confirmations.
+  The shared projection names both providers' model/effort rows,
   so root visibility and changed-only confirmations identify pending changes
   without changing the active backend or runtime snapshot. Editors contain no
-  repeated Current/Pending context panel. Structurally clean Save is a silent
-  no-op that performs no confirmation, authentication, persistence, panel or
-  event output, or Settings exit, and loops at the root with Save highlighted.
-  Dirty Save uses one selectable YES/NO confirmation whose preceding context
+  repeated Current/Pending context panel. The clean root contains no persistence
+  action to confirm, authenticate, persist, report, or exit through. Dirty Apply
+  Changes uses the stable `save` route and one selectable YES/NO confirmation whose preceding context
   contains only changed Current/Pending properties in stable settings and
   roster order; Current fields use default styling and Pending fields use
   warning styling, with the explicit changed text cues preserved. After any
   authentication/default rebase, the controller rechecks structural dirtiness
   at the persistence boundary and loops silently when clean. Exactly one saved
   event follows only a successful dirty persistence; failed, cancelled, or
-  rejected saves emit none. Explicit Cancel and
+  rejected apply attempts emit none. Explicit Discard Changes uses the stable
+  `cancel` route and
   root Settings Escape share one action: an unchanged candidate exits
   immediately, while a structurally changed candidate uses the same selectable
   confirmation context. Any whole-flow cancellation is silent for a clean
   candidate and emits exactly one discard report for a dirty candidate;
-  persistence remains exclusive to Save. Confirmation NO or nested Escape
+  persistence remains exclusive to the internal save action. Confirmation NO or nested Escape
   returns to the settings menu, while Ctrl-C or EOF preserves whole-flow
   cancellation.
   Provider-bound routes pass the submitted text
