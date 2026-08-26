@@ -2095,11 +2095,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   persona-catalog validator as selection's precommit guard so a changed catalog
   becomes a configuration conflict before that CAS, and it never activates or
   migrates storage. Agents selects one
-  roster agent, enables Codex or Antigravity selection, and exposes the exact
-  provider-neutral Provider, Model, and Effort fields. Model and Effort discover
-  one fresh pending-effective-provider catalog only when selected; use opaque
-  control identities; retain inherit, custom-model, and compatibility escape
-  paths; and edit only the active provider's values without discarding inactive
+  roster agent; each agent choice shows the pending-effective
+  `(Provider/model/effort)` tuple as `Current` when it matches the active
+  execution profile or `Pending` otherwise. Its exact provider-neutral
+  Provider, Model, and Effort choices independently show the pending-effective
+  value with the same Current/Pending comparison and enable Codex or
+  Antigravity selection. Model and Effort discover one fresh
+  pending-effective-provider catalog only when selected; use opaque control
+  identities; retain inherit, custom-model, and compatibility escape paths;
+  and edit only the active provider's values without discarding inactive
   provider values or auto-persisting model defaults. Codex effort choices come
   from the exact pending effective model, while Antigravity effort choices stay
   globally low, medium, and high without slug inference. The settings flow
@@ -2254,8 +2258,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   Launch-masked settings fields are read-only and show their explicit source.
   Successful activation renders the current-running-shell saved-and-applied
   notice for live changes, the desired-storage next-shell notice for storage
-  changes, and both for a mixed change. It then renders exact before/active
-  profiles, pending confirmation, and fresh-thread or reuse guidance.
+  changes, and both for a mixed change. Its compact completion notice reports
+  only the changed-profile count, adds fresh-thread and story-session context
+  only for provider switches, and directs active values and confirmation to
+  `/agents` plus thread and source detail to `/status`; it does not repeat exact
+  before/active profile rows, a pending-confirmation block, or same-provider
+  thread-reuse guidance.
   Cancellation or failed apply attempts do not mutate the active backend or
   runtime snapshot. Accepted user-message and
   request-context values remain call-local terminal presentation: the
