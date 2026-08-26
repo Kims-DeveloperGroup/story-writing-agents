@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 from dataclasses import asdict, dataclass, replace
+from unittest import mock
 
 from story_writing_agents import (
     AgentReply,
@@ -25,18 +26,37 @@ from story_writing_agents import (
 )
 from story_writing_agents.agents import CHARACTER_CUSTODIAN
 from story_writing_agents.conversation_retrieval import (
-    ConversationRagContext,
+    ConversationRagAttemptOutcome,
     ConversationRetrievalActionKind,
     ConversationRetrievalAnswerAction,
     ConversationRetrievalReply,
     ConversationRetrievalRequest,
+    ConversationRetrievalProgressEvent,
+    ConversationRetrievalProgressPhase,
+    ConversationRetrievalSource,
     ConversationRetrievalSearchAction,
 )
+from story_writing_agents.conversation_rag import (
+    ConversationRagEmbeddingIdentity,
+    ConversationRagOutcome,
+    ConversationRagProjectionState,
+    ConversationRagProjectionStateAvailability,
+    ConversationRagReason,
+)
+from story_writing_agents.conversation_rag_runtime import (
+    ConversationRagRuntimeService,
+    ConversationRagRuntimeStateSnapshot,
+)
 from story_writing_agents.conversation_search import (
+    ConversationCitation,
     ConversationMemoryService,
     ConversationSearchScope,
 )
+from story_writing_agents.conversation_storage import (
+    compose_filesystem_conversation_storage,
+)
 from story_writing_agents.conversations import (
+    ConversationEventAppend,
     ConversationEventKind,
 )
 from story_writing_agents.models import AgentDefinition, AgentRequest, ConversationRequest
@@ -160,6 +180,57 @@ class _ReadObservation:
     contents: tuple[bytes, ...]
 
 
+class _UnusedRagService:
+    """Satisfy the low-level port while an unavailable state prevents calls."""
+
+    @staticmethod
+    def _unexpected(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("unavailable RAG state must not call its provider")
+
+    project_documents = _unexpected
+    rebuild_projection = _unexpected
+    retrieve_semantic = _unexpected
+    retrieve_hybrid = _unexpected
+
+
+class _UnavailableRagState:
+    """Expose one exact unavailable state and count forced preflight attempts."""
+
+    def __init__(self, workspace_key: str) -> None:
+        self._workspace_key = workspace_key
+        self._embedding = ConversationRagEmbeddingIdentity(
+            model_id="reference-test-embedding",
+            dimensions=3,
+        )
+        self.inspections: list[str] = []
+
+    @property
+    def workspace_key(self) -> str:
+        return self._workspace_key
+
+    @property
+    def embedding(self) -> ConversationRagEmbeddingIdentity:
+        return self._embedding
+
+    def inspect_projection_state(
+        self,
+        session_id: str,
+        /,
+    ) -> ConversationRagRuntimeStateSnapshot:
+        self.inspections.append(session_id)
+        return ConversationRagRuntimeStateSnapshot(
+            session_id=session_id,
+            state=ConversationRagProjectionState(
+                availability=ConversationRagProjectionStateAvailability.MISSING,
+                checkpoint=None,
+            ),
+            reason=ConversationRagReason.UNAVAILABLE,
+        )
+
+    def mark_projection_stale(self, _session_id: str, /) -> None:
+        raise AssertionError("an unavailable projection must not be marked stale")
+
+
 class _ReferenceBound:
     """Consume mandatory reads before returning deterministic provider replies."""
 
@@ -276,7 +347,7 @@ class _ReferenceBound:
             turn_id=request.turn_id,
             action_index=5,
             content="provider-free retrieval reply",
-            citation_ids=(),
+            citation_ids=self.backend.retrieval_citation_ids,
         )
         self.backend.retrieval_action_count += 1
         return handler.handle_conversation_retrieval_action(  # type: ignore[attr-defined,no-any-return]
@@ -294,6 +365,7 @@ class _ReferenceBackend:
         self.conversation_requests: list[ConversationRequest] = []
         self.retrieval_requests: list[ConversationRetrievalRequest] = []
         self.retrieval_action_count = 0
+        self.retrieval_citation_ids: tuple[str, ...] = ()
         self.no_reference_provider_calls = 0
         self.drift_before_next_read = False
         self.fail_next_conversation = False
@@ -383,8 +455,14 @@ class RuntimeReferenceIntegrationTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len({item.invocation_id for item in correlations}), len(correlations))
 
-    def assert_content_free_history(self, operation_id: str, expected_reads: int) -> None:
-        history = self.runtime.inspect_reference_operation(operation_id)
+    def assert_content_free_history(
+        self,
+        operation_id: str,
+        expected_reads: int,
+        *,
+        runtime: StoryRuntime | None = None,
+    ) -> None:
+        history = (runtime or self.runtime).inspect_reference_operation(operation_id)
         self.assertIsNotNone(history)
         assert history is not None
         self.assertEqual(
@@ -513,19 +591,76 @@ class RuntimeReferenceIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_mixed_whole_and_range_references_coexist_with_forced_rag(
         self,
     ) -> None:
-        retrieval = await self.runtime.converse_with_retrieval(
-            _SESSION,
-            self.selected.conversation_id,
-            PLOT_ARCHITECT,
-            _SOURCE_TEXT,
-            memory_service=self.memory,
-            rag_query="Reference source",
+        services = compose_filesystem_conversation_storage(self.workspace)
+        source = services.catalog.create(_SESSION, "Active RAG source")
+        source_turn = "active_rag_source_turn"
+        for sender, recipient, kind, content in (
+            (
+                "user",
+                PLOT_ARCHITECT,
+                ConversationEventKind.USER_MESSAGE,
+                "Active RAG source question",
+            ),
+            (
+                PLOT_ARCHITECT,
+                "user",
+                ConversationEventKind.AGENT_REPLY,
+                "Active RAG source answer",
+            ),
+        ):
+            services.event_store.append(
+                ConversationEventAppend(
+                    session_id=_SESSION,
+                    conversation_id=source.conversation_id,
+                    turn_id=source_turn,
+                    sender=sender,
+                    recipient=recipient,
+                    kind=kind,
+                    content=content,
+                )
+            )
+        memory = ConversationMemoryService(
+            ConversationSearchScope(_SESSION),
+            services.catalog,
+            services.event_store,
         )
+        state = _UnavailableRagState(services.provenance.workspace_key)
+        rag_service = ConversationRagRuntimeService(_UnusedRagService(), state)
+        self.backend.retrieval_citation_ids = ("g1",)
+        runtime = StoryRuntime(
+            self.workspace,
+            self.backend,  # type: ignore[arg-type]
+            conversation_storage_services=services,
+            conversation_rag_service=rag_service,
+        )
+
+        preflight = ConversationRagRuntimeService.preflight
+        with mock.patch.object(
+            ConversationRagRuntimeService,
+            "preflight",
+            autospec=True,
+            side_effect=preflight,
+        ) as preflight_spy:
+            retrieval = await runtime.converse_with_retrieval(
+                _SESSION,
+                self.selected.conversation_id,
+                PLOT_ARCHITECT,
+                _SOURCE_TEXT,
+                memory_service=memory,
+                rag_query="Active RAG source",
+            )
         self.assertIsNotNone(retrieval.reference_operation_id)
         rag_context = self.backend.retrieval_requests[0].rag_context
-        self.assertEqual(rag_context, ConversationRagContext.disabled())
         assert rag_context is not None
+        preflight_spy.assert_called_once()
+        self.assertEqual(tuple(item.citation_id for item in rag_context.excerpts), ("g1",))
         self.assertEqual(retrieval.rag_outcome, rag_context.outcome)
+        self.assertEqual(retrieval.rag_sources, retrieval.sources)
+        self.assertEqual(len(retrieval.rag_sources), 1)
+        self.assertEqual(
+            retrieval.rag_sources[0].citation.conversation_id,
+            source.conversation_id,
+        )
         self.assertEqual(len(self.backend.reads), 1)
         self.assert_read_batch(self.backend.reads)
         references = self.backend.reads[0].request.references  # type: ignore[attr-defined]
@@ -538,7 +673,136 @@ class RuntimeReferenceIntegrationTests(unittest.IsolatedAsyncioTestCase):
             ),
             (None, (2, 2), None, None),
         )
-        self.assert_content_free_history(retrieval.reference_operation_id, 1)
+        self.assert_content_free_history(
+            retrieval.reference_operation_id,
+            1,
+            runtime=runtime,
+        )
+
+    async def test_rag_source_provenance_validation_is_deep_and_progress_bound(
+        self,
+    ) -> None:
+        base = await self.runtime.converse_with_retrieval(
+            _SESSION,
+            self.selected.conversation_id,
+            PLOT_ARCHITECT,
+            "provenance validation",
+            memory_service=self.memory,
+        )
+        rag_source = ConversationRetrievalSource(
+            subject="RAG source",
+            citation=ConversationCitation(
+                _SESSION,
+                "rag_source_conversation",
+                None,
+                None,
+                None,
+            ),
+        )
+        lexical_source = ConversationRetrievalSource(
+            subject="Lexical source",
+            citation=ConversationCitation(
+                _SESSION,
+                "lexical_source_conversation",
+                None,
+                None,
+                None,
+            ),
+        )
+        outcome = ConversationRagAttemptOutcome(
+            outcome=ConversationRagOutcome.COMPLETE,
+            reason=ConversationRagReason.NONE,
+        )
+        rag_only = replace(
+            base,
+            sources=(rag_source,),
+            rag_outcome=outcome,
+            rag_sources=(rag_source,),
+        )
+        validated = validate_conversation_retrieval_result(
+            rag_only,
+            expected_session_id=_SESSION,
+            expected_conversation_id=self.selected.conversation_id,
+            expected_agent_id=PLOT_ARCHITECT,
+            progress_events=(),
+        )
+        self.assertEqual(validated, rag_only)
+        self.assertIsNot(validated, rag_only)
+        self.assertIsNot(validated.sources[0], rag_source)
+        self.assertIsNot(validated.sources[0].citation, rag_source.citation)
+        self.assertIsNot(validated.rag_outcome, outcome)
+
+        non_rag = replace(
+            base,
+            sources=(lexical_source,),
+            rag_outcome=None,
+            rag_sources=(),
+        )
+        with self.assertRaisesRegex(ValueError, "completed search progress"):
+            validate_conversation_retrieval_result(
+                non_rag,
+                expected_session_id=_SESSION,
+                expected_conversation_id=self.selected.conversation_id,
+                expected_agent_id=PLOT_ARCHITECT,
+                progress_events=(),
+            )
+
+        completed = ConversationRetrievalProgressEvent(
+            session_id=_SESSION,
+            conversation_id=self.selected.conversation_id,
+            turn_id=base.turn_id,
+            agent_id=PLOT_ARCHITECT,
+            action_index=1,
+            phase=ConversationRetrievalProgressPhase.SEARCH_COMPLETED,
+            search_hit_count=1,
+            observation_utf8_bytes=1,
+        )
+        mixed = replace(
+            base,
+            sources=(rag_source, lexical_source),
+            rag_outcome=outcome,
+            rag_sources=(rag_source,),
+        )
+        self.assertEqual(
+            validate_conversation_retrieval_result(
+                mixed,
+                expected_session_id=_SESSION,
+                expected_conversation_id=self.selected.conversation_id,
+                expected_agent_id=PLOT_ARCHITECT,
+                progress_events=(completed,),
+            ),
+            mixed,
+        )
+        started = replace(
+            completed,
+            phase=ConversationRetrievalProgressPhase.SEARCH_STARTED,
+            search_hit_count=0,
+            observation_utf8_bytes=0,
+        )
+        for progress in (
+            (started,),
+            (replace(completed, turn_id="foreign_turn"),),
+        ):
+            with self.subTest(progress=progress[0].phase):
+                with self.assertRaises(ValueError):
+                    validate_conversation_retrieval_result(
+                        mixed,
+                        expected_session_id=_SESSION,
+                        expected_conversation_id=self.selected.conversation_id,
+                        expected_agent_id=PLOT_ARCHITECT,
+                        progress_events=progress,
+                    )
+
+        malformed = replace(base, rag_outcome=outcome)
+        object.__setattr__(malformed, "rag_sources", [rag_source])
+        with self.assertRaisesRegex(TypeError, "RAG sources must be a tuple"):
+            validate_conversation_retrieval_result(
+                malformed,
+                expected_session_id=_SESSION,
+                expected_conversation_id=self.selected.conversation_id,
+                expected_agent_id=PLOT_ARCHITECT,
+                progress_events=(),
+            )
 
     async def test_every_debate_provider_phase_reads_fresh_batch_before_modification(self) -> None:
         progress: list[DebateProgressEvent] = []

@@ -63,6 +63,7 @@ from story_writing_agents.conversation_retrieval import (
     ConversationRetrievalAnswerAction,
     ConversationRetrievalReply,
     ConversationRetrievalRequest,
+    ConversationRetrievalSearchAction,
 )
 from story_writing_agents.conversation_search import (
     ConversationMemoryService,
@@ -365,6 +366,19 @@ class _RuntimeBound:
         handler: ConversationRetrievalActionHandler,
     ) -> ConversationRetrievalReply:
         self.backend.retrieval_requests.append(request)
+        action_index = 1
+        if self.backend.search_query is not None:
+            handler.handle_conversation_retrieval_action(
+                ConversationRetrievalSearchAction(
+                    kind=ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
+                    session_id=request.session_id,
+                    conversation_id=request.conversation_id,
+                    turn_id=request.turn_id,
+                    action_index=action_index,
+                    query=self.backend.search_query,
+                )
+            )
+            action_index += 1
         citation_ids = self.backend.citation_ids
         reply = handler.handle_conversation_retrieval_action(
             ConversationRetrievalAnswerAction(
@@ -372,7 +386,7 @@ class _RuntimeBound:
                 session_id=request.session_id,
                 conversation_id=request.conversation_id,
                 turn_id=request.turn_id,
-                action_index=1,
+                action_index=action_index,
                 content="retrieval reply",
                 citation_ids=citation_ids,
             )
@@ -384,8 +398,14 @@ class _RuntimeBound:
 class _RuntimeBackend:
     """Minimal provider-free backend for StoryRuntime RAG orchestration."""
 
-    def __init__(self, citation_ids: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self,
+        citation_ids: tuple[str, ...] = (),
+        *,
+        search_query: str | None = None,
+    ) -> None:
         self.citation_ids = citation_ids
+        self.search_query = search_query
         self.conversation_requests: list[ConversationRequest] = []
         self.retrieval_requests: list[ConversationRetrievalRequest] = []
         self.access_held: set[str] = set()
@@ -1197,6 +1217,7 @@ class ConversationRagOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             request.rag_context.excerpts[0].source.citation.conversation_id, source_id
         )
         self.assertEqual(len(forced.sources), 1)
+        self.assertEqual(forced.rag_sources, forced.sources)
         self.assertEqual(forced.rag_outcome, request.rag_context.outcome)
         self.assertEqual(len(self.low_level.semantic_calls), 1)
         self.assertEqual(self.low_level.hybrid_calls, [])
@@ -1209,6 +1230,7 @@ class ConversationRagOrchestratorTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(backend.retrieval_requests[-1].rag_context)
         self.assertIsNone(no_attempt.rag_outcome)
+        self.assertEqual(no_attempt.rag_sources, ())
         self.assertEqual(len(self.low_level.semantic_calls), 1)
 
         automatic = ConversationRagRuntimeService(
@@ -1267,8 +1289,45 @@ class ConversationRagOrchestratorTests(unittest.IsolatedAsyncioTestCase):
             tuple(f"g{ordinal}" for ordinal in range(1, 21)),
         )
         self.assertEqual(len(result.sources), 2)
+        self.assertEqual(result.rag_sources, result.sources)
         self.assertEqual(result.rag_outcome, request.rag_context.outcome)
         self.assertEqual(self.low_level.semantic_calls, [])
+
+    async def test_real_runtime_provenance_retains_only_selected_g_sources(
+        self,
+    ) -> None:
+        rag_conversation_id = self._append_source("Semantic needle", 1)
+        lexical_conversation_id = self._append_source("Lexical target", 2)
+        self.rag.project_authorized(self.services, _SESSION, rebuild=True)
+        self.low_level.semantic_calls.clear()
+        backend = _RuntimeBackend(
+            ("g1", "s1h1"),
+            search_query="Lexical target",
+        )
+        runtime = StoryRuntime(
+            self.workspace,
+            backend,  # type: ignore[arg-type]
+            conversation_storage_services=self.services,
+            conversation_rag_service=self.rag,
+        )
+
+        result = await self._retrieval(
+            runtime,
+            "current",
+            rag_query="Semantic needle",
+        )
+
+        self.assertEqual(len(result.sources), 2)
+        self.assertEqual(result.rag_sources, (result.sources[0],))
+        self.assertEqual(
+            result.rag_sources[0].citation.conversation_id,
+            rag_conversation_id,
+        )
+        self.assertEqual(
+            result.sources[1].citation.conversation_id,
+            lexical_conversation_id,
+        )
+        self.assertIsNotNone(result.rag_outcome)
 
     async def test_reply_commits_before_projection_and_failures_isolate_or_propagate(
         self,
