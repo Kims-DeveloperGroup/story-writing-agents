@@ -581,10 +581,13 @@ through canonical `float.hex` strings. Per-file/per-record/aggregate limits are
 checked before allocation or mutation where applicable. Inspection streams and
 digests bounded records, reconstructs every fragment sequence/source digest,
 and proves provider/model/schema/chunking, manifest, counts, generation digest,
-and active-pointer identity. Deep JSON recursion, `NaN`/infinity, decimal or
-hex-float overflow, malformed Unicode, noncanonical encoding, and inconsistent
-records map to content-free `corrupt` rather than leaking persisted values or
-decoder details.
+and active-pointer identity. The fixed store schema identifies these envelopes;
+the caller-owned projection schema is an independently verified
+`projection_schema_id` and checkpoint identity. The exact nonblank strict-UTF-8
+inspection expectation is validated before filesystem I/O. Deep JSON recursion,
+`NaN`/infinity, decimal or hex-float overflow, malformed Unicode, noncanonical
+encoding, and inconsistent records map to content-free `corrupt` rather than
+leaking persisted values or decoder details.
 
 Generation mutation stays under one retained session lock and descriptor
 scope. An inactive build is synchronized and verified before it is renamed to
@@ -599,12 +602,22 @@ that rename leaves the old pointer byte-identical; a complete but inactive
 generation can remain as an orphan.
 
 Inspection is observational and never cleans an orphan or temporary pointer.
+After complete structural verification, a provider, model, or expected
+projection-schema mismatch reports `incompatible` while retaining the verified
+checkpoint plus safe provider/generation/count fields. This differs from an
+incompatible envelope or unverifiable identity, which exposes no trusted
+checkpoint. Advisory ready/stale/provider-failed status cannot hide either
+incompatibility result.
+
 The next generation mutation validates the complete namespace before removing
 recognized build/inactive-generation residue. Unknown, unsafe, or divergent
 state is preserved and rejected. Rebuild begins again from authoritative input;
-it never resumes partial build bytes. Active readers reopen and completely
-verify the exact snapshot under the same session lock, and close descriptors
-exactly once at context exit.
+it never resumes partial build bytes or relabels an existing generation. A
+schema-changing rebuild writes a separate inactive generation and preserves the
+old active pointer if any precommit step fails. Active readers reopen and
+completely verify the exact snapshot, including its checkpoint projection
+schema, under the same session lock and close descriptors exactly once at
+context exit.
 
 Purge requires exact `confirmed=True` and prevalidates the entire addressed
 session namespace before removal. It removes the active pointer first and then

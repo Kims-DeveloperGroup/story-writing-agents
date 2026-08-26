@@ -186,6 +186,16 @@ diagnostics contain no query or source text; `source-map.jsonl` deliberately
 does contain derived plaintext source fragments, so protect this subtree as
 conversation data.
 
+Two schema identities have different owners. The fixed
+`story-conversation-rag-store-v1` value versions only the persisted envelopes in
+the active/status pointers and generation metadata. The caller's
+`ConversationRagProjectionRequest.schema_id` identifies the projected content;
+the store preserves it separately as `projection_schema_id` and in the
+checkpoint. Direct callers inspecting a nonlegacy projection must pass that
+exact value through the keyword-only `expected_projection_schema_id` argument.
+Omitting it keeps the original store-v1 projection expectation and fails closed
+against a generation built for another projection schema.
+
 Projection writes an inactive `build-*` generation, completely verifies it,
 renames it to its content-derived generation ID, reopens and verifies it, then
 writes advisory `status.json`. `active.json` is the sole commit record and its
@@ -198,13 +208,25 @@ orphans; inspection reports but never removes them, while a later safe mutation
 validates and cleans them.
 
 Rebuild is deterministic and restartable from the beginning, not resumable.
-Advisory `stale` or `provider_failed` status never overrides the active pointer's
-identity. Missing, stale, corrupt, incompatible, and provider-failed state maps
-through local composition to `literal_fallback` with a fixed reason and no
-candidate text. `purge(session_id, confirmed=True)` prevalidates and deletes
-only that session's active/status and generation contents; its lock/directories
-remain. It never deletes authoritative conversations, SQLite/filesystem
-conversation storage, configuration, manuscripts, or writing artifacts.
+Inspection status describes compatibility with the requested provider, model,
+and projection schema; projection state describes whether a checkpoint was
+verified. A structurally verified identity mismatch is therefore
+`incompatible` with a `present` checkpoint and safe generation/count metadata,
+which lets an authorized caller request a rebuild. An invalid or unverifiable
+store envelope exposes no trusted checkpoint. Advisory `ready`, `stale`, or
+`provider_failed` status never overrides either identity result.
+
+Existing generations whose projected content used the store-v1 value remain
+ready for legacy callers. A caller expecting a different schema sees them as
+incompatible; the store does not relabel or migrate their bytes. An explicit
+rebuild writes and verifies a new inactive generation before atomically
+publishing it. Failure before publication preserves the previous active pointer.
+Missing, stale, corrupt, incompatible, and provider-failed state maps through
+local composition to `literal_fallback` with a fixed reason and no candidate
+text. `purge(session_id, confirmed=True)` prevalidates and deletes only that
+session's active/status and generation contents; its lock/directories remain.
+It never deletes authoritative conversations, SQLite/filesystem conversation
+storage, configuration, manuscripts, or writing artifacts.
 
 ## Use the current direct composition
 
@@ -228,7 +250,10 @@ composition immediately validates installed `generic-rag` 0.1.0 and its fixed
 capabilities, then creates a call-local generic adapter for each projection or
 retrieval that reaches generic work. Among caller-supplied objects, the
 composition retains the store and lexical retriever; it also owns the stateless
-fixed embedder/ranker.
+fixed embedder/ranker. Projection uses the request's schema; retrieval with a
+present state inspects against that checkpoint's schema. A different stored
+schema becomes an `incompatible` literal fallback, while drift from the same
+schema checkpoint becomes a `stale` fallback.
 Missing/incompatible optional-package state raises the sanitized composition
 error before storage is touched. No runtime or shell path invokes this API yet.
 
