@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Mapping
 
 from .agents import ROSTER
 from .config import (
@@ -35,6 +36,10 @@ SETTINGS_LANGUAGES: tuple[str, ...] = (
 )
 _SYSTEM_DEFAULTS_PATH = "config/system_defaults.json"
 _AGENT_CONFIGS_PATH = "config/agent_configs.json"
+_PROVIDER_ROUTE_GENERATIONS_PATH = (
+    "agent_states/orchestrator_state/provider_route_generations.json"
+)
+_PROVIDER_ROUTE_GENERATIONS_SCHEMA_VERSION = 1
 
 
 class SettingsErrorKind(StrEnum):
@@ -44,6 +49,7 @@ class SettingsErrorKind(StrEnum):
     CONFLICT = "conflict"
     WRITE = "write"
     ROLLBACK = "rollback"
+    RECOVERY_REQUIRED = "recovery_required"
 
 
 _SETTINGS_ERROR_MESSAGES = {
@@ -51,7 +57,21 @@ _SETTINGS_ERROR_MESSAGES = {
     SettingsErrorKind.CONFLICT: "settings changed on disk",
     SettingsErrorKind.WRITE: "settings write failed",
     SettingsErrorKind.ROLLBACK: "settings rollback failed",
+    SettingsErrorKind.RECOVERY_REQUIRED: "settings activation recovery is required",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderRouteEntry:
+    """Durable provider identity and monotonically increasing route generation."""
+
+    provider: str
+    generation: int
+
+    def __post_init__(self) -> None:
+        ConfigManager.validate_backend(self.provider)
+        if type(self.generation) is not int or self.generation < 0:
+            raise ValueError("provider route generation must be non-negative")
 
 
 class SettingsError(Exception):
@@ -90,6 +110,10 @@ class SettingsBaseline:
     agent_configs_bytes: bytes
     persona_catalog: tuple[PersonaCatalogEntry, ...]
     configuration: ConfigurationSnapshot
+    provider_route_bytes: bytes | None = None
+    provider_routes: Mapping[str, ProviderRouteEntry] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
 
     def __post_init__(self) -> None:
         if type(self.system_defaults_bytes) is not bytes:
@@ -111,6 +135,24 @@ class SettingsBaseline:
             raise ValueError("persona_catalog names must be unique")
         if type(self.configuration) is not ConfigurationSnapshot:
             raise TypeError("configuration must be a ConfigurationSnapshot")
+        if self.provider_route_bytes is not None and type(
+            self.provider_route_bytes
+        ) is not bytes:
+            raise TypeError("provider_route_bytes must be bytes or None")
+        if not isinstance(self.provider_routes, Mapping):
+            raise TypeError("provider_routes must be a mapping")
+        if self.provider_routes and set(self.provider_routes) != set(ROSTER):
+            raise ValueError("provider_routes must contain the complete roster")
+        if any(
+            type(entry) is not ProviderRouteEntry
+            for entry in self.provider_routes.values()
+        ):
+            raise TypeError("provider_routes values must be ProviderRouteEntry values")
+        object.__setattr__(
+            self,
+            "provider_routes",
+            MappingProxyType(dict(self.provider_routes)),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +169,48 @@ class SettingsState:
             raise TypeError("pending must be a ConfigurationSnapshot")
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedSettingsSave:
+    """Validated exact inputs for one conflict-safe three-file transaction."""
+
+    configuration: ConfigurationSnapshot
+    system_before: bytes
+    agent_before: bytes
+    route_before: bytes | None
+    system_after: bytes
+    agent_after: bytes
+    route_after: bytes | None
+    provider_routes: Mapping[str, ProviderRouteEntry]
+    switched_agents: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.configuration) is not ConfigurationSnapshot:
+            raise TypeError("configuration must be a ConfigurationSnapshot")
+        for name in (
+            "system_before",
+            "agent_before",
+            "system_after",
+            "agent_after",
+        ):
+            if type(getattr(self, name)) is not bytes:
+                raise TypeError(f"{name} must be bytes")
+        if self.route_before is not None and type(self.route_before) is not bytes:
+            raise TypeError("route_before must be bytes or None")
+        if self.route_after is not None and type(self.route_after) is not bytes:
+            raise TypeError("route_after must be bytes or None")
+        if set(self.provider_routes) != set(ROSTER):
+            raise ValueError("provider_routes must contain the complete roster")
+        if type(self.switched_agents) is not tuple or any(
+            agent_id not in ROSTER for agent_id in self.switched_agents
+        ):
+            raise ValueError("switched_agents must contain canonical agent IDs")
+        object.__setattr__(
+            self,
+            "provider_routes",
+            MappingProxyType(dict(self.provider_routes)),
+        )
+
+
 def load_settings_state(workspace: Workspace) -> SettingsState:
     """Read exact configuration bytes and the safe persona catalog once."""
 
@@ -139,11 +223,17 @@ def load_settings_state(workspace: Workspace) -> SettingsState:
         _decode_json(system_bytes, _SYSTEM_DEFAULTS_PATH),
         _decode_json(agent_bytes, _AGENT_CONFIGS_PATH),
     )
+    route_bytes, provider_routes = read_provider_route_generations(
+        workspace,
+        configuration,
+    )
     baseline = SettingsBaseline(
         system_bytes,
         agent_bytes,
         catalog,
         configuration,
+        route_bytes,
+        provider_routes,
     )
     return SettingsState(baseline, configuration)
 
@@ -248,6 +338,8 @@ def establish_settings_default_backend(
     workspace: Workspace,
     state: SettingsState,
     backend: str,
+    *,
+    provider_overrides: Mapping[str, str] | None = None,
 ) -> SettingsState:
     """Persist a missing default and safely rebase one open settings edit.
 
@@ -278,9 +370,13 @@ def establish_settings_default_backend(
     expected_system_bytes = _canonical_json(
         _system_value(persisted_defaults)
     ).encode("utf-8")
-    save_settings_state(
+    commit_prepared_settings_save(
         workspace,
-        SettingsState(state.baseline, persisted_configuration),
+        prepare_settings_save(
+            workspace,
+            SettingsState(state.baseline, persisted_configuration),
+            provider_overrides=provider_overrides,
+        ),
     )
 
     try:
@@ -397,8 +493,13 @@ def update_agent_antigravity_effort(
     )
 
 
-def save_settings_state(workspace: Workspace, state: SettingsState) -> None:
-    """Validate, conflict-check, and atomically replace changed documents."""
+def prepare_settings_save(
+    workspace: Workspace,
+    state: SettingsState,
+    *,
+    provider_overrides: Mapping[str, str] | None = None,
+) -> PreparedSettingsSave:
+    """Validate and capture exact conflict/rollback inputs without mutation."""
 
     _require_workspace(workspace)
     _require_state(state)
@@ -425,48 +526,258 @@ def save_settings_state(workspace: Workspace, state: SettingsState) -> None:
     ):
         raise SettingsError(SettingsErrorKind.CONFLICT)
 
-    system_changed = (
-        state.pending.system_defaults
-        != state.baseline.configuration.system_defaults
+    route_target = workspace.path(_PROVIDER_ROUTE_GENERATIONS_PATH)
+    route_before = (
+        _read_exact_bytes(workspace, _PROVIDER_ROUTE_GENERATIONS_PATH)
+        if route_target.exists()
+        else None
     )
-    agent_changed = (
-        state.pending.agent_configs
-        != state.baseline.configuration.agent_configs
+    if route_before != state.baseline.provider_route_bytes:
+        raise SettingsError(SettingsErrorKind.CONFLICT)
+    overrides = _validated_provider_overrides(provider_overrides)
+    baseline_routes = (
+        state.baseline.provider_routes
+        if state.baseline.provider_routes
+        else _initial_provider_routes(
+            state.baseline.configuration,
+            provider_overrides=overrides,
+        )
     )
-    if not system_changed and not agent_changed:
-        return
+    next_routes: dict[str, ProviderRouteEntry] = {}
+    switched: list[str] = []
+    for agent_id in ROSTER:
+        before = baseline_routes[agent_id]
+        provider = _configured_provider(
+            state.pending,
+            agent_id,
+            provider_overrides=overrides,
+        )
+        if provider == before.provider:
+            next_routes[agent_id] = before
+        else:
+            switched.append(agent_id)
+            next_routes[agent_id] = ProviderRouteEntry(
+                provider,
+                before.generation + 1,
+            )
+    return PreparedSettingsSave(
+        configuration=state.pending,
+        system_before=system_before,
+        agent_before=agent_before,
+        route_before=route_before,
+        system_after=_canonical_json(system_value).encode("utf-8"),
+        agent_after=_canonical_json(agent_value).encode("utf-8"),
+        route_after=(
+            None
+            if route_before is None and not switched
+            else _provider_routes_bytes(next_routes)
+        ),
+        provider_routes=next_routes,
+        switched_agents=tuple(switched),
+    )
 
-    system_text = _canonical_json(system_value)
-    agent_text = _canonical_json(agent_value)
-    attempted: list[tuple[str, str]] = []
+
+def commit_prepared_settings_save(
+    workspace: Workspace,
+    prepared: PreparedSettingsSave,
+) -> None:
+    """Publish one prepared configuration and route state with rollback."""
+
+    _require_workspace(workspace)
+    if type(prepared) is not PreparedSettingsSave:
+        raise TypeError("prepared must be a PreparedSettingsSave")
+    current_route = workspace.path(_PROVIDER_ROUTE_GENERATIONS_PATH)
+    observed_route = (
+        _read_exact_bytes(workspace, _PROVIDER_ROUTE_GENERATIONS_PATH)
+        if current_route.exists()
+        else None
+    )
+    if (
+        _read_exact_bytes(workspace, _SYSTEM_DEFAULTS_PATH) != prepared.system_before
+        or _read_exact_bytes(workspace, _AGENT_CONFIGS_PATH) != prepared.agent_before
+        or observed_route != prepared.route_before
+    ):
+        raise SettingsError(SettingsErrorKind.CONFLICT)
+    writes: list[tuple[str, bytes, bytes | None]] = [
+        (_SYSTEM_DEFAULTS_PATH, prepared.system_after, prepared.system_before),
+        (_AGENT_CONFIGS_PATH, prepared.agent_after, prepared.agent_before),
+    ]
+    if prepared.route_after is not None:
+        writes.append(
+            (
+                _PROVIDER_ROUTE_GENERATIONS_PATH,
+                prepared.route_after,
+                prepared.route_before,
+            )
+        )
+    attempted: list[tuple[str, bytes | None]] = []
     try:
-        if system_changed:
-            attempted.append(
-                (
-                    _SYSTEM_DEFAULTS_PATH,
-                    state.baseline.system_defaults_bytes.decode("utf-8"),
-                )
-            )
-            workspace.write_text(_SYSTEM_DEFAULTS_PATH, system_text)
-        if agent_changed:
-            attempted.append(
-                (
-                    _AGENT_CONFIGS_PATH,
-                    state.baseline.agent_configs_bytes.decode("utf-8"),
-                )
-            )
-            workspace.write_text(_AGENT_CONFIGS_PATH, agent_text)
+        for relative, after, before in writes:
+            if after == before:
+                continue
+            attempted.append((relative, before))
+            workspace.write_text(relative, after.decode("utf-8"))
     except Exception as write_failure:
         rollback_failure: Exception | None = None
-        for relative, original_text in reversed(attempted):
+        for relative, original in reversed(attempted):
             try:
-                workspace.write_text(relative, original_text)
+                if original is None:
+                    workspace.path(relative).unlink(missing_ok=True)
+                else:
+                    workspace.write_text(relative, original.decode("utf-8"))
             except Exception as failure:
                 if rollback_failure is None:
                     rollback_failure = failure
         if rollback_failure is not None:
             raise SettingsError(SettingsErrorKind.ROLLBACK) from rollback_failure
         raise SettingsError(SettingsErrorKind.WRITE) from write_failure
+
+
+def restore_prepared_settings_save(
+    workspace: Workspace,
+    prepared: PreparedSettingsSave,
+) -> None:
+    """Restore exact pre-save bytes after a verified post-persist failure."""
+
+    _require_workspace(workspace)
+    if type(prepared) is not PreparedSettingsSave:
+        raise TypeError("prepared must be a PreparedSettingsSave")
+    try:
+        route_target = workspace.path(_PROVIDER_ROUTE_GENERATIONS_PATH)
+        observed_route = (
+            _read_exact_bytes(workspace, _PROVIDER_ROUTE_GENERATIONS_PATH)
+            if route_target.exists()
+            else None
+        )
+        expected_route = (
+            prepared.route_after
+            if prepared.route_after is not None
+            else prepared.route_before
+        )
+        if (
+            _read_exact_bytes(workspace, _SYSTEM_DEFAULTS_PATH)
+            != prepared.system_after
+            or _read_exact_bytes(workspace, _AGENT_CONFIGS_PATH)
+            != prepared.agent_after
+            or observed_route != expected_route
+        ):
+            raise SettingsError(SettingsErrorKind.RECOVERY_REQUIRED)
+        workspace.write_text(
+            _SYSTEM_DEFAULTS_PATH,
+            prepared.system_before.decode("utf-8"),
+        )
+        workspace.write_text(
+            _AGENT_CONFIGS_PATH,
+            prepared.agent_before.decode("utf-8"),
+        )
+        if prepared.route_before is None:
+            workspace.path(_PROVIDER_ROUTE_GENERATIONS_PATH).unlink(missing_ok=True)
+        else:
+            workspace.write_text(
+                _PROVIDER_ROUTE_GENERATIONS_PATH,
+                prepared.route_before.decode("utf-8"),
+            )
+        restored_route = (
+            _read_exact_bytes(workspace, _PROVIDER_ROUTE_GENERATIONS_PATH)
+            if workspace.path(_PROVIDER_ROUTE_GENERATIONS_PATH).exists()
+            else None
+        )
+        if (
+            _read_exact_bytes(workspace, _SYSTEM_DEFAULTS_PATH)
+            != prepared.system_before
+            or _read_exact_bytes(workspace, _AGENT_CONFIGS_PATH)
+            != prepared.agent_before
+            or restored_route != prepared.route_before
+        ):
+            raise SettingsError(SettingsErrorKind.RECOVERY_REQUIRED)
+    except SettingsError:
+        raise
+    except Exception as exc:
+        raise SettingsError(SettingsErrorKind.RECOVERY_REQUIRED) from exc
+
+
+def save_settings_state(workspace: Workspace, state: SettingsState) -> None:
+    """Compatibility delegate for the prepared settings transaction."""
+
+    commit_prepared_settings_save(workspace, prepare_settings_save(workspace, state))
+
+
+def reconcile_provider_route_generations(
+    workspace: Workspace,
+    configuration: ConfigurationSnapshot,
+    *,
+    provider_overrides: Mapping[str, str] | None = None,
+) -> tuple[bytes, Mapping[str, ProviderRouteEntry]]:
+    """Load durable routes and safely advance manual provider changes."""
+
+    _require_workspace(workspace)
+    if type(configuration) is not ConfigurationSnapshot:
+        raise TypeError("configuration must be a ConfigurationSnapshot")
+    target = workspace.path(_PROVIDER_ROUTE_GENERATIONS_PATH)
+    before = (
+        _read_exact_bytes(workspace, _PROVIDER_ROUTE_GENERATIONS_PATH)
+        if target.exists()
+        else None
+    )
+    overrides = _validated_provider_overrides(provider_overrides)
+    routes = (
+        _initial_provider_routes(
+            configuration,
+            provider_overrides=overrides,
+        )
+        if before is None
+        else _decode_provider_routes(before)
+    )
+    reconciled: dict[str, ProviderRouteEntry] = {}
+    changed = before is None
+    for agent_id in ROSTER:
+        current = routes[agent_id]
+        provider = _configured_provider(
+            configuration,
+            agent_id,
+            provider_overrides=overrides,
+        )
+        if current.provider == provider:
+            reconciled[agent_id] = current
+        else:
+            changed = True
+            reconciled[agent_id] = ProviderRouteEntry(
+                provider,
+                current.generation + 1,
+            )
+    expected = _provider_routes_bytes(reconciled)
+    if changed or before != expected:
+        try:
+            workspace.write_text(
+                _PROVIDER_ROUTE_GENERATIONS_PATH,
+                expected.decode("utf-8"),
+            )
+        except Exception as exc:
+            raise SettingsError(SettingsErrorKind.RECOVERY_REQUIRED) from exc
+    return expected, MappingProxyType(reconciled)
+
+
+def read_provider_route_generations(
+    workspace: Workspace,
+    configuration: ConfigurationSnapshot,
+    *,
+    provider_overrides: Mapping[str, str] | None = None,
+) -> tuple[bytes | None, Mapping[str, ProviderRouteEntry]]:
+    """Read route state without mutation, deriving generation zero when absent."""
+
+    _require_workspace(workspace)
+    if type(configuration) is not ConfigurationSnapshot:
+        raise TypeError("configuration must be a ConfigurationSnapshot")
+    target = workspace.path(_PROVIDER_ROUTE_GENERATIONS_PATH)
+    if not target.exists():
+        return None, _initial_provider_routes(
+            configuration,
+            provider_overrides=_validated_provider_overrides(
+                provider_overrides
+            ),
+        )
+    content = _read_exact_bytes(workspace, _PROVIDER_ROUTE_GENERATIONS_PATH)
+    return content, _decode_provider_routes(content)
 
 
 def _with_system_defaults(
@@ -583,6 +894,123 @@ def _agent_value(snapshot: ConfigurationSnapshot) -> dict[str, dict[str, Any]]:
         }
         for agent_id in ROSTER
     }
+
+
+def _configured_provider(
+    snapshot: ConfigurationSnapshot,
+    agent_id: str,
+    *,
+    provider_overrides: Mapping[str, str] | None = None,
+) -> str:
+    """Resolve the effective provider route with explicit launch precedence."""
+
+    override = (provider_overrides or {}).get(agent_id)
+    agent_provider = snapshot.agent_configs[agent_id].backend
+    return (
+        override
+        or agent_provider
+        or snapshot.system_defaults.default_backend
+        or "codex"
+    )
+
+
+def _initial_provider_routes(
+    snapshot: ConfigurationSnapshot,
+    *,
+    provider_overrides: Mapping[str, str] | None = None,
+) -> Mapping[str, ProviderRouteEntry]:
+    """Return generation-zero routes for a workspace without durable state."""
+
+    return MappingProxyType(
+        {
+            agent_id: ProviderRouteEntry(
+                _configured_provider(
+                    snapshot,
+                    agent_id,
+                    provider_overrides=provider_overrides,
+                ),
+                0,
+            )
+            for agent_id in ROSTER
+        }
+    )
+
+
+def _validated_provider_overrides(
+    provider_overrides: Mapping[str, str] | None,
+) -> Mapping[str, str]:
+    """Copy one optional partial launch-provider map after exact validation."""
+
+    if provider_overrides is None:
+        return MappingProxyType({})
+    if not isinstance(provider_overrides, Mapping):
+        raise TypeError("provider_overrides must be a mapping or None")
+    unknown = set(provider_overrides).difference(ROSTER)
+    if unknown:
+        raise ConfigurationError(
+            f"unknown backend override agent: {sorted(unknown)[0]}"
+        )
+    return MappingProxyType(
+        {
+            agent_id: ConfigManager.validate_backend(provider)
+            for agent_id, provider in provider_overrides.items()
+        }
+    )
+
+
+def _provider_routes_bytes(
+    routes: Mapping[str, ProviderRouteEntry],
+) -> bytes:
+    """Serialize one roster-complete route state in canonical schema-v1 form."""
+
+    if set(routes) != set(ROSTER):
+        raise ValueError("provider routes must contain the complete roster")
+    return _canonical_json(
+        {
+            "schema_version": _PROVIDER_ROUTE_GENERATIONS_SCHEMA_VERSION,
+            "agents": {
+                agent_id: {
+                    "provider": routes[agent_id].provider,
+                    "generation": routes[agent_id].generation,
+                }
+                for agent_id in ROSTER
+            },
+        }
+    ).encode("utf-8")
+
+
+def _decode_provider_routes(
+    content: bytes,
+) -> Mapping[str, ProviderRouteEntry]:
+    """Validate and copy exact durable schema-v1 route generation state."""
+
+    value = _decode_json(content, _PROVIDER_ROUTE_GENERATIONS_PATH)
+    if not isinstance(value, dict) or set(value) != {"schema_version", "agents"}:
+        raise WorkspaceFormatError("provider route generations have an invalid schema")
+    if value["schema_version"] != _PROVIDER_ROUTE_GENERATIONS_SCHEMA_VERSION:
+        raise WorkspaceFormatError(
+            "provider route generations have an unsupported schema version"
+        )
+    agents = value["agents"]
+    if not isinstance(agents, dict) or set(agents) != set(ROSTER):
+        raise WorkspaceFormatError(
+            "provider route generations must contain the complete roster"
+        )
+    routes: dict[str, ProviderRouteEntry] = {}
+    try:
+        for agent_id in ROSTER:
+            raw = agents[agent_id]
+            if not isinstance(raw, dict) or set(raw) != {"provider", "generation"}:
+                raise ValueError
+            routes[agent_id] = ProviderRouteEntry(
+                provider=raw["provider"],
+                generation=raw["generation"],
+            )
+    except (ConfigurationError, TypeError, ValueError) as exc:
+        raise WorkspaceFormatError(
+            "provider route generations contain an invalid entry"
+        ) from exc
+    return MappingProxyType(routes)
 
 
 def _canonical_json(value: Any) -> str:

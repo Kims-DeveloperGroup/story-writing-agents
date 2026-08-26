@@ -102,6 +102,7 @@ AgentRequest(
     messages: tuple[DebateMessage, ...] = (),
     agent_state: tuple[AgentStateEntry, ...] = (),
     conversation_context: ConversationContextWindow | None = None,
+    story_session_context: StorySessionContext | None = None,
 )
 ```
 
@@ -116,6 +117,14 @@ the same validated immutable window in every draft, audit, proposal, synthesis,
 and finalization request. It stays a separate provider field: the runtime does
 not concatenate it into the task, input, candidate, blackboard, agent state, or
 bound prompt.
+
+`story_session_context` is the trailing optional package-internal continuity
+envelope used by runtime-built substantive turns. It must match the request's
+session and agent. When present, the backend serializes it once under
+`story_session_context` and omits duplicate legacy `agent_state` and
+`conversation_context` payload fields. `None` preserves the established direct
+Python payload. The context types are not package-root exports; their exact
+schema and bounds are in [Prompts and provider boundary](../design/prompts-and-provider.md#story-session-continuity-envelope).
 
 ```python
 DebateMessage(sender: str, phase: str, round: int, revision: str,
@@ -133,20 +142,26 @@ characters per entry.
 ```python
 ConversationRequest(session_id: str, conversation_id: str, turn_id: str,
                     agent_id: str, content: str,
-                    context: ConversationContextWindow)
+                    context: ConversationContextWindow,
+                    story_session_context: StorySessionContext | None = None)
 ConversationReply(session_id: str, conversation_id: str,
                   turn_id: str, content: str)
 ConversationRetrievalRequest(*, session_id: str, conversation_id: str,
-    turn_id: str, agent_id: str, content: str, context: ConversationContextWindow)
+    turn_id: str, agent_id: str, content: str, context: ConversationContextWindow,
+    story_session_context: StorySessionContext | None = None)
 ConversationRetrievalReply(*, session_id: str, conversation_id: str,
     turn_id: str, content: str, sources: tuple[ConversationRetrievalSource, ...])
 ```
 
-The one-step pair is frozen and slotted with no defaults. IDs are safe, agents are
-canonical, and content is nonempty exact strict UTF-8. `context` must be a
+The one-step pair is frozen and slotted; only the request's trailing continuity
+envelope defaults to `None`. IDs are safe, agents are canonical, and content is
+nonempty exact strict UTF-8. `context` must be a
 bounded, increasing window of complete turns from the same session and
 conversation and exclude the current turn. Retrieval values are keyword-only;
 their reply adds ordered validated sources without changing the one-step pair.
+When present, the envelope must match the request session, agent, and any
+focused conversation identity. Backend payloads use it instead of a duplicate
+legacy `context`; omission retains compatibility for direct package callers.
 See [Conversation transcripts](conversation-transcripts.md) for windows and
 [Bounded retrieval](conversation-retrieval.md) for actions and persistence.
 

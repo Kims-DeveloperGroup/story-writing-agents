@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
@@ -20,6 +21,10 @@ from .errors import SessionIdError, WorkspaceFormatError
 
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 _SAFE_REFERENCE_OPERATION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+STORY_SESSION_CONTEXT_SCHEMA_VERSION = 1
+OWNER_OUTCOME_MAX_ENTRIES = 24
+OWNER_OUTCOME_MAX_UTF8_BYTES = 32_768
 
 
 class InputKind(StrEnum):
@@ -51,6 +56,14 @@ class DebateContextMode(StrEnum):
 
     INCLUDED = "included"
     FRESH = "fresh"
+
+
+class StoryFocusedContextMode(StrEnum):
+    """How the focused transcript is represented in story-session context."""
+
+    INCLUDED = "included"
+    FRESH = "fresh"
+    OMITTED = "omitted"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -280,6 +293,270 @@ class AgentStateEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class OwnerOutcomeWindow:
+    """A bounded newest suffix of one agent's session-owned outcomes."""
+
+    entries: tuple[AgentStateEntry, ...]
+    total_entries: int
+    retained_entries: int
+    omitted_entries: int
+    retained_utf8_bytes: int
+    truncated: bool
+
+    def __post_init__(self) -> None:
+        if type(self.entries) is not tuple or any(
+            type(entry) is not AgentStateEntry for entry in self.entries
+        ):
+            raise TypeError("owner outcome entries must be AgentStateEntry values")
+        for value, label in (
+            (self.total_entries, "total entries"),
+            (self.retained_entries, "retained entries"),
+            (self.omitted_entries, "omitted entries"),
+            (self.retained_utf8_bytes, "retained UTF-8 bytes"),
+        ):
+            if type(value) is not int:
+                raise TypeError(f"{label} must be an integer")
+            if value < 0:
+                raise ValueError(f"{label} must not be negative")
+        if self.retained_entries != len(self.entries):
+            raise ValueError("owner outcome retained-entry count is inconsistent")
+        if self.total_entries != self.retained_entries + self.omitted_entries:
+            raise ValueError("owner outcome entry counts are inconsistent")
+        if self.retained_entries > OWNER_OUTCOME_MAX_ENTRIES:
+            raise ValueError("owner outcome entry cap was exceeded")
+        serialized_bytes = _serialized_owner_outcome_bytes(self.entries)
+        if self.retained_utf8_bytes != serialized_bytes:
+            raise ValueError("owner outcome byte accounting is inconsistent")
+        if serialized_bytes > OWNER_OUTCOME_MAX_UTF8_BYTES:
+            raise ValueError("owner outcome byte cap was exceeded")
+        if type(self.truncated) is not bool:
+            raise TypeError("owner outcome truncated must be a boolean")
+        if self.truncated is not (self.omitted_entries > 0):
+            raise ValueError("owner outcome truncated flag is inconsistent")
+
+
+@dataclass(frozen=True, slots=True)
+class BoundCoreDocumentIdentity:
+    """Content identity of one core document already bound into provider rules."""
+
+    path: str
+    sha256: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.path, str) or not self.path:
+            raise ValueError("core document path must be non-empty text")
+        raw = Path(self.path)
+        if (
+            raw.is_absolute()
+            or ".." in raw.parts
+            or len(raw.parts) != 2
+            or raw.parts[0] != "core_documents"
+            or raw.as_posix() != self.path
+        ):
+            raise ValueError("core document path must be canonical under core_documents")
+        if not isinstance(self.sha256, str) or _SHA256.fullmatch(self.sha256) is None:
+            raise ValueError("core document sha256 must be lowercase hexadecimal")
+
+
+@dataclass(frozen=True, slots=True)
+class StoryFocusedContext:
+    """Focused-conversation facts carried by one substantive logical turn."""
+
+    mode: StoryFocusedContextMode
+    conversation_id: str | None
+    window: ConversationContextWindow | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.mode, StoryFocusedContextMode):
+            raise TypeError("focused context mode must be StoryFocusedContextMode")
+        if self.conversation_id is not None:
+            _validate_conversation_identifier(
+                self.conversation_id,
+                label="conversation ID",
+            )
+        if self.mode is StoryFocusedContextMode.INCLUDED:
+            if self.conversation_id is None:
+                raise ValueError("included focused context requires a conversation ID")
+            if type(self.window) is not ConversationContextWindow:
+                raise TypeError("included focused context requires a window")
+        elif self.window is not None:
+            raise ValueError("fresh or omitted focused context cannot carry a window")
+        if (
+            self.mode is StoryFocusedContextMode.FRESH
+            and self.conversation_id is None
+        ):
+            raise ValueError("fresh focused context requires a conversation ID")
+        if self.mode is StoryFocusedContextMode.OMITTED and self.conversation_id is not None:
+            raise ValueError("omitted focused context cannot identify a conversation")
+
+
+@dataclass(frozen=True, slots=True)
+class StorySessionContext:
+    """Authoritative bounded continuity envelope for one logical provider turn."""
+
+    schema_version: int
+    session_id: str
+    agent_id: str
+    owner_outcomes: OwnerOutcomeWindow
+    focused_context: StoryFocusedContext
+    core_documents: tuple[BoundCoreDocumentIdentity, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.schema_version) is not int or (
+            self.schema_version != STORY_SESSION_CONTEXT_SCHEMA_VERSION
+        ):
+            raise ValueError("unsupported story-session context schema version")
+        _validate_conversation_identifier(self.session_id, label="session ID")
+        _validate_conversation_identifier(self.agent_id, label="agent ID")
+        if self.agent_id not in ROSTER:
+            raise ValueError("story-session context agent must be canonical")
+        if type(self.owner_outcomes) is not OwnerOutcomeWindow:
+            raise TypeError("owner_outcomes must be an OwnerOutcomeWindow")
+        if any(
+            entry.session_id != self.session_id or entry.agent_id != self.agent_id
+            for entry in self.owner_outcomes.entries
+        ):
+            raise ValueError("owner outcomes do not match story-session ownership")
+        if type(self.focused_context) is not StoryFocusedContext:
+            raise TypeError("focused_context must be a StoryFocusedContext")
+        if self.focused_context.window is not None:
+            validate_conversation_context_window(
+                self.focused_context.window,
+                session_id=self.session_id,
+                conversation_id=self.focused_context.conversation_id,
+            )
+        if type(self.core_documents) is not tuple or any(
+            type(identity) is not BoundCoreDocumentIdentity
+            for identity in self.core_documents
+        ):
+            raise TypeError("core_documents must contain bound identities")
+        if len({identity.path for identity in self.core_documents}) != len(
+            self.core_documents
+        ):
+            raise ValueError("core document identities must be unique")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Project the exact schema-v1 JSON-compatible provider envelope."""
+
+        focused: dict[str, Any] = {"mode": self.focused_context.mode.value}
+        if self.focused_context.mode is StoryFocusedContextMode.INCLUDED:
+            window = self.focused_context.window
+            assert window is not None
+            focused.update(
+                {
+                    "conversation_id": self.focused_context.conversation_id,
+                    "total_complete_turns": window.total_complete_turns,
+                    "retained_turns": window.retained_turns,
+                    "omitted_turns": window.omitted_turns,
+                    "retained_utf8_bytes": window.retained_utf8_bytes,
+                    "truncated": window.truncated,
+                    "events": [
+                        {
+                            "turn_id": event.turn_id,
+                            "sequence": event.sequence,
+                            "sender": event.sender,
+                            "recipient": event.recipient,
+                            "kind": event.kind.value,
+                            "content": event.content,
+                        }
+                        for event in window.events
+                    ],
+                }
+            )
+        elif self.focused_context.mode is StoryFocusedContextMode.FRESH:
+            focused["conversation_id"] = self.focused_context.conversation_id
+
+        return {
+            "schema_version": self.schema_version,
+            "scope": "story_session",
+            "session_id": self.session_id,
+            "agent_id": self.agent_id,
+            "owner_outcomes": {
+                "total_entries": self.owner_outcomes.total_entries,
+                "retained_entries": self.owner_outcomes.retained_entries,
+                "omitted_entries": self.owner_outcomes.omitted_entries,
+                "retained_utf8_bytes": self.owner_outcomes.retained_utf8_bytes,
+                "truncated": self.owner_outcomes.truncated,
+                "entries": [entry.to_dict() for entry in self.owner_outcomes.entries],
+            },
+            "focused_context": focused,
+            "core_documents": [
+                {"path": identity.path, "sha256": identity.sha256}
+                for identity in self.core_documents
+            ],
+        }
+
+
+def select_owner_outcome_window(
+    entries: tuple[AgentStateEntry, ...],
+) -> OwnerOutcomeWindow:
+    """Select the newest complete entry suffix under both fixed owner caps."""
+
+    if type(entries) is not tuple or any(
+        type(entry) is not AgentStateEntry for entry in entries
+    ):
+        raise TypeError("owner outcomes must be an exact AgentStateEntry tuple")
+    retained_reversed: list[AgentStateEntry] = []
+    for entry in reversed(entries):
+        candidate = tuple(reversed((*retained_reversed, entry)))
+        if len(candidate) > OWNER_OUTCOME_MAX_ENTRIES:
+            break
+        if _serialized_owner_outcome_bytes(candidate) > OWNER_OUTCOME_MAX_UTF8_BYTES:
+            break
+        retained_reversed.append(entry)
+    retained = tuple(reversed(retained_reversed))
+    omitted = len(entries) - len(retained)
+    return OwnerOutcomeWindow(
+        entries=retained,
+        total_entries=len(entries),
+        retained_entries=len(retained),
+        omitted_entries=omitted,
+        retained_utf8_bytes=_serialized_owner_outcome_bytes(retained),
+        truncated=omitted > 0,
+    )
+
+
+def focused_story_context(
+    mode: StoryFocusedContextMode,
+    *,
+    conversation_id: str | None = None,
+    context: ConversationContextWindow | None = None,
+) -> StoryFocusedContext:
+    """Build one canonical focused-context projection from existing contracts."""
+
+    if mode is StoryFocusedContextMode.INCLUDED:
+        if context is None or conversation_id is None:
+            raise ValueError("included focused context requires context and identity")
+        return StoryFocusedContext(
+            mode=mode,
+            conversation_id=conversation_id,
+            window=context,
+        )
+    if context is not None:
+        raise ValueError("fresh or omitted focused context cannot carry events")
+    return StoryFocusedContext(
+        mode=mode,
+        conversation_id=(
+            conversation_id if mode is StoryFocusedContextMode.FRESH else None
+        ),
+        window=None,
+    )
+
+
+def _serialized_owner_outcome_bytes(entries: tuple[AgentStateEntry, ...]) -> int:
+    encoded = tuple(
+        json.dumps(
+            entry.to_dict(),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8", errors="strict")
+        for entry in entries
+    )
+    return sum(len(item) for item in encoded) + max(0, len(encoded) - 1)
+
+
+@dataclass(frozen=True, slots=True)
 class PromptFileReference:
     """Immutable content-addressed snapshot of one prompt component."""
 
@@ -388,20 +665,30 @@ class AgentRequest:
     messages: tuple[DebateMessage, ...] = ()
     agent_state: tuple[AgentStateEntry, ...] = ()
     conversation_context: ConversationContextWindow | None = None
+    story_session_context: StorySessionContext | None = None
 
     def __post_init__(self) -> None:
         """Validate optional context without changing legacy request fields."""
 
-        if self.conversation_context is None:
-            return
-        object.__setattr__(
-            self,
-            "conversation_context",
-            validate_conversation_context_window(
-                self.conversation_context,
-                session_id=self.session_id,
-            ),
-        )
+        if self.conversation_context is not None:
+            object.__setattr__(
+                self,
+                "conversation_context",
+                validate_conversation_context_window(
+                    self.conversation_context,
+                    session_id=self.session_id,
+                ),
+            )
+        if self.story_session_context is not None:
+            if type(self.story_session_context) is not StorySessionContext:
+                raise TypeError(
+                    "story_session_context must be a StorySessionContext or None"
+                )
+            if (
+                self.story_session_context.session_id != self.session_id
+                or self.story_session_context.agent_id != self.agent_id
+            ):
+                raise ValueError("story-session context request identity mismatch")
 
 
 @dataclass(frozen=True, slots=True)
@@ -414,6 +701,7 @@ class ConversationRequest:
     agent_id: str
     content: str
     context: ConversationContextWindow
+    story_session_context: StorySessionContext | None = None
 
     def __post_init__(self) -> None:
         """Validate IDs/content and install a canonical pre-turn context.
@@ -449,6 +737,22 @@ class ConversationRequest:
                 excluded_turn_id=self.turn_id,
             ),
         )
+        if self.story_session_context is not None:
+            if type(self.story_session_context) is not StorySessionContext:
+                raise TypeError(
+                    "story_session_context must be a StorySessionContext or None"
+                )
+            if (
+                self.story_session_context.session_id != self.session_id
+                or self.story_session_context.agent_id != self.agent_id
+                or (
+                    self.story_session_context.focused_context.conversation_id
+                    is not None
+                    and self.story_session_context.focused_context.conversation_id
+                    != self.conversation_id
+                )
+            ):
+                raise ValueError("story-session context request identity mismatch")
 
 
 @dataclass(frozen=True, slots=True)

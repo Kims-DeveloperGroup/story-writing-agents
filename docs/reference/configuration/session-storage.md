@@ -23,6 +23,7 @@ workspace/
 │   │   ├── sessions/<session_id>.json                          [lazy overrides]
 │   │   ├── cli_context.json                                   [lazy default session]
 │   │   ├── conversation_defaults/<session_id>.json             [lazy default conversation]
+│   │   ├── provider_route_generations.json                     [lazy route freshness]
 │   │   ├── provider_sessions/.access-claims.lock               [lazy guard]
 │   │   ├── provider_sessions/.antigravity/                      [lazy retained provider state]
 │   │   ├── provider_sessions/<session_id>.json                 [lazy manifest]
@@ -117,7 +118,9 @@ remain absent or identify the meaningful inode captured for that rotation, then
 updates its expectation after a successful shift. A mismatch stops later
 rotation, although earlier shifts may remain. Removing `.5` is an ordinary
 filesystem unlink, not secure erasure. The guard and `.gitkeep` are outside the
-data bound. Debug records are plaintext; their schema is documented in
+data bound. Debug records are plaintext. Ordinary records use schema version 1
+and execution-profile records use schema version 2; both coexist in the same
+JSONL stream. Their schemas are documented in
 [Persistence](../../design/persistence.md#workspace-runtime-debug-log),
 their containment and failure behavior in [Filesystem safety](../../operations/filesystem-safety.md#debug-log-filesystem-safety),
 and their content boundary in [Privacy](../../operations/privacy-and-provider.md#workspace-debug-log-privacy).
@@ -149,6 +152,41 @@ All three fields are required. The embedded session matches the path;
 `default_conversation_id` is a safe ID or `null`. Missing means no default.
 Saving one default atomically replaces only that complete file and does not
 change catalog status or process-local current focus.
+
+<a id="provider-route-generations"></a>
+
+## Provider route generations
+
+`agent_states/orchestrator_state/provider_route_generations.json` is a
+runtime-owned schema-v1 freshness record:
+
+```json
+{
+  "agents": {
+    "character_custodian": {"generation": 0, "provider": "codex"},
+    "execution_specialist": {"generation": 0, "provider": "codex"},
+    "lead_orchestrator": {"generation": 0, "provider": "codex"},
+    "plot_architect": {"generation": 0, "provider": "codex"}
+  },
+  "schema_version": 1
+}
+```
+
+Those are the only keys. Every canonical agent has an exact `codex` or
+`antigravity` provider and a nonnegative integer generation; canonical JSON
+uses sorted keys. When the record is absent, current configuration derives
+generation zero. Backend construction creates or reconciles it, including a
+provider change made directly in configuration while processes were stopped.
+Each provider change increments that agent's generation, including A→B→A.
+Confirmed `/settings` Save updates it in the same prepared boundary as the two
+configuration files when a switch requires it.
+
+The generation is not a user preference. A nonzero value participates in the
+definition fingerprint and forces a fresh target-provider thread; zero keeps
+legacy fingerprints unchanged. Other active backend instances retain their
+captured map. Do not edit or delete this record to force reuse or recovery; use
+`/settings`, or stop all processes and restore a verified complete workspace
+backup when the record is damaged.
 
 ## Provider-session manifest
 

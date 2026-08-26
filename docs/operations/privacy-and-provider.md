@@ -36,7 +36,10 @@ archived metadata/content; `/history` shows one full or newest-suffix snapshot,
 including errors, unmatched users, and whitespace. `/status` exposes
 workspace/session/subject/context/run metadata. Session status shows durable
 state, process access, defaults, current attachment/focus, readiness, and next
-action, but never owner hostname, PID, or claim token. `/inspect` whitelists
+action, then the authoritative provider/model/effort profile, sources,
+confirmation, thread state, and route generation for every agent. `/agents`
+shows the compact profile and confirmation. Neither command shows owner
+hostname, PID, or claim token. `/inspect` whitelists
 lifecycle/artifact/context identity/mode/counts, never raw messages, candidates,
 errors/actions, context content, or provider fields.
 
@@ -191,26 +194,48 @@ copying selected content into the prompt or work history.
 
 ## Provider disclosure
 
-A no-reference Python one-step call sends current text and bounded complete
-turns. Retrieval starts there, then may add authorized active-conversation hits
-and complete user/reply pairs from the current session. It cannot request
-archives, another session/workspace, arbitrary IDs, runtime errors, private
-state, tools, or native data. Observations are framed as untrusted story data.
+A runtime-built substantive call sends current text where applicable plus one
+schema-v1 `story_session_context` envelope. That envelope exposes the receiving
+agent's newest owner outcomes (at most 24 entries and 32,768 compact UTF-8
+bytes), the focused context in included/fresh/omitted mode, and canonical bound
+core-document path/hash identities. It does not copy core bytes; those are
+already separately bound into the definition. A direct Python request whose
+optional envelope is `None` keeps the legacy focused-context/owner-state
+payload.
+
+Retrieval starts with that bounded envelope, then may add authorized active-
+conversation hits and complete user/reply pairs from the current session. It
+cannot request archives, another session/workspace, arbitrary IDs, runtime
+errors, private state, tools, or native data. Observations are framed as
+untrusted story data.
+Continuations do not repeat the question or envelope.
 
 Agent definitions separately supply present safe current allowlisted core
 documents. A manual, pre-provenance, published, or hash-divergent safe file may
 therefore reach the provider in a later definition; this does not create
-publication provenance. The runtime does not delete those bytes. Debates,
-manuscripts, core updates, and owner state are not retrieval memory. Direct
-routing selects a shared-transcript responder, not a private channel.
+publication provenance. The runtime does not delete those bytes. Retrieval
+actions do not search debates, manuscripts, core updates, or owner state;
+bounded owner outcomes reach the provider only through the continuity envelope.
+Direct routing selects a shared-transcript responder, not a private channel.
 
 Included consensus sends one focused-transcript snapshot through every phase.
-Fresh and context-omitted modes omit `conversation_context` entirely.
+Fresh mode keeps the conversation identity but omits its transcript;
+context-omitted mode keeps neither. Both still carry bounded owner outcomes and
+core identities, so a fresh provider-native thread is not a fresh story
+session. The envelope intentionally omits another agent's owner outcomes,
+events outside the bounded window, provider-hidden history, and artifact bytes.
 
 Provider threads are keyed by session/backend/agent and can span conversations
-and debates. Changed visible context does not erase private history. Switch,
-pause, quit, and close preserve thread references; fresh/omitted context cannot make the
-provider forget.
+and debates. Changed visible context does not erase private history. Session
+switch, pause, quit, and close preserve compatible thread references;
+fresh/omitted context cannot make that provider forget. A provider-route switch
+instead advances generation and starts a fresh target-provider thread without
+deleting older native data.
+
+The backend-selected provider/model/effort profile and provider argv are the
+execution evidence shown by the terminal. Provider reply prose, including a
+self-identification such as “I am Codex,” is untrusted content and cannot prove
+which provider or model executed the turn.
 
 <a id="workspace-debug-log-privacy"></a>
 
@@ -229,6 +254,23 @@ read exception text or representation, filenames, source text, locals,
 arguments, notes, causes, or contexts. The concrete backend continues to drain
 and discard nonzero provider stderr without decoding it, so that stream is not
 available to this log.
+
+Ordinary operational records remain schema version 1. Execution-profile
+records use schema version 2 and one of `execution_setting_change`,
+`execution_profile_applied`, `execution_profile_confirmed`, or
+`execution_profile_recovery_required`. They intentionally expose exact
+sanitized provider, model, effort, each value's source, route generation,
+activation state, correlation/timing, and optional thread/context state. A
+startup active snapshot uses correlation `startup` and only `active_profile`;
+it never invents old values. A hot transition uses `old_profile` and
+`new_profile`, followed by active and first-success confirmation records.
+Recovery uncertainty is error/failed.
+
+These profile records are still content-free: they exclude story prose,
+prompts, replies, request payloads, provider stderr, context-envelope contents,
+credentials, and authentication output. Model identifiers and timing remain
+sensitive plaintext operational metadata. Do not place secrets in model or
+effort configuration.
 
 These files are separate from conversation transcript `runtime_error` events
 and their 4,096-character known-value sanitizer. `StoryRuntime` construction

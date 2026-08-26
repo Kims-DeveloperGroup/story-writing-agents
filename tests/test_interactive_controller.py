@@ -669,7 +669,13 @@ class ControllerTestCase(unittest.TestCase):
     def make_workspace(self) -> Workspace:
         """Create one initialized workspace registered for test cleanup."""
 
-        return initialized_workspace(self)
+        workspace = initialized_workspace(self)
+        configuration = ConfigManager(workspace).load_configuration_snapshot()
+        settings_module.reconcile_provider_route_generations(
+            workspace,
+            configuration,
+        )
+        return workspace
 
     def make_backend(self, workspace: Workspace) -> AgentBackend:
         """Create a provider-free lifecycle backend using Python as executable."""
@@ -1139,6 +1145,7 @@ class ControllerContractTests(ControllerTestCase):
                 "models",
                 "orchestrator",
                 "provider_auth",
+                "provider_adapter",
                 "provider_catalog",
                 "run_inputs",
                 "session_lifecycle",
@@ -3406,9 +3413,9 @@ class ControllerSettingsTests(ControllerTestCase):
                 terminal_module.Section("Current", current_fields),
                 terminal_module.Section("Pending", pending_fields),
                 terminal_module.Notice(
-                    "Changed values apply only to the next shell after Save.",
+                    "Save validates, persists, and applies the complete snapshot now.",
                     label="activation",
-                    role=terminal_module.SemanticRole.MUTED,
+                    role=terminal_module.SemanticRole.INFO,
                 ),
             )
         else:
@@ -3559,9 +3566,9 @@ class ControllerSettingsTests(ControllerTestCase):
             ) as establish_default,
             mock.patch.object(
                 controller_core_module,
-                "save_settings_state",
-                wraps=controller_core_module.save_settings_state,
-            ) as save,
+                "prepare_settings_save",
+                wraps=controller_core_module.prepare_settings_save,
+            ) as prepare,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
 
@@ -3574,7 +3581,7 @@ class ControllerSettingsTests(ControllerTestCase):
             "antigravity",
         )
         establish_default.assert_not_called()
-        save.assert_not_called()
+        prepare.assert_not_called()
         self.assertEqual(
             (defaults_path.read_bytes(), agents_path.read_bytes()),
             durable_before,
@@ -4393,8 +4400,8 @@ class ControllerSettingsTests(ControllerTestCase):
 
         with mock.patch.object(
             controller_core_module,
-            "save_settings_state",
-        ) as save:
+            "prepare_settings_save",
+        ) as prepare:
             state = exercise_picker(
                 "Language",
                 state,
@@ -4571,7 +4578,7 @@ class ControllerSettingsTests(ControllerTestCase):
             self.assertEqual(prompt.call_count, 3)
             self.assertEqual(update.call_count, 2)
             self.assertEqual(reentered, state)
-            save.assert_not_called()
+            prepare.assert_not_called()
 
         self.assertEqual(catalog.events, ["codex"] * 4)
         rendered = "".join(callbacks.records)
@@ -5455,8 +5462,8 @@ class ControllerSettingsTests(ControllerTestCase):
             [expected_record],
         )
         self.assertIn(
-            "[saved] Settings saved.",
-            "".join(callbacks.records),
+            "[savedandapplied]Settingssavedandappliedtothisrunningshellnow.",
+            "".join("".join(callbacks.records).split()),
         )
         self.assertEqual(
             settings_module.load_settings_state(workspace).pending.system_defaults.language,
@@ -5670,25 +5677,25 @@ class ControllerSettingsTests(ControllerTestCase):
             provider_catalog=catalog,
             terminal_width=48,
         )
-        real_save = settings_module.save_settings_state
+        real_commit = settings_module.commit_prepared_settings_save
 
-        def save_after_isolation(saved_workspace, state):
+        def commit_after_isolation(saved_workspace, prepared):
             self.assertEqual(_tree_snapshot(workspace.root), before)
-            return real_save(saved_workspace, state)
+            return real_commit(saved_workspace, prepared)
 
         with (
             mock.patch.object(
                 controller_core_module,
-                "save_settings_state",
+                "commit_prepared_settings_save",
                 autospec=True,
-                side_effect=save_after_isolation,
-            ) as save,
+                side_effect=commit_after_isolation,
+            ) as commit_save,
             mock.patch.object(subprocess, "Popen") as popen,
             mock.patch.object(subprocess, "run") as run,
             mock.patch.object(socket, "create_connection") as connect,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
-        save.assert_called_once()
+        commit_save.assert_called_once()
         popen.assert_not_called()
         run.assert_not_called()
         connect.assert_not_called()
@@ -5727,7 +5734,7 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         self.assertEqual(
             compact_rendered.count(
-                "[saved]Settingssaved.Changesapplytothenextshell."
+                "[savedandapplied]Settingssavedandappliedtothisrunningshellnow."
             ),
             1,
         )
@@ -5765,7 +5772,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 ProviderModel("agy-two", "AGY Two", None, None, efforts),
             )
         )
-        controller, _backend, callbacks = self.make_controller(
+        controller, backend, callbacks = self.make_controller(
             workspace,
             "/settings",
             "4",
@@ -5800,11 +5807,23 @@ class ControllerSettingsTests(ControllerTestCase):
         )
 
         with (
+            mock.patch(
+                "story_writing_agents.backend.AntigravityAdapter.executable_available",
+                autospec=True,
+                return_value=True,
+            ) as executable_available,
+            mock.patch(
+                "story_writing_agents.backend.AntigravityAdapter.headless_capabilities_available",
+                autospec=True,
+                return_value=True,
+            ) as headless_capabilities_available,
             mock.patch.object(subprocess, "Popen") as popen,
             mock.patch.object(subprocess, "run") as run,
             mock.patch.object(socket, "create_connection") as connect,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
+        executable_available.assert_called_once()
+        headless_capabilities_available.assert_called_once()
         popen.assert_not_called()
         run.assert_not_called()
         connect.assert_not_called()
@@ -5845,8 +5864,159 @@ class ControllerSettingsTests(ControllerTestCase):
             rendered,
         )
         self.assertIn("Antigravity model", rendered)
-        self.assertIn("[saved] Settings saved", rendered)
+        self.assertIn("[saved and applied] Settings saved and applied", rendered)
         self.assertEqual(catalog.events, ["antigravity", "antigravity"])
+        self.assertEqual(
+            (
+                backend.execution_profile(PLOT_ARCHITECT).provider,
+                backend.execution_profile(PLOT_ARCHITECT).model,
+                backend.execution_profile(PLOT_ARCHITECT).effort,
+                backend.provider_route_generations()[PLOT_ARCHITECT],
+            ),
+            ("antigravity", "agy-model", "high", 1),
+        )
+
+    def test_hot_save_preflight_quiescence_restore_and_recovery_are_truthful(
+        self,
+    ) -> None:
+        def setup_case():
+            workspace = self.make_workspace()
+            controller, backend, callbacks = self.make_controller(
+                workspace,
+                "/quit",
+                terminal_width=160,
+            )
+            state = settings_module.update_agent_codex_model(
+                settings_module.load_settings_state(workspace),
+                PLOT_ARCHITECT,
+                "hot-ui-model",
+            )
+            return workspace, controller, backend, callbacks, state
+
+        workspace, controller, backend, callbacks, state = setup_case()
+        before = _tree_snapshot(workspace.root)
+        before_profile = backend.execution_profile(PLOT_ARCHITECT)
+        with (
+            mock.patch.object(
+                backend,
+                "stage_runtime_configuration",
+                side_effect=ConfigurationError("PRIVATE_PREFLIGHT_FAILURE"),
+            ) as stage,
+            mock.patch.object(
+                controller._runtime,
+                "prepare_runtime_configuration",
+                new=mock.AsyncMock(),
+            ) as prepare_runtime,
+        ):
+            self.assertEqual(controller._save_and_apply_settings(state), "retry")
+        stage.assert_called_once()
+        prepare_runtime.assert_not_awaited()
+        self.assertEqual(_tree_snapshot(workspace.root), before)
+        self.assertEqual(backend.execution_profile(PLOT_ARCHITECT), before_profile)
+        rendered = "".join(callbacks.records)
+        self.assertIn("[not applied] Settings were not saved or applied.", rendered)
+        self.assertNotIn("PRIVATE_PREFLIGHT_FAILURE", rendered)
+        self.assertNotIn("saved and applied", rendered)
+
+        workspace, controller, backend, callbacks, state = setup_case()
+        before = _tree_snapshot(workspace.root)
+        before_profile = backend.execution_profile(PLOT_ARCHITECT)
+        with (
+            mock.patch.object(
+                controller._runtime,
+                "prepare_runtime_configuration",
+                new=mock.AsyncMock(
+                    side_effect=BackendProtocolError(
+                        "PRIVATE_QUIESCENCE_FAILURE"
+                    )
+                ),
+            ) as prepare_runtime,
+            mock.patch.object(
+                backend,
+                "discard_runtime_configuration",
+                wraps=backend.discard_runtime_configuration,
+            ) as discard_backend,
+        ):
+            self.assertEqual(controller._save_and_apply_settings(state), "retry")
+        prepare_runtime.assert_awaited_once()
+        discard_backend.assert_called_once()
+        self.assertEqual(_tree_snapshot(workspace.root), before)
+        self.assertEqual(backend.execution_profile(PLOT_ARCHITECT), before_profile)
+        rendered = "".join(callbacks.records)
+        self.assertIn("[not applied] Settings were not saved or applied.", rendered)
+        self.assertNotIn("PRIVATE_QUIESCENCE_FAILURE", rendered)
+        self.assertNotIn("saved and applied", rendered)
+
+        workspace, controller, backend, callbacks, state = setup_case()
+        before = _tree_snapshot(workspace.root)
+        before_profile = backend.execution_profile(PLOT_ARCHITECT)
+        with (
+            mock.patch.object(
+                controller._runtime,
+                "commit_runtime_configuration",
+                new=mock.AsyncMock(
+                    side_effect=BackendProtocolError(
+                        "PRIVATE_POST_PERSIST_FAILURE"
+                    )
+                ),
+            ) as commit_runtime,
+            mock.patch.object(
+                controller_core_module,
+                "restore_prepared_settings_save",
+                wraps=controller_core_module.restore_prepared_settings_save,
+            ) as restore,
+        ):
+            self.assertEqual(controller._save_and_apply_settings(state), "retry")
+        commit_runtime.assert_awaited_once()
+        restore.assert_called_once()
+        self.assertEqual(
+            {
+                relative: value[0]
+                for relative, value in _tree_snapshot(workspace.root).items()
+            },
+            {relative: value[0] for relative, value in before.items()},
+        )
+        self.assertEqual(backend.execution_profile(PLOT_ARCHITECT), before_profile)
+        rendered = "".join(callbacks.records)
+        self.assertIn("[restored; not applied] Runtime activation failed", rendered)
+        self.assertNotIn("PRIVATE_POST_PERSIST_FAILURE", rendered)
+        self.assertNotIn("saved and applied", rendered)
+
+        workspace, controller, backend, callbacks, state = setup_case()
+        before = _tree_snapshot(workspace.root)
+
+        async def activate_then_fail(runtime_candidate, backend_candidate):
+            backend.commit_runtime_configuration(backend_candidate)
+            raise BackendProtocolError("PRIVATE_ACTIVE_RECOVERY_FAILURE")
+
+        with (
+            mock.patch.object(
+                controller._runtime,
+                "commit_runtime_configuration",
+                new=mock.AsyncMock(side_effect=activate_then_fail),
+            ) as commit_runtime,
+            mock.patch.object(
+                backend,
+                "record_runtime_configuration_recovery_required",
+                wraps=backend.record_runtime_configuration_recovery_required,
+            ) as record_recovery,
+        ):
+            self.assertEqual(
+                controller._save_and_apply_settings(state),
+                "recovery_required",
+            )
+        commit_runtime.assert_awaited_once()
+        record_recovery.assert_called_once()
+        self.assertNotEqual(_tree_snapshot(workspace.root), before)
+        self.assertEqual(
+            backend.execution_profile(PLOT_ARCHITECT).model,
+            "hot-ui-model",
+        )
+        rendered = "".join(callbacks.records)
+        self.assertIn("[settings error] Settings were saved", rendered)
+        self.assertIn("restart it to recover", rendered)
+        self.assertNotIn("PRIVATE_ACTIVE_RECOVERY_FAILURE", rendered)
+        self.assertNotIn("saved and applied", rendered)
 
     def test_nested_return_but_interrupt_and_eof_cancel_all(self) -> None:
         scenarios = (
@@ -5925,9 +6095,18 @@ class ControllerSettingsTests(ControllerTestCase):
                     "/quit",
                     terminal_width=160,
                 )
+                operation = (
+                    "prepare_settings_save"
+                    if kind
+                    in {
+                        settings_module.SettingsErrorKind.VALIDATION,
+                        settings_module.SettingsErrorKind.CONFLICT,
+                    }
+                    else "commit_prepared_settings_save"
+                )
                 with mock.patch.object(
                     controller_core_module,
-                    "save_settings_state",
+                    operation,
                     side_effect=settings_module.SettingsError(kind),
                 ) as save:
                     self.assertEqual(controller.run_session_lobby(), 0)

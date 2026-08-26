@@ -46,6 +46,22 @@ transcripts and retrieval authorization; backend owns provider metadata,
 processes, access claims, per-thread serialization, and exact binding-staging
 retirement.
 
+The backend is the sole authority for each active agent's provider, model,
+effort, and their sources: `launch_override`, `agent_config`, `system_default`,
+`built_in_default`, or `provider_default`. Its profile also drives adapter argv,
+interactive metadata, confirmation, and debug events. A null model or effort
+means the adapter omits that flag; it does not identify or attest a vendor's
+server-side default. Provider reply prose and self-identification are never
+execution evidence.
+
+Every substantive runtime-built request can also carry the package-internal
+schema-v1 `story_session_context` envelope. When present, backend payloads use
+that field instead of duplicating legacy `agent_state`, `conversation_context`,
+or `context` fields. Direct package callers that leave the trailing optional
+field as `None` keep the legacy payload. The content-free explicit-reference
+prelude never carries the envelope, and retrieval continuations do not repeat
+it. See [Prompts and provider boundary](../design/prompts-and-provider.md#story-session-continuity-envelope).
+
 <a id="referenced-invocation-boundary"></a>
 
 ## Referenced invocation boundary
@@ -105,11 +121,14 @@ Construction first validates the complete eight-field
 `config/agent_configs.json`, even when non-null constructor model/effort values
 would override persisted fields. Optional fields and canonical agents may be
 absent; nullable routes and `default_backend` still produce a complete roster
-snapshot through the final Codex fallback. It then snapshots
-provider routes and resolved per-agent model/effort values for that backend's
-lifetime. Editing either file does not refresh an active backend, existing
-binding, provider thread, fingerprint, or request payload; the next backend
-construction observes the new valid values.
+snapshot through the final Codex fallback. It then captures provider routes and
+resolved per-agent model/effort values. Direct edits have no watcher: the next
+backend construction observes and reconciles valid persisted changes, while
+existing other shells retain their captured state. The installed interactive
+`/settings` path is different: it stages and preflights a complete candidate,
+persists it, and swaps the current shell's backend/runtime generation without a
+restart. Launch overrides remain higher precedence and therefore mask the
+corresponding editor fields.
 
 When present, the optional invocation arguments are inserted in this exact
 order immediately after `exec` and before any `resume` marker:
@@ -122,16 +141,19 @@ order immediately after `exec` and before any `resume` marker:
 These are Codex arguments. Either line is omitted when its effective value is
 null. The reasoning levels
 are exactly `minimal`, `low`, `medium`, `high`, and `xhigh`; model/provider
-support for `xhigh` is not inferred by workspace validation. The configured
-values change only the invocation arguments and do not become definition,
-thread-identity, lifecycle, or request-payload fields. Validation and the
+support for `xhigh` is not inferred by workspace validation. Model and effort
+values change only invocation arguments and do not become definition,
+thread-identity, lifecycle, or request-payload fields. A provider switch
+separately advances a durable route generation; nonzero generations participate
+in the definition fingerprint so every A→B→A switch starts fresh. Generation
+zero preserves the legacy fingerprint exactly. Validation and the
 workspace schema are specified in
 [Agent configuration](configuration/agent-configuration.md#system-defaults).
 
 Antigravity uses `--model MODEL` and `--effort LEVEL` only when their effective
 values are non-null. Provider conversation resume adds `--conversation ID`.
-Those process arguments do not change definition fingerprints, lifecycle
-identity, or request payload fields.
+Those model/effort process arguments do not change definition fingerprints,
+lifecycle identity, or request payload fields.
 
 ## Backend diagnostic side effect
 
@@ -140,20 +162,32 @@ emission begins only after the complete configuration snapshot loads
 successfully. The initial Codex executable check and snapshot-load failures
 precede diagnostic emission; later constructor validation failures are eligible.
 Once eligible, it best-effort records fixed configuration, binding, provider
-invocation, session lifecycle, cleanup, completion, cancellation, and safe
-failure facts.
+invocation, session lifecycle, cleanup, completion, cancellation, safe failure,
+and execution-profile facts.
 
 Backend-private submission guards catch diagnostic `BaseException`, including
 `KeyboardInterrupt` and `SystemExit`. This adds no constructor or method
 parameter and does not change results, exceptions, cancellation, claim
 compensation, provider-thread taint, or cleanup ordering.
 
+Ordinary records retain schema version 1. Execution identity uses content-free
+schema-v2 operations `execution_setting_change`,
+`execution_profile_applied`, `execution_profile_confirmed`, and
+`execution_profile_recovery_required`. A successful startup emits one active
+snapshot per canonical agent with correlation `startup` and never fabricates an
+old profile. A hot change correlates accepted old/new, active, and first-
+success confirmation records; uncertain compensation emits the error/failed
+recovery record. No-op, cancelled, and pre-persist failures emit no successful
+transition.
+
+These schema-v2 records intentionally contain exact provider/model/effort
+values and sources, route generation, activation state, and optional thread or
+context state. They still contain no request or response payload, story prose,
+provider stderr, credential, access owner, or claim token. Concrete adapters
+continue to drain provider stderr without exposing it to diagnostics.
 `get_session_lifecycle()` and `list_session_lifecycles()` remain provider-free
-and read-only for provider-session state, but they may append a bounded
-operational record. The logger receives no request or response payload,
-configured model/reasoning/effort value, access owner or claim token, or
-provider stderr. Concrete adapters continue to drain provider stderr without
-exposing it to diagnostics. See
+and read-only for provider-session state, though they may append a bounded
+operational record. See
 [debug-log privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy).
 
 ## Lifecycle value contracts

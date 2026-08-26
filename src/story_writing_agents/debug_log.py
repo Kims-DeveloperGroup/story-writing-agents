@@ -17,6 +17,7 @@ from pathlib import Path
 from types import TracebackType
 
 from .agents import ROSTER
+from .provider_adapter import AgentExecutionProfile
 from .workspace import (
     Workspace,
     open_workspace_root_directory,
@@ -47,6 +48,7 @@ _LOCK_RETRY_SECONDS = 0.01
 _DEBUG_LOG_FILENAME = Path(DEBUG_LOG_RELATIVE_PATH).name
 _DEBUG_LOG_GUARD_FILENAME = Path(DEBUG_LOG_GUARD_RELATIVE_PATH).name
 _SAFE_MODULE = re.compile(r"[A-Za-z_][A-Za-z0-9_.]{0,159}")
+_SAFE_CORRELATION = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _SAFE_SYMBOL = re.compile(
     r"(?:[A-Za-z_][A-Za-z0-9_.<>]{0,159}|<[A-Za-z_][A-Za-z0-9_]*>)"
 )
@@ -90,6 +92,10 @@ class DebugOperation(StrEnum):
     DIRECTIVE = "directive"
     INSPECTION = "inspection"
     CLEANUP = "cleanup"
+    EXECUTION_SETTING_CHANGE = "execution_setting_change"
+    EXECUTION_PROFILE_APPLIED = "execution_profile_applied"
+    EXECUTION_PROFILE_CONFIRMED = "execution_profile_confirmed"
+    EXECUTION_PROFILE_RECOVERY_REQUIRED = "execution_profile_recovery_required"
 
 
 class DebugPhase(StrEnum):
@@ -223,6 +229,132 @@ class WorkspaceDebugLog:
             outcome=outcome,
             exception=exception,
         )
+
+    def execution_profile_event(
+        self,
+        operation: DebugOperation,
+        *,
+        correlation_id: str,
+        agent_id: str,
+        route_generation: int,
+        old_profile: AgentExecutionProfile | None = None,
+        new_profile: AgentExecutionProfile | None = None,
+        active_profile: AgentExecutionProfile | None = None,
+        activation_state: str,
+        thread_disposition: str | None = None,
+        context_state: str | None = None,
+        recovery_required: bool = False,
+    ) -> None:
+        """Best-effort append one exact, content-free schema-v2 profile event."""
+
+        try:
+            if operation not in {
+                DebugOperation.EXECUTION_SETTING_CHANGE,
+                DebugOperation.EXECUTION_PROFILE_APPLIED,
+                DebugOperation.EXECUTION_PROFILE_CONFIRMED,
+                DebugOperation.EXECUTION_PROFILE_RECOVERY_REQUIRED,
+            }:
+                raise ValueError("operation is not an execution-profile event")
+            if (
+                not isinstance(correlation_id, str)
+                or _SAFE_CORRELATION.fullmatch(correlation_id) is None
+            ):
+                raise ValueError("correlation_id is invalid")
+            validated_agent = self._workspace.validate_identifier(
+                agent_id,
+                label="agent ID",
+            )
+            if validated_agent not in ROSTER:
+                raise ValueError("agent_id must be canonical")
+            if type(route_generation) is not int or route_generation < 0:
+                raise ValueError("route_generation must be a non-negative integer")
+            active_snapshot = (
+                operation is DebugOperation.EXECUTION_PROFILE_CONFIRMED
+                or (
+                    operation is DebugOperation.EXECUTION_PROFILE_APPLIED
+                    and active_profile is not None
+                )
+            )
+            if active_snapshot:
+                if (
+                    old_profile is not None
+                    or new_profile is not None
+                    or type(active_profile) is not AgentExecutionProfile
+                ):
+                    raise TypeError(
+                        "active profile events require only an active profile"
+                    )
+                profiles = (active_profile,)
+            else:
+                if (
+                    type(old_profile) is not AgentExecutionProfile
+                    or type(new_profile) is not AgentExecutionProfile
+                    or active_profile is not None
+                ):
+                    raise TypeError(
+                        "profile transition events require old and new profiles"
+                    )
+                profiles = (old_profile, new_profile)
+            if any(profile.agent_id != validated_agent for profile in profiles):
+                raise ValueError("execution profile agent identity mismatch")
+            for name, value in (
+                ("activation_state", activation_state),
+                ("thread_disposition", thread_disposition),
+                ("context_state", context_state),
+            ):
+                if value is not None and (
+                    not isinstance(value, str)
+                    or not value
+                    or _SAFE_SYMBOL.fullmatch(value) is None
+                ):
+                    raise ValueError(f"{name} is invalid")
+            if type(recovery_required) is not bool:
+                raise TypeError("recovery_required must be a boolean")
+            record: dict[str, object] = {
+                "schema_version": 2,
+                "timestamp": datetime.now(UTC).isoformat(timespec="milliseconds"),
+                "level": (
+                    DebugLevel.ERROR.value
+                    if recovery_required
+                    else DebugLevel.TRACE.value
+                ),
+                "component": DebugComponent.BACKEND.value,
+                "operation": operation.value,
+                "phase": (
+                    DebugPhase.FAILED.value
+                    if recovery_required
+                    else DebugPhase.SUCCEEDED.value
+                ),
+                "correlation_id": correlation_id,
+                "agent_id": validated_agent,
+                "route_generation": route_generation,
+                "activation_state": activation_state,
+            }
+            if active_profile is not None:
+                record["active_profile"] = _execution_profile_projection(
+                    active_profile
+                )
+            else:
+                assert old_profile is not None and new_profile is not None
+                record["old_profile"] = _execution_profile_projection(old_profile)
+                record["new_profile"] = _execution_profile_projection(new_profile)
+            if thread_disposition is not None:
+                record["thread_disposition"] = thread_disposition
+            if context_state is not None:
+                record["context_state"] = context_state
+            payload = (
+                json.dumps(
+                    record,
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8", errors="strict")
+                + b"\n"
+            )
+            if len(payload) <= DEBUG_LOG_MAX_BYTES:
+                self._append(payload)
+        except Exception:
+            return
 
     def _record(
         self,
@@ -972,6 +1104,21 @@ def _project_exception(exception: BaseException) -> dict[str, object]:
         "type": qualified,
         "frames": frames,
         "frames_truncated": truncated,
+    }
+
+
+def _execution_profile_projection(
+    profile: AgentExecutionProfile,
+) -> dict[str, object]:
+    """Project exact provider/model/effort identities and their sources."""
+
+    return {
+        "provider": profile.provider,
+        "provider_source": profile.provider_source.value,
+        "model": profile.model,
+        "model_source": profile.model_source.value,
+        "effort": profile.effort,
+        "effort_source": profile.effort_source.value,
     }
 
 

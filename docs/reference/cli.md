@@ -242,8 +242,12 @@ Entering Model or Effort discovers the pending effective provider afresh;
 opening Settings and provider navigation do not launch catalog commands.
 Custom models and inheritance remain supported. See the exact
 [picker contract](interactive-terminal.md#provider-model-and-effort-pickers).
-Direct edits to the validated JSON documents remain possible. An active backend
-and runtime keep their construction-time configuration snapshot. Existing
+Direct edits to the validated JSON documents remain possible, but there is no
+file watcher: they are reconciled by a newly launched backend, and other
+running shells retain their captured state. Confirmed `/settings` Save instead
+validates, persists, and applies the complete snapshot to the current shell
+without a restart. Launch overrides stay higher precedence, so the corresponding
+effective Provider, Model, or Effort editor is disabled and read-only. Existing
 three-key system-default files remain valid and provide no provider-specific
 fallback until configured. Exact fields, validation, and initialization
 compatibility are in
@@ -295,11 +299,26 @@ eligible ANSI decoration enabled. Any other value disables decorative ANSI,
 without the runtime overwriting or exporting the environment. Presence of
 `STORY_REDUCED_MOTION` independently selects one final colored frame when the
 TTY is otherwise ANSI-eligible, with no animation, sleep, raw mode, cursor
-control, or clearing. Nonzero/truthy `NO_COLOR`, non-TTY, `TERM=dumb`,
+control, or clearing. A disabling `NO_COLOR` value, non-TTY, `TERM=dumb`,
 non-POSIX, callback, and uncertain-output paths render one plain final frame
 without delay or ANSI. The welcome does not use the alternate screen or hide
 the cursor, and it never includes provider output.
 See the exact [terminal startup contract](interactive-terminal.md#startup-welcome-and-authentication).
+
+The capable main input also carries a responsive execution-profile header. It
+shows the sticky agent's active profile, or the exact one-shot profile when the
+buffer begins with a valid `@agent` route:
+
+```text
+[active runtime] Lead Orchestrator · Antigravity · model agy-model-id · effort high · pending
+story[novel:lead]> Who is answering?
+
+[one-shot runtime] Plot & Structure Architect · Codex · model codex-model-id · effort high · confirmed
+story[novel:lead]> @plot Check the current constraints.
+```
+
+These runtime-owned facts, the provider argv, and the profile records below are
+execution evidence. A model's reply prose or self-identification is not.
 
 Main prompts project canonical root, subcommand, and finite fixed-option
 candidates into a selectable semantic palette. Opening highlights the first
@@ -506,13 +525,22 @@ completed post-confirmation default is not rolled back if later Save gating or
 transaction work stops. Save then validates the complete pending pair and rejects any
 exact-byte change to either configuration document or any persona-catalog
 change since opening.
-Only changed documents are canonically replaced, in system-defaults then
-agent-configs order. A write failure attempts reverse-order restoration of
-every attempted target, including the failing target; rollback uncertainty is
-reported separately. Success returns to the main prompt and applies to the next
-shell/backend construction only. It does not refresh the active backend or
-runtime, invoke a story-model turn, alter session/explicit overrides, or add
-credentials, persisted catalog data, or automatic save.
+The prepared boundary contains `config/system_defaults.json`,
+`config/agent_configs.json`, and, when needed,
+`agent_states/orchestrator_state/provider_route_generations.json`. It writes in
+that order and a write failure attempts exact reverse-order restoration of
+every attempted target, including the failing target. After persistence, the
+controller commits the staged backend/runtime generation. Safe compensation
+restores the exact prior files and leaves the old runtime active; if restoration
+or activation cannot be proved, the shell reports `recovery_required` and must
+not be used until restarted against the persisted state.
+
+Success returns to the main prompt with `Settings saved and applied to this
+running shell now.` Changed profiles remain `pending` until their first complete
+logical provider call succeeds. A provider switch requires a fresh target-
+provider thread; a same-provider model/effort change remains eligible for native
+thread reuse. Save invokes no story-model turn, does not alter session or launch
+overrides, and stores no credentials or catalog data.
 
 Entering or validating a value remains in-memory only; no configuration value
 is persisted before confirmed Save. This does not change global `/auth` default
@@ -635,7 +663,11 @@ and package/public terminal APIs are unchanged.
 
 Full help is one grouped semantic `Panel` in command-registry order; contextual
 help is one command record with its group, syntax, aliases, provider/artifact
-effects, and example. `/agents` is one canonical roster list. Session and
+effects, and example. `/agents` is one canonical roster list. Every agent row
+shows `ID`, `Aliases`, `Advisory domain`, an `Execution` composite with
+provider/model/effort and each source, and `Confirmation`. The compact value
+shape is `PROVIDER [SOURCE] · model VALUE [SOURCE] · effort VALUE [SOURCE]`.
+Session and
 conversation catalogs, search hits, transcript events, and focused history
 emit one positioned, one-record list per established row callback. Empty
 states are explicit. If Ctrl-C interrupts search, transcript, or history after
@@ -649,6 +681,21 @@ exact order:
 Session | Durable state | Process access | Default session | Current attachment
 Default conversation | Current focus | Agent focus | Provider readiness | Next action
 ```
+
+It then emits four execution-profile records in canonical roster order. Each
+uses this exact field order:
+
+```text
+Provider | Provider source | Model | Model source | Effort | Effort source
+Confirmation | Thread | Route generation
+```
+
+Sources are `launch override`, `agent config`, `system default`,
+`built in default`, or `provider default`. Thread values are `not observed`,
+`fresh pending`, `reusable pending`, `fresh`, `reused`, or
+`fresh after provider switch`. `provider default` means Story omitted that
+model/effort flag; it is not a claim about the vendor's hidden server-side
+selection.
 
 `/session list` emits one row per persisted session, newest update then ID:
 
@@ -674,8 +721,8 @@ reads can include archives. See [grammar](interactive-command-parser.md) and
 
 | Syntax | Context behavior |
 | --- | --- |
-| `/run --output PART/PATH.md PROMPT` or `/run --output PART/PATH.md` then `/send` | One bounded snapshot of current focus. |
-| `/run --fresh --output PART/PATH.md PROMPT` | Records focused identity; sends no transcript. |
+| `/run --output PART/PATH.md PROMPT` or `/run --output PART/PATH.md` then `/send` | Bounded owner/core belonging-session facts plus one focused transcript snapshot. |
+| `/run --fresh --output PART/PATH.md PROMPT` | Retains bounded owner/core facts and focused identity; sends no focused transcript. |
 | `/draft-file PATH` | Strict-UTF-8 draft plus one focused snapshot; prompts for `PART/PATH.md`. |
 
 After prompt and path validation, inline, fresh, and committed composer runs

@@ -402,8 +402,8 @@ class ConversationRetrievalContractTests(unittest.TestCase):
         cases = (
             (ConversationRetrievalRequest, request, (
                 "session_id", "conversation_id", "turn_id", "agent_id",
-                "content", "context",
-            ), ()),
+                "content", "context", "story_session_context",
+            ), (("story_session_context", None),)),
             (ConversationRetrievalSearchAction, search_action, (
                 "kind", "session_id", "conversation_id", "turn_id",
                 "action_index", "query",
@@ -721,7 +721,7 @@ class ConversationRetrievalContractTests(unittest.TestCase):
         }
         self.assertEqual(
             dependencies,
-            {"agents", "conversation_search", "conversations", "errors"},
+            {"agents", "conversation_search", "conversations", "errors", "models"},
         )
         environment = os.environ.copy()
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -1214,6 +1214,37 @@ class ConversationRetrievalRuntimeFlowTests(ConversationRetrievalRuntimeTestCase
         self.assertEqual(result.content, "retrieval answer")
         self.assertEqual(result.sources, ())
         self.assertEqual(result.context.events, ())
+        self.assertEqual(len(backend.requests), 1)
+        request = backend.requests[0]
+        story_context = request.story_session_context
+        self.assertIsNotNone(story_context)
+        assert story_context is not None
+        self.assertEqual(
+            (
+                story_context.schema_version,
+                story_context.session_id,
+                story_context.agent_id,
+                story_context.focused_context.mode.value,
+                story_context.focused_context.conversation_id,
+                story_context.focused_context.window,
+            ),
+            (
+                1,
+                _SESSION,
+                PLOT_ARCHITECT,
+                "fresh",
+                self.selected.conversation_id,
+                None,
+            ),
+        )
+        self.assertEqual(story_context.owner_outcomes.entries, ())
+        self.assertEqual(
+            tuple(identity.path for identity in story_context.core_documents),
+            tuple(
+                reference.path.relative_to(self.workspace.root).as_posix()
+                for reference in backend.definitions[0].context_document_files
+            ),
+        )
         search.assert_not_called()
         read.assert_not_called()
         events = self.store.read(_SESSION, self.selected.conversation_id)

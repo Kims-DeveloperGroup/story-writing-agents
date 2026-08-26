@@ -68,6 +68,7 @@ from ._model import (
     PickerControlState,
     Prompt,
     Record,
+    RenderedInputFrame,
     Section,
     SemanticRole,
     SlashCommandSuggestion,
@@ -498,6 +499,7 @@ class InteractiveTerminal:
         "_composition_reference_read_line",
         "_confirmation_read_line",
         "_main_choice_read_line",
+        "_main_context_read_line",
         "_main_reference_read_line",
         "_main_read_line",
         "_picker_read",
@@ -549,6 +551,17 @@ class InteractiveTerminal:
         self._main_reference_read_line = (
             lambda prompt, choice_provider, _scope, _paths, _text: (
                 self._main_choice_read_line(prompt, choice_provider)
+            )
+        )
+        self._main_context_read_line = (
+            lambda prompt, choice_provider, scope, paths, text, _header: (
+                self._main_reference_read_line(
+                    prompt,
+                    choice_provider,
+                    scope,
+                    paths,
+                    text,
+                )
             )
         )
         self._composition_read_line = _plain_input_reader(read_line, width)
@@ -1449,9 +1462,10 @@ class InteractiveMainInput:
                 Callable[[str, int], ReferenceInputScope | None] | None,
                 Callable[[], tuple[str, ...]] | None,
                 Callable[[str], str] | None,
+                Callable[[str, int], Notice | None] | None,
             ],
             str,
-        ] = terminal._main_reference_read_line
+        ] = terminal._main_context_read_line
         self._reference_scope_provider: (
             Callable[[str, int], ReferenceInputScope | None] | None
         ) = None
@@ -1464,6 +1478,7 @@ class InteractiveMainInput:
         *,
         session_id: str | None = None,
         agent_id: str | None = None,
+        header_provider: Callable[[str, int], Notice | None] | None = None,
     ) -> TerminalAction:
         """Return one completed main line using call-local semantic choices."""
 
@@ -1474,6 +1489,7 @@ class InteractiveMainInput:
             reference_scope_provider=self._reference_scope_provider,
             reference_paths_provider=self._reference_paths_provider,
             reference_text_reader=self._reference_text_reader,
+            header_provider=header_provider,
         )
 
     def read_main_with_references(
@@ -1485,6 +1501,7 @@ class InteractiveMainInput:
         *,
         session_id: str | None = None,
         agent_id: str | None = None,
+        header_provider: Callable[[str, int], Notice | None] | None = None,
     ) -> TerminalAction:
         """Return one main line with private call-local reference activation."""
 
@@ -1512,6 +1529,7 @@ class InteractiveMainInput:
                 choice_provider,
                 session_id=session_id,
                 agent_id=agent_id,
+                header_provider=header_provider,
             )
         finally:
             self._reference_scope_provider = None
@@ -1529,11 +1547,14 @@ class InteractiveMainInput:
         ),
         reference_paths_provider: Callable[[], tuple[str, ...]] | None,
         reference_text_reader: Callable[[str], str] | None,
+        header_provider: Callable[[str, int], Notice | None] | None,
     ) -> TerminalAction:
         """Implement main input through one selected package-internal route."""
 
         if not callable(choice_provider):
             raise TypeError("choice_provider must be callable")
+        if header_provider is not None and not callable(header_provider):
+            raise TypeError("header_provider must be callable or None")
         reference_collaborators = (
             reference_scope_provider,
             reference_paths_provider,
@@ -1553,6 +1574,7 @@ class InteractiveMainInput:
                 reference_scope_provider,
                 reference_paths_provider,
                 reference_text_reader,
+                header_provider,
             )
         except KeyboardInterrupt:
             return TerminalAction(TerminalActionKind.INTERRUPT)
@@ -2121,6 +2143,7 @@ def read_main_command_line(
     reference_failure_writer: (
         Callable[[ReferenceInputFailureKind], None] | None
     ) = None,
+    input_context_provider: Callable[[str, int], Notice | None] | None = None,
 ) -> str:
     """Read one canonical selectable main command through the sole driver."""
 
@@ -2128,6 +2151,8 @@ def read_main_command_line(
         raise TypeError("driver must be a RawTerminalDriver")
     if choice_provider is not None and not callable(choice_provider):
         raise TypeError("choice_provider must be callable or None")
+    if input_context_provider is not None and not callable(input_context_provider):
+        raise TypeError("input_context_provider must be callable or None")
     reference_collaborators = (
         reference_scope_provider,
         reference_paths_provider,
@@ -2189,6 +2214,35 @@ def read_main_command_line(
         if picker is None:
             raise RuntimeError("active main choices are not correlated")
         return project_main_choice_palette(state, picker)
+
+    def input_frame_provider(
+        buffer: str,
+        cursor: int,
+        capabilities: TerminalCapabilities,
+    ) -> RenderedInputFrame:
+        assert input_context_provider is not None
+        context = input_context_provider(buffer, cursor)
+        if context is not None and type(context) is not Notice:
+            raise TypeError("input_context_provider must return a Notice or None")
+        if not prompt.endswith("> "):
+            raise ValueError("contextual main prompt must end with '> '")
+        return render_input_prompt(
+            InputPromptView(
+                () if context is None else (context,),
+                Prompt(prompt[:-1], state=ViewState.FOCUSED),
+            ),
+            capabilities,
+        )
+
+    if input_context_provider is not None:
+        return driver.read_contextual_main_command_line(
+            prompt,
+            completion_provider,
+            palette_projector,
+            render_component,
+            input_frame_provider,
+            reference_bindings,
+        )
 
     if reference_bindings is None:
         return driver.read_main_command_line(
@@ -2286,6 +2340,22 @@ def build_stream_terminal(
                 if scope is None
                 else lambda kind: terminal.write_error(_reference_input_error(kind))
             ),
+        )
+    )
+    terminal._main_context_read_line = (
+        lambda prompt, choices, scope, paths, text, header: read_main_command_line(
+            driver,
+            prompt,
+            choice_provider=choices,
+            reference_scope_provider=scope,
+            reference_paths_provider=paths,
+            reference_text_reader=text,
+            reference_failure_writer=(
+                None
+                if scope is None
+                else lambda kind: terminal.write_error(_reference_input_error(kind))
+            ),
+            input_context_provider=header,
         )
     )
     terminal._composition_read_line = lambda view: driver.read_input_line(

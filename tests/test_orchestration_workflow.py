@@ -306,6 +306,52 @@ class ContextAndProgressWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             all(request.conversation_context == snapshot for request in backend.requests)
         )
+        self.assertEqual(len(backend.bound_invocations), len(backend.requests))
+        for definition, request in backend.bound_invocations:
+            with self.subTest(
+                phase=request.phase.value,
+                agent_id=request.agent_id,
+                revision=request.revision_id,
+            ):
+                story_context = request.story_session_context
+                self.assertIsNotNone(story_context)
+                assert story_context is not None
+                self.assertEqual(story_context.session_id, session_id)
+                self.assertEqual(story_context.agent_id, request.agent_id)
+                self.assertEqual(
+                    story_context.focused_context.mode.value,
+                    "included",
+                )
+                self.assertEqual(
+                    story_context.focused_context.conversation_id,
+                    conversation_id,
+                )
+                self.assertIs(
+                    story_context.focused_context.window,
+                    request.conversation_context,
+                )
+                self.assertTrue(
+                    all(
+                        entry.agent_id == request.agent_id
+                        and entry.session_id == session_id
+                        for entry in story_context.owner_outcomes.entries
+                    )
+                )
+                self.assertEqual(
+                    tuple(
+                        (identity.path, identity.sha256)
+                        for identity in story_context.core_documents
+                    ),
+                    tuple(
+                        (
+                            reference.path.relative_to(
+                                workspace.root
+                            ).as_posix(),
+                            reference.sha256,
+                        )
+                        for reference in definition.context_document_files
+                    ),
+                )
         self.assertEqual(
             [event.phase for event in events],
             [
@@ -406,6 +452,35 @@ class ContextAndProgressWorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             all(request.conversation_context is None for request in backend.requests)
         )
+        legacy_requests = tuple(
+            request
+            for request in backend.requests
+            if request.debate_id == "legacy_debate"
+        )
+        fresh_requests = tuple(
+            request
+            for request in backend.requests
+            if request.debate_id == "fresh_debate"
+        )
+        self.assertTrue(legacy_requests)
+        self.assertTrue(fresh_requests)
+        for request in legacy_requests:
+            story_context = request.story_session_context
+            self.assertIsNotNone(story_context)
+            assert story_context is not None
+            self.assertEqual(story_context.focused_context.mode.value, "omitted")
+            self.assertIsNone(story_context.focused_context.conversation_id)
+            self.assertIsNone(story_context.focused_context.window)
+        for request in fresh_requests:
+            story_context = request.story_session_context
+            self.assertIsNotNone(story_context)
+            assert story_context is not None
+            self.assertEqual(story_context.focused_context.mode.value, "fresh")
+            self.assertEqual(
+                story_context.focused_context.conversation_id,
+                "conversation_a",
+            )
+            self.assertIsNone(story_context.focused_context.window)
         expected = [
             DebateProgressPhase.STARTED,
             DebateProgressPhase.DRAFTED,

@@ -58,6 +58,7 @@ _SESSION_DIRECTORY = "agent_states/orchestrator_state/provider_sessions"
 _PROCESS_DEADLINE_SECONDS = 12.0
 _PROCESS_POLL_QUANTUM_SECONDS = 0.02
 _TEARDOWN_DEADLINE_SECONDS = 3.0
+_ANSI_SGR_BYTES = re.compile(rb"\x1b\[[0-9;]*m")
 
 
 _FAKE_CODEX = r'''#!/usr/bin/env python3
@@ -612,13 +613,21 @@ class PtyCliProcess:
         """Read until one semantic fragment appears or a bounded failure occurs."""
 
         encoded = expected.encode("utf-8")
+
+        def captured_contains_expected() -> bool:
+            captured = self.normalized_bytes[after:]
+            return (
+                encoded in captured
+                or encoded in _ANSI_SGR_BYTES.sub(b"", captured)
+            )
+
         deadline = time.monotonic() + timeout
-        while encoded not in self.normalized_bytes[after:]:
+        while not captured_contains_expected():
             if self.process.poll() is not None:
                 self._drain_terminal()
                 break
             self._read_terminal_once(deadline)
-        if encoded not in self.normalized_bytes[after:]:
+        if not captured_contains_expected():
             raise AssertionError(
                 f"CLI output did not contain {expected!r}; "
                 f"captured_after_mark={self.text_after(after)!r}"
@@ -893,6 +902,36 @@ class InteractiveCliPtyTests(unittest.TestCase):
                     "CLI exited before fake-provider readiness; "
                     f"captured={process.normalized_text!r}"
                 )
+
+    def _wait_for_live_reply(
+        self,
+        process: PtyCliProcess,
+        *,
+        after: int,
+        identity: str,
+        title: str,
+        content: str,
+        provider: str = "Codex",
+    ) -> str:
+        """Wait for and verify one live execution-identity reply Record."""
+
+        process.wait_for_text(content, after=after)
+        rendered = process.text_after(after)
+        plain = _ANSI_SGR_BYTES.sub(
+            b"",
+            rendered.encode("utf-8"),
+        ).decode("utf-8")
+        self.assertIn(f"[{identity}] {title} [completed]\n", plain)
+        self.assertIn(f"Provider [info]: {provider} ", plain)
+        self.assertIn("Model: provider default [provider default]\n", plain)
+        self.assertIn("Effort: provider default [provider default]\n", plain)
+        self.assertIn("Confirmation [success]: confirmed\n", plain)
+        self.assertRegex(
+            plain,
+            r"Thread \[(?:info|success|warning)\]: (?:resumed|reused|fresh)\n",
+        )
+        self.assertIn(f"  {content}\n", plain)
+        return rendered
 
     def _wait_for_auth_record(
         self,
@@ -2197,10 +2236,20 @@ print(
                 process.send_text(("\x1b[B" * 4) + "\n")
                 process.send_text("\n")
                 saved = process.wait_for_text(
-                    "[saved] Settings saved.",
+                    "[saved and applied]",
                     after=returned_mark,
                 )
                 self.assertIn("(Changed)", saved)
+                self.assertIn(
+                    "Settingssavedandappliedtothisrunningshellnow.",
+                    "".join(
+                        re.sub(
+                            r"\x1b\[[0-9;]*[A-Za-z]",
+                            "",
+                            saved,
+                        ).split()
+                    ),
+                )
                 confirmation = saved.rsplit("Settings [open]", 1)[-1]
                 self.assertNotIn("Persona", confirmation)
                 process.wait_for_text("story[lobby]> ", after=returned_mark)
@@ -2313,10 +2362,20 @@ print(
         save_commit_mark = process.output_mark()
         process.send_text("\n")
         saved = process.wait_for_text(
-            "[saved] Settings saved.",
+            "[saved and applied]",
             after=save_commit_mark,
         )
         process.wait_for_text("story[lobby]> ", after=save_commit_mark)
+        self.assertIn(
+            "Settingssavedandappliedtothisrunningshellnow.",
+            "".join(
+                re.sub(
+                    r"\x1b\[[0-9;]*[A-Za-z]",
+                    "",
+                    saved,
+                ).split()
+            ),
+        )
         self.assertIn(b"\x1b[", bytes(process.raw_bytes[mark:]))
         process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
@@ -2976,7 +3035,7 @@ print(
 
         process.send_text("statuX")
         process.wait_for_text(
-            "story[lobby]> /stat\nuX",
+            "story[lobby]> /statu\nX",
             after=preview_mark,
         )
         backspace_mark = process.output_mark()
@@ -2984,17 +3043,20 @@ print(
         process.wait_for_text("Suggestions [open]", after=backspace_mark)
         edited = process.text_after(backspace_mark)
         self.assertIn("Suggestions [open]", edited)
-        self.assertIn("story[lobby]> /stat\nu", edited)
+        self.assertIn("story[lobby]> /statu", edited)
         self.assertIn("/status", "".join(edited.split()))
         process.send_text("s")
         process.wait_for_text(
-            "story[lobby]> /stat\nus",
+            "story[lobby]> /statu\ns",
             after=backspace_mark,
         )
 
         submit_mark = process.output_mark()
         process.send_text("\n")
-        completed = process.wait_for_text("us ", after=submit_mark)
+        completed = process.wait_for_text(
+            "story[lobby]> /statu\ns ",
+            after=submit_mark,
+        )
         self.assertNotIn("[session]", completed)
         process.send_text("\n")
         submitted = process.wait_for_text("[session]\n", after=submit_mark)
@@ -4851,7 +4913,13 @@ print(
 
         mark = process.output_mark()
         process.send_line("ordinary sticky turn")
-        process.wait_for_text("plot [completed]> deterministic advisory reply", after=mark)
+        self._wait_for_live_reply(
+            process,
+            after=mark,
+            identity="plot",
+            title="Plot & Structure Architect",
+            content="deterministic advisory reply",
+        )
         process.wait_for_text("story[alpha:plot]> ", after=mark)
         ordinary_output = process.text_after(mark)
         self.assertNotIn("you → plot", ordinary_output)
@@ -4860,9 +4928,12 @@ print(
 
         mark = process.output_mark()
         process.send_line("@character one-shot turn")
-        routed = process.wait_for_text(
-            "character [completed]> deterministic advisory reply",
+        routed = self._wait_for_live_reply(
+            process,
             after=mark,
+            identity="character",
+            title="Character & World Custodian",
+            content="deterministic advisory reply",
         )
         process.wait_for_text("story[alpha:plot]> ", after=mark)
         self.assertNotIn("[routing] One-shot route", routed)
@@ -5050,7 +5121,7 @@ print(
         commit_mark = process.output_mark()
         process.send_text("\n")
         resumed = process.wait_for_text("story[beta:lead]> ", after=commit_mark)
-        self.assertTrue(resumed.startswith("\r\r\x1b[J"), resumed)
+        self.assertRegex(resumed, r"^\r(?:\x1b\[A)*\r\x1b\[J")
         self.assertEqual(resumed.count("Session: beta (opened)"), 1)
         self.assertEqual(resumed.count("--- Conversation scope "), 1)
         self.assertNotIn("[session] Already attached to beta.", resumed)
@@ -5111,7 +5182,7 @@ print(
         commit_mark = process.output_mark()
         process.send_text("\n")
         resumed = process.wait_for_text("story[alpha:lead]> ", after=commit_mark)
-        self.assertTrue(resumed.startswith("\r\r\x1b[J"), resumed)
+        self.assertRegex(resumed, r"^\r(?:\x1b\[A)*\r\x1b\[J")
         self.assertEqual(resumed.count("Current focus: "), 1)
         self.assertEqual(resumed.count("--- Conversation scope "), 1)
         self.assertIn("Subject: Second subject", resumed)
@@ -5143,7 +5214,13 @@ print(
 
         mark = process.output_mark()
         process.send_line("harbor beacon beside the vessel")
-        process.wait_for_text("lead [completed]> deterministic advisory reply", after=mark)
+        self._wait_for_live_reply(
+            process,
+            after=mark,
+            identity="lead",
+            title="Lead Orchestrator",
+            content="deterministic advisory reply",
+        )
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         advisory_output = process.text_after(mark)
         accepted_message = (
@@ -5152,9 +5229,7 @@ print(
         self.assertEqual(advisory_output.count(accepted_message), 1)
         self.assertLess(
             advisory_output.index(accepted_message),
-            advisory_output.index(
-                "lead [completed]> deterministic advisory reply"
-            ),
+            advisory_output.index("[lead] Lead Orchestrator [completed]"),
         )
         provider_calls_before_reads = len(
             [
@@ -5243,7 +5318,13 @@ print(
         )
         process.wait_for_text("Retrieval read action 2 started.", after=mark)
         process.wait_for_text("Retrieval read action 2 completed:", after=mark)
-        process.wait_for_text("lead [completed]> retrieval-assisted answer", after=mark)
+        self._wait_for_live_reply(
+            process,
+            after=mark,
+            identity="lead",
+            title="Lead Orchestrator",
+            content="retrieval-assisted answer",
+        )
         process.wait_for_text("[context] Source 1 [completed]", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         retrieval_output = process.text_after(mark)
@@ -5597,7 +5678,13 @@ asyncio.run(main())
 
         mark = process.output_mark()
         process.send_line("seed advisory")
-        process.wait_for_text("plot [completed]> deterministic advisory reply", after=mark)
+        self._wait_for_live_reply(
+            process,
+            after=mark,
+            identity="plot",
+            title="Plot & Structure Architect",
+            content="deterministic advisory reply",
+        )
         process.wait_for_text("story[alpha:plot]> ", after=mark)
         manifest_path = f"{_SESSION_DIRECTORY}/alpha.json"
         manifest = self.workspace.read_json(manifest_path)
@@ -5691,7 +5778,13 @@ asyncio.run(main())
         self._set_provider_control(mode="auto")
         mark = process.output_mark()
         process.send_line("after cancellation")
-        process.wait_for_text("plot [completed]> deterministic advisory reply", after=mark)
+        self._wait_for_live_reply(
+            process,
+            after=mark,
+            identity="plot",
+            title="Plot & Structure Architect",
+            content="deterministic advisory reply",
+        )
         process.wait_for_text("story[alpha:plot]> ", after=mark)
         manifest = self.workspace.read_json(manifest_path)
         self.assertIs(
@@ -5739,7 +5832,13 @@ asyncio.run(main())
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         mark = process.output_mark()
         process.send_line("establish current lead thread")
-        process.wait_for_text("lead [completed]> deterministic advisory reply", after=mark)
+        self._wait_for_live_reply(
+            process,
+            after=mark,
+            identity="lead",
+            title="Lead Orchestrator",
+            content="deterministic advisory reply",
+        )
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         core_after_seed = self.workspace.read_text(
             "core_documents/global_outline.md"
@@ -6127,7 +6226,13 @@ asyncio.run(main())
         self._set_provider_control(mode="auto")
         mark = process.output_mark()
         process.send_line("recovered provider turn")
-        process.wait_for_text("lead [completed]> deterministic advisory reply", after=mark)
+        self._wait_for_live_reply(
+            process,
+            after=mark,
+            identity="lead",
+            title="Lead Orchestrator",
+            content="deterministic advisory reply",
+        )
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         self.assertEqual(
             len(
@@ -6180,7 +6285,13 @@ asyncio.run(main())
         self._set_provider_control(mode="auto")
         mark = process.output_mark()
         process.send_line("recovered malformed provider turn")
-        process.wait_for_text("lead [completed]> deterministic advisory reply", after=mark)
+        self._wait_for_live_reply(
+            process,
+            after=mark,
+            identity="lead",
+            title="Lead Orchestrator",
+            content="deterministic advisory reply",
+        )
         process.wait_for_text("story[alpha:lead]> ", after=mark)
 
         transcript_path = self.workspace.path(

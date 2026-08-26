@@ -436,12 +436,21 @@ class Workspace:
         session_id: str,
         debate_id: str,
     ) -> tuple[AgentStateEntry, ...]:
-        """Rehydrate the requested owner's session history in stable chronology."""
+        """Compatibility delegate for owner-scoped session rehydration."""
+
+        self.validate_identifier(debate_id, label="debate ID")
+        return self.read_agent_session_state(agent_id, session_id)
+
+    def read_agent_session_state(
+        self,
+        agent_id: str,
+        session_id: str,
+    ) -> tuple[AgentStateEntry, ...]:
+        """Rehydrate one owner's complete session history in stable chronology."""
 
         if agent_id not in AGENT_STATE_DIRECTORIES:
             raise WorkspaceSecurityError(f"unknown agent state owner: {agent_id}")
         session = self.validate_identifier(session_id)
-        self.validate_identifier(debate_id, label="debate ID")
         state_directory = AGENT_STATE_DIRECTORIES[agent_id]
         relative_directory = (
             f"agent_states/{state_directory}/debates/{session}"

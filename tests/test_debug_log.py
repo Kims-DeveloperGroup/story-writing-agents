@@ -41,6 +41,10 @@ from story_writing_agents.debug_log import (
     DebugPhase,
     WorkspaceDebugLog,
 )
+from story_writing_agents.provider_adapter import (
+    AgentExecutionProfile,
+    ExecutionValueSource,
+)
 from story_writing_agents.workspace import Workspace
 
 from tests.helpers import initialized_workspace
@@ -702,6 +706,13 @@ class DebugLogContractTests(unittest.TestCase):
                 ("DIRECTIVE", "directive"),
                 ("INSPECTION", "inspection"),
                 ("CLEANUP", "cleanup"),
+                ("EXECUTION_SETTING_CHANGE", "execution_setting_change"),
+                ("EXECUTION_PROFILE_APPLIED", "execution_profile_applied"),
+                ("EXECUTION_PROFILE_CONFIRMED", "execution_profile_confirmed"),
+                (
+                    "EXECUTION_PROFILE_RECOVERY_REQUIRED",
+                    "execution_profile_recovery_required",
+                ),
             ),
             DebugPhase: (
                 ("STARTED", "started"),
@@ -755,6 +766,27 @@ class DebugLogContractTests(unittest.TestCase):
                 "debate_id",
                 "agent_id",
                 "outcome",
+            ),
+        )
+        self.assertEqual(
+            tuple(
+                inspect.signature(
+                    WorkspaceDebugLog.execution_profile_event
+                ).parameters
+            ),
+            (
+                "self",
+                "operation",
+                "correlation_id",
+                "agent_id",
+                "route_generation",
+                "old_profile",
+                "new_profile",
+                "active_profile",
+                "activation_state",
+                "thread_disposition",
+                "context_state",
+                "recovery_required",
             ),
         )
         for name in debug_module.__all__:
@@ -823,6 +855,210 @@ class DebugLogContractTests(unittest.TestCase):
         self.assertTrue(raw.endswith(b"\n"))
         self.assertEqual(raw.count(b"\n"), 2)
         self.assertNotIn(b"null", raw)
+
+    def test_schema_v2_profile_transitions_are_exact_correlated_and_private(
+        self,
+    ) -> None:
+        old = AgentExecutionProfile(
+            agent_id=ROSTER[0],
+            provider="codex",
+            provider_source=ExecutionValueSource.BUILT_IN_DEFAULT,
+            model=None,
+            model_source=ExecutionValueSource.PROVIDER_DEFAULT,
+            effort="high",
+            effort_source=ExecutionValueSource.SYSTEM_DEFAULT,
+        )
+        new = AgentExecutionProfile(
+            agent_id=ROSTER[0],
+            provider="antigravity",
+            provider_source=ExecutionValueSource.AGENT_CONFIG,
+            model="agy-model",
+            model_source=ExecutionValueSource.AGENT_CONFIG,
+            effort="medium",
+            effort_source=ExecutionValueSource.LAUNCH_OVERRIDE,
+        )
+        fixed_datetime = mock.Mock()
+        fixed_datetime.now.return_value = _FIXED_TIME
+        with mock.patch.object(debug_module, "datetime", fixed_datetime):
+            self.log.trace(
+                DebugComponent.CLI,
+                DebugOperation.CLI_COMMAND,
+                DebugPhase.OBSERVED,
+            )
+            for operation, activation_state, recovery_required in (
+                (
+                    DebugOperation.EXECUTION_SETTING_CHANGE,
+                    "accepted",
+                    False,
+                ),
+                (
+                    DebugOperation.EXECUTION_PROFILE_APPLIED,
+                    "active",
+                    False,
+                ),
+                (
+                    DebugOperation.EXECUTION_PROFILE_RECOVERY_REQUIRED,
+                    "recovery_required",
+                    True,
+                ),
+            ):
+                self.log.execution_profile_event(
+                    operation,
+                    correlation_id="settings_save_7",
+                    agent_id=ROSTER[0],
+                    route_generation=7,
+                    old_profile=old,
+                    new_profile=new,
+                    activation_state=activation_state,
+                    recovery_required=recovery_required,
+                )
+            self.log.execution_profile_event(
+                DebugOperation.EXECUTION_PROFILE_CONFIRMED,
+                correlation_id="settings_save_7",
+                agent_id=ROSTER[0],
+                route_generation=7,
+                active_profile=new,
+                activation_state="confirmed",
+                thread_disposition="fresh_after_provider_switch",
+                context_state="rehydrated",
+            )
+
+        records = _records(self.workspace)
+        self.assertEqual([record["schema_version"] for record in records], [1, 2, 2, 2, 2])
+        transitions = records[1:4]
+        profile_projection = {
+            "provider": "antigravity",
+            "provider_source": "agent_config",
+            "model": "agy-model",
+            "model_source": "agent_config",
+            "effort": "medium",
+            "effort_source": "launch_override",
+        }
+        old_projection = {
+            "provider": "codex",
+            "provider_source": "built_in_default",
+            "model": None,
+            "model_source": "provider_default",
+            "effort": "high",
+            "effort_source": "system_default",
+        }
+        self.assertEqual(
+            [record["operation"] for record in transitions],
+            [
+                "execution_setting_change",
+                "execution_profile_applied",
+                "execution_profile_recovery_required",
+            ],
+        )
+        for record in transitions:
+            with self.subTest(operation=record["operation"]):
+                expected = {
+                    "schema_version": 2,
+                    "timestamp": "2026-08-20T01:02:03.456+00:00",
+                    "level": (
+                        "error"
+                        if record["operation"]
+                        == "execution_profile_recovery_required"
+                        else "trace"
+                    ),
+                    "component": "backend",
+                    "operation": record["operation"],
+                    "phase": (
+                        "failed"
+                        if record["operation"]
+                        == "execution_profile_recovery_required"
+                        else "succeeded"
+                    ),
+                    "correlation_id": "settings_save_7",
+                    "agent_id": ROSTER[0],
+                    "route_generation": 7,
+                    "activation_state": record["activation_state"],
+                    "old_profile": old_projection,
+                    "new_profile": profile_projection,
+                }
+                self.assertEqual(record, expected)
+        confirmed = records[4]
+        self.assertEqual(
+            confirmed,
+            {
+                "schema_version": 2,
+                "timestamp": "2026-08-20T01:02:03.456+00:00",
+                "level": "trace",
+                "component": "backend",
+                "operation": "execution_profile_confirmed",
+                "phase": "succeeded",
+                "correlation_id": "settings_save_7",
+                "agent_id": ROSTER[0],
+                "route_generation": 7,
+                "activation_state": "confirmed",
+                "active_profile": profile_projection,
+                "thread_disposition": "fresh_after_provider_switch",
+                "context_state": "rehydrated",
+            },
+        )
+        forbidden = {
+            "payload",
+            "context",
+            "story",
+            "prompt",
+            "reply",
+            "stderr",
+            "credentials",
+            "argv",
+            "provider_output",
+            "exception",
+        }
+        for record in records[1:]:
+            self.assertTrue(forbidden.isdisjoint(record))
+
+    def test_invalid_schema_v2_profile_events_drop_without_mutation(self) -> None:
+        profile = AgentExecutionProfile(
+            agent_id=ROSTER[0],
+            provider="codex",
+            provider_source=ExecutionValueSource.BUILT_IN_DEFAULT,
+            model=None,
+            model_source=ExecutionValueSource.PROVIDER_DEFAULT,
+            effort=None,
+            effort_source=ExecutionValueSource.PROVIDER_DEFAULT,
+        )
+        calls = (
+            lambda: self.log.execution_profile_event(
+                DebugOperation.CLI_COMMAND,
+                correlation_id="valid",
+                agent_id=ROSTER[0],
+                route_generation=0,
+                active_profile=profile,
+                activation_state="active",
+            ),
+            lambda: self.log.execution_profile_event(
+                DebugOperation.EXECUTION_PROFILE_APPLIED,
+                correlation_id="../unsafe",
+                agent_id=ROSTER[0],
+                route_generation=0,
+                active_profile=profile,
+                activation_state="active",
+            ),
+            lambda: self.log.execution_profile_event(
+                DebugOperation.EXECUTION_PROFILE_APPLIED,
+                correlation_id="valid",
+                agent_id=ROSTER[0],
+                route_generation=-1,
+                active_profile=profile,
+                activation_state="active",
+            ),
+            lambda: self.log.execution_profile_event(
+                DebugOperation.EXECUTION_PROFILE_APPLIED,
+                correlation_id="valid",
+                agent_id=ROSTER[1],
+                route_generation=0,
+                active_profile=profile,
+                activation_state="active",
+            ),
+        )
+        for index, call in enumerate(calls):
+            with self.subTest(index=index):
+                call()
+        self.assertFalse(self.log.path.exists())
 
     def test_invalid_inputs_drop_only_the_record(self) -> None:
         calls = (
@@ -1011,7 +1247,7 @@ class DebugLogContractTests(unittest.TestCase):
             for node in ast.walk(tree)
             if isinstance(node, ast.ImportFrom) and node.level == 1
         }
-        self.assertEqual(dependencies, {"agents", "workspace"})
+        self.assertEqual(dependencies, {"agents", "provider_adapter", "workspace"})
         for dependency in dependencies:
             dependency_source = (
                 Path(debug_module.__file__).with_name(f"{dependency}.py")
