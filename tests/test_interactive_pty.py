@@ -63,10 +63,10 @@ _PROCESS_POLL_QUANTUM_SECONDS = 0.02
 _TEARDOWN_DEADLINE_SECONDS = 3.0
 _ANSI_SGR_BYTES = re.compile(rb"\x1b\[[0-9;]*m")
 _VISIBLE_PROGRESS_FRAMES = (
-    "[█▓▒░░░░░]",
-    "[▓█▓▒░░░░]",
-    "[▒▓█▓▒░░░]",
-    "[░▒▓█▓▒░░]",
+    "[█▓▒░░░░░░░░░░░░░]",
+    "[▓█▓▒░░░░░░░░░░░░]",
+    "[▒▓█▓▒░░░░░░░░░░░]",
+    "[░▒▓█▓▒░░░░░░░░░░]",
 )
 
 

@@ -441,7 +441,7 @@ probes and the controller's persisted session/conversation reads before an
 omitted resume picker use that lifecycle too. The controller also brackets
 advisory and consensus runtime awaitables plus each Settings
 Provider/Model/Effort option read.
-On a capable raw stream, the sole driver renders a text-free eight-cell
+On a capable raw stream, the sole driver renders a text-free sixteen-cell
 block-shade shimmer that travels out and back, with a fixed bold color cycle on
 ANSI terminals. It clears the complete row around
 semantic retrieval/progress/result writes, and clears it before a refreshed

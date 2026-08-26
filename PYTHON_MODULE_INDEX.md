@@ -2832,7 +2832,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   a two-space-indented projection; malformed JSON, scalars, embedded prose, and
   every other string return exactly unchanged. The fixed `AGENT` role is bold
   terminal-default foreground with the same plain meaning and local reset.
-  `render_advisory_progress_frame` projects one fixed text-free eight-cell
+  `render_advisory_progress_frame` projects one fixed text-free sixteen-cell
   block-shade shimmer whose graded bright point travels out and back, without
   ANSI, cursor controls, dynamic content, or state. Package-internal
   `render_startup_welcome_frame` separately consumes one

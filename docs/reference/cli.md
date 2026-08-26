@@ -874,7 +874,7 @@ During interactive startup, fresh authentication probing, omitted session or
 conversation resume preparation, one advisory turn, or while `/settings`
 prepares Provider, Model, or Effort options, a capable raw stream may show the
 terminal-owned loading row.
-It is a text-free eight-cell block-shade shimmer that travels out and back.
+It is a text-free sixteen-cell block-shade shimmer that travels out and back.
 ANSI terminals cycle a fixed bold color palette as it moves. The driver clears
 the complete row before each
 semantic/progress/result write, redraws while the operation is

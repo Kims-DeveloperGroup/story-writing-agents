@@ -104,7 +104,7 @@ authentication probes, persisted omitted-resume preparation, advisory and
 consensus turns, and Settings option preparation, the same capability result
 also gates the narrow terminal-owned progress indicator. A capable raw stream
 may show the fixed
-text-free eight-cell block-shade shimmer with a fixed ANSI color cycle;
+text-free sixteen-cell block-shade shimmer with a fixed ANSI color cycle;
 `NO_COLOR` preserves the same spatial motion without SGR.
 Callback construction and non-TTY, `TERM=dumb`, non-POSIX, missing, or
 uncertain-capability paths await the operation silently and emit no indicator.
