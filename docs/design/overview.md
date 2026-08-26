@@ -4,7 +4,9 @@
 > dependency direction, filesystem/SQLite conversation selection, and the
 > installed interactive controller. The controller now uses the package-internal supplied-text viewer
 > for `$`/`$$` prompt editing; the viewer still has no standalone command or
-> supported public API.
+> supported public API. Optional conversation RAG currently has a direct Python
+> boundary only; provider/store, runtime, agent, and shell integration remain
+> planned.
 
 Key terms: **controller**—owner of interactive transition order;
 **adapter**—provider-specific process/protocol implementation;
@@ -40,6 +42,24 @@ Antigravity-native state; taint or a changed definition starts a fresh provider
 conversation without deleting prior data. See the
 [Backend/session contract](../reference/backend-and-sessions.md) and
 [Antigravity guide](../guides/antigravity.md).
+
+## Optional conversation RAG ownership
+
+| Module | Responsibility |
+| --- | --- |
+| `conversation_rag` | Standard-library-only story contracts, fixed projection/retrieval budgets, stable source identities, collaborator protocols, outcomes, reasons, and content-free failures |
+| `generic_rag_adapter` | Sole production translation boundary that imports story contracts and the exact optional `generic-rag` API |
+| `conversation_rag_composition` | Import-safe deferred composition, fixed `local` allowlist, version/capability checks, and sanitized diagnostics |
+
+`generic-rag` has no dependency on this project. The package root does not
+re-export these modules, the base install does not need the generic package,
+and #262 creates no provider, store, runtime authorization, projection schedule,
+citation path, command, or setting. Callers own injected collaborators and
+their lifecycles. Provider fragment text is non-authoritative; later runtime
+integration must reauthorize stable references and reread authoritative
+conversation bytes before use. See
+[Optional conversation RAG](../guides/conversation-rag.md) for installation,
+the current boundary, and the explicitly planned agent/user workflow.
 
 `Workspace` owns generic path-safe persistence, inspection, and atomic
 replacement. Its retained root identity is a narrower internal

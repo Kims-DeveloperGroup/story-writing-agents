@@ -1,0 +1,22 @@
+version = 1
+revision = 3
+requires-python = ">=3.11"
+
+[[package]]
+name = "generic-rag"
+version = "0.1.0"
+source = { git = "https://github.com/Kims-DeveloperGroup/generic-rag.git?rev=c77456321c614518e420e45c033e3f71dc5363b8#c77456321c614518e420e45c033e3f71dc5363b8" }
+
+[[package]]
+name = "story-writing-agents"
+version = "0.1.0"
+source = { virtual = "." }
+
+[package.optional-dependencies]
+rag = [
+    { name = "generic-rag" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "generic-rag", marker = "extra == 'rag'", git = "https://github.com/Kims-DeveloperGroup/generic-rag.git?rev=c77456321c614518e420e45c033e3f71dc5363b8" }]
+provides-extras = ["rag"]

@@ -5,7 +5,9 @@
 > archive additions to the supported `story_writing_agents.conversation_storage`
 > subpackage, pure literal-search mechanics, and the optional SQLite owning
 > modules plus direct-only conversation migration, provisioning, and selection;
-> none is a package-root facade export. Context and progress types are Python
+> optional conversation RAG also uses three supported direct modules, with the
+> generic adapter available only through its pinned extra. None is a
+> package-root facade export. Context and progress types are Python
 > APIs; an export does not imply a CLI command.
 
 Key terms: **package facade**—the names re-exported at the package root;
@@ -148,6 +150,114 @@ Subject classification returns `exact_subject`, `subject_prefix`,
 `subject_substring`, or `None`; the snippet and sort helpers implement the
 same deterministic public behavior used by both reference and SQLite search.
 See [Conversation search](conversation-search.md#search-contract).
+
+<a id="optional-conversation-rag-boundary"></a>
+
+## Optional conversation RAG boundary
+
+> **Availability:** these are direct Python APIs. Issue #262 does not connect
+> them to `StoryRuntime`, conversation stores, agents, the CLI, `/rag`, or
+> `/settings`. It provides no local provider or derived generation store.
+> Existing literal retrieval and `/search` are unchanged.
+
+Provider-neutral story contracts live in
+`story_writing_agents.conversation_rag`. The module imports only the standard
+library, performs no I/O, and is safe in the RAG-free base installation. Its
+exact 35-name `__all__` is:
+
+- policy and outcomes: `CONVERSATION_RAG_POLICY`, `ConversationRagPolicy`,
+  `ConversationRagOutcome`, `ConversationRagReason`,
+  `ConversationRagProjectionStateAvailability`,
+  `ConversationRagProjectionStatus`, `ConversationRagProjectionOutcome`, and
+  `ConversationRagProjectionFailureStage`;
+- source and vector values: `ConversationRagDocumentKey`,
+  `ConversationRagDocumentIdentity`, `ConversationRagSourceDocument`,
+  `ConversationRagSourceReference`, `ConversationRagEmbeddingIdentity`,
+  `ConversationRagEmbeddingVector`, `ConversationRagProviderCandidate`, and
+  `ConversationRagVectorRecord`;
+- state, request, and result values:
+  `ConversationRagProjectionCheckpointEntry`,
+  `ConversationRagProjectionCheckpoint`, `ConversationRagProjectionState`,
+  `ConversationRagProjectionRequest`, `ConversationRagProjectionResult`,
+  `ConversationRagRetrievalRequest`, `ConversationRagCandidate`, and
+  `ConversationRagRetrievalResult`;
+- caller-owned ports: `ConversationRagEmbedder`,
+  `ConversationRagVectorIndexWriter`, `ConversationRagVectorIndexResetter`,
+  `ConversationRagVectorIndexReader`, `ConversationRagLexicalRetriever`,
+  `ConversationRagCollaborators`, and `ConversationRagService`; and
+- failures: `ConversationRagError`, `ConversationRagContractError`,
+  `ConversationRagStateError`, and `ConversationRagOperationError`.
+
+The fixed policy is:
+
+| Field | Exact value |
+| --- | ---: |
+| `max_candidates` | `20` |
+| `max_conversations` | `256` |
+| `max_events` | `10_000` |
+| `max_fragment_codepoints` | `800` |
+| `fragment_overlap_codepoints` | `80` |
+| `max_embedding_batch_size` | `32` |
+
+`ConversationRagService` has four positional-only operations:
+
+```python
+project_documents(request, state) -> ConversationRagProjectionResult
+rebuild_projection(request, state) -> ConversationRagProjectionResult
+retrieve_semantic(request, state) -> ConversationRagRetrievalResult
+retrieve_hybrid(request, state) -> ConversationRagRetrievalResult
+```
+
+Projection input can contain authorized source text, but public retrieval
+output does not. `ConversationRagCandidate` carries only a stable source
+reference and contiguous rank. Provider fragment text is non-authoritative
+adapter input and is dropped after identity/range validation. A future runtime
+must reauthorize and reread the current range before display or agent use.
+
+The exact generic translation surface requires the optional package and
+exports three names:
+
+```python
+from story_writing_agents.generic_rag_adapter import (
+    GenericRagCapabilitySnapshot,
+    GenericRagConversationService,
+    inspect_generic_rag_capabilities,
+)
+```
+
+`generic_rag_adapter` is the sole production module importing both projects.
+It maps to the exact `generic-rag` 0.1.0 owning-module API, borrows caller-owned
+collaborators, validates returned types and stable identities, removes provider
+text from story results, and translates ordinary failures to content-free story
+errors. It does not acquire, close, discover, or persist collaborators. Process
+control propagates.
+
+Deferred composition is safe to import without `generic-rag` and exports four
+names:
+
+```python
+from story_writing_agents.conversation_rag_composition import (
+    CONVERSATION_RAG_PROVIDER_ALLOWLIST,
+    ConversationRagCompositionError,
+    ConversationRagCompositionFailure,
+    compose_conversation_rag,
+)
+```
+
+The allowlist is exactly `("local",)`. Calling
+`compose_conversation_rag(provider, collaborators, /)` validates that value,
+requires installed distribution version `0.1.0`, performs the deferred static
+adapter import, verifies its capability manifest, and constructs the service.
+It does not dynamically discover providers or inspect environment
+configuration. Sanitized failure values are `provider_unsupported`,
+`dependency_missing`, `version_incompatible`, and
+`capability_incompatible`; dependency details do not cross the error boundary.
+
+These modules do not implement the `local` provider, storage, authorization,
+scheduling, rereads, citations, or user interface. Installation, immutable-pin
+verification, caller ownership, the redistribution restriction, and the
+planned agent/user flow are in
+[Optional conversation RAG](../guides/conversation-rag.md).
 
 <a id="conversation-storage-subpackage"></a>
 
@@ -843,6 +953,7 @@ aliases. See [Backend and sessions](backend-and-sessions.md#lifecycle-value-cont
 - [Canonical conversation archives and storage migration](conversation-archives.md)
 - [Conversation search and cited transcript pages](conversation-search.md)
 - [Bounded conversation retrieval](conversation-retrieval.md)
+- [Optional conversation RAG setup and delivery plan](../guides/conversation-rag.md)
 - [Interactive command parser](interactive-command-parser.md)
 - [Identifiers and errors](configuration/identifiers-and-errors.md)
 
@@ -850,12 +961,13 @@ Lower-level modules may contain implementation helpers. The package-root facade
 matches its `__all__`; archive names are supported only through the explicitly
 documented conversation-storage subpackage and its owning-module surfaces.
 The explicitly documented literal-search, SQLite adapter, SQLite companion,
-conversation-migration, provisioning, and selection modules are also supported
-direct-module surfaces and match their own `__all__` values. None is
-re-exported by the package-root or conversation-storage facade.
+conversation-migration, provisioning, selection, and conversation-RAG modules
+are also supported direct-module surfaces and match their own `__all__` values.
+None is re-exported by the package-root or conversation-storage facade.
 
 The exact current inventories are package root `120`, conversation storage
 `64`, conversation search `13`, SQLite database owner `12`, SQLite adapter
 `14`, literal-search mechanics `6`, SQLite companion owner `5`, conversation
-migration `7`, provisioning `4`, and selection `7`. The production module
-inventory is `68`.
+migration `7`, provisioning `4`, selection `7`, conversation RAG contracts
+`35`, generic RAG adapter `3`, and RAG composition `4`. The production module
+inventory is `72`.

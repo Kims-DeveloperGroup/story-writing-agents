@@ -55,6 +55,13 @@ python -m pip install --editable .
 rehash
 ```
 
+That is the RAG-free base installation. An optional direct Python conversation
+RAG boundary is available for approved internal, non-redistributing evaluation,
+but no RAG provider, derived store, runtime/agent integration, command, or
+setting is enabled yet. See [Optional conversation RAG](docs/guides/conversation-rag.md)
+for submodule initialization, the pinned `rag` extra, license limits, and the
+clearly labeled delivery plan.
+
 `story` and `story-writing-agents` are exact aliases. Smoke uses synthetic data
 without Codex or Antigravity, credential reads, a terminal, subprocesses, apps,
 web, or network.
@@ -122,6 +129,7 @@ story run --output part-01/opening.md --prompt 'Draft the opening.'
 - [Workspace guide](docs/guides/workspaces.md) explains the editable project files.
 - [Writing artifacts](docs/reference/writing-artifacts.md) separates current reference sources from publication identity, provenance, and recovery.
 - [Conversation archives](docs/reference/conversation-archives.md) documents canonical conversation-only bytes and privileged filesystem transfer.
+- [Optional conversation RAG](docs/guides/conversation-rag.md) separates the current direct Python adapter boundary from the planned agent and user workflow.
 - [Antigravity guide](docs/guides/antigravity.md) covers `agy` setup, authentication, routing, safety, sessions, and provider-free verification.
 - [Story sessions](docs/guides/story-sessions.md) shows shell management, conversation reads, retrieval, and consensus.
 - [Session lifecycle](docs/design/session-lifecycle.md) maps internal state to commands, output, errors, and next actions.
@@ -141,6 +149,11 @@ The only supported backend names are `codex` and `antigravity`; legacy
 <a id="minimal-python-api"></a>
 
 For Python integrations, start with the [runtime API](docs/reference/runtime-api.md), [agent contracts](docs/reference/agent-contracts.md), and [bounded retrieval](docs/reference/conversation-retrieval.md).
+
+The optional conversation RAG contracts, exact generic adapter, and deferred
+composition surface are direct-module APIs and are not package-root exports.
+They do not alter runtime retrieval until later integration is delivered. See
+the [RAG package boundary](docs/reference/package-api.md#optional-conversation-rag-boundary).
 
 Canonical conversation archive values and lease-bound filesystem export/import
 are available from the `story_writing_agents.conversation_storage` subpackage.
@@ -221,9 +234,11 @@ See the [CLI contract](docs/reference/cli.md#conversation-storage-migration).
   the next shell. SQLite host installation requires explicit confirmation, and
   startup never installs or provisions it. Migration remains a separate
   provider-free copy/parity workflow over two ready same-workspace stores and
-  never activates or deletes one. There is no live switch, dual write, RAG, or
-  MySQL adapter. The derived FTS5 companion does not change readiness, exact
-  literal results, migration parity, or selection.
+  never activates or deletes one. There is no live switch, dual write, MySQL
+  adapter, or runtime/shell RAG integration. The optional direct Python RAG
+  boundary has no local provider/store, authorized scheduling/reread/citation
+  path, commands, or settings yet. The derived FTS5 companion does not change
+  readiness, exact literal results, migration parity, or selection.
 - Smoke's explicit workspace is not read-only and retains bounded plaintext
   diagnostics when they can be written; abrupt termination can interrupt
   cleanup. A pass does not validate provider/model, terminal behavior,
