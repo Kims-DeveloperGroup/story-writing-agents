@@ -2288,6 +2288,10 @@ print(
                     b"\x1b[35mSettings [focused] [open] >\x1b[0m",
                     process.raw_bytes,
                 )
+                self.assertNotIn(
+                    b"\x1b[33mCurrent:",
+                    bytes(process.raw_bytes[mark:]),
+                )
 
                 language_mark = process.output_mark()
                 process.send_text("\n")
@@ -2313,6 +2317,7 @@ print(
                         ).split()
                     ),
                 )
+                highlighted_pending_mark = process.output_mark()
                 process.send_text("\n")
                 returned_settings = process.wait_for_text(
                     "[save required]",
@@ -2350,12 +2355,28 @@ print(
                         ).split()
                     ),
                 )
+                self.assertNotIn(
+                    f"\x1b[33mPending: {expected_language}\x1b[0m".encode(),
+                    bytes(process.raw_bytes[highlighted_pending_mark:]),
+                )
                 self.assertEqual(
                     returned_settings.count("Settings [focused] [open]"),
                     1,
                 )
+                idle_pending_mark = process.output_mark()
+                process.send_text("\x1b[B")
+                process.wait_for_text(
+                    "[highlighted] Persona",
+                    after=idle_pending_mark,
+                )
+                idle_pending = bytes(process.raw_bytes[idle_pending_mark:])
+                self.assertIn(
+                    f"\x1b[33mPending: {expected_language}\x1b[0m".encode(),
+                    idle_pending,
+                )
+                self.assertNotIn(b"\x1b[33mCurrent:", idle_pending)
                 returned_mark = process.output_mark()
-                process.send_text(("\x1b[B" * 4) + "\n")
+                process.send_text(("\x1b[B" * 3) + "\n")
                 process.send_text("\n")
                 saved = process.wait_for_text(
                     "[saved] Settings saved.",
@@ -2905,6 +2926,15 @@ print(
         settings_mark = process.output_mark()
         process.send_line("/settings")
         process.wait_for_text("6. [available] Cancel", after=settings_mark)
+        process.send_line("1")
+        process.wait_for_text("Language >", after=settings_mark)
+        process.send_line("2")
+        process.wait_for_text(
+            "Pending Language entered: EN.",
+            after=settings_mark,
+        )
+        process.send_line("/cancel")
+        process.wait_for_text("Save (*Required)", after=settings_mark)
         self._set_auth_state(codex="unauthenticated")
         process.send_line("5")
         process.wait_for_text("Save settings?", after=settings_mark)

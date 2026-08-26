@@ -2219,6 +2219,10 @@ class InteractiveController:
                 for root_id, agent_id, _label, current_value, pending_value in projection
                 if agent_id is None
             }
+            root_changed = {
+                root_id: current_value != pending_value
+                for root_id, (current_value, pending_value) in root_values.items()
+            }
             agent_change_count = sum(
                 current_value != pending_value
                 for root_id, agent_id, _label, current_value, pending_value in projection
@@ -2230,8 +2234,13 @@ class InteractiveController:
                     "Language",
                     description=(
                         f"Pending: {root_values['language'][1]}"
-                        if root_values["language"][0] != root_values["language"][1]
+                        if root_changed["language"]
                         else f"Current: {root_values['language'][0]}"
+                    ),
+                    description_role=(
+                        SemanticRole.WARNING
+                        if root_changed["language"]
+                        else SemanticRole.DEFAULT
                     ),
                 ),
                 Choice(
@@ -2239,8 +2248,13 @@ class InteractiveController:
                     "Persona",
                     description=(
                         f"Pending: {root_values['persona'][1]}"
-                        if root_values["persona"][0] != root_values["persona"][1]
+                        if root_changed["persona"]
                         else f"Current: {root_values['persona'][0]}"
+                    ),
+                    description_role=(
+                        SemanticRole.WARNING
+                        if root_changed["persona"]
+                        else SemanticRole.DEFAULT
                     ),
                 ),
                 Choice(
@@ -2248,9 +2262,13 @@ class InteractiveController:
                     "Maximum debate rounds",
                     description=(
                         f"Pending: {root_values['max_debate_rounds'][1]}"
-                        if root_values["max_debate_rounds"][0]
-                        != root_values["max_debate_rounds"][1]
+                        if root_changed["max_debate_rounds"]
                         else f"Current: {root_values['max_debate_rounds'][0]}"
+                    ),
+                    description_role=(
+                        SemanticRole.WARNING
+                        if root_changed["max_debate_rounds"]
+                        else SemanticRole.DEFAULT
                     ),
                 ),
                 Choice(
@@ -2264,6 +2282,11 @@ class InteractiveController:
                             if agent_change_count == 1
                             else f"{agent_change_count} pending changes"
                         )
+                    ),
+                    description_role=(
+                        SemanticRole.WARNING
+                        if agent_change_count
+                        else SemanticRole.DEFAULT
                     ),
                 ),
                 Choice(
@@ -2309,6 +2332,8 @@ class InteractiveController:
                     return
                 continue
             if selected == "save":
+                if state.pending == state.baseline.configuration:
+                    continue
                 confirmation = self._settings_save_confirmation(
                     state,
                     action="save",
@@ -2330,6 +2355,8 @@ class InteractiveController:
                         return
                     if auth_outcome == "return":
                         continue
+                if state.pending == state.baseline.configuration:
+                    continue
                 try:
                     save_settings_state(self._workspace, state)
                 except SettingsError as failure:
@@ -3392,7 +3419,7 @@ class InteractiveController:
             Field(
                 label,
                 f"{current_value} (Changed)",
-                role=SemanticRole.WARNING,
+                role=SemanticRole.DEFAULT,
             )
             for _root_id, _agent_id, label, current_value, _pending_value
             in changed_rows
