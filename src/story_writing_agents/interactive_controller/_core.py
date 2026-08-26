@@ -269,6 +269,8 @@ class _PendingConversationRagQuery:
     query: str = field(repr=False)
 
     def __post_init__(self) -> None:
+        """Validate exact scope identifiers and the bounded private query."""
+
         Workspace.validate_identifier(self.session_id)
         Workspace.validate_identifier(
             self.conversation_id,
