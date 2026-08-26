@@ -1960,12 +1960,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   emit persistent context records containing their normalized query and scope,
   or their visible conversation handle and effective page parameters, before
   the corresponding provider-free catalog or memory operation. Unfiltered
-  lists add no request record. Advisory turns and consensus waits retain the
-  facade's unlisted
-  `InteractiveAdvisoryProgress` and `InteractiveDebateProgress` adapters and
-  wrap exactly the runtime awaitables instead of emitting persistent routing
-  and waiting notices; the controller owns no indicator glyph, cursor control,
-  or animation task. It also retains the facade's resource-free main-input,
+  lists add no request record. Advisory turns, consensus waits, and bounded
+  Settings Provider/Model/Effort option reads retain the facade's unlisted
+  `InteractiveAdvisoryProgress` and `InteractiveDebateProgress` adapters. The
+  runtime paths wrap exactly their awaitables instead of emitting persistent
+  routing and waiting notices; Settings moves its synchronous bounded reads to
+  the Runner thread while the same terminal lifecycle remains active. The
+  controller owns no indicator glyph, cursor control, or animation task. It
+  also retains the facade's resource-free main-input,
   generic-picker, and cancellable-prompt adapters. Omitted
   `/session resume` and `/conversation resume` pass a call-local provider of
   controller-built immutable `Picker` choices and opaque canonical command
@@ -2488,8 +2490,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   opt out of that lifecycle. These adapters do not expand the exact public
   `__all__` or `InteractiveTerminal` method surface.
   Unlisted `InteractiveAdvisoryProgress`, `InteractiveDebateProgress`, and
-  `AdvisoryProgressError` bind advisory and consensus async progress lifecycles
-  through the same facade: callback and incapable terminals await silently,
+  `AdvisoryProgressError` bind advisory, consensus, and Settings option-read
+  async progress lifecycles through the same facade: callback and incapable
+  terminals await silently,
   while stream construction injects the pure fixed-glyph renderer into the sole
   driver. They do not expand the public `__all__` or expose terminal leaves to
   the controller.
@@ -2920,9 +2923,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   per-read transient flags, while the installed facade adapters always request
   this lifecycle. Line fallback cannot erase printed prompts or input and emits
   no synthetic `completed` or `cancelled` control frame. Supported
-  package-internal `run_advisory_progress` accepts one awaitable and injected
-  fixed-glyph renderer, awaits silently without raw cursor capability, and on a
-  capable stream joins the operation with one indicator task. Internal
+  package-internal `run_advisory_progress` accepts one advisory, consensus, or
+  Settings option-read awaitable and an injected fixed-glyph renderer, awaits
+  silently without raw cursor capability, and on a capable stream joins the
+  operation with one indicator task. Internal
   `AdvisoryProgressError` distinguishes indicator failure from provider failure
   for controller cleanup. Purpose-bound `run_startup_welcome`,
   `run_startup_notice`, and `run_startup_result_notice` accept injected pure
@@ -3190,10 +3194,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   components use a no-op callback sink and the driver's selected-mode sink for
   callback and stream construction respectively. Resource-free
   `InteractiveAdvisoryProgress` and
-  `InteractiveDebateProgress` bind the terminal's advisory and consensus
-  awaitable wrappers: callback construction remains visually silent, and stream
-  construction injects the pure fixed-glyph renderer into the sole driver
-  without exposing capabilities or streams. Resource-free
+  `InteractiveDebateProgress` bind the terminal's advisory, consensus, and
+  Settings option-read awaitable wrappers: callback construction remains
+  visually silent, and stream construction injects the pure fixed-glyph
+  renderer into the sole driver without exposing capabilities or streams.
+  Resource-free
   `InteractiveStartupPresentation` similarly binds the fixed, prefix-free
   welcome plus semantic authentication guidance and result notices. The core
   owns the canonical ordered `STORY`, `WRITING`, `AGENTS`, and `HANDOFF`

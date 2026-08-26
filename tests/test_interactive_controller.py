@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import importlib.util
 import inspect
 import json
@@ -4288,6 +4289,73 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         self.assertEqual(controller.run_session_lobby(), 0)
         self.assertEqual(catalog.events, [])
+
+    def test_provider_model_and_effort_option_reads_use_transient_progress(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        authenticated = _auth_snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.AUTHENTICATED,
+        )
+        coordinator = ScriptedAuthCoordinator(
+            snapshots=(authenticated,),
+            results=(),
+        )
+        catalog = ScriptedProviderCatalog(
+            _ready_provider_catalog(
+                "codex",
+                ProviderModel(
+                    "gpt-progress",
+                    "GPT Progress",
+                    None,
+                    "medium",
+                    (ProviderEffort("medium", "medium"),),
+                ),
+            )
+        )
+        controller, _backend, _callbacks = self.make_controller(
+            workspace,
+            auth_coordinator=coordinator,
+            provider_catalog=catalog,
+        )
+        progress_events: list[str] = []
+
+        async def observe_progress(operation):
+            progress_events.append("started")
+            result = await operation
+            progress_events.append("completed")
+            return result
+
+        controller._advisory_progress._run = observe_progress
+        controller._runner = asyncio.Runner()
+        cancel = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.CANCEL
+        )
+        state = settings_module.load_settings_state(workspace)
+        try:
+            with mock.patch.object(
+                terminal_module.InteractivePickerInput,
+                "read_picker",
+                autospec=True,
+                side_effect=(cancel, cancel, cancel),
+            ):
+                controller._edit_settings_agent_provider(state, PLOT_ARCHITECT)
+                controller._edit_settings_agent_model(state, PLOT_ARCHITECT)
+                controller._edit_settings_agent_reasoning(state, PLOT_ARCHITECT)
+        finally:
+            controller._runner.close()
+            controller._runner = None
+
+        self.assertEqual(
+            progress_events,
+            ["started", "completed"] * 3,
+        )
+        self.assertEqual(
+            coordinator.events,
+            [("probe_all", None), ("choices", "codex")],
+        )
+        self.assertEqual(catalog.events, ["codex", "codex"])
 
     def test_simple_value_editors_reopen_with_latest_notice_and_selection(
         self,

@@ -130,7 +130,8 @@ sequence, its core adapter, and the dedicated startup renderer.
 
 The facade also binds unlisted `InteractiveStartupPresentation`,
 `InteractiveAdvisoryProgress`, and `InteractiveDebateProgress` for startup
-presentation and advisory/consensus awaitable lifecycles.
+presentation plus advisory/consensus and Settings option-read awaitable
+lifecycles.
 They are package-internal and do not expose the driver, renderer, timing,
 glyphs, cursor controls, or a public animation API.
 
@@ -208,6 +209,9 @@ universal transient lifecycle; callers cannot request a persistent final
 control frame. `InteractiveAdvisoryProgress` and
 `InteractiveDebateProgress` are also unlisted and bind one call-local async
 operation to the terminal's indicator without changing the supported public API.
+The controller uses the same terminal-owned lifecycle for the bounded Provider,
+Model, and Effort option reads described below; no general animation API is
+introduced.
 
 <a id="startup-welcome-and-authentication"></a>
 
@@ -427,14 +431,14 @@ one `Record`, then the phase status record. When phase messages exist, the
 controller also writes one bounded `Panel` titled `Agent saying`, where each
 message includes the sender label and its phase/revision metadata.
 
-### Advisory progress
+### Advisory, consensus, and Settings progress
 
-The controller brackets one advisory and one consensus runtime awaitable with the
-unlisted `InteractiveAdvisoryProgress` and `InteractiveDebateProgress`
-adapters. On a capable raw stream, the sole driver renders the fixed
+The controller brackets advisory and consensus runtime awaitables, plus each
+Settings Provider/Model/Effort option read, with the unlisted progress adapters.
+On a capable raw stream, the sole driver renders the fixed
 `◐`/`◓`/`◑`/`◒` cycle, clears the active cell around
-semantic retrieval/progress/result writes, and clears it before final,
-cancellation, or error records. It joins the operation and indicator task on
+semantic retrieval/progress/result writes, and clears it before a final record
+or completed Settings picker. It joins the operation and indicator task on
 every exit. `NO_COLOR` leaves the glyphs unchanged because they are not SGR;
 the indicator has no dynamic text, alternate screen, background, or general
 animation API.
@@ -598,6 +602,14 @@ catalog command. Each entry runs one fresh command for the pending effective
 provider. Valid retained commits and redraws within that editor do not run
 discovery again; leaving and re-entering does. Effort additionally resolves the
 pending effective model from the agent value and then workspace fallback.
+
+After the preceding capable picker is cleared, Provider authentication probing
+and Model/Effort catalog discovery run under the terminal-owned `◐`, `◓`, `◑`,
+`◒` progress cycle. The cell is cleared before the completed option picker is
+drawn, so loading adds no durable row. Callback, ordinary fallback,
+`TERM=dumb`, non-POSIX, missing-capability, and uncertain-capability paths run
+the same option read silently. The indicator changes neither read frequency nor
+the established failure guidance, choice ordering, cancellation, or save state.
 
 Language, Persona, Maximum debate rounds, Conversation storage, Provider,
 Model, Custom model, and Effort remain active after a first valid Enter. A

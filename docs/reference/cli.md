@@ -476,7 +476,9 @@ Effort. It supports Codex and Antigravity and edits only the active
 provider's per-agent model/effort while retaining inactive-provider values.
 Entering Model or Effort discovers the pending effective provider afresh;
 opening Settings and provider navigation do not launch catalog commands.
-Custom models and inheritance remain supported. See the exact
+Provider option probing and Model/Effort discovery show transient progress on
+capable raw terminals and remain visually silent in ordinary fallback. Custom
+models and inheritance remain supported. See the exact
 [picker contract](interactive-terminal.md#provider-model-and-effort-pickers).
 Direct edits to the validated JSON documents remain possible. An active backend
 and runtime keep their construction-time configuration snapshot. Existing
@@ -796,14 +798,15 @@ work returns empty, fails safely, or is cancelled; fallback may therefore show
 both its original command and the normalized result context without repeating
 the same verbatim snapshot.
 
-During one advisory turn, a capable raw stream may show the terminal-owned
-four-glyph rolling indicator `◐`, `◓`, `◑`, `◒`. The driver clears the active
+During one advisory turn or while `/settings` prepares Provider, Model, or
+Effort options, a capable raw stream may show the terminal-owned four-glyph
+rolling indicator `◐`, `◓`, `◑`, `◒`. The driver clears the active
 cell before each semantic/progress/result write, redraws while the operation is
 pending, and clears and joins both operation and indicator tasks before the
-final, cancelled, or error record. `NO_COLOR` keeps the glyph cycle because it
-removes decorative SGR only. Advisory turns emit no `[routing]` or `[waiting]`
-notice. Callback construction and non-TTY, `TERM=dumb`, non-POSIX, missing, or
-uncertain-capability paths await the operation silently; the installed CLI's
+final record or completed Settings picker. `NO_COLOR` keeps the glyph cycle
+because it removes decorative SGR only. Advisory turns emit no `[routing]` or
+`[waiting]` notice. Callback construction and non-TTY, `TERM=dumb`, non-POSIX,
+missing, or uncertain-capability paths await the operation silently; the installed CLI's
 TTY guard still rejects non-TTY shell entry before this point. An underlying
 operation failure takes precedence over a simultaneous indicator failure;
 indicator-only failures use the existing internal-error path after cleanup.

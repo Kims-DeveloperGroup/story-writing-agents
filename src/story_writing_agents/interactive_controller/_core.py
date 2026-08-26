@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from collections.abc import Callable
 from types import TracebackType
+from typing import TypeVar
 
 from ..agents import (
     AGENT_SPECS,
@@ -211,6 +213,9 @@ from ._session_policy import (
     require_ready_access_state,
     require_released_state,
 )
+
+
+_SettingsOptionT = TypeVar("_SettingsOptionT")
 
 
 _UNAVAILABLE_SUMMARY = "This command is not available in the session lobby."
@@ -2987,7 +2992,7 @@ class InteractiveController:
         notice: Notice | None = None
         armed_value: object = _SETTINGS_UNARMED
         while True:
-            snapshot = coordinator.probe_all()
+            snapshot = self._run_settings_option_load(coordinator.probe_all)
             current = _effective_settings_provider(state, agent_id)
             choices = coordinator.choices(
                 snapshot,
@@ -3023,7 +3028,7 @@ class InteractiveController:
                 return state, whole_cancel
 
             notice = None
-            snapshot = coordinator.probe_all()
+            snapshot = self._run_settings_option_load(coordinator.probe_all)
             if snapshot.is_authenticated(provider):
                 if armed_value == provider:
                     return state, False
@@ -3048,7 +3053,7 @@ class InteractiveController:
             }:
                 return state, True
 
-            snapshot = coordinator.probe_all()
+            snapshot = self._run_settings_option_load(coordinator.probe_all)
             if (
                 result.kind is InteractiveAuthResultKind.AUTHENTICATED
                 and result.provider == provider
@@ -3074,6 +3079,30 @@ class InteractiveController:
                 role=SemanticRole.ERROR,
                 state=ViewState.ERROR,
             )
+
+    def _run_settings_option_load(
+        self,
+        operation: Callable[[], _SettingsOptionT],
+    ) -> _SettingsOptionT:
+        """Run one Settings option read under transient terminal progress."""
+
+        if not callable(operation):
+            raise TypeError("settings option operation must be callable")
+        runner = self._runner
+        if runner is None:
+            return operation()
+
+        async def load() -> _SettingsOptionT:
+            """Keep the Runner responsive while the bounded read blocks."""
+
+            return await asyncio.to_thread(operation)
+
+        try:
+            return runner.run(self._advisory_progress.run(load()))
+        except AdvisoryProgressError:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            ) from None
 
     def _edit_settings_agent_model(
         self,
@@ -3510,7 +3539,11 @@ class InteractiveController:
         """Contain collaborator failures behind one fixed discovery state."""
 
         try:
-            discovery = self._provider_catalog.discover(provider)
+            discovery = self._run_settings_option_load(
+                lambda: self._provider_catalog.discover(provider)
+            )
+        except _ControllerAbort:
+            raise
         except Exception:
             return ProviderCatalogDiscovery(
                 provider,

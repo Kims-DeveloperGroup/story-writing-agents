@@ -107,6 +107,7 @@ current production behavior.
 | #105 agent reply presentation | Implemented: direct, retrieval, transcript, and focused-history agent replies use a presentation-only strict JSON object/array projection with exact unchanged fallback cases and two-space Unicode-preserving output; stored/provider content remains unchanged, and the `AGENT` role uses bold terminal-default foreground styling without background detection. |
 | #106 transient settings UI | Implemented: settings picker and prompt reads clear capable transient rows, suppress duplicate fallback finals, and keep nested Escape silent. #142 later makes this lifecycle universal for capable submitted input. |
 | #111 advisory progress indicator | Implemented: one advisory and consensus waiting four-glyph rolling indicator runs only on capable raw streams, including `NO_COLOR`; callback, non-TTY, `TERM=dumb`, and uncertain-capability paths remain silent, and no general animation or `[routing]`/`[waiting]` record is introduced. |
+| #321 Settings option progress | Implemented: Provider authentication probing and Model/Effort catalog discovery reuse the terminal-owned four-glyph lifecycle after the preceding capable picker clears; the indicator clears before the completed picker, fallback remains silent, and option reads, failures, ordering, cancellation, and persistence remain unchanged. |
 | #115 settings lifecycle | Implemented: capable committed `/settings` input is cleared from the live display without deleting its history entry; Save and Cancel use transient selectable YES/NO confirmations; confirmation context shows only changed Current/Pending fields with `(Changed)` cues or only a no-changes notice; fallback paths preserve visible committed input and report no cleanup they cannot perform. |
 | #119 debate visibility | Implemented: consensus progress now includes per-phase handoff/action records and a dedicated semantic `Panel` titled `Agent saying` showing newly emitted messages from the relevant agents. |
 | #123 Panel splitters | Implemented: every semantic `Panel` renders a responsive ASCII top splitter carrying its title and state plus a bottom splitter, without side borders or changes to interaction/runtime behavior. |
@@ -1394,15 +1395,15 @@ Color is always redundant with words, labels, order, or symbols. Focus,
 highlight, selected, disabled, loading, empty, error, cancelled, and completed
 states remain distinguishable in plain output and under `TERM=dumb`.
 
-### Advisory progress indicator
+### Advisory and Settings progress indicator
 
-During advisory turns and consensus waits, a capable raw stream may show the fixed
-four-glyph
+During advisory turns, consensus waits, and Settings Provider/Model/Effort
+option preparation, a capable raw stream may show the fixed four-glyph
 cycle `◐`, `◓`, `◑`, `◒` at the active cell. The existing raw driver owns the
 indicator state, clears it before each semantic or provider-result write, and
 redraws it while the operation remains pending. Completion, cancellation, and
 failure join the operation and indicator tasks, then clear the cell before
-their normal records are rendered. `NO_COLOR` retains the same
+their normal record or completed picker is rendered. `NO_COLOR` retains the same
 glyphs because it disables decorative SGR only; the indicator adds no ANSI
 styling, dynamic text, alternate screen, or background detection.
 
@@ -1411,8 +1412,9 @@ non-TTY, `TERM=dumb`, non-POSIX, missing, or uncertain capability—await the
 same awaitable silently. The installed CLI's TTY guard still rejects
 non-TTY shell entry before controller work. A provider/operation failure wins
 over a simultaneous indicator failure; an indicator-only failure is converted
-to the existing internal error after cleanup. No other view or operation may
-reuse this animation lifecycle.
+to the existing internal error after cleanup. Only advisory/consensus awaits
+and the three Settings option-preparation paths use this animation lifecycle;
+it remains unavailable to other views and operations.
 
 ## Compatibility contract
 
