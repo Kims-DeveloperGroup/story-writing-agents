@@ -223,7 +223,7 @@ from ._session_policy import (
 )
 
 
-_SettingsOptionT = TypeVar("_SettingsOptionT")
+_PickerLoadT = TypeVar("_PickerLoadT")
 
 
 _UNAVAILABLE_SUMMARY = "This command is not available in the session lobby."
@@ -1382,7 +1382,11 @@ class InteractiveController:
             return False
 
         try:
-            states = self._validated_story_session_lifecycles()
+            states = self._run_picker_preparation(
+                self._validated_story_session_lifecycles
+            )
+        except _ControllerAbort:
+            raise
         except Exception as exc:
             self._present_session_failure(
                 exc,
@@ -2254,7 +2258,7 @@ class InteractiveController:
             )
             return
 
-        snapshot = coordinator.probe_all()
+        snapshot = self._run_auth_probe(coordinator)
         self._persist_missing_auth_default(snapshot)
         result = coordinator.run(snapshot)
         if result.kind in {
@@ -2273,7 +2277,7 @@ class InteractiveController:
             )
             return
 
-        refreshed = coordinator.probe_all()
+        refreshed = self._run_auth_probe(coordinator)
         newly_authenticated = self._newly_authenticated_provider(
             snapshot,
             result,
@@ -2933,7 +2937,7 @@ class InteractiveController:
         if coordinator is None:
             return state, "ready"
         attempted: set[str] = set()
-        snapshot = coordinator.probe_all()
+        snapshot = self._run_auth_probe(coordinator)
         state = self._rebase_missing_settings_default(state, snapshot)
         while True:
             provider = next(
@@ -3005,7 +3009,7 @@ class InteractiveController:
             }:
                 return state, "cancel"
 
-            snapshot = coordinator.probe_all()
+            snapshot = self._run_auth_probe(coordinator)
             newly_authenticated = self._newly_authenticated_provider(
                 before,
                 result,
@@ -3550,7 +3554,7 @@ class InteractiveController:
         notice: Notice | None = None
         armed_value: object = _SETTINGS_UNARMED
         while True:
-            snapshot = self._run_settings_option_load(coordinator.probe_all)
+            snapshot = self._run_auth_probe(coordinator)
             current = _effective_settings_provider(
                 state,
                 agent_id,
@@ -3590,7 +3594,7 @@ class InteractiveController:
                 return state, whole_cancel
 
             notice = None
-            snapshot = self._run_settings_option_load(coordinator.probe_all)
+            snapshot = self._run_auth_probe(coordinator)
             if snapshot.is_authenticated(provider):
                 if armed_value == provider:
                     return state, False
@@ -3619,7 +3623,7 @@ class InteractiveController:
             }:
                 return state, True
 
-            snapshot = self._run_settings_option_load(coordinator.probe_all)
+            snapshot = self._run_auth_probe(coordinator)
             if (
                 result.kind is InteractiveAuthResultKind.AUTHENTICATED
                 and result.provider == provider
@@ -3652,17 +3656,35 @@ class InteractiveController:
 
     def _run_settings_option_load(
         self,
-        operation: Callable[[], _SettingsOptionT],
-    ) -> _SettingsOptionT:
+        operation: Callable[[], _PickerLoadT],
+    ) -> _PickerLoadT:
         """Run one Settings option read under transient terminal progress."""
 
+        return self._run_picker_preparation(operation)
+
+    def _run_auth_probe(
+        self,
+        coordinator: InteractiveAuthCoordinator,
+    ) -> ProviderAuthSnapshot:
+        """Run one fresh auth probe through its single progress owner."""
+
+        if isinstance(coordinator, InteractiveAuthCoordinator):
+            return coordinator.probe_all()
+        return self._run_picker_preparation(coordinator.probe_all)
+
+    def _run_picker_preparation(
+        self,
+        operation: Callable[[], _PickerLoadT],
+    ) -> _PickerLoadT:
+        """Run one blocking data-to-picker read under transient progress."""
+
         if not callable(operation):
-            raise TypeError("settings option operation must be callable")
+            raise TypeError("picker preparation operation must be callable")
         runner = self._runner
         if runner is None:
             return operation()
 
-        async def load() -> _SettingsOptionT:
+        async def load() -> _PickerLoadT:
             """Keep the Runner responsive while the bounded read blocks."""
 
             return await asyncio.to_thread(operation)
@@ -6715,13 +6737,49 @@ class InteractiveController:
         session_id = self._attached_session_id
         assert session_id is not None
         if reference is None:
-            try:
+
+            def prepare_resume_choices() -> tuple[
+                tuple[ConversationMetadata, ...],
+                tuple[ConversationMetadata, ...],
+                tuple[str, ...],
+                str | None,
+            ]:
+                """Read catalog/default state before the picker is visible."""
+
                 entries = self._catalog_entries(session_id)
                 active_entries = tuple(
                     entry
                     for entry in entries
                     if entry.status is ConversationStatus.ACTIVE
                 )
+                active_ids = tuple(
+                    entry.conversation_id for entry in active_entries
+                )
+                highlighted_id = (
+                    None
+                    if self._focused_conversation is None
+                    else self._focused_conversation.conversation_id
+                )
+                if highlighted_id not in active_ids:
+                    highlighted_id = load_default_conversation(
+                        self._workspace,
+                        session_id,
+                    )
+                if highlighted_id not in active_ids:
+                    highlighted_id = None
+                return entries, active_entries, active_ids, highlighted_id
+
+            try:
+                (
+                    entries,
+                    active_entries,
+                    active_ids,
+                    highlighted_id,
+                ) = self._run_picker_preparation(
+                    prepare_resume_choices
+                )
+            except _ControllerAbort:
+                raise
             except Exception as exc:
                 self._present_conversation_failure(exc)
                 return False
@@ -6733,26 +6791,6 @@ class InteractiveController:
                     state=ViewState.EMPTY,
                 )
                 return False
-
-            active_ids = tuple(
-                entry.conversation_id for entry in active_entries
-            )
-            highlighted_id = (
-                None
-                if self._focused_conversation is None
-                else self._focused_conversation.conversation_id
-            )
-            if highlighted_id not in active_ids:
-                try:
-                    highlighted_id = load_default_conversation(
-                        self._workspace,
-                        session_id,
-                    )
-                except Exception as exc:
-                    self._present_conversation_failure(exc)
-                    return False
-            if highlighted_id not in active_ids:
-                highlighted_id = None
 
             outcome = self._picker_input.read_picker(
                 Prompt(

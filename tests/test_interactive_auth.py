@@ -6,6 +6,7 @@ import inspect
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from dataclasses import FrozenInstanceError, fields
 from pathlib import Path
@@ -55,11 +56,13 @@ class ScriptedAuthService:
 
     def __init__(self) -> None:
         self.events: list[tuple[str, object | None]] = []
+        self.thread_ids: list[int] = []
         self.probe_results: list[object] = []
         self.probe_all_results: list[object] = []
         self.login_results: list[object] = []
 
     def probe(self, provider: str) -> ProviderAuthStatus:
+        self.thread_ids.append(threading.get_ident())
         self.events.append(("probe", provider))
         result = self.probe_results.pop(0)
         if isinstance(result, BaseException):
@@ -67,6 +70,7 @@ class ScriptedAuthService:
         return result  # type: ignore[return-value]
 
     def probe_all(self) -> ProviderAuthSnapshot:
+        self.thread_ids.append(threading.get_ident())
         self.events.append(("probe_all", None))
         result = self.probe_all_results.pop(0)
         if isinstance(result, BaseException):
@@ -74,6 +78,7 @@ class ScriptedAuthService:
         return result  # type: ignore[return-value]
 
     def login(self, provider: str) -> ProviderLoginResult:
+        self.thread_ids.append(threading.get_ident())
         self.events.append(("login", provider))
         result = self.login_results.pop(0)
         if isinstance(result, BaseException):
@@ -279,6 +284,48 @@ class InteractiveAuthContractTests(unittest.TestCase):
 
 
 class InteractiveAuthCoordinatorTests(unittest.TestCase):
+    def test_fresh_status_probes_use_terminal_progress_off_the_event_loop(
+        self,
+    ) -> None:
+        """Bracket full and selected probes without blocking animation."""
+
+        initial = snapshot(
+            ProviderAuthState.INDETERMINATE,
+            ProviderAuthState.UNAVAILABLE,
+        )
+        auth = ScriptedAuthService()
+        auth.probe_all_results.append(initial)
+        auth.probe_results.append(
+            status("codex", ProviderAuthState.AUTHENTICATED)
+        )
+        harness = TerminalHarness(
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="codex")
+        )
+        progress_events: list[str] = []
+
+        async def observe_progress(operation):
+            progress_events.append("started")
+            try:
+                return await operation
+            finally:
+                progress_events.append("completed")
+
+        harness.terminal._advisory_progress = observe_progress
+        coordinator = harness.coordinator(auth)
+        self.assertIs(coordinator.probe_all(), initial)
+        result = coordinator.run(initial)
+
+        self.assertEqual(result.kind, InteractiveAuthResultKind.AUTHENTICATED)
+        self.assertEqual(progress_events, ["started", "completed"] * 2)
+        self.assertEqual(
+            auth.events,
+            [("probe_all", None), ("probe", "codex")],
+        )
+        self.assertTrue(auth.thread_ids)
+        self.assertTrue(
+            all(thread_id != threading.get_ident() for thread_id in auth.thread_ids)
+        )
+
     def test_terminal_controls_and_authenticated_selection_do_not_login(self) -> None:
         current = snapshot(
             ProviderAuthState.AUTHENTICATED,

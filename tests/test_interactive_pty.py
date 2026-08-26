@@ -3291,6 +3291,124 @@ raise SystemExit(cli.main([]))
         )
         self.assertFalse(self.provider_log.exists())
 
+    def test_delayed_auth_session_and_conversation_reads_animate_to_picker(
+        self,
+    ) -> None:
+        """Keep each blocking data-to-picker transition visibly active."""
+
+        source = r'''
+import time
+
+from story_writing_agents import cli
+from story_writing_agents.backend import AgentBackend
+from story_writing_agents.interactive_controller import InteractiveController
+from story_writing_agents.provider_auth import ProviderAuthService
+from story_writing_agents.workspace import FilesystemConversationCatalog
+
+
+probe_all = ProviderAuthService.probe_all
+list_sessions = AgentBackend.list_session_lifecycles
+list_conversations = FilesystemConversationCatalog.list
+
+
+def delayed_probe_all(self):
+    time.sleep(0.36)
+    return probe_all(self)
+
+
+def delayed_list_sessions(self):
+    time.sleep(0.36)
+    return list_sessions(self)
+
+
+def delayed_list_conversations(self, session_id, *, include_archived=False):
+    time.sleep(0.36)
+    return list_conversations(
+        self,
+        session_id,
+        include_archived=include_archived,
+    )
+
+
+ProviderAuthService.probe_all = delayed_probe_all
+AgentBackend.list_session_lifecycles = delayed_list_sessions
+FilesystemConversationCatalog.list = delayed_list_conversations
+InteractiveController._main_resume_choices = lambda self, buffer, cursor: None
+raise SystemExit(cli.main([]))
+'''
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=64,
+        )
+        process.wait_for_text("story[lobby]> ")
+
+        def assert_progress_before_picker(output: str, prompt: str) -> None:
+            """Require ordered spatial frames before one completed picker."""
+
+            positions = tuple(
+                output.index(frame) for frame in _VISIBLE_PROGRESS_FRAMES
+            )
+            self.assertEqual(positions, tuple(sorted(positions)))
+            self.assertLess(max(positions), output.index(prompt, positions[0]))
+
+        auth_mark = process.output_mark()
+        process.send_text("/auth\n\n")
+        auth_output = process.wait_for_text(
+            "1. [highlighted] Codex",
+            after=auth_mark,
+        )
+        assert_progress_before_picker(
+            auth_output,
+            "1. [highlighted] Codex",
+        )
+        cancel_mark = process.output_mark()
+        process.send_interrupt()
+        process.wait_for_text("story[lobby]> ", after=cancel_mark)
+
+        create_mark = process.output_mark()
+        process.send_line("/session create alpha")
+        process.wait_for_text("story[alpha:lead]> ", after=create_mark)
+        session_mark = process.output_mark()
+        process.send_text("/session resume\n\n")
+        session_output = process.wait_for_text(
+            "1. [highlighted] alpha",
+            after=session_mark,
+        )
+        assert_progress_before_picker(
+            session_output,
+            "1. [highlighted] alpha",
+        )
+        cancel_mark = process.output_mark()
+        process.send_interrupt()
+        process.wait_for_text("story[alpha:lead]> ", after=cancel_mark)
+
+        conversation_mark = process.output_mark()
+        process.send_line("/conversation new Delayed Subject")
+        process.wait_for_text("Subject: Delayed Subject", after=conversation_mark)
+        process.wait_for_text("story[alpha:lead]> ", after=conversation_mark)
+        resume_mark = process.output_mark()
+        process.send_text("/conversation resume\n\n")
+        conversation_output = process.wait_for_text(
+            "1. [highlighted] Delayed Subject",
+            after=resume_mark,
+        )
+        assert_progress_before_picker(
+            conversation_output,
+            "1. [highlighted] Delayed Subject",
+        )
+        cancel_mark = process.output_mark()
+        process.send_interrupt()
+        process.wait_for_text("story[alpha:lead]> ", after=cancel_mark)
+
+        process.send_text("/quit\n\n")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertFalse(self.provider_log.exists())
+
     def test_startup_welcome_scales_wide_and_narrow_without_provider_leakage(
         self,
     ) -> None:

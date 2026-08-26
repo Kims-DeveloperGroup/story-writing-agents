@@ -870,16 +870,18 @@ work returns empty, fails safely, or is cancelled; fallback may therefore show
 both its original command and the normalized result context without repeating
 the same verbatim snapshot.
 
-During interactive startup, one advisory turn, or while `/settings` prepares
-Provider, Model, or Effort options, a capable raw stream may show the
+During interactive startup, fresh authentication probing, omitted session or
+conversation resume preparation, one advisory turn, or while `/settings`
+prepares Provider, Model, or Effort options, a capable raw stream may show the
 terminal-owned loading row.
 It is a text-free eight-cell block-shade shimmer that travels out and back.
 ANSI terminals cycle a fixed bold color palette as it moves. The driver clears
 the complete row before each
 semantic/progress/result write, redraws while the operation is
 pending, and clears and joins both operation and indicator tasks before the
-final record or completed Settings picker. `NO_COLOR` keeps the same spatial
-motion without SGR. Advisory turns emit no `[routing]` or
+final record, refreshed authentication view, resume picker, empty/error result,
+or completed Settings picker. `NO_COLOR` keeps the same spatial motion without
+SGR. Advisory turns emit no `[routing]` or
 `[waiting]` notice. Callback construction and non-TTY, `TERM=dumb`, non-POSIX,
 missing, or uncertain-capability paths await the operation silently; the installed CLI's
 TTY guard still rejects non-TTY shell entry before this point. An underlying

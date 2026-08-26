@@ -1856,7 +1856,9 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `interactive_terminal` and `provider_auth`.
 - **State, resources, and side effects:** The coordinator retains borrowed
   authentication and terminal collaborators plus a resource-free picker and
-  startup-presentation adapter. It projects stable Codex and Antigravity rows
+  startup-presentation adapter. Each full or selected native-status probe runs
+  in a bounded local Runner/default-executor span under terminal-owned progress;
+  callback and incapable terminals remain silent. It projects stable Codex and Antigravity rows
   with explicit authenticated, unauthenticated, unavailable, and indeterminate
   text; disabled state and current selection remain meaningful without color.
   Before login it displays sanitized fixed guidance and completes that terminal
@@ -2022,12 +2024,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   emit persistent context records containing their normalized query and scope,
   or their visible conversation handle and effective page parameters, before
   the corresponding provider-free catalog or memory operation. Unfiltered
-  lists add no request record. Advisory turns, consensus waits, and bounded
-  Settings Provider/Model/Effort option reads retain the facade's unlisted
+  lists add no request record. Omitted session/conversation resume preparation,
+  advisory turns, consensus waits, and bounded Settings Provider/Model/Effort
+  option reads retain the facade's unlisted
   `InteractiveAdvisoryProgress` and `InteractiveDebateProgress` adapters. The
   runtime paths wrap exactly their awaitables instead of emitting persistent
-  routing and waiting notices; Settings moves its synchronous bounded reads to
-  the Runner thread while the same terminal lifecycle remains active. Capable
+  routing and waiting notices; picker and Settings preparation move their
+  synchronous bounded reads to the Runner thread while the same terminal
+  lifecycle remains active. Capable
   stream terminals show bounded progress, while callback and ordinary-line
   fallback remain visually silent. The controller owns no indicator glyph,
   cursor control, or animation task. It
@@ -3351,8 +3355,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   components use a no-op callback sink and the driver's selected-mode sink for
   callback and stream construction respectively. Resource-free
   `InteractiveAdvisoryProgress` and
-  `InteractiveDebateProgress` bind the terminal's startup, advisory, consensus,
-  and Settings option-read awaitable wrappers: callback construction remains
+  `InteractiveDebateProgress` bind the terminal's startup, picker preparation,
+  advisory, consensus, and Settings option-read awaitable wrappers: callback construction remains
   visually silent, and stream construction injects the pure fixed-row
   renderer into the sole driver without exposing capabilities or streams.
   Resource-free
@@ -4710,11 +4714,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   exposes an unlisted typed semantic-output adapter and closed component
   bindings, including `ListView`, for package consumers without expanding
   `__all__`; controller code imports only that facade, never a terminal leaf.
-  The same facade exposes unlisted progress and error bindings: the CLI brackets
-  each startup span and the controller brackets exactly one advisory runtime
-  awaitable without owning animation mechanics. The driver removes the
-  indicator before the next startup view, result, cancellation, or failure
-  presentation. Persistent advisory routing and waiting records are
+  The same facade exposes unlisted progress and error bindings: CLI startup,
+  authentication, controller picker preparation, and controller runtime waits
+  each bracket exactly one awaitable without owning animation mechanics. The
+  driver removes the indicator before the next view, result, cancellation, or
+  failure presentation. Persistent advisory routing and waiting records are
   intentionally absent.
   Counted session, conversation, search, transcript, and history output uses
   one positioned one-record list and one component write for each established
