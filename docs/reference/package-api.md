@@ -5,7 +5,7 @@
 > archive additions to the supported `story_writing_agents.conversation_storage`
 > subpackage, pure literal-search mechanics, and the optional SQLite owning
 > modules plus direct-only conversation migration, provisioning, and selection;
-> optional conversation RAG also uses three supported direct modules, with the
+> optional conversation RAG also uses five supported direct modules, with the
 > generic adapter available only through its pinned extra. None is a
 > package-root facade export. Context and progress types are Python
 > APIs; an export does not imply a CLI command.
@@ -155,10 +155,11 @@ See [Conversation search](conversation-search.md#search-contract).
 
 ## Optional conversation RAG boundary
 
-> **Availability:** these are direct Python APIs. Issue #262 does not connect
-> them to `StoryRuntime`, conversation stores, agents, the CLI, `/rag`, or
-> `/settings`. It provides no local provider or derived generation store.
-> Existing literal retrieval and `/search` are unchanged.
+> **Availability:** these are direct Python APIs. Issues #262/#283 provide the
+> contracts, deterministic local provider, disposable generation store, generic
+> adapter, and explicit local composition. They are not connected to
+> `StoryRuntime`, authoritative conversation stores, agents, the CLI, `/rag`,
+> or `/settings`; existing literal retrieval and `/search` are unchanged.
 
 Provider-neutral story contracts live in
 `story_writing_agents.conversation_rag`. The module imports only the standard
@@ -232,7 +233,123 @@ text from story results, and translates ordinary failures to content-free story
 errors. It does not acquire, close, discover, or persist collaborators. Process
 control propagates.
 
-Deferred composition is safe to import without `generic-rag` and exports four
+The deterministic local provider is a separate pure direct module with exactly
+five exports:
+
+```python
+from story_writing_agents.conversation_rag_local import (
+    LOCAL_CONVERSATION_RAG_DIMENSIONS,
+    LOCAL_CONVERSATION_RAG_MODEL_ID,
+    LOCAL_CONVERSATION_RAG_PROVIDER_ID,
+    LocalConversationRagEmbedder,
+    LocalConversationRagVectorRanker,
+)
+```
+
+The constants are exactly `256`, `"story-conversation-rag-local-hash-v1"`, and
+`"local"`. `LocalConversationRagEmbedder.identity` returns that fixed model and
+dimension pair. Its public operations are:
+
+```python
+LocalConversationRagEmbedder.embed(
+    texts: tuple[str, ...],
+    /,
+) -> tuple[ConversationRagEmbeddingVector, ...]
+LocalConversationRagVectorRanker.rank(
+    request: ConversationRagRetrievalRequest,
+    embedding: ConversationRagEmbeddingVector,
+    records: Iterable[ConversationRagVectorRecord],
+    /,
+) -> tuple[ConversationRagProviderCandidate, ...]
+```
+
+Embedding pins later codepoint assignments through Unicode 3.2 classification,
+uses shared strict normalized text, hashes whole tokens and boundary-padded
+codepoint 1/2/3-grams through a fixed SHA-256 feature domain, and L2-normalizes
+the 256 integer buckets. It accepts at most 32 texts of at most 800 codepoints
+each. Ranking scans at most 65,536 exact local-dimension records, deduplicates
+identical stable sources, rejects conflicts/cross-session records, retains only
+positive similarity, orders ties by the full stable source key, and returns no
+scores. Neither class owns state or performs I/O, network, credential,
+subprocess, clock, randomness, locale, timezone, hash-seed, or environment
+discovery. This intentionally weak deterministic baseline has no semantic-
+quality guarantee.
+
+Disposable persistence is supported from one identity-bound direct module with
+exactly eight exports:
+
+```python
+from story_writing_agents.conversation_rag_store import (
+    CONVERSATION_RAG_STORE_SCHEMA_ID,
+    ConversationRagGenerationBuilder,
+    ConversationRagGenerationStore,
+    ConversationRagStoreCounts,
+    ConversationRagStoreError,
+    ConversationRagStoreFailure,
+    ConversationRagStoreSnapshot,
+    ConversationRagStoreStatus,
+)
+```
+
+The schema ID is exactly `"story-conversation-rag-store-v1"`. Status values are
+`missing`, `ready`, `stale`, `corrupt`, `incompatible`, and `provider_failed`.
+Failure values are `unsupported`, `busy`, `unsafe`, `corrupt`, `incompatible`,
+`provider_failed`, `confirmation_required`, and `operation_failed`.
+`ConversationRagStoreCounts` contains these exact nonnegative fields:
+
+```text
+conversations, events, documents, fragments, source_map_records,
+vector_records, generations, orphan_generations, source_utf8_bytes,
+payload_bytes, generation_bytes
+```
+
+The store constructs without I/O and retains the supplied identity-bound
+`Workspace`. Its public operations are:
+
+```python
+ConversationRagGenerationStore(workspace: Workspace, /)
+store.inspect(session_id, provider_id, embedding, /) -> ConversationRagStoreSnapshot
+store.begin_generation(
+    provider_id,
+    request,
+    state,
+    /,
+    *,
+    rebuild: bool,
+) -> ConversationRagGenerationBuilder
+store.open_active_reader(snapshot, ranker, /) -> context manager
+store.set_status(session_id, status, /) -> None
+store.purge(session_id, /, *, confirmed: bool) -> ConversationRagStoreCounts
+```
+
+The builder is an operation-scoped context manager. Its `state` is the exact
+store-loaded state; it implements `replace_document()`, `delete_document()`,
+and `reset_session()` for the generic projection bridge, and
+`publish(result, /)` completely verifies and commits a successful target.
+An active reader is likewise call-scoped and exposes `search(request,
+embedding, /)` only while its exact snapshot remains current. Advisory status
+accepts only `stale` or `provider_failed`. Purge requires exact
+`confirmed=True` and removes only one session's derived active/status and
+generation contents.
+
+The store owns
+`agent_states/orchestrator_state/conversation_rag/sessions/<session>/`, with
+owner-only modes, descriptor-relative no-follow access, bounded POSIX locks,
+canonical strict-UTF-8 JSON/JSONL, digest/count/range reconstruction, and
+complete active-generation verification. `active.json` is the sole commit
+record. Its atomic rename is the final publish operation after precommit file
+and directory synchronization; no post-rename durability is claimed, so an
+immediate crash can retain either the old or new valid pointer. A reported
+precommit failure preserves the old pointer byte-for-byte. Rebuild restarts
+from the beginning, inspection does not clean, and later mutation removes only
+validated orphans. Deep/noncanonical JSON, non-finite or overflowing numbers,
+and inconsistent persisted records become sanitized corruption. Public
+snapshots/errors/status contain no query or source text, although the private
+derived source-map file contains plaintext fragments. See
+[Persistence](../design/persistence.md#optional-conversation-rag-derived-persistence)
+and [Filesystem safety](../operations/filesystem-safety.md#conversation-rag-generation-store-safety).
+
+Deferred composition is safe to import without `generic-rag` and exports six
 names:
 
 ```python
@@ -240,7 +357,9 @@ from story_writing_agents.conversation_rag_composition import (
     CONVERSATION_RAG_PROVIDER_ALLOWLIST,
     ConversationRagCompositionError,
     ConversationRagCompositionFailure,
+    LocalConversationRagComposition,
     compose_conversation_rag,
+    compose_local_conversation_rag,
 )
 ```
 
@@ -253,10 +372,24 @@ configuration. Sanitized failure values are `provider_unsupported`,
 `dependency_missing`, `version_incompatible`, and
 `capability_incompatible`; dependency details do not cross the error boundary.
 
-These modules do not implement the `local` provider, storage, authorization,
-scheduling, rereads, citations, or user interface. Installation, immutable-pin
-verification, caller ownership, the redistribution restriction, and the
-planned agent/user flow are in
+`compose_local_conversation_rag(store, lexical_retriever, /)` validates the
+same optional dependency immediately and returns
+`LocalConversationRagComposition`. Its `service` property is the composition
+itself and `store` is the retained caller-owned generation store. The fixed
+embedder/ranker and supplied lexical retriever are combined with a fresh
+call-local generic adapter for every projection or retrieval that reaches
+generic work. Successful projection publishes one fully verified inactive
+generation. Retrieval opens only the exact verified active snapshot; missing,
+stale, corrupt, incompatible, provider-failed, or failed storage/provider state
+returns `literal_fallback` with a fixed content-free reason. A missing or
+incompatible optional package at initial composition raises the sanitized
+composition error before store I/O.
+
+These modules implement only direct local provider and disposable derived-state
+behavior. They do not authorize sources, schedule projection, reread or cite
+authoritative content, inject agent context, or implement the user interface.
+Installation, immutable-pin verification, caller ownership, the redistribution
+restriction, persistence boundary, and planned agent/user flow are in
 [Optional conversation RAG](../guides/conversation-rag.md).
 
 <a id="conversation-storage-subpackage"></a>
@@ -969,5 +1102,5 @@ The exact current inventories are package root `120`, conversation storage
 `64`, conversation search `13`, SQLite database owner `12`, SQLite adapter
 `14`, literal-search mechanics `6`, SQLite companion owner `5`, conversation
 migration `7`, provisioning `4`, selection `7`, conversation RAG contracts
-`35`, generic RAG adapter `3`, and RAG composition `4`. The production module
-inventory is `72`.
+`35`, generic RAG adapter `3`, local RAG provider `5`, RAG generation store `8`,
+and RAG composition `6`. The production module inventory is `74`.

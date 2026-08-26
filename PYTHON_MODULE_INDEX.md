@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 72.
+Importable production units indexed: 74.
 
-Direct internal dependency edges indexed: 274.
+Direct internal dependency edges indexed: 280.
 
 ## Current Dependency Direction
 
@@ -103,9 +103,12 @@ interactive_terminal._viewer_render -> interactive_terminal._model
                                     -> interactive_terminal._viewer_model
 conversation_literal_search -> (standard library only)
 conversation_rag -> (standard library only)
+conversation_rag_local -> conversation_literal_search/conversation_rag
+conversation_rag_store -> conversation_rag/workspace
 generic_rag_adapter -> conversation_rag
                     -> generic-rag 0.1.0 (optional external package)
 conversation_rag_composition -> conversation_rag
+                             -> conversation_rag_local/conversation_rag_store
                              -> generic_rag_adapter (deferred until composition)
 story_writing_agents facade -> interactive_commands
                             -> conversation_retrieval -> agents/conversation_search
@@ -808,6 +811,88 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/reference/package-api.md`, `docs/guides/conversation-rag.md`, and
   `docs/design/overview.md`.
 
+### `story_writing_agents.conversation_rag_local`
+
+- **Source:** `src/story_writing_agents/conversation_rag_local.py`
+- **Responsibility:** Provide the fixed, deterministic, network-free local
+  conversation-RAG embedding and vector-ranking baseline.
+- **Supported surface:** Exactly five direct-module names in `__all__`:
+  `LOCAL_CONVERSATION_RAG_DIMENSIONS`, `LOCAL_CONVERSATION_RAG_MODEL_ID`,
+  `LOCAL_CONVERSATION_RAG_PROVIDER_ID`, `LocalConversationRagEmbedder`, and
+  `LocalConversationRagVectorRanker`. The constants bind provider `local`,
+  model `story-conversation-rag-local-hash-v1`, and 256 dimensions. These names
+  are not re-exported by the package-root facade.
+- **Direct internal dependencies:** `conversation_literal_search` and
+  `conversation_rag`.
+- **State, resources, and side effects:** Owns only immutable identity metadata
+  and pure operations. Embedding first maps code points unassigned in the
+  standard library's frozen Unicode 3.2 database to U+FFFD, then delegates the
+  shared version-1 NFKC/casefold/category-C/whitespace normalization and hashes
+  whole-token plus boundary-padded code-point 1/2/3-gram features through the
+  fixed length-framed SHA-256 domain. Integer accumulation and `fsum`-based L2
+  normalization produce deterministic finite positive-zero vectors. Ranking
+  fully scans at most 65,536 exact 256-coordinate records, removes exact
+  duplicates, rejects conflicting source identities, retains only positive
+  scores, and sorts by descending score plus the complete stable source key
+  before the request's at-most-20 limit. The intentionally weak baseline makes
+  no semantic-quality guarantee. It owns no filesystem, workspace, provider,
+  network, subprocess, environment, credential, clock, random, or lifecycle
+  resource and performs no import-time I/O.
+- **Primary verification/documentation:** `tests/test_conversation_rag_local.py`,
+  `tests/test_rag_module_and_packaging_boundary.py`,
+  and `docs/design/overview.md`.
+
+### `story_writing_agents.conversation_rag_store`
+
+- **Source:** `src/story_writing_agents/conversation_rag_store.py`
+- **Responsibility:** Own identity-bound disposable conversation-RAG generation
+  persistence, verification, publication, inspection, and purge lifecycles.
+- **Supported surface:** Exactly eight direct-module names in `__all__`:
+  `CONVERSATION_RAG_STORE_SCHEMA_ID`, `ConversationRagStoreStatus`,
+  `ConversationRagStoreFailure`, `ConversationRagStoreCounts`,
+  `ConversationRagStoreSnapshot`, `ConversationRagGenerationBuilder`,
+  `ConversationRagGenerationStore`, and `ConversationRagStoreError`. The fixed
+  schema is `story-conversation-rag-store-v1`; construction retains an exact
+  identity-bound `Workspace` without I/O. The generation store exposes
+  inspection, operation-scoped generation creation, verified active-reader
+  creation with an injected ranker, advisory status, and exact-confirmed
+  session purge. The builder implements the existing story writer/resetter
+  methods plus successful-result publication. None is re-exported by the
+  package-root facade.
+- **Direct internal dependencies:** `conversation_rag` and `workspace`.
+- **State, resources, and side effects:** The store is the sole owner of the
+  derived `agent_states/orchestrator_state/conversation_rag` subtree. Each
+  operation acquires a process-local lock and a mandatory bounded POSIX
+  advisory lock, retains verified no-follow directory and regular-file
+  descriptors only for that call or builder/reader context, and closes them
+  exactly once. Derived directories and regular files require modes 0700 and
+  0600, meaningful device/inode identity, exact containment, and supported
+  descriptor-relative primitives; there is no pathname fallback. Canonical
+  strict-UTF-8 sorted compact JSON/JSONL, exact schemas, duplicate-field and
+  non-finite-number rejection, finite canonical `float.hex` coordinates, and
+  fixed corruption mapping for bounded decoder, recursion, and numeric
+  failures are enforced. Streaming bounded record reads/digests,
+  manifest/source/vector digests, source reconstruction, identities, counts,
+  and fixed 800/80 chunking are completely reverified.
+  Projection writes remain in restartable, nonresumable inactive generations;
+  after preverification they are renamed, reopened, and reverified. Advisory
+  status is persisted before `active.json`, while that four-field pointer is
+  the sole commit record. Its complete temporary file and session-directory
+  entry are fsynced before the atomic rename, which is the commit point and
+  final callable publication operation. Precommit failures preserve the old
+  pointer and expose stale or provider-failed advisory state with any old
+  checkpoint retained. Inspection never cleans state; later mutations safely
+  remove validated build and inactive-generation orphans. Purge requires exact
+  `confirmed=True`, prevalidates the entire one-session derived namespace, and
+  removes the active pointer first. Ordinary failures are fixed and
+  content-free; control exceptions propagate. The module imports no local or
+  generic provider, configuration/settings, SQLite, authoritative conversation
+  store, network, credential, or external package and performs no import-time
+  I/O.
+- **Primary verification/documentation:** `tests/test_conversation_rag_store.py`,
+  `tests/test_rag_module_and_packaging_boundary.py`,
+  `docs/design/persistence.md`, and `docs/operations/filesystem-safety.md`.
+
 ### `story_writing_agents.generic_rag_adapter`
 
 - **Source:** `src/story_writing_agents/generic_rag_adapter.py`
@@ -845,25 +930,37 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:**
   `src/story_writing_agents/conversation_rag_composition.py`
-- **Responsibility:** Compose the allowlisted optional conversation-RAG
-  service after exact compatibility validation.
-- **Supported surface:** Exactly four direct-module names in `__all__`:
+- **Responsibility:** Compose allowlisted generic and fixed local
+  conversation-RAG services after exact compatibility validation.
+- **Supported surface:** Exactly six direct-module names in `__all__`:
   `CONVERSATION_RAG_PROVIDER_ALLOWLIST`,
-  `ConversationRagCompositionFailure`, `ConversationRagCompositionError`, and
-  `compose_conversation_rag`. The supported import path is
-  `story_writing_agents.conversation_rag_composition`; none is re-exported by
-  the package-root facade. The allowlist is exactly `("local",)` and the fixed
-  failure vocabulary is `provider_unsupported`, `dependency_missing`,
-  `version_incompatible`, and `capability_incompatible`.
-- **Direct internal dependencies:** `conversation_rag` and the deferred
+  `ConversationRagCompositionFailure`, `ConversationRagCompositionError`,
+  `LocalConversationRagComposition`, `compose_conversation_rag`, and
+  `compose_local_conversation_rag`. A local composition exposes the provider-
+  neutral service as itself through read-only `service` and its retained,
+  caller-owned generation store through read-only `store`. The supported import
+  path is `story_writing_agents.conversation_rag_composition`; none is
+  re-exported by the package-root facade. The allowlist is exactly `("local",)`
+  and the fixed failure vocabulary is `provider_unsupported`,
+  `dependency_missing`, `version_incompatible`, and
+  `capability_incompatible`.
+- **Direct internal dependencies:** `conversation_rag`,
+  `conversation_rag_local`, `conversation_rag_store`, and the deferred
   `generic_rag_adapter` import.
 - **State, resources, and side effects:** Import defines immutable policy and
-  error metadata and loads only standard-library support plus
-  `conversation_rag`; it does not read distribution metadata or import
-  `generic-rag`. An explicit composition call validates the exact provider and
-  collaborator bundle, requires installed distribution version 0.1.0, then
-  performs one statically named deferred local adapter import, verifies the
-  fixed host-required capability manifest, and constructs the adapter service.
+  error metadata and loads only standard-library support plus the provider-
+  neutral, pure-local, and no-I/O store modules; it does not read distribution
+  metadata or import `generic-rag`. An explicit composition call validates the
+  exact provider and collaborator bundle, requires installed distribution
+  version 0.1.0, then performs one statically named deferred local adapter
+  import, verifies the fixed host-required capability manifest, and constructs
+  the adapter service. Explicit local composition fixes the local embedder and
+  ranker, retains only the supplied store and lexical retriever, and constructs
+  a call-local generic service for every projection or retrieval. Projection
+  publishes through an inactive builder only after generic success; retrieval
+  borrows only a completely verified active generation and otherwise returns a
+  fixed literal-fallback reason. No descriptor or provider lifecycle is
+  retained by the composition.
   It performs no provider discovery, dynamic module-name loading, environment
   or `sys.path` inspection, settings/storage access, credential work, or
   resource acquisition. Ordinary metadata, import, capability, and
@@ -3664,8 +3761,9 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Package-supported `FilesystemConversationCatalog`,
   `FilesystemConversationEventStore`, `Workspace`, and
   `initialize_workspace`. Package-internal `open_workspace_root_directory` and
-  `verify_workspace_root_directory` provide the diagnostic storage boundary and
-  are deliberately absent from the project-root facade.
+  `verify_workspace_root_directory` provide the identity-bound internal-storage
+  boundary used by diagnostic and disposable-generation owners and are
+  deliberately absent from the project-root facade.
   `Workspace.inspect_debate_context` is the strict, separate context-sidecar
   inspection operation; topology, serialization, and lock-registry details are
   internal.
@@ -3705,12 +3803,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   once a meaningful identity is bound, a later named or opened symlink,
   non-directory, or identity replacement raises
   `WorkspaceSecurityError`, while an unsupported safe primitive raises an
-  ordinary `OSError`. Retained identity protects internal diagnostic storage,
-  not ordinary domain operations: public path I/O remains pathname-based and
-  nontransactional and may observe a real directory installed later at the same
-  root path. The module also owns strict UTF-8 and
-  JSON I/O, overrides, agent and debate state, logs, results, per-conversation
-  metadata under
+  ordinary `OSError`. Retained identity protects internal storage owners such
+  as `debug_log` and `conversation_rag_store`, not ordinary domain operations:
+  public path I/O remains pathname-based and nontransactional and may observe a
+  real directory installed later at the same root path. The module also owns
+  strict UTF-8 and JSON I/O, overrides, agent and debate state, logs, results,
+  and per-conversation metadata under
   `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/metadata.json`,
   authoritative visible events under
   `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/transcript.jsonl`,

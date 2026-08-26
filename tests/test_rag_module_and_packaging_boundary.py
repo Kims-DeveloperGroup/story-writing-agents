@@ -17,7 +17,12 @@ import zipfile
 from pathlib import Path
 
 import story_writing_agents
-from story_writing_agents import conversation_rag, conversation_rag_composition
+from story_writing_agents import (
+    conversation_rag,
+    conversation_rag_composition,
+    conversation_rag_local,
+    conversation_rag_store,
+)
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _SOURCE_ROOT = _REPOSITORY_ROOT / "src" / "story_writing_agents"
@@ -191,8 +196,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 72)
-        self.assertEqual(len(edges), 274)
+        self.assertEqual(len(modules), 74)
+        self.assertEqual(len(edges), 280)
         self.assertIsNone(_cycle_witness(modules, edges))
         self.assertEqual(
             _generic_importers(modules),
@@ -218,22 +223,56 @@ class RagModuleBoundaryTests(unittest.TestCase):
             {
                 target
                 for source, target in edges
+                if source == "story_writing_agents.conversation_rag_local"
+            },
+            {
+                "story_writing_agents.conversation_literal_search",
+                "story_writing_agents.conversation_rag",
+            },
+        )
+        self.assertEqual(
+            {
+                target
+                for source, target in edges
+                if source == "story_writing_agents.conversation_rag_store"
+            },
+            {
+                "story_writing_agents.conversation_rag",
+                "story_writing_agents.workspace",
+            },
+        )
+        self.assertEqual(
+            {
+                target
+                for source, target in edges
                 if source == "story_writing_agents.conversation_rag_composition"
             },
             {
                 "story_writing_agents.conversation_rag",
+                "story_writing_agents.conversation_rag_local",
+                "story_writing_agents.conversation_rag_store",
                 "story_writing_agents.generic_rag_adapter",
             },
         )
 
     def test_supported_module_surfaces_do_not_expand_the_root_facade(self) -> None:
         self.assertEqual(len(story_writing_agents.__all__), 120)
-        rag_names = set(conversation_rag.__all__) | set(
-            conversation_rag_composition.__all__
+        rag_names = set().union(
+            conversation_rag.__all__,
+            conversation_rag_composition.__all__,
+            conversation_rag_local.__all__,
+            conversation_rag_store.__all__,
         )
         self.assertTrue(rag_names.isdisjoint(story_writing_agents.__all__))
         self.assertFalse(hasattr(story_writing_agents, "compose_conversation_rag"))
+        self.assertFalse(
+            hasattr(story_writing_agents, "compose_local_conversation_rag")
+        )
         self.assertFalse(hasattr(story_writing_agents, "ConversationRagCandidate"))
+        self.assertFalse(hasattr(story_writing_agents, "LocalConversationRagEmbedder"))
+        self.assertFalse(
+            hasattr(story_writing_agents, "ConversationRagGenerationStore")
+        )
 
 
 class RagPackagingBoundaryTests(unittest.TestCase):
@@ -361,6 +400,18 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                         for name in names
                     )
                 )
+                self.assertTrue(
+                    any(
+                        name.endswith("story_writing_agents/conversation_rag_local.py")
+                        for name in names
+                    )
+                )
+                self.assertTrue(
+                    any(
+                        name.endswith("story_writing_agents/conversation_rag_store.py")
+                        for name in names
+                    )
+                )
                 self.assertFalse(any("/vendor/" in f"/{name}/" for name in names))
                 self.assertFalse(any("/generic_rag/" in f"/{name}/" for name in names))
 
@@ -374,7 +425,14 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 sys.path.insert(0, {str(base_target)!r})
                 import story_writing_agents
                 import story_writing_agents.conversation_rag_composition as composition
+                import story_writing_agents.conversation_rag_local as local
+                import story_writing_agents.conversation_rag_store as store
                 assert len(story_writing_agents.__all__) == 120
+                assert len(composition.__all__) == 6
+                assert len(local.__all__) == 5
+                assert len(store.__all__) == 8
+                assert local.LocalConversationRagEmbedder().identity.dimensions == 256
+                assert store.CONVERSATION_RAG_STORE_SCHEMA_ID == "story-conversation-rag-store-v1"
                 assert not any(
                     name == "generic_rag" or name.startswith("generic_rag.")
                     for name in sys.modules
@@ -404,6 +462,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 sys.path.insert(0, {str(optional_target)!r})
                 from story_writing_agents import conversation_rag as rag
                 from story_writing_agents import conversation_rag_composition as composition
+                from story_writing_agents import conversation_rag_local as local
+                from story_writing_agents import conversation_rag_store as store
                 service = composition.compose_conversation_rag(
                     "local",
                     rag.ConversationRagCollaborators(
@@ -412,6 +472,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 )
                 assert type(service).__name__ == "GenericRagConversationService"
                 assert type(service).__module__ == "story_writing_agents.generic_rag_adapter"
+                assert local.LocalConversationRagEmbedder().identity.dimensions == 256
+                assert len(store.__all__) == 8
                 """
             )
             optional = subprocess.run(

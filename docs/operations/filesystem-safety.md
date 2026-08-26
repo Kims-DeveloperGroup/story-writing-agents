@@ -14,7 +14,8 @@
 > lease. Explicit next-shell filesystem/SQLite selection and optional direct
 > Python SQLite conversation storage use one workspace coordinator; SQLite has
 > its own fixed database, derived search companion, transaction, and sidecar
-> boundary.
+> boundary. Direct Python conversation RAG also has a separate identity-bound,
+> disposable per-session generation store; no runtime or shell path uses it yet.
 
 Key terms: **containment**—keeping paths beneath the workspace root; **symlink**—
 a filesystem alias the runtime rejects; **exclusive creation**—failure instead
@@ -551,6 +552,77 @@ standalone filesystem adapters and external file/database editors remain
 outside it. See the exact
 [CLI contract](../reference/cli.md#conversation-storage-selection) and
 [selection recovery](recovery-and-limitations.md#conversation-storage-selection-and-activation-recovery).
+
+<a id="conversation-rag-generation-store-safety"></a>
+
+## Conversation RAG generation-store safety
+
+The direct `ConversationRagGenerationStore` is the sole owner of
+`agent_states/orchestrator_state/conversation_rag`. Construction retains the
+supplied `Workspace` and its established identity without touching the
+filesystem. Operations require POSIX `fcntl`, descriptor-relative directory
+and file calls, no-follow flags, meaningful device/inode identities, and
+directory synchronization. Missing capability reports `unsupported`; there is
+no pathname or lock-free fallback.
+
+The owner creates/verifies every directory beneath its fixed subtree as mode
+`0700` and every regular file as mode `0600`. It rejects symlinks, hard-linked
+files, nonregular names, wrong modes, unexpected namespace entries, changed
+descriptor/name identity, root replacement, and unsafe generation contents.
+Traversal, listing, open, read, write, rename, unlink, and removal are relative
+to retained verified directory descriptors. A weakly shared process lock and
+bounded advisory `flock` serialize the addressed session; a short global lock
+serializes topology creation before the session lock becomes the operation
+owner. Busy state fails without automatic retry.
+
+Canonical strict-UTF-8 JSON/JSONL has fixed schemas, sorted compact fields,
+exact LF termination, duplicate-field rejection, and finite floats serialized
+through canonical `float.hex` strings. Per-file/per-record/aggregate limits are
+checked before allocation or mutation where applicable. Inspection streams and
+digests bounded records, reconstructs every fragment sequence/source digest,
+and proves provider/model/schema/chunking, manifest, counts, generation digest,
+and active-pointer identity. Deep JSON recursion, `NaN`/infinity, decimal or
+hex-float overflow, malformed Unicode, noncanonical encoding, and inconsistent
+records map to content-free `corrupt` rather than leaking persisted values or
+decoder details.
+
+Generation mutation stays under one retained session lock and descriptor
+scope. An inactive build is synchronized and verified before it is renamed to
+its content-derived generation name, the generations directory is synchronized,
+and the installed generation is reopened/reverified. Advisory `status.json` is
+prepared next. `active.json` alone commits the generation. Its complete
+temporary file and the session directory are synchronized before the atomic
+replacement rename, which is deliberately the final callable publish action.
+The store does not claim a post-rename directory sync: an immediate crash can
+leave either the old or complete new valid pointer. Any failure reported before
+that rename leaves the old pointer byte-identical; a complete but inactive
+generation can remain as an orphan.
+
+Inspection is observational and never cleans an orphan or temporary pointer.
+The next generation mutation validates the complete namespace before removing
+recognized build/inactive-generation residue. Unknown, unsafe, or divergent
+state is preserved and rejected. Rebuild begins again from authoritative input;
+it never resumes partial build bytes. Active readers reopen and completely
+verify the exact snapshot under the same session lock, and close descriptors
+exactly once at context exit.
+
+Purge requires exact `confirmed=True` and prevalidates the entire addressed
+session namespace before removal. It removes the active pointer first and then
+only status, pointer temporaries, and recognized derived generations; session
+locks/directories remain. It neither follows/removes an unsafe name nor touches
+authoritative filesystem/SQLite conversations, configuration, manuscripts,
+artifacts, provider state, or another session. Advisory locks coordinate only
+supported store participants; they are not authorization or protection against
+an actively hostile same-user process.
+
+Status/snapshot/error values and diagnostic records are content-free and do not
+include source or query text. The verified source-map file does contain derived
+plaintext fragments, so filesystem permissions do not replace workspace-level
+data protection. Derived vectors and fragments are never authority; #263 must
+reauthorize stable references and reread conversation bytes before use. See the
+[persistence design](../design/persistence.md#optional-conversation-rag-derived-persistence),
+[direct API](../reference/package-api.md#optional-conversation-rag-boundary),
+and [current/planned workflow](../guides/conversation-rag.md).
 
 <a id="sqlite-conversation-storage-safety"></a>
 
