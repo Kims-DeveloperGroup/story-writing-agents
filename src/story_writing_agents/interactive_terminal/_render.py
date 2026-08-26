@@ -99,18 +99,45 @@ _StartupSpan: TypeAlias = tuple[str, str]
 _StartupLine: TypeAlias = tuple[_StartupSpan, ...]
 
 
-class _InlineWarningRole:
-    """Decorate one already-wrapped warning suffix within its base row."""
+class _InlineRoleSpan:
+    """Identify one semantic interval within an already-wrapped row."""
 
-    __slots__ = ("base", "start", "stop")
+    __slots__ = ("role", "start", "stop")
 
-    def __init__(self, base: SemanticRole, start: int, stop: int) -> None:
-        self.base = base
+    def __init__(self, start: int, stop: int, role: SemanticRole) -> None:
         self.start = start
         self.stop = stop
+        self.role = role
 
 
-_LineRole: TypeAlias = SemanticRole | _InlineWarningRole
+class _InlineRole:
+    """Decorate ordered non-overlapping semantic spans within a base row."""
+
+    __slots__ = ("base", "spans")
+
+    def __init__(
+        self,
+        base: SemanticRole,
+        spans: tuple[_InlineRoleSpan, ...],
+    ) -> None:
+        if not isinstance(base, SemanticRole):
+            raise TypeError("base must be a SemanticRole")
+        if type(spans) is not tuple or any(
+            type(span) is not _InlineRoleSpan for span in spans
+        ):
+            raise TypeError("spans must be a tuple of _InlineRoleSpan values")
+        previous_stop = 0
+        for span in spans:
+            if span.start < previous_stop or span.start >= span.stop:
+                raise ValueError("inline role spans must be ordered and non-overlapping")
+            if not isinstance(span.role, SemanticRole):
+                raise TypeError("inline span role must be a SemanticRole")
+            previous_stop = span.stop
+        self.base = base
+        self.spans = spans
+
+
+_LineRole: TypeAlias = SemanticRole | _InlineRole
 _SemanticLine: TypeAlias = tuple[str, _LineRole]
 
 
@@ -691,24 +718,12 @@ def _numbered_picker_choice_lines(
             if highlighted
             else SemanticRole.DEFAULT
         )
-    text = choice.label
-    if choice.warning_suffix is not None:
-        text += f" {choice.warning_suffix}"
-    if choice.description is not None:
-        text += f" — {choice.description}"
-    if choice.disabled_reason is not None:
-        text += f" (disabled: {choice.disabled_reason})"
+    text, spans = _choice_text_and_spans(choice, numbered=True)
     prefix = f"{ordinal}. {cues} "
-    if choice.warning_suffix is not None and role is SemanticRole.DEFAULT:
-        tail = ""
-        if choice.description is not None:
-            tail += f" — {choice.description}"
-        if choice.disabled_reason is not None:
-            tail += f" (disabled: {choice.disabled_reason})"
-        return _wrap_warning_suffix(
-            choice.label,
-            choice.warning_suffix,
-            tail,
+    if spans and role is SemanticRole.DEFAULT:
+        return _wrap_inline_roles(
+            text,
+            spans,
             width,
             indent=indent,
             initial_prefix=prefix,
@@ -1144,23 +1159,11 @@ def _choice_lines(
     else:
         marker = "- "
         role = SemanticRole.DEFAULT
-    text = choice.label
-    if choice.warning_suffix is not None:
-        text += f" {choice.warning_suffix}"
-    if choice.description is not None:
-        text += f" — {choice.description}"
-    if choice.disabled_reason is not None:
-        text += f" ({choice.disabled_reason})"
-    if choice.warning_suffix is not None and role is SemanticRole.DEFAULT:
-        tail = ""
-        if choice.description is not None:
-            tail += f" — {choice.description}"
-        if choice.disabled_reason is not None:
-            tail += f" ({choice.disabled_reason})"
-        return _wrap_warning_suffix(
-            choice.label,
-            choice.warning_suffix,
-            tail,
+    text, spans = _choice_text_and_spans(choice, numbered=False)
+    if spans and role is SemanticRole.DEFAULT:
+        return _wrap_inline_roles(
+            text,
+            spans,
             width,
             indent=indent,
             initial_prefix=marker,
@@ -1273,10 +1276,36 @@ def _wrap(
     return rendered or [base_indent.rstrip()]
 
 
-def _wrap_warning_suffix(
-    label: str,
-    warning_suffix: str,
-    tail: str,
+def _choice_text_and_spans(
+    choice: Choice,
+    *,
+    numbered: bool,
+) -> tuple[str, tuple[_InlineRoleSpan, ...]]:
+    """Build one sanitized choice line and its independent semantic spans."""
+
+    text = _inline(choice.label)
+    spans: list[_InlineRoleSpan] = []
+    if choice.warning_suffix is not None:
+        text += " "
+        start = len(text)
+        text += _inline(choice.warning_suffix)
+        spans.append(_InlineRoleSpan(start, len(text), SemanticRole.WARNING))
+    if choice.description is not None:
+        text += " — "
+        start = len(text)
+        text += _inline(choice.description)
+        if choice.description_role is not SemanticRole.DEFAULT:
+            spans.append(_InlineRoleSpan(start, len(text), choice.description_role))
+    if choice.disabled_reason is not None:
+        text += " (disabled: " if numbered else " ("
+        text += _inline(choice.disabled_reason)
+        text += ")"
+    return text, tuple(spans)
+
+
+def _wrap_inline_roles(
+    text: str,
+    spans: tuple[_InlineRoleSpan, ...],
     width: int,
     *,
     indent: int,
@@ -1284,18 +1313,12 @@ def _wrap_warning_suffix(
     continuation_prefix: str,
     base_role: SemanticRole,
 ) -> list[_SemanticLine]:
-    """Wrap one choice while retaining its plain warning-suffix boundaries."""
+    """Wrap sanitized choice text while retaining semantic span boundaries."""
 
-    safe_label = _inline(label)
-    safe_warning_suffix = _inline(warning_suffix)
-    safe_text = f"{safe_label} {safe_warning_suffix}{_inline(tail)}"
-    warning_start = len(safe_label) + 1
-    warning_stop = warning_start + len(safe_warning_suffix)
     base_indent = " " * max(0, min(indent, max(width - 1, 0)))
-    return _prefixed_warning_lines(
-        safe_text,
-        warning_start,
-        warning_stop,
+    return _prefixed_inline_role_lines(
+        text,
+        spans,
         width,
         first_prefix=f"{base_indent}{initial_prefix}",
         continuation_prefix=f"{base_indent}{continuation_prefix}",
@@ -1303,17 +1326,16 @@ def _wrap_warning_suffix(
     )
 
 
-def _prefixed_warning_lines(
+def _prefixed_inline_role_lines(
     text: str,
-    warning_start: int,
-    warning_stop: int,
+    spans: tuple[_InlineRoleSpan, ...],
     width: int,
     *,
     first_prefix: str,
     continuation_prefix: str,
     base_role: SemanticRole,
 ) -> list[_SemanticLine]:
-    """Fit safe choice text while mapping its warning interval to each row."""
+    """Fit safe choice text while projecting semantic spans onto each row."""
 
     rendered: list[_SemanticLine] = []
     remaining = text
@@ -1336,16 +1358,18 @@ def _prefixed_warning_lines(
         content = _cell_chunks(remaining, available)[0]
         line = f"{active_prefix}{content}"
         content_stop = offset + len(content)
-        overlap_start = max(offset, warning_start)
-        overlap_stop = min(content_stop, warning_stop)
-        if overlap_start < overlap_stop:
-            role: _LineRole = _InlineWarningRole(
-                base_role,
-                len(active_prefix) + overlap_start - offset,
-                len(active_prefix) + overlap_stop - offset,
+        line_spans = tuple(
+            _InlineRoleSpan(
+                len(active_prefix) + max(offset, span.start) - offset,
+                len(active_prefix) + min(content_stop, span.stop) - offset,
+                span.role,
             )
-        else:
-            role = base_role
+            for span in spans
+            if max(offset, span.start) < min(content_stop, span.stop)
+        )
+        role: _LineRole = (
+            _InlineRole(base_role, line_spans) if line_spans else base_role
+        )
         rendered.append((line, role))
         remaining = remaining[len(content) :]
         offset = content_stop
@@ -1422,14 +1446,15 @@ def _cell_width(text: str) -> int:
 def _decorate(text: str, role: _LineRole) -> str:
     """Apply one fixed local style without parsing dynamic text as markup."""
 
-    if isinstance(role, _InlineWarningRole):
-        return "".join(
-            (
-                _decorate(text[: role.start], role.base),
-                _decorate(text[role.start : role.stop], SemanticRole.WARNING),
-                _decorate(text[role.stop :], role.base),
-            )
-        )
+    if isinstance(role, _InlineRole):
+        rendered: list[str] = []
+        offset = 0
+        for span in role.spans:
+            rendered.append(_decorate(text[offset : span.start], role.base))
+            rendered.append(_decorate(text[span.start : span.stop], span.role))
+            offset = span.stop
+        rendered.append(_decorate(text[offset:], role.base))
+        return "".join(rendered)
     sgr = _ROLE_SGR[role]
     if not sgr or not text:
         return text

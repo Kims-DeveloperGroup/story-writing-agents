@@ -6,8 +6,9 @@ import asyncio
 import inspect
 import uuid
 import sys
+from collections.abc import Callable
 from types import TracebackType
-from typing import Mapping
+from typing import Mapping, TypeVar
 
 from ..agents import (
     AGENT_SPECS,
@@ -222,6 +223,9 @@ from ._session_policy import (
 )
 
 
+_SettingsOptionT = TypeVar("_SettingsOptionT")
+
+
 _UNAVAILABLE_SUMMARY = "This command is not available in the session lobby."
 _LOBBY_COMMAND_HINT = (
     "Use /help, /session list, /session create NAME, /session resume [NAME], "
@@ -253,8 +257,8 @@ _SETTINGS_CUSTOM_MODEL_ID = "settings:model:custom"
 _SETTINGS_EFFORT_ID_PREFIX = "settings:effort:"
 _SETTINGS_CURRENT_EFFORT_ID = "settings:effort:current-compatibility"
 _SETTINGS_VALUE_SAVE_GUIDANCE = (
-    "Entered changes remain pending in memory and are not saved; choose Save in "
-    "Settings to persist them."
+    "Entered changes remain pending in memory and are not saved; choose Apply "
+    "Changes in Settings to persist them."
 )
 _SETTINGS_UNARMED = object()
 
@@ -419,7 +423,7 @@ def _settings_pending_save_notice(state: SettingsState) -> Notice | None:
     if state.pending == state.baseline.configuration:
         return None
     return Notice(
-        "Choose Save to persist pending changes",
+        "Choose Apply Changes to persist pending changes",
         label="save required",
         role=SemanticRole.WARNING,
         state=ViewState.IDLE,
@@ -2387,7 +2391,7 @@ class InteractiveController:
             )
             return
 
-        top_highlight = "language"
+        top_highlight: str | None = "language"
         while True:
             dirty = state.pending != state.baseline.configuration
             projection = _settings_projection(
@@ -2398,6 +2402,10 @@ class InteractiveController:
                 root_id: (current_value, pending_value)
                 for root_id, agent_id, _label, current_value, pending_value in projection
                 if agent_id is None
+            }
+            root_changed = {
+                root_id: current_value != pending_value
+                for root_id, (current_value, pending_value) in root_values.items()
             }
             agent_change_count = sum(
                 current_value != pending_value
@@ -2410,8 +2418,13 @@ class InteractiveController:
                     "Language",
                     description=(
                         f"Pending: {root_values['language'][1]}"
-                        if root_values["language"][0] != root_values["language"][1]
+                        if root_changed["language"]
                         else f"Current: {root_values['language'][0]}"
+                    ),
+                    description_role=(
+                        SemanticRole.WARNING
+                        if root_changed["language"]
+                        else SemanticRole.DEFAULT
                     ),
                 ),
                 Choice(
@@ -2419,8 +2432,13 @@ class InteractiveController:
                     "Persona",
                     description=(
                         f"Pending: {root_values['persona'][1]}"
-                        if root_values["persona"][0] != root_values["persona"][1]
+                        if root_changed["persona"]
                         else f"Current: {root_values['persona'][0]}"
+                    ),
+                    description_role=(
+                        SemanticRole.WARNING
+                        if root_changed["persona"]
+                        else SemanticRole.DEFAULT
                     ),
                 ),
                 Choice(
@@ -2428,9 +2446,13 @@ class InteractiveController:
                     "Maximum debate rounds",
                     description=(
                         f"Pending: {root_values['max_debate_rounds'][1]}"
-                        if root_values["max_debate_rounds"][0]
-                        != root_values["max_debate_rounds"][1]
+                        if root_changed["max_debate_rounds"]
                         else f"Current: {root_values['max_debate_rounds'][0]}"
+                    ),
+                    description_role=(
+                        SemanticRole.WARNING
+                        if root_changed["max_debate_rounds"]
+                        else SemanticRole.DEFAULT
                     ),
                 ),
                 Choice(
@@ -2441,6 +2463,11 @@ class InteractiveController:
                         if root_values["conversation_storage"][0]
                         != root_values["conversation_storage"][1]
                         else f"Current: {root_values['conversation_storage'][0]}"
+                    ),
+                    description_role=(
+                        SemanticRole.WARNING
+                        if root_changed["conversation_storage"]
+                        else SemanticRole.DEFAULT
                     ),
                 ),
                 Choice(
@@ -2455,24 +2482,37 @@ class InteractiveController:
                             else f"{agent_change_count} pending changes"
                         )
                     ),
-                ),
-                Choice(
-                    "save",
-                    "Save",
-                    warning_suffix="(*Required)" if dirty else None,
-                ),
-                Choice(
-                    "cancel",
-                    "Cancel",
-                    description=(
-                        "Pending changes will be discarded." if dirty else None
+                    description_role=(
+                        SemanticRole.WARNING
+                        if agent_change_count
+                        else SemanticRole.DEFAULT
                     ),
                 ),
             )
+            if dirty:
+                choices += (
+                    Choice(
+                        "save",
+                        "Apply Changes",
+                        warning_suffix="(*Required)",
+                    ),
+                    Choice(
+                        "cancel",
+                        "Discard Changes",
+                        description="Pending changes will be discarded.",
+                    ),
+                )
+            if top_highlight not in {choice.identity for choice in choices}:
+                top_highlight = None
             outcome = self._picker_input.read_picker(
                 Prompt(
                     "Settings",
-                    instruction="Choose a setting to edit, save, or cancel.",
+                    instruction=(
+                        "Choose a setting to edit, apply changes, or discard "
+                        "changes."
+                        if dirty
+                        else "Choose a setting to edit."
+                    ),
                 ),
                 choices,
                 highlighted_id=top_highlight,
@@ -2499,6 +2539,8 @@ class InteractiveController:
                     return
                 continue
             if selected == "save":
+                if state.pending == state.baseline.configuration:
+                    continue
                 confirmation = self._settings_save_confirmation(
                     state,
                     action="save",
@@ -2520,6 +2562,8 @@ class InteractiveController:
                         return
                     if auth_outcome == "return":
                         continue
+                if state.pending == state.baseline.configuration:
+                    continue
                 save_outcome = self._save_and_apply_settings(state)
                 if save_outcome == "retry":
                     continue
@@ -2922,17 +2966,18 @@ class InteractiveController:
                 if status.state.value == "unauthenticated":
                     message = (
                         f"{provider_name} is not authenticated. Complete "
-                        "native sign-in, then retry Save."
+                            "native sign-in, then retry Apply Changes."
                     )
                 elif status.state.value == "unavailable":
                     message = (
                         f"{provider_name} CLI is unavailable. Install it, "
-                        "then retry Save."
+                        "then retry Apply Changes."
                     )
                 elif status.state.value == "indeterminate":
                     message = (
                         f"{provider_name} authentication could not be "
-                        "confirmed. Check the native CLI, then retry Save."
+                        "confirmed. Check the native CLI, then retry Apply "
+                        "Changes."
                     )
                 else:
                     raise _ControllerAbort(
@@ -2990,11 +3035,15 @@ class InteractiveController:
         )
         outcome = self._picker_input.read_picker(
             Prompt(
-                "Save settings?" if action == "save" else "Cancel settings?",
-                instruction=(
-                    "Choose YES to save, or NO to return."
+                (
+                    "Apply changes?"
                     if action == "save"
-                    else "Choose YES to cancel, or NO to return."
+                    else "Discard changes?"
+                ),
+                instruction=(
+                    "Choose YES to apply changes, or NO to return."
+                    if action == "save"
+                    else "Choose YES to discard changes, or NO to return."
                 ),
             ),
             (Choice("yes", "YES"), Choice("no", "NO")),
@@ -3501,7 +3550,7 @@ class InteractiveController:
         notice: Notice | None = None
         armed_value: object = _SETTINGS_UNARMED
         while True:
-            snapshot = coordinator.probe_all()
+            snapshot = self._run_settings_option_load(coordinator.probe_all)
             current = _effective_settings_provider(
                 state,
                 agent_id,
@@ -3541,7 +3590,7 @@ class InteractiveController:
                 return state, whole_cancel
 
             notice = None
-            snapshot = coordinator.probe_all()
+            snapshot = self._run_settings_option_load(coordinator.probe_all)
             if snapshot.is_authenticated(provider):
                 if armed_value == provider:
                     return state, False
@@ -3570,7 +3619,7 @@ class InteractiveController:
             }:
                 return state, True
 
-            snapshot = coordinator.probe_all()
+            snapshot = self._run_settings_option_load(coordinator.probe_all)
             if (
                 result.kind is InteractiveAuthResultKind.AUTHENTICATED
                 and result.provider == provider
@@ -3600,6 +3649,30 @@ class InteractiveController:
                 role=SemanticRole.ERROR,
                 state=ViewState.ERROR,
             )
+
+    def _run_settings_option_load(
+        self,
+        operation: Callable[[], _SettingsOptionT],
+    ) -> _SettingsOptionT:
+        """Run one Settings option read under transient terminal progress."""
+
+        if not callable(operation):
+            raise TypeError("settings option operation must be callable")
+        runner = self._runner
+        if runner is None:
+            return operation()
+
+        async def load() -> _SettingsOptionT:
+            """Keep the Runner responsive while the bounded read blocks."""
+
+            return await asyncio.to_thread(operation)
+
+        try:
+            return runner.run(self._advisory_progress.run(load()))
+        except AdvisoryProgressError:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            ) from None
 
     def _edit_settings_agent_model(
         self,
@@ -4050,7 +4123,11 @@ class InteractiveController:
         """Contain collaborator failures behind one fixed discovery state."""
 
         try:
-            discovery = self._provider_catalog.discover(provider)
+            discovery = self._run_settings_option_load(
+                lambda: self._provider_catalog.discover(provider)
+            )
+        except _ControllerAbort:
+            raise
         except Exception:
             return ProviderCatalogDiscovery(
                 provider,
@@ -4120,7 +4197,7 @@ class InteractiveController:
             Field(
                 label,
                 f"{current_value} (Changed)",
-                role=SemanticRole.WARNING,
+                role=SemanticRole.DEFAULT,
             )
             for _root_id, _agent_id, label, current_value, _pending_value
             in changed_rows
@@ -4139,7 +4216,10 @@ class InteractiveController:
                 Section("Current", current_fields),
                 Section("Pending", pending_fields),
                 Notice(
-                    "Save validates, persists, and applies the complete snapshot now.",
+                    (
+                        "Runtime changes apply to this shell after Apply Changes; "
+                        "desired storage changes apply to the next shell."
+                    ),
                     label="activation",
                     role=SemanticRole.INFO,
                 ),

@@ -476,16 +476,18 @@ Effort. It supports Codex and Antigravity and edits only the active
 provider's per-agent model/effort while retaining inactive-provider values.
 Entering Model or Effort discovers the pending effective provider afresh;
 opening Settings and provider navigation do not launch catalog commands.
-Custom models and inheritance remain supported. See the exact
+Provider option probing and Model/Effort discovery show transient progress on
+capable raw terminals and remain visually silent in ordinary fallback. Custom
+models and inheritance remain supported. See the exact
 [picker contract](interactive-terminal.md#provider-model-and-effort-pickers).
 Direct edits to the validated JSON documents remain possible, but there is no
 file watcher: they are reconciled by a newly launched backend, and other
-running shells retain their captured state. Confirmed `/settings` Save instead
-validates, persists, and applies non-storage runtime settings to the current
-shell without a restart. Desired conversation storage remains a next-shell
-setting and the current storage bundle is unchanged. Launch overrides stay
-higher precedence, so the corresponding effective Provider, Model, or Effort
-editor is disabled and read-only. Existing
+running shells retain their captured state. Confirmed `/settings` Apply Changes
+instead validates, persists, and applies non-storage runtime settings to the
+current shell without a restart. Desired conversation storage remains a
+next-shell setting and the current storage bundle is unchanged. Launch
+overrides stay higher precedence, so the corresponding effective Provider,
+Model, or Effort editor is disabled and read-only. Existing
 three-key system-default files remain valid and provide no provider-specific
 fallback until configured. Exact fields, validation, and initialization
 compatibility are in
@@ -676,36 +678,48 @@ text so the invoking shell does not expand `$`.
 
 `/auth` and `/settings` are alias-free, take no argument, and are available with
 or without an attached session. `/auth` follows the authentication contract
-above. `/settings` edits isolated Current and Pending snapshots for
-Language, Persona, Maximum debate rounds, Conversation storage, and Agents
-through a seven-choice editor in this exact order: those five fields, Save,
-Cancel. Conversation storage independently offers Filesystem and SQLite for
-the next shell; it is not an agent-provider route. `Agents` opens a
-nested canonical-agent picker, then a provider-neutral Provider/Model/Effort
-picker. Current/Pending confirmations retain provider-qualified rows for both
-providers so inactive values remain identifiable.
+above. `/settings` edits isolated Current and Pending snapshots for Language,
+Persona, Maximum debate rounds, Conversation storage, and Agents. A clean root
+shows exactly those five choices in that order, with no persistence action or
+save guidance. Dirty state appends `Apply Changes (*Required)` and then `Discard
+Changes`. Conversation storage independently offers Filesystem and SQLite for
+the next shell; it is not an agent-provider route. `Agents` opens a nested
+canonical-agent picker, then a provider-neutral Provider/Model/Effort picker.
+Current/Pending confirmations retain provider-qualified rows for both providers
+so inactive values remain identifiable.
+
+At the Settings root, each one-level value, including Conversation storage,
+shows one effective description: neutral `Current` when unchanged or
+warning-semantic `Pending` when changed. Agents similarly warning-marks its
+explicit nonzero nested pending-change count. Dirty confirmation context keeps
+Current neutral and Pending warning. These roles reinforce the visible words
+and counts; warning suffix and description spans wrap independently, whole-row
+disabled/selected/highlighted precedence remains authoritative, and plain and
+`NO_COLOR` text remain unchanged so color is never required to identify state.
+The additive Choice description role remains package-internal.
 
 Every retained Language, Persona, Maximum debate rounds, Conversation storage,
 Provider, Model, Custom model, and Effort editor always shows `Entered changes
-remain pending in memory and are not saved; choose Save in Settings to persist
-them.` The text is present on initial entry, after a valid Enter reopens the
-editor, and during validation. The established entered-value success result
+remain pending in memory and are not saved; choose Apply Changes in Settings to
+persist them.` The text is present on initial entry, after a valid Enter reopens
+the editor, and during validation. The established entered-value success result
 remains unchanged and is still the only inline completed result.
 
-The top-level Settings picker shows `[save required] Pending changes are in
-memory only and are not saved. Choose Save to persist them.` if and only if the
+The dirty top-level Settings picker shows `[save required] Choose Apply Changes to persist
+pending changes` if and only if the
 complete pending configuration differs structurally from its opening baseline.
 This is recomputed on every top-level read, so the warning is absent initially
 and after a complete revert. It is also absent from Agents, Agent settings,
-value editors, and Save/Cancel confirmations. Capable, narrow, `NO_COLOR`, and
+value editors, and Apply/Discard confirmations. Capable, narrow, `NO_COLOR`, and
 fallback views expose the complete text. Fallback cannot erase historical
 scrollback, but the current prompt reflects the current comparison.
 
-That same comparison labels the top-level choice exact plain `Save` while clean
-and exact plain `Save (*Required)` while dirty. When ANSI decoration is
-eligible, only `(*Required)` receives warning styling; the preceding separator
-space remains unstyled. The existing `[save required]` notice remains present,
-including in plain, `NO_COLOR`, narrow, and fallback views.
+When dirty, the root appends exact plain `Apply Changes (*Required)` followed by
+`Discard Changes`. The Apply warning suffix is exactly `(*Required)`; only that
+suffix receives eligible warning styling, while the label and preceding space
+remain neutral. Discard has the exact description `Pending changes will be
+discarded.` Clean state renders neither action. Plain, `NO_COLOR`, narrow, and
+fallback views preserve the same labels, order, description, and guidance.
 
 Only entering Model or Effort runs discovery. Each entry uses the pending
 effective provider; Effort also uses the pending effective model. Model order
@@ -736,15 +750,19 @@ failure, Custom model navigation, and editor re-entry reset it. This is
 consecutive semantic commit policy in the `/settings` controller, not raw-key
 timing or generic Picker/Prompt behavior.
 
-Save always opens its transient yes/no confirmation. Explicit Cancel and root
-Settings Escape share one action: clean settings exit immediately without a
-confirmation, while dirty settings open the existing Cancel confirmation. Each
-confirmation has changed-only Current/Pending context: only differing fields
-appear in both sections, each with a `(Changed)` cue, while no differences in
-Save confirmation show `No pending settings changes.` YES commits the requested
-action; NO or confirmation Escape returns to the root Settings picker, and
-invalid fallback input retries. Ctrl-C or EOF still cancels the whole workflow
-without writing. The
+Apply Changes alone opens the dirty transient yes/no persistence confirmation.
+Discard Changes opens the existing dirty discard confirmation. Root Settings
+Escape retains the same cancellation action: clean settings exit immediately
+without confirmation, while dirty settings open the discard confirmation. Each
+dirty confirmation has changed-only Current/Pending
+context: only differing fields appear in both sections, each with a `(Changed)`
+cue. The confirmation also states exactly:
+`Runtime changes apply to this shell after Apply Changes; desired storage changes apply to the next shell.`
+The existing `No pending settings changes.` confirmation panel remains a
+defensive internal projection and is not selectable clean-root UX. YES
+commits the requested dirty action; NO or confirmation Escape returns to the
+root Settings picker, and invalid fallback input retries. Ctrl-C or EOF still
+cancels the whole workflow without writing. The
 submitted `/settings` line has already been cleared with the capable main frame;
 its history entry remains. Ordinary-line fallback leaves its printed input
 visible, with the same history semantics. `/cancel` is literal model text in the
@@ -754,11 +772,15 @@ Choosing a provider starts authentication before changing that agent's pending
 route. A failed or cancelled authentication leaves the route candidate
 unchanged. Successful authentication is subordinate and returns to Provider;
 the route and any missing workspace default remain pending in memory. Escape or
-cancellation before confirmed Save leaves configuration bytes unchanged. No
-configuration value is persisted before Save is confirmed.
+cancellation before confirmed Apply Changes leaves configuration bytes
+unchanged. No configuration value is persisted before Apply Changes is
+confirmed.
 
-After Save confirmation, the controller freshly gates each distinct effective
-provider once before entering the configuration transaction. A stale,
+After Apply Changes confirmation, the controller rechecks that pending still
+differs from the opening baseline, then freshly gates each distinct effective
+provider once before entering the configuration transaction. A clean final
+recheck returns to the Settings root without authentication, persistence,
+output, exit, or a saved event. A stale,
 unavailable, unauthenticated, indeterminate, failed, cancelled, or interrupted
 status prevents the settings file transaction. A missing workspace default
 learned during this gate remains in the pending candidate. The controller then
@@ -769,7 +791,7 @@ create-only provisioning, and fresh parity, while rejecting any exact-byte
 change to either configuration document, the optional provider-route generation
 record, or the persona catalog since opening. A host prerequisite, empty SQLite
 database, or lazy storage guard created during readiness may remain after a
-later failure, but Save never migrates or activates conversation data.
+later failure, but Apply Changes never migrates or activates conversation data.
 
 The prepared persistence boundary contains
 `config/system_defaults.json`, `config/agent_configs.json`, and, when needed,
@@ -782,25 +804,33 @@ leaves the old runtime active; if restoration or activation cannot be proved,
 the shell reports `recovery_required` and must not be used until restarted
 against the persisted state.
 
-A non-storage save returns to the main prompt with
-`Settings saved and applied to this running shell now.` A storage-only save
+A non-storage Apply returns to the main prompt with
+`Settings saved and applied to this running shell now.` A storage-only Apply
 instead reports
 `Settings saved. Desired conversation storage is sqlite. Changes apply to the next shell.`
 when selecting SQLite (`filesystem` appears on the reverse change) and makes no
-live-activation claim. A mixed save emits both notices: runtime settings are
+live-activation claim. A mixed Apply emits both notices: runtime settings are
 active now, while the desired storage backend remains for the next shell. The
 current controller/runtime storage bundle never changes.
 Changed profiles remain `pending` until their first complete logical provider
 call succeeds. A provider switch requires a fresh target-provider thread; a
 same-provider model/effort change remains eligible for native-thread reuse.
-Save invokes no story-model turn, does not alter session or launch overrides,
-and stores no credentials or provider catalog data.
+A successfully persisted and activated dirty snapshot emits those success
+notices and returns to the main prompt. Cancellation, interruption,
+authentication or storage-readiness gating, declined installation,
+provisioning or parity failure, a clean final recheck, validation conflicts,
+write or activation failure, compensation, and rollback outcomes emit no false
+success. Apply Changes invokes no story-model turn, does not alter session or
+launch overrides, and stores no credentials or provider catalog data.
 
 Entering or validating a value remains in-memory only; no configuration value
-is persisted before the complete Save. This does not change startup or global
-`/auth` default persistence. It adds no terminal primitive, public API, or
-global picker rule; the #270 one-level Escape and one-shot Save, Cancel, and
-resume contracts remain unchanged.
+is persisted before confirmed Apply Changes. This does not change startup or
+global `/auth` default persistence. It adds no terminal primitive, public API,
+or global picker rule; the #270 one-level Escape, submitted-input retention,
+generic cancellation, YES/NO confirmation, and closing session-resume picker
+contracts remain unchanged. Stable internal save/cancel identities and the
+defensive clean route are controller details, not selectable Settings actions
+or a global navigation rule.
 
 On capable real-CLI streams, orientation/current context, `/status`, `/inspect`,
 central errors/recovery, and accepted management, advisory, retrieval, and
@@ -837,14 +867,15 @@ work returns empty, fails safely, or is cancelled; fallback may therefore show
 both its original command and the normalized result context without repeating
 the same verbatim snapshot.
 
-During one advisory turn, a capable raw stream may show the terminal-owned
-four-glyph rolling indicator `◐`, `◓`, `◑`, `◒`. The driver clears the active
+During one advisory turn or while `/settings` prepares Provider, Model, or
+Effort options, a capable raw stream may show the terminal-owned four-glyph
+rolling indicator `◐`, `◓`, `◑`, `◒`. The driver clears the active
 cell before each semantic/progress/result write, redraws while the operation is
 pending, and clears and joins both operation and indicator tasks before the
-final, cancelled, or error record. `NO_COLOR` keeps the glyph cycle because it
-removes decorative SGR only. Advisory turns emit no `[routing]` or `[waiting]`
-notice. Callback construction and non-TTY, `TERM=dumb`, non-POSIX, missing, or
-uncertain-capability paths await the operation silently; the installed CLI's
+final record or completed Settings picker. `NO_COLOR` keeps the glyph cycle
+because it removes decorative SGR only. Advisory turns emit no `[routing]` or
+`[waiting]` notice. Callback construction and non-TTY, `TERM=dumb`, non-POSIX,
+missing, or uncertain-capability paths await the operation silently; the installed CLI's
 TTY guard still rejects non-TTY shell entry before this point. An underlying
 operation failure takes precedence over a simultaneous indicator failure;
 indicator-only failures use the existing internal-error path after cleanup.

@@ -415,20 +415,62 @@ class PickerModelContractTests(unittest.TestCase):
                 self.assertIs(getattr(terminal_facade, name), value)
                 self.assertNotIn(name, terminal_facade.__all__)
 
-    def test_choice_warning_suffix_is_optional_keyword_only_and_compares(self) -> None:
+    def test_choice_inline_roles_are_keyword_only_strict_immutable_values(self) -> None:
         signature = inspect.signature(Choice)
         parameter = signature.parameters["warning_suffix"]
         self.assertIs(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
         self.assertIsNone(parameter.default)
+        role_parameter = signature.parameters["description_role"]
+        self.assertIs(role_parameter.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIs(role_parameter.default, SemanticRole.DEFAULT)
+        self.assertEqual(
+            tuple(field.name for field in fields(Choice)),
+            (
+                "identity",
+                "label",
+                "warning_suffix",
+                "description",
+                "description_role",
+                "enabled",
+                "disabled_reason",
+            ),
+        )
 
         default = Choice("save", "Save")
         explicit_none = Choice("save", "Save", warning_suffix=None)
+        explicit_default = Choice(
+            "save",
+            "Save",
+            description_role=SemanticRole.DEFAULT,
+        )
         warned = Choice("save", "Save", warning_suffix="(*Required)")
         self.assertEqual(default, explicit_none)
+        self.assertEqual(default, explicit_default)
+        self.assertEqual(hash(default), hash(explicit_default))
         self.assertNotEqual(default, warned)
         self.assertEqual(warned.warning_suffix, "(*Required)")
+        described = Choice(
+            "save",
+            "Save",
+            description="Writes settings.",
+            description_role=SemanticRole.WARNING,
+        )
+        self.assertIs(described.description_role, SemanticRole.WARNING)
+        self.assertNotEqual(default, described)
+        self.assertFalse(hasattr(described, "__dict__"))
+        self.assertEqual(pickle.loads(pickle.dumps(described)), described)
+        with self.assertRaises(FrozenInstanceError):
+            described.description_role = SemanticRole.DEFAULT  # type: ignore[misc]
         self.assertIsNone(
             Choice("save", "Save", description="Writes settings.").warning_suffix
+        )
+        self.assertIs(
+            Choice(
+                "save",
+                "Save",
+                description_role=SemanticRole.ERROR,
+            ).description_role,
+            SemanticRole.ERROR,
         )
 
         with self.assertRaises(TypeError):
@@ -441,6 +483,12 @@ class PickerModelContractTests(unittest.TestCase):
             with self.subTest(invalid=invalid):
                 with self.assertRaises(exception):
                     Choice("save", "Save", warning_suffix=invalid)  # type: ignore[arg-type]
+        for invalid in ("warning", ViewState.ERROR, object()):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                TypeError,
+                "description_role must be a SemanticRole",
+            ):
+                Choice("save", "Save", description_role=invalid)  # type: ignore[arg-type]
 
     def test_models_reject_invalid_state_and_viewport_relations(self) -> None:
         enabled = Choice("one", "One")
@@ -967,6 +1015,49 @@ class PickerRenderingTests(unittest.TestCase):
             self.assertNotIn(identity, ansi.text)
             self.assertNotIn(identity, fallback.text)
 
+        explicit_default_choices = (
+            Choice(
+                "secret-1",
+                "Alpha",
+                description="first",
+                description_role=SemanticRole.DEFAULT,
+            ),
+            *_choices()[1:],
+        )
+        explicit_default = initialize_picker(
+            Picker(
+                state.picker.prompt,
+                explicit_default_choices,
+                highlighted_id=state.picker.highlighted_id,
+                selected_id=state.picker.selected_id,
+            )
+        )
+        self.assertEqual(
+            render_picker_fallback(
+                explicit_default,
+                _capabilities(CapabilityProfile.LINE),
+            ),
+            fallback,
+        )
+        omitted_description = _render.render_component(
+            Picker(Prompt("Choose"), (Choice("one", "One"),)),
+            _capabilities(CapabilityProfile.ANSI),
+        )
+        inert_role = _render.render_component(
+            Picker(
+                Prompt("Choose"),
+                (
+                    Choice(
+                        "one",
+                        "One",
+                        description_role=SemanticRole.ERROR,
+                    ),
+                ),
+            ),
+            _capabilities(CapabilityProfile.ANSI),
+        )
+        self.assertEqual(inert_role, omitted_description)
+
     def test_narrow_no_color_combined_cues_and_width_change_preserve_facts(self) -> None:
         state = _long_state()
         viewport = project_picker_viewport(state)
@@ -1210,10 +1301,186 @@ class PickerRenderingTests(unittest.TestCase):
         self.assertNotIn("\x1b[31m", ansi.text)
         self.assertNotIn("\x00", ansi.text)
 
+    def test_description_roles_span_profiles_components_and_state_precedence(
+        self,
+    ) -> None:
+        styled = Choice(
+            "styled",
+            "Role",
+            warning_suffix="(*Required-long*)",
+            description="界e\u0301 danger\x1b[31m\x00 across rows",
+            description_role=SemanticRole.ERROR,
+        )
+        focus = Choice("focus", "Focus")
+        picker = Picker(
+            Prompt("Choose"),
+            (styled, focus),
+            highlighted_id="focus",
+        )
+        palette = _model.SuggestionPalette(
+            "/",
+            (styled, focus),
+            highlighted_id="focus",
+        )
+        for component in (picker, palette):
+            with self.subTest(component=type(component).__name__):
+                plain = _render.render_component(
+                    component,
+                    _capabilities(CapabilityProfile.PLAIN, 20),
+                )
+                ansi = _render.render_component(
+                    component,
+                    _capabilities(CapabilityProfile.ANSI, 20),
+                )
+                line = _render.render_component(
+                    component,
+                    _capabilities(CapabilityProfile.LINE, 20),
+                )
+                self.assertEqual(strip_decorative_sgr(ansi.text), plain.text)
+                self.assertEqual(line.text, plain.text)
+                self.assertNotIn("\x1b", plain.text)
+                self.assertNotIn("\x1b", line.text)
+                self.assertIn(r"\x1b[31m\x00", plain.text.replace("\n", ""))
+                self.assertGreaterEqual(ansi.text.count("\x1b[33m"), 2)
+                self.assertGreaterEqual(ansi.text.count("\x1b[31m"), 2)
+                for rendered_line in plain.text.splitlines():
+                    self.assertLessEqual(_physical_width(rendered_line), 20)
+
+        state = initialize_picker(picker)
+        fallback = render_picker_fallback(
+            state,
+            _capabilities(CapabilityProfile.LINE, 24),
+        )
+        self.assertEqual(fallback.text, fallback.plain_text)
+        self.assertNotIn("\x1b", fallback.text)
+        self.assertIn(r"\x1b[", fallback.text)
+        self.assertIn(r"31m\x00", fallback.text)
+        for rendered_line in fallback.text.splitlines():
+            self.assertLessEqual(_physical_width(rendered_line), 24)
+
+        available = _render.render_component(
+            Picker(
+                Prompt("Pick"),
+                (
+                    Choice(
+                        "option",
+                        "Option",
+                        warning_suffix="(*Required)",
+                        description="Detail",
+                        description_role=SemanticRole.ERROR,
+                    ),
+                    focus,
+                ),
+                highlighted_id="focus",
+            ),
+            _capabilities(CapabilityProfile.ANSI),
+        )
+        self.assertIn(
+            "  - Option \x1b[33m(*Required)\x1b[0m — "
+            "\x1b[31mDetail\x1b[0m",
+            available.text.splitlines(),
+        )
+
+        precedence = (
+            (
+                "disabled",
+                Picker(
+                    Prompt("Pick"),
+                    (
+                        Choice(
+                            "option",
+                            "Option",
+                            description="Detail",
+                            description_role=SemanticRole.ERROR,
+                            enabled=False,
+                            disabled_reason="Unavailable",
+                        ),
+                    ),
+                ),
+                "\x1b[37m",
+            ),
+            (
+                "selected",
+                Picker(
+                    Prompt("Pick"),
+                    (
+                        Choice(
+                            "option",
+                            "Option",
+                            description="Detail",
+                            description_role=SemanticRole.ERROR,
+                        ),
+                    ),
+                    selected_id="option",
+                ),
+                "\x1b[32m",
+            ),
+            (
+                "highlighted",
+                Picker(
+                    Prompt("Pick"),
+                    (
+                        Choice(
+                            "option",
+                            "Option",
+                            description="Detail",
+                            description_role=SemanticRole.ERROR,
+                        ),
+                    ),
+                    highlighted_id="option",
+                ),
+                "\x1b[36m",
+            ),
+            (
+                "selected-highlighted",
+                Picker(
+                    Prompt("Pick"),
+                    (
+                        Choice(
+                            "option",
+                            "Option",
+                            description="Detail",
+                            description_role=SemanticRole.ERROR,
+                        ),
+                    ),
+                    highlighted_id="option",
+                    selected_id="option",
+                ),
+                "\x1b[32m",
+            ),
+        )
+        for label, component, expected_sgr in precedence:
+            with self.subTest(precedence=label):
+                plain = _render.render_component(
+                    component,
+                    _capabilities(CapabilityProfile.PLAIN),
+                )
+                ansi = _render.render_component(
+                    component,
+                    _capabilities(CapabilityProfile.ANSI),
+                )
+                choice_line = next(
+                    line for line in plain.text.splitlines() if "Option" in line
+                )
+                styled_line = next(
+                    line for line in ansi.text.splitlines() if "Option" in line
+                )
+                self.assertEqual(
+                    styled_line,
+                    f"{expected_sgr}{choice_line}\x1b[0m",
+                )
+                self.assertNotIn("\x1b[31m", styled_line)
+
     def test_warning_suffix_component_palette_and_selected_outside_projection(
         self,
     ) -> None:
-        save = Choice("save", "Save", warning_suffix="(*Required)")
+        save = Choice(
+            "save",
+            "Save",
+            warning_suffix="(*Required)",
+            description="Discard pending values",
+            description_role=SemanticRole.ERROR,
+        )
         continue_choice = Choice("continue", "Continue")
         components = (
             Picker(
@@ -1237,10 +1504,14 @@ class PickerRenderingTests(unittest.TestCase):
                     component,
                     _capabilities(CapabilityProfile.ANSI),
                 )
-                self.assertIn("  - Save (*Required)", plain.text.splitlines())
+                self.assertIn(
+                    "  - Save (*Required) — Discard pending values",
+                    plain.text.splitlines(),
+                )
                 self.assertEqual(strip_decorative_sgr(ansi.text), plain.text)
                 self.assertIn(
-                    "  - Save \x1b[33m(*Required)\x1b[0m",
+                    "  - Save \x1b[33m(*Required)\x1b[0m — "
+                    "\x1b[31mDiscard pending values\x1b[0m",
                     ansi.text.splitlines(),
                 )
 
@@ -1264,7 +1535,9 @@ class PickerRenderingTests(unittest.TestCase):
             "Save (*Required)\x1b[0m",
             outside_ansi.text,
         )
+        self.assertNotIn("Discard pending values", outside_ansi.text)
         self.assertNotIn("\x1b[33m", outside_ansi.text)
+        self.assertNotIn("\x1b[31m", outside_ansi.text)
 
     def test_hostile_empty_disabled_error_and_terminal_states_remain_visible(self) -> None:
         hostile = Choice(
