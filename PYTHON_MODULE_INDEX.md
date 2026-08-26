@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 69.
+Importable production units indexed: 72.
 
-Direct internal dependency edges indexed: 271.
+Direct internal dependency edges indexed: 274.
 
 ## Current Dependency Direction
 
@@ -102,6 +102,11 @@ interactive_terminal._viewer_controls -> interactive_terminal._model
 interactive_terminal._viewer_render -> interactive_terminal._model
                                     -> interactive_terminal._viewer_model
 conversation_literal_search -> (standard library only)
+conversation_rag -> (standard library only)
+generic_rag_adapter -> conversation_rag
+                    -> generic-rag 0.1.0 (optional external package)
+conversation_rag_composition -> conversation_rag
+                             -> generic_rag_adapter (deferred until composition)
 story_writing_agents facade -> interactive_commands
                             -> conversation_retrieval -> agents/conversation_search
                             |                          -> conversations/errors
@@ -757,6 +762,119 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_settings.py`,
   `docs/reference/configuration/agent-configuration.md`, and
   `docs/reference/configuration/runtime-overrides.md`.
+
+### `story_writing_agents.conversation_rag`
+
+- **Source:** `src/story_writing_agents/conversation_rag.py`
+- **Responsibility:** Define provider-neutral immutable conversation-RAG
+  contracts and fixed work policy.
+- **Supported surface:** Exactly 35 names in the direct-module `__all__`:
+  `CONVERSATION_RAG_POLICY`, `ConversationRagPolicy`,
+  `ConversationRagOutcome`, `ConversationRagReason`,
+  `ConversationRagProjectionStateAvailability`,
+  `ConversationRagProjectionStatus`, `ConversationRagProjectionOutcome`,
+  `ConversationRagProjectionFailureStage`, `ConversationRagDocumentKey`,
+  `ConversationRagDocumentIdentity`, `ConversationRagSourceDocument`,
+  `ConversationRagSourceReference`, `ConversationRagEmbeddingIdentity`,
+  `ConversationRagEmbeddingVector`, `ConversationRagProviderCandidate`,
+  `ConversationRagVectorRecord`,
+  `ConversationRagProjectionCheckpointEntry`,
+  `ConversationRagProjectionCheckpoint`, `ConversationRagProjectionState`,
+  `ConversationRagProjectionRequest`, `ConversationRagProjectionResult`,
+  `ConversationRagRetrievalRequest`, `ConversationRagCandidate`,
+  `ConversationRagRetrievalResult`, `ConversationRagEmbedder`,
+  `ConversationRagVectorIndexWriter`,
+  `ConversationRagVectorIndexResetter`,
+  `ConversationRagVectorIndexReader`, `ConversationRagLexicalRetriever`,
+  `ConversationRagCollaborators`, `ConversationRagService`,
+  `ConversationRagError`, `ConversationRagContractError`,
+  `ConversationRagStateError`, and `ConversationRagOperationError`.
+  These names are supported only from
+  `story_writing_agents.conversation_rag`; none is re-exported by the
+  120-name package-root facade.
+- **Direct internal dependencies:** None.
+- **State, resources, and side effects:** Standard-library-only frozen,
+  slotted values, exact enums, runtime-checkable caller-owned collaborator
+  protocols, fixed content-free failures, and one immutable policy constant.
+  The policy fixes candidate, conversation, event, fragment, overlap, and
+  embedding-batch limits at 20, 256, 10,000, 800, 80, and 32 respectively.
+  Source and provider-candidate values may carry caller-authorized or
+  non-authoritative text, but public retrieval candidates carry only stable
+  source references and contiguous ranks. The module acquires no collaborator,
+  owns no mutable state or external resource, performs no I/O, and has no
+  operational import side effect.
+- **Primary verification/documentation:** `tests/test_conversation_rag.py`,
+  `tests/test_rag_module_and_packaging_boundary.py`,
+  `docs/reference/package-api.md`, `docs/guides/conversation-rag.md`, and
+  `docs/design/overview.md`.
+
+### `story_writing_agents.generic_rag_adapter`
+
+- **Source:** `src/story_writing_agents/generic_rag_adapter.py`
+- **Responsibility:** Translate exact story conversation-RAG contracts to and
+  from the pinned generic-RAG API.
+- **Supported surface:** Exactly three direct-module names in `__all__`:
+  `GenericRagCapabilitySnapshot`, `GenericRagConversationService`, and
+  `inspect_generic_rag_capabilities`. The supported import path is
+  `story_writing_agents.generic_rag_adapter`; it requires the optional
+  `generic-rag` package and is not re-exported by the package-root facade.
+- **Direct internal dependencies:** `conversation_rag`.
+- **State, resources, and side effects:** This is the sole production module
+  that imports both story contracts and the exact owning modules of
+  `generic-rag` 0.1.0. Capability inspection returns only an immutable
+  sanitized module/symbol inventory. One service retains the exact
+  caller-supplied collaborator bundle but acquires and closes none of its
+  embedder, vector writer/resetter/reader, or lexical-retriever resources;
+  call-local generic `Borrowed` wrappers preserve that caller-owned lifecycle.
+  Projection translation uses empty generic attributes and reconstructs story
+  checkpoint identities from the authorized request. Retrieval translation
+  reconstructs stable source references from the caller-owned checkpoint,
+  validates exact result classes and identities, and discards generic fragment
+  text and scores. Ordinary generic or collaborator failures become fixed
+  content-free story failures without provider exception text or chaining;
+  `KeyboardInterrupt` and `SystemExit` propagate. Import requires the declared
+  optional package but performs no filesystem, network, provider, settings,
+  storage, credential, or application-startup operation.
+- **Primary verification/documentation:**
+  `tests/test_generic_rag_adapter.py`,
+  `tests/test_rag_module_and_packaging_boundary.py`,
+  `docs/reference/package-api.md`, `docs/guides/conversation-rag.md`, and
+  `docs/design/overview.md`.
+
+### `story_writing_agents.conversation_rag_composition`
+
+- **Source:**
+  `src/story_writing_agents/conversation_rag_composition.py`
+- **Responsibility:** Compose the allowlisted optional conversation-RAG
+  service after exact compatibility validation.
+- **Supported surface:** Exactly four direct-module names in `__all__`:
+  `CONVERSATION_RAG_PROVIDER_ALLOWLIST`,
+  `ConversationRagCompositionFailure`, `ConversationRagCompositionError`, and
+  `compose_conversation_rag`. The supported import path is
+  `story_writing_agents.conversation_rag_composition`; none is re-exported by
+  the package-root facade. The allowlist is exactly `("local",)` and the fixed
+  failure vocabulary is `provider_unsupported`, `dependency_missing`,
+  `version_incompatible`, and `capability_incompatible`.
+- **Direct internal dependencies:** `conversation_rag` and the deferred
+  `generic_rag_adapter` import.
+- **State, resources, and side effects:** Import defines immutable policy and
+  error metadata and loads only standard-library support plus
+  `conversation_rag`; it does not read distribution metadata or import
+  `generic-rag`. An explicit composition call validates the exact provider and
+  collaborator bundle, requires installed distribution version 0.1.0, then
+  performs one statically named deferred local adapter import, verifies the
+  fixed host-required capability manifest, and constructs the adapter service.
+  It performs no provider discovery, dynamic module-name loading, environment
+  or `sys.path` inspection, settings/storage access, credential work, or
+  resource acquisition. Ordinary metadata, import, capability, and
+  construction failures become fixed sanitized composition errors without
+  dependency details or chaining; `KeyboardInterrupt` and `SystemExit`
+  propagate.
+- **Primary verification/documentation:**
+  `tests/test_conversation_rag_composition.py`,
+  `tests/test_rag_module_and_packaging_boundary.py`,
+  `docs/reference/package-api.md`, `docs/guides/conversation-rag.md`, and
+  `docs/design/overview.md`.
 
 ### `story_writing_agents.conversation_retrieval`
 
@@ -4158,6 +4276,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/operations/recovery-and-limitations.md`.
 
 ## Consistency Notes
+
+- Optional conversation RAG has three one-way direct-module boundaries.
+  `conversation_rag` is the standard-library-only story contract and policy
+  leaf. `generic_rag_adapter` is the sole production dual-project importer and
+  depends inward only on that leaf; it borrows every injected collaborator and
+  returns text-free stable story references. `conversation_rag_composition`
+  stays safe in the base installation, depends on the story leaf, and exposes
+  its adapter edge only through a statically named deferred import after an
+  exact `generic-rag` 0.1.0 distribution check. The package-root facade remains
+  120 names and exports none of these surfaces. Base dependencies remain empty;
+  the `rag` extra, lock, and `vendor/generic-rag` gitlink share the exact
+  `c77456321c614518e420e45c033e3f71dc5363b8` pin. That separate seven-module
+  generic project is governed by its own index, imports no story module, and is
+  not a production unit beneath this index's `src/story_writing_agents/` root.
+  These three story modules own no provider, derived store, runtime/agent
+  scheduling or authorization, authoritative reread/citation, CLI, settings,
+  or conversation-storage integration.
 
 - `conversation_storage.contracts` is the backend-neutral direction owner for
   filesystem/SQLite selection, explicit raw-port component binding, capability
