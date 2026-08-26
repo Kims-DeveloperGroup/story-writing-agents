@@ -7,11 +7,13 @@ import asyncio
 import json
 import math
 import sys
-from typing import Sequence
+from collections.abc import Callable
+from typing import Sequence, TypeVar, cast
 
 from .agents import ROSTER
 from .backend import AgentBackend
 from .cli_context import (
+    CliContext,
     load_cli_context,
     resolve_session,
     resolve_workspace,
@@ -52,6 +54,8 @@ from .interactive_settings import (
     establish_default_backend,
 )
 from .interactive_terminal import (
+    AdvisoryProgressError,
+    InteractiveAdvisoryProgress,
     InteractiveError,
     InteractiveErrorCode,
     InteractiveTerminal,
@@ -81,6 +85,7 @@ _INTERACTIVE_DEBUG_LOG_NOTICE = (
 _NONINTERACTIVE_DEBUG_LOG_HINT = (
     "Debug log (if available, workspace-relative): debug_logs/runtime.jsonl"
 )
+_StartupT = TypeVar("_StartupT")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -714,6 +719,27 @@ def _close_unstarted_interactive_backend(backend: AgentBackend) -> bool:
     return True
 
 
+def _run_interactive_startup_progress(
+    terminal: InteractiveTerminal,
+    operation: Callable[[], _StartupT],
+) -> _StartupT:
+    """Run one blocking startup operation under terminal-owned progress."""
+
+    if not isinstance(terminal, InteractiveTerminal):
+        raise TypeError("terminal must be an InteractiveTerminal")
+    if not callable(operation):
+        raise TypeError("startup operation must be callable")
+
+    async def run() -> object:
+        """Keep the progress loop responsive while startup work blocks."""
+
+        progress = InteractiveAdvisoryProgress(terminal)
+        return await progress.run(asyncio.to_thread(operation))
+
+    with asyncio.Runner() as runner:
+        return cast(_StartupT, runner.run(run()))
+
+
 def _run_interactive_cli(arguments: argparse.Namespace) -> int:
     """Construct and transfer one guarded interactive session-lobby lifecycle.
 
@@ -721,8 +747,9 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
     or backend construction. All interactive values validate before workspace
     discovery. One workspace-bound authentication coordinator then owns the
     welcome and hard gates for initial and effective providers. Conversation
-    storage activates from validated configuration before provider auth;
-    context, backend, and controller construction remain behind auth. Once
+    storage activates under terminal-owned progress before provider auth;
+    context, backend, and controller construction remain behind auth and share
+    a second progress span. Once
     ``run_session_lobby`` is called, the controller owns backend cleanup;
     before that transfer this adapter closes any constructed backend.
     """
@@ -794,7 +821,20 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
     )
 
     try:
-        storage_startup = activate_configured_conversation_storage(workspace)
+        terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+    except Exception as exc:
+        _record_cli_error(debug_log, DebugOperation.CLI_COMMAND, exc)
+        _write_interactive_cli_error(
+            InteractiveError(InteractiveErrorCode.INTERNAL_ERROR),
+            debug_log_available=True,
+        )
+        return 2
+
+    try:
+        storage_startup = _run_interactive_startup_progress(
+            terminal,
+            lambda: activate_configured_conversation_storage(workspace),
+        )
     except KeyboardInterrupt:
         _trace_cli(
             debug_log,
@@ -804,19 +844,14 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
         )
         return 0
     except Exception as exc:
-        _record_cli_error(debug_log, DebugOperation.CONFIGURATION, exc)
+        if isinstance(exc, AdvisoryProgressError):
+            _record_cli_error(debug_log, DebugOperation.CLI_COMMAND, exc)
+            error = InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+        else:
+            _record_cli_error(debug_log, DebugOperation.CONFIGURATION, exc)
+            error = _classify_conversation_storage_startup_failure(exc)
         _write_interactive_cli_error(
-            _classify_conversation_storage_startup_failure(exc),
-            debug_log_available=True,
-        )
-        return 2
-
-    try:
-        terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
-    except Exception as exc:
-        _record_cli_error(debug_log, DebugOperation.CLI_COMMAND, exc)
-        _write_interactive_cli_error(
-            InteractiveError(InteractiveErrorCode.INTERNAL_ERROR),
+            error,
             debug_log_available=True,
         )
         return 2
@@ -932,23 +967,25 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
         )
         return 0
 
-    try:
-        cli_context = load_cli_context(workspace)
-    except Exception as exc:
-        _record_cli_error(debug_log, DebugOperation.CLI_CONTEXT, exc)
-        _write_interactive_cli_error(
-            _classify_interactive_configuration_failure(exc),
-            debug_log_available=True,
-        )
-        return 2
-    _trace_cli(
-        debug_log,
-        DebugOperation.CLI_CONTEXT,
-        DebugPhase.SUCCEEDED,
-        outcome=DebugOutcome.COMPLETED,
-    )
+    startup_phase = "context"
+    unstarted_backend: AgentBackend | None = None
 
-    try:
+    def prepare_interactive_runtime() -> tuple[
+        CliContext,
+        AgentBackend,
+        InteractiveController,
+    ]:
+        """Construct authenticated runtime state inside one progress span."""
+
+        nonlocal startup_phase, unstarted_backend
+        cli_context = load_cli_context(workspace)
+        _trace_cli(
+            debug_log,
+            DebugOperation.CLI_CONTEXT,
+            DebugPhase.SUCCEEDED,
+            outcome=DebugOutcome.COMPLETED,
+        )
+        startup_phase = "backend"
         backend = AgentBackend(
             workspace,
             model=model,
@@ -958,15 +995,8 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
             antigravity_model=antigravity_model,
             antigravity_effort=antigravity_effort,
         )
-    except Exception as exc:
-        _record_cli_error(debug_log, DebugOperation.CONFIGURATION, exc)
-        _write_interactive_cli_error(
-            _classify_interactive_configuration_failure(exc),
-            debug_log_available=True,
-        )
-        return 2
-
-    try:
+        unstarted_backend = backend
+        startup_phase = "controller"
         controller = InteractiveController(
             workspace,
             cli_context,
@@ -976,13 +1006,33 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
             auth_coordinator=auth_coordinator,
             provider_catalog=catalog_service,
         )
+        startup_phase = "complete"
+        return cli_context, backend, controller
+
+    try:
+        cli_context, backend, controller = _run_interactive_startup_progress(
+            terminal,
+            prepare_interactive_runtime,
+        )
     except Exception as exc:
-        _record_cli_error(debug_log, DebugOperation.CLI_COMMAND, exc)
+        if isinstance(exc, AdvisoryProgressError):
+            _record_cli_error(debug_log, DebugOperation.CLI_COMMAND, exc)
+            error = InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+        elif startup_phase == "context":
+            _record_cli_error(debug_log, DebugOperation.CLI_CONTEXT, exc)
+            error = _classify_interactive_configuration_failure(exc)
+        elif startup_phase == "backend":
+            _record_cli_error(debug_log, DebugOperation.CONFIGURATION, exc)
+            error = _classify_interactive_configuration_failure(exc)
+        else:
+            _record_cli_error(debug_log, DebugOperation.CLI_COMMAND, exc)
+            error = InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
         _write_interactive_cli_error(
-            InteractiveError(InteractiveErrorCode.INTERNAL_ERROR),
+            error,
             debug_log_available=True,
         )
-        _close_unstarted_interactive_backend(backend)
+        if unstarted_backend is not None:
+            _close_unstarted_interactive_backend(unstarted_backend)
         return 2
 
     try:
