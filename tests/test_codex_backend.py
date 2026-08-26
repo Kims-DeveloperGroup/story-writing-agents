@@ -69,7 +69,7 @@ from story_writing_agents.conversation_search import (
 )
 from story_writing_agents.cli import _parse_backend_overrides, build_parser, main
 from story_writing_agents.backend import backend_configuration_snapshot
-from story_writing_agents.config import ConfigManager
+from story_writing_agents.config import ConfigManager, ConfigurationSnapshot
 from story_writing_agents.errors import (
     BackendProtocolError,
     ConfigurationError,
@@ -85,6 +85,13 @@ from story_writing_agents.debug_log import (
     WorkspaceDebugLog,
 )
 from story_writing_agents.prompts import PromptAssembler
+from story_writing_agents.interactive_settings import (
+    ProviderRouteEntry,
+    commit_prepared_settings_save,
+    load_settings_state,
+    prepare_settings_save,
+    update_agent_backend,
+)
 from story_writing_agents.orchestrator import StoryRuntime
 from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
@@ -103,6 +110,8 @@ from story_writing_agents.writing_artifacts import (
     ReferenceReadRequest,
 )
 from story_writing_agents.provider_adapter import (
+    AgentExecutionProfile,
+    ExecutionValueSource,
     ProviderInvocationError,
     ProviderResult,
 )
@@ -111,6 +120,7 @@ from story_writing_agents.provider_process import (
     run_process,
     stop_process,
 )
+from story_writing_agents.models import StoryFocusedContextMode
 
 from tests.helpers import (
     SUPPORTED_ARRAY_ITEMS_SCHEMA_VALIDATOR_SOURCE,
@@ -614,7 +624,15 @@ class ConversationModelContractTests(unittest.TestCase):
         cases = (
             (
                 ConversationRequest,
-                ("session_id", "conversation_id", "turn_id", "agent_id", "content", "context"),
+                (
+                    "session_id",
+                    "conversation_id",
+                    "turn_id",
+                    "agent_id",
+                    "content",
+                    "context",
+                    "story_session_context",
+                ),
                 _conversation_request(),
             ),
             (
@@ -627,13 +645,20 @@ class ConversationModelContractTests(unittest.TestCase):
             with self.subTest(model=model.__name__):
                 model_fields = fields(model)
                 self.assertEqual(tuple(field.name for field in model_fields), names)
+                required_fields = (
+                    model_fields[:-1]
+                    if model is ConversationRequest
+                    else model_fields
+                )
                 self.assertTrue(
                     all(
                         field.default is MISSING
                         and field.default_factory is MISSING
-                        for field in model_fields
+                        for field in required_fields
                     )
                 )
+                if model is ConversationRequest:
+                    self.assertIsNone(model_fields[-1].default)
                 self.assertFalse(hasattr(value, "__dict__"))
                 with self.assertRaises(FrozenInstanceError):
                     value.content = "changed"
@@ -757,6 +782,41 @@ class ConversationModelContractTests(unittest.TestCase):
         values["context"] = derived
         with self.assertRaises(TypeError):
             ConversationRequest(**values)  # type: ignore[arg-type]
+
+    def test_story_session_context_must_match_outer_conversation_identity(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        assembler = PromptAssembler(workspace)
+        definition = assembler.build_definition(
+            session_id="story_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        story_context = assembler.build_story_session_context(
+            definition=definition,
+            session_id="story_session",
+            agent_id=PLOT_ARCHITECT,
+            focused_context_mode=StoryFocusedContextMode.INCLUDED,
+            focused_conversation_id="conversation_b",
+            conversation_context=_context_window(),
+        )
+        common = {
+            "session_id": "story_session",
+            "conversation_id": "conversation_a",
+            "turn_id": "turn_current",
+            "agent_id": PLOT_ARCHITECT,
+            "content": "visible",
+            "context": _context_window(),
+            "story_session_context": story_context,
+        }
+
+        for request_type in (ConversationRequest, ConversationRetrievalRequest):
+            with self.subTest(request_type=request_type.__name__):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "story-session context request identity mismatch",
+                ):
+                    request_type(**common)
 
     def test_retrieval_bound_signature_and_sync_handler_protocol_are_exact(self) -> None:
         signature = inspect.signature(BoundAgent.converse_with_retrieval)
@@ -990,6 +1050,196 @@ class CodexBackendDefaultsTests(unittest.TestCase):
             )
         finally:
             backend.close()
+
+    def test_execution_profiles_resolve_every_source_with_nullable_defaults(
+        self,
+    ) -> None:
+        self.workspace.write_json(
+            "config/system_defaults.json",
+            {
+                "language": "KO",
+                "persona": "default_kim_eun_hee",
+                "max_debate_rounds": 1,
+                "codex_model": "system-codex",
+                "codex_reasoning_effort": "system-effort",
+                "antigravity_model": "system-agy",
+                "antigravity_effort": None,
+                "default_backend": "antigravity",
+            },
+        )
+        configs = self.workspace.read_json("config/agent_configs.json")
+        configs[ROSTER[0]].update(
+            {
+                "backend": None,
+                "codex_model": None,
+                "codex_reasoning_effort": None,
+            }
+        )
+        configs[PLOT_ARCHITECT].update(
+            {
+                "backend": "codex",
+                "codex_model": "agent-codex",
+                "codex_reasoning_effort": "agent-effort",
+            }
+        )
+        configs[CHARACTER_CUSTODIAN].update(
+            {
+                "backend": "antigravity",
+                "antigravity_model": None,
+                "antigravity_effort": "high",
+            }
+        )
+        configs[EXECUTION_SPECIALIST].update(
+            {
+                "backend": None,
+                "antigravity_model": None,
+                "antigravity_effort": None,
+            }
+        )
+        self.workspace.write_json("config/agent_configs.json", configs)
+
+        backend = AgentBackend(
+            self.workspace,
+            backend_overrides={ROSTER[0]: "codex"},
+        )
+        self.addCleanup(backend.close)
+        expected = (
+            AgentExecutionProfile(
+                ROSTER[0],
+                "codex",
+                ExecutionValueSource.LAUNCH_OVERRIDE,
+                "system-codex",
+                ExecutionValueSource.SYSTEM_DEFAULT,
+                "system-effort",
+                ExecutionValueSource.SYSTEM_DEFAULT,
+            ),
+            AgentExecutionProfile(
+                PLOT_ARCHITECT,
+                "codex",
+                ExecutionValueSource.AGENT_CONFIG,
+                "agent-codex",
+                ExecutionValueSource.AGENT_CONFIG,
+                "agent-effort",
+                ExecutionValueSource.AGENT_CONFIG,
+            ),
+            AgentExecutionProfile(
+                CHARACTER_CUSTODIAN,
+                "antigravity",
+                ExecutionValueSource.AGENT_CONFIG,
+                "system-agy",
+                ExecutionValueSource.SYSTEM_DEFAULT,
+                "high",
+                ExecutionValueSource.AGENT_CONFIG,
+            ),
+            AgentExecutionProfile(
+                EXECUTION_SPECIALIST,
+                "antigravity",
+                ExecutionValueSource.SYSTEM_DEFAULT,
+                "system-agy",
+                ExecutionValueSource.SYSTEM_DEFAULT,
+                None,
+                ExecutionValueSource.PROVIDER_DEFAULT,
+            ),
+        )
+        self.assertEqual(backend.execution_profiles(), expected)
+        for profile, active in zip(
+            expected,
+            backend.execution_profiles(),
+            strict=True,
+        ):
+            self.assertIs(backend.execution_profile(profile.agent_id), active)
+
+        explicit = AgentBackend(
+            self.workspace,
+            model="launch-codex",
+            antigravity_model="launch-agy",
+            antigravity_effort="medium",
+            backend_overrides={ROSTER[0]: "codex"},
+        )
+        self.addCleanup(explicit.close)
+        self.assertEqual(
+            explicit.execution_profile(PLOT_ARCHITECT).model_source,
+            ExecutionValueSource.LAUNCH_OVERRIDE,
+        )
+        character = explicit.execution_profile(CHARACTER_CUSTODIAN)
+        self.assertEqual(
+            (character.model, character.model_source),
+            ("launch-agy", ExecutionValueSource.LAUNCH_OVERRIDE),
+        )
+        self.assertEqual(
+            (character.effort, character.effort_source),
+            ("medium", ExecutionValueSource.LAUNCH_OVERRIDE),
+        )
+
+        default_workspace = initialized_workspace(self)
+        defaults = AgentBackend(default_workspace)
+        self.addCleanup(defaults.close)
+        for profile in defaults.execution_profiles():
+            self.assertEqual(
+                (
+                    profile.provider,
+                    profile.provider_source,
+                    profile.model,
+                    profile.model_source,
+                    profile.effort,
+                    profile.effort_source,
+                ),
+                (
+                    "codex",
+                    ExecutionValueSource.BUILT_IN_DEFAULT,
+                    None,
+                    ExecutionValueSource.PROVIDER_DEFAULT,
+                    None,
+                    ExecutionValueSource.PROVIDER_DEFAULT,
+                ),
+            )
+
+    def test_startup_logs_four_exact_active_execution_profile_snapshots(self) -> None:
+        backend = AgentBackend(self.workspace)
+        self.addCleanup(backend.close)
+        startup = [
+            record
+            for record in _workspace_debug_records(self.workspace)
+            if record.get("schema_version") == 2
+        ]
+        self.assertEqual(
+            [record["agent_id"] for record in startup],
+            list(ROSTER),
+        )
+        self.assertEqual(len(startup), len(ROSTER))
+        for record, profile in zip(
+            startup,
+            backend.execution_profiles(),
+            strict=True,
+        ):
+            with self.subTest(agent_id=profile.agent_id):
+                timestamp = record.pop("timestamp")
+                self.assertRegex(
+                    timestamp,
+                    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+00:00$",
+                )
+                self.assertEqual(
+                    record,
+                    {
+                        "schema_version": 2,
+                        "level": "trace",
+                        "component": "backend",
+                        "operation": "execution_profile_applied",
+                        "phase": "succeeded",
+                        "correlation_id": "startup",
+                        "agent_id": profile.agent_id,
+                        "route_generation": 0,
+                        "activation_state": "active",
+                        "active_profile": {
+                            "provider": profile.provider,
+                            "provider_source": profile.provider_source.value,
+                            "model": profile.model,
+                            "model_source": profile.model_source.value,
+                            "effort": profile.effort,
+                            "effort_source": profile.effort_source.value,
+                        },
+                    },
+                )
 
     def test_explicit_model_validation_retains_exact_value_error(self) -> None:
         invalid = (
@@ -1989,6 +2239,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     backend = AgentBackend(
                         self.workspace,
                         executable=str(self.executable),
+                        backend_overrides={PLOT_ARCHITECT: vendor},
                     )
                     self.addCleanup(backend.close)
                     definition = (
@@ -2065,6 +2316,182 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                             terminal,
                         ],
                     )
+
+    async def test_hot_same_provider_profile_applies_now_and_reuses_thread(
+        self,
+    ) -> None:
+        session_id = "hot_profile_session"
+        correlation_id = "settings_save_hot_profile"
+        backend = AgentBackend(
+            self.workspace,
+            executable=str(self.executable),
+        )
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        before_configuration = backend_configuration_snapshot(backend)
+        route_generations = backend.provider_route_generations()
+        before_assembler = PromptAssembler(
+            self.workspace,
+            configuration_snapshot=before_configuration,
+            provider_route_generations=route_generations,
+        )
+        before_definition = before_assembler.build_definition(
+            session_id=session_id,
+            agent_id=PLOT_ARCHITECT,
+        )
+        before_request = before_assembler.build_request(
+            session_id=session_id,
+            debate_id="before_hot_apply",
+            agent_id=PLOT_ARCHITECT,
+            phase=Phase.DRAFT,
+            round_number=0,
+            revision_id="r0",
+            task="Draft the candidate.",
+            user_payload="before",
+            definition=before_definition,
+            focused_context_mode=StoryFocusedContextMode.OMITTED,
+        )
+        before_bound = await backend.bind(before_definition)
+        await before_bound.invoke(before_request)
+        before_bound._retire()
+        self.assertEqual(
+            backend.execution_profile_confirmation(PLOT_ARCHITECT),
+            "confirmed",
+        )
+
+        next_agents = dict(before_configuration.agent_configs)
+        next_agents[PLOT_ARCHITECT] = replace(
+            next_agents[PLOT_ARCHITECT],
+            codex_model="hot-model",
+            codex_reasoning_effort="ultra",
+        )
+        after_configuration = ConfigurationSnapshot(
+            before_configuration.system_defaults,
+            next_agents,
+        )
+        provider_routes = {
+            agent_id: ProviderRouteEntry(
+                backend.execution_profile(agent_id).provider,
+                route_generations[agent_id],
+            )
+            for agent_id in ROSTER
+        }
+        candidate = backend.stage_runtime_configuration(
+            after_configuration,
+            provider_routes,
+            correlation_id=correlation_id,
+        )
+        mark = len(_workspace_debug_records(self.workspace))
+        profiles = backend.commit_runtime_configuration(candidate)
+        active = backend.execution_profile(PLOT_ARCHITECT)
+        self.assertIs(active, profiles[ROSTER.index(PLOT_ARCHITECT)])
+        self.assertEqual(
+            (
+                active.provider,
+                active.model,
+                active.model_source,
+                active.effort,
+                active.effort_source,
+            ),
+            (
+                "codex",
+                "hot-model",
+                ExecutionValueSource.AGENT_CONFIG,
+                "ultra",
+                ExecutionValueSource.AGENT_CONFIG,
+            ),
+        )
+        self.assertEqual(route_generations, backend.provider_route_generations())
+        self.assertEqual(
+            backend.execution_profile_confirmation(PLOT_ARCHITECT),
+            "pending",
+        )
+        self.assertEqual(
+            backend.execution_profile_thread_status(PLOT_ARCHITECT),
+            "reusable_pending",
+        )
+        transition_records = [
+            record
+            for record in _workspace_debug_records(self.workspace)[mark:]
+            if record.get("schema_version") == 2
+        ]
+        self.assertEqual(
+            [record["operation"] for record in transition_records],
+            ["execution_setting_change", "execution_profile_applied"],
+        )
+        self.assertEqual(
+            {record["correlation_id"] for record in transition_records},
+            {correlation_id},
+        )
+        for record in transition_records:
+            self.assertEqual(record["route_generation"], 0)
+            self.assertEqual(record["old_profile"]["provider"], "codex")
+            self.assertIsNone(record["old_profile"]["model"])
+            self.assertEqual(record["new_profile"]["model"], "hot-model")
+            self.assertEqual(record["new_profile"]["effort"], "ultra")
+
+        after_assembler = PromptAssembler(
+            self.workspace,
+            configuration_snapshot=after_configuration,
+            provider_route_generations=backend.provider_route_generations(),
+        )
+        after_definition = after_assembler.build_definition(
+            session_id=session_id,
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertEqual(after_definition.fingerprint, before_definition.fingerprint)
+        after_request = after_assembler.build_request(
+            session_id=session_id,
+            debate_id="after_hot_apply",
+            agent_id=PLOT_ARCHITECT,
+            phase=Phase.DRAFT,
+            round_number=0,
+            revision_id="r1",
+            task="Continue the candidate.",
+            user_payload="after",
+            definition=after_definition,
+            focused_context_mode=StoryFocusedContextMode.OMITTED,
+        )
+        after_bound = await backend.bind(after_definition)
+        reply = await after_bound.invoke(after_request)
+        self.assertEqual(reply, AgentReply.candidate("r1", "generated candidate"))
+        self.assertEqual(
+            backend.execution_profile_confirmation(PLOT_ARCHITECT),
+            "confirmed",
+        )
+        self.assertEqual(
+            backend.execution_profile_thread_status(PLOT_ARCHITECT),
+            "reused",
+        )
+        confirmed = [
+            record
+            for record in _workspace_debug_records(self.workspace)[mark:]
+            if record.get("operation") == "execution_profile_confirmed"
+        ]
+        self.assertEqual(len(confirmed), 1)
+        self.assertEqual(
+            {
+                key: confirmed[0][key]
+                for key in (
+                    "correlation_id",
+                    "route_generation",
+                    "activation_state",
+                    "thread_disposition",
+                    "context_state",
+                )
+            },
+            {
+                "correlation_id": correlation_id,
+                "route_generation": 0,
+                "activation_state": "confirmed",
+                "thread_disposition": "reused",
+                "context_state": "rehydrated",
+            },
+        )
+        argv = self.provider_invocations()[-1]["argv"]
+        self.assertIn("hot-model", argv)
+        self.assertIn('model_reasoning_effort="ultra"', argv)
+        self.assertIn("resume", argv)
 
     async def test_backend_defaults_snapshot_refresh_and_thread_identity_are_exact(
         self,
@@ -2173,11 +2600,31 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(captured_stderr.getvalue(), "")
         self.assertNotIn(model, str(caught.exception))
         self.assertNotIn(effort, str(caught.exception))
-        raw_debug_log = self.workspace.path(
-            DEBUG_LOG_RELATIVE_PATH
-        ).read_text(encoding="utf-8")
-        self.assertNotIn(model, raw_debug_log)
-        self.assertNotIn(effort, raw_debug_log)
+        records = _workspace_debug_records(self.workspace)
+        profile_records = [
+            record
+            for record in records
+            if record.get("schema_version") == 2
+            and record.get("operation") == "execution_profile_applied"
+        ]
+        self.assertEqual(len(profile_records), len(ROSTER))
+        plot_profile = next(
+            record["active_profile"]
+            for record in profile_records
+            if record["agent_id"] == PLOT_ARCHITECT
+        )
+        self.assertEqual(plot_profile["model"], model)
+        self.assertEqual(plot_profile["effort"], effort)
+        provider_diagnostics = json.dumps(
+            [
+                record
+                for record in records
+                if record.get("operation") == "provider_invocation"
+            ],
+            ensure_ascii=False,
+        )
+        self.assertNotIn(model, provider_diagnostics)
+        self.assertNotIn(effort, provider_diagnostics)
         argv = self.provider_invocations()[0]["argv"]
         start = argv.index("exec")
         self.assertEqual(
@@ -2229,7 +2676,11 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         """Trace every public Antigravity operation without provider I/O."""
 
-        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        backend = AgentBackend(
+            self.workspace,
+            executable=str(self.executable),
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
+        )
         self.addCleanup(backend.close)
         bound = await backend.bind(self.antigravity_definition())
         operations = (
@@ -3214,6 +3665,91 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             manifest["provider_threads"]["codex:plot_architect"]["thread_id"],
             "thread-story_session-plot_architect",
         )
+
+    async def test_a_to_b_to_a_route_generation_never_resumes_old_a_threads_after_restart(
+        self,
+    ) -> None:
+        session_ids = ("route_session_one", "route_session_two")
+        first = AgentBackend(self.workspace, executable=str(self.executable))
+        legacy_definition = self.definition()
+        for index, session_id in enumerate(session_ids, start=1):
+            first.create_session_with_access(session_id)
+            await (await first.bind(legacy_definition)).invoke(
+                self.request(
+                    session_id=session_id,
+                    debate_id=f"legacy_{index}",
+                )
+            )
+        first.close()
+
+        antigravity = update_agent_backend(
+            load_settings_state(self.workspace),
+            PLOT_ARCHITECT,
+            "antigravity",
+        )
+        commit_prepared_settings_save(
+            self.workspace,
+            prepare_settings_save(self.workspace, antigravity),
+        )
+        codex_again = update_agent_backend(
+            load_settings_state(self.workspace),
+            PLOT_ARCHITECT,
+            "codex",
+        )
+        commit_prepared_settings_save(
+            self.workspace,
+            prepare_settings_save(self.workspace, codex_again),
+        )
+
+        restarted = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(restarted.close)
+        self.assertEqual(
+            restarted.provider_route_generations()[PLOT_ARCHITECT],
+            2,
+        )
+        assembler = PromptAssembler(
+            self.workspace,
+            configuration_snapshot=backend_configuration_snapshot(restarted),
+            provider_route_generations=restarted.provider_route_generations(),
+        )
+        current_definition = assembler.build_definition(
+            session_id=session_ids[0],
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertNotEqual(
+            current_definition.fingerprint,
+            legacy_definition.fingerprint,
+        )
+        for index, session_id in enumerate(session_ids, start=1):
+            restarted.acquire_session_access(session_id)
+            definition = assembler.build_definition(
+                session_id=session_id,
+                agent_id=PLOT_ARCHITECT,
+            )
+            request = assembler.build_request(
+                session_id=session_id,
+                debate_id=f"after_return_{index}",
+                agent_id=PLOT_ARCHITECT,
+                phase=Phase.DRAFT,
+                round_number=0,
+                revision_id=f"r{index}",
+                task="Continue without resuming the pre-switch provider thread.",
+                user_payload="rehydrated session input",
+                definition=definition,
+                focused_context_mode=StoryFocusedContextMode.OMITTED,
+            )
+            await (await restarted.bind(definition)).invoke(request)
+
+        invocations = self.provider_invocations()
+        self.assertEqual(len(invocations), 4)
+        self.assertTrue(
+            all("resume" not in invocation["argv"] for invocation in invocations)
+        )
+        for session_id in session_ids:
+            self.assertEqual(
+                self.thread(session_id)["fingerprint"],
+                current_definition.fingerprint,
+            )
 
     async def test_threads_are_separate_by_agent_and_story_session(self) -> None:
         backend = AgentBackend(self.workspace, executable=str(self.executable))
@@ -4309,13 +4845,13 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_unsupported_vendor_fails_during_binding(self) -> None:
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
-        with self.assertRaises(ConfigurationError) as caught:
+        with self.assertRaises(BackendProtocolError) as caught:
             await backend.bind(
                 replace(self.definition(), backend="unsupported-provider")
             )
         self.assertEqual(
             str(caught.exception),
-            "agent backend is not implemented: unsupported-provider",
+            "definition provider does not match the active execution profile",
         )
 
     async def test_unsafe_persisted_thread_id_is_never_used_as_an_option(
@@ -4375,9 +4911,22 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             user_content='prior "question" 한🙂',
             outcome_content="prior answer",
         )
+        definition = self.definition()
+        context = _context_window(prior_events)
+        story_session_context = PromptAssembler(
+            self.workspace
+        ).build_story_session_context(
+            definition=definition,
+            session_id=session_id,
+            agent_id=PLOT_ARCHITECT,
+            focused_context_mode=StoryFocusedContextMode.INCLUDED,
+            focused_conversation_id="conversation_a",
+            conversation_context=context,
+        )
         request = self.retrieval_request(
             session_id=session_id,
-            context=_context_window(prior_events),
+            context=context,
+            story_session_context=story_session_context,
         )
         outputs = (
             _retrieval_action_json(
@@ -4405,7 +4954,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
         backend.create_session_with_access(session_id)
-        bound = await backend.bind(self.definition())
+        bound = await backend.bind(definition)
         handler = _RecordingRetrievalHandler()
         with mock.patch.dict(
             os.environ,
@@ -4448,16 +4997,21 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 "turn_id",
                 "agent_id",
                 "content",
-                "context",
+                "story_session_context",
                 "retrieval",
             ),
         )
         self.assertEqual(initial["operation"], "conversation_retrieval")
         self.assertEqual(
-            initial["context"],
+            initial["story_session_context"],
+            story_session_context.to_dict(),
+        )
+        self.assertEqual(
+            initial["story_session_context"]["focused_context"]["events"],
             [
                 {
                     "turn_id": event.turn_id,
+                    "sequence": event.sequence,
                     "sender": event.sender,
                     "recipient": event.recipient,
                     "kind": event.kind.value,
@@ -4506,6 +5060,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertNotIn("content", payload)
                 self.assertNotIn("context", payload)
+                self.assertNotIn("story_session_context", payload)
                 self.assertEqual(
                     payload["observation"],
                     serialize_conversation_retrieval_observation(

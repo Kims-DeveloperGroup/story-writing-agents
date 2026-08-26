@@ -480,8 +480,14 @@ Provider option probing and Model/Effort discovery show transient progress on
 capable raw terminals and remain visually silent in ordinary fallback. Custom
 models and inheritance remain supported. See the exact
 [picker contract](interactive-terminal.md#provider-model-and-effort-pickers).
-Direct edits to the validated JSON documents remain possible. An active backend
-and runtime keep their construction-time configuration snapshot. Existing
+Direct edits to the validated JSON documents remain possible, but there is no
+file watcher: they are reconciled by a newly launched backend, and other
+running shells retain their captured state. Confirmed `/settings` Apply Changes
+instead validates, persists, and applies non-storage runtime settings to the
+current shell without a restart. Desired conversation storage remains a
+next-shell setting and the current storage bundle is unchanged. Launch
+overrides stay higher precedence, so the corresponding effective Provider,
+Model, or Effort editor is disabled and read-only. Existing
 three-key system-default files remain valid and provide no provider-specific
 fallback until configured. Exact fields, validation, and initialization
 compatibility are in
@@ -533,11 +539,26 @@ eligible ANSI decoration enabled. Any other value disables decorative ANSI,
 without the runtime overwriting or exporting the environment. Presence of
 `STORY_REDUCED_MOTION` independently selects one final colored frame when the
 TTY is otherwise ANSI-eligible, with no animation, sleep, raw mode, cursor
-control, or clearing. Nonzero/truthy `NO_COLOR`, non-TTY, `TERM=dumb`,
+control, or clearing. A disabling `NO_COLOR` value, non-TTY, `TERM=dumb`,
 non-POSIX, callback, and uncertain-output paths render one plain final frame
 without delay or ANSI. The welcome does not use the alternate screen or hide
 the cursor, and it never includes provider output.
 See the exact [terminal startup contract](interactive-terminal.md#startup-welcome-and-authentication).
+
+The capable main input also carries a responsive execution-profile header. It
+shows the sticky agent's active profile, or the exact one-shot profile when the
+buffer begins with a valid `@agent` route:
+
+```text
+[active runtime] Lead Orchestrator · Antigravity · model agy-model-id · effort high · pending
+story[novel:lead]> Who is answering?
+
+[one-shot runtime] Plot & Structure Architect · Codex · model codex-model-id · effort high · confirmed
+story[novel:lead]> @plot Check the current constraints.
+```
+
+These runtime-owned facts, the provider argv, and the profile records below are
+execution evidence. A model's reply prose or self-identification is not.
 
 Main prompts project canonical root, subcommand, and finite fixed-option
 candidates into a selectable semantic palette. Opening highlights the first
@@ -689,7 +710,7 @@ pending changes` if and only if the
 complete pending configuration differs structurally from its opening baseline.
 This is recomputed on every top-level read, so the warning is absent initially
 and after a complete revert. It is also absent from Agents, Agent settings,
-value editors, and Save/Cancel confirmations. Capable, narrow, `NO_COLOR`, and
+value editors, and Apply/Discard confirmations. Capable, narrow, `NO_COLOR`, and
 fallback views expose the complete text. Fallback cannot erase historical
 scrollback, but the current prompt reflects the current comparison.
 
@@ -735,8 +756,10 @@ Escape retains the same cancellation action: clean settings exit immediately
 without confirmation, while dirty settings open the discard confirmation. Each
 dirty confirmation has changed-only Current/Pending
 context: only differing fields appear in both sections, each with a `(Changed)`
-cue. The existing `No pending settings changes.` Save panel remains a defensive
-internal projection and is not selectable clean-root UX. YES
+cue. The confirmation also states exactly:
+`Runtime changes apply to this shell after Apply Changes; desired storage changes apply to the next shell.`
+The existing `No pending settings changes.` confirmation panel remains a
+defensive internal projection and is not selectable clean-root UX. YES
 commits the requested dirty action; NO or confirmation Escape returns to the
 root Settings picker, and invalid fallback input retries. Ctrl-C or EOF still
 cancels the whole workflow without writing. The
@@ -760,24 +783,45 @@ recheck returns to the Settings root without authentication, persistence,
 output, exit, or a saved event. A stale,
 unavailable, unauthenticated, indeterminate, failed, cancelled, or interrupted
 status prevents the settings file transaction. A missing workspace default
-learned during this gate remains in the pending candidate. Save then runs
+learned during this gate remains in the pending candidate. The controller then
+stages and preflights the candidate adapters, prepares runtime quiescence, and
+validates the prepared configuration and route state. It next runs
 conversation-storage readiness, optional explicit installer confirmation,
-create-only provisioning, and fresh parity before validating the complete
-pending pair. It rejects any exact-byte change to either configuration
-document or any persona-catalog change since opening.
-Only changed documents are canonically replaced, in system-defaults then
-agent-configs order. A write failure attempts reverse-order restoration of
-every attempted target, including the failing target; rollback uncertainty is
-reported separately. Only successful dirty persistence emits exact
-`[saved] Settings saved. Changes apply to the next shell.` and returns to the
-main prompt. Cancellation, interruption, authentication or storage-readiness
-gating, declined installation, provisioning or parity failure, a clean final
-recheck, validation conflicts, write failure, and rollback outcomes emit no
-saved event. Successful persistence applies configuration and desired storage
-to the next shell/backend construction only. It does not refresh the active
-backend, runtime, or conversation-storage bundle; migrate or activate storage;
-invoke a story-model turn; alter session/explicit overrides; or add credentials,
-persisted catalog data, or automatic save.
+create-only provisioning, and fresh parity, while rejecting any exact-byte
+change to either configuration document, the optional provider-route generation
+record, or the persona catalog since opening. A host prerequisite, empty SQLite
+database, or lazy storage guard created during readiness may remain after a
+later failure, but Apply Changes never migrates or activates conversation data.
+
+The prepared persistence boundary contains
+`config/system_defaults.json`, `config/agent_configs.json`, and, when needed,
+`agent_states/orchestrator_state/provider_route_generations.json`. Changed
+targets are written in that order; a write failure attempts exact reverse-order
+restoration of every attempted target, including the failing target. After
+persistence, the controller commits the staged backend/runtime generation.
+Safe compensation restores the exact prior configuration and route files and
+leaves the old runtime active; if restoration or activation cannot be proved,
+the shell reports `recovery_required` and must not be used until restarted
+against the persisted state.
+
+A non-storage Apply returns to the main prompt with
+`Settings saved and applied to this running shell now.` A storage-only Apply
+instead reports
+`Settings saved. Desired conversation storage is sqlite. Changes apply to the next shell.`
+when selecting SQLite (`filesystem` appears on the reverse change) and makes no
+live-activation claim. A mixed Apply emits both notices: runtime settings are
+active now, while the desired storage backend remains for the next shell. The
+current controller/runtime storage bundle never changes.
+Changed profiles remain `pending` until their first complete logical provider
+call succeeds. A provider switch requires a fresh target-provider thread; a
+same-provider model/effort change remains eligible for native-thread reuse.
+A successfully persisted and activated dirty snapshot emits those success
+notices and returns to the main prompt. Cancellation, interruption,
+authentication or storage-readiness gating, declined installation,
+provisioning or parity failure, a clean final recheck, validation conflicts,
+write or activation failure, compensation, and rollback outcomes emit no false
+success. Apply Changes invokes no story-model turn, does not alter session or
+launch overrides, and stores no credentials or provider catalog data.
 
 Entering or validating a value remains in-memory only; no configuration value
 is persisted before confirmed Apply Changes. This does not change startup or
@@ -903,7 +947,11 @@ and package/public terminal APIs are unchanged.
 
 Full help is one grouped semantic `Panel` in command-registry order; contextual
 help is one command record with its group, syntax, aliases, provider/artifact
-effects, and example. `/agents` is one canonical roster list. Session and
+effects, and example. `/agents` is one canonical roster list. Every agent row
+shows `ID`, `Aliases`, `Advisory domain`, an `Execution` composite with
+provider/model/effort and each source, and `Confirmation`. The compact value
+shape is `PROVIDER [SOURCE] · model VALUE [SOURCE] · effort VALUE [SOURCE]`.
+Session and
 conversation catalogs, search hits, transcript events, and focused history
 emit one positioned, one-record list per established row callback. Empty
 states are explicit. If Ctrl-C interrupts search, transcript, or history after
@@ -917,6 +965,21 @@ exact order:
 Session | Durable state | Process access | Default session | Current attachment
 Default conversation | Current focus | Agent focus | Provider readiness | Next action
 ```
+
+It then emits four execution-profile records in canonical roster order. Each
+uses this exact field order:
+
+```text
+Provider | Provider source | Model | Model source | Effort | Effort source
+Confirmation | Thread | Route generation
+```
+
+Sources are `launch override`, `agent config`, `system default`,
+`built in default`, or `provider default`. Thread values are `not observed`,
+`fresh pending`, `reusable pending`, `fresh`, `reused`, or
+`fresh after provider switch`. `provider default` means Story omitted that
+model/effort flag; it is not a claim about the vendor's hidden server-side
+selection.
 
 `/session list` emits one row per persisted session, newest update then ID:
 
@@ -942,8 +1005,8 @@ reads can include archives. See [grammar](interactive-command-parser.md) and
 
 | Syntax | Context behavior |
 | --- | --- |
-| `/run --output PART/PATH.md PROMPT` or `/run --output PART/PATH.md` then `/send` | One bounded snapshot of current focus. |
-| `/run --fresh --output PART/PATH.md PROMPT` | Records focused identity; sends no transcript. |
+| `/run --output PART/PATH.md PROMPT` or `/run --output PART/PATH.md` then `/send` | Bounded owner/core belonging-session facts plus one focused transcript snapshot. |
+| `/run --fresh --output PART/PATH.md PROMPT` | Retains bounded owner/core facts and focused identity; sends no focused transcript. |
 | `/draft-file PATH` | Strict-UTF-8 draft plus one focused snapshot; prompts for `PART/PATH.md`. |
 
 After prompt and path validation, inline, fresh, and committed composer runs

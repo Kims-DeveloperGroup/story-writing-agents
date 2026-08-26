@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
+import uuid
 import sys
 from collections.abc import Callable
 from types import TracebackType
-from typing import TypeVar
+from typing import Mapping, TypeVar
 
 from ..agents import (
     AGENT_SPECS,
@@ -90,7 +92,10 @@ from ..interactive_settings import (
     SettingsState,
     establish_default_backend,
     establish_settings_default_backend,
+    commit_prepared_settings_save,
     load_settings_state,
+    prepare_settings_save,
+    restore_prepared_settings_save,
     update_agent_antigravity_effort,
     update_agent_antigravity_model,
     update_agent_backend,
@@ -100,7 +105,6 @@ from ..interactive_settings import (
     update_language,
     update_max_debate_rounds,
     update_persona,
-    validate_settings_persona_catalog,
 )
 from ..interactive_terminal import (
     AdvisoryProgressError,
@@ -148,6 +152,10 @@ from ..models import (
 )
 from ..orchestrator import StoryRuntime
 from ..provider_auth import ProviderAuthSnapshot
+from ..provider_adapter import (
+    AgentExecutionProfile,
+    ExecutionValueSource,
+)
 from ..provider_catalog import (
     ProviderCatalogDiscovery,
     ProviderCatalogService,
@@ -263,6 +271,7 @@ def _effective_settings_provider(
     agent_id: str,
     *,
     pending: bool = True,
+    provider_overrides: Mapping[str, str] | None = None,
 ) -> str:
     """Resolve one settings route through agent, workspace, then Codex."""
 
@@ -271,10 +280,25 @@ def _effective_settings_provider(
     )
     agent = configuration.agent_configs[agent_id]
     return (
-        agent.backend
+        (provider_overrides or {}).get(agent_id)
+        or agent.backend
         or configuration.system_defaults.default_backend
         or "codex"
     )
+
+
+def _execution_source_label(source: ExecutionValueSource) -> str:
+    """Return compact human-facing copy for an exact execution value source."""
+
+    if not isinstance(source, ExecutionValueSource):
+        raise TypeError("source must be an ExecutionValueSource")
+    return source.value.replace("_", " ")
+
+
+def _execution_value(value: str | None) -> str:
+    """Render an omitted provider flag without claiming a hidden default."""
+
+    return value if value is not None else "provider default"
 
 
 def _provider_display_name(provider: str) -> str:
@@ -285,6 +309,31 @@ def _provider_display_name(provider: str) -> str:
     if provider == "antigravity":
         return "Antigravity"
     raise ValueError("provider must be codex or antigravity")
+
+
+def _confirmation_role(confirmation: str) -> SemanticRole:
+    """Color confirmed green and pending yellow without color-only meaning."""
+
+    if confirmation == "confirmed":
+        return SemanticRole.SUCCESS
+    if confirmation == "pending":
+        return SemanticRole.WARNING
+    raise ValueError("confirmation must be pending or confirmed")
+
+
+def _thread_status_role(status: str) -> SemanticRole:
+    """Color reuse green, fresh/pending yellow, and unknown state gray."""
+
+    if status == "reused":
+        return SemanticRole.SUCCESS
+    if status in {
+        "fresh",
+        "fresh_after_provider_switch",
+        "fresh_pending",
+        "reusable_pending",
+    }:
+        return SemanticRole.WARNING
+    return SemanticRole.MUTED
 
 
 def _settings_catalog_notice(
@@ -383,6 +432,8 @@ def _settings_pending_save_notice(state: SettingsState) -> Notice | None:
 
 def _settings_projection(
     state: SettingsState,
+    *,
+    provider_overrides: Mapping[str, str] | None = None,
 ) -> tuple[tuple[str, str | None, str, str, str], ...]:
     """Project ordered root and agent identities with current/pending values."""
 
@@ -426,8 +477,13 @@ def _settings_projection(
             state,
             agent_id,
             pending=False,
+            provider_overrides=provider_overrides,
         )
-        pending_provider = _effective_settings_provider(state, agent_id)
+        pending_provider = _effective_settings_provider(
+            state,
+            agent_id,
+            provider_overrides=provider_overrides,
+        )
         rows.extend(
             (
                 (
@@ -1735,6 +1791,7 @@ class InteractiveController:
                     if self._attached_session_id is not None
                     else None
                 ),
+                header_provider=self._main_runtime_header,
             )
             if terminal_action.kind is TerminalActionKind.INTERRUPT:
                 self._write_main_input_cancelled_status()
@@ -1750,6 +1807,66 @@ class InteractiveController:
             action = parse_interactive_line(original_line)
             if self._dispatch_session_lobby_action(action, original_line):
                 return 0
+
+    def _main_runtime_header(self, buffer: str, cursor: int) -> Notice:
+        """Project the exact active or one-shot execution target while editing."""
+
+        if not isinstance(buffer, str):
+            raise TypeError("buffer must be a string")
+        if not isinstance(cursor, int) or isinstance(cursor, bool):
+            raise TypeError("cursor must be an integer")
+        if cursor < 0 or cursor > len(buffer):
+            raise ValueError("cursor must identify a buffer boundary")
+        if self._attached_session_id is None:
+            return Notice(
+                "Attach a story session to activate an agent execution profile.",
+                label="active runtime",
+                role=SemanticRole.MUTED,
+                state=ViewState.EMPTY,
+            )
+
+        agent_id = self._target_agent_id
+        one_shot = False
+        if buffer.startswith("@"):
+            token_end = len(buffer)
+            for index, character in enumerate(buffer):
+                if character in " \t":
+                    token_end = index
+                    break
+            alias = buffer[1:token_end]
+            routed = next(
+                (
+                    route.agent_id
+                    for route in AGENT_ROUTES
+                    if alias in route.aliases
+                ),
+                None,
+            )
+            if routed is not None:
+                agent_id = routed
+                one_shot = True
+
+        profile = self._backend.execution_profile(agent_id)
+        confirmation = self._backend.execution_profile_confirmation(agent_id)
+        return Notice(
+            (
+                f"{AGENT_SPECS[agent_id].display_name} · "
+                f"{_provider_display_name(profile.provider)} · "
+                f"model {_execution_value(profile.model)} · "
+                f"effort {_execution_value(profile.effort)} · {confirmation}"
+            ),
+            label=("one-shot runtime" if one_shot else "active runtime"),
+            role=(
+                SemanticRole.INFO
+                if confirmation == "confirmed"
+                else SemanticRole.WARNING
+            ),
+            state=(
+                ViewState.COMPLETED
+                if confirmation == "confirmed"
+                else ViewState.LOADING
+            ),
+        )
 
     def _main_resume_choices(
         self,
@@ -2014,7 +2131,7 @@ class InteractiveController:
             self._terminal.write_help(action.argument)
             return False
         if action.kind is ActionKind.LIST_AGENTS:
-            self._terminal.write_agent_roster()
+            self._write_agent_roster()
             return False
         if action.kind is ActionKind.AUTH:
             self._run_auth()
@@ -2229,6 +2346,7 @@ class InteractiveController:
                 self._workspace,
                 state,
                 provider,
+                provider_overrides=self._backend.backend_overrides,
             )
         except SettingsError as failure:
             self._write_settings_error(failure.kind)
@@ -2276,7 +2394,10 @@ class InteractiveController:
         top_highlight: str | None = "language"
         while True:
             dirty = state.pending != state.baseline.configuration
-            projection = _settings_projection(state)
+            projection = _settings_projection(
+                state,
+                provider_overrides=self._backend.backend_overrides,
+            )
             root_values = {
                 root_id: (current_value, pending_value)
                 for root_id, agent_id, _label, current_value, pending_value in projection
@@ -2443,39 +2564,11 @@ class InteractiveController:
                         continue
                 if state.pending == state.baseline.configuration:
                     continue
-                report = select_conversation_storage(
-                    self._workspace,
-                    (
-                        state.pending.system_defaults.conversation_storage_backend
-                        or "filesystem"
-                    ),
-                    installation_consent=self._confirm_storage_installation,
-                    diagnostic_stream=sys.stderr,
-                    configuration_baseline=state.baseline.configuration_baseline,
-                    configuration=state.pending,
-                    precommit_guard=lambda: validate_settings_persona_catalog(
-                        self._workspace,
-                        state.baseline,
-                    ),
-                )
-                if report.outcome != "completed":
-                    assert report.failure is not None
-                    self._write_storage_selection_error(report.failure)
+                save_outcome = self._save_and_apply_settings(state)
+                if save_outcome == "retry":
                     continue
-                self._semantic_output.write_component(
-                    Panel(
-                        "Settings",
-                        (
-                            Notice(
-                                "Settings saved. Changes apply to the next shell.",
-                                label="saved",
-                                role=SemanticRole.SUCCESS,
-                                state=ViewState.COMPLETED,
-                            ),
-                        ),
-                        state=ViewState.COMPLETED,
-                    )
-                )
+                if save_outcome != "applied":
+                    return
                 return
             try:
                 state, cancelled = self._edit_settings_value(
@@ -2487,6 +2580,348 @@ class InteractiveController:
             if cancelled:
                 self._write_settings_cancelled(state)
                 return
+
+    def _save_and_apply_settings(self, state: SettingsState) -> str:
+        """Persist and activate one staged snapshot without false success."""
+
+        correlation_id = uuid.uuid4().hex
+        backend_candidate = None
+        runtime_candidate = None
+        prepared = None
+        persisted = False
+        storage_failure = None
+        before_profiles = self._backend.execution_profiles()
+        try:
+            prepared = prepare_settings_save(
+                self._workspace,
+                state,
+                provider_overrides=self._backend.backend_overrides,
+            )
+            backend_candidate = self._backend.stage_runtime_configuration(
+                prepared.configuration,
+                prepared.provider_routes,
+                correlation_id=correlation_id,
+            )
+            runtime_candidate = self._run_runtime_configuration_coroutine(
+                self._runtime.prepare_runtime_configuration(
+                    prepared.configuration,
+                    {
+                        agent_id: prepared.provider_routes[agent_id].generation
+                        for agent_id in ROSTER
+                    },
+                )
+            )
+            self._backend.validate_runtime_configuration_candidate(
+                backend_candidate
+            )
+            report = select_conversation_storage(
+                self._workspace,
+                (
+                    prepared.configuration.system_defaults.conversation_storage_backend
+                    or "filesystem"
+                ),
+                installation_consent=self._confirm_storage_installation,
+                diagnostic_stream=sys.stderr,
+                configuration_baseline=state.baseline.configuration_baseline,
+                configuration=prepared.configuration,
+                precommit_guard=lambda: prepare_settings_save(
+                    self._workspace,
+                    state,
+                    provider_overrides=self._backend.backend_overrides,
+                ),
+            )
+            if report.outcome != "completed":
+                assert report.failure is not None
+                storage_failure = report.failure
+                raise SettingsError(SettingsErrorKind.CONFLICT)
+            persisted = report.configuration == "saved"
+            commit_prepared_settings_save(self._workspace, prepared)
+            persisted = True
+            self._run_runtime_configuration_coroutine(
+                self._runtime.commit_runtime_configuration(
+                    runtime_candidate,
+                    backend_candidate,
+                )
+            )
+        except BaseException as failure:
+            recovery_required = False
+            restored = False
+            if persisted and prepared is not None:
+                try:
+                    candidate_is_active = (
+                        backend_candidate is not None
+                        and self._backend.runtime_configuration_candidate_is_active(
+                            backend_candidate
+                        )
+                    )
+                except BaseException:
+                    candidate_is_active = True
+                if not candidate_is_active:
+                    try:
+                        restore_prepared_settings_save(self._workspace, prepared)
+                    except BaseException:
+                        recovery_required = True
+                    else:
+                        restored = True
+                else:
+                    recovery_required = True
+            if backend_candidate is not None:
+                if recovery_required:
+                    self._backend.record_runtime_configuration_recovery_required(
+                        backend_candidate
+                    )
+                try:
+                    self._backend.discard_runtime_configuration(backend_candidate)
+                except BaseException as cleanup_failure:
+                    if isinstance(failure, Exception):
+                        raise cleanup_failure from failure
+            if runtime_candidate is not None:
+                try:
+                    self._runtime.discard_runtime_configuration(runtime_candidate)
+                except BaseException as cleanup_failure:
+                    if isinstance(failure, Exception):
+                        raise cleanup_failure from failure
+            if not isinstance(failure, Exception):
+                raise
+            if recovery_required:
+                self._write_settings_error(SettingsErrorKind.RECOVERY_REQUIRED)
+                return "recovery_required"
+            if restored:
+                self._semantic_output.write_component(
+                    Notice(
+                        (
+                            "Runtime activation failed after persistence, so the "
+                            "exact saved files were restored. The active runtime "
+                            "is unchanged; review the settings and retry."
+                        ),
+                        label="restored; not applied",
+                        role=SemanticRole.WARNING,
+                        state=ViewState.CANCELLED,
+                    )
+                )
+                return "retry"
+            if storage_failure is not None:
+                self._write_storage_selection_error(storage_failure)
+            elif isinstance(failure, SettingsError):
+                self._write_settings_error(failure.kind)
+            else:
+                self._semantic_output.write_component(
+                    Notice(
+                        (
+                            "Settings were not saved or applied. Provider "
+                            "preflight or runtime quiescence was not ready; the "
+                            "active runtime is unchanged."
+                        ),
+                        label="not applied",
+                        role=SemanticRole.ERROR,
+                        state=ViewState.ERROR,
+                    )
+                )
+            return "retry"
+
+        assert prepared is not None
+        active_profiles = self._backend.execution_profiles()
+        before_defaults = state.baseline.configuration.system_defaults
+        active_defaults = prepared.configuration.system_defaults
+        live_settings_changed = (
+            state.baseline.configuration.agent_configs
+            != prepared.configuration.agent_configs
+            or (
+                before_defaults.language,
+                before_defaults.persona,
+                before_defaults.max_debate_rounds,
+                before_defaults.codex_model,
+                before_defaults.codex_reasoning_effort,
+                before_defaults.antigravity_model,
+                before_defaults.antigravity_effort,
+                before_defaults.default_backend,
+            )
+            != (
+                active_defaults.language,
+                active_defaults.persona,
+                active_defaults.max_debate_rounds,
+                active_defaults.codex_model,
+                active_defaults.codex_reasoning_effort,
+                active_defaults.antigravity_model,
+                active_defaults.antigravity_effort,
+                active_defaults.default_backend,
+            )
+        )
+        self._write_settings_applied_result(
+            before_profiles,
+            active_profiles,
+            switched_agents=prepared.switched_agents,
+            live_settings_changed=live_settings_changed,
+            storage_before=(
+                before_defaults.conversation_storage_backend or "filesystem"
+            ),
+            storage_after=(
+                active_defaults.conversation_storage_backend or "filesystem"
+            ),
+        )
+        return "applied"
+
+    def _run_runtime_configuration_coroutine(self, coroutine: object) -> object:
+        """Run one configuration coroutine on the controller-owned event loop."""
+
+        try:
+            runner = self._runner
+            if runner is not None:
+                return runner.run(coroutine)
+            with asyncio.Runner() as local_runner:
+                return local_runner.run(coroutine)
+        except BaseException:
+            if inspect.iscoroutine(coroutine):
+                coroutine.close()
+            raise
+
+    def _write_settings_applied_result(
+        self,
+        before_profiles: tuple[AgentExecutionProfile, ...],
+        active_profiles: tuple[AgentExecutionProfile, ...],
+        *,
+        switched_agents: tuple[str, ...],
+        live_settings_changed: bool,
+        storage_before: str,
+        storage_after: str,
+    ) -> None:
+        """Render truthful current-shell and next-shell settings scopes."""
+
+        if (
+            len(before_profiles) != len(ROSTER)
+            or len(active_profiles) != len(ROSTER)
+            or type(live_settings_changed) is not bool
+            or storage_before not in {"filesystem", "sqlite"}
+            or storage_after not in {"filesystem", "sqlite"}
+        ):
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        before = {profile.agent_id: profile for profile in before_profiles}
+        active = {profile.agent_id: profile for profile in active_profiles}
+        changed_agents = tuple(
+            agent_id
+            for agent_id in ROSTER
+            if before[agent_id] != active[agent_id]
+        )
+        storage_changed = storage_before != storage_after
+        items: list[Section | Notice] = []
+        if live_settings_changed or not storage_changed:
+            items.append(
+                Notice(
+                    "Settings saved and applied to this running shell now.",
+                    label="saved and applied",
+                    role=SemanticRole.SUCCESS,
+                    state=ViewState.COMPLETED,
+                )
+            )
+        if storage_changed:
+            items.append(
+                Notice(
+                    (
+                        "Settings saved. Desired conversation storage is "
+                        f"{storage_after}. Changes apply to the next shell."
+                    ),
+                    label="saved",
+                    role=SemanticRole.SUCCESS,
+                    state=ViewState.COMPLETED,
+                )
+            )
+        if changed_agents:
+            items.extend(
+                (
+                    Section(
+                        "Before",
+                        tuple(
+                            self._execution_profile_field(
+                                before[agent_id],
+                                role=SemanticRole.MUTED,
+                            )
+                            for agent_id in changed_agents
+                        ),
+                    ),
+                    Section(
+                        "Active now",
+                        tuple(
+                            self._execution_profile_field(
+                                active[agent_id],
+                                role=SemanticRole.SUCCESS,
+                            )
+                            for agent_id in changed_agents
+                        ),
+                    ),
+                    Notice(
+                        (
+                            "Changed profiles are active for the next invocation "
+                            "and remain pending confirmation until that logical "
+                            "provider call succeeds."
+                        ),
+                        label="pending confirmation",
+                        role=SemanticRole.WARNING,
+                    ),
+                )
+            )
+        else:
+            items.append(
+                Notice(
+                    "The active provider, model, and effort roster is unchanged.",
+                    label="active roster",
+                    role=SemanticRole.MUTED,
+                )
+            )
+        if switched_agents:
+            names = ", ".join(
+                AGENT_SPECS[agent_id].display_name
+                for agent_id in switched_agents
+            )
+            items.append(
+                Notice(
+                    (
+                        f"{names}: the next turn starts a fresh target-provider "
+                        "thread and rehydrates bounded context from the belonging "
+                        "story session."
+                    ),
+                    label="fresh thread",
+                    role=SemanticRole.WARNING,
+                )
+            )
+        elif changed_agents:
+            items.append(
+                Notice(
+                    "Same-provider profile changes remain eligible to reuse the native thread.",
+                    label="thread reuse",
+                    role=SemanticRole.SUCCESS,
+                )
+            )
+        self._semantic_output.write_component(
+            Panel(
+                "Settings",
+                tuple(items),
+                state=ViewState.COMPLETED,
+            )
+        )
+
+    @staticmethod
+    def _execution_profile_field(
+        profile: AgentExecutionProfile,
+        *,
+        role: SemanticRole,
+        label: str | None = None,
+    ) -> Field:
+        """Project one exact execution profile into a compact settings row."""
+
+        return Field(
+            label or AGENT_SPECS[profile.agent_id].display_name,
+            (
+                f"{_provider_display_name(profile.provider)} "
+                f"[{_execution_source_label(profile.provider_source)}] · "
+                f"model {_execution_value(profile.model)} "
+                f"[{_execution_source_label(profile.model_source)}] · "
+                f"effort {_execution_value(profile.effort)} "
+                f"[{_execution_source_label(profile.effort_source)}]"
+            ),
+            role=role,
+        )
 
     def _authenticate_settings_routes(
         self,
@@ -2503,10 +2938,18 @@ class InteractiveController:
         while True:
             provider = next(
                 (
-                    _effective_settings_provider(state, agent_id)
+                    _effective_settings_provider(
+                        state,
+                        agent_id,
+                        provider_overrides=self._backend.backend_overrides,
+                    )
                     for agent_id in ROSTER
                     if not snapshot.is_authenticated(
-                        _effective_settings_provider(state, agent_id)
+                        _effective_settings_provider(
+                            state,
+                            agent_id,
+                            provider_overrides=self._backend.backend_overrides,
+                        )
                     )
                 ),
                 None,
@@ -2584,7 +3027,12 @@ class InteractiveController:
 
         if action not in {"save", "cancel"}:
             raise ValueError("action must be save or cancel")
-        self._semantic_output.write_component(self._settings_panel(state))
+        self._semantic_output.write_component(
+            self._settings_panel(
+                state,
+                provider_overrides=self._backend.backend_overrides,
+            )
+        )
         outcome = self._picker_input.read_picker(
             Prompt(
                 (
@@ -2920,6 +3368,64 @@ class InteractiveController:
                 return state, False
             agent_highlight = agent_id
             while True:
+                pending_profile = self._backend.preview_execution_profile(
+                    state.pending,
+                    agent_id,
+                )
+                provider_masked = (
+                    pending_profile.provider_source
+                    is ExecutionValueSource.LAUNCH_OVERRIDE
+                )
+                model_masked = (
+                    pending_profile.model_source
+                    is ExecutionValueSource.LAUNCH_OVERRIDE
+                )
+                effort_masked = (
+                    pending_profile.effort_source
+                    is ExecutionValueSource.LAUNCH_OVERRIDE
+                )
+                field_choices = (
+                    Choice(
+                        "provider",
+                        "Provider",
+                        enabled=not provider_masked,
+                        disabled_reason=(
+                            "Set by a launch override; read-only in this shell."
+                            if provider_masked
+                            else None
+                        ),
+                    ),
+                    Choice(
+                        "model",
+                        "Model",
+                        enabled=not model_masked,
+                        disabled_reason=(
+                            "Set by a launch override; read-only in this shell."
+                            if model_masked
+                            else None
+                        ),
+                    ),
+                    Choice(
+                        "reasoning",
+                        "Effort",
+                        enabled=not effort_masked,
+                        disabled_reason=(
+                            "Set by a launch override; read-only in this shell."
+                            if effort_masked
+                            else None
+                        ),
+                    ),
+                )
+                enabled_fields = tuple(
+                    choice.identity for choice in field_choices if choice.enabled
+                )
+                highlighted_field = (
+                    field_highlights[agent_id]
+                    if field_highlights[agent_id] in enabled_fields
+                    else enabled_fields[0]
+                    if enabled_fields
+                    else None
+                )
                 field_outcome = self._picker_input.read_picker(
                     Prompt(
                         "Agent settings",
@@ -2929,12 +3435,8 @@ class InteractiveController:
                             "Esc to return to Agents."
                         ),
                     ),
-                    (
-                        Choice("provider", "Provider"),
-                        Choice("model", "Model"),
-                        Choice("reasoning", "Effort"),
-                    ),
-                    highlighted_id=field_highlights[agent_id],
+                    field_choices,
+                    highlighted_id=highlighted_field,
                     transient=True,
                 )
                 field, whole_cancel = self._nested_settings_value(field_outcome)
@@ -2968,6 +3470,9 @@ class InteractiveController:
     ) -> tuple[SettingsState, bool]:
         """Edit one agent's provider without changing either provider's settings."""
 
+        if self._settings_field_is_launch_masked(state, agent_id, "provider"):
+            self._write_settings_launch_override_mask("Provider")
+            return state, False
         if self._auth_coordinator is not None:
             return self._edit_authenticated_settings_agent_provider(
                 state,
@@ -2977,7 +3482,11 @@ class InteractiveController:
         notice: Notice | None = None
         armed_value: object = _SETTINGS_UNARMED
         while True:
-            current = _effective_settings_provider(state, agent_id)
+            current = _effective_settings_provider(
+                state,
+                agent_id,
+                provider_overrides=self._backend.backend_overrides,
+            )
             outcome = self._picker_input.read_picker(
                 Prompt(
                     "Provider",
@@ -3019,7 +3528,11 @@ class InteractiveController:
             if armed_value == provider:
                 return state, False
             state = update_agent_backend(state, agent_id, provider)
-            armed_value = _effective_settings_provider(state, agent_id)
+            armed_value = _effective_settings_provider(
+                state,
+                agent_id,
+                provider_overrides=self._backend.backend_overrides,
+            )
             notice = _settings_entered_notice(
                 "Provider",
                 _provider_display_name(provider),
@@ -3038,7 +3551,11 @@ class InteractiveController:
         armed_value: object = _SETTINGS_UNARMED
         while True:
             snapshot = self._run_settings_option_load(coordinator.probe_all)
-            current = _effective_settings_provider(state, agent_id)
+            current = _effective_settings_provider(
+                state,
+                agent_id,
+                provider_overrides=self._backend.backend_overrides,
+            )
             choices = coordinator.choices(
                 snapshot,
                 selected_provider=current,
@@ -3078,7 +3595,11 @@ class InteractiveController:
                 if armed_value == provider:
                     return state, False
                 state = update_agent_backend(state, agent_id, provider)
-                armed_value = _effective_settings_provider(state, agent_id)
+                armed_value = _effective_settings_provider(
+                    state,
+                    agent_id,
+                    provider_overrides=self._backend.backend_overrides,
+                )
                 notice = _settings_entered_notice(
                     "Provider",
                     _provider_display_name(provider),
@@ -3107,7 +3628,11 @@ class InteractiveController:
                 if armed_value == provider:
                     return state, False
                 state = update_agent_backend(state, agent_id, provider)
-                armed_value = _effective_settings_provider(state, agent_id)
+                armed_value = _effective_settings_provider(
+                    state,
+                    agent_id,
+                    provider_overrides=self._backend.backend_overrides,
+                )
                 notice = _settings_entered_notice(
                     "Provider",
                     _provider_display_name(provider),
@@ -3156,7 +3681,14 @@ class InteractiveController:
     ) -> tuple[SettingsState, bool]:
         """Select one discovered active-provider model or a custom value."""
 
-        provider = _effective_settings_provider(state, agent_id)
+        if self._settings_field_is_launch_masked(state, agent_id, "model"):
+            self._write_settings_launch_override_mask("Model")
+            return state, False
+        provider = _effective_settings_provider(
+            state,
+            agent_id,
+            provider_overrides=self._backend.backend_overrides,
+        )
         antigravity = provider == "antigravity"
         provider_name = _provider_display_name(provider)
         discovery = self._discover_settings_catalog(provider)
@@ -3384,9 +3916,16 @@ class InteractiveController:
     ) -> tuple[SettingsState, bool]:
         """Select exact discovered effort for the pending effective model."""
 
+        if self._settings_field_is_launch_masked(state, agent_id, "effort"):
+            self._write_settings_launch_override_mask("Effort")
+            return state, False
         agent = state.pending.agent_configs[agent_id]
         defaults = state.pending.system_defaults
-        provider = _effective_settings_provider(state, agent_id)
+        provider = _effective_settings_provider(
+            state,
+            agent_id,
+            provider_overrides=self._backend.backend_overrides,
+        )
         antigravity = provider == "antigravity"
         provider_name = _provider_display_name(provider)
         pending = (
@@ -3642,12 +4181,16 @@ class InteractiveController:
         state: SettingsState,
         *,
         notice: Notice | None = None,
+        provider_overrides: Mapping[str, str] | None = None,
     ) -> Panel:
         """Project a stable current/pending settings diff for confirmation."""
 
         changed_rows = tuple(
             row
-            for row in _settings_projection(state)
+            for row in _settings_projection(
+                state,
+                provider_overrides=provider_overrides,
+            )
             if row[3] != row[4]
         )
         current_fields = tuple(
@@ -3673,10 +4216,12 @@ class InteractiveController:
                 Section("Current", current_fields),
                 Section("Pending", pending_fields),
                 Notice(
-                    "Changed values apply only to the next shell after Apply "
-                    "Changes.",
+                    (
+                        "Runtime changes apply to this shell after Apply Changes; "
+                        "desired storage changes apply to the next shell."
+                    ),
                     label="activation",
-                    role=SemanticRole.MUTED,
+                    role=SemanticRole.INFO,
                 ),
             ]
         else:
@@ -3694,6 +4239,42 @@ class InteractiveController:
             "Settings",
             tuple(panel_items),
             state=ViewState.OPEN,
+        )
+
+    def _settings_field_is_launch_masked(
+        self,
+        state: SettingsState,
+        agent_id: str,
+        field: str,
+    ) -> bool:
+        """Return whether one pending effective value is fixed at launch."""
+
+        profile = self._backend.preview_execution_profile(
+            state.pending,
+            agent_id,
+        )
+        sources = {
+            "provider": profile.provider_source,
+            "model": profile.model_source,
+            "effort": profile.effort_source,
+        }
+        if field not in sources:
+            raise ValueError("settings execution field is unknown")
+        return sources[field] is ExecutionValueSource.LAUNCH_OVERRIDE
+
+    def _write_settings_launch_override_mask(self, field: str) -> None:
+        """Explain one disabled launch-owned execution value without mutation."""
+
+        self._semantic_output.write_component(
+            Notice(
+                (
+                    f"{field} is fixed by a launch override and is read-only in "
+                    "this running shell. Remove the launch override to edit it."
+                ),
+                label="launch override",
+                role=SemanticRole.MUTED,
+                state=ViewState.DISABLED,
+            )
         )
 
     def _write_settings_validation(self, text: str) -> None:
@@ -3723,6 +4304,11 @@ class InteractiveController:
             ),
             SettingsErrorKind.ROLLBACK: (
                 "Settings rollback failed; inspect both configuration files."
+            ),
+            SettingsErrorKind.RECOVERY_REQUIRED: (
+                "Settings were saved, but this shell could not confirm activation. "
+                "Stop using this shell and restart it to recover the exact "
+                "persisted runtime configuration."
             ),
         }
         self._semantic_output.write_component(
@@ -3809,6 +4395,124 @@ class InteractiveController:
             )
         )
 
+    def _write_agent_roster(self) -> None:
+        """Render canonical agents with their compact active execution profiles."""
+
+        profiles = {
+            profile.agent_id: profile
+            for profile in self._backend.execution_profiles()
+        }
+        records = tuple(
+            Record(
+                route.agent_id,
+                title=AGENT_SPECS[route.agent_id].display_name,
+                fields=(
+                    Field("ID", route.agent_id),
+                    Field("Aliases", ", ".join(route.aliases)),
+                    Field("Advisory domain", route.advisory_domain),
+                    self._execution_profile_field(
+                        profiles[route.agent_id],
+                        role=SemanticRole.INFO,
+                        label="Execution",
+                    ),
+                    Field(
+                        "Confirmation",
+                        self._backend.execution_profile_confirmation(
+                            route.agent_id
+                        ),
+                        role=(
+                            SemanticRole.SUCCESS
+                            if self._backend.execution_profile_confirmation(
+                                route.agent_id
+                            )
+                            == "confirmed"
+                            else SemanticRole.WARNING
+                        ),
+                    ),
+                ),
+                role=SemanticRole.AGENT,
+                state=ViewState.COMPLETED,
+            )
+            for route in AGENT_ROUTES
+        )
+        self._semantic_output.write_component(
+            ListView(
+                "Agents",
+                records,
+                total_count=len(records),
+                state=ViewState.COMPLETED,
+            )
+        )
+
+    def _write_execution_roster_status(self) -> None:
+        """Render full exact profiles, sources, confirmation, and thread state."""
+
+        profiles = self._backend.execution_profiles()
+        route_generations = self._backend.provider_route_generations()
+        records: list[Record] = []
+        for profile in profiles:
+            confirmation = self._backend.execution_profile_confirmation(
+                profile.agent_id
+            )
+            thread_status = self._backend.execution_profile_thread_status(
+                profile.agent_id
+            )
+            records.append(
+                Record(
+                    profile.agent_id,
+                    title=AGENT_SPECS[profile.agent_id].display_name,
+                    fields=(
+                        Field(
+                            "Provider",
+                            _provider_display_name(profile.provider),
+                            role=SemanticRole.INFO,
+                        ),
+                        Field(
+                            "Provider source",
+                            _execution_source_label(profile.provider_source),
+                            role=SemanticRole.MUTED,
+                        ),
+                        Field("Model", _execution_value(profile.model)),
+                        Field(
+                            "Model source",
+                            _execution_source_label(profile.model_source),
+                            role=SemanticRole.MUTED,
+                        ),
+                        Field("Effort", _execution_value(profile.effort)),
+                        Field(
+                            "Effort source",
+                            _execution_source_label(profile.effort_source),
+                            role=SemanticRole.MUTED,
+                        ),
+                        Field(
+                            "Confirmation",
+                            confirmation,
+                            role=_confirmation_role(confirmation),
+                        ),
+                        Field(
+                            "Thread",
+                            thread_status.replace("_", " "),
+                            role=_thread_status_role(thread_status),
+                        ),
+                        Field(
+                            "Route generation",
+                            str(route_generations[profile.agent_id]),
+                            role=SemanticRole.MUTED,
+                        ),
+                    ),
+                    role=SemanticRole.AGENT,
+                    state=ViewState.COMPLETED,
+                )
+            )
+        self._semantic_output.write_component(
+            ListView(
+                "Execution profiles",
+                tuple(records),
+                total_count=len(records),
+                state=ViewState.COMPLETED,
+            )
+        )
+
     def _write_runtime_status(self) -> None:
         """Render a read-only lifecycle record followed by detailed scope facts."""
 
@@ -3876,6 +4580,7 @@ class InteractiveController:
                 ),
             )
         )
+        self._write_execution_roster_status()
 
         if attached_session is None:
             return
@@ -4436,6 +5141,7 @@ class InteractiveController:
             assert action.kind is ActionKind.MESSAGE
             agent_id = self._target_agent_id
         display_name = AGENT_SPECS[agent_id].display_name
+        execution_profile = self._backend.execution_profile(agent_id)
 
         memory_service = self._conversation_memory_service
         if type(memory_service) is not ConversationMemoryService:
@@ -4606,10 +5312,47 @@ class InteractiveController:
                     state=ViewState.COMPLETED,
                 ),
             )
+        confirmation = self._backend.execution_profile_confirmation(agent_id)
+        thread_status = self._backend.execution_profile_thread_status(agent_id)
         self._semantic_output.write_component(
-            Message(
+            Record(
                 _AGENT_PROMPT_ALIASES[agent_id],
-                format_agent_reply_content(result.content),
+                title=display_name,
+                fields=(
+                    Field(
+                        "Provider",
+                        (
+                            f"{_provider_display_name(execution_profile.provider)} "
+                            f"[{_execution_source_label(execution_profile.provider_source)}]"
+                        ),
+                        role=SemanticRole.INFO,
+                    ),
+                    Field(
+                        "Model",
+                        (
+                            f"{_execution_value(execution_profile.model)} "
+                            f"[{_execution_source_label(execution_profile.model_source)}]"
+                        ),
+                    ),
+                    Field(
+                        "Effort",
+                        (
+                            f"{_execution_value(execution_profile.effort)} "
+                            f"[{_execution_source_label(execution_profile.effort_source)}]"
+                        ),
+                    ),
+                    Field(
+                        "Confirmation",
+                        confirmation,
+                        role=_confirmation_role(confirmation),
+                    ),
+                    Field(
+                        "Thread",
+                        thread_status.replace("_", " "),
+                        role=_thread_status_role(thread_status),
+                    ),
+                ),
+                content=format_agent_reply_content(result.content),
                 role=SemanticRole.AGENT,
                 state=ViewState.COMPLETED,
             )

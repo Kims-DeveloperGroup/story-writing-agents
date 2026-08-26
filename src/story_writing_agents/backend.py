@@ -18,6 +18,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType
@@ -92,7 +93,16 @@ from .models import (
     Phase,
     Verdict,
 )
+from .interactive_settings import (
+    ProviderRouteEntry,
+    SettingsError,
+    SettingsErrorKind,
+    read_provider_route_generations,
+    reconcile_provider_route_generations,
+)
 from .provider_adapter import (
+    AgentExecutionProfile,
+    ExecutionValueSource,
     ProviderAdapter,
     ProviderBinding,
     ProviderInvocation,
@@ -156,6 +166,32 @@ _REFERENCE_READ_RULES = (
 _StructuredReply = TypeVar("_StructuredReply")
 
 
+@dataclass(slots=True)
+class _AdapterGeneration:
+    """One exact adapter/profile generation retained by its live bindings."""
+
+    generation_id: int
+    configuration: ConfigurationSnapshot
+    profiles: Mapping[str, AgentExecutionProfile]
+    provider_routes: Mapping[str, ProviderRouteEntry]
+    adapters: dict[str, ProviderAdapter]
+    switched_agents: frozenset[str] = frozenset()
+    binding_count: int = 0
+    retired: bool = False
+    closed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class BackendRuntimeConfigurationCandidate:
+    """One fully built backend generation awaiting atomic activation."""
+
+    owner: AgentBackend
+    base_generation_id: int
+    correlation_id: str
+    previous_profiles: Mapping[str, AgentExecutionProfile]
+    generation: _AdapterGeneration
+
+
 class BoundAgent:
     """One immutable definition bound to its concrete vendor implementation."""
 
@@ -166,6 +202,8 @@ class BoundAgent:
         staging_directory: Path,
         *,
         _provider_binding: ProviderBinding | None = None,
+        _adapter_generation: _AdapterGeneration | None = None,
+        _execution_profile: AgentExecutionProfile | None = None,
     ) -> None:
         self.backend = owner
         self.definition = definition
@@ -188,6 +226,17 @@ class BoundAgent:
             )
         else:
             self._provider_binding = _provider_binding
+        self._adapter_generation = _adapter_generation
+        self.execution_profile = _execution_profile
+        if self._adapter_generation is not None:
+            if (
+                self.execution_profile is None
+                or self.execution_profile.agent_id != definition.agent_id
+                or self.execution_profile.provider != definition.backend
+            ):
+                raise BackendProtocolError(
+                    "bound agent execution profile is inconsistent"
+                )
         self._call_state_lock = threading.Lock()
         self._active_calls = 0
         self._retired = False
@@ -322,6 +371,10 @@ class BoundAgent:
                     debate_id=request.debate_id,
                     agent_id=self.definition.agent_id,
                 )
+                thread_disposition = self.backend._logical_thread_disposition(
+                    self,
+                    request.session_id,
+                )
                 try:
                     reply = await self.backend._invoke_provider(
                         self,
@@ -348,6 +401,11 @@ class BoundAgent:
                         agent_id=self.definition.agent_id,
                     )
                     raise
+                self.backend._confirm_execution_profile(
+                    self,
+                    context_rehydrated=request.story_session_context is not None,
+                    thread_disposition=thread_disposition,
+                )
                 self.backend._trace_debug(
                     DebugOperation.PROVIDER_INVOCATION,
                     DebugPhase.SUCCEEDED,
@@ -396,6 +454,10 @@ class BoundAgent:
                     conversation_id=validated.conversation_id,
                     agent_id=self.definition.agent_id,
                 )
+                thread_disposition = self.backend._logical_thread_disposition(
+                    self,
+                    validated.session_id,
+                )
                 try:
                     reply = await self.backend._converse_provider(
                         self,
@@ -422,6 +484,13 @@ class BoundAgent:
                         agent_id=self.definition.agent_id,
                     )
                     raise
+                self.backend._confirm_execution_profile(
+                    self,
+                    context_rehydrated=(
+                        validated.story_session_context is not None
+                    ),
+                    thread_disposition=thread_disposition,
+                )
                 self.backend._trace_debug(
                     DebugOperation.PROVIDER_INVOCATION,
                     DebugPhase.SUCCEEDED,
@@ -497,6 +566,10 @@ class BoundAgent:
                     conversation_id=validated.conversation_id,
                     agent_id=self.definition.agent_id,
                 )
+                thread_disposition = self.backend._logical_thread_disposition(
+                    self,
+                    validated.session_id,
+                )
                 try:
                     reply = await self.backend._converse_with_retrieval_provider(
                         self,
@@ -524,6 +597,13 @@ class BoundAgent:
                         agent_id=self.definition.agent_id,
                     )
                     raise
+                self.backend._confirm_execution_profile(
+                    self,
+                    context_rehydrated=(
+                        validated.story_session_context is not None
+                    ),
+                    thread_disposition=thread_disposition,
+                )
                 self.backend._trace_debug(
                     DebugOperation.PROVIDER_INVOCATION,
                     DebugPhase.SUCCEEDED,
@@ -673,6 +753,7 @@ class BoundAgent:
                 agent_id=request.agent_id,
                 content=request.content,
                 context=request.context,
+                story_session_context=request.story_session_context,
             )
         except (AttributeError, SessionIdError, TypeError, ValueError) as exc:
             raise BackendProtocolError("conversation request is invalid") from exc
@@ -718,6 +799,7 @@ class BoundAgent:
                 agent_id=request.agent_id,
                 content=request.content,
                 context=request.context,
+                story_session_context=request.story_session_context,
             )
         except (AttributeError, SessionIdError, TypeError, ValueError) as exc:
             raise BackendProtocolError(
@@ -754,6 +836,41 @@ class AgentBackend:
             raise ValueError("Codex executable must be non-empty text")
         manager = ConfigManager(self.workspace)
         configuration = manager.load_configuration_snapshot()
+        raw_overrides = dict(backend_overrides or {})
+        unknown_agents = set(raw_overrides).difference(ROSTER)
+        if unknown_agents:
+            failure = ConfigurationError(
+                f"unknown backend override agent: {sorted(unknown_agents)[0]}"
+            )
+            self._record_debug_error(DebugOperation.CONFIGURATION, failure)
+            raise failure
+        try:
+            self.backend_overrides = MappingProxyType(
+                {
+                    agent_id: manager.validate_backend(backend)
+                    for agent_id, backend in raw_overrides.items()
+                }
+            )
+        except BaseException as exc:
+            self._record_debug_error(DebugOperation.CONFIGURATION, exc)
+            raise
+        route_before_bytes, routes_before = read_provider_route_generations(
+            self.workspace,
+            configuration,
+            provider_overrides=self.backend_overrides,
+        )
+        _route_bytes, provider_routes = reconcile_provider_route_generations(
+            self.workspace,
+            configuration,
+            provider_overrides=self.backend_overrides,
+        )
+        startup_switched_agents = frozenset(
+            agent_id
+            for agent_id in ROSTER
+            if route_before_bytes is not None
+            and routes_before[agent_id].provider
+            != provider_routes[agent_id].provider
+        )
         self._trace_debug(
             DebugOperation.CONFIGURATION,
             DebugPhase.STARTED,
@@ -795,33 +912,33 @@ class AgentBackend:
             self._record_debug_error(DebugOperation.CONFIGURATION, failure)
             raise failure
 
-        raw_overrides = dict(backend_overrides or {})
-        unknown_agents = set(raw_overrides).difference(ROSTER)
-        if unknown_agents:
-            failure = ConfigurationError(
-                f"unknown backend override agent: {sorted(unknown_agents)[0]}"
-            )
-            self._record_debug_error(DebugOperation.CONFIGURATION, failure)
-            raise failure
-        try:
-            self.backend_overrides = MappingProxyType(
-                {
-                    agent_id: manager.validate_backend(backend)
-                    for agent_id, backend in raw_overrides.items()
-                }
-            )
-        except BaseException as exc:
-            self._record_debug_error(DebugOperation.CONFIGURATION, exc)
-            raise
         self._configuration_snapshot = configuration
         self.executable = executable
         self._explicit_model = explicit_model
+        self._explicit_antigravity_model = explicit_antigravity_model
+        self._explicit_antigravity_effort = explicit_antigravity_effort
+        self.antigravity_executable = antigravity_executable
+        self.timeout_seconds = float(timeout_seconds)
+        self._generation_lock = threading.RLock()
+        self._next_adapter_generation_id = 1
+        self._provider_routes = MappingProxyType(dict(provider_routes))
+        profiles = self._resolve_execution_profiles(configuration)
+        if any(
+            provider_routes[agent_id].provider != profiles[agent_id].provider
+            for agent_id in ROSTER
+        ):
+            raise SettingsError(SettingsErrorKind.RECOVERY_REQUIRED)
         try:
             self._codex_adapter = CodexAdapter(
                 executable=executable,
                 timeout_seconds=float(timeout_seconds),
                 configuration=configuration,
                 explicit_model=explicit_model,
+                execution_profiles={
+                    agent_id: profile
+                    for agent_id, profile in profiles.items()
+                    if profile.provider == "codex"
+                },
                 create_process=lambda: asyncio.create_subprocess_exec,
                 wait_for=lambda: asyncio.wait_for,
                 make_temporary_directory=lambda: tempfile.mkdtemp,
@@ -844,6 +961,11 @@ class AgentBackend:
                     )
                     for agent_id in ROSTER
                 },
+                execution_profiles={
+                    agent_id: profile
+                    for agent_id, profile in profiles.items()
+                    if profile.provider == "antigravity"
+                },
                 create_process=lambda: asyncio.create_subprocess_exec,
                 wait_for=lambda: asyncio.wait_for,
                 which=lambda: shutil.which,
@@ -855,12 +977,35 @@ class AgentBackend:
             self._codex_adapter.vendor: self._codex_adapter,
             self._antigravity_adapter.vendor: self._antigravity_adapter,
         }
-        self.antigravity_executable = antigravity_executable
+        self._active_adapter_generation = _AdapterGeneration(
+            generation_id=0,
+            configuration=configuration,
+            profiles=profiles,
+            provider_routes=self._provider_routes,
+            adapters=self._adapters,
+            switched_agents=startup_switched_agents,
+        )
+        self._adapter_generations: dict[int, _AdapterGeneration] = {
+            0: self._active_adapter_generation
+        }
+        self._profile_confirmed = {
+            agent_id: False for agent_id in ROSTER
+        }
+        self._active_profile_correlation = {
+            agent_id: "startup" for agent_id in ROSTER
+        }
+        self._profile_thread_status = {
+            agent_id: (
+                "fresh_pending"
+                if agent_id in startup_switched_agents
+                else "not_observed"
+            )
+            for agent_id in ROSTER
+        }
         self.antigravity_model = self._antigravity_adapter.model
         self.antigravity_effort = self._antigravity_adapter.effort
         self.model = self._codex_adapter.model
         self._codex_reasoning_effort = self._codex_adapter.reasoning_effort
-        self.timeout_seconds = float(timeout_seconds)
         self._access_claim_tokens: dict[str, str] = {}
         self._thread_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
         self._staging_directories = self._codex_adapter.staging_directories
@@ -873,6 +1018,520 @@ class AgentBackend:
             DebugPhase.SUCCEEDED,
             outcome=DebugOutcome.READY,
         )
+        startup_applied_profiles = tuple(
+            (
+                self._active_adapter_generation.profiles[agent_id],
+                self._provider_routes[agent_id].generation,
+            )
+            for agent_id in ROSTER
+        )
+        for profile, route_generation in startup_applied_profiles:
+            self._log_execution_profile_event(
+                DebugOperation.EXECUTION_PROFILE_APPLIED,
+                correlation_id="startup",
+                route_generation=route_generation,
+                active_profile=profile,
+                activation_state="active",
+            )
+
+    def _resolve_execution_profiles(
+        self,
+        configuration: ConfigurationSnapshot,
+    ) -> Mapping[str, AgentExecutionProfile]:
+        """Resolve the sole authoritative provider/model/effort roster."""
+
+        manager = ConfigManager(self.workspace)
+        profiles: dict[str, AgentExecutionProfile] = {}
+        defaults = configuration.system_defaults
+        for agent_id in ROSTER:
+            agent = configuration.agent_configs[agent_id]
+            if agent_id in self.backend_overrides:
+                provider = self.backend_overrides[agent_id]
+                provider_source = ExecutionValueSource.LAUNCH_OVERRIDE
+            elif agent.backend is not None:
+                provider = agent.backend
+                provider_source = ExecutionValueSource.AGENT_CONFIG
+            elif defaults.default_backend is not None:
+                provider = defaults.default_backend
+                provider_source = ExecutionValueSource.SYSTEM_DEFAULT
+            else:
+                provider = "codex"
+                provider_source = ExecutionValueSource.BUILT_IN_DEFAULT
+            provider = manager.validate_backend(provider)
+            assert provider is not None
+
+            if provider == "codex":
+                model, model_source = self._effective_execution_value(
+                    self._explicit_model,
+                    agent.codex_model,
+                    defaults.codex_model,
+                )
+                effort, effort_source = self._effective_execution_value(
+                    None,
+                    agent.codex_reasoning_effort,
+                    defaults.codex_reasoning_effort,
+                )
+            else:
+                model, model_source = self._effective_execution_value(
+                    self._explicit_antigravity_model,
+                    agent.antigravity_model,
+                    defaults.antigravity_model,
+                )
+                effort, effort_source = self._effective_execution_value(
+                    self._explicit_antigravity_effort,
+                    agent.antigravity_effort,
+                    defaults.antigravity_effort,
+                )
+            profiles[agent_id] = AgentExecutionProfile(
+                agent_id=agent_id,
+                provider=provider,
+                provider_source=provider_source,
+                model=model,
+                model_source=model_source,
+                effort=effort,
+                effort_source=effort_source,
+            )
+        return MappingProxyType(profiles)
+
+    @staticmethod
+    def _effective_execution_value(
+        launch_value: str | None,
+        agent_value: str | None,
+        system_value: str | None,
+    ) -> tuple[str | None, ExecutionValueSource]:
+        if launch_value is not None:
+            return launch_value, ExecutionValueSource.LAUNCH_OVERRIDE
+        if agent_value is not None:
+            return agent_value, ExecutionValueSource.AGENT_CONFIG
+        if system_value is not None:
+            return system_value, ExecutionValueSource.SYSTEM_DEFAULT
+        return None, ExecutionValueSource.PROVIDER_DEFAULT
+
+    def execution_profile(self, agent_id: str) -> AgentExecutionProfile:
+        """Return the exact active profile used for the next agent invocation."""
+
+        if agent_id not in ROSTER:
+            raise ConfigurationError(f"unknown agent: {agent_id}")
+        with self._generation_lock:
+            return self._active_adapter_generation.profiles[agent_id]
+
+    def execution_profiles(self) -> tuple[AgentExecutionProfile, ...]:
+        """Return the active roster in canonical order."""
+
+        with self._generation_lock:
+            profiles = self._active_adapter_generation.profiles
+            return tuple(profiles[agent_id] for agent_id in ROSTER)
+
+    def execution_profile_confirmation(self, agent_id: str) -> str:
+        """Return pending or confirmed for the active execution profile."""
+
+        if agent_id not in ROSTER:
+            raise ConfigurationError(f"unknown agent: {agent_id}")
+        with self._generation_lock:
+            return "confirmed" if self._profile_confirmed[agent_id] else "pending"
+
+    def execution_profile_thread_status(self, agent_id: str) -> str:
+        """Return the active generation's observed or pending thread status."""
+
+        if agent_id not in ROSTER:
+            raise ConfigurationError(f"unknown agent: {agent_id}")
+        with self._generation_lock:
+            return self._profile_thread_status[agent_id]
+
+    def preview_execution_profile(
+        self,
+        configuration: ConfigurationSnapshot,
+        agent_id: str,
+    ) -> AgentExecutionProfile:
+        """Resolve one candidate profile without adapter or durable mutation."""
+
+        if type(configuration) is not ConfigurationSnapshot:
+            raise TypeError("configuration must be a ConfigurationSnapshot")
+        if agent_id not in ROSTER:
+            raise ConfigurationError(f"unknown agent: {agent_id}")
+        return self._resolve_execution_profiles(configuration)[agent_id]
+
+    def _confirm_execution_profile(
+        self,
+        bound_agent: BoundAgent,
+        *,
+        context_rehydrated: bool,
+        thread_disposition: str,
+    ) -> None:
+        """Confirm an active profile only after its whole logical call succeeds."""
+
+        profile = bound_agent.execution_profile
+        generation = bound_agent._adapter_generation
+        if profile is None or generation is None:
+            return
+        emit_confirmation = False
+        with self._generation_lock:
+            if generation is not self._active_adapter_generation:
+                return
+            self._profile_thread_status[profile.agent_id] = thread_disposition
+            if not self._profile_confirmed[profile.agent_id]:
+                self._profile_confirmed[profile.agent_id] = True
+                emit_confirmation = True
+        if not emit_confirmation:
+            return
+        self._log_execution_profile_confirmed(
+            profile,
+            thread_disposition=thread_disposition,
+            context_state=(
+                "rehydrated" if context_rehydrated else "unavailable"
+            ),
+        )
+
+    def _logical_thread_disposition(
+        self,
+        bound_agent: BoundAgent,
+        session_id: str,
+    ) -> str:
+        """Capture logical-turn thread state before any reference prelude."""
+
+        generation = bound_agent._adapter_generation
+        try:
+            stored = self._load_thread(session_id, bound_agent.definition)
+        except SessionNotFoundError:
+            stored = None
+        if (
+            stored is None
+            and generation is not None
+            and bound_agent.definition.agent_id in generation.switched_agents
+        ):
+            return "fresh_after_provider_switch"
+        return "fresh" if stored is None else "reused"
+
+    def provider_route_generations(self) -> Mapping[str, int]:
+        """Return the current shell's captured durable route generations."""
+
+        with self._generation_lock:
+            return MappingProxyType(
+                {
+                    agent_id: self._provider_routes[agent_id].generation
+                    for agent_id in ROSTER
+                }
+            )
+
+    def stage_runtime_configuration(
+        self,
+        configuration: ConfigurationSnapshot,
+        provider_routes: Mapping[str, ProviderRouteEntry],
+        *,
+        correlation_id: str,
+    ) -> BackendRuntimeConfigurationCandidate:
+        """Build and preflight one isolated adapter generation."""
+
+        self._ensure_open()
+        if type(configuration) is not ConfigurationSnapshot:
+            raise TypeError("configuration must be a ConfigurationSnapshot")
+        if set(provider_routes) != set(ROSTER) or any(
+            type(provider_routes[agent_id]) is not ProviderRouteEntry
+            for agent_id in ROSTER
+        ):
+            raise ValueError("provider_routes must contain the complete roster")
+        if not isinstance(correlation_id, str) or not correlation_id:
+            raise ValueError("correlation_id must be non-empty text")
+        profiles = self._resolve_execution_profiles(configuration)
+        if any(
+            provider_routes[agent_id].provider != profiles[agent_id].provider
+            for agent_id in ROSTER
+        ):
+            raise BackendProtocolError(
+                "provider route generation does not match the effective profile"
+            )
+        adapters = self._create_adapters(configuration, profiles)
+        try:
+            effective_providers = {profile.provider for profile in profiles.values()}
+            for provider in effective_providers:
+                if not adapters[provider].executable_available():
+                    raise ConfigurationError(
+                        f"configured provider executable is unavailable: {provider}"
+                    )
+            antigravity = adapters["antigravity"]
+            if (
+                "antigravity" in effective_providers
+                and isinstance(antigravity, AntigravityAdapter)
+                and not antigravity.headless_capabilities_available()
+            ):
+                raise ConfigurationError(
+                    "Antigravity headless capabilities are unavailable"
+                )
+            with self._generation_lock:
+                generation_id = self._next_adapter_generation_id
+                self._next_adapter_generation_id += 1
+                base_generation_id = self._active_adapter_generation.generation_id
+                current_profiles = self._active_adapter_generation.profiles
+                switched_agents = frozenset(
+                    agent_id
+                    for agent_id in ROSTER
+                    if current_profiles[agent_id].provider
+                    != profiles[agent_id].provider
+                )
+            generation = _AdapterGeneration(
+                generation_id=generation_id,
+                configuration=configuration,
+                profiles=profiles,
+                provider_routes=MappingProxyType(dict(provider_routes)),
+                adapters=adapters,
+                switched_agents=switched_agents,
+            )
+            return BackendRuntimeConfigurationCandidate(
+                owner=self,
+                base_generation_id=base_generation_id,
+                correlation_id=correlation_id,
+                previous_profiles=current_profiles,
+                generation=generation,
+            )
+        except BaseException:
+            for adapter in adapters.values():
+                try:
+                    adapter.close()
+                except Exception:
+                    pass
+            raise
+
+    def commit_runtime_configuration(
+        self,
+        candidate: BackendRuntimeConfigurationCandidate,
+    ) -> tuple[AgentExecutionProfile, ...]:
+        """Atomically activate one staged generation after runtime quiescence."""
+
+        if (
+            type(candidate) is not BackendRuntimeConfigurationCandidate
+            or candidate.owner is not self
+        ):
+            raise TypeError("candidate does not belong to this backend")
+        close_generation: _AdapterGeneration | None = None
+        with self._generation_lock:
+            current = self._active_adapter_generation
+            if current.generation_id != candidate.base_generation_id:
+                raise BackendProtocolError("runtime configuration candidate is stale")
+            if self._bound_agents:
+                raise BackendProtocolError(
+                    "runtime configuration activation requires quiescent bindings"
+                )
+            next_generation = candidate.generation
+            old_profiles = current.profiles
+            previous_confirmation = dict(self._profile_confirmed)
+            previous_correlation = dict(self._active_profile_correlation)
+            previous_thread_status = dict(self._profile_thread_status)
+            for agent_id in ROSTER:
+                if old_profiles[agent_id] != next_generation.profiles[agent_id]:
+                    self._log_execution_profile_event(
+                        DebugOperation.EXECUTION_SETTING_CHANGE,
+                        correlation_id=candidate.correlation_id,
+                        route_generation=(
+                            next_generation.provider_routes[agent_id].generation
+                        ),
+                        old_profile=old_profiles[agent_id],
+                        new_profile=next_generation.profiles[agent_id],
+                        activation_state="accepted",
+                    )
+            self._active_adapter_generation = next_generation
+            self._adapter_generations[next_generation.generation_id] = next_generation
+            self._configuration_snapshot = next_generation.configuration
+            self._provider_routes = next_generation.provider_routes
+            self._adapters = next_generation.adapters
+            self._codex_adapter = next_generation.adapters["codex"]
+            self._antigravity_adapter = next_generation.adapters["antigravity"]
+            self._staging_directories = self._codex_adapter.staging_directories
+            self.model = self._codex_adapter.model
+            self._codex_reasoning_effort = self._codex_adapter.reasoning_effort
+            self.antigravity_model = self._antigravity_adapter.model
+            self.antigravity_effort = self._antigravity_adapter.effort
+            self._profile_confirmed = {
+                agent_id: (
+                    previous_confirmation[agent_id]
+                    if old_profiles[agent_id] == next_generation.profiles[agent_id]
+                    else False
+                )
+                for agent_id in ROSTER
+            }
+            self._active_profile_correlation = {
+                agent_id: (
+                    previous_correlation[agent_id]
+                    if old_profiles[agent_id] == next_generation.profiles[agent_id]
+                    else candidate.correlation_id
+                )
+                for agent_id in ROSTER
+            }
+            self._profile_thread_status = {
+                agent_id: (
+                    previous_thread_status[agent_id]
+                    if old_profiles[agent_id] == next_generation.profiles[agent_id]
+                    else "fresh_pending"
+                    if agent_id in next_generation.switched_agents
+                    else "reusable_pending"
+                )
+                for agent_id in ROSTER
+            }
+            current.retired = True
+            if current.binding_count == 0:
+                close_generation = current
+        if close_generation is not None:
+            self._close_adapter_generation(close_generation)
+        for agent_id in ROSTER:
+            if old_profiles[agent_id] != candidate.generation.profiles[agent_id]:
+                self._log_execution_profile_event(
+                    DebugOperation.EXECUTION_PROFILE_APPLIED,
+                    correlation_id=candidate.correlation_id,
+                    route_generation=(
+                        candidate.generation.provider_routes[agent_id].generation
+                    ),
+                    old_profile=old_profiles[agent_id],
+                    new_profile=candidate.generation.profiles[agent_id],
+                    activation_state="active",
+                )
+        return self.execution_profiles()
+
+    def validate_runtime_configuration_candidate(
+        self,
+        candidate: BackendRuntimeConfigurationCandidate,
+    ) -> None:
+        """Prove one staged generation can still activate before persistence."""
+
+        if (
+            type(candidate) is not BackendRuntimeConfigurationCandidate
+            or candidate.owner is not self
+        ):
+            raise TypeError("candidate does not belong to this backend")
+        with self._generation_lock:
+            if candidate.generation.closed:
+                raise BackendProtocolError(
+                    "runtime configuration candidate is already closed"
+                )
+            if (
+                self._active_adapter_generation.generation_id
+                != candidate.base_generation_id
+            ):
+                raise BackendProtocolError(
+                    "runtime configuration candidate is stale"
+                )
+            if self._bound_agents:
+                raise BackendProtocolError(
+                    "runtime configuration activation requires quiescent bindings"
+                )
+
+    def runtime_configuration_candidate_is_active(
+        self,
+        candidate: BackendRuntimeConfigurationCandidate,
+    ) -> bool:
+        """Return whether one exact candidate generation became active."""
+
+        if (
+            type(candidate) is not BackendRuntimeConfigurationCandidate
+            or candidate.owner is not self
+        ):
+            raise TypeError("candidate does not belong to this backend")
+        with self._generation_lock:
+            return candidate.generation is self._active_adapter_generation
+
+    def discard_runtime_configuration(
+        self,
+        candidate: BackendRuntimeConfigurationCandidate,
+    ) -> None:
+        """Close one uncommitted staged generation idempotently."""
+
+        if (
+            type(candidate) is not BackendRuntimeConfigurationCandidate
+            or candidate.owner is not self
+        ):
+            raise TypeError("candidate does not belong to this backend")
+        with self._generation_lock:
+            if candidate.generation is self._active_adapter_generation:
+                return
+        self._close_adapter_generation(candidate.generation)
+
+    def record_runtime_configuration_recovery_required(
+        self,
+        candidate: BackendRuntimeConfigurationCandidate,
+    ) -> None:
+        """Persist fixed recovery-required profile facts without exception prose."""
+
+        if (
+            type(candidate) is not BackendRuntimeConfigurationCandidate
+            or candidate.owner is not self
+        ):
+            return
+        previous = candidate.previous_profiles
+        for agent_id in ROSTER:
+            active = candidate.generation.profiles[agent_id]
+            if previous[agent_id] == active:
+                continue
+            self._log_execution_profile_event(
+                DebugOperation.EXECUTION_PROFILE_RECOVERY_REQUIRED,
+                correlation_id=candidate.correlation_id,
+                route_generation=(
+                    candidate.generation.provider_routes[agent_id].generation
+                ),
+                old_profile=previous[agent_id],
+                new_profile=active,
+                activation_state="recovery_required",
+                recovery_required=True,
+            )
+
+    def _create_adapters(
+        self,
+        configuration: ConfigurationSnapshot,
+        profiles: Mapping[str, AgentExecutionProfile],
+    ) -> dict[str, ProviderAdapter]:
+        """Construct isolated provider adapters from exact resolved profiles."""
+
+        codex = CodexAdapter(
+            executable=self.executable,
+            timeout_seconds=self.timeout_seconds,
+            configuration=configuration,
+            explicit_model=self._explicit_model,
+            execution_profiles={
+                agent_id: profile
+                for agent_id, profile in profiles.items()
+                if profile.provider == "codex"
+            },
+            create_process=lambda: asyncio.create_subprocess_exec,
+            wait_for=lambda: asyncio.wait_for,
+            make_temporary_directory=lambda: tempfile.mkdtemp,
+            which=lambda: shutil.which,
+        )
+        antigravity = AntigravityAdapter(
+            executable=self.antigravity_executable,
+            timeout_seconds=self.timeout_seconds,
+            state_root=self.workspace.path(f"{_SESSION_DIRECTORY}/.antigravity"),
+            explicit_model=self._explicit_antigravity_model,
+            explicit_effort=self._explicit_antigravity_effort,
+            system_model=configuration.system_defaults.antigravity_model,
+            system_effort=configuration.system_defaults.antigravity_effort,
+            agent_settings={
+                agent_id: (
+                    configuration.agent_configs[agent_id].antigravity_model,
+                    configuration.agent_configs[agent_id].antigravity_effort,
+                )
+                for agent_id in ROSTER
+            },
+            execution_profiles={
+                agent_id: profile
+                for agent_id, profile in profiles.items()
+                if profile.provider == "antigravity"
+            },
+            create_process=lambda: asyncio.create_subprocess_exec,
+            wait_for=lambda: asyncio.wait_for,
+            which=lambda: shutil.which,
+        )
+        return {codex.vendor: codex, antigravity.vendor: antigravity}
+
+    def _close_adapter_generation(self, generation: _AdapterGeneration) -> None:
+        """Close one retired/staged generation exactly once."""
+
+        with self._generation_lock:
+            if generation.closed:
+                return
+            generation.closed = True
+            self._adapter_generations.pop(generation.generation_id, None)
+        for adapter in generation.adapters.values():
+            try:
+                adapter.close()
+            except Exception as exc:
+                self._record_debug_error(DebugOperation.CLEANUP, exc)
 
     def _trace_debug(
         self,
@@ -900,6 +1559,67 @@ class AgentBackend:
             )
         except BaseException:
             pass
+
+    def _log_execution_profile_event(
+        self,
+        operation: DebugOperation,
+        *,
+        correlation_id: str,
+        route_generation: int,
+        old_profile: AgentExecutionProfile | None = None,
+        new_profile: AgentExecutionProfile | None = None,
+        active_profile: AgentExecutionProfile | None = None,
+        activation_state: str,
+        thread_disposition: str | None = None,
+        context_state: str | None = None,
+        recovery_required: bool = False,
+    ) -> None:
+        """Write one schema-v2 profile event without altering runtime behavior."""
+
+        try:
+            self._debug_log.execution_profile_event(
+                operation,
+                correlation_id=correlation_id,
+                agent_id=(
+                    active_profile.agent_id
+                    if active_profile is not None
+                    else new_profile.agent_id
+                    if new_profile is not None
+                    else ""
+                ),
+                route_generation=route_generation,
+                old_profile=old_profile,
+                new_profile=new_profile,
+                active_profile=active_profile,
+                activation_state=activation_state,
+                thread_disposition=thread_disposition,
+                context_state=context_state,
+                recovery_required=recovery_required,
+            )
+        except BaseException:
+            pass
+
+    def _log_execution_profile_confirmed(
+        self,
+        profile: AgentExecutionProfile,
+        *,
+        thread_disposition: str,
+        context_state: str,
+    ) -> None:
+        """Record first successful use of one active profile generation."""
+
+        with self._generation_lock:
+            correlation_id = self._active_profile_correlation[profile.agent_id]
+            route_generation = self._provider_routes[profile.agent_id].generation
+        self._log_execution_profile_event(
+            DebugOperation.EXECUTION_PROFILE_CONFIRMED,
+            correlation_id=correlation_id,
+            route_generation=route_generation,
+            active_profile=profile,
+            activation_state="confirmed",
+            thread_disposition=thread_disposition,
+            context_state=context_state,
+        )
 
     def _record_debug_error(
         self,
@@ -951,18 +1671,29 @@ class AgentBackend:
             agent_id=agent_id,
         )
         try:
-            adapter = self._adapter_for(definition.backend)
-            binding = adapter.bind(definition)
-            if type(binding) is not ProviderBinding:
-                raise BackendProtocolError(
-                    "provider adapter returned an inconsistent binding"
+            with self._generation_lock:
+                generation = self._active_adapter_generation
+                profile = generation.profiles[agent_id]
+                if profile.provider != definition.backend:
+                    raise BackendProtocolError(
+                        "definition provider does not match the active execution profile"
+                    )
+                adapter = generation.adapters[definition.backend]
+                binding = adapter.bind(definition)
+                if type(binding) is not ProviderBinding:
+                    raise BackendProtocolError(
+                        "provider adapter returned an inconsistent binding"
+                    )
+                bound = BoundAgent(
+                    self,
+                    definition,
+                    binding.staging_directory,
+                    _provider_binding=binding,
+                    _adapter_generation=generation,
+                    _execution_profile=profile,
                 )
-            bound = BoundAgent(
-                self,
-                definition,
-                binding.staging_directory,
-                _provider_binding=binding,
-            )
+                generation.binding_count += 1
+                self._bound_agents.add(bound)
         except BaseException as exc:
             self._record_debug_error(
                 DebugOperation.BACKEND_LIFECYCLE,
@@ -976,7 +1707,6 @@ class AgentBackend:
             agent_id=agent_id,
             outcome=DebugOutcome.READY,
         )
-        self._bound_agents.add(bound)
         return bound
 
     def get_session_lifecycle(self, session_id: str) -> SessionLifecycleState:
@@ -1417,8 +2147,25 @@ class AgentBackend:
         if bound_agent not in self._bound_agents:
             return
         self._bound_agents.remove(bound_agent)
-        adapter = self._adapter_for(bound_agent.vendor)
+        generation = bound_agent._adapter_generation
+        adapter = (
+            self._adapter_for(bound_agent.vendor)
+            if generation is None
+            else generation.adapters[bound_agent.vendor]
+        )
         adapter.release(bound_agent._provider_binding)
+        close_generation: _AdapterGeneration | None = None
+        if generation is not None:
+            with self._generation_lock:
+                generation.binding_count -= 1
+                if generation.binding_count < 0:
+                    raise BackendProtocolError(
+                        "adapter generation binding count became negative"
+                    )
+                if generation.retired and generation.binding_count == 0:
+                    close_generation = generation
+        if close_generation is not None:
+            self._close_adapter_generation(close_generation)
         self._finalize_close_if_ready()
 
     def _discard_staging_directory(self, directory: Path) -> None:
@@ -2570,7 +3317,12 @@ class AgentBackend:
             except BaseException:
                 pass
 
-        adapter = self._adapter_for(bound_agent.vendor)
+        generation = bound_agent._adapter_generation
+        adapter = (
+            self._adapter_for(bound_agent.vendor)
+            if generation is None
+            else generation.adapters[bound_agent.vendor]
+        )
         provider_diagnostic: str | None = None
         provider_cause: BaseException | None = None
         try:
@@ -2702,9 +3454,17 @@ class AgentBackend:
             "user_payload": request.user_payload,
             "candidate_payload": request.candidate_payload,
             "messages": [message.to_dict() for message in request.messages],
-            "agent_state": [entry.to_dict() for entry in request.agent_state],
         }
-        if request.conversation_context is not None:
+        if request.story_session_context is not None:
+            payload["story_session_context"] = request.story_session_context.to_dict()
+        else:
+            payload["agent_state"] = [
+                entry.to_dict() for entry in request.agent_state
+            ]
+        if (
+            request.story_session_context is None
+            and request.conversation_context is not None
+        ):
             payload["conversation_context"] = [
                 {
                     "turn_id": event.turn_id,
@@ -2723,13 +3483,17 @@ class AgentBackend:
     ) -> dict[str, Any]:
         """Project a request into the exact payload, preserving context order."""
 
-        return {
+        payload = {
             "session_id": request.session_id,
             "conversation_id": request.conversation_id,
             "turn_id": request.turn_id,
             "agent_id": request.agent_id,
             "content": request.content,
-            "context": [
+        }
+        if request.story_session_context is not None:
+            payload["story_session_context"] = request.story_session_context.to_dict()
+        else:
+            payload["context"] = [
                 {
                     "turn_id": event.turn_id,
                     "sender": event.sender,
@@ -2738,8 +3502,8 @@ class AgentBackend:
                     "content": event.content,
                 }
                 for event in request.context.events
-            ],
-        }
+            ]
+        return payload
 
     @staticmethod
     def _conversation_retrieval_context_projection(
@@ -2787,19 +3551,25 @@ class AgentBackend:
         fails only if the already validated request is tampered.
         """
 
-        return {
+        payload = {
             "operation": "conversation_retrieval",
             "session_id": request.session_id,
             "conversation_id": request.conversation_id,
             "turn_id": request.turn_id,
             "agent_id": request.agent_id,
             "content": request.content,
-            "context": cls._conversation_retrieval_context_projection(request),
-            "retrieval": cls._conversation_retrieval_control(
-                action_index=1,
-                allowed_actions=allowed_actions,
-            ),
         }
+        if request.story_session_context is not None:
+            payload["story_session_context"] = request.story_session_context.to_dict()
+        else:
+            payload["context"] = cls._conversation_retrieval_context_projection(
+                request
+            )
+        payload["retrieval"] = cls._conversation_retrieval_control(
+            action_index=1,
+            allowed_actions=allowed_actions,
+        )
+        return payload
 
     @classmethod
     def _conversation_retrieval_continuation_payload(

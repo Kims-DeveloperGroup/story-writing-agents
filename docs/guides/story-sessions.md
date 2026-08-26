@@ -250,15 +250,88 @@ direction, reopen `/settings`, select SQLite again, save, and start a new shell.
 The same sequence applies in reverse when returning to filesystem. See the
 [exact selection workflow](../reference/cli.md#conversation-storage-selection).
 
-Save fails closed if either configuration file or the persona catalog changed
-after opening. A successful save affects only the next shell/backend
-construction; it does not migrate or activate storage. The active shell keeps
-its construction-time configuration and conversation-storage bundle, and live
-session or explicit overrides still take precedence. See
+Save fails closed if either configuration file, the provider-route generation
+record, or the persona catalog changed after opening. It also freshly checks
+the desired conversation-storage readiness and parity before committing the
+complete prepared snapshot. Provider, Model, or Effort fixed by a launch
+override is disabled and read-only because that override remains higher
+precedence.
+
+A confirmed Save applies non-storage runtime changes, including
+provider/model/effort, to this running shell without a restart. A storage-only
+save selecting SQLite instead reports
+`Settings saved. Desired conversation storage is sqlite. Changes apply to the next shell.`
+without claiming live activation (`filesystem` appears on the reverse change).
+A mixed save reports that runtime settings were applied now and desired storage
+applies to the next shell. The current controller/runtime storage bundle
+remains unchanged, and other running shells keep the runtime state and storage
+bundle they captured.
+
+Editing the JSON files directly is different: there is no file watcher. A
+manual edit is reconciled when a new backend launches, while already running
+shells remain unchanged. Use `/settings` when non-storage runtime settings in
+the current shell must change without restarting. See
 [Agent configuration](../reference/configuration/agent-configuration.md) and
 [Filesystem safety](../operations/filesystem-safety.md). Antigravity setup and
-provider-specific precedence are in the
-[Antigravity guide](antigravity.md).
+provider-specific precedence are in the [Antigravity guide](antigravity.md).
+
+<a id="execution-identity-and-fresh-thread-continuity"></a>
+
+## Execution identity and fresh-thread continuity
+
+The runtime, not an agent's prose, is authoritative for the provider, model,
+and effort used for a turn. A reply that calls itself “Codex” is only model
+text; use the live input header, reply metadata, `/agents`, or `/status` to see
+the profile the backend selected and passed to the provider CLI. A missing
+model or effort is shown as `provider default`: Story omitted that process
+flag and does not claim to know the vendor's server-side choice.
+
+A capable input frame follows the active sticky agent, or a valid leading
+`@agent` one-shot route, as the buffer changes:
+
+```text
+[active runtime] Lead Orchestrator · Antigravity · model agy-model-id · effort high · pending
+story[novel:lead]> Who is answering?
+```
+
+The corresponding reply keeps the execution evidence outside the reply body:
+
+```text
+[lead] Lead Orchestrator [completed]
+  Provider [info]: Antigravity [agent config]
+  Model: agy-model-id [agent config]
+  Effort: high [agent config]
+  Confirmation [success]: confirmed
+  Thread [warning]: fresh after provider switch
+  <agent reply>
+```
+
+`pending` means the changed profile is active for the next invocation but has
+not yet completed a logical provider call. The first complete success changes
+it to `confirmed`; this confirms runtime use, not remote attestation. A
+same-provider model or effort change remains eligible to reuse its native
+thread. Every provider switch advances a durable route generation, so switching
+A to B and later back to A starts a fresh target-provider thread each time.
+
+That fresh provider-native thread is not a fresh story session. Every
+substantive turn rehydrates a bounded belonging-session envelope containing
+the receiving agent's newest owner outcomes (at most 24 entries and 32,768
+compact UTF-8 bytes), the current core-document path/hash identities, and one
+focused-context mode:
+
+- `included` carries the bounded complete-turn window for normal focused work;
+- `fresh` carries the conversation identity but no focused transcript, as on
+  `/run --fresh`; and
+- `omitted` carries neither a conversation identity nor transcript for a
+  context-omitted noninteractive run.
+
+It intentionally does not carry another agent's owner outcomes, omitted
+transcript events, provider-private hidden history, artifact bytes, or core
+document bytes. Reference preludes are content-free; the next substantive call
+carries the envelope. Retrieval call one carries it, while retrieval
+continuations do not repeat it. See the exact
+[provider envelope](../design/prompts-and-provider.md#story-session-continuity-envelope)
+and [session storage](../reference/configuration/session-storage.md#provider-route-generations).
 
 ## Manage conversations and routing
 
@@ -416,10 +489,12 @@ complete or submit slash controls. Artifact `$` activation is available in the
 composer text and likewise returns without sending. `/say /send` and `/say /cancel` still insert literal
 control lines, and ordinary fallback input shows no panel.
 
-The runtime supplies every debate phase one bounded focus snapshot.
-`/run --fresh --output PART/PATH.md PROMPT` records its identity without
-transcript; `/draft-file PATH` reads strict UTF-8, includes the snapshot, and
-prompts for the required output path. After validation, inline, fresh, and
+The runtime supplies every debate phase one bounded belonging-session envelope.
+Normal `/run` includes one bounded focus snapshot. `/run --fresh --output
+PART/PATH.md PROMPT` retains the story-session owner/core facts and focused
+conversation identity but omits the focused transcript; `/draft-file PATH`
+reads strict UTF-8, includes the snapshot, and prompts for the required output
+path. After validation, inline, fresh, and
 committed composer prompts appear once as
 `you → consensus [completed]> PROMPT`, followed by `Consensus request` with the
 safe output path, before debate progress. `/draft-file` emits no message copy of

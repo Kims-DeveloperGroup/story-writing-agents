@@ -173,6 +173,9 @@ _HistoryAppend: TypeAlias = Callable[
 _InputRenderer: TypeAlias = Callable[
     [InputPromptView, TerminalCapabilities], RenderedInputFrame
 ]
+_InputFrameProvider: TypeAlias = Callable[
+    [str, int, TerminalCapabilities], RenderedInputFrame
+]
 _StartupFrameRenderer: TypeAlias = Callable[
     [int, TerminalCapabilities, int], RenderedFrame
 ]
@@ -1299,6 +1302,7 @@ class RawTerminalDriver:
             palette_projector,
             palette_renderer,
             None,
+            None,
         )
 
     def read_reference_main_command_line(
@@ -1319,6 +1323,38 @@ class RawTerminalDriver:
             palette_projector,
             palette_renderer,
             reference_bindings,
+            None,
+        )
+
+    def read_contextual_main_command_line(
+        self,
+        prompt: str,
+        completion_provider: _CompletionProvider,
+        palette_projector: _PaletteProjector,
+        palette_renderer: _PaletteRenderer,
+        input_frame_provider: _InputFrameProvider,
+        reference_bindings: ReferenceInputBindings | None,
+    ) -> str:
+        """Read a main command beneath a buffer-aware semantic header."""
+
+        if not callable(input_frame_provider):
+            raise TypeError("input_frame_provider must be callable")
+        if (
+            reference_bindings is not None
+            and type(reference_bindings) is not ReferenceInputBindings
+        ):
+            raise TypeError(
+                "reference_bindings must be a ReferenceInputBindings or None"
+            )
+        if input_frame_provider is not None and not callable(input_frame_provider):
+            raise TypeError("input_frame_provider must be callable or None")
+        return self._read_main_command_line(
+            prompt,
+            completion_provider,
+            palette_projector,
+            palette_renderer,
+            reference_bindings,
+            input_frame_provider,
         )
 
     def _read_main_command_line(
@@ -1328,6 +1364,7 @@ class RawTerminalDriver:
         palette_projector: _PaletteProjector,
         palette_renderer: _PaletteRenderer,
         reference_bindings: ReferenceInputBindings | None,
+        input_frame_provider: _InputFrameProvider | None,
     ) -> str:
         """Implement main input with optional package-internal activation."""
 
@@ -1387,17 +1424,29 @@ class RawTerminalDriver:
                     palette_projector=palette_projector,
                     palette_renderer=palette_renderer,
                     reference_bindings=reference_bindings,
+                    input_frame_provider=input_frame_provider,
                     transient=True,
                 )
                 if configuration is not None
                 else (
                     self._read_reference_fallback(
-                        prompt,
+                        _fallback_contextual_prompt(
+                            prompt,
+                            input_frame_provider,
+                            capabilities,
+                        ),
                         capabilities,
                         reference_bindings,
                     )
                     if reference_bindings is not None
-                    else self._read_fallback_line(prompt, capabilities)
+                    else self._read_fallback_line(
+                        _fallback_contextual_prompt(
+                            prompt,
+                            input_frame_provider,
+                            capabilities,
+                        ),
+                        capabilities,
+                    )
                 )
             )
             self._append_completed_main_history(line)
@@ -2014,6 +2063,7 @@ class RawTerminalDriver:
         palette_projector: _PaletteProjector | None = None,
         palette_renderer: _PaletteRenderer | None = None,
         reference_bindings: ReferenceInputBindings | None = None,
+        input_frame_provider: _InputFrameProvider | None = None,
         transient: bool = False,
     ) -> str:
         """Read one exact buffer through one pure logical-state transition.
@@ -2047,6 +2097,12 @@ class RawTerminalDriver:
             raise TypeError("rendered_input must be a RenderedInputFrame or None")
         if rendered_input is not None and rendered_input.width != configuration.width:
             raise ValueError("rendered input and known width must match")
+        if input_frame_provider is not None and not callable(input_frame_provider):
+            raise TypeError("input_frame_provider must be callable or None")
+        if rendered_input is not None and input_frame_provider is not None:
+            raise ValueError(
+                "rendered_input and input_frame_provider are mutually exclusive"
+            )
         if (
             live_capabilities is not None
             and type(live_capabilities) is not TerminalCapabilities
@@ -2106,6 +2162,7 @@ class RawTerminalDriver:
                 palette_projector,
                 palette_renderer,
                 reference_bindings,
+                input_frame_provider,
             )
             if transient:
                 self._clear_live_display(display_state, line_break=False)
@@ -2116,6 +2173,8 @@ class RawTerminalDriver:
                     display_state,
                     line_state,
                     rendered_input,
+                    live_capabilities,
+                    input_frame_provider,
                 )
         except BaseException as failure:
             active_failure = failure
@@ -2146,6 +2205,7 @@ class RawTerminalDriver:
         palette_projector: _PaletteProjector | None,
         palette_renderer: _PaletteRenderer | None,
         reference_bindings: ReferenceInputBindings | None,
+        input_frame_provider: _InputFrameProvider | None,
     ) -> tuple[str, LineInputState]:
         """Edit one code-point buffer until submit, interrupt, EOF, or failure.
 
@@ -2167,6 +2227,7 @@ class RawTerminalDriver:
             live_capabilities,
             palette_projector,
             palette_renderer,
+            input_frame_provider,
         )
         while True:
             try:
@@ -2210,6 +2271,7 @@ class RawTerminalDriver:
                         live_capabilities,
                         palette_projector,
                         palette_renderer,
+                        input_frame_provider,
                     )
                 continue
 
@@ -2249,6 +2311,7 @@ class RawTerminalDriver:
                             live_capabilities,
                             palette_projector,
                             palette_renderer,
+                            input_frame_provider,
                         )
                 if not reprocess:
                     continue
@@ -2285,6 +2348,7 @@ class RawTerminalDriver:
                             live_capabilities,
                             palette_projector,
                             palette_renderer,
+                            input_frame_provider,
                         )
                     continue
                 display_state.escape_sequence = character
@@ -2320,6 +2384,7 @@ class RawTerminalDriver:
                     live_capabilities,
                     palette_projector,
                     palette_renderer,
+                    input_frame_provider,
                 )
 
     def _resolve_live_reference_outcome(
@@ -2786,6 +2851,7 @@ class RawTerminalDriver:
         live_capabilities: TerminalCapabilities | None,
         palette_projector: _PaletteProjector | None,
         palette_renderer: _PaletteRenderer | None,
+        input_frame_provider: _InputFrameProvider | None,
     ) -> int:
         """Replace the current editor area and return its visible cursor row.
 
@@ -2794,11 +2860,18 @@ class RawTerminalDriver:
         propagates for the owning read boundary to clear and restore resources.
         """
 
-        render_width = max(1, width - 1) if rendered_input is None else width
         line_state = _control_line_state(control_state)
+        active_input = _resolve_contextual_input_frame(
+            rendered_input,
+            input_frame_provider,
+            line_state,
+            live_capabilities,
+            width,
+        )
+        render_width = max(1, width - 1) if active_input is None else width
         input_lines, cursor_row, cursor_column = _editor_input_lines(
             prompt,
-            rendered_input,
+            active_input,
             line_state.buffer,
             line_state.cursor,
             render_width,
@@ -2888,6 +2961,8 @@ class RawTerminalDriver:
         display_state: _LiveEditorState,
         line_state: LineInputState,
         rendered_input: RenderedInputFrame | None,
+        live_capabilities: TerminalCapabilities | None,
+        input_frame_provider: _InputFrameProvider | None,
     ) -> int:
         """Remove suggestions and leave the submitted prompt line visible.
 
@@ -2896,10 +2971,17 @@ class RawTerminalDriver:
         owned by ``read_line``.
         """
 
-        render_width = max(1, width - 1) if rendered_input is None else width
+        active_input = _resolve_contextual_input_frame(
+            rendered_input,
+            input_frame_provider,
+            line_state,
+            live_capabilities,
+            width,
+        )
+        render_width = max(1, width - 1) if active_input is None else width
         input_lines, _cursor_row, _cursor_column = _editor_input_lines(
             prompt,
-            rendered_input,
+            active_input,
             line_state.buffer,
             len(line_state.buffer),
             render_width,
@@ -3731,6 +3813,51 @@ def _completed_text_or_raise(outcome: ControlOutcome | None) -> str | None:
     if outcome.kind is ControlOutcomeKind.CANCEL:
         raise _PromptCancelled
     raise ValueError(f"unsupported control outcome: {outcome.kind.value}")
+
+
+def _fallback_contextual_prompt(
+    prompt: str,
+    input_frame_provider: _InputFrameProvider | None,
+    capabilities: TerminalCapabilities,
+) -> str:
+    """Resolve one static accessible header before line-mode input begins."""
+
+    if input_frame_provider is None:
+        return prompt
+    frame = input_frame_provider("", 0, capabilities)
+    _require_contextual_input_frame(frame, capabilities.width)
+    return frame.plain_text
+
+
+def _resolve_contextual_input_frame(
+    rendered_input: RenderedInputFrame | None,
+    input_frame_provider: _InputFrameProvider | None,
+    line_state: LineInputState,
+    capabilities: TerminalCapabilities | None,
+    width: int,
+) -> RenderedInputFrame | None:
+    """Resolve and validate the exact semantic frame for one live buffer."""
+
+    if input_frame_provider is None:
+        return rendered_input
+    if capabilities is None:
+        raise ValueError("contextual input requires live capabilities")
+    frame = input_frame_provider(
+        line_state.buffer,
+        line_state.cursor,
+        capabilities,
+    )
+    _require_contextual_input_frame(frame, width)
+    return frame
+
+
+def _require_contextual_input_frame(frame: object, width: int) -> None:
+    """Require a dynamic frame to preserve the active terminal geometry."""
+
+    if type(frame) is not RenderedInputFrame:
+        raise TypeError("input_frame_provider must return a RenderedInputFrame")
+    if frame.width != width:
+        raise ValueError("contextual input frame width must match capabilities")
 
 
 def _editor_input_lines(

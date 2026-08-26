@@ -26,6 +26,12 @@ from story_writing_agents import (
 )
 from story_writing_agents.errors import WorkspaceFormatError
 from story_writing_agents.config import ConfigManager
+from story_writing_agents.models import (
+    BoundCoreDocumentIdentity,
+    StoryFocusedContext,
+    StoryFocusedContextMode,
+    StorySessionContext,
+)
 from story_writing_agents.prompts import PromptAssembler
 
 from tests.helpers import ScriptedBackend, initialized_workspace
@@ -104,6 +110,7 @@ class PromptAssemblerTests(unittest.TestCase):
                 "artifact_repository",
                 "backend_overrides",
                 "configuration_snapshot",
+                "provider_route_generations",
             ),
         )
         snapshot = ConfigManager(self.workspace).load_configuration_snapshot()
@@ -185,8 +192,11 @@ class PromptAssemblerTests(unittest.TestCase):
         self,
     ) -> None:
         request_fields = fields(AgentRequest)
-        self.assertEqual(request_fields[-1].name, "conversation_context")
-        self.assertIsNone(request_fields[-1].default)
+        self.assertEqual(
+            tuple(field.name for field in request_fields[-2:]),
+            ("conversation_context", "story_session_context"),
+        )
+        self.assertTrue(all(field.default is None for field in request_fields[-2:]))
         context = ConversationContextWindow(
             events=(),
             total_complete_turns=0,
@@ -213,6 +223,209 @@ class PromptAssemblerTests(unittest.TestCase):
             request.conversation_context,
             ConversationContextWindow,
         )
+        self.assertIsNone(request.story_session_context)
+
+        definition = self.assembler.build_definition(
+            session_id="prompt_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        enveloped = self.assembler.build_request(
+            session_id="prompt_session",
+            debate_id="prompt_debate",
+            agent_id=PLOT_ARCHITECT,
+            phase=Phase.AUDIT,
+            round_number=0,
+            revision_id="r0",
+            task="Audit the candidate.",
+            user_payload="payload",
+            conversation_context=context,
+            focused_context_mode=StoryFocusedContextMode.INCLUDED,
+            focused_conversation_id="conversation_a",
+            definition=definition,
+        )
+        self.assertIsNotNone(enveloped.story_session_context)
+        assert enveloped.story_session_context is not None
+        self.assertEqual(
+            enveloped.story_session_context.focused_context.conversation_id,
+            "conversation_a",
+        )
+        self.assertIs(
+            enveloped.story_session_context.focused_context.window,
+            context,
+        )
+
+    def test_story_session_envelope_modes_core_identities_and_schema_are_exact(
+        self,
+    ) -> None:
+        definition = self.assembler.build_definition(
+            session_id="prompt_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        empty_window = ConversationContextWindow(
+            events=(),
+            total_complete_turns=0,
+            retained_turns=0,
+            omitted_turns=0,
+            retained_utf8_bytes=0,
+            truncated=False,
+        )
+        common = {
+            "definition": definition,
+            "session_id": "prompt_session",
+            "agent_id": PLOT_ARCHITECT,
+        }
+        included = self.assembler.build_story_session_context(
+            **common,
+            focused_context_mode=StoryFocusedContextMode.INCLUDED,
+            focused_conversation_id="conversation_a",
+            conversation_context=empty_window,
+        )
+        fresh = self.assembler.build_story_session_context(
+            **common,
+            focused_context_mode=StoryFocusedContextMode.FRESH,
+            focused_conversation_id="conversation_a",
+        )
+        omitted = self.assembler.build_story_session_context(
+            **common,
+            focused_context_mode=StoryFocusedContextMode.OMITTED,
+        )
+        self.assertEqual(
+            tuple(field.name for field in fields(StorySessionContext)),
+            (
+                "schema_version",
+                "session_id",
+                "agent_id",
+                "owner_outcomes",
+                "focused_context",
+                "core_documents",
+            ),
+        )
+        base = {
+            "schema_version": 1,
+            "scope": "story_session",
+            "session_id": "prompt_session",
+            "agent_id": PLOT_ARCHITECT,
+            "owner_outcomes": {
+                "total_entries": 0,
+                "retained_entries": 0,
+                "omitted_entries": 0,
+                "retained_utf8_bytes": 0,
+                "truncated": False,
+                "entries": [],
+            },
+            "core_documents": [
+                {
+                    "path": reference.path.relative_to(
+                        self.workspace.root
+                    ).as_posix(),
+                    "sha256": reference.sha256,
+                }
+                for reference in definition.context_document_files
+            ],
+        }
+        self.assertEqual(
+            included.to_dict(),
+            {
+                **base,
+                "focused_context": {
+                    "mode": "included",
+                    "conversation_id": "conversation_a",
+                    "total_complete_turns": 0,
+                    "retained_turns": 0,
+                    "omitted_turns": 0,
+                    "retained_utf8_bytes": 0,
+                    "truncated": False,
+                    "events": [],
+                },
+            },
+        )
+        self.assertEqual(
+            fresh.to_dict(),
+            {
+                **base,
+                "focused_context": {
+                    "mode": "fresh",
+                    "conversation_id": "conversation_a",
+                },
+            },
+        )
+        self.assertEqual(
+            omitted.to_dict(),
+            {
+                **base,
+                "focused_context": {"mode": "omitted"},
+            },
+        )
+        for identity in included.core_documents:
+            self.assertRegex(identity.path, r"^core_documents/[^/]+$")
+            self.assertRegex(identity.sha256, r"^[0-9a-f]{64}$")
+
+        with self.assertRaisesRegex(ValueError, "requires a conversation ID"):
+            StoryFocusedContext(
+                mode=StoryFocusedContextMode.FRESH,
+                conversation_id=None,
+                window=None,
+            )
+        for path in (
+            "config/not-core.md",
+            "core_documents/nested/not-canonical.md",
+            "/core_documents/absolute.md",
+            "core_documents/../escape.md",
+        ):
+            with self.subTest(path=path):
+                with self.assertRaisesRegex(ValueError, "canonical"):
+                    BoundCoreDocumentIdentity(path, "a" * 64)
+        with self.assertRaisesRegex(ValueError, "lowercase hexadecimal"):
+            BoundCoreDocumentIdentity(
+                "core_documents/valid.md",
+                "A" * 64,
+            )
+
+    def test_route_generation_zero_is_legacy_and_positive_values_salt_identity(
+        self,
+    ) -> None:
+        legacy = self.assembler.build_definition(
+            session_id="prompt_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        zero = PromptAssembler(
+            self.workspace,
+            provider_route_generations={PLOT_ARCHITECT: 0},
+        ).build_definition(
+            session_id="prompt_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        one = PromptAssembler(
+            self.workspace,
+            provider_route_generations={PLOT_ARCHITECT: 1},
+        ).build_definition(
+            session_id="prompt_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        two = PromptAssembler(
+            self.workspace,
+            provider_route_generations={PLOT_ARCHITECT: 2},
+        ).build_definition(
+            session_id="prompt_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertEqual(legacy.fingerprint, zero.fingerprint)
+        self.assertEqual(len({legacy.fingerprint, one.fingerprint, two.fingerprint}), 3)
+        for changed in (one, two):
+            self.assertEqual(changed.backend, legacy.backend)
+            self.assertEqual(changed.system_prompt_file, legacy.system_prompt_file)
+            self.assertEqual(changed.persona_file, legacy.persona_file)
+            self.assertEqual(
+                changed.context_document_files,
+                legacy.context_document_files,
+            )
+        for invalid in (-1, True, 1.5):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(ValueError, "non-negative integers"):
+                    PromptAssembler(
+                        self.workspace,
+                        provider_route_generations={PLOT_ARCHITECT: invalid},
+                    )
 
     def test_definition_has_exact_reference_order_paths_hashes_and_language(
         self,

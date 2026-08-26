@@ -21,6 +21,7 @@ from .conversations import (
     validate_conversation_context_window,
 )
 from .errors import SessionIdError
+from .models import StorySessionContext
 
 
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
@@ -216,6 +217,7 @@ class ConversationRetrievalRequest:
     agent_id: str
     content: str
     context: ConversationContextWindow
+    story_session_context: StorySessionContext | None = None
 
     def __post_init__(self) -> None:
         """Validate identity, content, and context without I/O or durability."""
@@ -247,6 +249,22 @@ class ConversationRetrievalRequest:
                 excluded_turn_id=self.turn_id,
             ),
         )
+        if self.story_session_context is not None:
+            if type(self.story_session_context) is not StorySessionContext:
+                raise TypeError(
+                    "story_session_context must be a StorySessionContext or None"
+                )
+            if (
+                self.story_session_context.session_id != self.session_id
+                or self.story_session_context.agent_id != self.agent_id
+                or (
+                    self.story_session_context.focused_context.conversation_id
+                    is not None
+                    and self.story_session_context.focused_context.conversation_id
+                    != self.conversation_id
+                )
+            ):
+                raise ValueError("story-session context request identity mismatch")
 
 
 def _validate_action_common(

@@ -3,11 +3,52 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping, Protocol
 
 from .models import AgentDefinition
+
+
+class ExecutionValueSource(StrEnum):
+    """Authoritative origin of one effective provider execution value."""
+
+    LAUNCH_OVERRIDE = "launch_override"
+    AGENT_CONFIG = "agent_config"
+    SYSTEM_DEFAULT = "system_default"
+    BUILT_IN_DEFAULT = "built_in_default"
+    PROVIDER_DEFAULT = "provider_default"
+
+
+@dataclass(frozen=True, slots=True)
+class AgentExecutionProfile:
+    """One immutable set of values used for an exact agent invocation."""
+
+    agent_id: str
+    provider: str
+    provider_source: ExecutionValueSource
+    model: str | None
+    model_source: ExecutionValueSource
+    effort: str | None
+    effort_source: ExecutionValueSource
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.agent_id, str) or not self.agent_id:
+            raise ValueError("agent_id must be non-empty text")
+        if self.provider not in {"codex", "antigravity"}:
+            raise ValueError("provider must be codex or antigravity")
+        for field_name in (
+            "provider_source",
+            "model_source",
+            "effort_source",
+        ):
+            if not isinstance(getattr(self, field_name), ExecutionValueSource):
+                raise TypeError(f"{field_name} must be an ExecutionValueSource")
+        for field_name in ("model", "effort"):
+            value = getattr(self, field_name)
+            if value is not None and (not isinstance(value, str) or not value):
+                raise ValueError(f"{field_name} must be non-empty text or None")
 
 
 @dataclass(frozen=True)

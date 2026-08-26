@@ -10,7 +10,12 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from story_writing_agents.agents import LEAD_ORCHESTRATOR, PLOT_ARCHITECT
+from story_writing_agents.agents import (
+    AGENT_SPECS,
+    LEAD_ORCHESTRATOR,
+    PLOT_ARCHITECT,
+    ROSTER,
+)
 from story_writing_agents.cli_context import (
     load_default_conversation,
     save_default_conversation,
@@ -277,7 +282,6 @@ class InteractiveManagementGateAndDirectiveTests(
 
     def test_global_help_status_and_attachment_gates_are_provider_free(self) -> None:
         workspace = self.make_workspace()
-        before = _durable_file_snapshot(workspace)
         controller, _backend, callbacks, _store, _factory = self.make_controller(
             workspace,
             "/? status",
@@ -290,6 +294,16 @@ class InteractiveManagementGateAndDirectiveTests(
             "/quit",
             runtime=_REAL_RUNTIME,
         )
+        before = _durable_file_snapshot(workspace)
+        components: list[object] = []
+        real_write_component = (
+            terminal_module.InteractiveSemanticOutput.write_component
+        )
+
+        def capture_component(output, component):
+            components.append(component)
+            return real_write_component(output, component)
+
         with (
             mock.patch.object(subprocess, "Popen") as popen,
             mock.patch.object(subprocess, "run") as run,
@@ -299,6 +313,12 @@ class InteractiveManagementGateAndDirectiveTests(
                 controller._conversation_event_store,
                 "read",
             ) as transcript_read,
+            mock.patch.object(
+                terminal_module.InteractiveSemanticOutput,
+                "write_component",
+                autospec=True,
+                side_effect=capture_component,
+            ),
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
 
@@ -328,6 +348,36 @@ class InteractiveManagementGateAndDirectiveTests(
             rendered,
         )
         self.assertEqual(rendered.count("[error session_not_attached]"), 5)
+        execution_views = [
+            component
+            for component in components
+            if type(component) is terminal_module.ListView
+            and component.title == "Execution profiles"
+        ]
+        self.assertEqual(len(execution_views), 1)
+        execution_view = execution_views[0]
+        self.assertEqual(execution_view.total_count, len(ROSTER))
+        self.assertEqual(
+            tuple(record.identity for record in execution_view.items),
+            ROSTER,
+        )
+        for record, agent_id in zip(execution_view.items, ROSTER, strict=True):
+            with self.subTest(agent_id=agent_id):
+                self.assertEqual(record.title, AGENT_SPECS[agent_id].display_name)
+                self.assertEqual(
+                    tuple((field.label, field.value) for field in record.fields),
+                    (
+                        ("Provider", "Codex"),
+                        ("Provider source", "built in default"),
+                        ("Model", "provider default"),
+                        ("Model source", "provider default"),
+                        ("Effort", "provider default"),
+                        ("Effort source", "provider default"),
+                        ("Confirmation", "pending"),
+                        ("Thread", "not observed"),
+                        ("Route generation", "0"),
+                    ),
+                )
 
         attached = self.make_workspace()
         self.seed_session(attached, "session")
@@ -739,6 +789,14 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
             for sequence, turn_id, kind, sender, recipient, content in expected_events
         ]
         self.assertEqual(history_views, expected_history)
+        self.assertTrue(
+            all(
+                {field.label for field in view.items[0].fields}.isdisjoint(
+                    {"Provider", "Model", "Effort", "Confirmation", "Thread"}
+                )
+                for view in history_views
+            )
+        )
         for kind in ("user_message", "agent_reply", "runtime_error"):
             self.assertIn(f"Kind: {kind}", rendered)
         self.assertIn("Content:\n    unmatched", rendered)

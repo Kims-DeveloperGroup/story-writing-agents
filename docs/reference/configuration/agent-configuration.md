@@ -158,28 +158,45 @@ active-provider pending fields and preserve that agent's inactive-provider
 values. Editor labels remain Provider, Model, and Effort; Current/Pending
 confirmation stays provider-qualified so inactive values remain clear.
 Discovery writes no catalog data. Save persists only the selected opaque
-model/effort token or null, and the active backend keeps its snapshot until the
-next shell/backend construction.
+model/effort token or null. If a launch override supplies an effective
+provider/model/effort value, that field is disabled and read-only in the active
+shell because the override remains higher precedence.
 
-Opening `/settings` captures exact bytes for both configuration documents, a
-fully validated immutable pair, and the safe persona catalog. No configuration
-value is persisted before Save is confirmed; Escape or cancellation leaves the
-captured configuration bytes unchanged. After Save confirmation, Save
-revalidates every distinct effective provider, completes conversation-storage
-readiness and parity, then revalidates the persona catalog and complete pending
-pair under the storage coordinator lease. Both byte snapshots and the opening
-persona catalog must remain exact before the final write.
-It writes only changed documents, canonically, in system-defaults then
-agent-configs order. A failed write triggers reverse-order restoration of every
-attempted target, including the failing target, from its exact opening bytes;
-rollback uncertainty is reported separately. This is guarded coordination of
-two atomic per-file replacements, not a public API or cross-file transaction.
-Provider-native authentication can remain after cancellation, but Settings
-does not write a provider default separately. A missing default learned during
-Provider editing or the Save gate remains pending and becomes durable only
-through the final complete Save. Startup authentication and explicit global
-`/auth` remain outside `/settings` and retain their immediate absent-default
-durability policy.
+Opening `/settings` captures exact bytes for both configuration documents and
+the optional provider-route generation record, a fully validated immutable
+configuration pair, and the safe persona catalog. The system object is the
+canonical nine-field shape, including independent desired conversation
+storage. No configuration value is persisted before Save is confirmed; Escape
+or cancellation leaves the captured bytes unchanged. After confirmation, Save
+freshly authenticates every distinct effective provider, preflights staged
+adapters, prepares runtime quiescence, validates the candidate, coordinates
+storage readiness and fresh parity, and requires the opening facts to remain
+exact. A missing provider default learned inside Settings remains in the
+pending candidate and becomes durable only through this complete Save.
+
+The prepared boundary is exactly `config/system_defaults.json`,
+`config/agent_configs.json`, and optional
+`agent_states/orchestrator_state/provider_route_generations.json`. Changed
+targets are written in that order; a write failure triggers reverse-order
+restoration of every attempted target, including the failing target, from its
+exact opening bytes. After persistence, the staged backend and runtime snapshot
+become active in the current shell without a restart, except that desired
+conversation storage applies only when the next shell selects a bundle. The
+current controller/runtime storage bundle is unchanged. A storage-only save
+therefore reports the desired backend and `Changes apply to the next shell`;
+a mixed save separately reports the current-shell runtime activation and the
+next-shell storage change.
+
+A safe post-persist activation failure restores the exact configuration and
+route files and leaves the old runtime active. If the runtime cannot prove
+either restoration or the active generation, it reports `recovery_required`;
+stop using that shell and restart against the persisted state. Host installation,
+an empty provisioned SQLite database, or a lazy storage guard may remain after
+a later failure. This is guarded coordination, not a public save API or a
+general filesystem transaction. Provider-native authentication can also remain
+after cancellation, but Settings does not persist its missing provider default
+separately. Startup authentication and explicit global `/auth` remain outside
+`/settings` and retain their immediate absent-default durability policy.
 
 ## Role prompts
 
@@ -192,16 +209,17 @@ allowlisted core documents.
 Normal `story init` creates a missing prompt and preserves existing content.
 `story init --overwrite-prompts` replaces all four canonical prompt files,
 even if only one changed, while preserving every other existing file. One
-backend construction validates and snapshots the complete persisted system and
-agent configuration pair. That active backend and its runtime keep the snapshot
-for provider route, language, persona, debate-round, workspace fallbacks, and
-each agent's Codex model/reasoning and Antigravity model/effort values. Later
-valid edits, settings saves, or persisted corruption do not reconfigure it. A
-later backend construction reads and validates the then-persisted pair. Session
+backend construction validates and captures the complete persisted system and
+agent configuration pair. Direct on-disk edits have no watcher: a newly
+launched backend validates and reconciles them, while existing other shells
+retain their captured state. Confirmed `/settings` Save is the distinct
+current-shell hot-activation path for non-storage runtime settings described
+above; desired conversation storage remains a next-shell selection. Session
 language and persona overrides remain live, and explicit applicable
-CLI/constructor provider settings remain higher precedence, while referenced
-role, persona, and core-document content continues to participate in definition
-binding as documented.
+CLI/constructor provider settings remain higher precedence. Role, persona, and
+core-document content continues to follow its separate definition-snapshot and
+binding lifecycle; the settings hot-activation contract does not turn those
+files into watched live inputs.
 
 Exact route and model/effort precedence is in
 [Runtime overrides](runtime-overrides.md#resolution-precedence). Installation
