@@ -2514,12 +2514,29 @@ print(
         )
 
         process.send_text(("\x1b[B" * 4) + "\n")
-        process.wait_for_text("Select an agent to configure", after=mark)
+        agents_picker = process.wait_for_text(
+            "Select an agent to configure",
+            after=mark,
+        )
+        compact_agents = "".join(
+            re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", agents_picker).split()
+        )
+        self.assertIn(
+            "Plot&StructureArchitect—Current:"
+            "(Codex/providerdefault/providerdefault)",
+            compact_agents,
+        )
         process.send_text("\x1b[B\n")
-        process.wait_for_text(
+        initial_fields = process.wait_for_text(
             "Choose a provider, model, or effort setting",
             after=mark,
         )
+        compact_fields = "".join(
+            re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", initial_fields).split()
+        )
+        self.assertIn("Provider—Current:Codex", compact_fields)
+        self.assertIn("Model—Current:providerdefault", compact_fields)
+        self.assertIn("Effort—Current:providerdefault", compact_fields)
         model_picker_mark = process.output_mark()
         process.send_text("\x1b[B\n")
         model_picker = process.wait_for_text("GPT PTY", after=model_picker_mark)
@@ -2534,9 +2551,15 @@ print(
         self.assertIn("[selected] [highlighted] GPT PTY", model_result)
         model_parent_mark = process.output_mark()
         process.send_text("\n")
-        process.wait_for_text(
+        model_parent = process.wait_for_text(
             "Agent settings [Plot & Structure Architect]",
             after=model_parent_mark,
+        )
+        self.assertIn(
+            "Model—Pending:gpt-pty",
+            "".join(
+                re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", model_parent).split()
+            ),
         )
         effort_picker_mark = process.output_mark()
         process.send_text("\x1b[B\n")
@@ -2551,15 +2574,26 @@ print(
         self.assertIn("[selected] [highlighted] future_2", effort_result)
         effort_parent_mark = process.output_mark()
         process.send_text("\n")
-        process.wait_for_text(
+        effort_parent = process.wait_for_text(
             "Agent settings [Plot & Structure Architect]",
             after=effort_parent_mark,
         )
+        compact_effort_parent = "".join(
+            re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", effort_parent).split()
+        )
+        self.assertIn("Model—Pending:gpt-pty", compact_effort_parent)
+        self.assertIn("Effort—Pending:future_2", compact_effort_parent)
         agents_parent_mark = process.output_mark()
         process.send_text("\x1b")
-        process.wait_for_text(
+        agents_parent = process.wait_for_text(
             "Agents [focused] [open]",
             after=agents_parent_mark,
+        )
+        self.assertIn(
+            "Plot&StructureArchitect—Pending:(Codex/gpt-pty/future_2)",
+            "".join(
+                re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", agents_parent).split()
+            ),
         )
         settings_parent_mark = process.output_mark()
         process.send_text("\x1b")
@@ -2578,16 +2612,33 @@ print(
             after=save_commit_mark,
         )
         process.wait_for_text("story[lobby]> ", after=save_commit_mark)
+        result = process.text_after(save_commit_mark)
         self.assertIn(
             "Settingssavedandappliedtothisrunningshellnow.",
             "".join(
                 re.sub(
                     r"\x1b\[[0-9;]*[A-Za-z]",
                     "",
-                    saved,
+                    result,
                 ).split()
             ),
         )
+        compact_result = "".join(
+            re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", result).split()
+        )
+        self.assertIn(
+            "[profileschanged]1agentprofilechanged."
+            "Use/agentsforactivevaluesandconfirmation,"
+            "or/statusforthreadandsourcedetails.",
+            compact_result,
+        )
+        completion = result.rsplit("Settings [completed]", 1)[-1]
+        self.assertNotIn("Before", completion)
+        self.assertNotIn("Active now", completion)
+        self.assertNotIn("active roster", completion)
+        self.assertNotIn("thread reuse", completion)
+        self.assertNotIn("gpt-pty", completion)
+        self.assertNotIn("future_2", completion)
         self.assertIn(b"\x1b[", bytes(process.raw_bytes[mark:]))
         process.send_text("/quit\n\n")
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
@@ -2708,9 +2759,18 @@ print(
         process.send_text("/settings\n\n")
         process.wait_for_text("[highlighted] Language", after=mark)
         process.send_text(("\x1b[B" * 4) + "\n")
-        process.wait_for_text("Agents [focused] [open]", after=mark)
+        agents = process.wait_for_text("Agents [focused] [open]", after=mark)
+        self.assertIn(
+            "Plot&StructureArchitect—Current:"
+            "(Codex/providerdefault/providerdefault)",
+            "".join(agents.split()),
+        )
         process.send_text("\x1b[B\n")
-        process.wait_for_text("Agent settings", after=mark)
+        fields = process.wait_for_text("Agent settings", after=mark)
+        compact_fields = "".join(fields.split())
+        self.assertIn("Provider—Current:Codex", compact_fields)
+        self.assertIn("Model—Current:providerdefault", compact_fields)
+        self.assertIn("Effort—Current:providerdefault", compact_fields)
         process.send_text("\x1b[B\n")
         process.wait_for_text("GPT PTY", after=mark)
         self.assertNotRegex(
@@ -2731,9 +2791,24 @@ print(
         )
         returned_mark = process.output_mark()
         process.send_text("\x1b")
-        process.wait_for_text("Agent settings", after=returned_mark)
+        returned_fields = process.wait_for_text(
+            "Agent settings",
+            after=returned_mark,
+        )
+        self.assertIn(
+            "Model—Pending:gpt-pty",
+            "".join(returned_fields.split()),
+        )
         process.send_text("\x1b")
-        process.wait_for_text("Agents [focused] [open]", after=returned_mark)
+        returned_agents = process.wait_for_text(
+            "Agents [focused] [open]",
+            after=returned_mark,
+        )
+        self.assertIn(
+            "Plot&StructureArchitect—Pending:"
+            "(Codex/gpt-pty/providerdefault)",
+            "".join(returned_agents.split()),
+        )
         process.send_text("\x1b")
         returned_settings = process.wait_for_text(
             "[save required]",

@@ -474,9 +474,11 @@ options, so a configured Antigravity route requires `agy` on `PATH`.
 
 There is no `--codex-reasoning-effort` option or supported public
 system-default save API. Global `/settings` provides the installed interactive
-edit/save workflow; choose `Agents`, then an agent, then Provider, Model, or
-Effort. It supports Codex and Antigravity and edits only the active
-provider's per-agent model/effort while retaining inactive-provider values.
+edit/apply workflow; choose `Agents`, then an agent, then Provider, Model, or
+Effort. Each agent row shows its effective `(Provider/model/effort)` values,
+and each Provider, Model, and Effort row shows its effective value beside the
+field. It supports Codex and Antigravity and edits only the active provider's
+per-agent model/effort while retaining inactive-provider values.
 Entering Model or Effort discovers the pending effective provider afresh;
 opening Settings and provider navigation do not launch catalog commands.
 Provider option probing and Model/Effort discovery show transient progress on
@@ -687,19 +689,36 @@ shows exactly those five choices in that order, with no persistence action or
 save guidance. Dirty state appends `Apply Changes (*Required)` and then `Discard
 Changes`. Conversation storage independently offers Filesystem and SQLite for
 the next shell; it is not an agent-provider route. `Agents` opens a nested
-canonical-agent picker, then a provider-neutral Provider/Model/Effort picker.
-Current/Pending confirmations retain provider-qualified rows for both providers
-so inactive values remain identifiable.
+canonical-agent picker. Each canonical agent is followed by `Current:` or
+`Pending:` and its effective `(Provider/model/effort)` profile. Selecting an
+agent opens a provider-neutral Provider/Model/Effort picker; each field
+independently shows `Current:` or `Pending:` followed by its effective value.
+An omitted effective model or effort is displayed as `provider default`.
+Current/Pending confirmation panels retain provider-qualified rows for both
+providers so inactive stored values remain identifiable.
+
+The inline agent and field comparisons are against the active runtime profile,
+not a flattening of every configuration property. An edit to only an inactive
+provider's stored model or effort can therefore leave the effective agent and
+field descriptions `Current`; the warning-semantic pending-change count beside
+the top-level Agents choice still records that unsaved configuration change.
+Launch-override fields remain disabled and show the effective override value.
+These summaries use only already validated local Settings and backend state;
+rendering them does not authenticate, discover a provider catalog, persist a
+value, or invoke a story provider.
 
 At the Settings root, each one-level value, including Conversation storage,
 shows one effective description: neutral `Current` when unchanged or
 warning-semantic `Pending` when changed. Agents similarly warning-marks its
-explicit nonzero nested pending-change count. Dirty confirmation context keeps
-Current neutral and Pending warning. These roles reinforce the visible words
-and counts; warning suffix and description spans wrap independently, whole-row
-disabled/selected/highlighted precedence remains authoritative, and plain and
-`NO_COLOR` text remain unchanged so color is never required to identify state.
-The additive Choice description role remains package-internal.
+explicit nonzero nested pending-change count. In Agents and Agent settings,
+effective `Current` descriptions remain neutral and effective `Pending`
+descriptions use warning semantics. Dirty confirmation context keeps Current
+neutral and Pending warning. These roles reinforce the visible words and
+counts; warning suffix and description spans wrap independently, whole-row
+disabled/selected/highlighted precedence remains authoritative, and narrow,
+plain, fallback, and `NO_COLOR` output retain the complete textual values so
+color is never required to identify state. The additive Choice description
+role remains package-internal.
 
 Every retained Language, Persona, Maximum debate rounds, Conversation storage,
 Provider, Model, Custom model, and Effort editor always shows `Entered changes
@@ -810,14 +829,25 @@ against the persisted state.
 A non-storage Apply returns to the main prompt with
 `Settings saved and applied to this running shell now.` A storage-only Apply
 instead reports
-`Settings saved. Desired conversation storage is sqlite. Changes apply to the next shell.`
-when selecting SQLite (`filesystem` appears on the reverse change) and makes no
-live-activation claim. A mixed Apply emits both notices: runtime settings are
-active now, while the desired storage backend remains for the next shell. The
-current controller/runtime storage bundle never changes.
-Changed profiles remain `pending` until their first complete logical provider
-call succeeds. A provider switch requires a fresh target-provider thread; a
-same-provider model/effort change remains eligible for native-thread reuse.
+`Restart is required for sqlite.` when selecting SQLite (`filesystem` appears
+on the reverse change) and makes no live-activation claim. A mixed Apply emits
+both notices: runtime settings are active now, while the desired storage backend
+remains for the next shell. The current controller/runtime storage bundle never
+changes.
+
+When effective profiles changed, the completed Settings panel adds one compact
+`[profiles changed]` summary with the number of changed agent profiles. It does
+not repeat agent names, property values, Before/Active sections, unchanged
+roster status, pending-confirmation detail, or same-provider reuse eligibility.
+For one provider switch, the summary includes `The provider switch starts a
+fresh thread with story-session context on the next turn.` For multiple
+switches it includes `Provider switches start fresh threads with story-session
+context on the next turn.` Use `/agents` for active values and confirmation;
+use `/status` for thread and source details. Changed profiles remain `pending`
+until their first complete logical provider call succeeds. A provider switch
+still requires a fresh target-provider thread, and a same-provider model/effort
+change remains eligible for native-thread reuse even though the completion
+panel does not list that eligibility.
 A successfully persisted and activated dirty snapshot emits those success
 notices and returns to the main prompt. Cancellation, interruption,
 authentication or storage-readiness gating, declined installation,

@@ -311,6 +311,16 @@ def _provider_display_name(provider: str) -> str:
     raise ValueError("provider must be codex or antigravity")
 
 
+def _compact_execution_profile(profile: AgentExecutionProfile) -> str:
+    """Render effective provider/model/effort values for a settings choice."""
+
+    return (
+        f"({_provider_display_name(profile.provider)}/"
+        f"{_execution_value(profile.model)}/"
+        f"{_execution_value(profile.effort)})"
+    )
+
+
 def _confirmation_role(confirmation: str) -> SemanticRole:
     """Color confirmed green and pending yellow without color-only meaning."""
 
@@ -2829,69 +2839,29 @@ class InteractiveController:
                 )
             )
         if changed_agents:
-            items.extend(
-                (
-                    Section(
-                        "Before",
-                        tuple(
-                            self._execution_profile_field(
-                                before[agent_id],
-                                role=SemanticRole.MUTED,
-                            )
-                            for agent_id in changed_agents
-                        ),
-                    ),
-                    Section(
-                        "Active now",
-                        tuple(
-                            self._execution_profile_field(
-                                active[agent_id],
-                                role=SemanticRole.SUCCESS,
-                            )
-                            for agent_id in changed_agents
-                        ),
-                    ),
-                    Notice(
-                        (
-                            "Changed profiles are active for the next invocation "
-                            "and remain pending confirmation until that logical "
-                            "provider call succeeds."
-                        ),
-                        label="pending confirmation",
-                        role=SemanticRole.WARNING,
-                    ),
-                )
-            )
-        else:
-            items.append(
-                Notice(
-                    "The active provider, model, and effort roster is unchanged.",
-                    label="active roster",
-                    role=SemanticRole.MUTED,
-                )
-            )
-        if switched_agents:
-            names = ", ".join(
-                AGENT_SPECS[agent_id].display_name
-                for agent_id in switched_agents
+            changed_count = len(changed_agents)
+            profile_word = "profile" if changed_count == 1 else "profiles"
+            summary = f"{changed_count} agent {profile_word} changed."
+            if switched_agents:
+                if len(switched_agents) == 1:
+                    summary += (
+                        " The provider switch starts a fresh thread with "
+                        "story-session context on the next turn."
+                    )
+                else:
+                    summary += (
+                        " Provider switches start fresh threads with "
+                        "story-session context on the next turn."
+                    )
+            summary += (
+                " Use /agents for active values and confirmation, or /status "
+                "for thread and source details."
             )
             items.append(
                 Notice(
-                    (
-                        f"{names}: the next turn starts a fresh target-provider "
-                        "thread and rehydrates bounded context from the belonging "
-                        "story session."
-                    ),
-                    label="fresh thread",
+                    summary,
+                    label="profiles changed",
                     role=SemanticRole.WARNING,
-                )
-            )
-        elif changed_agents:
-            items.append(
-                Notice(
-                    "Same-provider profile changes remain eligible to reuse the native thread.",
-                    label="thread reuse",
-                    role=SemanticRole.SUCCESS,
                 )
             )
         self._semantic_output.write_component(
@@ -3347,6 +3317,37 @@ class InteractiveController:
         agent_highlight = ROSTER[0]
         field_highlights = {agent_id: "provider" for agent_id in ROSTER}
         while True:
+            agent_choices: list[Choice] = []
+            for agent_id in ROSTER:
+                pending_profile = self._backend.preview_execution_profile(
+                    state.pending,
+                    agent_id,
+                )
+                active_profile = self._backend.execution_profile(agent_id)
+                is_current = (
+                    pending_profile.provider,
+                    pending_profile.model,
+                    pending_profile.effort,
+                ) == (
+                    active_profile.provider,
+                    active_profile.model,
+                    active_profile.effort,
+                )
+                agent_choices.append(
+                    Choice(
+                        agent_id,
+                        AGENT_SPECS[agent_id].display_name,
+                        description=(
+                            f"{'Current' if is_current else 'Pending'}: "
+                            f"{_compact_execution_profile(pending_profile)}"
+                        ),
+                        description_role=(
+                            SemanticRole.DEFAULT
+                            if is_current
+                            else SemanticRole.WARNING
+                        ),
+                    )
+                )
             agent_outcome = self._picker_input.read_picker(
                 Prompt(
                     "Agents",
@@ -3355,10 +3356,7 @@ class InteractiveController:
                         "Settings."
                     ),
                 ),
-                tuple(
-                    Choice(agent_id, AGENT_SPECS[agent_id].display_name)
-                    for agent_id in ROSTER
-                ),
+                tuple(agent_choices),
                 highlighted_id=agent_highlight,
                 transient=True,
             )
@@ -3373,6 +3371,7 @@ class InteractiveController:
                     state.pending,
                     agent_id,
                 )
+                active_profile = self._backend.execution_profile(agent_id)
                 provider_masked = (
                     pending_profile.provider_source
                     is ExecutionValueSource.LAUNCH_OVERRIDE
@@ -3385,10 +3384,26 @@ class InteractiveController:
                     pending_profile.effort_source
                     is ExecutionValueSource.LAUNCH_OVERRIDE
                 )
+                provider_is_current = (
+                    pending_profile.provider == active_profile.provider
+                )
+                model_is_current = pending_profile.model == active_profile.model
+                effort_is_current = (
+                    pending_profile.effort == active_profile.effort
+                )
                 field_choices = (
                     Choice(
                         "provider",
                         "Provider",
+                        description=(
+                            f"{'Current' if provider_is_current else 'Pending'}: "
+                            f"{_provider_display_name(pending_profile.provider)}"
+                        ),
+                        description_role=(
+                            SemanticRole.DEFAULT
+                            if provider_is_current
+                            else SemanticRole.WARNING
+                        ),
                         enabled=not provider_masked,
                         disabled_reason=(
                             "Set by a launch override; read-only in this shell."
@@ -3399,6 +3414,15 @@ class InteractiveController:
                     Choice(
                         "model",
                         "Model",
+                        description=(
+                            f"{'Current' if model_is_current else 'Pending'}: "
+                            f"{_execution_value(pending_profile.model)}"
+                        ),
+                        description_role=(
+                            SemanticRole.DEFAULT
+                            if model_is_current
+                            else SemanticRole.WARNING
+                        ),
                         enabled=not model_masked,
                         disabled_reason=(
                             "Set by a launch override; read-only in this shell."
@@ -3409,6 +3433,15 @@ class InteractiveController:
                     Choice(
                         "reasoning",
                         "Effort",
+                        description=(
+                            f"{'Current' if effort_is_current else 'Pending'}: "
+                            f"{_execution_value(pending_profile.effort)}"
+                        ),
+                        description_role=(
+                            SemanticRole.DEFAULT
+                            if effort_is_current
+                            else SemanticRole.WARNING
+                        ),
                         enabled=not effort_masked,
                         disabled_reason=(
                             "Set by a launch override; read-only in this shell."

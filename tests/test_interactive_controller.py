@@ -4310,6 +4310,393 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertIn("codex(Changed)", compact)
         self.assertIn("pending-codex-model(Changed)", compact)
 
+    def test_settings_applied_result_is_compact_scope_truthful_and_context_aware(
+        self,
+    ) -> None:
+        def render_result(
+            *,
+            changed_indexes: tuple[int, ...],
+            switched_agents: tuple[str, ...],
+            live_settings_changed: bool,
+            storage_before: str,
+            storage_after: str,
+        ) -> str:
+            workspace = self.make_workspace()
+            controller, backend, callbacks = self.make_controller(
+                workspace,
+                terminal_width=320,
+            )
+            before = backend.execution_profiles()
+            active = list(before)
+            for index in changed_indexes:
+                profile = active[index]
+                if profile.agent_id in switched_agents:
+                    active[index] = replace(
+                        profile,
+                        provider=(
+                            "antigravity"
+                            if profile.provider == "codex"
+                            else "codex"
+                        ),
+                    )
+                else:
+                    active[index] = replace(
+                        profile,
+                        model=f"changed-model-{index}",
+                    )
+            controller._write_settings_applied_result(
+                before,
+                tuple(active),
+                switched_agents=switched_agents,
+                live_settings_changed=live_settings_changed,
+                storage_before=storage_before,
+                storage_after=storage_after,
+            )
+            return " ".join("".join(callbacks.records).split())
+
+        runtime_only = render_result(
+            changed_indexes=(0,),
+            switched_agents=(ROSTER[0],),
+            live_settings_changed=True,
+            storage_before="filesystem",
+            storage_after="filesystem",
+        )
+        self.assertIn(
+            "[saved and applied] Settings saved and applied to this running shell now.",
+            runtime_only,
+        )
+        self.assertNotIn("Restart is required", runtime_only)
+        self.assertIn(
+            "[profiles changed] 1 agent profile changed. The provider switch "
+            "starts a fresh thread with story-session context on the next turn. "
+            "Use /agents for active values and confirmation, or /status for "
+            "thread and source details.",
+            runtime_only,
+        )
+        self.assertNotIn("bounded context", runtime_only)
+        self.assertNotIn("rehydrated", runtime_only)
+        self.assertNotIn("belonging story session", runtime_only)
+
+        storage_only = render_result(
+            changed_indexes=(),
+            switched_agents=(),
+            live_settings_changed=False,
+            storage_before="filesystem",
+            storage_after="sqlite",
+        )
+        self.assertIn(
+            "[saved] Restart is required for sqlite.",
+            storage_only,
+        )
+        self.assertNotIn("[saved and applied]", storage_only)
+        self.assertNotIn("[profiles changed]", storage_only)
+
+        mixed = render_result(
+            changed_indexes=(0, 1),
+            switched_agents=(),
+            live_settings_changed=True,
+            storage_before="filesystem",
+            storage_after="sqlite",
+        )
+        self.assertIn("[saved and applied] Settings saved and applied", mixed)
+        self.assertIn("[saved] Restart is required for sqlite.", mixed)
+        self.assertIn("[profiles changed] 2 agent profiles changed.", mixed)
+
+        for rendered in (runtime_only, storage_only, mixed):
+            with self.subTest(rendered=rendered):
+                self.assertNotIn("Before", rendered)
+                self.assertNotIn("Active now", rendered)
+                self.assertNotIn("[active roster]", rendered)
+                self.assertNotIn("[thread reuse]", rendered)
+                self.assertNotIn("[pending confirmation]", rendered)
+                self.assertNotIn("provider default", rendered)
+                self.assertFalse(
+                    any(
+                        AGENT_SPECS[agent_id].display_name in rendered
+                        for agent_id in ROSTER
+                    )
+                )
+
+    def test_agent_and_field_choices_show_effective_current_and_pending_values(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        state = settings_module.load_settings_state(workspace)
+        catalog = ScriptedProviderCatalog(
+            ProviderCatalogDiscovery("codex", ProviderCatalogState.EMPTY)
+        )
+        auth = ScriptedAuthCoordinator(snapshots=())
+        controller, _backend, _callbacks = self.make_controller(
+            workspace,
+            auth_coordinator=auth,
+            provider_catalog=catalog,
+        )
+        commit = lambda value: terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.COMMIT,
+            text=value,
+        )
+        cancel = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.CANCEL
+        )
+
+        provider_pending = settings_module.update_agent_backend(
+            state,
+            PLOT_ARCHITECT,
+            "antigravity",
+        )
+        before_tree = _tree_snapshot(workspace.root)
+        with (
+            mock.patch.object(
+                terminal_module.InteractivePickerInput,
+                "read_picker",
+                autospec=True,
+                side_effect=(
+                    commit(PLOT_ARCHITECT),
+                    commit("provider"),
+                    cancel,
+                    cancel,
+                ),
+            ) as picker,
+            mock.patch.object(
+                InteractiveController,
+                "_edit_settings_agent_provider",
+                autospec=True,
+                return_value=(provider_pending, False),
+            ) as edit_provider,
+            mock.patch.object(subprocess, "Popen") as popen,
+            mock.patch.object(subprocess, "run") as run,
+            mock.patch.object(socket, "create_connection") as connect,
+        ):
+            updated, whole_cancel = controller._edit_settings_provider(state)
+
+        self.assertFalse(whole_cancel)
+        self.assertEqual(updated, provider_pending)
+        edit_provider.assert_called_once_with(controller, state, PLOT_ARCHITECT)
+        self.assertEqual(_tree_snapshot(workspace.root), before_tree)
+        popen.assert_not_called()
+        run.assert_not_called()
+        connect.assert_not_called()
+        self.assertEqual(auth.events, [])
+        self.assertEqual(catalog.events, [])
+
+        initial_agents = picker.call_args_list[0].args[2]
+        self.assertEqual(
+            tuple(choice.identity for choice in initial_agents),
+            ROSTER,
+        )
+        self.assertEqual(
+            tuple(choice.label for choice in initial_agents),
+            tuple(AGENT_SPECS[agent_id].display_name for agent_id in ROSTER),
+        )
+        self.assertEqual(
+            tuple(choice.description for choice in initial_agents),
+            ("Current: (Codex/provider default/provider default)",) * len(ROSTER),
+        )
+        self.assertTrue(
+            all(
+                choice.description_role is terminal_module.SemanticRole.DEFAULT
+                for choice in initial_agents
+            )
+        )
+
+        initial_fields = picker.call_args_list[1].args[2]
+        self.assertEqual(
+            tuple((choice.identity, choice.label) for choice in initial_fields),
+            (
+                ("provider", "Provider"),
+                ("model", "Model"),
+                ("reasoning", "Effort"),
+            ),
+        )
+        self.assertEqual(
+            tuple(choice.description for choice in initial_fields),
+            (
+                "Current: Codex",
+                "Current: provider default",
+                "Current: provider default",
+            ),
+        )
+
+        redrawn_fields = picker.call_args_list[2].args[2]
+        self.assertEqual(
+            tuple(choice.description for choice in redrawn_fields),
+            (
+                "Pending: Antigravity",
+                "Current: provider default",
+                "Current: provider default",
+            ),
+        )
+        self.assertEqual(
+            tuple(choice.description_role for choice in redrawn_fields),
+            (
+                terminal_module.SemanticRole.WARNING,
+                terminal_module.SemanticRole.DEFAULT,
+                terminal_module.SemanticRole.DEFAULT,
+            ),
+        )
+        redrawn_agents = picker.call_args_list[3].args[2]
+        plot_choice = next(
+            choice
+            for choice in redrawn_agents
+            if choice.identity == PLOT_ARCHITECT
+        )
+        self.assertEqual(
+            plot_choice.description,
+            "Pending: (Antigravity/provider default/provider default)",
+        )
+        self.assertIs(
+            plot_choice.description_role,
+            terminal_module.SemanticRole.WARNING,
+        )
+
+        model_effort_pending = settings_module.update_agent_codex_model(
+            state,
+            PLOT_ARCHITECT,
+            "gpt-pending",
+        )
+        model_effort_pending = (
+            settings_module.update_agent_codex_reasoning_effort(
+                model_effort_pending,
+                PLOT_ARCHITECT,
+                "future_2",
+            )
+        )
+        with mock.patch.object(
+            terminal_module.InteractivePickerInput,
+            "read_picker",
+            autospec=True,
+            side_effect=(commit(PLOT_ARCHITECT), cancel, cancel),
+        ) as pending_picker:
+            unchanged, whole_cancel = controller._edit_settings_provider(
+                model_effort_pending
+            )
+        self.assertFalse(whole_cancel)
+        self.assertEqual(unchanged, model_effort_pending)
+        pending_fields = pending_picker.call_args_list[1].args[2]
+        self.assertEqual(
+            tuple(choice.description for choice in pending_fields),
+            (
+                "Current: Codex",
+                "Pending: gpt-pending",
+                "Pending: future_2",
+            ),
+        )
+        self.assertEqual(
+            tuple(choice.description_role for choice in pending_fields),
+            (
+                terminal_module.SemanticRole.DEFAULT,
+                terminal_module.SemanticRole.WARNING,
+                terminal_module.SemanticRole.WARNING,
+            ),
+        )
+
+        inactive_only = settings_module.update_agent_antigravity_model(
+            state,
+            PLOT_ARCHITECT,
+            "inactive-agy-model",
+        )
+        with mock.patch.object(
+            terminal_module.InteractivePickerInput,
+            "read_picker",
+            autospec=True,
+            return_value=cancel,
+        ) as inactive_picker:
+            unchanged, whole_cancel = controller._edit_settings_provider(
+                inactive_only
+            )
+        self.assertFalse(whole_cancel)
+        self.assertEqual(unchanged, inactive_only)
+        inactive_plot = next(
+            choice
+            for choice in inactive_picker.call_args.args[2]
+            if choice.identity == PLOT_ARCHITECT
+        )
+        self.assertEqual(
+            inactive_plot.description,
+            "Current: (Codex/provider default/provider default)",
+        )
+        self.assertIs(
+            inactive_plot.description_role,
+            terminal_module.SemanticRole.DEFAULT,
+        )
+
+    def test_launch_override_fields_stay_disabled_and_show_effective_values(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        backend = AgentBackend(
+            workspace,
+            executable=sys.executable,
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
+            antigravity_executable=sys.executable,
+            antigravity_model="agy-override",
+            antigravity_effort="high",
+        )
+        self.addCleanup(backend.close)
+        catalog = ScriptedProviderCatalog(
+            ProviderCatalogDiscovery("antigravity", ProviderCatalogState.EMPTY)
+        )
+        auth = ScriptedAuthCoordinator(snapshots=())
+        controller, _backend, _callbacks = self.make_controller(
+            workspace,
+            backend=backend,
+            auth_coordinator=auth,
+            provider_catalog=catalog,
+        )
+        commit = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.COMMIT,
+            text=PLOT_ARCHITECT,
+        )
+        cancel = terminal_module.ControlOutcome(
+            terminal_module.ControlOutcomeKind.CANCEL
+        )
+        with (
+            mock.patch.object(
+                terminal_module.InteractivePickerInput,
+                "read_picker",
+                autospec=True,
+                side_effect=(commit, cancel, cancel),
+            ) as picker,
+            mock.patch.object(subprocess, "Popen") as popen,
+            mock.patch.object(subprocess, "run") as run,
+            mock.patch.object(socket, "create_connection") as connect,
+        ):
+            unchanged, whole_cancel = controller._edit_settings_provider(
+                settings_module.load_settings_state(workspace)
+            )
+
+        self.assertFalse(whole_cancel)
+        self.assertEqual(
+            unchanged,
+            settings_module.load_settings_state(workspace),
+        )
+        fields = picker.call_args_list[1].args[2]
+        self.assertEqual(
+            tuple(choice.description for choice in fields),
+            (
+                "Current: Antigravity",
+                "Current: agy-override",
+                "Current: high",
+            ),
+        )
+        self.assertEqual(tuple(choice.enabled for choice in fields), (False,) * 3)
+        self.assertEqual(
+            tuple(choice.disabled_reason for choice in fields),
+            (
+                "Set by a launch override; read-only in this shell.",
+            )
+            * 3,
+        )
+        self.assertEqual(
+            tuple(choice.description_role for choice in fields),
+            (terminal_module.SemanticRole.DEFAULT,) * 3,
+        )
+        self.assertEqual(auth.events, [])
+        self.assertEqual(catalog.events, [])
+        popen.assert_not_called()
+        run.assert_not_called()
+        connect.assert_not_called()
+
     def test_settings_open_is_exact_five_item_discovery_free_snapshot(self) -> None:
         workspace = self.make_workspace()
         before = _tree_snapshot(workspace.root)
