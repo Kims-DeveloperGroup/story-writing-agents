@@ -238,8 +238,8 @@ _SETTINGS_CUSTOM_MODEL_ID = "settings:model:custom"
 _SETTINGS_EFFORT_ID_PREFIX = "settings:effort:"
 _SETTINGS_CURRENT_EFFORT_ID = "settings:effort:current-compatibility"
 _SETTINGS_VALUE_SAVE_GUIDANCE = (
-    "Entered changes remain pending in memory and are not saved; choose Save in "
-    "Settings to persist them."
+    "Entered changes remain pending in memory and are not saved; choose Apply "
+    "Changes in Settings to persist them."
 )
 _SETTINGS_UNARMED = object()
 
@@ -363,7 +363,7 @@ def _settings_pending_save_notice(state: SettingsState) -> Notice | None:
     if state.pending == state.baseline.configuration:
         return None
     return Notice(
-        "Choose Save to persist pending changes",
+        "Choose Apply Changes to persist pending changes",
         label="save required",
         role=SemanticRole.WARNING,
         state=ViewState.IDLE,
@@ -2210,7 +2210,7 @@ class InteractiveController:
             )
             return
 
-        top_highlight = "language"
+        top_highlight: str | None = "language"
         while True:
             dirty = state.pending != state.baseline.configuration
             projection = _settings_projection(state)
@@ -2289,23 +2289,31 @@ class InteractiveController:
                         else SemanticRole.DEFAULT
                     ),
                 ),
-                Choice(
-                    "save",
-                    "Save",
-                    warning_suffix="(*Required)" if dirty else None,
-                ),
-                Choice(
-                    "cancel",
-                    "Cancel",
-                    description=(
-                        "Pending changes will be discarded." if dirty else None
-                    ),
-                ),
             )
+            if dirty:
+                choices += (
+                    Choice(
+                        "save",
+                        "Apply Changes",
+                        warning_suffix="(*Required)",
+                    ),
+                    Choice(
+                        "cancel",
+                        "Discard Changes",
+                        description="Pending changes will be discarded.",
+                    ),
+                )
+            if top_highlight not in {choice.identity for choice in choices}:
+                top_highlight = None
             outcome = self._picker_input.read_picker(
                 Prompt(
                     "Settings",
-                    instruction="Choose a setting to edit, save, or cancel.",
+                    instruction=(
+                        "Choose a setting to edit, apply changes, or discard "
+                        "changes."
+                        if dirty
+                        else "Choose a setting to edit."
+                    ),
                 ),
                 choices,
                 highlighted_id=top_highlight,
@@ -2423,17 +2431,18 @@ class InteractiveController:
                 if status.state.value == "unauthenticated":
                     message = (
                         f"{provider_name} is not authenticated. Complete "
-                        "native sign-in, then retry Save."
+                            "native sign-in, then retry Apply Changes."
                     )
                 elif status.state.value == "unavailable":
                     message = (
                         f"{provider_name} CLI is unavailable. Install it, "
-                        "then retry Save."
+                        "then retry Apply Changes."
                     )
                 elif status.state.value == "indeterminate":
                     message = (
                         f"{provider_name} authentication could not be "
-                        "confirmed. Check the native CLI, then retry Save."
+                        "confirmed. Check the native CLI, then retry Apply "
+                        "Changes."
                     )
                 else:
                     raise _ControllerAbort(
@@ -2486,11 +2495,15 @@ class InteractiveController:
         self._semantic_output.write_component(self._settings_panel(state))
         outcome = self._picker_input.read_picker(
             Prompt(
-                "Save settings?" if action == "save" else "Cancel settings?",
-                instruction=(
-                    "Choose YES to save, or NO to return."
+                (
+                    "Apply changes?"
                     if action == "save"
-                    else "Choose YES to cancel, or NO to return."
+                    else "Discard changes?"
+                ),
+                instruction=(
+                    "Choose YES to apply changes, or NO to return."
+                    if action == "save"
+                    else "Choose YES to discard changes, or NO to return."
                 ),
             ),
             (Choice("yes", "YES"), Choice("no", "NO")),
@@ -3438,7 +3451,8 @@ class InteractiveController:
                 Section("Current", current_fields),
                 Section("Pending", pending_fields),
                 Notice(
-                    "Changed values apply only to the next shell after Save.",
+                    "Changed values apply only to the next shell after Apply "
+                    "Changes.",
                     label="activation",
                     role=SemanticRole.MUTED,
                 ),

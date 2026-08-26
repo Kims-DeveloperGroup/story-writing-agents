@@ -2224,11 +2224,11 @@ print(
             re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", returned).split()
         )
         self.assertIn("Maximumdebaterounds—Pending:2", compact_returned)
-        self.assertIn("ChooseSavetopersistpendingchanges", compact_returned)
+        self.assertIn("ChooseApplyChangestopersistpendingchanges", compact_returned)
 
         cancel_mark = process.output_mark()
         process.send_text("\x1b")
-        process.wait_for_text("Cancel settings?", after=cancel_mark)
+        process.wait_for_text("Discard changes?", after=cancel_mark)
         process.send_text("\n")
         discarded = process.wait_for_text("story[lobby]> ", after=cancel_mark)
         self.assertEqual(
@@ -2267,7 +2267,7 @@ print(
                 mark = process.output_mark()
                 process.send_text("/settings\n\n")
                 opened = process.wait_for_text(
-                    "Choose a setting to edit, save, or cancel.",
+                    "Choose a setting to edit.",
                     after=mark,
                 )
                 self.assertIn("Settings [focused] [open]", opened)
@@ -2308,7 +2308,7 @@ print(
                 self.assertIn(expected_language, language_result)
                 self.assertIn(
                     "Enteredchangesremainpendinginmemoryandarenotsaved;"
-                    "chooseSaveinSettingstopersistthem.",
+                    "chooseApplyChangesinSettingstopersistthem.",
                     "".join(
                         re.sub(
                             r"\x1b\[[0-9;]*[A-Za-z]",
@@ -2324,7 +2324,7 @@ print(
                     after=language_mark,
                 )
                 self.assertIn(
-                    "Save (*Required)",
+                    "Apply Changes (*Required)",
                     re.sub(
                         r"\x1b\[[0-9;]*[A-Za-z]",
                         "",
@@ -2332,11 +2332,11 @@ print(
                     ),
                 )
                 self.assertIn(
-                    b"Save \x1b[33m(*Required)\x1b[0m",
+                    b"Apply Changes \x1b[33m(*Required)\x1b[0m",
                     bytes(process.raw_bytes[language_mark:]),
                 )
                 self.assertIn(
-                    "ChooseSavetopersistpendingchanges",
+                    "ChooseApplyChangestopersistpendingchanges",
                     "".join(
                         re.sub(
                             r"\x1b\[[0-9;]*[A-Za-z]",
@@ -2430,7 +2430,7 @@ print(
         mark = process.output_mark()
         process.send_text("/settings\n\n")
         process.wait_for_text(
-            "Choose a setting to edit, save, or cancel.",
+            "Choose a setting to edit.",
             after=mark,
         )
 
@@ -2491,7 +2491,7 @@ print(
 
         save_prompt_mark = process.output_mark()
         process.send_text("\x1b[B\n")
-        process.wait_for_text("Save settings?", after=save_prompt_mark)
+        process.wait_for_text("Apply changes?", after=save_prompt_mark)
         save_commit_mark = process.output_mark()
         process.send_text("\n")
         saved = process.wait_for_text(
@@ -2548,7 +2548,7 @@ print(
         normalized = "".join(process.normalized_text.split())
         self.assertIn(
             "Enteredchangesremainpendinginmemoryandarenotsaved;"
-            "chooseSaveinSettingstopersistthem.",
+            "chooseApplyChangesinSettingstopersistthem.",
             normalized,
         )
         returned_mark = process.output_mark()
@@ -2562,9 +2562,11 @@ print(
             after=returned_mark,
         )
         self.assertIn("[save required]", returned_settings)
-        self.assertIn("Save (*Required)", returned_settings)
+        compact_returned = "".join(returned_settings.split())
+        self.assertIn("ApplyChanges(*Required)", compact_returned)
+        self.assertNotIn("Save(*Required)", compact_returned)
         self.assertIn(
-            "ChooseSavetopersistpendingchanges",
+            "ChooseApplyChangestopersistpendingchanges",
             "".join(process.normalized_text.split()),
         )
         self.assertIn(
@@ -2574,7 +2576,7 @@ print(
         cancelled_mark = process.output_mark()
         process.send_text("\x1b")
         confirmation = process.wait_for_text(
-            "Cancel settings?",
+            "Discard changes?",
             after=cancelled_mark,
         )
         self.assertNotRegex(
@@ -2616,10 +2618,14 @@ print(
                     before = _durable_tree(self.workspace.root)
                     mark = process.output_mark()
                     process.send_text("/settings\n\n")
-                    process.wait_for_text(
+                    opened = process.wait_for_text(
                         "[highlighted] Language",
                         after=mark,
                     )
+                    self.assertNotIn("Apply Changes", opened)
+                    self.assertNotIn("Discard Changes", opened)
+                    self.assertNotIn("[available] Save", opened)
+                    self.assertNotIn("[available] Cancel", opened)
                     event_mark = process.output_mark()
                     if event_name == "escape":
                         process.send_text("\x1b")
@@ -2656,7 +2662,7 @@ print(
         process.wait_for_text("story[lobby]> ")
         mark = process.output_mark()
         process.send_line("/settings")
-        process.wait_for_text("6. [available] Cancel", after=mark)
+        process.wait_for_text("4. [available] Agents", after=mark)
         process.send_line("4")
         process.wait_for_text("Agents > ", after=mark)
         process.send_line("2")
@@ -2677,7 +2683,7 @@ print(
         )
         self.assertIn(
             "Enteredchangesremainpendinginmemoryandarenotsaved;"
-            "chooseSaveinSettingstopersistthem.",
+            "chooseApplyChangesinSettingstopersistthem.",
             "".join(entered.split()),
         )
         process.send_text("\x1b\n")
@@ -2688,13 +2694,18 @@ print(
         process.wait_for_text("Agents > ", after=model_mark)
         process.send_line("/cancel")
         returned_settings = process.wait_for_text(
-            "6. [available] Cancel",
+            "6. [available] Discard Changes",
             after=model_mark,
         )
         self.assertIn("[save required]", returned_settings)
-        self.assertIn("5. [available] Save (*Required)", returned_settings)
+        compact_returned = "".join(returned_settings.split())
         self.assertIn(
-            "ChooseSavetopersistpendingchanges",
+            "5.[available]ApplyChanges(*Required)",
+            compact_returned,
+        )
+        self.assertNotIn("5.[available]Save", compact_returned)
+        self.assertIn(
+            "ChooseApplyChangestopersistpendingchanges",
             "".join(returned_settings.split()),
         )
         process.send_line("5")
@@ -2925,7 +2936,7 @@ print(
 
         settings_mark = process.output_mark()
         process.send_line("/settings")
-        process.wait_for_text("6. [available] Cancel", after=settings_mark)
+        process.wait_for_text("4. [available] Agents", after=settings_mark)
         process.send_line("1")
         process.wait_for_text("Language >", after=settings_mark)
         process.send_line("2")
@@ -2934,10 +2945,10 @@ print(
             after=settings_mark,
         )
         process.send_line("/cancel")
-        process.wait_for_text("Save (*Required)", after=settings_mark)
+        process.wait_for_text("Apply Changes (*Required)", after=settings_mark)
         self._set_auth_state(codex="unauthenticated")
         process.send_line("5")
-        process.wait_for_text("Save settings?", after=settings_mark)
+        process.wait_for_text("Apply changes?", after=settings_mark)
         process.send_line("1")
         process.wait_for_text("Provider authentication", after=settings_mark)
         process.send_line("1")

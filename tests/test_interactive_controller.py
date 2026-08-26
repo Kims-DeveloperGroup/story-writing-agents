@@ -3312,8 +3312,8 @@ class ControllerSettingsTests(ControllerTestCase):
     """Verify isolated settings UI, validation, persistence, and cancellation."""
 
     VALUE_SAVE_GUIDANCE = (
-        "Entered changes remain pending in memory and are not saved; choose Save in "
-        "Settings to persist them."
+        "Entered changes remain pending in memory and are not saved; choose Apply "
+        "Changes in Settings to persist them."
     )
 
     def assert_value_save_guidance(self, instruction: str) -> None:
@@ -3325,7 +3325,7 @@ class ControllerSettingsTests(ControllerTestCase):
     @staticmethod
     def expected_pending_save_notice() -> terminal_module.Notice:
         return terminal_module.Notice(
-            "Choose Save to persist pending changes",
+            "Choose Apply Changes to persist pending changes",
             label="save required",
             role=terminal_module.SemanticRole.WARNING,
             state=terminal_module.ViewState.IDLE,
@@ -3405,7 +3405,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 terminal_module.Section("Current", current_fields),
                 terminal_module.Section("Pending", pending_fields),
                 terminal_module.Notice(
-                    "Changed values apply only to the next shell after Save.",
+                    "Changed values apply only to the next shell after Apply Changes.",
                     label="activation",
                     role=terminal_module.SemanticRole.MUTED,
                 ),
@@ -3937,6 +3937,53 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         self.assertEqual(
             tuple(
+                tuple(choice.identity for choice in call.args[2])
+                for call in top_level_calls
+            ),
+            (
+                ("language", "persona", "max_debate_rounds", "providers"),
+                (
+                    "language",
+                    "persona",
+                    "max_debate_rounds",
+                    "providers",
+                    "save",
+                    "cancel",
+                ),
+                ("language", "persona", "max_debate_rounds", "providers"),
+                ("language", "persona", "max_debate_rounds", "providers"),
+            ),
+        )
+        self.assertEqual(
+            tuple(
+                tuple(choice.label for choice in call.args[2])
+                for call in top_level_calls
+            ),
+            (
+                ("Language", "Persona", "Maximum debate rounds", "Agents"),
+                (
+                    "Language",
+                    "Persona",
+                    "Maximum debate rounds",
+                    "Agents",
+                    "Apply Changes",
+                    "Discard Changes",
+                ),
+                ("Language", "Persona", "Maximum debate rounds", "Agents"),
+                ("Language", "Persona", "Maximum debate rounds", "Agents"),
+            ),
+        )
+        self.assertEqual(
+            tuple(call.args[1].instruction for call in top_level_calls),
+            (
+                "Choose a setting to edit.",
+                "Choose a setting to edit, apply changes, or discard changes.",
+                "Choose a setting to edit.",
+                "Choose a setting to edit.",
+            ),
+        )
+        self.assertEqual(
+            tuple(
                 tuple(choice.description for choice in call.args[2])
                 for call in top_level_calls
             ),
@@ -3945,8 +3992,6 @@ class ControllerSettingsTests(ControllerTestCase):
                     f"Current: {baseline}",
                     "Current: default_kim_eun_hee",
                     "Current: 1",
-                    None,
-                    None,
                     None,
                 ),
                 (
@@ -3962,15 +4007,11 @@ class ControllerSettingsTests(ControllerTestCase):
                     "Current: default_kim_eun_hee",
                     "Current: 1",
                     None,
-                    None,
-                    None,
                 ),
                 (
                     f"Current: {baseline}",
                     "Current: default_kim_eun_hee",
                     "Current: 1",
-                    None,
-                    None,
                     None,
                 ),
             ),
@@ -3983,22 +4024,23 @@ class ControllerSettingsTests(ControllerTestCase):
                 for call in top_level_calls
             ),
             (
-                (default, default, default, default, default, default),
+                (default, default, default, default),
                 (warning, default, default, default, default, default),
-                (default, default, default, default, default, default),
-                (default, default, default, default, default, default),
+                (default, default, default, default),
+                (default, default, default, default),
             ),
         )
         self.assertEqual(
             tuple(
-                next(
-                    choice
-                    for choice in call.args[2]
-                    if choice.identity == "save"
-                ).warning_suffix
+                tuple(choice.warning_suffix for choice in call.args[2])
                 for call in top_level_calls
             ),
-            (None, "(*Required)", None, None),
+            (
+                (None, None, None, None),
+                (None, None, None, None, "(*Required)", None),
+                (None, None, None, None),
+                (None, None, None, None),
+            ),
         )
         self.assertEqual(
             sum(
@@ -4017,7 +4059,7 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertEqual(_tree_snapshot(workspace.root), before)
         save.assert_not_called()
         self.assertNotIn("[saved] Settings saved.", "".join(callbacks.records))
-        self.assertEqual(top_level_calls[-1].kwargs["highlighted_id"], "save")
+        self.assertIsNone(top_level_calls[-1].kwargs["highlighted_id"])
 
     def test_agents_root_description_counts_every_ordered_pending_agent_value(
         self,
@@ -4151,7 +4193,7 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertIn("codex(Changed)", compact)
         self.assertIn("pending-codex-model(Changed)", compact)
 
-    def test_settings_open_is_exact_six_item_discovery_free_snapshot(self) -> None:
+    def test_settings_open_is_exact_four_item_discovery_free_snapshot(self) -> None:
         workspace = self.make_workspace()
         before = _tree_snapshot(workspace.root)
         catalog = ScriptedProviderCatalog(
@@ -4163,7 +4205,7 @@ class ControllerSettingsTests(ControllerTestCase):
         controller, backend, callbacks = self.make_controller(
             workspace,
             "/settings",
-            "6",
+            "/cancel",
             "/quit",
             provider_catalog=catalog,
             terminal_width=120,
@@ -4205,8 +4247,6 @@ class ControllerSettingsTests(ControllerTestCase):
                 "persona",
                 "max_debate_rounds",
                 "providers",
-                "save",
-                "cancel",
             ),
         )
         self.assertEqual(
@@ -4216,8 +4256,6 @@ class ControllerSettingsTests(ControllerTestCase):
                 "Persona",
                 "Maximum debate rounds",
                 "Agents",
-                "Save",
-                "Cancel",
             ),
         )
         self.assertEqual(
@@ -4226,8 +4264,6 @@ class ControllerSettingsTests(ControllerTestCase):
                 "Current: KO",
                 "Current: default_kim_eun_hee",
                 "Current: 1",
-                None,
-                None,
                 None,
             ),
         )
@@ -4240,8 +4276,11 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertTrue(
             all(choice.warning_suffix is None for choice in settings_call.args[2])
         )
+        self.assertEqual(settings_call.args[1].instruction, "Choose a setting to edit.")
+        self.assertNotIn("Save", callbacks.prompts[1])
+        self.assertNotIn("[available] Cancel", callbacks.prompts[1])
         self.assertFalse(
-            any("Cancel settings?" in prompt for prompt in callbacks.prompts)
+            any("Discard changes?" in prompt for prompt in callbacks.prompts)
         )
         self.assertEqual(
             "".join(callbacks.records).count(
@@ -5673,7 +5712,7 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertEqual(picker_call.kwargs["highlighted_id"], "yes")
         self.assertTrue(picker_call.kwargs["transient"])
         confirmation_prompt = next(
-            prompt for prompt in callbacks.prompts if "Save settings?" in prompt
+            prompt for prompt in callbacks.prompts if "Apply changes?" in prompt
         )
         self.assertIn("YES", confirmation_prompt)
         expected_record = f"{render_plain(expected, width=48).text}\n"
@@ -5732,7 +5771,13 @@ class ControllerSettingsTests(ControllerTestCase):
                 False,
                 1,
             ),
-            ("clean-explicit-cancel", ("/settings", "6", "/quit"), 0, False, 0),
+            (
+                "clean-action-ordinal-is-not-selectable",
+                ("/settings", "5", "/cancel", "/quit"),
+                0,
+                False,
+                0,
+            ),
             ("clean-root-escape", ("/settings", "/cancel", "/quit"), 0, False, 0),
             (
                 "clean-root-interrupt",
@@ -5886,7 +5931,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 confirmation_prompts = [
                     prompt
                     for prompt in callbacks.prompts
-                    if "Save settings?" in prompt or "Cancel settings?" in prompt
+                    if "Apply changes?" in prompt or "Discard changes?" in prompt
                 ]
                 self.assertEqual(len(confirmation_prompts), confirmation_count)
                 if discard_count:
@@ -5894,12 +5939,12 @@ class ControllerSettingsTests(ControllerTestCase):
                         call
                         for call in picker.call_args_list
                         if call.args[1].name == "Settings"
-                        and next(
-                            choice
+                        and any(
+                            choice.identity == "cancel"
+                            and choice.description
+                            == "Pending changes will be discarded."
                             for choice in call.args[2]
-                            if choice.identity == "cancel"
-                        ).description
-                        == "Pending changes will be discarded."
+                        )
                     ]
                     self.assertTrue(dirty_settings_calls)
                 if returns_to_cancel:
@@ -5913,7 +5958,7 @@ class ControllerSettingsTests(ControllerTestCase):
                         "cancel",
                     )
 
-    def test_clean_save_is_silent_and_reopens_with_save_highlighted(self) -> None:
+    def test_internal_clean_save_route_is_silent_and_normalizes_highlight(self) -> None:
         workspace = self.make_workspace()
         controller, _backend, callbacks = self.make_controller(workspace)
         commit_save = terminal_module.ControlOutcome(
@@ -5964,10 +6009,14 @@ class ControllerSettingsTests(ControllerTestCase):
         output.assert_not_called()
         self.assertEqual(callbacks.records, [])
         self.assertEqual(len(picker.call_args_list), 2)
-        self.assertEqual(
-            picker.call_args_list[1].kwargs["highlighted_id"],
-            "save",
+        self.assertTrue(
+            all(
+                tuple(choice.identity for choice in call.args[2])
+                == ("language", "persona", "max_debate_rounds", "providers")
+                for call in picker.call_args_list
+            )
         )
+        self.assertIsNone(picker.call_args_list[1].kwargs["highlighted_id"])
 
     def test_save_auth_exits_and_clean_rebase_never_persist_or_emit_saved(
         self,
@@ -6038,8 +6087,14 @@ class ControllerSettingsTests(ControllerTestCase):
                 if label == "clean-rebase":
                     self.assertEqual(len(picker.call_args_list), 2)
                     self.assertEqual(
-                        picker.call_args_list[1].kwargs["highlighted_id"],
-                        "save",
+                        tuple(
+                            choice.identity
+                            for choice in picker.call_args_list[1].args[2]
+                        ),
+                        ("language", "persona", "max_debate_rounds", "providers"),
+                    )
+                    self.assertIsNone(
+                        picker.call_args_list[1].kwargs["highlighted_id"]
                     )
                     self.assertNotIn(
                         "[cancelled] Pending changes discarded.",
@@ -6313,8 +6368,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "/cancel",
                     "/cancel",
                     "/cancel",
-                    "6",
-                    "1",
+                    "/cancel",
                     "/quit",
                 ),
             ),
