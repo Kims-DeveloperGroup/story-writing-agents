@@ -262,28 +262,28 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
 
         rendered = "".join(callbacks.records)
         self.assertIn(
-            "[context] Search request [completed]\n"
+            "[context] Search request\n"
             "  Query: council vessel\n"
             "  Scope: active\n",
             rendered,
         )
         self.assertIn(
-            "[context] Transcript request [completed]\n"
+            "[context] Transcript request\n"
             f"  Conversation: {transcript.conversation_id[:12]}\n"
             "  Start: 2\n"
             "  Count: 1\n",
             rendered,
         )
         self.assertIn(
-            "[context] Transcript request [completed]\n"
+            "[context] Transcript request\n"
             f"  Conversation: {archived.conversation_id[:12]}\n"
             "  Start: 1\n"
             "  Count: 24\n",
             rendered,
         )
         exact_row = (
-            "Search results (1/2) [completed]\n"
-            f"  [search {exact.conversation_id[:12]}] [completed]\n"
+            "Search results (1/2)\n"
+            f"  [search {exact.conversation_id[:12]}]\n"
             "    Status: active\n"
             "    Match: exact_subject\n"
             "    Subject: Council Vessel\n"
@@ -291,8 +291,8 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
             "    Snippet: council vessel\n"
         )
         transcript_row = (
-            "Search results (2/2) [completed]\n"
-            f"  [search {transcript.conversation_id[:12]}] [completed]\n"
+            "Search results (2/2)\n"
+            f"  [search {transcript.conversation_id[:12]}]\n"
             "    Status: active\n"
             "    Match: transcript\n"
             "    Subject: Harbor timing\n"
@@ -511,33 +511,37 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
         rendered = "".join(callbacks.records)
         handle = metadata.conversation_id[:12]
         self.assertIn(
-            "Transcript (1/2) [completed]\n"
-            "  You → Plot & Structure Architect · Sequence: 1 [completed]\n"
+            "Transcript (1/2)\n"
+            "  You → Plot & Structure Architect\n"
+            "    Sequence: 1\n"
             "  │ first question\n"
             "\n",
             rendered,
         )
         self.assertIn(
-            "Transcript (2/2) [completed]\n"
-            "  Plot & Structure Architect → You · Sequence: 2 [completed]\n"
+            "Transcript (2/2)\n"
+            "  Plot & Structure Architect → You\n"
+            "    Sequence: 2\n"
             "  │ first reply\n"
             "\n",
             rendered,
         )
         self.assertIn(
-            "Transcript (1/2) [completed]\n"
-            "  You → Plot & Structure Architect · Sequence: 3 · "
+            "Transcript (1/2)\n"
+            "  You → Plot & Structure Architect\n"
+            "    Sequence: 3 · "
             "Turn: turn_2 · Kind: user_message · "
-            "IDs: user → plot_architect [completed]\n"
+            "IDs: user → plot_architect\n"
             "  │  \\x09\n"
             "\n",
             rendered,
         )
         self.assertIn(
-            "Transcript (2/2) [completed]\n"
-            "  Plot & Structure Architect → You · Sequence: 4 · "
+            "Transcript (2/2)\n"
+            "  Plot & Structure Architect → You\n"
+            "    Sequence: 4 · "
             "Turn: turn_2 · Kind: agent_reply · "
-            "IDs: plot_architect → user [completed]\n"
+            "IDs: plot_architect → user\n"
             "  │ new reply\n"
             "\n",
             rendered,

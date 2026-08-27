@@ -357,6 +357,36 @@ def _compact_execution_profile(profile: AgentExecutionProfile) -> str:
     )
 
 
+def _compact_reply_metadata(
+    profile: AgentExecutionProfile,
+    *,
+    confirmation: str,
+    thread_status: str,
+) -> str:
+    """Render compact turn-specific execution evidence beneath a reply header."""
+
+    if confirmation not in {"confirmed", "pending"}:
+        raise ValueError("confirmation must be pending or confirmed")
+    qualifiers = [thread_status.replace("_", " ")]
+    if confirmation == "pending":
+        qualifiers.append("pending")
+    if any(
+        source is ExecutionValueSource.LAUNCH_OVERRIDE
+        for source in (
+            profile.provider_source,
+            profile.model_source,
+            profile.effort_source,
+        )
+    ):
+        qualifiers.append("launch override")
+    return (
+        f"{_provider_display_name(profile.provider)} / "
+        f"{_execution_value(profile.model)} / "
+        f"{_execution_value(profile.effort)} · "
+        + " · ".join(qualifiers)
+    )
+
+
 def _confirmation_role(confirmation: str) -> SemanticRole:
     """Color confirmed green and pending yellow without color-only meaning."""
 
@@ -5930,18 +5960,10 @@ class InteractiveController:
             assert execution_profile is not None
             confirmation = self._backend.execution_profile_confirmation(agent_id)
             thread_status = self._backend.execution_profile_thread_status(agent_id)
-            metadata = (
-                "Provider: "
-                f"{_provider_display_name(execution_profile.provider)} "
-                f"[{_execution_source_label(execution_profile.provider_source)}]"
-                " · Model: "
-                f"{_execution_value(execution_profile.model)} "
-                f"[{_execution_source_label(execution_profile.model_source)}]"
-                " · Effort: "
-                f"{_execution_value(execution_profile.effort)} "
-                f"[{_execution_source_label(execution_profile.effort_source)}]"
-                f" · Confirmation: {confirmation}"
-                f" · Thread: {thread_status.replace('_', ' ')}"
+            metadata = _compact_reply_metadata(
+                execution_profile,
+                confirmation=confirmation,
+                thread_status=thread_status,
             )
         self._semantic_output.write_component(
             Message(

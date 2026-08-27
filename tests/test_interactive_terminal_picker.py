@@ -1600,7 +1600,7 @@ class PickerRenderingTests(unittest.TestCase):
             initialize_picker(Picker(Prompt("Choose"), (Choice("one", "One"),))),
             KeyEvent(KeyKind.ESCAPE),
         )
-        self.assertIn(
+        self.assertNotIn(
             "[completed]",
             render_picker_viewport(
                 project_picker_viewport(completed),
@@ -1649,7 +1649,7 @@ class PickerDriverTests(unittest.TestCase):
         self.assertEqual(output.flush_calls, 4)
         rendered = "".join(output.records)
         self.assertIn("[open]", rendered)
-        self.assertIn("[completed]", rendered)
+        self.assertNotIn("[completed]", rendered)
         self.assertIn("[selected] [highlighted] Gamma", rendered)
         self.assertTrue(rendered.endswith("\n"))
         self.assertNotIn("secret-", rendered)
@@ -1900,7 +1900,7 @@ class PickerDriverTests(unittest.TestCase):
             self.assertIn("3. [available] Gamma", prompt)
             self.assertNotIn("secret-", prompt)
         self.assertEqual(len(output.records), 1)
-        self.assertIn("[completed]", output.records[0])
+        self.assertNotIn("[completed]", output.records[0])
         self.assertIn("3. [selected] [highlighted] Gamma", output.records[0])
         self.assertEqual(output.flush_calls, 1)
         self.assertEqual(input_stream.read_calls, 0)

@@ -211,15 +211,15 @@ synchronous sink returns `None`. Later observer failure stores a safe error.
 
 ```text
 [context] Retrieval search action N started.
-[context] [completed]
+[context]
   Retrieval search action N completed: H hits; B observation bytes; truncated: yes|no.
 [context] Retrieval read action N started.
-[context] [completed]
+[context]
   Retrieval read action N completed: T turns; E events; B observation bytes; truncated: yes|no.
-[context] Source N [completed]
+[context] Source N
   Subject: SUBJECT
   Conversation: ID
-[context] Source N [completed]
+[context] Source N
   Subject: SUBJECT
   Conversation: ID
   Sequence: N
@@ -229,7 +229,7 @@ An attempted shell RAG preflight adds one content-free record before the agent
 reply:
 
 ```text
-[context] [completed]
+[context]
   Conversation RAG: complete|partial|literal_fallback
   Reason: none|partial|disabled|unavailable|stale|corrupt|incompatible|failed
 ```

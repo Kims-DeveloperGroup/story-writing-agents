@@ -1102,7 +1102,7 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
         self.assertIn("History displayed: 3/3 events", rendered)
         self.assertIn("Context retained: 1 turns, 2 events", rendered)
         self.assertIn(
-            "[result] [completed]\n"
+            "[result]\n"
             "  Search: available, active-only\n"
             "  Last interactive run: none.\n",
             rendered,
@@ -1309,7 +1309,7 @@ class InteractiveInspectionTests(InteractiveConversationTestCase):
             self.assertIn(
                 f"[run {debate_id}]"
                 + (
-                    " [completed] [success]"
+                    " [success]"
                     if expected_status == "consensus"
                     else " [cancelled] [warning]"
                     if expected_status == "interrupted"
@@ -1320,7 +1320,7 @@ class InteractiveInspectionTests(InteractiveConversationTestCase):
                 rendered,
             )
         self.assertIn(
-            f"[context] conversation {selected.conversation_id} [completed]\n"
+            f"[context] conversation {selected.conversation_id}\n"
             "  Mode: included\n"
             "  Events: 2\n"
             "  Complete turns: 1\n"
@@ -1419,7 +1419,7 @@ class InteractiveInspectionTests(InteractiveConversationTestCase):
         rendered = "".join(callbacks.records)
         self.assertIn(
             "Last interactive run\n"
-            "    [run debate_1] [completed] [success]\n",
+            "    [run debate_1] [success]\n",
             rendered,
         )
         self.assertIn(
@@ -1427,7 +1427,7 @@ class InteractiveInspectionTests(InteractiveConversationTestCase):
             rendered,
         )
         self.assertIn(
-            "[run debate_1] [completed] [success]\n"
+            "[run debate_1] [success]\n"
             "  Session: session_a\n",
             rendered,
         )
