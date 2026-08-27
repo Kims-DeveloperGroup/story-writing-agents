@@ -5791,6 +5791,19 @@ print(
         self.assertNotIn("You → Consensus", consensus)
         self.assertNotIn("\x1b", consensus)
         self.assertEqual(consensus.count("--- Debate phase"), 6)
+        for heading in (
+            "Debate phase · Started",
+            "Debate phase · Drafted",
+            "Debate phase · Audit started",
+            "Debate phase · Audit completed",
+            "Debate phase · Artifacts committed",
+        ):
+            self.assertIn(f"--- {heading}", consensus)
+            self.assertNotIn(f"{heading} [loading]", consensus)
+        self.assertIn(
+            "--- Debate phase · Consensus [completed]",
+            consensus,
+        )
         self.assertEqual(consensus.count("deterministic candidate"), 1)
         self.assertLess(
             consensus.rfind("--- Debate phase"),
@@ -6443,6 +6456,22 @@ print(
         successful_compact = "".join(
             successful_plain.replace("│", "").split()
         )
+        for heading in (
+            "Started",
+            "Drafted",
+            "Auditstarted",
+            "Auditcompleted",
+            "Artifactscommitted",
+        ):
+            self.assertIn(f"---Debatephase·{heading}", successful_compact)
+            self.assertNotIn(
+                f"---Debatephase·{heading}[loading]",
+                successful_compact,
+            )
+        self.assertIn(
+            "---Debatephase·Consensus[completed]",
+            successful_compact,
+        )
         self.assertEqual(successful_compact.count("deterministiccandidate"), 1)
         self.assertLess(
             successful_compact.rfind("---Debatephase"),
@@ -6913,6 +6942,16 @@ asyncio.run(main())
             cancelled_output.encode("utf-8"),
         ).decode("utf-8")
         self.assertEqual(cancelled_plain.count("--- Debate phase"), 2)
+        cancelled_compact = "".join(cancelled_plain.split())
+        self.assertIn("---Debatephase·Started", cancelled_compact)
+        self.assertNotIn(
+            "---Debatephase·Started[loading]",
+            cancelled_compact,
+        )
+        self.assertIn(
+            "---Debatephase·Interrupted[cancelled]",
+            cancelled_compact,
+        )
         self.assertEqual(cancelled_plain.count("Phase: interrupted"), 1)
         self.assertEqual(
             cancelled_plain.count(

@@ -989,7 +989,7 @@ class InteractiveController:
     def _debate_progress_style(
         phase: DebateProgressPhase,
     ) -> tuple[SemanticRole, ViewState]:
-        """Return stable role/state decoration for one progress phase."""
+        """Return stable Outcome role/state decoration for one progress phase."""
 
         if phase is DebateProgressPhase.CONSENSUS:
             return SemanticRole.SUCCESS, ViewState.COMPLETED
@@ -1001,6 +1001,27 @@ class InteractiveController:
         if phase is DebateProgressPhase.INTERRUPTED:
             return SemanticRole.WARNING, ViewState.CANCELLED
         return SemanticRole.INFO, ViewState.LOADING
+
+    @staticmethod
+    def _debate_progress_display_name(phase: DebateProgressPhase) -> str:
+        """Return the trusted heading label for one supported progress phase."""
+
+        display_names = {
+            DebateProgressPhase.STARTED: "Started",
+            DebateProgressPhase.DRAFTED: "Drafted",
+            DebateProgressPhase.AUDIT_STARTED: "Audit started",
+            DebateProgressPhase.AUDIT_COMPLETED: "Audit completed",
+            DebateProgressPhase.SYNTHESIZED: "Synthesized",
+            DebateProgressPhase.ARTIFACTS_COMMITTED: "Artifacts committed",
+            DebateProgressPhase.CONSENSUS: "Consensus",
+            DebateProgressPhase.DEADLOCK: "Deadlock",
+            DebateProgressPhase.FAILED: "Failed",
+            DebateProgressPhase.INTERRUPTED: "Interrupted",
+        }
+        try:
+            return display_names[phase]
+        except KeyError as error:
+            raise RuntimeError("Unsupported debate progress phase.") from error
 
     @staticmethod
     def _agent_display_name(agent_id: str) -> str:
@@ -6456,7 +6477,12 @@ class InteractiveController:
 
         key = self._debate_message_key(event)
         phase = event.phase
-        role, state = self._debate_progress_style(phase)
+        role, outcome_state = self._debate_progress_style(phase)
+        panel_state = (
+            ViewState.IDLE
+            if outcome_state is ViewState.LOADING
+            else outcome_state
+        )
         committed_offset = self._debate_message_offsets.get(key, 0)
         start = 0 if phase is DebateProgressPhase.STARTED else committed_offset
         if phase is DebateProgressPhase.STARTED:
@@ -6488,7 +6514,7 @@ class InteractiveController:
                     "Outcome",
                     self._debate_progress_outcome(event),
                     role=role,
-                    state=state,
+                    state=outcome_state,
                 ),
                 Field(
                     "Conflicts",
@@ -6528,9 +6554,9 @@ class InteractiveController:
             panel_items.append(warning)
         panel_items.extend(sections)
         panel = Panel(
-            "Debate phase",
+            f"Debate phase · {self._debate_progress_display_name(phase)}",
             tuple(panel_items),
-            state=state,
+            state=panel_state,
         )
         self._semantic_output.write_component(panel)
         return candidate_offset

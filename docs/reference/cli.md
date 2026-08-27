@@ -1257,16 +1257,20 @@ already printed prompt text and receives no duplicate message; the distinct
 output/source context is still written. None of this changes `story run` or
 other noninteractive output.
 
-Each accepted progress event is one atomic `Debate phase` Panel. It always shows
-Debate ID, Phase, Round, Revision, Action, Outcome, and Conflicts; Message
-details On inserts Handoff after Revision. Newly readable durable speech is
-grouped into contiguous persisted phase/round/revision sections within that same
-panel and shown in full except for fixed safe replacement of error-kind content.
-On adds each speech's Kind. A debate-log read warning remains inside the panel,
-and a failed panel write advances no cursor or progress cache. Successful
-consensus receives a separate final `Consensus` Record after terminal progress;
-deadlock and failed outcomes instead use typed error presentation. This
-interactive presentation does not change `story run` JSON or exit behavior.
+Each accepted progress event is one atomic `Debate phase · DISPLAY_NAME` Panel.
+The trusted sentence-case title names the actual phase. Active headings omit
+`[loading]`; terminal headings retain completed, error, or cancelled state as
+applicable. The canonical Phase field and the Outcome field's existing
+role/state are unchanged. Every panel shows Debate ID, Phase, Round, Revision,
+Action, Outcome, and Conflicts; Message details On inserts Handoff after
+Revision. Newly readable durable speech is grouped into contiguous persisted
+phase/round/revision sections within that same panel and shown in full except
+for fixed safe replacement of error-kind content. On adds each speech's Kind. A
+debate-log read warning remains inside the panel, and a failed panel write
+advances no cursor or progress cache. Successful consensus receives a separate
+final `Consensus` Record after terminal progress; deadlock and failed outcomes
+instead use typed error presentation. This interactive presentation does not
+change `story run` JSON or exit behavior.
 
 In both `/run --output ...` and `/run --fresh --output ...`, option boundaries
 use ASCII space or tab only. Unicode whitespace cannot separate `--output` from

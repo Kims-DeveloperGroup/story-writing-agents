@@ -1236,9 +1236,9 @@ class RenderingFoundationTests(unittest.TestCase):
                 ("--- Interactive erro", "    r [error] ------"),
             ),
             (
-                "Debate phase",
+                "Background task",
                 ViewState.LOADING,
-                ("--- Debate phase", "    [loading] ------"),
+                ("--- Background task", "    [loading] ------"),
             ),
             ("Settings", ViewState.OPEN, ("--- Settings [open]",)),
             (
