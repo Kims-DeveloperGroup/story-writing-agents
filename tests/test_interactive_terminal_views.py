@@ -277,44 +277,39 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
                 "plot · Plot & \n"
                 "Structure Architect \n"
                 "[completed]\n"
-                "\n"
                 "│ Keep each \n"
                 "│ returning vessel \n"
                 "│ visible while the \n"
                 "│ harbor lantern \n"
                 "│ guides the final \n"
-                "│ approach safely."
+                "│ approach safely.\n"
             ),
             24: (
                 "plot · Plot & Structure \n"
                 "Architect [completed]\n"
-                "\n"
                 "│ Keep each returning \n"
                 "│ vessel visible while \n"
                 "│ the harbor lantern \n"
                 "│ guides the final \n"
-                "│ approach safely."
+                "│ approach safely.\n"
             ),
             40: (
                 "plot · Plot & Structure Architect \n"
                 "[completed]\n"
-                "\n"
                 "│ Keep each returning vessel visible \n"
                 "│ while the harbor lantern guides the \n"
-                "│ final approach safely."
+                "│ final approach safely.\n"
             ),
             80: (
                 "plot · Plot & Structure Architect [completed]\n"
-                "\n"
                 "│ Keep each returning vessel visible while the harbor "
                 "lantern guides the final \n"
-                "│ approach safely."
+                "│ approach safely.\n"
             ),
             120: (
                 "plot · Plot & Structure Architect [completed]\n"
-                "\n"
                 "│ Keep each returning vessel visible while the harbor "
-                "lantern guides the final approach safely."
+                "lantern guides the final approach safely.\n"
             ),
         }
         for width, expected in snapshots.items():
@@ -334,10 +329,10 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             state=ViewState.IDLE,
             accent=SpeakerAccent.MAGENTA,
         )
-        self.assertEqual(render_plain(geometry, width=1).text, "u\n\na\nb")
-        self.assertEqual(render_plain(geometry, width=2).text, "u\n\nab")
-        self.assertEqual(render_plain(geometry, width=3).text, "u\n\n│ a\n│ b")
-        self.assertEqual(render_plain(geometry, width=4).text, "u\n\n│ ab")
+        self.assertEqual(render_plain(geometry, width=1).text, "u\na\nb\n")
+        self.assertEqual(render_plain(geometry, width=2).text, "u\nab\n")
+        self.assertEqual(render_plain(geometry, width=3).text, "u\n│ a\n│ b\n")
+        self.assertEqual(render_plain(geometry, width=4).text, "u\n│ ab\n")
 
         row_local_wide = _chat_block_message(
             "a界b",
@@ -348,7 +343,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             accent=SpeakerAccent.MAGENTA,
         )
         wide_frame = render_plain(row_local_wide, width=3)
-        self.assertEqual(wide_frame.text, "u\n\n│ a\n界\n│ b")
+        self.assertEqual(wide_frame.text, "u\n│ a\n界\n│ b\n")
         self.assertTrue(
             all(_physical_width(line) <= 3 for line in wide_frame.text.split("\n"))
         )
@@ -358,17 +353,17 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             (
                 10,
                 "alpha beta abcdefghijk",
-                "u\n\n│ alpha \n│ beta \n│ abcdefgh\n│ ijk",
+                "u\n│ alpha \n│ beta \n│ abcdefgh\n│ ijk\n",
             ),
             (
                 12,
                 "  indented  words  here  ",
-                "u\n\n│   indented\n│   words  \n│ here  ",
+                "u\n│   indented\n│   words  \n│ here  \n",
             ),
             (
                 10,
                 "first\n\n  second\n",
-                "u\n\n│ first\n│\n│   second\n│",
+                "u\n│ first\n│\n│   second\n│\n",
             ),
         )
         for width, content, expected in cases:
@@ -401,7 +396,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             accent=SpeakerAccent.MAGENTA,
         )
         unicode_frame = render_plain(unicode_message, width=10)
-        self.assertEqual(unicode_frame.text, "u\n\n│ 界界界 \n│ e\u0301 🌊 x")
+        self.assertEqual(unicode_frame.text, "u\n│ 界界界 \n│ e\u0301 🌊 x\n")
         self.assertNotIn("\n│ \u0301", unicode_frame.text)
         self.assertTrue(
             all(
@@ -421,14 +416,13 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
         self.assertEqual(
             render_plain(json_message, width=20).text,
             "u\n"
-            "\n"
             "│ {\n"
             '│   "z": "界",\n'
             '│   "a": [\n'
             "│     1,\n"
             "│     true\n"
             "│   ]\n"
-            "│ }",
+            "│ }\n",
         )
 
         hostile = _chat_block_message(
@@ -443,8 +437,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
         self.assertEqual(
             hostile_plain,
             "u\\x1b · m\\u202e\n"
-            "\n"
-            "│ safe\\x07 \\x1b]8;;owned\\x07 \\u202e",
+            "│ safe\\x07 \\x1b]8;;owned\\x07 \\u202e\n",
         )
         self.assertNotIn("\x1b", hostile_plain)
         self.assertNotIn("\x07", hostile_plain)
@@ -460,7 +453,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             SpeakerAccent.GREEN: "\x1b[1;32m",
             SpeakerAccent.BLUE: "\x1b[1;34m",
         }
-        plain_text = "you · metadata [completed]\n\n│ first\n│ second"
+        plain_text = "you · metadata [completed]\n│ first\n│ second\n"
         for accent, sgr in expected_sgr.items():
             with self.subTest(accent=accent):
                 message = _chat_block_message(
@@ -484,14 +477,13 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
                 self.assertEqual(
                     ansi.text,
                     f"{sgr}you · metadata [completed]\x1b[0m\n"
-                    "\n"
                     "│ first\n"
-                    "│ second",
+                    "│ second\n",
                 )
                 self.assertEqual(strip_decorative_sgr(ansi.text), plain_text)
                 self.assertEqual(plain.text, plain_text)
                 self.assertEqual(plain, line)
-                self.assertNotIn("\x1b", ansi.text.split("\n\n", 1)[1])
+                self.assertNotIn("\x1b", ansi.text.split("\n", 1)[1])
 
         wrapped = render_component(
             _chat_block_message(
@@ -501,11 +493,13 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             ),
             _capability(CapabilityProfile.ANSI, width=20),
         )
-        header, body = wrapped.text.split("\n\n", 1)
-        for line in header.split("\n"):
+        wrapped_lines = wrapped.text.split("\n")
+        body_index = wrapped_lines.index("│ body")
+        for line in wrapped_lines[:body_index]:
             self.assertTrue(line.startswith("\x1b[1;33m"))
             self.assertTrue(line.endswith("\x1b[0m"))
-        self.assertEqual(body, "│ body")
+        body = "\n".join(wrapped_lines[body_index:])
+        self.assertEqual(body, "│ body\n")
         self.assertNotIn("\x1b", body)
 
     def test_list_view_renders_inline_and_chat_block_messages_in_order(
@@ -537,8 +531,8 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             "   field\n"
             "  inline> old\n"
             "  you\n"
-            "\n"
             "  │ one two\n"
+            "\n"
             "  [after]\n"
             "   record",
         )
@@ -547,6 +541,48 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             tuple(type(item) for item in view.items),
             (Field, Message, Message, Record),
         )
+
+    def test_adjacent_chat_blocks_own_one_separator_across_composition(self) -> None:
+        first = _chat_block_message(
+            "First body.",
+            sender="You → Plot & Structure Architect",
+            metadata=None,
+            role=SemanticRole.DEFAULT,
+            state=ViewState.IDLE,
+            accent=SpeakerAccent.MAGENTA,
+        )
+        second = _chat_block_message(
+            "Second body.",
+            sender="Plot & Structure Architect → You",
+            metadata=None,
+            state=ViewState.IDLE,
+            accent=SpeakerAccent.YELLOW,
+        )
+        section = Section("Speeches", (first, second))
+        self.assertEqual(
+            render_plain(section, width=80).text,
+            "Speeches\n"
+            "  You → Plot & Structure Architect\n"
+            "  │ First body.\n"
+            "\n"
+            "  Plot & Structure Architect → You\n"
+            "  │ Second body.\n",
+        )
+
+        records: list[str] = []
+        output = InteractiveSemanticOutput(
+            InteractiveTerminal(lambda prompt: "", records.append)
+        )
+        output.write_component(first)
+        output.write_component(second)
+        self.assertEqual(
+            records,
+            [
+                "You → Plot & Structure Architect\n│ First body.\n\n",
+                "Plot & Structure Architect → You\n│ Second body.\n\n",
+            ],
+        )
+        self.assertIn("│ First body.\n\nPlot & Structure Architect", "".join(records))
 
     def test_adapter_construction_is_resource_free_and_each_call_writes_once(
         self,
@@ -923,10 +959,10 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
                     self.assertEqual(
                         records[-1],
                         f"{alias} [completed]\n"
-                        "\n"
                         "│ {\n"
                         '│   "answer": "界"\n'
-                        "│ }\n",
+                        "│ }\n"
+                        "\n",
                     )
 
         self.assertEqual(render.call_count, 4)

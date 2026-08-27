@@ -1060,7 +1060,7 @@ def _chat_block_message_lines(
     *,
     indent: int,
 ) -> list[_SemanticLine]:
-    """Render one speaker header, separator, and default-styled body rail."""
+    """Render one grouped speaker rail with a trailing block separator."""
 
     header = _inline(message.sender)
     if message.metadata is not None:
@@ -1077,11 +1077,11 @@ def _chat_block_message_lines(
             fallback_prefix="",
         )
     ]
-    lines.append(("", SemanticRole.DEFAULT))
     lines.extend(
         (line, SemanticRole.DEFAULT)
         for line in _chat_block_body_lines(message.content, width, indent=indent)
     )
+    lines.append(("", SemanticRole.DEFAULT))
     return lines
 
 

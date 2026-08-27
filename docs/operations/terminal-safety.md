@@ -249,8 +249,11 @@ back to the transcript or provider result.
 
 `Message` retains its compatible inline layout by default. Controller call
 sites that represent a user or agent speaker select the chat-block layout: a
-full speaker header, one blank separator row, and a default-styled `│ ` body
-rail. Only the header receives its stable bold accent—user magenta, lead cyan,
+full speaker header directly above a default-styled `│ ` body rail, followed by
+one unrailed terminal-default separator row. That separator belongs to the
+message, so adjacent writes and collection items have one visible blank row
+between speakers; explicit blank body lines remain railed. Only the header
+receives its stable bold accent—user magenta, lead cyan,
 plot yellow, character green, and execution blue—so long message bodies remain
 legible on either terminal theme. Sanitization precedes Unicode physical-cell
 measurement and word wrapping; whitespace-only bodies, strict-JSON projection,
@@ -300,11 +303,15 @@ prompt-based consensus uses the
 fixed consensus target, and request records use validated paths, normalized
 queries/scopes, or resolved transcript page facts.
 
-Each debate callback similarly builds one `Debate phase` Panel and submits it
-through exactly one semantic writer call. The panel contains its fixed progress
-fields, any read warning, and all newly readable contiguous persisted speech
-sections. Only after that write succeeds does the controller advance its debate
-message cursor, conflict cache, accepted-event list, or last-started mapping.
+Each debate callback similarly builds one `Debate phase · DISPLAY_NAME` Panel
+and submits it through exactly one semantic writer call. Display names come
+from the closed trusted phase set. Active headings are state-neutral rather
+than showing `[loading]`; meaningful terminal heading states remain. The
+canonical Phase field and Outcome field state do not change. The panel contains
+its fixed progress fields, any read warning, and all newly readable contiguous
+persisted speech sections. Only after that write succeeds does the controller
+advance its debate message cursor, conflict cache, accepted-event list, or
+last-started mapping.
 
 Conversation-scope deduplication is also controller-owned. Before each attached
 prompt, the controller freshly validates any current focus against the complete

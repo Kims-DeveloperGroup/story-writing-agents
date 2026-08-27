@@ -1043,10 +1043,13 @@ contract for a caught exception after CLI workspace initialization or discovery
 succeeds, independently of whether a diagnostic handle or file is available.
 
 Generic semantic `Message` output retains its inline layout. User and agent
-messages use a speaker header, blank separator, and default-styled `│ ` body
-rail; only the header receives a stable speaker accent. Physical-cell wrapping
-preserves whitespace, strict-JSON presentation, and CJK/full-width content, with
-a row-local rail fallback when a narrow row cannot fit its leading glyph.
+messages place the speaker header directly above the default-styled `│ ` body
+rail and own one unrailed trailing separator; only the header receives a stable
+speaker accent. Adjacent message owners therefore have exactly one visible blank
+row between them, while explicit blank body rows remain railed. Physical-cell
+wrapping preserves whitespace, strict-JSON presentation, and CJK/full-width
+content, with a row-local rail fallback when a narrow row cannot fit its leading
+glyph.
 Message details Off is the compact default and never removes stored content. A
 direct agent reply still shows its speaker and full body; On adds Provider,
 Model, and Effort with each source, then Confirmation and Thread. The accepted
@@ -1254,16 +1257,20 @@ already printed prompt text and receives no duplicate message; the distinct
 output/source context is still written. None of this changes `story run` or
 other noninteractive output.
 
-Each accepted progress event is one atomic `Debate phase` Panel. It always shows
-Debate ID, Phase, Round, Revision, Action, Outcome, and Conflicts; Message
-details On inserts Handoff after Revision. Newly readable durable speech is
-grouped into contiguous persisted phase/round/revision sections within that same
-panel and shown in full except for fixed safe replacement of error-kind content.
-On adds each speech's Kind. A debate-log read warning remains inside the panel,
-and a failed panel write advances no cursor or progress cache. Successful
-consensus receives a separate final `Consensus` Record after terminal progress;
-deadlock and failed outcomes instead use typed error presentation. This
-interactive presentation does not change `story run` JSON or exit behavior.
+Each accepted progress event is one atomic `Debate phase · DISPLAY_NAME` Panel.
+The trusted sentence-case title names the actual phase. Active headings omit
+`[loading]`; terminal headings retain completed, error, or cancelled state as
+applicable. The canonical Phase field and the Outcome field's existing
+role/state are unchanged. Every panel shows Debate ID, Phase, Round, Revision,
+Action, Outcome, and Conflicts; Message details On inserts Handoff after
+Revision. Newly readable durable speech is grouped into contiguous persisted
+phase/round/revision sections within that same panel and shown in full except
+for fixed safe replacement of error-kind content. On adds each speech's Kind. A
+debate-log read warning remains inside the panel, and a failed panel write
+advances no cursor or progress cache. Successful consensus receives a separate
+final `Consensus` Record after terminal progress; deadlock and failed outcomes
+instead use typed error presentation. This interactive presentation does not
+change `story run` JSON or exit behavior.
 
 In both `/run --output ...` and `/run --fresh --output ...`, option boundaries
 use ASCII space or tab only. Unicode whitespace cannot separate `--output` from

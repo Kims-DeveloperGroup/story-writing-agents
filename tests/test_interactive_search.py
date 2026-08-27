@@ -513,15 +513,15 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
         self.assertIn(
             "Transcript (1/2) [completed]\n"
             "  You → Plot & Structure Architect · Sequence: 1 [completed]\n"
-            "\n"
-            "  │ first question\n",
+            "  │ first question\n"
+            "\n",
             rendered,
         )
         self.assertIn(
             "Transcript (2/2) [completed]\n"
             "  Plot & Structure Architect → You · Sequence: 2 [completed]\n"
-            "\n"
-            "  │ first reply\n",
+            "  │ first reply\n"
+            "\n",
             rendered,
         )
         self.assertIn(
@@ -529,8 +529,8 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
             "  You → Plot & Structure Architect · Sequence: 3 · "
             "Turn: turn_2 · Kind: user_message · "
             "IDs: user → plot_architect [completed]\n"
-            "\n"
-            "  │  \\x09\n",
+            "  │  \\x09\n"
+            "\n",
             rendered,
         )
         self.assertIn(
@@ -538,8 +538,8 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
             "  Plot & Structure Architect → You · Sequence: 4 · "
             "Turn: turn_2 · Kind: agent_reply · "
             "IDs: plot_architect → user [completed]\n"
-            "\n"
-            "  │ new reply\n",
+            "  │ new reply\n"
+            "\n",
             rendered,
         )
         self.assertEqual(

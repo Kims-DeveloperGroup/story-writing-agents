@@ -606,8 +606,11 @@ visible prompt without a duplicate. These terminal records survive later
 success, deadlock, handled failure, cancellation, or post-acceptance interrupt
 but add no separate storage guarantee. Runs do not change conversations.
 
-Each accepted progress event then appears as one `Debate phase` panel with its
-fixed status fields and any newly persisted contiguous speech sections. Full
+Each accepted progress event then appears as one
+`Debate phase · DISPLAY_NAME` panel with its fixed status fields and any newly
+persisted contiguous speech sections. Active headings name their actual phase
+without `[loading]`; terminal headings retain completed, error, or cancelled
+state. The canonical Phase field and Outcome role/state are unchanged. Full
 non-error speech remains visible. Message details On adds Handoff and speech
 Kind; Off removes only those diagnostics. Successful consensus receives a
 separate final `Consensus` Record after terminal progress; deadlock and failed

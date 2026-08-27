@@ -689,9 +689,20 @@ class InteractiveConsensusResultTests(InteractiveConversationTestCase):
             component
             for component in components
             if type(component) is terminal_module.Panel
-            and component.title == "Debate phase"
+            and component.title.startswith("Debate phase · ")
         ]
         self.assertEqual(len(phase_panels), 6)
+        self.assertEqual(
+            [panel.title for panel in phase_panels],
+            [
+                "Debate phase · Started",
+                "Debate phase · Drafted",
+                "Debate phase · Audit started",
+                "Debate phase · Audit completed",
+                "Debate phase · Artifacts committed",
+                "Debate phase · Consensus",
+            ],
+        )
         self.assertEqual(
             [
                 next(
@@ -714,11 +725,11 @@ class InteractiveConsensusResultTests(InteractiveConversationTestCase):
         self.assertEqual(
             [panel.state for panel in phase_panels],
             [
-                terminal_module.ViewState.LOADING,
-                terminal_module.ViewState.LOADING,
-                terminal_module.ViewState.LOADING,
-                terminal_module.ViewState.LOADING,
-                terminal_module.ViewState.LOADING,
+                terminal_module.ViewState.IDLE,
+                terminal_module.ViewState.IDLE,
+                terminal_module.ViewState.IDLE,
+                terminal_module.ViewState.IDLE,
+                terminal_module.ViewState.IDLE,
                 terminal_module.ViewState.COMPLETED,
             ],
         )
@@ -763,6 +774,10 @@ class InteractiveConsensusResultTests(InteractiveConversationTestCase):
         )
         rendered = "".join(callbacks.records)
         self.assertEqual(rendered.count("--- Debate phase"), 6)
+        self.assertNotIn("Debate phase [loading]", rendered)
+        self.assertNotIn("Debate phase · Started [loading]", rendered)
+        self.assertIn("--- Debate phase · Started", rendered)
+        self.assertIn("--- Debate phase · Consensus [completed]", rendered)
         self.assertEqual(rendered.count("Consensus [completed] [success]"), 1)
         self.assertNotIn("RAW_RESULT_SECRET", rendered)
         self.assertEqual(file_bytes(workspace), before)

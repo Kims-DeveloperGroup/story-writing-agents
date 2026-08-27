@@ -1764,21 +1764,27 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
                     context_event_count=4,
                     context_omitted_turns=1,
                 ),
+                "Started",
                 "Started prompt consensus.",
                 terminal_module.SemanticRole.INFO,
                 terminal_module.ViewState.LOADING,
+                terminal_module.ViewState.IDLE,
             ),
             (
                 self._event(DebateProgressPhase.DRAFTED, revision_id="r0"),
+                "Drafted",
                 "Drafted revision r0.",
                 terminal_module.SemanticRole.INFO,
                 terminal_module.ViewState.LOADING,
+                terminal_module.ViewState.IDLE,
             ),
             (
                 self._event(DebateProgressPhase.AUDIT_STARTED, revision_id="r0"),
+                "Audit started",
                 "Audit started for r0 at round 0.",
                 terminal_module.SemanticRole.INFO,
                 terminal_module.ViewState.LOADING,
+                terminal_module.ViewState.IDLE,
             ),
             (
                 self._event(
@@ -1786,9 +1792,11 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
                     revision_id="r0",
                     conflicting_agents=(PLOT_ARCHITECT,),
                 ),
+                "Audit completed",
                 "Audit completed for r0 at round 0; conflicts: plot_architect.",
                 terminal_module.SemanticRole.INFO,
                 terminal_module.ViewState.LOADING,
+                terminal_module.ViewState.IDLE,
             ),
             (
                 self._event(
@@ -1796,9 +1804,11 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
                     revision_id="r1",
                     round_number=1,
                 ),
+                "Synthesized",
                 "Synthesized r1 at round 1.",
                 terminal_module.SemanticRole.INFO,
                 terminal_module.ViewState.LOADING,
+                terminal_module.ViewState.IDLE,
             ),
             (
                 self._event(
@@ -1808,12 +1818,14 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
                     manuscript_path="manuscript/part.md",
                     core_updates=("global_outline.md",),
                 ),
+                "Artifacts committed",
                 (
                     "Artifacts committed for r1: manuscript/part.md; "
                     "core updates: global_outline.md."
                 ),
                 terminal_module.SemanticRole.INFO,
                 terminal_module.ViewState.LOADING,
+                terminal_module.ViewState.IDLE,
             ),
             (
                 self._event(
@@ -1821,8 +1833,10 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
                     revision_id="r1",
                     round_number=1,
                 ),
+                "Consensus",
                 "Consensus reached on r1 after 1 revision rounds.",
                 terminal_module.SemanticRole.SUCCESS,
+                terminal_module.ViewState.COMPLETED,
                 terminal_module.ViewState.COMPLETED,
             ),
             (
@@ -1831,8 +1845,10 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
                     revision_id="r1",
                     round_number=1,
                 ),
+                "Deadlock",
                 "Deadlock on r1 after 1 revision rounds.",
                 terminal_module.SemanticRole.ERROR,
+                terminal_module.ViewState.ERROR,
                 terminal_module.ViewState.ERROR,
             ),
             (
@@ -1842,16 +1858,24 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
                     round_number=1,
                     failure_kind=DebateFailureKind.INTERNAL,
                 ),
+                "Failed",
                 "Run failed (internal).",
                 terminal_module.SemanticRole.ERROR,
+                terminal_module.ViewState.ERROR,
                 terminal_module.ViewState.ERROR,
             ),
             (
                 self._event(DebateProgressPhase.INTERRUPTED),
+                "Interrupted",
                 "Run interrupted after durable state transition.",
                 terminal_module.SemanticRole.WARNING,
                 terminal_module.ViewState.CANCELLED,
+                terminal_module.ViewState.CANCELLED,
             ),
+        )
+        self.assertEqual(
+            {case[0].phase for case in cases},
+            set(DebateProgressPhase),
         )
         components: list[object] = []
         real_write_component = (
@@ -1868,7 +1892,14 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
             autospec=True,
             side_effect=capture_component,
         ):
-            for event, expected_outcome, expected_role, expected_state in cases:
+            for (
+                event,
+                expected_display_name,
+                expected_outcome,
+                expected_role,
+                expected_outcome_state,
+                expected_panel_state,
+            ) in cases:
                 with self.subTest(phase=event.phase):
                     component_start = len(components)
                     record_start = len(callbacks.records)
@@ -1878,8 +1909,11 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
                     panel = components[-1]
                     self.assertIs(type(panel), terminal_module.Panel)
                     assert isinstance(panel, terminal_module.Panel)
-                    self.assertEqual(panel.title, "Debate phase")
-                    self.assertIs(panel.state, expected_state)
+                    self.assertEqual(
+                        panel.title,
+                        f"Debate phase · {expected_display_name}",
+                    )
+                    self.assertIs(panel.state, expected_panel_state)
                     fields = tuple(
                         item
                         for item in panel.items
@@ -1908,7 +1942,7 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
                             "Outcome",
                             expected_outcome,
                             role=expected_role,
-                            state=expected_state,
+                            state=expected_outcome_state,
                         ),
                     )
                     self.assertNotIn("Handoff", tuple(field.label for field in fields))
@@ -1941,6 +1975,11 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
                         )
                     else:
                         self.assertEqual(context_notices, ())
+        with self.assertRaisesRegex(
+            RuntimeError,
+            r"^Unsupported debate progress phase\.$",
+        ):
+            controller._debate_progress_display_name(object())  # type: ignore[arg-type]
         backend.close()
 
     def test_phase_panel_groups_complete_speeches_and_gates_details(self) -> None:
@@ -2072,7 +2111,7 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
                 )
                 metadata = (lambda kind: f"Kind: {kind}") if details else (lambda _kind: None)
                 expected_audit = terminal_module.Panel(
-                    "Debate phase",
+                    "Debate phase · Audit completed",
                     (
                         terminal_module.Field("Debate ID", "debate"),
                         terminal_module.Field("Phase", "audit_completed"),
@@ -2175,7 +2214,7 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
                             ),
                         ),
                     ),
-                    state=terminal_module.ViewState.LOADING,
+                    state=terminal_module.ViewState.IDLE,
                 )
                 synthesis_handoff = (
                     (
@@ -2192,7 +2231,7 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
                     else ()
                 )
                 expected_synthesis = terminal_module.Panel(
-                    "Debate phase",
+                    "Debate phase · Synthesized",
                     (
                         terminal_module.Field("Debate ID", "debate"),
                         terminal_module.Field("Phase", "synthesized"),
@@ -2220,7 +2259,7 @@ class ControllerDebateVisibilityTests(ControllerTestCase):
                             ),
                         ),
                     ),
-                    state=terminal_module.ViewState.LOADING,
+                    state=terminal_module.ViewState.IDLE,
                 )
                 self.assertEqual(components, [expected_audit, expected_synthesis])
                 self.assertEqual(
