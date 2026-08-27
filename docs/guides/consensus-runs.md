@@ -96,16 +96,19 @@ part-scoped modification scenario and failure semantics.
 The noninteractive command prints `DebateResult` JSON and exits `0` for
 consensus, `3` for deadlock, or `4` for failed. A referenced result adds its
 content-free `reference_operation_id`; a no-reference result omits that key.
-The shell instead shows each phase as one `Debate phase` panel. Its fixed status
+The shell instead shows each phase as one `Debate phase · DISPLAY_NAME` panel.
+Active headings name the current phase without `[loading]`; terminal headings
+retain completed, error, or cancelled state as applicable. The canonical Phase
+field and the Outcome field's existing role/state remain visible. Fixed status
 fields are followed by contiguous persisted speech sections, so complete
 non-error agent speech remains readable in terminal scrollback. Message details
 Off is the compact default; On additionally shows phase Handoff and each
 speech's Kind. Error-kind speech uses fixed redacted text, and a log-read failure
 appears as a warning inside that phase panel. Successful consensus receives a
 separate final `Consensus` Record after terminal progress; deadlock and failed
-outcomes instead use typed error presentation. These are interactive presentation
-rules only: the command's JSON, exit codes, and durable debate log are
-unchanged.
+outcomes instead use typed error presentation. These are interactive
+presentation rules only: the command's JSON, exit codes, and durable debate log
+are unchanged.
 
 Use [Consensus workflow](../design/consensus-workflow.md) for sequencing,
 [CLI reference](../reference/cli.md) for exact grammar and exits, and

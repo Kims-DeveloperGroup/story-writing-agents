@@ -1731,13 +1731,13 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
             component
             for component in semantic_components
             if type(component) is terminal_module.Panel
-            and component.title == "Debate phase"
+            and component.title == "Debate phase · Interrupted"
         ]
         self.assertEqual(
             interrupted_panels,
             [
                 terminal_module.Panel(
-                    "Debate phase",
+                    "Debate phase · Interrupted",
                     (
                         terminal_module.Field("Debate ID", debate_id),
                         terminal_module.Field("Phase", "interrupted"),
@@ -1865,7 +1865,7 @@ class ConsensusCancellationTests(InteractiveCancellationTestCase):
         for component in semantic_components:
             if (
                 type(component) is not terminal_module.Panel
-                or component.title != "Debate phase"
+                or component.title != "Debate phase · Interrupted"
             ):
                 continue
             fields = {

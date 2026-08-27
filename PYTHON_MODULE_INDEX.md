@@ -2499,10 +2499,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   stream terminals show bounded progress, while callback and ordinary-line
   fallback remain visually silent. The controller owns no indicator glyph,
   cursor control, or animation task. Independently, each validated debate
-  progress callback constructs one `Debate phase` `Panel` and submits it in one
-  semantic write. Debate ID, phase, round, revision, action, outcome, conflicts,
-  and any applicable starting-context notice remain visible with message
-  details Off; details On additionally includes the phase handoff. The same
+  progress callback constructs one `Debate phase · DISPLAY_NAME` `Panel` and
+  submits it in one semantic write. A private exhaustive trusted phase-name
+  projection keeps active panel headings state-neutral instead of labeling them
+  loading, while terminal headings preserve their completed, error, or
+  cancelled state and the Outcome field preserves its prior role/state. Debate
+  ID, canonical phase, round, revision, action, outcome, conflicts, and any
+  applicable starting-context notice remain visible with message details Off;
+  details On additionally includes the phase handoff. The same
   panel contains either a fixed debate-log-read warning or the unread
   chronological suffix of persisted canonical-agent speeches, grouped by each
   consecutive phase, round, and revision tuple. Non-error speeches retain their

@@ -52,8 +52,9 @@
 > Off is the compact default and On reveals documented diagnostics without
 > changing stored content.
 > User/agent messages use readable speaker headers and railed bodies, and each
-> debate progress event is one atomic `Debate phase` panel containing newly
-> readable persisted speeches.
+> debate progress event is one atomic `Debate phase · DISPLAY_NAME` panel
+> containing newly readable persisted speeches. Active headings name the phase
+> without `[loading]`; terminal headings keep their meaningful state.
 
 ## Public API
 
@@ -384,8 +385,8 @@ and performs no stream observation or resource acquisition.
   optional capable-only indicator without an advisory waiting record;
 - retrieval progress and cited-source records; and
 - consensus progress, inspection, cancellation, and terminal summaries. Each
-  progress event is one `Debate phase` Panel containing its progress facts and
-  any newly readable persisted speech sections.
+  progress event is one `Debate phase · DISPLAY_NAME` Panel containing its
+  progress facts and any newly readable persisted speech sections.
 
 #84 uses the same foundation for:
 
@@ -440,8 +441,12 @@ record without a user-message copy of its source bytes. These records precede
 coroutine construction, so a later cancellation, provider failure, deadlock, or
 other handled outcome does not erase them.
 
-Consensus-phase rendering builds one `Debate phase` Panel and performs one
-semantic writer call per accepted event. Fields are ordered Debate ID, Phase,
+Consensus-phase rendering builds one `Debate phase · DISPLAY_NAME` Panel and
+performs one semantic writer call per accepted event. Display names are a
+trusted exhaustive sentence-case projection of the canonical phase. Active
+headings omit `[loading]`; Consensus, Deadlock, Failed, and Interrupted retain
+completed, error, error, and cancelled states. The canonical Phase field and
+Outcome field role/state remain unchanged. Fields are ordered Debate ID, Phase,
 Round, Revision, Action, Outcome, and Conflicts; Message details On inserts
 Handoff between Revision and Action. `STARTED` adds its fixed included/fresh
 context notice. The panel then contains the uncommitted suffix of readable
