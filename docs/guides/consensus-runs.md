@@ -97,9 +97,10 @@ The noninteractive command prints `DebateResult` JSON and exits `0` for
 consensus, `3` for deadlock, or `4` for failed. A referenced result adds its
 content-free `reference_operation_id`; a no-reference result omits that key.
 The shell instead shows each phase as one `Debate phase · DISPLAY_NAME` panel.
-Active headings name the current phase without `[loading]`; terminal headings
-retain completed, error, or cancelled state as applicable. The canonical Phase
-field and the Outcome field's existing role/state remain visible. Fixed status
+Active headings name the current phase without `[loading]`; successful
+completion is silent, while error or cancelled state remains visible as
+applicable. The canonical Phase field and the Outcome field's existing
+role/state remain visible. Fixed status
 fields are followed by contiguous persisted speech sections, so complete
 non-error agent speech remains readable in terminal scrollback. Message details
 Off is the compact default; On additionally shows phase Handoff and each

@@ -1033,17 +1033,18 @@ class RunnerAndAdvisoryCancellationTests(InteractiveCancellationTestCase):
                     PLOT_ARCHITECT,
                     "reply:after cancellation",
                     metadata=(
-                        "Provider: Codex [built in default] · "
-                        "Model: provider default [provider default] · "
-                        "Effort: provider default [provider default] · "
-                        "Confirmation: pending · Thread: not observed"
+                        "Codex / provider default / provider default · "
+                        "not observed · pending"
                     ),
                 )
             ],
         )
-        self.assertIn("Plot & Structure Architect → You · Provider:", rendered)
-        self.assertIn("Confirmation: pending", rendered)
-        self.assertIn("Thread: not observed", rendered)
+        self.assertIn("Plot & Structure Architect → You\n", rendered)
+        self.assertIn(
+            "Codex / provider default / provider default · "
+            "not observed · pending",
+            rendered,
+        )
         self.assertIn("│ reply:after cancellation\n", rendered)
         detach.assert_called_once_with("session")
         close.assert_called_once_with()

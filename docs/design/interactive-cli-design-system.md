@@ -134,10 +134,11 @@ current production behavior.
 | #319 dirty-only Settings actions | Implemented: the clean Settings root contains exactly Language, Persona, Maximum debate rounds, Conversation storage, Conversation RAG, Message details, and Agents, with no persistence action or save-required notice. Dirty state appends exact plain `Apply Changes (*Required)` followed by `Discard Changes`; only `(*Required)` receives eligible warning styling, and Discard carries the explicit description `Pending changes will be discarded.` The dirty notice is exactly `[save required] Choose Apply Changes to persist pending changes`. Apply retains dirty-only YES/NO confirmation, a final dirty recheck, and persistence; mixed candidates retain full authentication/activation, Message-details-only uses its live presentation fast path, and RAG-only uses its no-auth/no-storage/no-runtime next-shell persistence path. Success reports only the applicable current-shell, RAG-next-shell, and storage-restart effects. Discard retains dirty confirmation and discard reporting. Internal save/cancel identities and the defensive clean route are not selectable UX. Existing semantic-role precedence, plain/`NO_COLOR` facts, Settings Escape/cancellation, transient input, and closing resume-picker contracts are unchanged. |
 | #343 compact Settings values and result | Implemented: every canonical Agents row shows its effective `Current:` or `Pending:` `(Provider/model/effort)` profile, and Provider, Model, and Effort independently show their effective Current/Pending value. Omitted model/effort values render as `provider default`; launch overrides remain disabled and truthful. Pending stays textual under narrow, plain, fallback, and `NO_COLOR` rendering, and reading the summaries performs no authentication, discovery, persistence, or provider invocation. The completed Settings panel preserves distinct current-shell runtime, next-shell RAG, and next-shell storage scope notices, replaces verbose profile sections with one changed-profile count, adds fresh-thread/story-session-context guidance only for provider switches, and hands active values and confirmation to `/agents` and thread and source details to `/status`. |
 | #350 message-details preference | Implemented: `show_message_details` is a strict boolean in the closed twelve-key system schema, defaults to false when missing without read-time rewrite, and is edited through the exact Message details Off/On root row. Off is compact presentation rather than stored-content deletion. A details-only Apply prepares, verifies, and commits configuration without provider/storage/backend/runtime/route/thread activation work; mixed changes retain the full path. |
-| #351 speaker-aware message layout | Implemented and refined by #367: generic Message remains inline by default; opt-in chat blocks place the full stable-accent speaker header directly above the default-styled `│ ` body rail, then contribute one terminal-default trailing separator row. Unicode physical-cell wrapping and row-local narrow fallback remain intact. |
+| #351 speaker-aware message layout | Implemented and refined by #367/#372: generic Message remains inline by default; opt-in chat blocks place the full stable-accent speaker header above optional subordinate metadata and the default-styled `│ ` body rail, then contribute one terminal-default trailing separator row. Unicode physical-cell wrapping and row-local narrow fallback remain intact. |
 | #352 readable conversation output | Implemented: accepted user submissions, direct/retrieval replies, and transcript/history events use speaker-aware chat blocks. Message details gates only the documented execution/citation/identity diagnostics; full bodies, human direction, event position, and Sequence remain visible, while `/agents` and `/status` stay fully diagnostic. |
 | #353 atomic debate output | Implemented and refined by #368: each accepted event writes one phase-named `Debate phase · DISPLAY_NAME` Panel containing ordered progress fields, contiguous persisted speech sections, fixed safe error replacement or an in-panel read warning, and optional Handoff/Kind details. Cursor and event caches advance only after the atomic write; successful consensus receives a separate final `Consensus` Record, while deadlock/failed outcomes use typed errors. |
-| #368 named debate phases | Implemented: every progress Panel title is `Debate phase · DISPLAY_NAME` using a trusted exhaustive mapping. Active headings omit the meaningless `[loading]` marker while their Outcome field retains its existing loading/info state; Consensus, Deadlock, Failed, and Interrupted headings retain completed, error, error, and cancelled states. The canonical Phase field and one-write/cache-commit contract are unchanged. |
+| #368 named debate phases | Implemented and refined by #372: every progress Panel title is `Debate phase · DISPLAY_NAME` using a trusted exhaustive mapping. Active headings omit the meaningless `[loading]` marker while their Outcome field retains its existing loading/info state; successful completion is silent, while Deadlock, Failed, and Interrupted retain error, error, and cancelled states. The canonical Phase field and one-write/cache-commit contract are unchanged. |
+| #372 compact completion-free messages | Implemented: generated `COMPLETED` state is visually silent across the semantic renderer, while actionable states and semantic result roles remain textual. Chat-block execution metadata occupies a subordinate default-styled row; routine direct/retrieval details use `Provider / Model / Effort · Thread`, adding only exceptional `pending` and `launch override` qualifiers. Literal content is never rewritten, and `/agents` and `/status` retain full provenance. |
 | #105 agent reply presentation | Implemented: direct, retrieval, transcript, and focused-history agent replies use a presentation-only strict JSON object/array projection with exact unchanged fallback cases and two-space Unicode-preserving output; stored/provider content remains unchanged. Generic inline `AGENT` output retains bold terminal-default foreground styling, while chat blocks accent only the speaker header. |
 | #106 transient settings UI | Implemented: settings picker and prompt reads clear capable transient rows, suppress duplicate fallback finals, and keep nested Escape silent. #142 later makes this lifecycle universal for capable submitted input. |
 | #111 advisory progress indicator | Implemented: one advisory and consensus waiting indicator runs only on capable raw streams, including `NO_COLOR`; callback, non-TTY, `TERM=dumb`, and uncertain-capability paths remain silent, and no general animation or `[routing]`/`[waiting]` record is introduced. #331 supersedes its one-cell presentation. |
@@ -749,12 +750,16 @@ story[novel:lead]> @plot Check the current constraints.
 ```
 
 Direct and retrieval replies always show their human speaker and full body.
-Message details On adds one compact metadata string in exact order: Provider
-with source, Model with source, Effort with source, Confirmation, and Thread.
-Off omits that string; the accepted user message receives no diagnostic
-metadata. These values come from the backend profile used for argv. Model prose
-and self-identification are not execution evidence, and metadata is not written
-to the transcript or retroactively added to prior replies.
+Message details On adds one subordinate default-styled metadata row in exact
+order: Provider / Model / Effort, then Thread. It appends `pending` only before
+the first successful call under the profile and `launch override` only when at
+least one effective value came from the launch command. Routine confirmed
+state and per-value source labels are omitted here; `/agents` and `/status`
+retain the full diagnostics. Off omits the row; the accepted user message
+receives no diagnostic metadata. These values come from the backend profile
+used for argv. Model prose and self-identification are not execution evidence,
+and metadata is not written to the transcript or retroactively added to prior
+replies.
 
 Retrieval sources always show Subject and Conversation. Event citations always
 add Sequence and, only with details On, Turn before Sequence and Kind after it.
@@ -772,8 +777,9 @@ sentence-case display names are Started, Drafted, Audit started, Audit
 completed, Synthesized, Artifacts committed, Consensus, Deadlock, Failed, and
 Interrupted. Active headings are state-neutral instead of displaying the
 meaningless `[loading]` marker; the Outcome field retains its existing
-loading/info state. Terminal headings retain `[completed]`, `[error]`, or
-`[cancelled]` as applicable. The canonical Phase field remains present. Fields
+loading/info state. Successful terminal headings are visually complete without
+a redundant state label; `[error]` and `[cancelled]` remain visible as
+applicable. The canonical Phase field remains present. Fields
 are ordered Debate ID, Phase, Round, Revision, Action, Outcome, and Conflicts.
 Message details On inserts Handoff between Revision and Action. `STARTED`
 appends the included/fresh context notice.
@@ -1571,14 +1577,21 @@ Every semantic `Panel` uses this canonical plain shape at a sufficiently wide
 width:
 
 ```text
---- Panel title [completed] ------------
+--- Panel title ------------------------
   PANEL CONTENT
 ----------------------------------------
 ```
 
+Generated `COMPLETED` state is visually silent for every component. Actionable
+states such as `[loading]`, `[open]`, `[error]`, `[cancelled]`, and `[empty]`
+remain visible, as do meaningful result-role suffixes such as `[success]`,
+`[warning]`, `[error]`, and `[info]`. Literal bracketed text supplied in a
+sender, label, metadata value, or content body is data and is never removed.
+
 The top splitter begins with the ASCII prefix `--- `, carries the sanitized
-title and textual state, and fills its remaining usable width with `-`. The
-bottom splitter uses `-` across the usable width. There are no side borders.
+title and actionable textual state, and fills its remaining usable width with
+`-`. The bottom splitter uses `-` across the usable width. There are no side
+borders.
 At narrow widths the title and state wrap with visible continuation indentation,
 and the trailing top run is omitted when fewer than four cells remain; content
 and the bottom splitter are retained. The splitter lines remain part of the
@@ -2118,8 +2131,8 @@ provider-native threads.
 | Mode-gated accepted-input projection | The unlisted semantic adapter validates and renders one closed component before delegating its complete LF-terminated output; callback construction stays silent; stream `LIVE` writes exactly once after capable cleanup through the progress-safe persistent path; stream `FALLBACK` stays silent; `UNDECIDED` rejects without output; render/write failures propagate; no accepted payload or token is retained; public exports, constructor, actions, and supported method signatures remain exact. |
 | Informative-content retention | Capable ordinary, `/say`, and routed advisory turns clear the editable frame then render one exact-body attributed user `Message` before progress/reply; inline, fresh, and composer consensus prompts receive the same one-record treatment followed by safe output/source context; accepted content remains through success, provider failure, cancellation, and post-acceptance interrupt; pre-acceptance rejection never claims a send; normalized search/filter context and resolved transcript page context appear before their operations; fallback retains one visible representation without verbatim duplication; draft-file and referenced-source bytes, settings/configuration fields, picker choices, confirmations, credentials, provider-native input, and raw diagnostics receive no automatic echo; later input cleanup cannot erase existing informative output; no projection adds a storage, transcript-retention, provider-history, or audit guarantee. |
 | Panel framing | Every semantic `Panel` entry path uses the ASCII top-title and bottom splitters in plain, ANSI, and `NO_COLOR` output; wide, narrow, wrapped-title/state, and physical-cell widths preserve content and omit side borders; non-Panel components remain unframed; one Panel remains one callback write. |
-| Speaker-aware message and reply presentation | Generic Message remains inline; user/agent chat blocks place full headers directly above default-styled `│ ` rails and own one unrailed trailing separator, producing exactly one visible blank row between adjacent owners while preserving railed explicit blank/trailing body lines; header-only stable accents, physical-cell wrapping, whitespace/JSON/CJK safety, and row-local narrow fallback remain; complete strict JSON object/array formatting only with unchanged fallback and stored/provider bytes; compact direct/retrieval full replies versus detailed Provider/Model/Effort sources, Confirmation, and Thread; accepted users have no diagnostics; retrieval citations and transcript/history compact/detailed matrices remain exact; fallback meaning is complete and nonduplicated rather than topologically identical; `/agents` and `/status` remain fully diagnostic. |
-| Debate phase presentation | One `Debate phase · DISPLAY_NAME` Panel and writer call per event; exhaustive trusted sentence-case phase names; no loading marker in active headings; completed/error/cancelled terminal headings; unchanged canonical Phase and loading/info Outcome fields; exact field order with details-only Handoff; included/fresh notice; contiguous persisted phase/round/revision Sections; complete normal chat-block speech with details-only Kind; fixed error text and in-panel read warning; cursor-overrun restart; cursor/conflict/event/last-started state committed only after a successful write; retry sees the same suffix; successful consensus gets a separate final `Consensus` Record, while deadlock/failed outcomes use typed errors. |
+| Speaker-aware message and reply presentation | Generic Message remains inline; user/agent chat blocks place full headers directly above optional subordinate default-styled metadata and default-styled `│ ` rails, then own one unrailed trailing separator, producing exactly one visible blank row between adjacent owners while preserving railed explicit blank/trailing body lines; header-only stable accents, physical-cell wrapping, whitespace/JSON/CJK safety, and row-local narrow fallback remain; complete strict JSON object/array formatting only with unchanged fallback and stored/provider bytes; compact direct/retrieval full replies versus details-only `Provider / Model / Effort · Thread` with exceptional `pending`/`launch override`; accepted users have no diagnostics; retrieval citations and transcript/history compact/detailed matrices remain exact; fallback meaning is complete and nonduplicated rather than topologically identical; `/agents` and `/status` remain fully diagnostic. |
+| Debate phase presentation | One `Debate phase · DISPLAY_NAME` Panel and writer call per event; exhaustive trusted sentence-case phase names; no loading marker in active headings; silent completion with visible error/cancelled terminal headings; unchanged canonical Phase and loading/info Outcome fields; exact field order with details-only Handoff; included/fresh notice; contiguous persisted phase/round/revision Sections; complete normal chat-block speech with details-only Kind; fixed error text and in-panel read warning; cursor-overrun restart; cursor/conflict/event/last-started state committed only after a successful write; retry sees the same suffix; successful consensus gets a separate final `Consensus` Record, while deadlock/failed outcomes use typed errors. |
 | State transitions | Pure tests cover idle/focused/open/highlighted/selected/disabled/loading/empty/error/cancelled/completed states and invalid or boundary transitions. |
 | History | Exact whitespace-preserving commits including invalid commands, duplicates, `/quit`, fallback, and nonempty VEOF; blank/interrupt/empty-VEOF/physical-EOF/failure exclusion; 100-entry oldest eviction; older/newer bounds; exact draft/cursor restoration; editable copies; per-driver isolation; non-main exclusion; no persistence; and post-restoration append. |
 | Palette/history coordination | Slash opening with deterministic initial highlight and unchanged buffer; filtering; empty/error; canonical metadata projection including finite agent IDs/aliases; open-palette Up/Down clamped highlight navigation without replacement or history movement; Tab application of the highlighted candidate; Shift-Tab no-op; Escape full-snapshot restoration and exact-state dismissal; closed-palette Up/Down history; edited recall; and visible-buffer-only Enter commit. |

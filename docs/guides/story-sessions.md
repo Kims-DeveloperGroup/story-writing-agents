@@ -344,9 +344,10 @@ flag and does not claim to know the vendor's server-side choice.
 
 Message details Off makes the live runtime header show only the target display
 name and leaves direct replies compact. On makes the header show the resolved
-provider/model/effort and confirmation, and adds one compact reply metadata
-line with Provider, Model, and Effort sources plus Confirmation and Thread.
-`/agents` and `/status` remain fully diagnostic in both modes.
+provider/model/effort and confirmation, and adds one subordinate reply metadata
+line containing Provider / Model / Effort and Thread. It adds only exceptional
+`pending` and `launch override` qualifiers. `/agents` and `/status` retain full
+source and confirmation diagnostics in both modes.
 
 With Message details On, a capable input frame follows the active sticky agent, or a valid leading
 `@agent` one-shot route, as the buffer changes:
@@ -356,12 +357,12 @@ With Message details On, a capable input frame follows the active sticky agent, 
 story[novel:lead]> Who is answering?
 ```
 
-With Message details On, the corresponding reply keeps the execution evidence
-in its speaker header and outside the reply body:
+With Message details On, the corresponding reply keeps compact execution
+evidence beneath its speaker header and outside the reply body:
 
 ```text
-Lead Orchestrator → You · Provider: Antigravity [agent config] · Model: agy-model-id [agent config] · Effort: high [agent config] · Confirmation: confirmed · Thread: fresh after provider switch [completed]
-
+Lead Orchestrator → You
+  Antigravity / agy-model-id / high · reused
 │ <agent reply>
 ```
 
@@ -609,9 +610,9 @@ but add no separate storage guarantee. Runs do not change conversations.
 Each accepted progress event then appears as one
 `Debate phase · DISPLAY_NAME` panel with its fixed status fields and any newly
 persisted contiguous speech sections. Active headings name their actual phase
-without `[loading]`; terminal headings retain completed, error, or cancelled
-state. The canonical Phase field and Outcome role/state are unchanged. Full
-non-error speech remains visible. Message details On adds Handoff and speech
+without `[loading]`; successful completion is silent, while error or cancelled
+state remains visible. The canonical Phase field and Outcome role/state are
+unchanged. Full non-error speech remains visible. Message details On adds Handoff and speech
 Kind; Off removes only those diagnostics. Successful consensus receives a
 separate final `Consensus` Record after terminal progress; deadlock and failed
 outcomes instead use typed error presentation.

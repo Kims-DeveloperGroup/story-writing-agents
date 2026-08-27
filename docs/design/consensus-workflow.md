@@ -88,9 +88,9 @@ The interactive shell presents each accepted progress event as one Panel titled
 `Debate phase · DISPLAY_NAME` in one terminal write. Display names are the
 trusted sentence-case phase names, such as `Audit started` and `Artifacts
 committed`; the canonical Phase field still carries the enum value. Active
-headings omit `[loading]`, while Consensus, Deadlock, Failed, and Interrupted
-retain their completed, error, error, and cancelled heading states. The Outcome
-field keeps its existing role/state. Ordered fields are Debate ID, Phase, Round,
+headings omit `[loading]`; Consensus completion is silent, while Deadlock,
+Failed, and Interrupted retain error, error, and cancelled heading states. The
+Outcome field keeps its existing role/state. Ordered fields are Debate ID, Phase, Round,
 Revision, Action, Outcome, and Conflicts. Message details On inserts Handoff
 between Revision and Action; Off omits only that diagnostic field. `STARTED`
 also includes the fixed included/fresh context notice.

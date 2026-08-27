@@ -2502,8 +2502,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   progress callback constructs one `Debate phase · DISPLAY_NAME` `Panel` and
   submits it in one semantic write. A private exhaustive trusted phase-name
   projection keeps active panel headings state-neutral instead of labeling them
-  loading, while terminal headings preserve their completed, error, or
-  cancelled state and the Outcome field preserves its prior role/state. Debate
+  loading, while successful terminal headings are completion-silent and error
+  or cancelled state remains visible; the Outcome field preserves its prior
+  role/state. Debate
   ID, canonical phase, round, revision, action, outcome, conflicts, and any
   applicable starting-context notice remain visible with message details Off;
   details On additionally includes the phase handoff. The same
@@ -2566,12 +2567,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   and performs no execution-profile or confirmation lookup; with details On it
   preserves the prior exact provider/model/effort, confirmation, and semantic
   role profile. Terminal rendering may collapse the notice on narrow/fallback
-  layouts. A completed agent reply is one chat-block `Message` headed
+  layouts. An agent reply is one chat-block `Message` headed
   `<full agent display name> → You` with its complete formatted body. Details
-  Off performs no reply-profile lookup and adds no metadata; details On adds
-  provider/model/effort values and sources, confirmation, and thread status as
-  compact metadata. Neither projection adds transcript or session-manifest
-  persistence.
+  Off performs no reply-profile lookup and adds no metadata; details On adds a
+  subordinate default-styled `Provider / Model / Effort · Thread` row, with
+  `pending` only for an unconfirmed profile and `launch override` only when any
+  effective value has that source. Full sources and confirmation remain in
+  `/agents` and `/status`. Neither projection adds transcript or
+  session-manifest persistence.
   The clean settings editor exposes the exact seven-row top level Language,
   Persona, Maximum debate rounds, Conversation storage, Conversation RAG,
   Message details, and Agents. A dirty candidate appends Apply Changes and
@@ -3417,11 +3420,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   a two-space-indented projection; malformed JSON, scalars, embedded prose, and
   every other string return exactly unchanged. The fixed `AGENT` role is bold
   terminal-default foreground with the same plain meaning and local reset.
-  Messages preserve the exact established inline branch by default. Opted-in
-  chat blocks render a sanitized speaker header with optional compact metadata
-  and the visible state cue directly above every explicit body line beneath a
-  default-styled `│ ` rail, then own one unrailed terminal-default separator
-  row. A private fixed style carrier makes only the header bold plus its
+  Messages retain the established inline layout by default. Generated completed
+  state is visually silent across components, while every non-idle,
+  non-completed state and semantic result-role suffix remains textual;
+  unlabeled completed notices fall back to their semantic role. Opted-in chat
+  blocks render a sanitized
+  speaker header, then optional compact metadata on a subordinate default-styled
+  row, directly above every explicit body line beneath a default-styled `│ `
+  rail, and own one unrailed terminal-default separator row. A private fixed
+  style carrier makes only the header bold plus its
   magenta, cyan, yellow, green, or blue accent; separator, rail, and body remain
   terminal-default in every profile. The
   message-specific word wrapper preserves whitespace and explicit blank or

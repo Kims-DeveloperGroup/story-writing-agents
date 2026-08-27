@@ -1259,9 +1259,9 @@ other noninteractive output.
 
 Each accepted progress event is one atomic `Debate phase · DISPLAY_NAME` Panel.
 The trusted sentence-case title names the actual phase. Active headings omit
-`[loading]`; terminal headings retain completed, error, or cancelled state as
-applicable. The canonical Phase field and the Outcome field's existing
-role/state are unchanged. Every panel shows Debate ID, Phase, Round, Revision,
+`[loading]`; successful completion is silent, while error or cancelled state
+remains visible as applicable. The canonical Phase field and the Outcome
+field's existing role/state are unchanged. Every panel shows Debate ID, Phase, Round, Revision,
 Action, Outcome, and Conflicts; Message details On inserts Handoff after
 Revision. Newly readable durable speech is grouped into contiguous persisted
 phase/round/revision sections within that same panel and shown in full except
