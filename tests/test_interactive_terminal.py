@@ -1839,7 +1839,7 @@ class PromptAndRenderingTests(unittest.TestCase):
                 terminal.write_agent(agent_id, "reply")
                 self.assertEqual(
                     callbacks.records,
-                    [f"{alias} [completed]\n\n│ reply\n"],
+                    [f"{alias} [completed]\n│ reply\n\n"],
                 )
 
     def test_every_written_block_is_sanitized_and_gets_one_record_lf(self) -> None:

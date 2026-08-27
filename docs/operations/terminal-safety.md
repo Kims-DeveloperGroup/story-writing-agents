@@ -249,8 +249,11 @@ back to the transcript or provider result.
 
 `Message` retains its compatible inline layout by default. Controller call
 sites that represent a user or agent speaker select the chat-block layout: a
-full speaker header, one blank separator row, and a default-styled `│ ` body
-rail. Only the header receives its stable bold accent—user magenta, lead cyan,
+full speaker header directly above a default-styled `│ ` body rail, followed by
+one unrailed terminal-default separator row. That separator belongs to the
+message, so adjacent writes and collection items have one visible blank row
+between speakers; explicit blank body lines remain railed. Only the header
+receives its stable bold accent—user magenta, lead cyan,
 plot yellow, character green, and execution blue—so long message bodies remain
 legible on either terminal theme. Sanitization precedes Unicode physical-cell
 measurement and word wrapping; whitespace-only bodies, strict-JSON projection,

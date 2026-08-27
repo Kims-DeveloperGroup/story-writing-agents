@@ -1043,10 +1043,13 @@ contract for a caught exception after CLI workspace initialization or discovery
 succeeds, independently of whether a diagnostic handle or file is available.
 
 Generic semantic `Message` output retains its inline layout. User and agent
-messages use a speaker header, blank separator, and default-styled `│ ` body
-rail; only the header receives a stable speaker accent. Physical-cell wrapping
-preserves whitespace, strict-JSON presentation, and CJK/full-width content, with
-a row-local rail fallback when a narrow row cannot fit its leading glyph.
+messages place the speaker header directly above the default-styled `│ ` body
+rail and own one unrailed trailing separator; only the header receives a stable
+speaker accent. Adjacent message owners therefore have exactly one visible blank
+row between them, while explicit blank body rows remain railed. Physical-cell
+wrapping preserves whitespace, strict-JSON presentation, and CJK/full-width
+content, with a row-local rail fallback when a narrow row cannot fit its leading
+glyph.
 Message details Off is the compact default and never removes stored content. A
 direct agent reply still shows its speaker and full body; On adds Provider,
 Model, and Effort with each source, then Confirmation and Thread. The accepted

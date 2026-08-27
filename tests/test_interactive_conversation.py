@@ -102,7 +102,7 @@ _REPLY_ACCENTS = {
 
 
 def _reply_header(agent_id: str) -> str:
-    return f"{AGENT_SPECS[agent_id].display_name} → You [completed]\n\n"
+    return f"{AGENT_SPECS[agent_id].display_name} → You [completed]\n"
 
 
 def _expected_reply_message(

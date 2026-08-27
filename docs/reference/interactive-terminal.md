@@ -835,18 +835,18 @@ ALIAS [completed]> FIRST LINE
 ```
 
 Controller messages with semantic user/agent speakers select the chat-block
-layout. It uses a full speaker header, one blank separator, and a
-default-styled `│ ` body rail. Command envelopes and options are excluded from
-accepted bodies:
+layout. It places a full speaker header directly above a default-styled `│ `
+body rail, then contributes one unrailed terminal-default separator row after
+the complete body. Command envelopes and options are excluded from accepted
+bodies:
 
 ```text
 You → Lead Orchestrator [completed]
-
 │ EXACT ADVISORY BODY
 
 You → Consensus [completed]
-
 │ EXACT CONSENSUS PROMPT
+
 ```
 
 Only the header receives its stable bold accent: user magenta, lead cyan, plot
@@ -856,7 +856,9 @@ whitespace-only content, strict-JSON projection, combining characters, and
 CJK/full-width glyphs remain safe and readable. If the rail leaves too little
 room for a leading glyph, only that physical row falls back without the rail;
 very narrow output still preserves complete, nonduplicated meaning. “Exact”
-refers to the accepted semantic body, not unsanitized terminal bytes.
+refers to the accepted semantic body, not unsanitized terminal bytes. Explicit
+blank or trailing source lines remain railed content rows and are distinct from
+the single unrailed separator owned by the block.
 
 Request-defining context uses completed `Record` values. Consensus field order
 is `Output`, then `Source` only for draft input. Search and filtered-list field
@@ -897,8 +899,8 @@ include their resolved source. The exact plain topology is:
 
 ```text
 Lead Orchestrator → You · Provider: Antigravity [agent config] · Model: agy-model-id [agent config] · Effort: high [agent config] · Confirmation: confirmed · Thread: fresh after provider switch [completed]
-
 │ <agent reply>
+
 ```
 
 Accepted user blocks never receive this diagnostic metadata. The metadata is
