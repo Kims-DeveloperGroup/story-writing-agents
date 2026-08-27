@@ -2203,20 +2203,20 @@ print("RESULT=done")
 
         expected_plain = (
             "you [completed]\n"
-            "\n"
             "│ user body\n"
+            "\n"
             "lead [completed]\n"
-            "\n"
             "│ agent body\n"
+            "\n"
             "plot [completed]\n"
-            "\n"
             "│ agent body\n"
+            "\n"
             "character [completed]\n"
-            "\n"
             "│ agent body\n"
+            "\n"
             "execution [completed]\n"
-            "\n"
             "│ agent body\n"
+            "\n"
             "RESULT=done\n"
         )
         styled_headers = (
@@ -6183,7 +6183,7 @@ print(
             advisory_output.encode("utf-8"),
         ).decode("utf-8")
         accepted_message = (
-            "You → Lead Orchestrator [completed]\n\n"
+            "You → Lead Orchestrator [completed]\n"
             "│ harbor beacon beside the vessel"
         )
         self.assertEqual(advisory_plain.count(accepted_message), 1)

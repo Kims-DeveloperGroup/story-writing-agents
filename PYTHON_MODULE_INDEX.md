@@ -3415,10 +3415,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   terminal-default foreground with the same plain meaning and local reset.
   Messages preserve the exact established inline branch by default. Opted-in
   chat blocks render a sanitized speaker header with optional compact metadata
-  and the visible state cue, one blank separator row, then every explicit body
-  line beneath a default-styled `│ ` rail. A private fixed style carrier makes
-  only the header bold plus its magenta, cyan, yellow, green, or blue accent;
-  separator, rail, and body remain terminal-default in every profile. The
+  and the visible state cue directly above every explicit body line beneath a
+  default-styled `│ ` rail, then own one unrailed terminal-default separator
+  row. A private fixed style carrier makes only the header bold plus its
+  magenta, cyan, yellow, green, or blue accent; separator, rail, and body remain
+  terminal-default in every profile. The
   message-specific word wrapper preserves whitespace and explicit blank or
   trailing-LF rows, prefers word boundaries without normalizing content,
   measures physical cells for combining and wide text, hard-splits long tokens,

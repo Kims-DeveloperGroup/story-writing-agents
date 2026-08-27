@@ -120,7 +120,9 @@ The surrounding ListView supplies its position/total, and the block uses a human
 direction header: `You → Agent`, `Agent → You`, or `Runtime → You`. Sequence is
 always present. With Message details On, the same metadata line also includes
 Turn, Kind, and the canonical sender-to-recipient IDs. The full body is visible
-in both modes; Off is compact presentation, not content deletion.
+in both modes; Off is compact presentation, not content deletion. The header is
+directly contiguous with its railed body, and the block owns one unrailed
+trailing separator so adjacent transcript owners cannot visually merge.
 
 For presentation, an `agent_reply` event attempts strict complete-object/array
 JSON formatting with two-space indentation, preserved key order, and Unicode
