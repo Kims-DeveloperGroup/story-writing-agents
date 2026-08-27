@@ -16,9 +16,11 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 76.
+Importable production units indexed: 77.
 
-Direct internal dependency edges indexed: 311.
+Direct internal dependency edges indexed: 313.
+
+Directed internal dependency cycles indexed: 0.
 
 ## Current Dependency Direction
 
@@ -164,6 +166,7 @@ orchestrator -> conversation_rag_runtime
              -> conversation_storage.composition/contracts
 models -> conversations/agents/errors
 provider_adapter -> models
+provider_error_artifacts -> agents/workspace
 provider_auth -> (standard library only)
 provider_catalog -> (standard library only)
 provider_process -> (standard library only)
@@ -561,6 +564,49 @@ every intermediate arrow. The current runtime graph is acyclic.
   resource; importing and constructing its values perform no I/O.
 - **Primary verification/documentation:** `tests/test_codex_backend.py` and
   `docs/design/overview.md`.
+
+### `story_writing_agents.provider_error_artifacts`
+
+- **Source:** `src/story_writing_agents/provider_error_artifacts.py`
+- **Responsibility:** Persist bounded rejected provider responses as private
+  workspace artifacts.
+- **Supported surface:** No package-supported or project-root API. The
+  module-supported internal surface is `WorkspaceProviderErrorArtifacts`, its
+  I/O-free `directory` projection, the exact keyword-only
+  `record_rejected_response(...)` seam, and the fixed path, schema-category,
+  body/file/retention bounds, and lock-timeout constants listed in the module's
+  `__all__`. No production module currently consumes this internal surface.
+- **Direct internal dependencies:** `agents` and `workspace`.
+- **State, resources, and side effects:** Import and construction perform no
+  filesystem work. One storage call validates an exact `codex` or
+  `antigravity` provider, canonical agent and session identities, at most one
+  debate/conversation correlation, the fixed `structured_response_rejected`
+  category, and strict-UTF-8 provider-controlled plaintext. Schema-v1 compact
+  UTF-8 JSON records retain the exact body up to 262,144 bytes at a complete
+  code-point boundary plus full-response byte count and SHA-256; one serialized
+  record is limited to 2,097,152 bytes. Complete timestamp-and-UUID artifacts
+  live under `debug_logs/provider_error_responses/`, with at most 32 files and
+  16,777,216 serialized bytes. The owner holds a weakly registered
+  per-workspace process lock and makes a bounded 100-millisecond attempt on the
+  independent `.lock` advisory guard. It borrows `Workspace`'s identity-bound
+  root open/reverification seam, then holds and reverifies the root,
+  `debug_logs`, and artifact-directory descriptors. All namespace operations
+  are descriptor-relative and no-follow; directories must retain exact spelling
+  and identity, and leaf files must be regular, singly linked, size-bounded,
+  stably readable, strict-UTF-8, duplicate-free canonical JSON with the exact
+  managed schema. Unknown, malformed, aliased, symlinked, hard-linked,
+  nonregular, oversized, replaced, or concurrently changed state fails closed
+  without pruning that state. Under the acquired guard, the owner removes only
+  a verified stale fixed `.pending`, synchronizes a new exclusive pending file,
+  validates existing complete artifacts before oldest-first pruning, and uses
+  the platform's native atomic no-replace rename before final directory
+  synchronization and validation. Unsupported safe primitives or native
+  no-replace publication fail before using a weaker fallback; bounded lock
+  contention drops the attempted artifact. Storage failures and process-control
+  exceptions propagate to the caller, no redaction or terminal rendering occurs,
+  and ordinary deletion is not secure erasure.
+- **Primary verification/documentation:**
+  `tests/test_provider_error_artifacts.py`.
 
 ### `story_writing_agents.provider_process`
 
