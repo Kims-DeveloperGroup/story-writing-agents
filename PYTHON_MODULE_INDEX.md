@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 80.
+Importable production units indexed: 81.
 
-Direct internal dependency edges indexed: 317.
+Direct internal dependency edges indexed: 321.
 
 ## Current Dependency Direction
 
@@ -169,6 +169,8 @@ orchestrator -> conversation_rag_runtime
 models -> conversations/agents/errors
 agent_context -> agent_context.accounting
 agent_context.accounting -> (standard library only)
+agent_context.ledger -> agent_context.accounting/manifest/planning
+                     -> workspace
 agent_context.manifest -> (standard library only)
 agent_context.planning -> agent_context.manifest
 provider_adapter -> agent_context/models
@@ -314,9 +316,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ProviderCallAccounting`, `ProviderCallKind`, `ProviderCallState`,
   `ProviderJsonEncodingError`, `ProviderPayloadAccounting`, `ProviderUsage`,
   `account_provider_payload`, and `canonical_provider_json`. This is the
-  facade's complete exposed surface. The package-internal `manifest` and
-  `planning` modules intentionally remain direct-module contracts and are not
-  re-exported here.
+  facade's complete exposed surface. The package-internal `ledger`, `manifest`,
+  and `planning` modules intentionally remain direct-module contracts and are
+  not re-exported here.
 - **Direct internal dependencies:** `agent_context.accounting`.
 - **State, resources, and side effects:** Re-exports immutable values and pure
   functions only. Importing performs no I/O and creates no mutable state or
@@ -355,6 +357,50 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_codex_backend.py`, `tests/test_antigravity_adapter.py`,
   `tests/test_antigravity_parity.py`, and
   `docs/design/prompts-and-provider.md`.
+
+### `story_writing_agents.agent_context.ledger`
+
+- **Source:** `src/story_writing_agents/agent_context/ledger.py`
+- **Responsibility:** Persist and reconstruct one scoped, content-free
+  agent-context checkpoint together with its exact planning and physical-call
+  accounting.
+- **Supported surface:** No project-root or `agent_context`-facade-supported
+  API. The direct-module package-internal `__all__` exposes
+  `CONTEXT_LEDGER_SCHEMA_VERSION`,
+  `MAX_CONTEXT_LEDGER_RECORD_UTF8_BYTES`, `MAX_CONTEXT_LEDGER_SOURCES`,
+  `MAX_CONTEXT_LEDGER_PROVIDER_CALLS`,
+  `CONTEXT_LEDGER_LOCK_TIMEOUT_SECONDS`, `ContextLedger`, `ContextLedgerKey`,
+  `ContextLedgerRecordState`, `ContextLedgerAttemptOutcome`,
+  `ContextLedgerAttemptPlan`, `ContextLedgerProviderCall`,
+  `ContextLedgerAttempt`, `ContextLedgerReadyCheckpoint`,
+  `ContextLedgerRecord`, `ContextLedgerInspection`,
+  `ContextLedgerCommitAuthorization`, `ContextLedgerError`,
+  `ContextLedgerErrorCode`, `context_checkpoint_proposal_digest`, and
+  `context_ledger_scope_key`. `ContextLedger` owns `inspect`,
+  `reserve_attempt`, `append_provider_call`, `taint_attempt`, `commit_attempt`,
+  and `invalidate` transitions with optimistic generation checks and exact
+  idempotent replay.
+- **Direct internal dependencies:** `agent_context.accounting`,
+  `agent_context.manifest`, `agent_context.planning`, and `workspace`.
+- **State, resources, and side effects:** Sole owner of lazy schema-v1 records
+  under `agent_states/orchestrator_state/context_ledger/v1/`, hash-only record
+  names, a weak in-process writer registry, descriptor-relative traversal,
+  `0600` POSIX advisory lock files, and same-directory atomic replacement with
+  file and directory synchronization. Importing, construction, and a missing
+  inspection perform no I/O mutation. Readers remain lock-free and use bounded
+  verification and retry to return one complete predecessor or successor
+  across atomic replacement. Stored values contain no prompts, bodies,
+  excerpts, outputs, transcripts, exception text, reference descriptors, or
+  projected units.
+- **Primary verification/documentation:** `tests/test_agent_context_ledger.py`
+  verifies the exact direct-module surface, immutable values and codecs,
+  lifecycle and commit authorization, restart and corruption mapping,
+  content-free privacy, limits, storage security and durability, lock-free and
+  serialized concurrency, scope isolation, facade stability, and dependency
+  graph. `tests/test_rag_module_and_packaging_boundary.py` verifies the exact
+  four internal dependency edges; `tests/test_writing_artifacts.py` and
+  `tests/test_interactive_pty.py` verify that internal ledger records remain
+  excluded from canonical artifact discovery and the `$`/`$$` picker.
 
 ### `story_writing_agents.agent_context.manifest`
 
