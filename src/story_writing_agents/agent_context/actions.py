@@ -795,21 +795,6 @@ def _boundary_value(boundary: ContextSourceBoundary) -> dict[str, object]:
     }
 
 
-def _correlation_value(correlation: ContextActionCorrelation) -> dict[str, object]:
-    return {
-        "action_index": correlation.action_index,
-        "operation_id": correlation.operation_id,
-        "result_correlation_id": correlation.result_correlation_id,
-        "scope": {
-            "agent_id": correlation.scope.agent_id,
-            "session_id": correlation.scope.session_id,
-            "subject_id": correlation.scope.subject_id,
-            "subject_kind": correlation.scope.subject_kind.value,
-            "workspace_id": correlation.scope.workspace_id,
-        },
-    }
-
-
 def _receipt_value(receipt: ContextEvidenceReceipt) -> dict[str, object]:
     return {
         "boundary": _boundary_value(receipt.boundary),
@@ -843,47 +828,58 @@ def _completed_evidence_digest(
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
+def _wire_boundary_value(boundary: ContextSourceBoundary) -> list[object]:
+    """Project one exact boundary without internal authority or digest facts."""
+
+    return [
+        boundary.kind.value,
+        boundary.start,
+        boundary.end,
+        boundary.first_id,
+        boundary.last_id,
+    ]
+
+
 def serialize_context_action_observation(
     observation: ContextActionObservation,
 ) -> str:
-    """Serialize exactly one observation inside the established trust markers."""
+    """Serialize one compact observation inside the established trust markers.
+
+    Complete revisions, provenance, digests, sizes, and read receipts remain on
+    the validated in-process values.  The provider sees only the facts needed
+    to choose its next bounded action.
+    """
 
     if type(observation) is ContextSearchObservation:
-        payload: dict[str, object] = {
-            "correlation": _correlation_value(observation.correlation),
-            "hits": [
-                {
-                    "boundary": _boundary_value(hit.boundary),
-                    "handle": hit.handle.value,
-                    "provenance": {
-                        "authority_kind": hit.provenance.authority_kind.value,
-                        "locator": hit.provenance.locator,
-                    },
-                    "query_index": hit.query_index,
-                    "revision": hit.revision,
-                    "source_digest": hit.source_digest,
-                    "source_utf8_bytes": hit.source_utf8_bytes,
-                    "boundary_digest": hit.boundary_digest,
-                    "boundary_utf8_bytes": hit.boundary_utf8_bytes,
-                    "snippet": hit.snippet,
-                    "snippet_utf8_bytes": hit.snippet_utf8_bytes,
-                    "source_id": hit.source_id,
-                    "source_kind": hit.source_kind.value,
-                }
+        payload: object = [
+            "s",
+            observation.truncated,
+            [
+                [
+                    hit.query_index,
+                    hit.source_id,
+                    hit.source_kind.value,
+                    _wire_boundary_value(hit.boundary),
+                    hit.handle.value,
+                    hit.snippet,
+                ]
                 for hit in observation.hits
             ],
-            "kind": "search_observation",
-            "truncated": observation.truncated,
-        }
+        ]
     elif type(observation) is ContextReadObservation:
-        payload = {
-            "correlation": _correlation_value(observation.correlation),
-            "evidence": [
-                {"content": item.content, **_receipt_value(item.receipt)}
+        payload = [
+            "r",
+            [
+                [
+                    item.receipt.source_id,
+                    item.receipt.source_kind.value,
+                    _wire_boundary_value(item.receipt.boundary),
+                    item.receipt.handle.value,
+                    item.content,
+                ]
                 for item in observation.evidence
             ],
-            "kind": "read_observation",
-        }
+        ]
     else:
         raise _invalid()
     encoded: str | None = None
