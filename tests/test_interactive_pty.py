@@ -1145,6 +1145,9 @@ class InteractiveCliPtyTests(unittest.TestCase):
         }
         excluded = {
             "agent_states/file-picker/internal.md": "internal\n",
+            "agent_states/orchestrator_state/context_ledger/v1/checkpoint.json": (
+                "content-free internal ledger\n"
+            ),
             "core_documents/extra.md": "extra\n",
             "manuscript/bad}.md": "unsafe delimiter\n",
             "manuscript/chapter.MD": "unsupported suffix\n",
