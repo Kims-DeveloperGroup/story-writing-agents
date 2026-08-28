@@ -487,7 +487,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   optional synchronous answer validator receives the exact authorized answer
   and authorization after final source revalidation but before reference
   completion and READY commit, so invalid domain output cannot advance the
-  checkpoint.
+  checkpoint. `ContextSourceClassification` is strict-presence by default; its
+  additive exact-bool `allow_absent` field is valid only for P2 hard
+  constraints. The service still treats source inventory as authoritative,
+  rejects every unmatched strict classification, and omits only an unmatched
+  classification carrying that explicit conditional-presence fact.
 - **Direct internal dependencies:** `agent_context.accounting`,
   `agent_context.actions`, `agent_context.ledger`, `agent_context.manifest`,
   `agent_context.planning`, `agent_context.sources`, and `workspace`.
@@ -511,7 +515,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   or mutation; service construction performs no filesystem mutation.
 - **Primary verification/documentation:**
   `tests/test_agent_context_service.py`,
-  `tests/test_agent_context_execution.py`, `tests/test_codex_backend.py`,
+  `tests/test_agent_context_execution.py`,
+  `tests/test_agent_context_runtime_adoption.py`, `tests/test_codex_backend.py`,
   `tests/test_antigravity_adapter.py`, and `tests/test_antigravity_parity.py`;
   module-inventory, dependency, facade, and import-boundary assertions across
   `tests/test_rag_module_and_packaging_boundary.py`,
@@ -4602,8 +4607,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   definitions without mutable core-document bytes, construct canonical P0
   current/candidate material, classify role core documents and focused
   conversation/debate/owner state as bounded working context, and leave other
-  searchable artifacts optional. The four concrete source adapters remain the
-  only read authorities. Runtime-reference proofs become the same ordered
+  searchable artifacts optional. Only role-core classifications explicitly
+  allow absence, matching the established workspace rule that missing core
+  documents are omitted; when a role core later appears, the same classification
+  delivers it as a new P2 hard constraint. Conversation, debate, owner-state,
+  and retrieved-source classifications remain strict. The four concrete source
+  adapters remain the only read authorities. Runtime-reference proofs become
+  the same ordered
   content-free reservations while each addressed call receives its matching
   read invocation, so the mandatory prelude remains outside the substantive
   action budget and retains the existing operation completion rules.
@@ -4700,6 +4710,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   the repository's recoverable, part-scoped publication operation.
 - **Primary verification/documentation:** `tests/test_conversation_runtime.py`,
   `tests/test_context_accounting_baseline.py`,
+  `tests/test_agent_context_runtime_adoption.py`,
   `tests/test_conversation_retrieval.py`, `tests/test_interactive_consensus.py`,
   `tests/test_interactive_conversation.py` for retained runtime use through the
   controller-owned persistent Runner and its single lifecycle event loop,
@@ -5595,7 +5606,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   validates domain answers, and projects typed context events into existing
   debug/progress owners without reversing any context dependency. Prompts owns
   the stable no-core-byte runtime definition while retaining its eager legacy
-  definition. Mandatory references pass through answer authorization unchanged,
+  definition. Service-owned classification joining remains strict unless the
+  orchestrator explicitly marks a P2 hard constraint as conditional; only
+  role-core IDs use that path, so missing workspace cores are omitted without
+  weakening conversation, debate, owner-state, or retrieved-source authority.
+  Mandatory references pass through answer authorization unchanged,
   remain outside source search/read authority, and execute as a separately
   accounted backend prelude before the substantive context-action budget; the
   runtime-reference coordinator exposes only ordered content-free proof facts
