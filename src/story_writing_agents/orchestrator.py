@@ -4375,6 +4375,7 @@ class StoryRuntime:
                     ContextSemanticChannel.HARD_CONSTRAINT,
                     ContextPriority.P2_WORKING,
                     ordinal,
+                    allow_absent=True,
                 )
             )
             ordinal += 1

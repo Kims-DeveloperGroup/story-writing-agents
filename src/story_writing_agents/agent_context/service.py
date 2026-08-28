@@ -472,6 +472,7 @@ class ContextSourceClassification:
     semantic_channel: ContextSemanticChannel
     priority: ContextPriority
     ordinal: int
+    allow_absent: bool = False
 
     def __post_init__(self) -> None:
         _safe_identity(self.source_id)
@@ -482,6 +483,15 @@ class ContextSourceClassification:
             not in {ContextPriority.P2_WORKING, ContextPriority.P3_OPTIONAL}
             or type(self.ordinal) is not int
             or self.ordinal < 0
+            or type(self.allow_absent) is not bool
+            or (
+                self.allow_absent
+                and (
+                    self.priority is not ContextPriority.P2_WORKING
+                    or self.semantic_channel
+                    is not ContextSemanticChannel.HARD_CONSTRAINT
+                )
+            )
         ):
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
 
@@ -2143,7 +2153,11 @@ class AgentContextService:
             item.source_id: item for item in request.source_classifications
         }
         descriptor_ids = {item.source_id for item in descriptors}
-        if set(classifications).difference(descriptor_ids):
+        unmatched_classifications = set(classifications).difference(descriptor_ids)
+        if any(
+            not classifications[source_id].allow_absent
+            for source_id in unmatched_classifications
+        ):
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         source_entries: list[ContextManifestEntry] = []
         for index, descriptor in enumerate(descriptors):
