@@ -829,9 +829,10 @@ agent is followed by `Current:` or `Pending:` and its effective
 `(Provider/model/effort)` profile. Selecting an agent opens a provider-neutral
 Provider/Model/Effort picker; each field independently shows `Current:` or
 `Pending:` followed by its effective value. An omitted effective model or
-effort is displayed as `provider default`. Current/Pending confirmation panels
-retain provider-qualified rows for both providers so inactive stored values
-remain identifiable.
+effort is displayed as `provider default`. Current/Pending confirmation
+comparisons retain provider-qualified rows for both providers on capable
+streams, so inactive stored values remain identifiable while the transient
+comparison is visible. Ordinary-line fallback omits that comparison.
 
 The inline agent and field comparisons are against the active runtime profile,
 not a flattening of every configuration property. An edit to only an inactive
@@ -862,12 +863,14 @@ Conversation RAG, and Message details, shows one effective description: neutral
 similarly warning-marks its explicit nonzero nested pending-change count. In
 Agents and Agent settings, effective `Current` descriptions remain neutral and
 effective `Pending` descriptions use warning semantics. Dirty confirmation
-context keeps Current neutral and Pending warning. These roles reinforce the
-visible words and counts; warning suffix and description spans wrap
-independently, whole-row disabled/selected/highlighted precedence remains
-authoritative, and narrow, plain, fallback, and `NO_COLOR` output retain the
-complete textual values so color is never required to identify state. The
-additive Choice description role remains package-internal.
+context on capable streams keeps Current neutral and Pending warning. These
+roles reinforce the visible words and counts; warning suffix and description
+spans wrap independently, and whole-row disabled/selected/highlighted
+precedence remains authoritative. Root and editor views retain complete
+textual values under narrow, plain, fallback, and `NO_COLOR` output, so color
+is never required to identify state; fallback confirmation context is omitted
+as described below. The additive Choice description role remains
+package-internal.
 
 Every retained Language, Persona, Maximum debate rounds, Conversation storage,
 Conversation RAG Provider, Conversation RAG Automatic, Message details,
@@ -932,13 +935,22 @@ Apply Changes alone opens the dirty transient yes/no persistence confirmation.
 Discard Changes opens the existing dirty discard confirmation. Root Settings
 Escape retains the same cancellation action: clean settings exit immediately
 without confirmation, while dirty settings open the discard confirmation. Each
-dirty confirmation has changed-only Current/Pending
-context: only differing fields appear in both sections, each with a `(Changed)`
-cue. Its activation notice joins only the applicable exact sentences:
+dirty confirmation has changed-only Current/Pending context on capable
+streams: only differing fields appear in both sections, each with a `(Changed)`
+cue. That comparison, the confirmation picker, and its activation notice are
+one live FORM frame rather than separate durable output. The activation notice
+joins only the applicable exact sentences:
 `Runtime changes apply to this shell after Apply Changes.`, `Desired storage
 changes apply to the next shell.`, and `Conversation RAG changes apply to the
 next shell; this running shell retains its current RAG service and automatic
 policy.`
+The driver clears the whole capable frame before YES, NO, confirmation Escape,
+Ctrl-C, or EOF returns, and attempts the same cleanup before an input or render
+failure propagates. The controller does not write a separate Current/Pending
+panel, so returning to Settings or the shell leaves no redundant comparison.
+Ordinary-line fallback, including `TERM=dumb`, omits both the comparison and
+activation notice—even on an invalid-answer retry—because printed fallback
+content cannot be erased. Its YES/NO choices and action outcomes are unchanged.
 The existing `No pending settings changes.` confirmation panel remains a
 defensive internal projection and is not selectable clean-root UX. YES
 commits the requested dirty action; NO or confirmation Escape returns to the

@@ -219,8 +219,10 @@ save settings, or invoke an agent.
 
 Provider remains the field-level configuration concept; its choices are Codex
 and Antigravity. Changing the route does not erase the inactive provider's
-saved model or effort. Current/Pending confirmation remains provider-qualified
-so both providers' inactive values stay identifiable.
+saved model or effort. On capable terminals, Current/Pending confirmation
+context remains provider-qualified so both providers' inactive values stay
+identifiable while that transient frame is visible. Line fallback omits the
+comparison context.
 
 On a capable terminal, Up/Down moves the current picker highlight. Enter opens
 a selected settings level or applies a pending value. Language, Persona,
@@ -246,7 +248,13 @@ Escape invokes the same action as explicit Discard Changes: clean settings exit
 immediately, while dirty settings open the existing YES/NO discard confirmation.
 NO or Escape there returns to Settings. Ctrl-C or EOF still cancels the whole
 transaction without saving. Plain fallback uses the picker's numbered grammar
-and the same level hierarchy. In the per-agent active-provider Custom model
+and the same level hierarchy. On a capable terminal, the changed-only
+Current/Pending comparison appears above the YES/NO choices in the same live
+confirmation frame. That whole frame clears after YES, NO, Escape, Ctrl-C, or
+EOF, so returning to Settings or the shell does not leave a duplicate diff.
+Line fallback, including `TERM=dumb`, omits the comparison and activation
+notice because it cannot erase them; the confirmation choice behaves the same.
+In the per-agent active-provider Custom model
 prompt, blank means inherit that provider's workspace system model and
 `/cancel` is literal model text rather than a command.
 
