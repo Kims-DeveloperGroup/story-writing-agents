@@ -231,10 +231,25 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
         self.assertEqual(
             tuple(service_module.__all__),
             (
+                "AgentContextService",
+                "ContextExecutionError",
+                "ContextExecutionErrorCode",
                 "ContextInvocationBinding",
+                "ContextInvocationRequest",
+                "ContextInvocationResult",
                 "ContextInvocationSession",
                 "ContextInvocationState",
+                "ContextProvider",
+                "ContextProviderCallRequest",
+                "ContextProviderCallResult",
+                "ContextProviderFailureFacts",
+                "ContextReferencePreludeRequest",
+                "ContextReferencePreludeResult",
                 "ContextReadReceipt",
+                "ContextScope",
+                "ContextSourceClassification",
+                "context_provider_failure_facts",
+                "record_context_provider_failure",
             ),
         )
         self.assertEqual(

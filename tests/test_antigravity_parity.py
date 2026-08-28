@@ -49,6 +49,17 @@ from story_writing_agents import (
     Verdict,
 )
 from story_writing_agents.config import ConfigManager
+from story_writing_agents.agent_context import (
+    ProviderCallKind,
+    ProviderCallState,
+    ProviderUsage,
+    canonical_provider_json,
+)
+from story_writing_agents.agent_context.manifest import (
+    ContextScope,
+    ContextSubjectKind,
+)
+from story_writing_agents.agent_context.service import ContextProviderCallRequest
 from story_writing_agents.prompts import PromptAssembler
 from story_writing_agents.provider_adapter import ProviderResult
 from story_writing_agents.writing_artifacts import (
@@ -757,6 +768,89 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 return
             await asyncio.sleep(0.01)
         self.fail(f"fake Antigravity did not record {count} invocations")
+
+    async def test_contextual_thread_bootstrap_delta_restart_and_scope_isolation_match_codex(
+        self,
+    ) -> None:
+        session_id = "antigravity-contextual"
+        backend = self.backend()
+        backend.create_session_with_access(session_id)
+        definition = self.definition()
+        provider = (await backend.bind(definition))._context_provider()
+        scope = ContextScope(
+            "workspace-context",
+            session_id,
+            ContextSubjectKind.CONVERSATION,
+            "conversation-context",
+            PLOT_ARCHITECT,
+        )
+        policy = "sha256:" + "6" * 64
+        schema = {"type": "object"}
+        payload = {"operation": "agent_context_v1", "content": "PARITY_한🙂"}
+        invocations = []
+
+        async def invoke(_binding, invocation):
+            invocations.append(invocation)
+            assert invocation.payload_json is not None
+            return ProviderResult(
+                invocation.thread_id or "antigravity-context-thread",
+                "{}",
+                usage=ProviderUsage(input_tokens=1),
+                actual_transport_utf8_bytes=len(invocation.payload_json) + 9,
+            )
+
+        with mock.patch.object(backend._antigravity_adapter, "invoke", new=invoke):
+            async with provider.invocation(scope, policy):
+                first = await provider.invoke_context(
+                    ContextProviderCallRequest(
+                        scope,
+                        policy,
+                        "parity-call-1",
+                        ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL,
+                        schema,
+                        payload,
+                    )
+                )
+                second = await provider.invoke_context(
+                    ContextProviderCallRequest(
+                        scope,
+                        policy,
+                        "parity-call-2",
+                        ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION,
+                        schema,
+                        {"observation": "bounded"},
+                        expected_thread_id=first.thread_id,
+                    )
+                )
+                self.assertEqual(
+                    provider.inspect_context_thread(scope, policy),
+                    first.thread_id,
+                )
+            other_scope = replace(scope, subject_id="other-conversation")
+            async with provider.invocation(other_scope, policy):
+                self.assertIsNone(
+                    provider.inspect_context_thread(other_scope, policy)
+                )
+
+        self.assertEqual(second.thread_id, first.thread_id)
+        self.assertEqual(invocations[0].payload_json, canonical_provider_json(payload))
+        self.assertIs(first.accounting.state, ProviderCallState.SUBMITTED)
+        self.assertEqual(first.accounting.usage, ProviderUsage(input_tokens=1))
+        self.assertGreater(
+            first.accounting.actual_transport_utf8_bytes,
+            len(invocations[0].payload_json),
+        )
+        self.assertEqual(self.manifest(session_id)["provider_threads"], {})
+        backend.close()
+
+        restarted = self.backend()
+        restarted.acquire_session_access(session_id)
+        restarted_provider = (await restarted.bind(definition))._context_provider()
+        async with restarted_provider.invocation(scope, policy):
+            self.assertEqual(
+                restarted_provider.inspect_context_thread(scope, policy),
+                first.thread_id,
+            )
 
     @staticmethod
     def _process_is_running(pid: int) -> bool:

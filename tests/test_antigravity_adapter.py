@@ -29,6 +29,7 @@ from story_writing_agents import (
 from story_writing_agents.antigravity_adapter import AntigravityAdapter
 from story_writing_agents.agent_context import (
     ContextComponentKind,
+    ProviderCallKind,
     ProviderCallState,
     ProviderUsage,
     canonical_provider_json,
@@ -1907,6 +1908,72 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [path.name for path in working_directory.iterdir()],
             ["AGENTS.md"],
+        )
+
+    async def test_contextual_unicode_keeps_inner_application_bytes_distinct_from_ndjson_transport(
+        self,
+    ) -> None:
+        adapter = self.adapter("contextual-runtime")
+        binding = adapter.bind(self.definition)
+        schema = {"type": "object"}
+        payload = {
+            "operation": "agent_context_v1",
+            "projected_units": [{"content": "CONTEXTUAL_한🙂"}],
+        }
+        invocation = ProviderInvocation(
+            session_id="contextual-session",
+            schema=schema,
+            payload=payload,
+            thread_id=None,
+            call_kind=ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL,
+            component_paths={
+                ("projected_units", 0, "content"): (
+                    ContextComponentKind.CURRENT_INPUT
+                )
+            },
+        )
+        requests: list[ProcessRequest] = []
+
+        async def capture_process(
+            request: ProcessRequest,
+            **_seams: object,
+        ) -> ProcessResult:
+            requests.append(request)
+            return ProcessResult(
+                stdout=_stream(
+                    "contextual-conversation",
+                    structured_output={"action": "answer"},
+                    usage={"input_tokens": 0, "output_tokens": 4},
+                ),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch(
+            "story_writing_agents.antigravity_adapter.run_process",
+            new=capture_process,
+        ):
+            result = await adapter.invoke(binding, invocation)
+
+        self.assertEqual(len(requests), 1)
+        assert invocation.payload_json is not None
+        outer = json.loads(requests[0].stdin)
+        self.assertEqual(
+            outer,
+            {
+                "event": "user",
+                "message": {
+                    "content": invocation.payload_json.decode("utf-8")
+                },
+            },
+        )
+        self.assertNotEqual(requests[0].stdin.rstrip(b"\n"), invocation.payload_json)
+        self.assertEqual(result.actual_transport_utf8_bytes, len(requests[0].stdin))
+        self.assertGreater(result.actual_transport_utf8_bytes, len(invocation.payload_json))
+        self.assertEqual(result.usage, ProviderUsage(0, 4))
+        self.assertEqual(
+            invocation.payload_accounting.payload_utf8_bytes,
+            len(invocation.payload_json),
         )
 
     def test_provider_usage_accepts_only_recognized_exact_snapshot_counters(
