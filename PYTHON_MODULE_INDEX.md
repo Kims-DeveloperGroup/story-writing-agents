@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 78.
+Importable production units indexed: 80.
 
-Direct internal dependency edges indexed: 316.
+Direct internal dependency edges indexed: 317.
 
 ## Current Dependency Direction
 
@@ -169,6 +169,8 @@ orchestrator -> conversation_rag_runtime
 models -> conversations/agents/errors
 agent_context -> agent_context.accounting
 agent_context.accounting -> (standard library only)
+agent_context.manifest -> (standard library only)
+agent_context.planning -> agent_context.manifest
 provider_adapter -> agent_context/models
 provider_auth -> (standard library only)
 provider_catalog -> (standard library only)
@@ -312,7 +314,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ProviderCallAccounting`, `ProviderCallKind`, `ProviderCallState`,
   `ProviderJsonEncodingError`, `ProviderPayloadAccounting`, `ProviderUsage`,
   `account_provider_payload`, and `canonical_provider_json`. This is the
-  package's complete implemented surface.
+  facade's complete exposed surface. The package-internal `manifest` and
+  `planning` modules intentionally remain direct-module contracts and are not
+  re-exported here.
 - **Direct internal dependencies:** `agent_context.accounting`.
 - **State, resources, and side effects:** Re-exports immutable values and pure
   functions only. Importing performs no I/O and creates no mutable state or
@@ -351,6 +355,76 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_codex_backend.py`, `tests/test_antigravity_adapter.py`,
   `tests/test_antigravity_parity.py`, and
   `docs/design/prompts-and-provider.md`.
+
+### `story_writing_agents.agent_context.manifest`
+
+- **Source:** `src/story_writing_agents/agent_context/manifest.py`
+- **Responsibility:** Define immutable content-free context-source manifests
+  and their canonical classification and ordering rules.
+- **Supported surface:** No project-root or `agent_context`-facade-supported
+  API. The direct-module package-internal `__all__` exposes
+  `ContextAuthorityKind`, `ContextManifest`, `ContextManifestEntry`,
+  `ContextManifestError`, `ContextManifestErrorCode`, `ContextPriority`,
+  `ContextProvenance`, `ContextScope`, `ContextSemanticChannel`,
+  `ContextSourceKind`, `ContextSubjectKind`,
+  `context_manifest_entry_key`, `validate_context_digest`, and
+  `validate_context_identity`. These contracts validate bounded content-free
+  identities, strict source/channel/priority/authority/searchability mappings,
+  subject scope, provenance, lowercase SHA-256 identities, exact byte counts,
+  unique source IDs, and locale-independent canonical order. Mutable writing
+  artifacts remain P2/P3 sources rather than stable P1 definitions.
+- **Direct internal dependencies:** None.
+- **State, resources, and side effects:** Owns frozen metadata values only.
+  Validation and normalization use call-local memory; importing performs no
+  I/O and creates no mutable state or external resource.
+- **Primary verification/documentation:**
+  `tests/test_agent_context_manifest.py` verifies the exact direct-module
+  surface, immutable value and identity contracts, exhaustive classification,
+  authority and searchability matrices, canonical ordering, privacy,
+  standard-library-only imports, and compilation.
+
+### `story_writing_agents.agent_context.planning`
+
+- **Source:** `src/story_writing_agents/agent_context/planning.py`
+- **Responsibility:** Produce deterministic budgeted bootstrap or delta
+  projections from validated context manifests.
+- **Supported surface:** No project-root or `agent_context`-facade-supported
+  API. The direct-module package-internal `__all__` exposes
+  `CONTEXT_CHECKPOINT_SCHEMA_VERSION`,
+  `DEFAULT_CONTEXT_PLANNING_POLICY`,
+  `MAX_MANDATORY_REFERENCE_RESERVATION_UTF8_BYTES`,
+  `ContextBootstrapReason`, `ContextBudgetAccounting`,
+  `ContextCheckpointProposal`,
+  `ContextCheckpointSource`, `ContextCheckpointState`,
+  `ContextCheckpointView`, `ContextDecisionAccounting`,
+  `ContextDecisionKind`, `ContextDeliveryMode`, `ContextMaterial`,
+  `ContextPlanningConditions`, `ContextPlanningError`,
+  `ContextPlanningErrorCode`, `ContextPlanningPolicy`,
+  `ContextProjectedUnit`, `ContextProjection`,
+  `ContextProjectionAccounting`, `ContextReferenceBudgetUsage`,
+  `ContextSearchableAccounting`, `ContextSourceBudgetUsage`,
+  `ContextSourceDecision`, `MandatoryReferenceReservation`, and
+  `plan_context_projection`. The planner preserves exact P0 and mandatory
+  reference treatment, bootstraps stable-context changes, suppresses only
+  compatible unchanged non-P0 sources, deduplicates eligible same-channel
+  P2/P3 material only after byte equality, atomically requires hard
+  constraints, and applies deterministic class-budget first-fit-with-skip to
+  other searchable sources. Content-free accounting partitions every source
+  decision, exact unique/logical bytes, cap usage, reference reservations, and
+  checkpoint proposal metadata.
+- **Direct internal dependencies:** `agent_context.manifest`.
+- **State, resources, and side effects:** Owns a frozen default policy and pure
+  planning contracts only. Transient strict-UTF-8 bodies are caller-owned,
+  immutable, hidden from representation, and retained only in returned
+  projected units; no body enters errors, accounting, manifests, references,
+  or checkpoint proposals. Planning performs no I/O, persistence, provider
+  work, source authorization, clock/environment access, caching, or mutation.
+- **Primary verification/documentation:**
+  `tests/test_agent_context_planning.py` verifies the exact direct-module
+  surface, policy, material and checkpoint validation, exhaustive decision and
+  accounting invariants, bootstrap/delta precedence, deterministic packing,
+  deduplication and collision handling, reference/proposal correlation,
+  privacy, replay, facade/import boundaries, and no-I/O guarantees.
 
 ### `story_writing_agents.backend`
 

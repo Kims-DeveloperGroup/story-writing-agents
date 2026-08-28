@@ -198,8 +198,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 78)
-        self.assertEqual(len(edges), 316)
+        self.assertEqual(len(modules), 80)
+        self.assertEqual(len(edges), 317)
         self.assertIsNone(_cycle_witness(modules, edges))
         self.assertEqual(
             _generic_importers(modules),
