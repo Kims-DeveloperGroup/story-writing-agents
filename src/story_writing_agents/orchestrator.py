@@ -38,6 +38,8 @@ from .agent_context.manifest import (
 from .agent_context.planning import ContextMaterial, MandatoryReferenceReservation
 from .agent_context.service import (
     AgentContextService,
+    ContextExecutionError,
+    ContextExecutionErrorCode,
     ContextExecutionEvent,
     ContextExecutionEventKind,
     ContextInvocationRequest,
@@ -4583,6 +4585,19 @@ class StoryRuntime:
 
         return emit
 
+    @staticmethod
+    def _contextual_backend_error(
+        failure: ContextExecutionError,
+    ) -> BackendProtocolError | None:
+        """Translate only an exact malformed provider action at the runtime edge."""
+
+        if (
+            type(failure) is ContextExecutionError
+            and failure.code is ContextExecutionErrorCode.MALFORMED_ACTION
+        ):
+            return BackendProtocolError("contextual provider action is malformed")
+        return None
+
     async def _invoke_contextual_conversation(
         self,
         bound_agent: BoundAgent,
@@ -4660,16 +4675,22 @@ class StoryRuntime:
         provider_factory = self._validated_context_provider_factory(bound_agent)
         provider = provider_factory(reference_read)
         self._reject_async_result(provider, operation="bound context_provider")
-        result = await self._agent_context_service.invoke(
-            contextual_request,
-            provider,
-            writing_artifacts=authorities[0],
-            focused_conversation=authorities[1],
-            active_debate=authorities[2],
-            own_agent_state=authorities[3],
-            answer_validator=validate,
-            event_sink=self._context_event_sink(),
-        )
+        try:
+            result = await self._agent_context_service.invoke(
+                contextual_request,
+                provider,
+                writing_artifacts=authorities[0],
+                focused_conversation=authorities[1],
+                active_debate=authorities[2],
+                own_agent_state=authorities[3],
+                answer_validator=validate,
+                event_sink=self._context_event_sink(),
+            )
+        except ContextExecutionError as exc:
+            translated = self._contextual_backend_error(exc)
+            if translated is None:
+                raise
+            raise translated from exc
         return project(result.answer)
 
     @staticmethod
@@ -4948,19 +4969,25 @@ class StoryRuntime:
         provider_factory = self._validated_context_provider_factory(bound_agent)
         provider = provider_factory(reference_read)
         self._reject_async_result(provider, operation="bound context_provider")
-        result = await self._agent_context_service.invoke(
-            contextual_request,
-            provider,
-            writing_artifacts=authorities[0],
-            focused_conversation=authorities[1],
-            active_debate=authorities[2],
-            own_agent_state=authorities[3],
-            answer_validator=validate,
-            event_sink=self._context_event_sink(
-                retrieval_request=request,
-                retrieval_progress=progress,
-            ),
-        )
+        try:
+            result = await self._agent_context_service.invoke(
+                contextual_request,
+                provider,
+                writing_artifacts=authorities[0],
+                focused_conversation=authorities[1],
+                active_debate=authorities[2],
+                own_agent_state=authorities[3],
+                answer_validator=validate,
+                event_sink=self._context_event_sink(
+                    retrieval_request=request,
+                    retrieval_progress=progress,
+                ),
+            )
+        except ContextExecutionError as exc:
+            translated = self._contextual_backend_error(exc)
+            if translated is None:
+                raise
+            raise translated from exc
         return project(result.answer, result.authorization)
 
     async def _invoke_contextual_agent(
@@ -5083,16 +5110,22 @@ class StoryRuntime:
         provider_factory = self._validated_context_provider_factory(bound_agent)
         provider = provider_factory(reference_read)
         self._reject_async_result(provider, operation="bound context_provider")
-        result = await self._agent_context_service.invoke(
-            contextual_request,
-            provider,
-            writing_artifacts=authorities[0],
-            focused_conversation=authorities[1],
-            active_debate=authorities[2],
-            own_agent_state=authorities[3],
-            answer_validator=validate,
-            event_sink=self._context_event_sink(),
-        )
+        try:
+            result = await self._agent_context_service.invoke(
+                contextual_request,
+                provider,
+                writing_artifacts=authorities[0],
+                focused_conversation=authorities[1],
+                active_debate=authorities[2],
+                own_agent_state=authorities[3],
+                answer_validator=validate,
+                event_sink=self._context_event_sink(),
+            )
+        except ContextExecutionError as exc:
+            translated = self._contextual_backend_error(exc)
+            if translated is None:
+                raise
+            raise translated from exc
         return project(result.answer)
 
     async def _invoke(
