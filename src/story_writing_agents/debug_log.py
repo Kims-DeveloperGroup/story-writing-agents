@@ -84,6 +84,7 @@ class DebugOperation(StrEnum):
     BACKEND_LIFECYCLE = "backend_lifecycle"
     SESSION_LIFECYCLE = "session_lifecycle"
     PROVIDER_INVOCATION = "provider_invocation"
+    AGENT_CONTEXT = "agent_context"
     ATTACHMENT = "attachment"
     CONVERSATION_FOCUS = "conversation_focus"
     ADVISORY_TURN = "advisory_turn"
@@ -121,6 +122,20 @@ class DebugOutcome(StrEnum):
     PAUSED = "paused"
     CLAIMABLE = "claimable"
     HELD_HERE = "held_here"
+    CONTEXT_BOOTSTRAP = "context_bootstrap"
+    CONTEXT_DELTA = "context_delta"
+    CONTEXT_OMISSION = "context_omission"
+    CONTEXT_SEARCH_STARTED = "context_search_started"
+    CONTEXT_SEARCH_COMPLETED = "context_search_completed"
+    CONTEXT_READ_STARTED = "context_read_started"
+    CONTEXT_READ_COMPLETED = "context_read_completed"
+    CONTEXT_ANSWER_AUTHORIZED = "context_answer_authorized"
+    CONTEXT_INVALIDATED = "context_invalidated"
+    CONTEXT_BUDGET_EXHAUSTED = "context_budget_exhausted"
+    CONTEXT_ACTION_EXHAUSTED = "context_action_exhausted"
+    CONTEXT_TAINTED = "context_tainted"
+    CONTEXT_CHECKPOINT_ADVANCED = "context_checkpoint_advanced"
+    CONTEXT_CHECKPOINT_NOT_ADVANCED = "context_checkpoint_not_advanced"
 
 
 class _WorkspaceProcessLock:

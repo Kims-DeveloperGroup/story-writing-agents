@@ -212,13 +212,120 @@ if argv in (["login", "status"], ["login"]):
 
 payload = json.loads(sys.stdin.read())
 control = json.loads(CONTROL_PATH.read_text(encoding="utf-8"))
+
+
+def context_current(value):
+    """Extract the real runtime's current material without importing it."""
+
+    if value.get("operation") != "agent_context_v1":
+        return None
+    for unit in value.get("projected_units", []):
+        if not isinstance(unit, dict):
+            continue
+        if any(
+            isinstance(source, dict)
+            and source.get("source_id") == "runtime_input:current"
+            for source in unit.get("sources", [])
+        ):
+            current = json.loads(unit["content"])
+            return current if isinstance(current, dict) else None
+    return None
+
+
+def context_observation(value):
+    """Return the final machine-readable frame in a bounded observation."""
+
+    frames = []
+    for line in value.get("observation", "").splitlines():
+        try:
+            frame = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(frame, dict):
+            frames.append(frame)
+    return frames[-1] if frames else {}
+
+
+def contextual_domain(current, correlation, used_handles):
+    """Build the legacy domain answer carried by one contextual ANSWER."""
+
+    workflow = current["workflow"]
+    identity = current["identity"]
+    if workflow == "conversation":
+        content = (
+            "visible \x1b[31mred\x1b[0m and bell \x07"
+            if current["command"] == "show visible controls"
+            else "deterministic advisory reply"
+        )
+        return {
+            "session_id": identity["session_id"],
+            "conversation_id": identity["conversation_id"],
+            "turn_id": identity["turn_id"],
+            "content": content,
+        }
+    if workflow == "conversation_retrieval":
+        content = (
+            "retrieval-assisted answer"
+            if current.get("command", "").startswith("retrieve ")
+            else "visible \x1b[31mred\x1b[0m and bell \x07"
+            if current.get("command") == "show visible controls"
+            else "deterministic advisory reply"
+        )
+        return {"action": {
+            "kind": "answer",
+            "session_id": identity["session_id"],
+            "conversation_id": identity["conversation_id"],
+            "turn_id": identity["turn_id"],
+            "action_index": correlation["action_index"],
+            "content": content,
+            "citation_ids": [
+                f"r{index}" for index in range(1, len(used_handles) + 1)
+            ],
+        }}
+    phase = current["phase"]
+    revision = current["revision"]
+    if phase == "audit":
+        return {"revision_id": revision, "verdict": "approve", "content": ""}
+    if phase == "finalize":
+        return {
+            "revision_id": revision,
+            "core_updates": [
+                {"filename": "global_outline.md", "content": "updated outline"}
+            ],
+        }
+    return {"revision_id": revision, "content": "deterministic candidate"}
+
+
+def contextual_answer(current, correlation, used_handles=()):
+    """Encode one strict generic ANSWER with a correlated domain payload."""
+
+    return {
+        "action": "answer",
+        "content": json.dumps(
+            contextual_domain(current, correlation, used_handles),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        "correlation": correlation,
+        "used_handles": list(used_handles),
+    }
+
+
+current = context_current(payload)
+correlation = payload.get("correlation", {})
 append_record(
     {
         "event": "started",
         "pid": os.getpid(),
         "argv": argv,
         "operation": payload.get("operation"),
-        "phase": payload.get("phase"),
+        "phase": current.get("phase") if current is not None else payload.get("phase"),
+        "context_current": current,
+        "context_action_index": (
+            correlation.get("action_index")
+            if isinstance(correlation, dict)
+            else None
+        ),
         "payload": payload,
     }
 )
@@ -237,6 +344,58 @@ if control.get("mode") == "malformed":
         control.get("response", "not-json"),
         encoding="utf-8",
     )
+elif payload.get("operation") == "agent_context_v1":
+    if (
+        current["workflow"] == "conversation_retrieval"
+        and current["command"].startswith("retrieve ")
+    ):
+        query = current["command"]
+        if query.startswith("retrieve "):
+            query = query.removeprefix("retrieve ")
+        response = {
+            "action": "search",
+            "correlation": correlation,
+            "queries": [{"source_kinds": ["conversation"], "text": query}],
+        }
+    else:
+        response = contextual_answer(current, correlation)
+    output_path.write_text(json.dumps(response), encoding="utf-8")
+elif payload.get("operation") == "agent_context_v1_continuation":
+    observation = context_observation(payload)
+    scope = correlation["scope"]
+    current = {
+        "workflow": "conversation_retrieval",
+        "command": "retrieve contextual evidence",
+        "identity": {
+            "session_id": scope["session_id"],
+            "conversation_id": scope["subject_id"],
+            "turn_id": correlation["result_correlation_id"].removeprefix(
+                "retrieval_reply_"
+            ),
+        },
+    }
+    if "hits" in observation:
+        handles = [
+            item["handle"]
+            for item in observation["hits"]
+            if isinstance(item, dict) and isinstance(item.get("handle"), str)
+        ]
+        if handles:
+            response = {
+                "action": "read",
+                "correlation": correlation,
+                "handles": handles,
+            }
+        else:
+            response = contextual_answer(current, correlation)
+    else:
+        handles = [
+            item["handle"]
+            for item in observation.get("evidence", [])
+            if isinstance(item, dict) and isinstance(item.get("handle"), str)
+        ]
+        response = contextual_answer(current, correlation, handles)
+    output_path.write_text(json.dumps(response), encoding="utf-8")
 elif payload.get("operation") == "conversation_retrieval":
     action_index = payload["retrieval"]["action_index"]
     correlation = {
@@ -309,12 +468,16 @@ else:
     output_path.write_text(json.dumps(response), encoding="utf-8")
 
 if "resume" not in argv:
+    scope = correlation.get("scope", {}) if isinstance(correlation, dict) else {}
+    thread_session = payload.get("session_id", scope.get("session_id", "session"))
+    thread_agent = payload.get("agent_id", scope.get("agent_id", "agent"))
+    thread_subject = scope.get("subject_id", "direct")
     print(
         json.dumps(
             {
                 "type": "thread.started",
                 "thread_id": (
-                    "thread-" + payload["session_id"] + "-" + payload["agent_id"]
+                    "thread-" + thread_session + "-" + thread_subject + "-" + thread_agent
                 ),
             }
         )
@@ -916,6 +1079,37 @@ class InteractiveCliPtyTests(unittest.TestCase):
                 if line
             ]
 
+    def _context_thread_records(
+        self,
+        session_id: str,
+        *,
+        agent_id: str | None = None,
+        subject_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Read exact content-free contextual continuation records."""
+
+        directory = self.workspace.path(
+            f"{_SESSION_DIRECTORY}/.contextual/v1/{session_id}"
+        )
+        if not directory.exists():
+            return []
+        records = [
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in sorted(directory.glob("*.json"))
+        ]
+        return [
+            record
+            for record in records
+            if (
+                agent_id is None
+                or record["key"]["scope"]["agent_id"] == agent_id
+            )
+            and (
+                subject_id is None
+                or record["key"]["scope"]["subject_id"] == subject_id
+            )
+        ]
+
     def _wait_for_provider_record(
         self,
         process: PtyCliProcess,
@@ -979,7 +1173,10 @@ class InteractiveCliPtyTests(unittest.TestCase):
             )
             self.assertRegex(
                 compact_plain,
-                r"(?:resumed|reused|fresh(?: after provider switch)?)",
+                (
+                    r"(?:resumed|reused|fresh(?: after provider switch)?|"
+                    r"not observed)"
+                ),
             )
             self.assertNotIn("Confirmation:", compact_plain)
         else:
@@ -6448,7 +6645,7 @@ print(
         ]
         self.assertEqual(len(started), provider_calls_before_reads + 3)
         self.assertEqual(
-            [record["payload"]["retrieval"]["action_index"] for record in started[-3:]],
+            [record["context_action_index"] for record in started[-3:]],
             [1, 2, 3],
         )
         process.send_text("/quit\n\n")
@@ -6689,7 +6886,7 @@ print(
         ]
         self.assertEqual(len(started), 5)
         self.assertEqual(
-            started[0]["payload"]["user_payload"],
+            started[0]["context_current"]["command"],
             "\n/send\n/cancel\nfinal literal line",
         )
         self.assertFalse(
@@ -6825,11 +7022,14 @@ asyncio.run(main())
         process.wait_for_text("story[alpha:plot]> ", after=mark)
         manifest_path = f"{_SESSION_DIRECTORY}/alpha.json"
         manifest = self.workspace.read_json(manifest_path)
-        thread_key = "codex:plot_architect"
-        self.assertIs(
-            manifest["provider_threads"][thread_key]["tainted"],
-            False,
+        self.assertEqual(manifest["provider_threads"], {})
+        context_records = self._context_thread_records(
+            "alpha",
+            agent_id="plot_architect",
+            subject_id=selected.conversation_id,
         )
+        self.assertEqual(len(context_records), 1)
+        self.assertIs(context_records[0]["tainted"], False)
 
         self._set_provider_control(mode="block")
         records_before_cancel = len(self._provider_records())
@@ -6845,11 +7045,11 @@ asyncio.run(main())
         def is_cancelled_invocation(record: dict[str, Any]) -> bool:
             """Identify the blocking advisory provider invocation by payload."""
 
-            payload = record.get("payload")
+            payload = record.get("context_current")
             return (
                 record.get("event") == "started"
                 and isinstance(payload, dict)
-                and payload.get("content") == "cancel advisory"
+                and payload.get("command") == "cancel advisory"
             )
 
         blocked = self._wait_for_provider_record(
@@ -6894,10 +7094,14 @@ asyncio.run(main())
             os.kill(blocked_pid, 0)
 
         manifest = self.workspace.read_json(manifest_path)
-        self.assertIs(
-            manifest["provider_threads"][thread_key]["tainted"],
-            True,
+        self.assertEqual(manifest["provider_threads"], {})
+        context_records = self._context_thread_records(
+            "alpha",
+            agent_id="plot_architect",
+            subject_id=selected.conversation_id,
         )
+        self.assertEqual(len(context_records), 1)
+        self.assertIs(context_records[0]["tainted"], True)
         catalog = FilesystemConversationCatalog(self.workspace)
         store = FilesystemConversationEventStore(self.workspace, catalog=catalog)
         events = store.read("alpha", selected.conversation_id)
@@ -6926,10 +7130,14 @@ asyncio.run(main())
         )
         process.wait_for_text("story[alpha:plot]> ", after=mark)
         manifest = self.workspace.read_json(manifest_path)
-        self.assertIs(
-            manifest["provider_threads"][thread_key]["tainted"],
-            False,
+        self.assertEqual(manifest["provider_threads"], {})
+        context_records = self._context_thread_records(
+            "alpha",
+            agent_id="plot_architect",
+            subject_id=selected.conversation_id,
         )
+        self.assertEqual(len(context_records), 1)
+        self.assertIs(context_records[0]["tainted"], False)
         started = [
             record
             for record in self._provider_records()
@@ -7000,12 +7208,12 @@ asyncio.run(main())
         def is_blocked_consensus_draft(record: dict[str, Any]) -> bool:
             """Identify the blocked execution draft for the cancellation run."""
 
-            payload = record.get("payload")
+            payload = record.get("context_current")
             return (
                 record.get("event") == "started"
                 and isinstance(payload, dict)
                 and payload.get("phase") == "draft"
-                and payload.get("user_payload") == "cancel consensus"
+                and payload.get("command") == "cancel consensus"
             )
 
         blocked = self._wait_for_provider_record(
@@ -7013,6 +7221,7 @@ asyncio.run(main())
             is_blocked_consensus_draft,
             after_count=records_before_cancel,
         )
+        cancelled_debate_id = blocked["context_current"]["identity"]["debate_id"]
         process.send_interrupt()
         process.wait_for_text(
             "Run interrupted after durable state transition.",
@@ -7091,9 +7300,14 @@ asyncio.run(main())
         self.assertEqual(manuscripts_after_cancel, seed_manuscripts)
         manifest_path = f"{_SESSION_DIRECTORY}/alpha.json"
         manifest = self.workspace.read_json(manifest_path)
-        self.assertIs(
-            manifest["provider_threads"]["codex:execution_specialist"]["tainted"],
-            True,
+        self.assertEqual(manifest["provider_threads"], {})
+        self.assertEqual(
+            self._context_thread_records(
+                "alpha",
+                agent_id="execution_specialist",
+                subject_id=cancelled_debate_id,
+            ),
+            [],
         )
 
         self._set_provider_control(mode="auto")
@@ -7104,23 +7318,34 @@ asyncio.run(main())
         process.wait_for_text("Consensus [success]", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         manifest = self.workspace.read_json(manifest_path)
-        self.assertIs(
-            manifest["provider_threads"]["codex:execution_specialist"]["tainted"],
-            False,
-        )
+        self.assertEqual(manifest["provider_threads"], {})
         drafter_invocations = [
             record
             for record in self._provider_records()
             if record.get("event") == "started"
-            and record["payload"].get("agent_id") == "execution_specialist"
+            and record["context_current"]["identity"].get("agent_id")
+            == "execution_specialist"
         ]
         self.assertEqual(
-            [record["payload"]["phase"] for record in drafter_invocations],
+            [record["context_current"]["phase"] for record in drafter_invocations],
             ["draft", "audit", "draft", "draft", "audit"],
         )
         self.assertEqual(
             ["resume" in record["argv"] for record in drafter_invocations],
-            [False, True, True, False, True],
+            [False, True, False, False, True],
+        )
+        context_records = self._context_thread_records(
+            "alpha",
+            agent_id="execution_specialist",
+        )
+        self.assertEqual(len(context_records), 2)
+        self.assertTrue(all(not record["tainted"] for record in context_records))
+        self.assertNotIn(
+            cancelled_debate_id,
+            {
+                record["key"]["scope"]["subject_id"]
+                for record in context_records
+            },
         )
         final_inspection = self.workspace.inspect_session("alpha")
         final_statuses = [item["status"] for item in final_inspection["debates"]]
@@ -7427,10 +7652,7 @@ asyncio.run(main())
         malformed_events = store.read("alpha", selected.conversation_id)
         self.assertEqual(
             malformed_events[-1].content,
-            (
-                "BackendProtocolError: Codex conversation retrieval response "
-                "is malformed JSON"
-            ),
+            "BackendProtocolError: contextual provider action is malformed",
         )
         self.assertNotIn(
             "MALFORMED_PROVIDER_VALUE_MUST_NOT_APPEAR",
@@ -7443,7 +7665,7 @@ asyncio.run(main())
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         malformed_history = process.text_after(mark)
         self.assertIn(
-            "malformedJSON",
+            "contextualprovideractionismalformed",
             "".join(malformed_history.split()).replace("│", ""),
         )
         self.assertNotIn(

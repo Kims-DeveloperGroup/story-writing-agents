@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import tempfile
 import unittest
@@ -441,6 +442,41 @@ class RealAuthorityAdapterTests(_SourceFixture):
         self.assertEqual(drift.exception.code, ContextSourceErrorCode.SOURCE_DRIFT)
         with self.assertRaises(ContextSourceError):
             FocusedConversationSourceAdapter(services.catalog, services.event_store, _scope(subject_id="other"), conversation_id)
+
+    def test_zero_record_focused_conversation_exists_without_pending_turn(
+        self,
+    ) -> None:
+        services = compose_filesystem_conversation_storage(self.workspace)
+        metadata = services.catalog.create("session", "Fresh conversation")
+        services.event_store.append(
+            ConversationEventAppend(
+                "session",
+                metadata.conversation_id,
+                "pending",
+                "user",
+                LEAD_ORCHESTRATOR,
+                ConversationEventKind.USER_MESSAGE,
+                "PRIVATE_PENDING_TURN",
+            )
+        )
+        adapter = FocusedConversationSourceAdapter(
+            services.catalog,
+            services.event_store,
+            _scope(subject_id=metadata.conversation_id),
+            metadata.conversation_id,
+            excluded_turn_id="pending",
+        )
+
+        inventory = adapter.inventory(CONTEXT_SOURCE_POLICY)
+        self.assertEqual(len(inventory), 1)
+        snapshot = adapter.capture(
+            f"conversation/{metadata.conversation_id}",
+            CONTEXT_SOURCE_POLICY,
+        )
+        self.assertEqual(snapshot.descriptor, inventory[0])
+        self.assertEqual(snapshot.records, ())
+        self.assertEqual(json.loads(snapshot.content)["pairs"], [])
+        self.assertNotIn(b"PRIVATE_PENDING_TURN", snapshot.content)
 
     def test_active_debate_and_all_four_owner_states_are_public_exact_and_isolated(self) -> None:
         debate_id = "debate"
