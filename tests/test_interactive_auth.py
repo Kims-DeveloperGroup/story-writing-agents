@@ -22,6 +22,7 @@ from story_writing_agents.interactive_auth import (
 from story_writing_agents.interactive_terminal import (
     ControlOutcome,
     ControlOutcomeKind,
+    InputPresentation,
     InteractiveTerminal,
     SemanticRole,
     ViewState,
@@ -355,8 +356,43 @@ class InteractiveAuthCoordinatorTests(unittest.TestCase):
                 self.assertEqual(picker.highlighted_id, "codex")
                 self.assertEqual(picker.selected_id, "codex")
                 self.assertEqual(picker.state, ViewState.OPEN)
+                self.assertIs(
+                    picker.presentation,
+                    InputPresentation.STANDARD,
+                )
                 self.assertEqual(picker.notice.label, "authentication")
                 self.assertEqual(picker.notice.role, SemanticRole.INFO)
+
+    def test_explicit_form_presentation_is_forwarded_without_auth_side_effects(
+        self,
+    ) -> None:
+        current = snapshot(
+            ProviderAuthState.AUTHENTICATED,
+            ProviderAuthState.UNAUTHENTICATED,
+        )
+        auth = ScriptedAuthService()
+        harness = TerminalHarness(
+            ControlOutcome(ControlOutcomeKind.CANCEL)
+        )
+        result = harness.coordinator(auth).run(
+            current,
+            presentation=InputPresentation.FORM,
+            selected_provider="codex",
+        )
+
+        self.assertIs(result.kind, InteractiveAuthResultKind.CANCEL)
+        self.assertEqual(auth.events, [])
+        self.assertIs(
+            harness.picker_states[0].picker.presentation,  # type: ignore[attr-defined]
+            InputPresentation.FORM,
+        )
+        for malformed in ("form", ViewState.OPEN, object()):
+            with self.subTest(malformed=malformed):
+                with self.assertRaisesRegex(TypeError, "InputPresentation"):
+                    harness.coordinator(auth).run(
+                        current,
+                        presentation=malformed,  # type: ignore[arg-type]
+                    )
 
     def test_native_login_handoff_refreshes_both_and_cleans_transients(self) -> None:
         initial = snapshot(
@@ -530,6 +566,15 @@ class InteractiveAuthBoundaryTests(unittest.TestCase):
         self.assertEqual(
             tuple(inspect.signature(InteractiveAuthCoordinator).parameters),
             ("auth_service", "terminal", "sleeper"),
+        )
+        self.assertEqual(
+            tuple(inspect.signature(InteractiveAuthCoordinator.run).parameters),
+            (
+                "self",
+                "snapshot",
+                "presentation",
+                "selected_provider",
+            ),
         )
         repository_root = Path(__file__).resolve().parents[1]
         source_root = repository_root / "src"

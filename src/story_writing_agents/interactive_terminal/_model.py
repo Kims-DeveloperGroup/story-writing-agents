@@ -29,6 +29,13 @@ class MessagePresentation(StrEnum):
     CHAT_BLOCK = "chat_block"
 
 
+class InputPresentation(StrEnum):
+    """Select one deterministic picker or prompt-input layout."""
+
+    STANDARD = "standard"
+    FORM = "form"
+
+
 class SpeakerAccent(StrEnum):
     """Select one fixed accessible accent for a chat-block speaker header."""
 
@@ -728,6 +735,8 @@ class Picker:
     prompt: Prompt
     choices: tuple[Choice, ...]
     _: KW_ONLY
+    presentation: InputPresentation = InputPresentation.STANDARD
+    visible_choice_limit: int = 7
     highlighted_id: str | None = None
     selected_id: str | None = None
     notice: Notice | None = None
@@ -736,6 +745,12 @@ class Picker:
     def __post_init__(self) -> None:
         if type(self.prompt) is not Prompt:
             raise TypeError("prompt must be a Prompt")
+        if not isinstance(self.presentation, InputPresentation):
+            raise TypeError("presentation must be an InputPresentation")
+        if type(self.visible_choice_limit) is not int:
+            raise TypeError("visible_choice_limit must be an integer")
+        if not 1 <= self.visible_choice_limit <= 9:
+            raise ValueError("visible_choice_limit must be between 1 and 9")
         identities = _validate_choices(self.choices, self.highlighted_id)
         if self.selected_id is not None:
             if self.selected_id not in identities:
@@ -811,7 +826,7 @@ class PickerViewport:
     stop: int
 
     def __post_init__(self) -> None:
-        """Require a valid at-most-seven-row slice containing its highlight."""
+        """Require a valid bounded slice containing its highlight."""
 
         if type(self.picker) is not Picker:
             raise TypeError("picker must be a Picker")
@@ -822,8 +837,10 @@ class PickerViewport:
                 raise ValueError(f"{name} must not be negative")
         if self.start > self.stop or self.stop > len(self.picker.choices):
             raise ValueError("viewport must identify a valid choice slice")
-        if self.stop - self.start > 7:
-            raise ValueError("a picker viewport contains at most seven choices")
+        if self.stop - self.start > self.picker.visible_choice_limit:
+            raise ValueError(
+                "a picker viewport exceeds its visible choice limit"
+            )
         if self.picker.choices and self.start == self.stop:
             raise ValueError("a nonempty picker viewport must contain a choice")
         if self.picker.highlighted_id is not None:
@@ -846,6 +863,7 @@ class InputPromptView:
     context: tuple[InputContext, ...]
     prompt: Prompt
     _: KW_ONLY
+    presentation: InputPresentation = InputPresentation.STANDARD
     initial_value: str | None = None
 
     def __post_init__(self) -> None:
@@ -860,6 +878,8 @@ class InputPromptView:
             )
         if type(self.prompt) is not Prompt:
             raise TypeError("prompt must be a Prompt")
+        if not isinstance(self.presentation, InputPresentation):
+            raise TypeError("presentation must be an InputPresentation")
         if self.prompt.state is not ViewState.FOCUSED:
             raise ValueError("input prompt must be focused")
         if self.initial_value is not None:

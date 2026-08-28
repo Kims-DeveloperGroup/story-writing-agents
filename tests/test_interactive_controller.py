@@ -255,6 +255,7 @@ class ScriptedAuthCoordinator:
         self.snapshots = list(snapshots)
         self.results = list(results)
         self.events: list[tuple[str, object | None]] = []
+        self.presentations: list[terminal_module.InputPresentation] = []
 
     def probe_all(self) -> ProviderAuthSnapshot:
         self.events.append(("probe_all", None))
@@ -297,8 +298,12 @@ class ScriptedAuthCoordinator:
         self,
         current: ProviderAuthSnapshot,
         *,
+        presentation: terminal_module.InputPresentation = (
+            terminal_module.InputPresentation.STANDARD
+        ),
         selected_provider: str | None = None,
     ) -> InteractiveAuthResult:
+        self.presentations.append(presentation)
         self.events.append(("run", selected_provider))
         if not self.results:
             raise AssertionError("unexpected controller auth picker")
@@ -4457,6 +4462,10 @@ class ControllerAuthTests(ControllerTestCase):
                 ("probe_all", None),
             ],
         )
+        self.assertEqual(
+            coordinator.presentations,
+            [terminal_module.InputPresentation.STANDARD],
+        )
         defaults = ConfigManager(workspace).load_system_defaults()
         self.assertEqual(defaults.default_backend, "antigravity")
         self.assertTrue(backend._closed)
@@ -4912,6 +4921,10 @@ class ControllerSettingsTests(ControllerTestCase):
                 ("probe_all", None),
             ],
         )
+        self.assertEqual(
+            coordinator.presentations,
+            [terminal_module.InputPresentation.FORM],
+        )
         self.assertIn("Settings saved", "".join(callbacks.records))
         self.assertEqual(
             "".join(callbacks.prompts).count(
@@ -5126,7 +5139,9 @@ class ControllerSettingsTests(ControllerTestCase):
         provider_prompts = [
             prompt
             for prompt in callbacks.prompts
-            if prompt.endswith("Provider [Plot & Structure Architect] > ")
+            if prompt.startswith(
+                "Provider\nContext: Plot & Structure Architect\n"
+            )
         ]
         self.assertEqual(len(provider_prompts), 4)
         configuration = settings_module.load_settings_state(workspace).pending
@@ -6156,17 +6171,27 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertIsNone(settings_call.kwargs["notice"])
         self.assertEqual(
             callbacks.prompts[1],
-            "Choices (highlighted 1/7) [open]\n"
-            "  1. [highlighted] Language — Current: KO\n"
-            "  2. [available] Persona — Current: default_kim_eun_hee\n"
-            "  3. [available] Maximum debate rounds — Current: 1\n"
-            "  4. [available] Conversation storage — Current: filesystem\n"
-            "  5. [available] Conversation RAG — Current: Provider Disabled; Automatic Off\n"
-            "  6. [available] Message details — Current: Off\n"
-            "  7. [available] Agents\n"
-            "[input] Enter a choice number, press Enter for the highlighted choice, or enter /cancel.\n"
+            "Settings\n"
+            "\n"
             "Choose a setting to edit.\n"
-            "Settings > ",
+            "\n"
+            "Choices 1/7\n"
+            "> 1. Language\n"
+            "     Current: KO\n"
+            "  2. Persona\n"
+            "     Current: default_kim_eun_hee\n"
+            "  3. Maximum debate rounds\n"
+            "     Current: 1\n"
+            "  4. Conversation storage\n"
+            "     Current: filesystem\n"
+            "  5. Conversation RAG\n"
+            "     Current: Provider Disabled; Automatic Off\n"
+            "  6. Message details\n"
+            "     Current: Off\n"
+            "  7. Agents\n"
+            "\n"
+            "Enter a choice number, press Enter for the active choice, or enter /cancel.\n"
+            "Choice > ",
         )
         self.assertEqual(
             tuple(choice.identity for choice in settings_call.args[2]),
@@ -6214,6 +6239,11 @@ class ControllerSettingsTests(ControllerTestCase):
             all(choice.warning_suffix is None for choice in settings_call.args[2])
         )
         self.assertEqual(settings_call.args[1].instruction, "Choose a setting to edit.")
+        self.assertIs(
+            settings_call.kwargs["presentation"],
+            terminal_module.InputPresentation.FORM,
+        )
+        self.assertEqual(settings_call.kwargs["visible_choice_limit"], 7)
         self.assertNotIn("Save", callbacks.prompts[1])
         self.assertNotIn("[available] Cancel", callbacks.prompts[1])
         self.assertFalse(
@@ -6488,6 +6518,13 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertFalse(whole_cancel)
         self.assertEqual(updated.pending.system_defaults.max_debate_rounds, 3)
         self.assertEqual(prompt.call_count, 4)
+        self.assertTrue(
+            all(
+                call.kwargs["presentation"]
+                is terminal_module.InputPresentation.FORM
+                for call in prompt.call_args_list
+            )
+        )
         self.assertIn("Enter applies", prompt.call_args_list[0].args[1].instruction)
         self.assertIn("press Esc", prompt.call_args_list[0].args[1].instruction)
         self.assert_value_save_guidance(
@@ -7725,9 +7762,75 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertTrue(
             all(call.kwargs.get("transient") is True for call in picker.call_args_list)
         )
+        self.assertTrue(
+            all(
+                call.kwargs["presentation"]
+                is terminal_module.InputPresentation.FORM
+                for call in picker.call_args_list
+            )
+        )
+        root_calls = [
+            call
+            for call in picker.call_args_list
+            if call.args[1].name == "Settings"
+        ]
+        self.assertEqual(
+            tuple(
+                (len(call.args[2]), call.kwargs["visible_choice_limit"])
+                for call in root_calls
+            ),
+            ((7, 7), (9, 9)),
+        )
+        dirty_prompt = next(
+            value
+            for value in _callbacks.prompts
+            if value.startswith("Settings\n") and "Choices 3/9" in value
+        )
+        self.assertEqual(
+            dirty_prompt,
+            "Settings\n"
+            "\n"
+            "Choose a setting to edit, apply changes, or discard changes.\n"
+            "\n"
+            "Choices 3/9\n"
+            "  1. Language\n"
+            "     Current: KO\n"
+            "  2. Persona\n"
+            "     Current: default_kim_eun_hee\n"
+            "> 3. Maximum debate rounds\n"
+            "     Pending: 0\n"
+            "  4. Conversation storage\n"
+            "     Current: filesystem\n"
+            "  5. Conversation RAG\n"
+            "     Current: Provider Disabled; Automatic Off\n"
+            "  6. Message details\n"
+            "     Current: Off\n"
+            "  7. Agents\n"
+            "  8. Apply Changes (*Required)\n"
+            "  9. Discard Changes\n"
+            "     Pending changes will be discarded.\n"
+            "  [save required] Choose Apply Changes to persist pending changes\n"
+            "\n"
+            "Enter a choice number, press Enter for the active choice, or enter /cancel.\n"
+            "Choice > ",
+        )
+        self.assertTrue(
+            all(
+                call.kwargs["visible_choice_limit"] == 7
+                for call in picker.call_args_list
+                if call.args[1].name != "Settings"
+            )
+        )
         self.assertEqual(len(prompt.call_args_list), 2)
         self.assertTrue(
             all(call.kwargs.get("transient") is True for call in prompt.call_args_list)
+        )
+        self.assertTrue(
+            all(
+                call.kwargs["presentation"]
+                is terminal_module.InputPresentation.FORM
+                for call in prompt.call_args_list
+            )
         )
         self.assertEqual(
             tuple(call.kwargs.get("initial_value") for call in prompt.call_args_list),
@@ -8964,11 +9067,16 @@ class ControllerSettingsTests(ControllerTestCase):
         effort_prompt = next(
             prompt
             for prompt in callbacks.prompts
-            if "Effort [Plot & Structure Architect · Antigravity]" in prompt
+            if prompt.startswith(
+                "Effort\n"
+                "Context: Plot & Structure Architect · Antigravity\n"
+            )
         )
-        self.assertIn("[available] low", effort_prompt)
-        self.assertIn("[available] medium", effort_prompt)
-        self.assertIn("[available] high", effort_prompt)
+        self.assertIn(". low", effort_prompt)
+        self.assertIn(". medium", effort_prompt)
+        self.assertIn(". high", effort_prompt)
+        self.assertNotIn("[available]", effort_prompt)
+        self.assertNotIn("[highlighted]", effort_prompt)
         self.assertNotIn("minimal", effort_prompt)
         self.assertNotIn("xhigh", effort_prompt)
         rendered = "".join(callbacks.records)

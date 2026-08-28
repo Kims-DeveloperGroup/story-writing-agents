@@ -63,6 +63,7 @@ from ._model import (
     ControlOutcome,
     ControlOutcomeKind,
     Field,
+    InputPresentation,
     InputPromptView,
     ListView,
     MainCommandControlState,
@@ -1664,6 +1665,8 @@ class InteractivePickerInput:
         prompt: Prompt,
         choices: tuple[Choice, ...],
         *,
+        presentation: InputPresentation = InputPresentation.STANDARD,
+        visible_choice_limit: int = 7,
         highlighted_id: str | None = None,
         selected_id: str | None = None,
         notice: Notice | None = None,
@@ -1678,6 +1681,8 @@ class InteractivePickerInput:
         picker = Picker(
             prompt,
             choices,
+            presentation=presentation,
+            visible_choice_limit=visible_choice_limit,
             highlighted_id=highlighted_id,
             selected_id=selected_id,
             notice=notice,
@@ -1706,6 +1711,7 @@ class InteractivePromptInput:
         self,
         prompt: Prompt,
         *,
+        presentation: InputPresentation = InputPresentation.STANDARD,
         context: tuple[Panel | Section | Field | Notice, ...] = (),
         initial_value: str | None = None,
         transient: bool = True,
@@ -1715,7 +1721,12 @@ class InteractivePromptInput:
         if type(transient) is not bool:
             raise TypeError("transient must be a bool")
 
-        view = InputPromptView(context, prompt, initial_value=initial_value)
+        view = InputPromptView(
+            context,
+            prompt,
+            presentation=presentation,
+            initial_value=initial_value,
+        )
         outcome = self._read(view, transient=True)
         if type(outcome) is not ControlOutcome:
             raise TypeError("prompt reader must return a ControlOutcome")

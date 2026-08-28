@@ -18,7 +18,9 @@ from story_writing_agents.interactive_terminal import (
     Choice,
     ControlOutcome,
     ControlOutcomeKind,
+    InputPresentation,
     InteractivePickerInput,
+    InteractivePromptInput,
     InteractiveTerminal,
     Notice,
     Prompt,
@@ -45,6 +47,7 @@ from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
 from story_writing_agents.interactive_terminal._model import (
     CapabilityProfile,
     Component,
+    InputPromptView,
     KeyEvent,
     KeyKind,
     MainInputHistoryState,
@@ -58,6 +61,7 @@ from story_writing_agents.interactive_terminal._model import (
     display_character_width,
 )
 from story_writing_agents.interactive_terminal._render import (
+    render_input_prompt,
     render_picker_fallback,
     render_picker_viewport,
     strip_decorative_sgr,
@@ -383,6 +387,8 @@ class PickerModelContractTests(unittest.TestCase):
                 "self",
                 "prompt",
                 "choices",
+                "presentation",
+                "visible_choice_limit",
                 "highlighted_id",
                 "selected_id",
                 "notice",
@@ -391,6 +397,22 @@ class PickerModelContractTests(unittest.TestCase):
             ),
         )
         self.assertEqual(InteractivePickerInput.__slots__, ("_read",))
+        self.assertEqual(
+            tuple(inspect.signature(InteractivePromptInput).parameters),
+            ("terminal",),
+        )
+        self.assertEqual(
+            tuple(inspect.signature(InteractivePromptInput.read_prompt).parameters),
+            (
+                "self",
+                "prompt",
+                "presentation",
+                "context",
+                "initial_value",
+                "transient",
+            ),
+        )
+        self.assertEqual(InteractivePromptInput.__slots__, ("_read",))
 
         internal_names = {"PickerControlState", "PickerViewport"}
         self.assertTrue(internal_names.isdisjoint(_model.__all__))
@@ -401,7 +423,13 @@ class PickerModelContractTests(unittest.TestCase):
         self.assertNotIn(PickerViewport, get_args(Component))
         self.assertIs(terminal_facade.InteractivePickerInput, InteractivePickerInput)
         self.assertIs(InteractivePickerInput, _core.InteractivePickerInput)
+        self.assertIs(terminal_facade.InteractivePromptInput, InteractivePromptInput)
+        self.assertIs(InteractivePromptInput, _core.InteractivePromptInput)
+        self.assertIs(terminal_facade.InputPresentation, InputPresentation)
+        self.assertIs(InputPresentation, _model.InputPresentation)
         self.assertNotIn("InteractivePickerInput", terminal_facade.__all__)
+        self.assertNotIn("InteractivePromptInput", terminal_facade.__all__)
+        self.assertNotIn("InputPresentation", terminal_facade.__all__)
         self.assertFalse(hasattr(story_writing_agents, "InteractivePickerInput"))
         for name, value in (
             ("Choice", Choice),
@@ -536,6 +564,72 @@ class PickerModelContractTests(unittest.TestCase):
             with self.subTest(call=call):
                 with self.assertRaises((TypeError, ValueError)):
                     call()  # type: ignore[misc]
+
+    def test_form_presentation_and_visible_limits_are_strict_values(self) -> None:
+        choices = (Choice("one", "One"),)
+        picker = Picker(
+            Prompt("Choose"),
+            choices,
+            presentation=InputPresentation.FORM,
+            visible_choice_limit=9,
+        )
+        prompt = InputPromptView(
+            (),
+            Prompt("Value"),
+            presentation=InputPresentation.FORM,
+            initial_value="seed",
+        )
+        self.assertIs(picker.presentation, InputPresentation.FORM)
+        self.assertEqual(picker.visible_choice_limit, 9)
+        self.assertIs(prompt.presentation, InputPresentation.FORM)
+        self.assertEqual(prompt.initial_value, "seed")
+        self.assertEqual(Picker(Prompt("Choose"), choices).visible_choice_limit, 7)
+        self.assertIs(
+            Picker(Prompt("Choose"), choices).presentation,
+            InputPresentation.STANDARD,
+        )
+        self.assertIs(
+            InputPromptView((), Prompt("Value")).presentation,
+            InputPresentation.STANDARD,
+        )
+        self.assertEqual(
+            tuple(
+                Picker(
+                    Prompt("Choose"),
+                    choices,
+                    visible_choice_limit=limit,
+                ).visible_choice_limit
+                for limit in (1, 9)
+            ),
+            (1, 9),
+        )
+
+        for limit, exception in (
+            (True, TypeError),
+            (1.0, TypeError),
+            (0, ValueError),
+            (10, ValueError),
+        ):
+            with self.subTest(limit=limit), self.assertRaises(exception):
+                Picker(
+                    Prompt("Choose"),
+                    choices,
+                    visible_choice_limit=limit,  # type: ignore[arg-type]
+                )
+        for value in ("form", ViewState.OPEN, object()):
+            with self.subTest(presentation=value):
+                with self.assertRaisesRegex(TypeError, "InputPresentation"):
+                    Picker(
+                        Prompt("Choose"),
+                        choices,
+                        presentation=value,  # type: ignore[arg-type]
+                    )
+                with self.assertRaisesRegex(TypeError, "InputPresentation"):
+                    InputPromptView(
+                        (),
+                        Prompt("Value"),
+                        presentation=value,  # type: ignore[arg-type]
+                    )
 
 
 class PurePickerControlTests(unittest.TestCase):
@@ -811,6 +905,57 @@ class PurePickerControlTests(unittest.TestCase):
         self.assertEqual(state.picker.highlighted_id, "secret-1")
         self.assertEqual(project_picker_viewport(state).start, 0)
 
+    def test_form_limit_controls_viewport_and_survives_all_state_transitions(
+        self,
+    ) -> None:
+        picker = Picker(
+            Prompt("Settings"),
+            _choices(),
+            presentation=InputPresentation.FORM,
+            visible_choice_limit=3,
+            highlighted_id="secret-8",
+            selected_id="secret-1",
+        )
+        state = initialize_picker(picker)
+        self.assertEqual(
+            project_picker_viewport(state),
+            PickerViewport(state.picker, 5, 8),
+        )
+        self.assertIs(state.picker.presentation, InputPresentation.FORM)
+        self.assertEqual(state.picker.visible_choice_limit, 3)
+
+        moved, outcome = transition_picker(state, KeyEvent(KeyKind.DOWN))
+        self.assertIsNone(outcome)
+        self.assertEqual(moved.picker.highlighted_id, "secret-9")
+        self.assertEqual(project_picker_viewport(moved).start, 6)
+        reconciled = reconcile_picker(moved, _choices()[1:])
+        self.assertIs(reconciled.picker.presentation, InputPresentation.FORM)
+        self.assertEqual(reconciled.picker.visible_choice_limit, 3)
+        self.assertEqual(
+            (
+                project_picker_viewport(reconciled).start,
+                project_picker_viewport(reconciled).stop,
+            ),
+            (6, 9),
+        )
+
+        completed, outcome = transition_picker(
+            reconciled,
+            KeyEvent(KeyKind.ENTER),
+        )
+        self.assertEqual(outcome.text, "secret-9")
+        self.assertIs(completed.picker.presentation, InputPresentation.FORM)
+        self.assertEqual(completed.picker.visible_choice_limit, 3)
+
+        rejected, outcome = transition_picker_fallback(state, "0")
+        self.assertIs(outcome.kind, ControlOutcomeKind.REJECTED)
+        self.assertIs(rejected.picker.presentation, InputPresentation.FORM)
+        self.assertEqual(rejected.picker.visible_choice_limit, 3)
+        cancelled, outcome = transition_picker_fallback(rejected, "/cancel")
+        self.assertIs(outcome.kind, ControlOutcomeKind.CANCEL)
+        self.assertIs(cancelled.picker.presentation, InputPresentation.FORM)
+        self.assertEqual(cancelled.picker.visible_choice_limit, 3)
+
     def test_fallback_grammar_blank_cancel_ordinals_and_huge_values_are_exact(self) -> None:
         initial = initialize_picker(
             Picker(
@@ -1057,6 +1202,200 @@ class PickerRenderingTests(unittest.TestCase):
             _capabilities(CapabilityProfile.ANSI),
         )
         self.assertEqual(inert_role, omitted_description)
+
+    def test_form_picker_plain_ansi_and_fallback_are_exact_and_uncluttered(
+        self,
+    ) -> None:
+        choices = (
+            Choice("language", "Language", description="Current: KO"),
+            Choice(
+                "persona",
+                "Persona",
+                description="Pending: noir",
+                description_role=SemanticRole.WARNING,
+            ),
+            Choice(
+                "save",
+                "Apply Changes",
+                warning_suffix="(*Required)",
+                description="Save pending settings.",
+            ),
+            Choice(
+                "off",
+                "Unavailable",
+                enabled=False,
+                disabled_reason="Not supported.",
+            ),
+        )
+        state = initialize_picker(
+            Picker(
+                Prompt(
+                    "Settings",
+                    scope="Workspace defaults",
+                    instruction="Choose a setting to edit.",
+                ),
+                choices,
+                presentation=InputPresentation.FORM,
+                visible_choice_limit=4,
+                highlighted_id="save",
+                selected_id="persona",
+            )
+        )
+        expected = (
+            "Settings\n"
+            "Context: Workspace defaults\n"
+            "\n"
+            "Choose a setting to edit.\n"
+            "\n"
+            "Choices 3/4\n"
+            "  1. Language\n"
+            "     Current: KO\n"
+            "  2. Persona (selected)\n"
+            "     Pending: noir\n"
+            "> 3. Apply Changes (*Required)\n"
+            "     Save pending settings.\n"
+            "  4. Unavailable (disabled)\n"
+            "     Disabled: Not supported."
+        )
+        plain = render_picker_viewport(
+            project_picker_viewport(state),
+            _capabilities(CapabilityProfile.PLAIN),
+        )
+        ansi = render_picker_viewport(
+            project_picker_viewport(state),
+            _capabilities(CapabilityProfile.ANSI),
+        )
+        self.assertEqual(plain.text, expected)
+        self.assertEqual(strip_decorative_sgr(ansi.text), expected)
+        self.assertIn("\x1b[33m     Pending: noir\x1b[0m", ansi.text)
+        self.assertIn(
+            "\x1b[36m> 3. Apply Changes \x1b[0m"
+            "\x1b[33m(*Required)\x1b[0m",
+            ansi.text,
+        )
+
+        fallback = render_picker_fallback(
+            state,
+            _capabilities(CapabilityProfile.LINE),
+        )
+        self.assertEqual(
+            fallback.text,
+            expected
+            + "\n\nEnter a choice number, press Enter for the active choice, "
+            "or enter /cancel.\nChoice > ",
+        )
+        self.assertEqual(fallback.plain_text, fallback.text)
+        for noisy in (
+            "[available]",
+            "[highlighted]",
+            "[focused]",
+            "[open]",
+            "showing",
+            "highlighted ",
+        ):
+            with self.subTest(noisy=noisy):
+                self.assertNotIn(noisy, expected)
+
+    def test_form_picker_window_uses_absolute_position_and_wraps_safely(self) -> None:
+        state = initialize_picker(
+            Picker(
+                Prompt("Agent settings"),
+                tuple(Choice(str(index), f"Choice {index}") for index in range(1, 11)),
+                presentation=InputPresentation.FORM,
+                visible_choice_limit=3,
+                highlighted_id="8",
+                selected_id="1",
+            )
+        )
+        viewport = project_picker_viewport(state)
+        self.assertEqual((viewport.start, viewport.stop), (5, 8))
+        wide = render_picker_viewport(
+            viewport,
+            _capabilities(CapabilityProfile.PLAIN),
+        )
+        self.assertEqual(
+            wide.text,
+            "Agent settings\n\n"
+            "Choices 8/10\n"
+            "  6. Choice 6\n"
+            "  7. Choice 7\n"
+            "> 8. Choice 8\n"
+            "  Selected: 1. Choice 1",
+        )
+        narrow_plain = render_picker_viewport(
+            viewport,
+            _capabilities(CapabilityProfile.PLAIN, 12),
+        )
+        narrow_ansi = render_picker_viewport(
+            viewport,
+            _capabilities(CapabilityProfile.ANSI, 12),
+        )
+        self.assertEqual(strip_decorative_sgr(narrow_ansi.text), narrow_plain.text)
+        self.assertIn("Choices 8/10", narrow_plain.text)
+        self.assertNotIn("showing", narrow_plain.text)
+        for line in narrow_plain.text.splitlines():
+            self.assertLessEqual(_physical_width(line), 12)
+
+    def test_form_input_prompt_separates_regions_and_preserves_initial_value(
+        self,
+    ) -> None:
+        view = InputPromptView(
+            (
+                Notice(
+                    "Use 1-99.",
+                    label="validation",
+                    role=SemanticRole.ERROR,
+                    state=ViewState.ERROR,
+                ),
+            ),
+            Prompt(
+                "Maximum debate rounds",
+                scope="Settings",
+                instruction="Enter a whole number.",
+                default="1",
+            ),
+            presentation=InputPresentation.FORM,
+            initial_value="12",
+        )
+        expected = (
+            "Maximum debate rounds\n"
+            "Context: Settings\n"
+            "\n"
+            "Enter a whole number.\n"
+            "Default: 1\n"
+            "\n"
+            "[validation] Use 1-99.\n"
+            "\n"
+            "Current value: 12\n"
+            "\n"
+            "New value > "
+        )
+        plain = render_input_prompt(
+            view,
+            _capabilities(CapabilityProfile.PLAIN),
+        )
+        ansi = render_input_prompt(
+            view,
+            _capabilities(CapabilityProfile.ANSI),
+        )
+        line = render_input_prompt(
+            view,
+            _capabilities(CapabilityProfile.LINE),
+        )
+        self.assertEqual(plain.text, expected)
+        self.assertEqual(line.text, expected)
+        self.assertEqual(strip_decorative_sgr(ansi.text), expected)
+        self.assertTrue(plain.text.endswith("New value > "))
+        self.assertNotIn("[focused]", plain.text)
+
+        narrow = render_input_prompt(
+            view,
+            _capabilities(CapabilityProfile.PLAIN, 16),
+        )
+        self.assertIn("Current value:", narrow.text.splitlines())
+        self.assertIn("12", narrow.text.splitlines())
+        for rendered_line in narrow.text.splitlines():
+            self.assertLessEqual(_physical_width(rendered_line), 16)
 
     def test_narrow_no_color_combined_cues_and_width_change_preserve_facts(self) -> None:
         state = _long_state()
@@ -2258,6 +2597,74 @@ class PickerAdapterCompatibilityTests(unittest.TestCase):
             self.assertIn("3. [highlighted] Gamma", prompt)
             self.assertNotIn("secret-", prompt)
         self.assertEqual(writes, [])
+
+    def test_adapters_forward_form_presentation_limit_context_and_initial_value(
+        self,
+    ) -> None:
+        terminal = InteractiveTerminal(
+            lambda prompt: (_ for _ in ()).throw(
+                AssertionError(f"unexpected line read: {prompt}")
+            ),
+            lambda _text: None,
+        )
+        picker_states: list[PickerControlState] = []
+        prompt_views: list[InputPromptView] = []
+
+        def read_picker(
+            state: PickerControlState,
+            *,
+            transient: bool = True,
+        ) -> ControlOutcome:
+            self.assertTrue(transient)
+            picker_states.append(state)
+            return ControlOutcome(ControlOutcomeKind.CANCEL)
+
+        def read_prompt(
+            view: InputPromptView,
+            *,
+            transient: bool = True,
+        ) -> ControlOutcome:
+            self.assertTrue(transient)
+            prompt_views.append(view)
+            return ControlOutcome(ControlOutcomeKind.CANCEL)
+
+        terminal._picker_read = read_picker
+        terminal._prompt_read = read_prompt
+        picker_outcome = InteractivePickerInput(terminal).read_picker(
+            Prompt("Settings"),
+            _choices(),
+            presentation=InputPresentation.FORM,
+            visible_choice_limit=9,
+            highlighted_id="secret-8",
+        )
+        notice = Notice("Pending values.", role=SemanticRole.WARNING)
+        prompt_outcome = InteractivePromptInput(terminal).read_prompt(
+            Prompt("Maximum debate rounds"),
+            presentation=InputPresentation.FORM,
+            context=(notice,),
+            initial_value="12",
+        )
+
+        self.assertIs(picker_outcome.kind, ControlOutcomeKind.CANCEL)
+        self.assertIs(prompt_outcome.kind, ControlOutcomeKind.CANCEL)
+        self.assertEqual(len(picker_states), 1)
+        self.assertIs(
+            picker_states[0].picker.presentation,
+            InputPresentation.FORM,
+        )
+        self.assertEqual(picker_states[0].picker.visible_choice_limit, 9)
+        self.assertEqual(picker_states[0].picker.highlighted_id, "secret-8")
+        self.assertEqual(
+            prompt_views,
+            [
+                InputPromptView(
+                    (notice,),
+                    Prompt("Maximum debate rounds"),
+                    presentation=InputPresentation.FORM,
+                    initial_value="12",
+                )
+            ],
+        )
 
     def test_callback_terminal_events_failures_and_validation_do_not_synthesize_output(self) -> None:
         choices = (Choice("one", "One"),)

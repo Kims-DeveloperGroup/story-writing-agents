@@ -2398,7 +2398,7 @@ print(
         before = _durable_tree(self.workspace.root)
         mark = process.output_mark()
         process.send_text("/settings\n\n")
-        process.wait_for_text("Settings [focused] [open]", after=mark)
+        process.wait_for_text("Choices 1/7", after=mark)
         process.send_text(("\x1b[B" * 2) + "\n")
         opened = process.wait_for_text("Current value", after=mark)
         compact_opened = "".join(
@@ -2406,13 +2406,15 @@ print(
         )
         self.assertIn("Currentvalue:1", compact_opened)
         self.assertIn("Maximumdebaterounds", compact_opened)
+        self.assertIn("Newvalue>", compact_opened)
+        self.assertNotIn("[focused]", opened)
 
         first_enter = process.output_mark()
         process.send_text("\n")
         process.wait_for_text("Current value", after=first_enter)
         second_enter = process.output_mark()
         process.send_text("\n")
-        process.wait_for_text("Settings [focused] [open]", after=second_enter)
+        process.wait_for_text("Choices 3/7", after=second_enter)
 
         edit_mark = process.output_mark()
         process.send_text("\n")
@@ -2427,8 +2429,11 @@ print(
         compact_returned = "".join(
             re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", returned).split()
         )
-        self.assertIn("Maximumdebaterounds—Pending:2", compact_returned)
+        self.assertIn("MaximumdebateroundsPending:2", compact_returned)
         self.assertIn("ChooseApplyChangestopersistpendingchanges", compact_returned)
+        self.assertIn("ApplyChanges(*Required)", compact_returned)
+        self.assertIn("DiscardChanges", compact_returned)
+        self.assertIn("Choices3/9", compact_returned)
 
         cancel_mark = process.output_mark()
         process.send_text("\x1b")
@@ -2474,27 +2479,37 @@ print(
                     "Choose a setting to edit.",
                     after=mark,
                 )
-                self.assertIn("Settings [focused] [open]", opened)
-                self.assertIn("[highlighted] Language", opened)
+                self.assertIn("Settings", opened)
+                self.assertIn("Choices 1/7", opened)
+                self.assertIn("> 1. Language", opened)
+                settings_frame = opened.rsplit("\x1b[35mSettings", 1)[-1]
+                for noisy in (
+                    "[available]",
+                    "[highlighted]",
+                    "[focused]",
+                    "[open]",
+                    "showing",
+                ):
+                    self.assertNotIn(noisy, settings_frame)
                 compact_opened = "".join(
                     re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", opened).split()
                 )
                 self.assertIn(
-                    f"Language—Current:{current_language}",
+                    f"LanguageCurrent:{current_language}",
                     compact_opened,
                 )
                 self.assertIn(
-                    "Persona—Current:default_kim_eun_hee",
+                    "PersonaCurrent:default_kim_eun_hee",
                     compact_opened,
                 )
-                self.assertIn("Maximumdebaterounds—Current:1", compact_opened)
+                self.assertIn("MaximumdebateroundsCurrent:1", compact_opened)
                 ordered_settings = (
-                    f"Language—Current:{current_language}",
-                    "Persona—Current:default_kim_eun_hee",
-                    "Maximumdebaterounds—Current:1",
-                    "Conversationstorage—Current:filesystem",
-                    "ConversationRAG—Current:ProviderDisabled;AutomaticOff",
-                    "Messagedetails—Current:Off",
+                    f"LanguageCurrent:{current_language}",
+                    "PersonaCurrent:default_kim_eun_hee",
+                    "MaximumdebateroundsCurrent:1",
+                    "ConversationstorageCurrent:filesystem",
+                    "ConversationRAGCurrent:ProviderDisabled;AutomaticOff",
+                    "MessagedetailsCurrent:Off",
                     "Agents",
                 )
                 self.assertEqual(
@@ -2510,7 +2525,7 @@ print(
                     ),
                 )
                 self.assertIn(
-                    b"\x1b[35mSettings [focused] [open] >\x1b[0m",
+                    b"\x1b[35mSettings\x1b[0m",
                     process.raw_bytes,
                 )
                 self.assertNotIn(
@@ -2529,7 +2544,8 @@ print(
                     f"[entered] Pending Language entered: {expected_language}.",
                     after=language_mark,
                 )
-                self.assertIn("Language [focused] [open]", language_result)
+                self.assertIn("Language", language_result)
+                self.assertIn("Choices", language_result)
                 self.assertIn(expected_language, language_result)
                 self.assertIn(
                     "Enteredchangesremainpendinginmemoryandarenotsaved;"
@@ -2559,7 +2575,7 @@ print(
                     ),
                 )
                 self.assertIn(
-                    f"Language—Pending:{expected_language}",
+                    f"LanguagePending:{expected_language}",
                     "".join(
                         re.sub(
                             r"\x1b\[[0-9;]*[A-Za-z]",
@@ -2568,36 +2584,49 @@ print(
                         ).split()
                     ),
                 )
-                self.assertNotIn(
-                    f"\x1b[33mPending: {expected_language}\x1b[0m".encode(),
+                self.assertIn(
+                    f"\x1b[33m     Pending: {expected_language}\x1b[0m".encode(),
                     bytes(process.raw_bytes[highlighted_pending_mark:]),
                 )
-                self.assertEqual(
-                    returned_settings.count("Settings [focused] [open]"),
-                    1,
+                compact_returned = "".join(
+                    re.sub(
+                        r"\x1b\[[0-9;]*[A-Za-z]",
+                        "",
+                        returned_settings,
+                    ).split()
                 )
+                self.assertIn("Choices1/9", compact_returned)
+                self.assertIn("ApplyChanges(*Required)", compact_returned)
+                self.assertIn("DiscardChanges", compact_returned)
                 idle_pending_mark = process.output_mark()
                 process.send_text("\x1b[B" * 8)
                 apply_view = process.wait_for_text(
                     "Discard Changes",
                     after=idle_pending_mark,
                 )
-                self.assertIn("Apply Changes (*Required)", apply_view)
+                compact_apply_view = "".join(
+                    re.sub(
+                        r"\x1b\[[0-9;]*[A-Za-z]",
+                        "",
+                        apply_view,
+                    ).split()
+                )
+                self.assertIn("ApplyChanges(*Required)", compact_apply_view)
                 self.assertIn(
                     b"Apply Changes \x1b[33m(*Required)\x1b[0m",
                     bytes(process.raw_bytes[idle_pending_mark:]),
                 )
                 process.send_text("\x1b[A" * 7)
                 process.wait_for_text(
-                    "[highlighted] Persona",
+                    "> 2. Persona",
                     after=idle_pending_mark,
                 )
                 idle_pending = bytes(process.raw_bytes[idle_pending_mark:])
                 self.assertIn(
-                    f"\x1b[33mPending: {expected_language}\x1b[0m".encode(),
+                    f"\x1b[33m     Pending: {expected_language}\x1b[0m".encode(),
                     idle_pending,
                 )
-                self.assertNotIn(b"\x1b[33mCurrent:", idle_pending)
+                self.assertNotIn(b"\x1b[33m     Current:", idle_pending)
                 returned_mark = process.output_mark()
                 process.send_text(("\x1b[B" * 6) + "\n")
                 process.send_text("\n")
@@ -2676,7 +2705,7 @@ print(
             re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", agents_picker).split()
         )
         self.assertIn(
-            "Plot&StructureArchitect—Current:"
+            "Plot&StructureArchitectCurrent:"
             "(Codex/providerdefault/providerdefault)",
             compact_agents,
         )
@@ -2688,9 +2717,9 @@ print(
         compact_fields = "".join(
             re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", initial_fields).split()
         )
-        self.assertIn("Provider—Current:Codex", compact_fields)
-        self.assertIn("Model—Current:providerdefault", compact_fields)
-        self.assertIn("Effort—Current:providerdefault", compact_fields)
+        self.assertIn("ProviderCurrent:Codex", compact_fields)
+        self.assertIn("ModelCurrent:providerdefault", compact_fields)
+        self.assertIn("EffortCurrent:providerdefault", compact_fields)
         model_picker_mark = process.output_mark()
         process.send_text("\x1b[B\n")
         model_picker = process.wait_for_text("GPT PTY", after=model_picker_mark)
@@ -2702,15 +2731,15 @@ print(
             "[entered] Pending Model entered: GPT PTY.",
             after=model_commit_mark,
         )
-        self.assertIn("[selected] [highlighted] GPT PTY", model_result)
+        self.assertIn("GPT PTY (selected)", model_result)
         model_parent_mark = process.output_mark()
         process.send_text("\n")
         model_parent = process.wait_for_text(
-            "Agent settings [Plot & Structure Architect]",
+            "Agent settings\nContext: Plot & Structure Architect",
             after=model_parent_mark,
         )
         self.assertIn(
-            "Model—Pending:gpt-pty",
+            "ModelPending:gpt-pty",
             "".join(
                 re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", model_parent).split()
             ),
@@ -2725,26 +2754,26 @@ print(
             "[entered] Pending Effort entered: future_2.",
             after=effort_commit_mark,
         )
-        self.assertIn("[selected] [highlighted] future_2", effort_result)
+        self.assertIn("future_2 (selected)", effort_result)
         effort_parent_mark = process.output_mark()
         process.send_text("\n")
         effort_parent = process.wait_for_text(
-            "Agent settings [Plot & Structure Architect]",
+            "Agent settings\nContext: Plot & Structure Architect",
             after=effort_parent_mark,
         )
         compact_effort_parent = "".join(
             re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", effort_parent).split()
         )
-        self.assertIn("Model—Pending:gpt-pty", compact_effort_parent)
-        self.assertIn("Effort—Pending:future_2", compact_effort_parent)
+        self.assertIn("ModelPending:gpt-pty", compact_effort_parent)
+        self.assertIn("EffortPending:future_2", compact_effort_parent)
         agents_parent_mark = process.output_mark()
         process.send_text("\x1b")
         agents_parent = process.wait_for_text(
-            "Agents [focused] [open]",
+            "Select an agent to configure",
             after=agents_parent_mark,
         )
         self.assertIn(
-            "Plot&StructureArchitect—Pending:(Codex/gpt-pty/future_2)",
+            "Plot&StructureArchitectPending:(Codex/gpt-pty/future_2)",
             "".join(
                 re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", agents_parent).split()
             ),
@@ -2752,7 +2781,7 @@ print(
         settings_parent_mark = process.output_mark()
         process.send_text("\x1b")
         process.wait_for_text(
-            "Settings [focused] [open]",
+            "Choices 7/9",
             after=settings_parent_mark,
         )
 
@@ -2844,12 +2873,12 @@ print(
             re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", opened).split()
         )
         ordered_settings = (
-            "Language—Current:KO",
-            "Persona—Current:default_kim_eun_hee",
-            "Maximumdebaterounds—Current:1",
-            "Conversationstorage—Current:filesystem",
-            "ConversationRAG—Current:ProviderDisabled;AutomaticOff",
-            "Messagedetails—Current:Off",
+            "LanguageCurrent:KO",
+            "PersonaCurrent:default_kim_eun_hee",
+            "MaximumdebateroundsCurrent:1",
+            "ConversationstorageCurrent:filesystem",
+            "ConversationRAGCurrent:ProviderDisabled;AutomaticOff",
+            "MessagedetailsCurrent:Off",
             "Agents",
         )
         self.assertEqual(
@@ -2865,18 +2894,18 @@ print(
         details_mark = process.output_mark()
         process.send_text(("\x1b[B" * 5) + "\n")
         details = process.wait_for_text(
-            "Message details [focused] [open]",
+            "Choices 1/2",
             after=details_mark,
         )
-        self.assertIn("Message details [focused] [open]", details)
+        self.assertIn("Message details", details)
         self.assertIn(
             "ChooseOffforcompactmessagesorOnfordetailedmessages.",
             "".join(
                 re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", details).split()
             ),
         )
-        self.assertIn("[selected] [highlighted] Off", details)
-        self.assertIn("[available] On", details)
+        self.assertIn("> 1. Off (selected)", details)
+        self.assertIn("  2. On", details)
 
         entered_mark = process.output_mark()
         process.send_text("\x1b[B\n")
@@ -2894,7 +2923,7 @@ print(
         process.send_text("\n")
         returned = process.wait_for_text("[save required]", after=returned_mark)
         self.assertIn(
-            "Messagedetails—Pending:On",
+            "MessagedetailsPending:On",
             "".join(
                 re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", returned).split()
             ),
@@ -2984,42 +3013,45 @@ print(
 
         provider = open_delayed_picker(
             "\n",
-            "Provider [Plot & Structure Architect]",
+            "Provider\nContext: Plot & Structure Architect",
         )
         self.assertIn("Codex", provider)
         return_mark = process.output_mark()
         process.send_text("\x1b")
         process.wait_for_text(
-            "Agent settings [Plot & Structure Architect]",
+            "Agent settings\nContext: Plot & Structure Architect",
             after=return_mark,
         )
 
         model = open_delayed_picker("\x1b[B\n", "GPT PTY")
-        self.assertIn("Model [Plot & Structure Architect", model)
+        self.assertIn("Model\nContext: Plot & Structure Architect", model)
         return_mark = process.output_mark()
         process.send_text("\x1b")
         process.wait_for_text(
-            "Agent settings [Plot & Structure Architect]",
+            "Agent settings\nContext: Plot & Structure Architect",
             after=return_mark,
         )
 
         effort = open_delayed_picker(
             "\x1b[B\n",
-            "Effort [Plot & Structure Architect",
+            "Effort\nContext: Plot & Structure Architect",
         )
-        self.assertIn("Effort [Plot & Structure Architect", effort)
+        self.assertIn("Effort\nContext: Plot & Structure Architect", effort)
         return_mark = process.output_mark()
         process.send_text("\x1b")
         process.wait_for_text(
-            "Agent settings [Plot & Structure Architect]",
+            "Agent settings\nContext: Plot & Structure Architect",
             after=return_mark,
         )
         return_mark = process.output_mark()
         process.send_text("\x1b")
-        process.wait_for_text("Agents [focused] [open]", after=return_mark)
+        process.wait_for_text("Select an agent to configure", after=return_mark)
         return_mark = process.output_mark()
         process.send_text("\x1b")
-        process.wait_for_text("Settings [focused] [open]", after=return_mark)
+        process.wait_for_text(
+            "Choose a setting to edit.",
+            after=return_mark,
+        )
         return_mark = process.output_mark()
         process.send_text("\x1b")
         process.wait_for_text("story[lobby]> ", after=return_mark)
@@ -3044,20 +3076,20 @@ print(
         before = _durable_tree(self.workspace.root)
         mark = process.output_mark()
         process.send_text("/settings\n\n")
-        process.wait_for_text("[highlighted] Language", after=mark)
+        process.wait_for_text("Choices 1/7", after=mark)
         process.send_text(("\x1b[B" * 6) + "\n")
-        agents = process.wait_for_text("Agents [focused] [open]", after=mark)
+        agents = process.wait_for_text("Select an agent to configure", after=mark)
         self.assertIn(
-            "Plot&StructureArchitect—Current:"
+            "Plot&StructureArchitectCurrent:"
             "(Codex/providerdefault/providerdefault)",
             "".join(agents.split()),
         )
         process.send_text("\x1b[B\n")
         fields = process.wait_for_text("Agent settings", after=mark)
         compact_fields = "".join(fields.split())
-        self.assertIn("Provider—Current:Codex", compact_fields)
-        self.assertIn("Model—Current:providerdefault", compact_fields)
-        self.assertIn("Effort—Current:providerdefault", compact_fields)
+        self.assertIn("ProviderCurrent:Codex", compact_fields)
+        self.assertIn("ModelCurrent:providerdefault", compact_fields)
+        self.assertIn("EffortCurrent:providerdefault", compact_fields)
         process.send_text("\x1b[B\n")
         process.wait_for_text("GPT PTY", after=mark)
         self.assertNotRegex(
@@ -3083,16 +3115,16 @@ print(
             after=returned_mark,
         )
         self.assertIn(
-            "Model—Pending:gpt-pty",
+            "ModelPending:gpt-pty",
             "".join(returned_fields.split()),
         )
         process.send_text("\x1b")
         returned_agents = process.wait_for_text(
-            "Agents [focused] [open]",
+            "Select an agent to configure",
             after=returned_mark,
         )
         self.assertIn(
-            "Plot&StructureArchitect—Pending:"
+            "Plot&StructureArchitectPending:"
             "(Codex/gpt-pty/providerdefault)",
             "".join(returned_agents.split()),
         )
@@ -3171,7 +3203,7 @@ print(
                     mark = process.output_mark()
                     process.send_text("/settings\n\n")
                     opened = process.wait_for_text(
-                        "[highlighted] Language",
+                        "Choices 1/7",
                         after=mark,
                     )
                     self.assertNotIn("Apply Changes", opened)
@@ -3214,22 +3246,22 @@ print(
         process.wait_for_text("story[lobby]> ")
         mark = process.output_mark()
         process.send_line("/settings")
-        settings = process.wait_for_text("7. [available] Agents", after=mark)
+        settings = process.wait_for_text("  7. Agents", after=mark)
         self.assertIn(
-            "5.[available]ConversationRAG—Current:ProviderDisabled;AutomaticOff",
+            "5.ConversationRAGCurrent:ProviderDisabled;AutomaticOff",
             "".join(settings.split()),
         )
         self.assertIn(
-            "6.[available]Messagedetails—Current:Off",
+            "6.MessagedetailsCurrent:Off",
             "".join(settings.split()),
         )
         process.send_line("7")
-        process.wait_for_text("Agents > ", after=mark)
+        process.wait_for_text("Select an agent to configure", after=mark)
         process.send_line("2")
         process.wait_for_text("Agent settings", after=mark)
         process.send_line("2")
         process.wait_for_text(
-            "Model [Plot & Structure Architect",
+            "Model\nContext: Plot & Structure Architect",
             after=mark,
         )
         model_mark = process.output_mark()
@@ -3247,23 +3279,26 @@ print(
             "".join(entered.split()),
         )
         process.send_text("\x1b\n")
-        process.wait_for_text("Model [Plot & Structure Architect", after=model_mark)
+        process.wait_for_text(
+            "Model\nContext: Plot & Structure Architect",
+            after=model_mark,
+        )
         process.send_line("/cancel")
         process.wait_for_text("Agent settings", after=model_mark)
         process.send_line("/cancel")
-        process.wait_for_text("Agents > ", after=model_mark)
+        process.wait_for_text("Select an agent to configure", after=model_mark)
         process.send_line("/cancel")
         returned_settings = process.wait_for_text(
-            "9. [available] Discard Changes",
+            "  9. Discard Changes",
             after=model_mark,
         )
         self.assertIn("[save required]", returned_settings)
         compact_returned = "".join(returned_settings.split())
         self.assertIn(
-            "8.[available]ApplyChanges(*Required)",
+            "8.ApplyChanges(*Required)",
             compact_returned,
         )
-        self.assertNotIn("8.[available]Save", compact_returned)
+        self.assertNotIn("8.Save", compact_returned)
         self.assertIn(
             "ChooseApplyChangestopersistpendingchanges",
             "".join(returned_settings.split()),
@@ -3498,9 +3533,9 @@ print(
 
         settings_mark = process.output_mark()
         process.send_line("/settings")
-        process.wait_for_text("7. [available] Agents", after=settings_mark)
+        process.wait_for_text("  7. Agents", after=settings_mark)
         process.send_line("1")
-        process.wait_for_text("Language >", after=settings_mark)
+        process.wait_for_text("Choose the workspace language.", after=settings_mark)
         process.send_line("2")
         process.wait_for_text(
             "Pending Language entered: EN.",
