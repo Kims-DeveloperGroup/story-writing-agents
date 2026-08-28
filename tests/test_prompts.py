@@ -529,6 +529,56 @@ class PromptAssemblerTests(unittest.TestCase):
             ],
         )
 
+    def test_contextual_definitions_are_stable_while_legacy_tracks_core(
+        self,
+    ) -> None:
+        """Keep mutable core bytes out of runtime bindings without breaking callers."""
+
+        contextual_before = self.assembler.build_contextual_definition(
+            session_id="contextual_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        legacy_before = self.assembler.build_definition(
+            session_id="contextual_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+
+        self.assertEqual(contextual_before.context_document_files, ())
+        self.assertEqual(
+            tuple(
+                reference.path.name
+                for reference in legacy_before.context_document_files
+            ),
+            AGENT_SPECS[PLOT_ARCHITECT].context_documents,
+        )
+        self.assertEqual(
+            tuple(
+                reference.path.name
+                for reference in contextual_before.file_references()
+            ),
+            ("AGENTS.md", "prompt_persona.md"),
+        )
+
+        self.workspace.path("core_documents/global_outline.md").write_text(
+            "CONTEXT_TOKEN::changed-outline",
+            encoding="utf-8",
+        )
+        contextual_after = self.assembler.build_contextual_definition(
+            session_id="contextual_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        legacy_after = self.assembler.build_definition(
+            session_id="contextual_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+
+        self.assertEqual(contextual_after, contextual_before)
+        self.assertNotEqual(legacy_after.fingerprint, legacy_before.fingerprint)
+        self.assertNotEqual(
+            legacy_after.context_document_files,
+            legacy_before.context_document_files,
+        )
+
     def test_fingerprint_is_deterministic_and_tracks_effective_definition(
         self,
     ) -> None:

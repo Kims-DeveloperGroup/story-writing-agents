@@ -777,6 +777,30 @@ class ConversationModelContractTests(unittest.TestCase):
         )
         self.assertIsNone(invoke_signature.parameters["reference_read"].default)
 
+        context_provider_signature = inspect.signature(BoundAgent.context_provider)
+        self.assertEqual(
+            tuple(context_provider_signature.parameters),
+            ("self", "reference_read"),
+        )
+        self.assertIsNone(
+            context_provider_signature.parameters["reference_read"].default
+        )
+        self.assertEqual(
+            tuple(
+                tuple(inspect.signature(method).parameters)
+                for method in (
+                    BoundAgent.decode_context_conversation_answer,
+                    BoundAgent.decode_context_retrieval_answer,
+                    BoundAgent.decode_context_agent_answer,
+                )
+            ),
+            (
+                ("self", "request", "text"),
+                ("self", "request", "text"),
+                ("self", "request", "text"),
+            ),
+        )
+
     def test_identifier_content_agent_and_context_error_taxonomy(self) -> None:
         request_values: dict[str, object] = {
             "session_id": "story_session",
