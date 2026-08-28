@@ -125,6 +125,12 @@ def matches_schema(value, specification):
         return specification
     if "anyOf" in specification:
         return any(matches_schema(value, branch) for branch in specification["anyOf"])
+    if "oneOf" in specification:
+        return sum(
+            matches_schema(value, branch) for branch in specification["oneOf"]
+        ) == 1
+    if "const" in specification and value != specification["const"]:
+        return False
     expected_type = specification.get("type")
     if isinstance(expected_type, list):
         return any(
@@ -184,6 +190,87 @@ if set(user_event["message"]) != {"content"}:
 payload = json.loads(user_event["message"]["content"])
 schema = json.loads(option("--json-schema"))
 provider_state = Path(next(value.split("=", 1)[1] for value in argv if value.startswith("--gemini_dir=")))
+
+def context_current(value):
+    if value.get("operation") != "agent_context_v1":
+        return None
+    for unit in value.get("projected_units", []):
+        if not isinstance(unit, dict):
+            continue
+        if any(
+            isinstance(source, dict)
+            and source.get("source_id") == "runtime_input:current"
+            for source in unit.get("sources", [])
+        ):
+            current = json.loads(unit["content"])
+            return current if isinstance(current, dict) else None
+    return None
+
+def context_observation(value):
+    frames = []
+    for line in value.get("observation", "").splitlines():
+        try:
+            frame = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(frame, dict):
+            frames.append(frame)
+    return frames[-1] if frames else {}
+
+def contextual_domain(current, correlation, used_handles):
+    workflow = current["workflow"]
+    identity = current["identity"]
+    if workflow == "conversation":
+        return {
+            "session_id": identity["session_id"],
+            "conversation_id": identity["conversation_id"],
+            "turn_id": identity["turn_id"],
+            "content": "conversation answer",
+        }
+    if workflow == "conversation_retrieval":
+        return {"action": {
+            "kind": "answer",
+            "session_id": identity["session_id"],
+            "conversation_id": identity["conversation_id"],
+            "turn_id": identity["turn_id"],
+            "action_index": correlation["action_index"],
+            "content": "retrieval answer",
+            "citation_ids": [
+                f"r{index}" for index in range(1, len(used_handles) + 1)
+            ],
+        }}
+    phase = current["phase"]
+    revision = current["revision"]
+    if phase == "audit":
+        return {"revision_id": revision, "verdict": "approve", "content": ""}
+    if phase == "finalize":
+        return {
+            "revision_id": revision,
+            "core_updates": [{
+                "filename": "global_outline.md",
+                "content": "bounded outline update",
+            }],
+        }
+    return {"revision_id": revision, "content": "reply-" + phase}
+
+def contextual_answer(current, correlation, used_handles=()):
+    return {
+        "action": "answer",
+        "content": json.dumps(
+            contextual_domain(current, correlation, used_handles),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        "correlation": correlation,
+        "used_handles": list(used_handles),
+    }
+
+current = context_current(payload)
+correlation = payload.get("correlation", {})
+scope = correlation.get("scope", {}) if isinstance(correlation, dict) else {}
+identity = current.get("identity", {}) if isinstance(current, dict) else {}
+logical_session_id = identity.get("session_id", scope.get("session_id"))
+logical_agent_id = identity.get("agent_id", scope.get("agent_id"))
 resumed_id = option("--conversation")
 known_path = provider_state / ".fake-known-conversations.json"
 known_ids = set(json.loads(known_path.read_text(encoding="utf-8"))) if known_path.exists() else set()
@@ -193,8 +280,8 @@ if resumed_id is None:
     counter_path.write_text(str(counter), encoding="ascii")
     fingerprint = Path.cwd().parent.name[:8]
     conversation_id = (
-        f"agy-{payload.get('session_id', 'session')}-"
-        f"{payload.get('agent_id', 'agent')}-{fingerprint}-{counter}"
+        f"agy-{logical_session_id or payload.get('session_id', 'session')}-"
+        f"{logical_agent_id or payload.get('agent_id', 'agent')}-{fingerprint}-{counter}"
     )
     known_ids.add(conversation_id)
     known_path.write_text(
@@ -221,13 +308,21 @@ record = {
     "provider_state": str(provider_state),
     "stdin_event_count": len(lines),
     "payload_keys": list(payload),
-    "session_id": payload.get("session_id"),
-    "agent_id": payload.get("agent_id"),
-    "phase": payload.get("phase"),
-    "revision_id": payload.get("revision_id"),
-    "conversation_id": payload.get("conversation_id"),
-    "turn_id": payload.get("turn_id"),
-    "retrieval_action_index": payload.get("retrieval", {}).get("action_index"),
+    "session_id": logical_session_id or payload.get("session_id"),
+    "agent_id": logical_agent_id or payload.get("agent_id"),
+    "phase": current.get("phase") if current is not None else payload.get("phase"),
+    "revision_id": (
+        current.get("revision") if current is not None else payload.get("revision_id")
+    ),
+    "conversation_id": (
+        identity.get("conversation_id") or payload.get("conversation_id")
+    ),
+    "turn_id": identity.get("turn_id") or payload.get("turn_id"),
+    "retrieval_action_index": (
+        correlation.get("action_index")
+        if payload.get("operation", "").startswith("agent_context_v1")
+        else payload.get("retrieval", {}).get("action_index")
+    ),
     "resumed_id": resumed_id,
     "resume_known": resume_known,
     "schema": schema,
@@ -258,7 +353,53 @@ if mode == "hang":
 if mode == "ignore_term":
     threading.Event().wait()
 
-if payload.get("operation") == "writing_artifact_reference_read":
+if payload.get("operation") == "agent_context_v1":
+    if current["workflow"] == "conversation_retrieval":
+        query = current["command"]
+        if query.startswith("retrieve "):
+            query = query.removeprefix("retrieve ")
+        output = {
+            "action": "search",
+            "correlation": correlation,
+            "queries": [{"source_kinds": ["conversation"], "text": query}],
+        }
+    else:
+        output = contextual_answer(current, correlation)
+elif payload.get("operation") == "agent_context_v1_continuation":
+    observation = context_observation(payload)
+    scope = correlation["scope"]
+    current = {
+        "workflow": "conversation_retrieval",
+        "identity": {
+            "session_id": scope["session_id"],
+            "conversation_id": scope["subject_id"],
+            "turn_id": correlation["result_correlation_id"].removeprefix(
+                "retrieval_reply_"
+            ),
+        },
+    }
+    if "hits" in observation:
+        handles = [
+            item["handle"]
+            for item in observation["hits"]
+            if isinstance(item, dict) and isinstance(item.get("handle"), str)
+        ]
+        if handles:
+            output = {
+                "action": "read",
+                "correlation": correlation,
+                "handles": handles,
+            }
+        else:
+            output = contextual_answer(current, correlation)
+    else:
+        handles = [
+            item["handle"]
+            for item in observation.get("evidence", [])
+            if isinstance(item, dict) and isinstance(item.get("handle"), str)
+        ]
+        output = contextual_answer(current, correlation, handles)
+elif payload.get("operation") == "writing_artifact_reference_read":
     output = {"action": {
         "kind": "read_writing_artifacts",
         "correlation": payload["correlation"],
