@@ -15,6 +15,7 @@ from .manifest import (
     ContextProvenance,
     ContextScope,
     ContextSemanticChannel,
+    ContextSourceKind,
     context_manifest_entry_key,
     validate_context_digest,
     validate_context_identity,
@@ -51,6 +52,7 @@ __all__ = [
 
 CONTEXT_CHECKPOINT_SCHEMA_VERSION = 1
 MAX_MANDATORY_REFERENCE_RESERVATION_UTF8_BYTES = 262_144
+_MAX_RECORD_ALIAS = (1 << 53) - 1
 
 
 class ContextDeliveryMode(StrEnum):
@@ -222,12 +224,160 @@ def _body_digest(body_utf8: bytes) -> str:
     return f"sha256:{hashlib.sha256(body_utf8).hexdigest()}"
 
 
+_RECORD_BOUNDARY_KINDS = frozenset(
+    {"whole", "artifact_lines", "conversation_turns", "records"}
+)
+
+
+def _validate_record_boundary(
+    kind: object,
+    start: object,
+    end: object,
+    first_id: object,
+    last_id: object,
+    *,
+    checkpoint: bool = False,
+) -> None:
+    """Validate the primitive projection of one exact source boundary."""
+
+    error = (
+        ContextPlanningErrorCode.INVALID_CHECKPOINT
+        if checkpoint
+        else ContextPlanningErrorCode.INVALID_MATERIAL
+    )
+    if type(kind) is not str or kind not in _RECORD_BOUNDARY_KINDS:
+        raise ContextPlanningError(error)
+    if kind == "whole":
+        if any(value is not None for value in (start, end, first_id, last_id)):
+            raise ContextPlanningError(error)
+        return
+    if (
+        type(start) is not int
+        or start < 1
+        or type(end) is not int
+        or end < start
+    ):
+        raise ContextPlanningError(error)
+    if kind == "conversation_turns":
+        try:
+            _safe_identity(first_id, checkpoint=checkpoint)
+            _safe_identity(last_id, checkpoint=checkpoint)
+        except ContextPlanningError:
+            raise ContextPlanningError(error) from None
+    elif first_id is not None or last_id is not None:
+        raise ContextPlanningError(error)
+
+
+def _validate_source_alias(value: object, *, allow_empty: bool = False) -> str:
+    """Validate one compact stable source alias without regular expressions."""
+
+    if allow_empty and value == "":
+        return ""
+    if (
+        type(value) is not str
+        or not value.startswith("s")
+        or not value[1:].isdigit()
+        or value[1:].startswith("0")
+    ):
+        raise ContextPlanningError(ContextPlanningErrorCode.INVALID_CHECKPOINT)
+    return value
+
+
+def _validate_record_alias(value: object, *, checkpoint: bool = False) -> int:
+    """Validate one JSON-exact positive per-source delivery alias."""
+
+    if type(value) is not int or value < 1 or value > _MAX_RECORD_ALIAS:
+        raise ContextPlanningError(
+            ContextPlanningErrorCode.INVALID_CHECKPOINT
+            if checkpoint
+            else ContextPlanningErrorCode.INVALID_VALUE
+        )
+    return value
+
+
+def context_source_uses_catalog_alias(entry: ContextManifestEntry) -> bool:
+    """Return whether one source participates in the readable wire catalog."""
+
+    if type(entry) is not ContextManifestEntry:
+        raise ContextPlanningError(ContextPlanningErrorCode.INVALID_VALUE)
+    return entry.source_kind in {
+        ContextSourceKind.WRITING_ARTIFACT,
+        ContextSourceKind.CONVERSATION,
+        ContextSourceKind.ACTIVE_DEBATE,
+        ContextSourceKind.OWN_AGENT_STATE,
+    }
+
+
+@dataclass(frozen=True, slots=True)
+class ContextRecordCursor:
+    """Content-free identity and byte facts for one atomic source record."""
+
+    record_id: str
+    boundary_kind: str
+    boundary_start: int | None
+    boundary_end: int | None
+    boundary_first_id: str | None
+    boundary_last_id: str | None
+    content_digest: str
+    utf8_bytes: int
+
+    def __post_init__(self) -> None:
+        _safe_identity(self.record_id)
+        _validate_record_boundary(
+            self.boundary_kind,
+            self.boundary_start,
+            self.boundary_end,
+            self.boundary_first_id,
+            self.boundary_last_id,
+        )
+        _safe_digest(self.content_digest)
+        _exact_nonnegative_integer(self.utf8_bytes)
+
+    @property
+    def boundary(self) -> tuple[object, ...]:
+        """Return the compact exact boundary tuple used by the wire codec."""
+
+        return (
+            self.boundary_kind,
+            self.boundary_start,
+            self.boundary_end,
+            self.boundary_first_id,
+            self.boundary_last_id,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ContextRecordMaterial:
+    """Transient strict-UTF-8 body paired with one content-free cursor."""
+
+    cursor: ContextRecordCursor
+    body_utf8: bytes = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if type(self.cursor) is not ContextRecordCursor or type(
+            self.body_utf8
+        ) is not bytes:
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_MATERIAL)
+        try:
+            self.body_utf8.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            raise ContextPlanningError(
+                ContextPlanningErrorCode.INVALID_MATERIAL
+            ) from None
+        if (
+            len(self.body_utf8) != self.cursor.utf8_bytes
+            or _body_digest(self.body_utf8) != self.cursor.content_digest
+        ):
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_MATERIAL)
+
+
 @dataclass(frozen=True, slots=True)
 class ContextMaterial:
     """Transient strict-UTF-8 material for one manifest entry."""
 
     entry: ContextManifestEntry
     body_utf8: bytes = field(repr=False)
+    records: tuple[ContextRecordMaterial, ...] = ()
 
     def __post_init__(self) -> None:
         if (
@@ -252,6 +402,13 @@ class ContextMaterial:
             raise ContextPlanningError(
                 ContextPlanningErrorCode.MATERIAL_DIGEST_MISMATCH
             )
+        if type(self.records) is not tuple or any(
+            type(record) is not ContextRecordMaterial for record in self.records
+        ):
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_MATERIAL)
+        record_ids = tuple(record.cursor.record_id for record in self.records)
+        if len(set(record_ids)) != len(record_ids):
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_MATERIAL)
 
 
 @dataclass(frozen=True, slots=True)
@@ -292,7 +449,7 @@ class ContextPlanningPolicy:
     p0_source_utf8_bytes: int = 73_728
     p1_source_utf8_bytes: int = 16_384
     p2_source_utf8_bytes: int = 32_768
-    p3_source_utf8_bytes: int = 8_192
+    p3_source_utf8_bytes: int = 0
     mandatory_reference_utf8_bytes: int = 262_144
     max_delta_depth: int = 16
 
@@ -360,16 +517,117 @@ class ContextPlanningConditions:
 
 
 @dataclass(frozen=True, slots=True)
+class ContextCheckpointRecord:
+    """Content-free source record paired with its stable delivery alias."""
+
+    cursor: ContextRecordCursor
+    record_alias: int
+
+    def __post_init__(self) -> None:
+        if type(self.cursor) is not ContextRecordCursor:
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_CHECKPOINT)
+        _validate_record_alias(self.record_alias, checkpoint=True)
+
+
+@dataclass(frozen=True, slots=True)
 class ContextCheckpointSource:
     """Complete content-free metadata for one accepted checkpoint source."""
 
     entry: ContextManifestEntry
+    records: tuple[ContextCheckpointRecord, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.entry) is not ContextManifestEntry:
             raise ContextPlanningError(ContextPlanningErrorCode.INVALID_CHECKPOINT)
         if self.entry.priority is ContextPriority.P0_REQUIRED:
             raise ContextPlanningError(ContextPlanningErrorCode.INVALID_CHECKPOINT)
+        if type(self.records) is not tuple or any(
+            type(record) is not ContextCheckpointRecord for record in self.records
+        ):
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_CHECKPOINT)
+        if self.records and not context_source_uses_catalog_alias(self.entry):
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_CHECKPOINT)
+        record_ids = tuple(record.cursor.record_id for record in self.records)
+        record_aliases = tuple(record.record_alias for record in self.records)
+        if (
+            len(set(record_ids)) != len(record_ids)
+            or len(set(record_aliases)) != len(record_aliases)
+        ):
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_CHECKPOINT)
+
+
+@dataclass(frozen=True, slots=True)
+class ContextCatalogCursor:
+    """Content-free stable alias for one current readable catalog source."""
+
+    entry: ContextManifestEntry
+    source_alias: str
+    record_alias_high_watermark: int = 0
+
+    def __post_init__(self) -> None:
+        if not context_source_uses_catalog_alias(self.entry):
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_CHECKPOINT)
+        _validate_source_alias(self.source_alias)
+        if (
+            type(self.record_alias_high_watermark) is not int
+            or self.record_alias_high_watermark < 0
+            or self.record_alias_high_watermark > _MAX_RECORD_ALIAS
+        ):
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_CHECKPOINT)
+
+
+def _catalog_covers_checkpoint_records(
+    sources: tuple[ContextCheckpointSource, ...],
+    catalog_sources: tuple[ContextCatalogCursor, ...],
+) -> bool:
+    """Return whether every delivery alias is valid in its source epoch."""
+
+    catalog_by_id = {
+        source.entry.source_id: source for source in catalog_sources
+    }
+    for source in sources:
+        if not context_source_uses_catalog_alias(source.entry):
+            if source.records:
+                return False
+            continue
+        catalog = catalog_by_id.get(source.entry.source_id)
+        if catalog is None or catalog.entry != source.entry:
+            return False
+        if any(
+            record.record_alias > catalog.record_alias_high_watermark
+            for record in source.records
+        ):
+            return False
+    return True
+
+
+@dataclass(frozen=True, slots=True)
+class ContextProjectedRecord:
+    """One changed transient record addressed by its stable source alias."""
+
+    source_alias: str
+    record: ContextCheckpointRecord
+    body_utf8: bytes = field(repr=False)
+
+    def __post_init__(self) -> None:
+        _validate_source_alias(self.source_alias)
+        if type(self.record) is not ContextCheckpointRecord:
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_VALUE)
+        ContextRecordMaterial(self.record.cursor, self.body_utf8)
+
+
+@dataclass(frozen=True, slots=True)
+class ContextRecordTombstone:
+    """Content-free removal of one prior record from a retained source."""
+
+    source_alias: str
+    record_alias: int
+    record_id: str
+
+    def __post_init__(self) -> None:
+        _validate_source_alias(self.source_alias)
+        _validate_record_alias(self.record_alias)
+        _safe_identity(self.record_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -381,6 +639,8 @@ class ContextCheckpointView:
     provider_thread_id: str | None = None
     sources: tuple[ContextCheckpointSource, ...] = ()
     delta_depth: int | None = None
+    catalog_sources: tuple[ContextCatalogCursor, ...] = ()
+    source_alias_high_watermark: int = 0
 
     def __post_init__(self) -> None:
         if type(self.state) is not ContextCheckpointState:
@@ -391,6 +651,8 @@ class ContextCheckpointView:
                 or self.provider_thread_id is not None
                 or self.sources
                 or self.delta_depth is not None
+                or self.catalog_sources
+                or self.source_alias_high_watermark != 0
             ):
                 raise ContextPlanningError(
                     ContextPlanningErrorCode.INVALID_CHECKPOINT
@@ -412,12 +674,51 @@ class ContextCheckpointView:
         source_ids = tuple(source.entry.source_id for source in self.sources)
         if len(set(source_ids)) != len(source_ids):
             raise ContextPlanningError(ContextPlanningErrorCode.INVALID_CHECKPOINT)
+        if type(self.catalog_sources) is not tuple or any(
+            type(source) is not ContextCatalogCursor
+            for source in self.catalog_sources
+        ):
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_CHECKPOINT)
+        catalog_ids = tuple(
+            source.entry.source_id for source in self.catalog_sources
+        )
+        source_aliases = tuple(
+            source.source_alias for source in self.catalog_sources
+        )
+        if (
+            len(set(catalog_ids)) != len(catalog_ids)
+            or len(set(source_aliases)) != len(source_aliases)
+        ):
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_CHECKPOINT)
+        if not _catalog_covers_checkpoint_records(
+            self.sources,
+            self.catalog_sources,
+        ):
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_CHECKPOINT)
+        alias_ordinals = tuple(
+            int(alias[1:]) for alias in source_aliases if alias
+        )
+        if (
+            type(self.source_alias_high_watermark) is not int
+            or self.source_alias_high_watermark < max(alias_ordinals, default=0)
+        ):
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_CHECKPOINT)
         object.__setattr__(
             self,
             "sources",
             tuple(
                 sorted(
                     self.sources,
+                    key=lambda source: context_manifest_entry_key(source.entry),
+                )
+            ),
+        )
+        object.__setattr__(
+            self,
+            "catalog_sources",
+            tuple(
+                sorted(
+                    self.catalog_sources,
                     key=lambda source: context_manifest_entry_key(source.entry),
                 )
             ),
@@ -509,7 +810,12 @@ def _decision_allowed(
         )
     return (
         priority is ContextPriority.P3_OPTIONAL
-        and semantic_channel is ContextSemanticChannel.OPTIONAL_BACKGROUND
+        and semantic_channel
+        in {
+            ContextSemanticChannel.OPTIONAL_BACKGROUND,
+            ContextSemanticChannel.RETRIEVED_EVIDENCE,
+            ContextSemanticChannel.HISTORY,
+        }
     )
 
 
@@ -939,6 +1245,8 @@ class ContextCheckpointProposal:
     conditions: ContextPlanningConditions
     sources: tuple[ContextCheckpointSource, ...]
     delta_depth: int
+    catalog_sources: tuple[ContextCatalogCursor, ...] = ()
+    source_alias_high_watermark: int = 0
 
     def __post_init__(self) -> None:
         if type(self.conditions) is not ContextPlanningConditions:
@@ -951,12 +1259,51 @@ class ContextCheckpointProposal:
         source_ids = tuple(source.entry.source_id for source in self.sources)
         if len(set(source_ids)) != len(source_ids):
             raise ContextPlanningError(ContextPlanningErrorCode.INVALID_VALUE)
+        if type(self.catalog_sources) is not tuple or any(
+            type(source) is not ContextCatalogCursor
+            for source in self.catalog_sources
+        ):
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_VALUE)
+        catalog_ids = tuple(
+            source.entry.source_id for source in self.catalog_sources
+        )
+        source_aliases = tuple(
+            source.source_alias for source in self.catalog_sources
+        )
+        if (
+            len(set(catalog_ids)) != len(catalog_ids)
+            or len(set(source_aliases)) != len(source_aliases)
+        ):
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_VALUE)
+        if not _catalog_covers_checkpoint_records(
+            self.sources,
+            self.catalog_sources,
+        ):
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_VALUE)
+        alias_ordinals = tuple(
+            int(alias[1:]) for alias in source_aliases if alias
+        )
+        if (
+            type(self.source_alias_high_watermark) is not int
+            or self.source_alias_high_watermark < max(alias_ordinals, default=0)
+        ):
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_VALUE)
         object.__setattr__(
             self,
             "sources",
             tuple(
                 sorted(
                     self.sources,
+                    key=lambda source: context_manifest_entry_key(source.entry),
+                )
+            ),
+        )
+        object.__setattr__(
+            self,
+            "catalog_sources",
+            tuple(
+                sorted(
+                    self.catalog_sources,
                     key=lambda source: context_manifest_entry_key(source.entry),
                 )
             ),
@@ -975,6 +1322,10 @@ class ContextProjection:
     removed_checkpoint_sources: tuple[ContextCheckpointSource, ...]
     accounting: ContextProjectionAccounting
     checkpoint_proposal: ContextCheckpointProposal
+    projected_records: tuple[ContextProjectedRecord, ...] = ()
+    removed_checkpoint_records: tuple[ContextRecordTombstone, ...] = ()
+    catalog_updates: tuple[ContextCatalogCursor, ...] = ()
+    removed_catalog_sources: tuple[ContextCatalogCursor, ...] = ()
 
     def __post_init__(self) -> None:
         if type(self.mode) is not ContextDeliveryMode:
@@ -1001,6 +1352,40 @@ class ContextProjection:
         if type(self.accounting) is not ContextProjectionAccounting:
             raise ContextPlanningError(ContextPlanningErrorCode.INVALID_VALUE)
         if type(self.checkpoint_proposal) is not ContextCheckpointProposal:
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_VALUE)
+        if type(self.projected_records) is not tuple or any(
+            type(record) is not ContextProjectedRecord
+            for record in self.projected_records
+        ):
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_VALUE)
+        if type(self.removed_checkpoint_records) is not tuple or any(
+            type(record) is not ContextRecordTombstone
+            for record in self.removed_checkpoint_records
+        ):
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_VALUE)
+        if type(self.catalog_updates) is not tuple or any(
+            type(source) is not ContextCatalogCursor
+            for source in self.catalog_updates
+        ):
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_VALUE)
+        if type(self.removed_catalog_sources) is not tuple or any(
+            type(source) is not ContextCatalogCursor
+            for source in self.removed_catalog_sources
+        ):
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_VALUE)
+        projected_record_keys = tuple(
+            (record.source_alias, record.record.cursor.record_id)
+            for record in self.projected_records
+        )
+        removed_record_keys = tuple(
+            (record.source_alias, record.record_id)
+            for record in self.removed_checkpoint_records
+        )
+        if (
+            len(set(projected_record_keys)) != len(projected_record_keys)
+            or len(set(removed_record_keys)) != len(removed_record_keys)
+            or set(projected_record_keys).intersection(removed_record_keys)
+        ):
             raise ContextPlanningError(ContextPlanningErrorCode.INVALID_VALUE)
         if self.accounting.mode is not self.mode:
             raise ContextPlanningError(ContextPlanningErrorCode.INVALID_VALUE)
@@ -1132,8 +1517,8 @@ class ContextProjection:
             self.checkpoint_proposal.delta_depth
         ):
             raise ContextPlanningError(ContextPlanningErrorCode.INVALID_VALUE)
-        expected_proposal_sources = tuple(
-            ContextCheckpointSource(decision.entry)
+        expected_proposal_entries = tuple(
+            decision.entry
             for decision in self.decisions
             if decision.entry.priority is not ContextPriority.P0_REQUIRED
             and decision.decision
@@ -1143,7 +1528,69 @@ class ContextProjection:
                 ContextDecisionKind.CHECKPOINT_SUPPRESSED,
             }
         )
-        if self.checkpoint_proposal.sources != expected_proposal_sources:
+        if tuple(
+            source.entry for source in self.checkpoint_proposal.sources
+        ) != expected_proposal_entries:
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_VALUE)
+        expected_catalog_entries = tuple(
+            decision.entry
+            for decision in self.decisions
+            if context_source_uses_catalog_alias(decision.entry)
+        )
+        proposal_catalog = self.checkpoint_proposal.catalog_sources
+        if (
+            tuple(source.entry for source in proposal_catalog)
+            != expected_catalog_entries
+        ):
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_VALUE)
+        proposal_aliases = tuple(
+            source.source_alias for source in proposal_catalog
+        )
+        if (
+            any(
+                record.source_alias not in proposal_aliases
+                for record in self.projected_records
+            )
+            or any(
+                record.source_alias not in proposal_aliases
+                for record in self.removed_checkpoint_records
+            )
+        ):
+            raise ContextPlanningError(ContextPlanningErrorCode.INVALID_VALUE)
+        proposal_catalog_set = set(proposal_catalog)
+        if (
+            len(set(self.catalog_updates)) != len(self.catalog_updates)
+            or any(source not in proposal_catalog_set for source in self.catalog_updates)
+            or len(set(self.removed_catalog_sources))
+            != len(self.removed_catalog_sources)
+            or {
+                source.entry.source_id for source in self.removed_catalog_sources
+            }.intersection(source.entry.source_id for source in proposal_catalog)
+            or {
+                source.source_alias for source in self.removed_catalog_sources
+            }.intersection(proposal_aliases)
+            or self.catalog_updates
+            != tuple(
+                sorted(
+                    self.catalog_updates,
+                    key=lambda source: context_manifest_entry_key(source.entry),
+                )
+            )
+            or self.removed_catalog_sources
+            != tuple(
+                sorted(
+                    self.removed_catalog_sources,
+                    key=lambda source: context_manifest_entry_key(source.entry),
+                )
+            )
+            or (
+                self.mode is ContextDeliveryMode.BOOTSTRAP
+                and (
+                    self.catalog_updates != proposal_catalog
+                    or self.removed_catalog_sources
+                )
+            )
+        ):
             raise ContextPlanningError(ContextPlanningErrorCode.INVALID_VALUE)
         removed_source_ids = tuple(
             source.entry.source_id for source in self.removed_checkpoint_sources
@@ -1611,11 +2058,128 @@ def plan_context_projection(
         ContextDecisionKind.DEDUPLICATED,
         ContextDecisionKind.CHECKPOINT_SUPPRESSED,
     }
-    proposal_sources = tuple(
-        ContextCheckpointSource(decision.entry)
+    accepted_decisions = tuple(
+        decision
         for decision in decisions
         if decision.entry.priority is not ContextPriority.P0_REQUIRED
         and decision.decision in accepted_kinds
+    )
+    checkpoint_source_by_id = (
+        {}
+        if mode is ContextDeliveryMode.BOOTSTRAP
+        else {source.entry.source_id: source for source in checkpoint.sources}
+    )
+    checkpoint_catalog_by_id = (
+        {}
+        if mode is ContextDeliveryMode.BOOTSTRAP
+        else {
+            source.entry.source_id: source
+            for source in checkpoint.catalog_sources
+        }
+    )
+    next_source_alias = (
+        1
+        if mode is ContextDeliveryMode.BOOTSTRAP
+        else checkpoint.source_alias_high_watermark + 1
+    )
+    catalog_sources_list: list[ContextCatalogCursor] = []
+    for entry in manifest.entries:
+        if not context_source_uses_catalog_alias(entry):
+            continue
+        previous = checkpoint_catalog_by_id.get(entry.source_id)
+        if previous is None:
+            source_alias = f"s{next_source_alias}"
+            next_source_alias += 1
+            record_alias_high_watermark = 0
+        else:
+            source_alias = previous.source_alias
+            record_alias_high_watermark = (
+                previous.record_alias_high_watermark
+            )
+        catalog_sources_list.append(
+            ContextCatalogCursor(
+                entry,
+                source_alias,
+                record_alias_high_watermark,
+            )
+        )
+    catalog_by_source = {
+        source.entry.source_id: source for source in catalog_sources_list
+    }
+    proposal_sources_list: list[ContextCheckpointSource] = []
+    for decision in accepted_decisions:
+        previous = checkpoint_source_by_id.get(decision.entry.source_id)
+        material = material_by_source.get(decision.entry.source_id)
+        catalog = catalog_by_source.get(decision.entry.source_id)
+        if material is not None:
+            previous_records = (
+                {}
+                if previous is None
+                else {
+                    record.cursor.record_id: record
+                    for record in previous.records
+                }
+            )
+            next_record_alias = (
+                1
+                if catalog is None
+                else catalog.record_alias_high_watermark + 1
+            )
+            checkpoint_records: list[ContextCheckpointRecord] = []
+            for record in material.records:
+                accepted = previous_records.get(record.cursor.record_id)
+                if accepted is None:
+                    accepted = ContextCheckpointRecord(
+                        record.cursor,
+                        next_record_alias,
+                    )
+                    next_record_alias += 1
+                else:
+                    accepted = ContextCheckpointRecord(
+                        record.cursor,
+                        accepted.record_alias,
+                    )
+                checkpoint_records.append(accepted)
+            cursors = tuple(checkpoint_records)
+            if catalog is not None:
+                updated_catalog = ContextCatalogCursor(
+                    catalog.entry,
+                    catalog.source_alias,
+                    max(
+                        catalog.record_alias_high_watermark,
+                        next_record_alias - 1,
+                    ),
+                )
+                catalog_by_source[decision.entry.source_id] = updated_catalog
+        elif previous is not None:
+            cursors = previous.records
+        else:
+            cursors = ()
+        proposal_sources_list.append(
+            ContextCheckpointSource(decision.entry, cursors)
+        )
+    proposal_sources = tuple(proposal_sources_list)
+    catalog_sources = tuple(
+        catalog_by_source[source.entry.source_id]
+        for source in catalog_sources_list
+    )
+    current_catalog_ids = {
+        source.entry.source_id for source in catalog_sources
+    }
+    removed_catalog_sources = (
+        tuple(
+            source
+            for source in checkpoint.catalog_sources
+            if source.entry.source_id not in current_catalog_ids
+        )
+        if mode is ContextDeliveryMode.DELTA
+        else ()
+    )
+    catalog_updates = tuple(
+        source
+        for source in catalog_sources
+        if mode is ContextDeliveryMode.BOOTSTRAP
+        or checkpoint_catalog_by_id.get(source.entry.source_id) != source
     )
     if mode is ContextDeliveryMode.BOOTSTRAP:
         proposed_depth = 0
@@ -1626,9 +2190,11 @@ def plan_context_projection(
         conditions,
         proposal_sources,
         proposed_depth,
+        catalog_sources,
+        next_source_alias - 1,
     )
     proposal_by_source = {
-        source.entry.source_id: source.entry for source in proposal.sources
+        source.entry.source_id: source for source in proposal.sources
     }
     same_scope_checkpoint = (
         checkpoint.state is ContextCheckpointState.READY
@@ -1639,11 +2205,56 @@ def plan_context_projection(
         tuple(
             source
             for source in checkpoint.sources
-            if proposal_by_source.get(source.entry.source_id) != source.entry
+            if source.entry.source_id not in proposal_by_source
         )
-        if same_scope_checkpoint
+        if same_scope_checkpoint and mode is ContextDeliveryMode.DELTA
         else ()
     )
+    projected_records: list[ContextProjectedRecord] = []
+    removed_records: list[ContextRecordTombstone] = []
+    for source in proposal.sources:
+        material = material_by_source.get(source.entry.source_id)
+        if material is None:
+            continue
+        current_record_materials = material.records
+        previous = checkpoint_source_by_id.get(source.entry.source_id)
+        previous_records = (
+            {}
+            if previous is None
+            else {
+                record.cursor.record_id: record
+                for record in previous.records
+            }
+        )
+        current_checkpoint_records = {
+            record.cursor.record_id: record for record in source.records
+        }
+        for record in current_record_materials:
+            checkpoint_record = current_checkpoint_records[
+                record.cursor.record_id
+            ]
+            accepted = previous_records.get(record.cursor.record_id)
+            if accepted is None or accepted.cursor != record.cursor:
+                projected_records.append(
+                    ContextProjectedRecord(
+                        catalog_by_source[source.entry.source_id].source_alias,
+                        checkpoint_record,
+                        record.body_utf8,
+                    )
+                )
+        if mode is ContextDeliveryMode.DELTA and previous is not None:
+            current_record_ids = {
+                record.cursor.record_id for record in current_record_materials
+            }
+            removed_records.extend(
+                ContextRecordTombstone(
+                    catalog_by_source[source.entry.source_id].source_alias,
+                    record.record_alias,
+                    record.cursor.record_id,
+                )
+                for record in previous.records
+                if record.cursor.record_id not in current_record_ids
+            )
 
     searchable_decisions = tuple(
         decision for decision in decisions if decision.searchable
@@ -1785,4 +2396,8 @@ def plan_context_projection(
         removed_checkpoint_sources=removed_sources,
         accounting=accounting,
         checkpoint_proposal=proposal,
+        projected_records=tuple(projected_records),
+        removed_checkpoint_records=tuple(removed_records),
+        catalog_updates=tuple(catalog_updates),
+        removed_catalog_sources=removed_catalog_sources,
     )

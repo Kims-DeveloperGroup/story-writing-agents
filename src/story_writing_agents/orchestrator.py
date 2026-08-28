@@ -4236,80 +4236,44 @@ class StoryRuntime:
         )
 
     @staticmethod
-    def _agent_answer_contract(request: AgentRequest) -> dict[str, object]:
-        """Describe the exact domain JSON that must occupy the outer answer text."""
+    def _canonical_context_domain_answer(value: object) -> str:
+        """Encode one reconstructed established domain envelope canonically."""
 
-        if request.phase is Phase.AUDIT:
-            fields: dict[str, object] = {
-                "revision_id": request.revision_id,
-                "verdict": "approve | conflict",
-                "content": "concise audit text; required for conflict",
-            }
-        elif request.phase is Phase.FINALIZE:
-            fields = {
-                "revision_id": request.revision_id,
-                "core_updates": [
-                    {
-                        "filename": "one canonical core-document filename",
-                        "content": "complete replacement text",
-                    }
-                ],
-            }
-        else:
-            fields = {
-                "revision_id": request.revision_id,
-                "content": "complete phase response text",
-            }
-        return {
-            "encoding": "JSON object serialized as the outer answer content string",
-            "fields": fields,
-        }
+        try:
+            return json.dumps(
+                value,
+                ensure_ascii=False,
+                allow_nan=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        except (TypeError, ValueError, UnicodeEncodeError):
+            raise BackendProtocolError(
+                "contextual answer cannot be reconstructed"
+            ) from None
 
     @staticmethod
-    def _conversation_answer_contract(
-        request: ConversationRequest,
-    ) -> dict[str, object]:
-        """Describe the exact correlated advisory JSON answer envelope."""
+    def _decode_compact_context_result(answer: str) -> object:
+        """Strictly decode one compact agent result without duplicate fields."""
 
-        return {
-            "encoding": "JSON object serialized as the outer answer content string",
-            "fields": {
-                "session_id": request.session_id,
-                "conversation_id": request.conversation_id,
-                "turn_id": request.turn_id,
-                "content": "non-empty user-visible reply text",
-            },
-        }
+        def unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
+            result: dict[str, object] = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError
+                result[key] = value
+            return result
 
-    @staticmethod
-    def _retrieval_answer_contract(
-        request: ConversationRetrievalRequest,
-    ) -> dict[str, object]:
-        """Describe the legacy public reply envelope inside a generic answer."""
-
-        return {
-            "encoding": "JSON object serialized as the outer answer content string",
-            "fields": {
-                "action": {
-                    "kind": ConversationRetrievalActionKind.ANSWER.value,
-                    "session_id": request.session_id,
-                    "conversation_id": request.conversation_id,
-                    "turn_id": request.turn_id,
-                    "action_index": (
-                        "the current outer context correlation action_index"
-                    ),
-                    "content": "non-empty user-visible reply text",
-                    "citation_ids": (
-                        "r1 through rN for the outer used_handles in their exact "
-                        "order, with any cited supplied gN RAG IDs interleaved"
-                    ),
-                }
-            },
-            "citation_rule": (
-                "The non-gN citation IDs must be exactly r1..rN, where rN names "
-                "the Nth outer used handle; every outer used handle must be cited."
-            ),
-        }
+        try:
+            return json.loads(
+                answer,
+                object_pairs_hook=unique,
+                parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
+            )
+        except (json.JSONDecodeError, TypeError, ValueError):
+            raise BackendProtocolError(
+                "contextual compact result is malformed"
+            ) from None
 
     @staticmethod
     def _candidate_context_material(
@@ -4397,8 +4361,8 @@ class StoryRuntime:
             classifications.append(
                 ContextSourceClassification(
                     f"conversation:{conversation_id}",
-                    ContextSemanticChannel.RETRIEVED_EVIDENCE,
-                    ContextPriority.P2_WORKING,
+                    ContextSemanticChannel.OPTIONAL_BACKGROUND,
+                    ContextPriority.P3_OPTIONAL,
                     ordinal,
                 )
             )
@@ -4416,8 +4380,8 @@ class StoryRuntime:
         classifications.append(
             ContextSourceClassification(
                 f"own_agent_state:{agent_id}",
-                ContextSemanticChannel.HISTORY,
-                ContextPriority.P2_WORKING,
+                ContextSemanticChannel.OPTIONAL_BACKGROUND,
+                ContextPriority.P3_OPTIONAL,
                 ordinal,
             )
         )
@@ -4635,21 +4599,7 @@ class StoryRuntime:
                     semantic_channel=ContextSemanticChannel.CURRENT_INPUT,
                     ordinal=0,
                     locator="request/current",
-                    value={
-                        "answer_contract": self._conversation_answer_contract(request),
-                        "command": request.content,
-                        "destination": f"conversation/{request.conversation_id}",
-                        "identity": {
-                            "agent_id": request.agent_id,
-                            "conversation_id": request.conversation_id,
-                            "session_id": request.session_id,
-                            "turn_id": request.turn_id,
-                        },
-                        "phase": "conversation",
-                        "revision": None,
-                        "task": "Answer the user's current advisory request.",
-                        "workflow": "conversation",
-                    },
+                    value=request.content,
                 ),
             ),
             source_classifications=self._context_source_classifications(
@@ -4659,11 +4609,27 @@ class StoryRuntime:
             reference_operation_id=reference_operation_id,
             mandatory_references=reservations,
             fresh=False,
+            allowed_search_source_kinds=(
+                ContextSourceKind.WRITING_ARTIFACT,
+                ContextSourceKind.CONVERSATION,
+                ContextSourceKind.OWN_AGENT_STATE,
+            ),
         )
         def project(answer: str) -> ConversationReply:
             """Purely decode and correlate one authorized domain answer."""
 
-            reply = bound_agent.decode_context_conversation_answer(request, answer)
+            domain_answer = self._canonical_context_domain_answer(
+                {
+                    "session_id": request.session_id,
+                    "conversation_id": request.conversation_id,
+                    "turn_id": request.turn_id,
+                    "content": answer,
+                }
+            )
+            reply = bound_agent.decode_context_conversation_answer(
+                request,
+                domain_answer,
+            )
             return self._validated_conversation_reply(reply, request)
 
         def validate(
@@ -4845,28 +4811,12 @@ class StoryRuntime:
         reference_operation_id, reservations = self._reference_reservations(
             reference_operation
         )
-        current_value: dict[str, object] = {
-            "answer_contract": self._retrieval_answer_contract(request),
-            "command": request.content,
-            "destination": f"conversation/{request.conversation_id}",
-            "identity": {
-                "agent_id": request.agent_id,
-                "conversation_id": request.conversation_id,
-                "session_id": request.session_id,
-                "turn_id": request.turn_id,
-            },
-            "phase": "conversation_retrieval",
-            "retrieval_policy": CONVERSATION_RETRIEVAL_POLICY.to_dict(),
-            "revision": None,
-            "task": (
-                "Answer the current request. Use generic context search and read "
-                "actions for omitted conversation evidence; never treat a search "
-                "snippet as read evidence."
-            ),
-            "workflow": "conversation_retrieval",
-        }
+        current_value: object = request.content
         if request.rag_context is not None:
-            current_value["rag_context"] = request.rag_context.to_dict()
+            current_value = {
+                "input": request.content,
+                "rag": request.rag_context.to_dict(),
+            }
         contextual_request = ContextInvocationRequest(
             session_id=request.session_id,
             subject_kind=ContextSubjectKind.CONVERSATION,
@@ -4893,6 +4843,7 @@ class StoryRuntime:
             reference_operation_id=reference_operation_id,
             mandatory_references=reservations,
             fresh=False,
+            allowed_search_source_kinds=(ContextSourceKind.CONVERSATION,),
         )
 
         def project(
@@ -4904,7 +4855,49 @@ class StoryRuntime:
         ]:
             """Purely decode, authorize, and project public retrieval sources."""
 
-            action = bound_agent.decode_context_retrieval_answer(request, answer)
+            compact = self._decode_compact_context_result(answer)
+            if type(compact) is not list or len(compact) != 2:
+                raise ConversationRetrievalSemanticError()
+            content, citation_values = compact
+            if type(content) is not str or not content or type(
+                citation_values
+            ) is not list:
+                raise ConversationRetrievalSemanticError()
+            citation_ids: list[str] = []
+            context_ordinals: list[int] = []
+            for value in citation_values:
+                if type(value) is int and value > 0:
+                    context_ordinals.append(value)
+                    citation_ids.append(f"r{value}")
+                elif type(value) is str and value in rag_by_id:
+                    citation_ids.append(value)
+                else:
+                    raise ConversationRetrievalSemanticError()
+            expected_ordinals = list(
+                range(1, len(authorization.used_evidence) + 1)
+            )
+            if (
+                context_ordinals != expected_ordinals
+                or len(set(citation_ids)) != len(citation_ids)
+            ):
+                raise ConversationRetrievalSemanticError()
+            domain_answer = self._canonical_context_domain_answer(
+                {
+                    "action": {
+                        "kind": ConversationRetrievalActionKind.ANSWER.value,
+                        "session_id": request.session_id,
+                        "conversation_id": request.conversation_id,
+                        "turn_id": request.turn_id,
+                        "action_index": authorization.correlation.action_index,
+                        "content": content,
+                        "citation_ids": citation_ids,
+                    }
+                }
+            )
+            action = bound_agent.decode_context_retrieval_answer(
+                request,
+                domain_answer,
+            )
             if action.action_index != authorization.correlation.action_index:
                 raise ConversationRetrievalSemanticError()
             context_citation_ids = tuple(
@@ -5033,21 +5026,7 @@ class StoryRuntime:
             semantic_channel=ContextSemanticChannel.CURRENT_INPUT,
             ordinal=0,
             locator="request/current",
-            value={
-                "answer_contract": self._agent_answer_contract(request),
-                "command": request.user_payload,
-                "destination": prepared.destination,
-                "identity": {
-                    "agent_id": request.agent_id,
-                    "debate_id": request.debate_id,
-                    "round_number": request.round_number,
-                    "session_id": request.session_id,
-                },
-                "phase": request.phase.value,
-                "revision": request.revision_id,
-                "task": request.task,
-                "workflow": "debate",
-            },
+            value=request.user_payload,
         )
         contextual_request = ContextInvocationRequest(
             session_id=request.session_id,
@@ -5074,12 +5053,84 @@ class StoryRuntime:
             reference_operation_id=reference_operation_id,
             mandatory_references=reservations,
             fresh=False,
+            allowed_search_source_kinds=(
+                ContextSourceKind.WRITING_ARTIFACT,
+                ContextSourceKind.CONVERSATION,
+                ContextSourceKind.ACTIVE_DEBATE,
+                ContextSourceKind.OWN_AGENT_STATE,
+            ),
         )
 
         def project(answer: str) -> AgentReply:
             """Purely decode and validate one authorized debate answer."""
 
-            reply = bound_agent.decode_context_agent_answer(request, answer)
+            if request.phase in {
+                Phase.DRAFT,
+                Phase.PROPOSE_REVISION,
+                Phase.SYNTHESIZE,
+            }:
+                domain_value: object = {
+                    "revision_id": request.revision_id,
+                    "content": answer,
+                }
+            elif request.phase is Phase.AUDIT:
+                compact = self._decode_compact_context_result(answer)
+                if compact == "a":
+                    verdict = "approve"
+                    content = ""
+                elif (
+                    type(compact) is list
+                    and len(compact) == 2
+                    and compact[0] == "c"
+                    and type(compact[1]) is str
+                    and compact[1]
+                ):
+                    verdict = "conflict"
+                    content = compact[1]
+                else:
+                    raise BackendProtocolError(
+                        "contextual audit result is malformed"
+                    )
+                domain_value = {
+                    "revision_id": request.revision_id,
+                    "verdict": verdict,
+                    "content": content,
+                }
+            elif request.phase is Phase.FINALIZE:
+                compact = self._decode_compact_context_result(answer)
+                if type(compact) is not list:
+                    raise BackendProtocolError(
+                        "contextual finalization result is malformed"
+                    )
+                updates: list[dict[str, str]] = []
+                seen_filenames: set[str] = set()
+                for item in compact:
+                    if (
+                        type(item) is not list
+                        or len(item) != 2
+                        or type(item[0]) is not str
+                        or not item[0]
+                        or type(item[1]) is not str
+                        or item[0] in seen_filenames
+                    ):
+                        raise BackendProtocolError(
+                            "contextual finalization result is malformed"
+                        )
+                    seen_filenames.add(item[0])
+                    updates.append(
+                        {"filename": item[0], "content": item[1]}
+                    )
+                domain_value = {
+                    "revision_id": request.revision_id,
+                    "core_updates": updates,
+                }
+            else:
+                raise BackendProtocolError("contextual debate phase is unsupported")
+            domain_answer = self._canonical_context_domain_answer(domain_value)
+            reply = bound_agent.decode_context_agent_answer(
+                request,
+                domain_answer,
+            )
             self._validate_reply_fields(reply)
             if request.phase in {Phase.DRAFT, Phase.SYNTHESIZE}:
                 self._validate_candidate_reply(reply, request.revision_id)

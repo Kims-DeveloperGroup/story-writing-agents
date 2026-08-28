@@ -54,7 +54,9 @@ from .manifest import (
 from .planning import (
     ContextBootstrapReason,
     ContextBudgetAccounting,
+    ContextCatalogCursor,
     ContextCheckpointProposal,
+    ContextCheckpointRecord,
     ContextCheckpointSource,
     ContextCheckpointState,
     ContextCheckpointView,
@@ -65,6 +67,7 @@ from .planning import (
     ContextPlanningError,
     ContextProjectionAccounting,
     ContextReferenceBudgetUsage,
+    ContextRecordCursor,
     ContextSearchableAccounting,
     ContextSourceBudgetUsage,
 )
@@ -92,13 +95,13 @@ __all__ = [
     "context_ledger_scope_key",
 ]
 
-CONTEXT_LEDGER_SCHEMA_VERSION = 1
+CONTEXT_LEDGER_SCHEMA_VERSION = 2
 MAX_CONTEXT_LEDGER_RECORD_UTF8_BYTES = 8 * 1024 * 1024
 MAX_CONTEXT_LEDGER_SOURCES = 4096
 MAX_CONTEXT_LEDGER_PROVIDER_CALLS = 32
 CONTEXT_LEDGER_LOCK_TIMEOUT_SECONDS = 5.0
 
-_LEDGER_PATH = ("agent_states", "orchestrator_state", "context_ledger", "v1")
+_LEDGER_PATH = ("agent_states", "orchestrator_state", "context_ledger", "v2")
 _PRIVATE_PATH_START = 2
 _LOCK_RETRY_SECONDS = 0.01
 _MAX_LOCK_FREE_READ_ATTEMPTS = 8
@@ -447,6 +450,8 @@ class ContextLedgerReadyCheckpoint:
     delta_depth: int
     proposal_digest: str
     committed_at: str
+    catalog_sources: tuple[ContextCatalogCursor, ...] = ()
+    source_alias_high_watermark: int = 0
 
     def __post_init__(self) -> None:
         if type(self.conditions) is not ContextPlanningConditions:
@@ -458,6 +463,13 @@ class ContextLedgerReadyCheckpoint:
             raise _invalid()
         if len(self.sources) > MAX_CONTEXT_LEDGER_SOURCES:
             raise ContextLedgerError(ContextLedgerErrorCode.LIMIT_EXCEEDED)
+        if type(self.catalog_sources) is not tuple or any(
+            type(source) is not ContextCatalogCursor
+            for source in self.catalog_sources
+        ):
+            raise _invalid()
+        if len(self.catalog_sources) > MAX_CONTEXT_LEDGER_SOURCES:
+            raise ContextLedgerError(ContextLedgerErrorCode.LIMIT_EXCEEDED)
         ordered = tuple(
             sorted(
                 self.sources,
@@ -467,14 +479,23 @@ class ContextLedgerReadyCheckpoint:
         source_ids = tuple(source.entry.source_id for source in ordered)
         if len(set(source_ids)) != len(source_ids):
             raise _invalid()
+        ordered_catalog = tuple(
+            sorted(
+                self.catalog_sources,
+                key=lambda source: context_manifest_entry_key(source.entry),
+            )
+        )
         _exact_nonnegative_integer(self.delta_depth)
         _safe_digest(self.proposal_digest)
         _parse_timestamp(self.committed_at)
         object.__setattr__(self, "sources", ordered)
+        object.__setattr__(self, "catalog_sources", ordered_catalog)
         proposal = ContextCheckpointProposal(
             self.conditions,
             ordered,
             self.delta_depth,
+            ordered_catalog,
+            self.source_alias_high_watermark,
         )
         if context_checkpoint_proposal_digest(proposal) != self.proposal_digest:
             raise _invalid()
@@ -482,7 +503,7 @@ class ContextLedgerReadyCheckpoint:
 
 @dataclass(frozen=True, slots=True)
 class ContextLedgerRecord:
-    """One complete schema-v1 record stored under a hashed ledger key."""
+    """One complete schema-v2 record stored under a hashed ledger key."""
 
     key: ContextLedgerKey
     generation: int
@@ -851,19 +872,122 @@ def _decode_conditions(value: object) -> ContextPlanningConditions:
     )
 
 
+def _record_cursor_value(value: ContextRecordCursor) -> dict[str, object]:
+    return {
+        "boundary": list(value.boundary),
+        "content_digest": value.content_digest,
+        "record_id": value.record_id,
+        "utf8_bytes": value.utf8_bytes,
+    }
+
+
+def _decode_record_cursor(value: object) -> ContextRecordCursor:
+    item = _decoded_dict(
+        value,
+        frozenset({"record_id", "boundary", "content_digest", "utf8_bytes"}),
+    )
+    boundary = _decoded_list(item["boundary"])
+    if len(boundary) != 5:
+        raise _DecodeError
+    return ContextRecordCursor(
+        record_id=_decoded_string(item["record_id"]),
+        boundary_kind=_decoded_string(boundary[0]),
+        boundary_start=_decoded_optional_integer(boundary[1]),
+        boundary_end=_decoded_optional_integer(boundary[2]),
+        boundary_first_id=_decoded_optional_string(boundary[3]),
+        boundary_last_id=_decoded_optional_string(boundary[4]),
+        content_digest=_decoded_string(item["content_digest"]),
+        utf8_bytes=_decoded_integer(item["utf8_bytes"]),
+    )
+
+
+def _checkpoint_record_value(value: ContextCheckpointRecord) -> dict[str, object]:
+    return {
+        **_record_cursor_value(value.cursor),
+        "record_alias": value.record_alias,
+    }
+
+
+def _decode_checkpoint_record(value: object) -> ContextCheckpointRecord:
+    item = _decoded_dict(
+        value,
+        frozenset(
+            {
+                "record_alias",
+                "record_id",
+                "boundary",
+                "content_digest",
+                "utf8_bytes",
+            }
+        ),
+    )
+    return ContextCheckpointRecord(
+        _decode_record_cursor(
+            {
+                "record_id": item["record_id"],
+                "boundary": item["boundary"],
+                "content_digest": item["content_digest"],
+                "utf8_bytes": item["utf8_bytes"],
+            }
+        ),
+        _decoded_integer(item["record_alias"]),
+    )
+
+
 def _checkpoint_source_value(value: ContextCheckpointSource) -> dict[str, object]:
-    return {"entry": _entry_value(value.entry)}
+    return {
+        "entry": _entry_value(value.entry),
+        "records": [
+            _checkpoint_record_value(record) for record in value.records
+        ],
+    }
 
 
 def _decode_checkpoint_source(value: object) -> ContextCheckpointSource:
-    item = _decoded_dict(value, frozenset({"entry"}))
-    return ContextCheckpointSource(_decode_entry(item["entry"]))
+    item = _decoded_dict(
+        value,
+        frozenset({"entry", "records"}),
+    )
+    records = _decoded_list(item["records"])
+    if len(records) > 10_000:
+        raise _DecodeError
+    source = ContextCheckpointSource(
+        _decode_entry(item["entry"]),
+        tuple(_decode_checkpoint_record(record) for record in records),
+    )
+    return source
+
+
+def _catalog_cursor_value(value: ContextCatalogCursor) -> dict[str, object]:
+    return {
+        "entry": _entry_value(value.entry),
+        "record_alias_high_watermark": value.record_alias_high_watermark,
+        "source_alias": value.source_alias,
+    }
+
+
+def _decode_catalog_cursor(value: object) -> ContextCatalogCursor:
+    item = _decoded_dict(
+        value,
+        frozenset(
+            {"entry", "record_alias_high_watermark", "source_alias"}
+        ),
+    )
+    return ContextCatalogCursor(
+        _decode_entry(item["entry"]),
+        _decoded_string(item["source_alias"]),
+        _decoded_integer(item["record_alias_high_watermark"]),
+    )
 
 
 def _proposal_value(value: ContextCheckpointProposal) -> dict[str, object]:
     return {
+        "catalog_sources": [
+            _catalog_cursor_value(source) for source in value.catalog_sources
+        ],
         "conditions": _conditions_value(value.conditions),
         "delta_depth": value.delta_depth,
+        "source_alias_high_watermark": value.source_alias_high_watermark,
         "sources": [_checkpoint_source_value(source) for source in value.sources],
     }
 
@@ -876,6 +1000,8 @@ def context_checkpoint_proposal_digest(
     if type(proposal) is not ContextCheckpointProposal:
         raise _invalid()
     if len(proposal.sources) > MAX_CONTEXT_LEDGER_SOURCES:
+        raise ContextLedgerError(ContextLedgerErrorCode.LIMIT_EXCEEDED)
+    if len(proposal.catalog_sources) > MAX_CONTEXT_LEDGER_SOURCES:
         raise ContextLedgerError(ContextLedgerErrorCode.LIMIT_EXCEEDED)
     digest = hashlib.sha256(_canonical_json(_proposal_value(proposal))).hexdigest()
     return f"sha256:{digest}"
@@ -1369,11 +1495,15 @@ def _ready_checkpoint_value(
     value: ContextLedgerReadyCheckpoint,
 ) -> dict[str, object]:
     return {
+        "catalog_sources": [
+            _catalog_cursor_value(source) for source in value.catalog_sources
+        ],
         "committed_at": value.committed_at,
         "conditions": _conditions_value(value.conditions),
         "delta_depth": value.delta_depth,
         "proposal_digest": value.proposal_digest,
         "provider_thread_id": value.provider_thread_id,
+        "source_alias_high_watermark": value.source_alias_high_watermark,
         "sources": [
             _checkpoint_source_value(source) for source in value.sources
         ],
@@ -1386,16 +1516,22 @@ def _decode_ready_checkpoint(value: object) -> ContextLedgerReadyCheckpoint:
         frozenset(
             {
                 "conditions",
+                "catalog_sources",
                 "provider_thread_id",
                 "sources",
                 "delta_depth",
                 "proposal_digest",
                 "committed_at",
+                "source_alias_high_watermark",
             }
         ),
     )
     sources = _decoded_list(item["sources"])
-    if len(sources) > MAX_CONTEXT_LEDGER_SOURCES:
+    catalog_sources = _decoded_list(item["catalog_sources"])
+    if (
+        len(sources) > MAX_CONTEXT_LEDGER_SOURCES
+        or len(catalog_sources) > MAX_CONTEXT_LEDGER_SOURCES
+    ):
         raise _DecodeError
     return ContextLedgerReadyCheckpoint(
         conditions=_decode_conditions(item["conditions"]),
@@ -1404,6 +1540,12 @@ def _decode_ready_checkpoint(value: object) -> ContextLedgerReadyCheckpoint:
         delta_depth=_decoded_integer(item["delta_depth"]),
         proposal_digest=_decoded_string(item["proposal_digest"]),
         committed_at=_decoded_string(item["committed_at"]),
+        catalog_sources=tuple(
+            _decode_catalog_cursor(source) for source in catalog_sources
+        ),
+        source_alias_high_watermark=_decoded_integer(
+            item["source_alias_high_watermark"]
+        ),
     )
 
 
@@ -2181,6 +2323,8 @@ def _inspection_for_record(record: ContextLedgerRecord) -> ContextLedgerInspecti
             provider_thread_id=ready.provider_thread_id,
             sources=ready.sources,
             delta_depth=ready.delta_depth,
+            catalog_sources=ready.catalog_sources,
+            source_alias_high_watermark=ready.source_alias_high_watermark,
         )
     elif record.state is ContextLedgerRecordState.STALE:
         view = ContextCheckpointView(ContextCheckpointState.STALE)
@@ -2597,6 +2741,10 @@ class ContextLedger:
                     delta_depth=proposal.delta_depth,
                     proposal_digest=digest,
                     committed_at=now,
+                    catalog_sources=proposal.catalog_sources,
+                    source_alias_high_watermark=(
+                        proposal.source_alias_high_watermark
+                    ),
                 )
                 attempt = replace(
                     record.attempt,
