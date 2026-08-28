@@ -447,7 +447,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   touched source after selection. All source bodies and normalization buffers
   remain call-local. Importing performs no I/O.
 - **Primary verification/documentation:**
-  `tests/test_agent_context_sources.py`; module-inventory, dependency,
+  `tests/test_agent_context_sources.py`,
+  `tests/test_agent_context_runtime_adoption.py`; module-inventory, dependency,
   facade, and import-boundary assertions across
   `tests/test_rag_module_and_packaging_boundary.py`,
   `tests/test_session_lifecycle.py`, and
@@ -819,7 +820,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   exception, or cancellation flow; `debug_log` retains ownership of its files,
   locks, schema, and rotation.
 - **Primary verification/documentation:**
-  `tests/test_agent_context_execution.py`, `tests/test_codex_backend.py`,
+  `tests/test_agent_context_execution.py`,
+  `tests/test_agent_context_runtime_adoption.py`, `tests/test_codex_backend.py`,
   `tests/test_context_accounting_baseline.py`, `tests/test_prompts.py`,
   `tests/test_conversation_retrieval.py`,
   `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`,
@@ -2663,6 +2665,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   cleanup attempts with its original object and traceback so each consumer can
   apply its boundary-specific fail-safe policy.
 - **Primary verification/documentation:** `tests/test_debug_log.py`,
+  `tests/test_agent_context_runtime_adoption.py`,
   `tests/test_workspace_and_config.py`, `docs/design/overview.md`,
   `docs/design/persistence.md`, `docs/operations/filesystem-safety.md`,
   `docs/operations/privacy-and-provider.md`, and
@@ -4620,7 +4623,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   Orchestrator-owned pure validator closures reuse backend domain decoders
   after service authorization and before reference completion or ledger commit;
   invalid advisory, retrieval, debate, citation, or publication-shaped output
-  therefore cannot advance READY. Retrieval uses the conversation adapter's
+  therefore cannot advance READY. At this runtime edge, only the exact
+  service-owned `MALFORMED_ACTION` failure is translated to the established
+  `BackendProtocolError`; other context execution failures retain their exact
+  classification. Retrieval uses the conversation adapter's
   explicit active same-session mode, maps only completed used read evidence to
   public sources, preserves supplied RAG source order, existing progress and
   transcript persistence, and never runs the legacy provider retrieval loop in
@@ -4718,7 +4724,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_antigravity_parity.py`,
   `tests/test_orchestration_workflow.py`,
   `tests/test_orchestration_safety.py`, `tests/test_lifecycle_atomicity.py`,
-  `tests/test_prompts.py`,
+  `tests/test_prompts.py`, `tests/test_interactive_pty.py`,
   `tests/test_agent_state.py`, `docs/guides/artifact-references.md`,
   `docs/reference/runtime-api.md`,
   `docs/reference/writing-artifacts.md`,
@@ -4772,6 +4778,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   projection delegates lazy internal-state and lease setup to the injected
   artifact repository without catalog loading or transaction recovery.
 - **Primary verification/documentation:** `tests/test_prompts.py`,
+  `tests/test_agent_context_runtime_adoption.py`,
   `tests/test_codex_backend.py`, `docs/reference/writing-artifacts.md`,
   `docs/reference/agent-contracts.md`, and `docs/design/prompts-and-provider.md`.
 
@@ -5220,7 +5227,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   resource; repository calls remain the only operational effects. Importing
   the module performs no I/O.
 - **Primary verification/documentation:**
-  `tests/test_runtime_reference_integration.py`; production inventory and
+  `tests/test_runtime_reference_integration.py`,
+  `tests/test_agent_context_runtime_adoption.py`; production inventory and
   clean-import checks in `tests/test_interactive_controller.py` and
   `tests/test_session_lifecycle.py`; the user workflow and lifecycle are in
   `docs/guides/artifact-references.md`, while orchestration consumers are
