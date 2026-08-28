@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 81.
+Importable production units indexed: 84.
 
-Direct internal dependency edges indexed: 321.
+Direct internal dependency edges indexed: 336.
 
 ## Current Dependency Direction
 
@@ -169,10 +169,16 @@ orchestrator -> conversation_rag_runtime
 models -> conversations/agents/errors
 agent_context -> agent_context.accounting
 agent_context.accounting -> (standard library only)
+agent_context.actions -> agent_context.manifest/planning
 agent_context.ledger -> agent_context.accounting/manifest/planning
                      -> workspace
 agent_context.manifest -> (standard library only)
 agent_context.planning -> agent_context.manifest
+agent_context.service -> agent_context.actions/manifest/planning/sources
+agent_context.sources -> agent_context.actions/manifest
+                      -> conversations/errors/models/workspace
+                      -> writing_artifacts.filesystem_sources
+                      -> writing_artifacts.references/repository
 provider_adapter -> agent_context/models
 provider_auth -> (standard library only)
 provider_catalog -> (standard library only)
@@ -316,9 +322,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ProviderCallAccounting`, `ProviderCallKind`, `ProviderCallState`,
   `ProviderJsonEncodingError`, `ProviderPayloadAccounting`, `ProviderUsage`,
   `account_provider_payload`, and `canonical_provider_json`. This is the
-  facade's complete exposed surface. The package-internal `ledger`, `manifest`,
-  and `planning` modules intentionally remain direct-module contracts and are
-  not re-exported here.
+  facade's complete exposed surface. The package-internal `actions`, `ledger`,
+  `manifest`, `planning`, `service`, and `sources` modules intentionally remain
+  direct-module contracts and are not re-exported here.
 - **Direct internal dependencies:** `agent_context.accounting`.
 - **State, resources, and side effects:** Re-exports immutable values and pure
   functions only. Importing performs no I/O and creates no mutable state or
@@ -357,6 +363,117 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_codex_backend.py`, `tests/test_antigravity_adapter.py`,
   `tests/test_antigravity_parity.py`, and
   `docs/design/prompts-and-provider.md`.
+
+### `story_writing_agents.agent_context.actions`
+
+- **Source:** `src/story_writing_agents/agent_context/actions.py`
+- **Responsibility:** Define the immutable agent-directed context action and
+  observation language.
+- **Supported surface:** No project-root or `agent_context`-facade-supported
+  API. The direct-module package-internal `__all__` exposes
+  `CONTEXT_ACTION_POLICY`, `ContextAction`, `ContextActionCorrelation`,
+  `ContextActionError`, `ContextActionErrorCode`, `ContextActionKind`,
+  `ContextActionObservation`, `ContextActionPolicy`, `ContextAnswerAction`,
+  `ContextAnswerAuthorization`, `ContextEvidenceReceipt`, `ContextReadAction`,
+  `ContextReadObservation`, `ContextSearchAction`, `ContextSearchHit`,
+  `ContextSearchObservation`, `ContextSearchQuery`, `ContextSourceBoundary`,
+  `ContextSourceBoundaryKind`, `ContextSourceEvidence`, `ContextSourceHandle`,
+  and `serialize_context_action_observation`. It owns exact invocation
+  correlation, canonical source-kind-constrained literal queries, tagged
+  whole/line/turn/record boundaries, ordered actions and observations,
+  content-free evidence receipts, repr-hidden excerpts, fixed limits and error
+  codes, exact source/authority/boundary evidence matrices, repr-hidden answer
+  payloads, and terminal answer authorizations bound to the manifest, ordered
+  completed evidence, used subset, answer/result digest, and unchanged pending
+  reference facts. Search and read observations serialize as one compact sorted
+  JSON frame between the established untrusted story-data delimiters.
+- **Direct internal dependencies:** `agent_context.manifest` and
+  `agent_context.planning`.
+- **State, resources, and side effects:** Owns one frozen default policy and
+  pure immutable values only. Validation and serialization use call-local
+  memory; importing performs no I/O, entropy, registration, or mutation.
+- **Primary verification/documentation:**
+  `tests/test_agent_context_actions.py`; module-inventory, dependency,
+  facade, and import-boundary assertions across
+  `tests/test_rag_module_and_packaging_boundary.py`,
+  `tests/test_session_lifecycle.py`, and
+  `tests/test_interactive_controller.py`.
+
+### `story_writing_agents.agent_context.sources`
+
+- **Source:** `src/story_writing_agents/agent_context/sources.py`
+- **Responsibility:** Adapt the fixed authorized owner domains into bounded
+  canonical context-source snapshots.
+- **Supported surface:** No project-root or `agent_context`-facade-supported
+  API. The direct-module package-internal `__all__` exposes
+  `CONTEXT_SOURCE_POLICY`, `ActiveDebateSourceAdapter`,
+  `ContextSourceDescriptor`, `ContextSourceError`, `ContextSourceErrorCode`,
+  `ContextSourcePolicy`, `ContextSourceRecord`, `ContextSourceRegistry`,
+  `ContextSourceSearchMatch`, `ContextSourceSnapshot`,
+  `FocusedConversationSourceAdapter`, `OwnAgentStateSourceAdapter`, and
+  `WritingArtifactSourceAdapter`. The exact four-slot registry binds canonical
+  writing artifacts, one focused same-session conversation, one active public
+  debate, and the invoking agent's own session state. It owns content-free
+  identities and revisions, exact physical artifact lines, canonical structured
+  conversation/debate/owner-state bodies, and repr-hidden strict-UTF-8 captures.
+  Active-debate records expose canonical public state first and durable messages
+  afterward, keeping state independently searchable/readable even when the
+  whole source exceeds the whole-handle cap. The module also owns record
+  boundaries, deterministic NFKC/casefold literal search, bounded artifact
+  context expansion, scan accounting, capture/re-read drift detection, and
+  fixed source limits and failures.
+- **Direct internal dependencies:** `agent_context.actions`,
+  `agent_context.manifest`, `conversations`, `errors`, `models`, `workspace`,
+  `writing_artifacts.filesystem_sources`, `writing_artifacts.references`, and
+  `writing_artifacts.repository`.
+- **State, resources, and side effects:** Adapters retain only borrowed public
+  owner collaborators and immutable scope identities. The registry owns no
+  cache, descriptor, lock, or file handle. Inventory performs stable
+  list/capture/re-list validation; capture double-reads mutable owners; search
+  prechecks manifest byte facts, acquires sources in canonical manifest order,
+  omits over-limit records without minting handles, and revalidates every
+  touched source after selection. All source bodies and normalization buffers
+  remain call-local. Importing performs no I/O.
+- **Primary verification/documentation:**
+  `tests/test_agent_context_sources.py`; module-inventory, dependency,
+  facade, and import-boundary assertions across
+  `tests/test_rag_module_and_packaging_boundary.py`,
+  `tests/test_session_lifecycle.py`, and
+  `tests/test_interactive_controller.py`.
+
+### `story_writing_agents.agent_context.service`
+
+- **Source:** `src/story_writing_agents/agent_context/service.py`
+- **Responsibility:** Coordinate one call-local manifest-bound context action
+  session.
+- **Supported surface:** No project-root or `agent_context`-facade-supported
+  API. The direct-module package-internal `__all__` exposes
+  `ContextInvocationBinding`, `ContextInvocationSession`,
+  `ContextInvocationState`, and `ContextReadReceipt`. The synchronized session
+  owns exact sequential action correlation, fresh invocation-local HMAC source
+  handles, fixed action/source counters, canonical source acquisition with
+  request-ordered observations, all-or-nothing one-use reads,
+  outstanding-delivery receipts, completed-source final revalidation, and
+  manifest/read/answer-bound terminal authorization with unchanged pass-through
+  of ordered mandatory reference facts.
+- **Direct internal dependencies:** `agent_context.actions`,
+  `agent_context.manifest`, `agent_context.planning`, and
+  `agent_context.sources`.
+- **State, resources, and side effects:** Each instance owns one fresh 32-byte
+  secret, a bounded in-memory handle table, counters, receipt metadata, and a
+  reentrant synchronization lock. It owns no provider, ledger, filesystem,
+  process, clock, network, or persistence resource; source I/O remains delegated
+  to the injected registry. Search trims only canonical tail hits to its
+  remaining framed-observation budget, while read failure remains atomic.
+  Failure and answer authorization zero and discard the secret, manifest and
+  search handles, and pending/completed handle-bearing receipt state. Importing
+  performs no I/O or entropy acquisition.
+- **Primary verification/documentation:**
+  `tests/test_agent_context_service.py`; module-inventory, dependency,
+  facade, and import-boundary assertions across
+  `tests/test_rag_module_and_packaging_boundary.py`,
+  `tests/test_session_lifecycle.py`, and
+  `tests/test_interactive_controller.py`.
 
 ### `story_writing_agents.agent_context.ledger`
 
@@ -5035,7 +5152,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/writing_artifacts/_storage.py`
 - **Responsibility:** Enforce descriptor-relative no-follow filesystem access
   for the writing-artifact repository.
-- **Supported surface:** Private `SecureWorkspaceStorage`, consumed only by
+- **Supported surface:** Private `SecureWorkspaceStorage` and
+  `ArtifactTraversalLimitError`, consumed only by
   `writing_artifacts.repository` and its package-private
   `writing_artifacts._reference_evidence` and
   `writing_artifacts.filesystem_sources` adapters. The repository remains the
@@ -5054,13 +5172,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   pre-stat/name/descriptor checks, unique-regular-file checks, and exact stored
   entry spelling. Final file names are alias-checked before their first stat and
   reverified around descriptor reads. Metadata-only recursive discovery reads
-  no file bodies, skips unsafe or alias-colliding entries, and retains and
-  revalidates descriptor ancestry. Stable reads return exact bytes plus device,
-  inode, size, modification, and change stamps. Descriptor-relative directory
-  listings reject case-folded or NFKC-normalized aliases before access; traversal fsyncs
-  each parent directory entry after successful child creation and before
-  descending. Publication also fsyncs its target/staging directories and uses a
-  lazily required Darwin/Linux native atomic no-replace rename. Publication,
+  no file bodies, uses descriptor-relative streaming scans, counts every raw
+  descendant entry against one call-local budget before filtering, fails the
+  complete traversal on overflow, skips unsafe or alias-colliding entries, and
+  retains and revalidates descriptor ancestry. Stable reads return exact bytes
+  plus device, inode, size, modification, and change stamps. Descriptor-relative
+  directory listings reject case-folded or NFKC-normalized aliases before
+  access; traversal fsyncs each parent directory entry after successful child
+  creation and before descending. Publication also fsyncs its target/staging
+  directories and uses a lazily required Darwin/Linux native atomic no-replace
+  rename. Publication,
   replacement holding, rollback, temporary cleanup, and completed-journal
   removal never overwrite or unlink a name: prior, failed, and completed bytes
   move exclusively into ignored non-authoritative staging and remain retained.
@@ -5094,7 +5215,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Authorize referenceable writing-artifact sources from the
   current filesystem.
 - **Supported surface:** Package-internal `CanonicalArtifactFilesystem`, plus
-  its package-private strict-UTF-8 and NUL format errors. The adapter lists the
+  its package-private strict-UTF-8, NUL, and inventory-limit format errors and
+  hard traversal/inventory constants. `list_paths_bounded` lists the
   four exact core paths and every safely representable regular lowercase-
   Markdown file recursively below `manuscript/`, including direct children,
   arbitrary nesting, ordinary spaces, and Unicode. It selectively captures
@@ -5105,7 +5227,10 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** Retains one borrowed
   `SecureWorkspaceStorage` and owns no descriptor or lock. Listing performs
   metadata-only safe-file inspection, includes empty files, filters through
-  reference-source eligibility, and orders complete workspace-relative paths.
+  reference-source eligibility, applies caller-selected bounds no greater than
+  8,192 raw manuscript entries and 4,096 total eligible sources, and orders
+  complete workspace-relative paths. The no-argument listing delegates to
+  those hard bounds; neither overflow returns a partial first-N inventory.
   Capture validates complete strict UTF-8 and NUL-free bytes and mints one
   immutable content snapshot carrying its full hash, size, and physical stamp.
   All descriptors remain call-local to `_storage`; import performs no I/O.
@@ -5123,7 +5248,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   operations.
 - **Supported surface:** Module-supported internal
   `WritingArtifactRepository`, with provenance-audited `catalog`,
-  filesystem-authoritative sorted `list_paths`, ordered selective immutable
+  filesystem-authoritative sorted `list_paths`, complete bounded
+  `list_paths_bounded`, ordered selective immutable
   `read_current`, verified `read_text`, and
   unanimous `commit_consensus` operations; plus capture, invocation
   authorization, one-use delivery, result receipt, invocation acceptance or
@@ -5339,6 +5465,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   carries artifact bytes. Parsing performs no repository read or runtime,
   provider, controller, terminal, picker, viewer, or composer integration;
   those workflows cannot treat a parsed directive as authorized content.
+
+- Agent-directed context operations retain three one-way internal boundaries.
+  `agent_context.actions` owns only immutable actions, correlations, evidence
+  values, fixed policies and errors, and canonical untrusted frames;
+  `agent_context.sources` owns the exact four concrete authority adapters and
+  deterministic bounded capture/search; and `agent_context.service` alone owns
+  one invocation's HMAC handles, counters, receipts, transitions, and final
+  source revalidation. Source adapters call only public owner operations on the
+  writing-artifact repository, conversation catalog/event store, and Workspace.
+  They never import orchestration, providers, prompts, runtime, or ledger, and
+  no existing owner imports these new direct modules. Mandatory references pass
+  through answer authorization unchanged and remain outside source search/read
+  authority. None of the three modules is re-exported by the accounting-only
+  `agent_context` facade.
 
 - Explicit artifact reads retain split, one-way ownership.
   `writing_artifacts.authorization` owns pure content-free evidence contracts

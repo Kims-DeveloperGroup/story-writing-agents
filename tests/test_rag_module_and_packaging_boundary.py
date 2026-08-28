@@ -198,8 +198,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 81)
-        self.assertEqual(len(edges), 321)
+        self.assertEqual(len(modules), 84)
+        self.assertEqual(len(edges), 336)
         self.assertIsNone(_cycle_witness(modules, edges))
         self.assertEqual(
             _generic_importers(modules),
@@ -259,6 +259,48 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.agent_context.manifest",
                 "story_writing_agents.agent_context.planning",
                 "story_writing_agents.workspace",
+            },
+        )
+        self.assertEqual(
+            {
+                target
+                for source, target in edges
+                if source == "story_writing_agents.agent_context.actions"
+            },
+            {
+                "story_writing_agents.agent_context.manifest",
+                "story_writing_agents.agent_context.planning",
+            },
+        )
+        self.assertEqual(
+            {
+                target
+                for source, target in edges
+                if source == "story_writing_agents.agent_context.sources"
+            },
+            {
+                "story_writing_agents.agent_context.actions",
+                "story_writing_agents.agent_context.manifest",
+                "story_writing_agents.conversations",
+                "story_writing_agents.errors",
+                "story_writing_agents.models",
+                "story_writing_agents.workspace",
+                "story_writing_agents.writing_artifacts.filesystem_sources",
+                "story_writing_agents.writing_artifacts.references",
+                "story_writing_agents.writing_artifacts.repository",
+            },
+        )
+        self.assertEqual(
+            {
+                target
+                for source, target in edges
+                if source == "story_writing_agents.agent_context.service"
+            },
+            {
+                "story_writing_agents.agent_context.actions",
+                "story_writing_agents.agent_context.manifest",
+                "story_writing_agents.agent_context.planning",
+                "story_writing_agents.agent_context.sources",
             },
         )
         self.assertEqual(
