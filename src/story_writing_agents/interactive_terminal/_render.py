@@ -1277,9 +1277,9 @@ def _notice_lines(
     label = notice.label
     if label is None:
         label = (
-            _state_label(notice.state)
-            if notice.state is not ViewState.IDLE
-            else _role_label(notice.role)
+            _role_label(notice.role)
+            if notice.state in {ViewState.IDLE, ViewState.COMPLETED}
+            else _state_label(notice.state)
         )
     prefix = f"[{_inline(label)}] "
     return [
@@ -1329,10 +1329,10 @@ def _chat_block_message_lines(
 ) -> list[_SemanticLine]:
     """Render one grouped speaker rail with a trailing block separator."""
 
-    header = _inline(message.sender)
-    if message.metadata is not None:
-        header += f" · {_inline(message.metadata)}"
-    header += _semantic_suffix(message.state, message.role)
+    header = (
+        f"{_inline(message.sender)}"
+        f"{_semantic_suffix(message.state, message.role)}"
+    )
     header_role = _SpeakerHeaderRole(message.accent)
     header_indent = " " * max(0, min(indent, max(width - 1, 0)))
     lines: list[_SemanticLine] = [
@@ -1344,6 +1344,17 @@ def _chat_block_message_lines(
             fallback_prefix="",
         )
     ]
+    if message.metadata is not None:
+        metadata_indent = " " * max(0, min(indent + 2, max(width - 1, 0)))
+        lines.extend(
+            (line, SemanticRole.DEFAULT)
+            for line in _word_wrapped_prefixed_lines(
+                _inline(message.metadata),
+                width,
+                prefix=metadata_indent,
+                fallback_prefix="",
+            )
+        )
     lines.extend(
         (line, SemanticRole.DEFAULT)
         for line in _chat_block_body_lines(message.content, width, indent=indent)
@@ -1652,9 +1663,11 @@ def _state_label(state: ViewState) -> str:
 
 
 def _state_suffix(state: ViewState) -> str:
-    """Return a visible non-default state annotation."""
+    """Return a visible actionable state annotation."""
 
-    return "" if state is ViewState.IDLE else f" [{state.value}]"
+    if state in {ViewState.IDLE, ViewState.COMPLETED}:
+        return ""
+    return f" [{state.value}]"
 
 
 def _role_label(role: SemanticRole) -> str:

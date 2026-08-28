@@ -261,7 +261,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             component,
             _capability(CapabilityProfile.PLAIN, width=80),
         )
-        self.assertTrue(ansi.text.startswith("\x1b[1mplot [completed]> {"))
+        self.assertTrue(ansi.text.startswith("\x1b[1mplot> {"))
         self.assertNotIn("\x1b", plain.text)
         self.assertIn('  "message": "界"', plain.text)
 
@@ -274,9 +274,9 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
         )
         snapshots = {
             20: (
-                "plot · Plot & \n"
-                "Structure Architect \n"
-                "[completed]\n"
+                "plot\n"
+                "  Plot & Structure \n"
+                "  Architect\n"
                 "│ Keep each \n"
                 "│ returning vessel \n"
                 "│ visible while the \n"
@@ -285,8 +285,9 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
                 "│ approach safely.\n"
             ),
             24: (
-                "plot · Plot & Structure \n"
-                "Architect [completed]\n"
+                "plot\n"
+                "  Plot & Structure \n"
+                "  Architect\n"
                 "│ Keep each returning \n"
                 "│ vessel visible while \n"
                 "│ the harbor lantern \n"
@@ -294,20 +295,22 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
                 "│ approach safely.\n"
             ),
             40: (
-                "plot · Plot & Structure Architect \n"
-                "[completed]\n"
+                "plot\n"
+                "  Plot & Structure Architect\n"
                 "│ Keep each returning vessel visible \n"
                 "│ while the harbor lantern guides the \n"
                 "│ final approach safely.\n"
             ),
             80: (
-                "plot · Plot & Structure Architect [completed]\n"
+                "plot\n"
+                "  Plot & Structure Architect\n"
                 "│ Keep each returning vessel visible while the harbor "
                 "lantern guides the final \n"
                 "│ approach safely.\n"
             ),
             120: (
-                "plot · Plot & Structure Architect [completed]\n"
+                "plot\n"
+                "  Plot & Structure Architect\n"
                 "│ Keep each returning vessel visible while the harbor "
                 "lantern guides the final approach safely.\n"
             ),
@@ -436,12 +439,32 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
         hostile_plain = render_plain(hostile, width=80).text
         self.assertEqual(
             hostile_plain,
-            "u\\x1b · m\\u202e\n"
+            "u\\x1b\n"
+            "  m\\u202e\n"
             "│ safe\\x07 \\x1b]8;;owned\\x07 \\u202e\n",
         )
         self.assertNotIn("\x1b", hostile_plain)
         self.assertNotIn("\x07", hostile_plain)
         self.assertNotIn("\u202e", hostile_plain)
+
+    def test_completed_state_is_silent_without_rewriting_literal_content(self) -> None:
+        message = _chat_block_message(
+            "body [completed]",
+            sender="provider [completed]",
+            metadata="literal [completed]",
+            role=SemanticRole.DEFAULT,
+            state=ViewState.COMPLETED,
+            accent=SpeakerAccent.CYAN,
+        )
+
+        rendered = render_plain(message, width=80).text
+        self.assertEqual(
+            rendered,
+            "provider [completed]\n"
+            "  literal [completed]\n"
+            "│ body [completed]\n",
+        )
+        self.assertEqual(rendered.count("[completed]"), 3)
 
     def test_chat_block_accents_only_headers_and_profiles_share_topology(
         self,
@@ -453,7 +476,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             SpeakerAccent.GREEN: "\x1b[1;32m",
             SpeakerAccent.BLUE: "\x1b[1;34m",
         }
-        plain_text = "you · metadata [completed]\n│ first\n│ second\n"
+        plain_text = "you\n  metadata\n│ first\n│ second\n"
         for accent, sgr in expected_sgr.items():
             with self.subTest(accent=accent):
                 message = _chat_block_message(
@@ -476,7 +499,8 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     ansi.text,
-                    f"{sgr}you · metadata [completed]\x1b[0m\n"
+                    f"{sgr}you\x1b[0m\n"
+                    "  metadata\n"
                     "│ first\n"
                     "│ second\n",
                 )
@@ -495,9 +519,11 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
         )
         wrapped_lines = wrapped.text.split("\n")
         body_index = wrapped_lines.index("│ body")
-        for line in wrapped_lines[:body_index]:
-            self.assertTrue(line.startswith("\x1b[1;33m"))
-            self.assertTrue(line.endswith("\x1b[0m"))
+        self.assertEqual(wrapped_lines[0], "\x1b[1;33mplot\x1b[0m")
+        self.assertEqual(wrapped_lines[1:body_index], [
+            "  Plot & Structure ",
+            "  Architect",
+        ])
         body = "\n".join(wrapped_lines[body_index:])
         self.assertEqual(body, "│ body\n")
         self.assertNotIn("\x1b", body)
@@ -526,7 +552,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
         frame = render_plain(view, width=40)
         self.assertEqual(
             frame.text,
-            "Messages (4) [completed]\n"
+            "Messages (4)\n"
             "  Before:\n"
             "   field\n"
             "  inline> old\n"
@@ -685,9 +711,9 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             "--- Status ---------------------------------------------------------------------\n"
             "  Workspace: /stories/界\n"
             "  [warning] Unsafe\\x1b[31m text\n"
-            "  plot [completed]> Line one\n"
-            "                    line two\n"
-            "  [debate_1] Consensus [completed] [success]\n"
+            "  plot> Line one\n"
+            "        line two\n"
+            "  [debate_1] Consensus [success]\n"
             "    Done.\n"
             "--------------------------------------------------------------------------------",
         )
@@ -698,15 +724,14 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             " Workspace:\n"
             "  /stories/界\n"
             " [warning] Unsafe\\x1b[31m text\n"
-            " plot [completed]> Line one\n"
-            "                   line two\n"
-            " [debate_1] Consensus [completed\n"
-            " ] [success]\n"
+            " plot> Line one\n"
+            "       line two\n"
+            " [debate_1] Consensus [success]\n"
             "  Done.\n"
             "--------------------------------",
         )
         self.assertEqual(narrow.width, 32)
-        self.assertEqual(narrow.line_count, 10)
+        self.assertEqual(narrow.line_count, 9)
         self.assertNotIn("\x1b", narrow.text)
 
     def test_literal_tree_has_exact_ansi_and_no_color_plain_equivalence(self) -> None:
@@ -719,9 +744,9 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             "\x1b[1m--- Status ---------------------------------------------------------------------\x1b[0m\n"
             "  Workspace: /stories/界\n"
             "\x1b[33m  [warning] Unsafe\\x1b[31m text\x1b[0m\n"
-            "\x1b[1m  plot [completed]> Line one\x1b[0m\n"
-            "\x1b[1m                    line two\x1b[0m\n"
-            "\x1b[32m  [debate_1] Consensus [completed] [success]\x1b[0m\n"
+            "\x1b[1m  plot> Line one\x1b[0m\n"
+            "\x1b[1m        line two\x1b[0m\n"
+            "\x1b[32m  [debate_1] Consensus [success]\x1b[0m\n"
             "\x1b[32m    Done.\x1b[0m\n"
             "\x1b[1m--------------------------------------------------------------------------------\x1b[0m",
         )
@@ -745,8 +770,8 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
         wide = render_plain(view, width=80)
         self.assertEqual(
             wide.text,
-            "Search results (1/3) [completed]\n"
-            "  [search c_0123456789] [completed]\n"
+            "Search results (1/3)\n"
+            "  [search c_0123456789]\n"
             "    Status: active\n"
             "    Focus: focused\n"
             "    Subject: Harbor 界 e\u0301\n"
@@ -757,9 +782,8 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
         narrow = render_plain(view, width=32)
         self.assertEqual(
             narrow.text,
-            "Search results (1/3) [completed]\n"
-            " [search c_0123456789] [complete\n"
-            " d]\n"
+            "Search results (1/3)\n"
+            " [search c_0123456789]\n"
             "  Status:\n"
             "   active\n"
             "  Focus:\n"
@@ -770,7 +794,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             "   Unsafe\\x1b]8;;owned\\x07\\u202e\n"
             "    text",
         )
-        self.assertEqual((narrow.width, narrow.line_count), (32, 12))
+        self.assertEqual((narrow.width, narrow.line_count), (32, 11))
 
         ansi = render_component(
             view,
@@ -778,8 +802,8 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
         )
         self.assertEqual(
             ansi.text,
-            "\x1b[1mSearch results (1/3) [completed]\x1b[0m\n"
-            "  [search c_0123456789] [completed]\n"
+            "\x1b[1mSearch results (1/3)\x1b[0m\n"
+            "  [search c_0123456789]\n"
             "    Status: active\n"
             "    Focus: focused\n"
             "    Subject: Harbor 界 e\u0301\n"
@@ -958,7 +982,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
                     )
                     self.assertEqual(
                         records[-1],
-                        f"{alias} [completed]\n"
+                        f"{alias}\n"
                         "│ {\n"
                         '│   "answer": "界"\n'
                         "│ }\n"

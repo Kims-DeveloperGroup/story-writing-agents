@@ -234,9 +234,11 @@ the terminal owns only input state and presentation. There is no public theme AP
 The capable main frame also receives a controller-provided active or exact
 leading-`@agent` target header. With Message details Off, that header contains
 only the full target display name and direct replies avoid execution-profile
-lookup and metadata. On adds backend-authoritative provider/model/effort facts,
-sources, confirmation, and thread state to the documented header/reply surfaces.
-`/agents` and `/status` remain fully diagnostic in both modes; model reply prose
+lookup and metadata. On adds backend-authoritative provider/model/effort facts
+and confirmation to the live header, plus a compact Provider / Model / Effort
+and Thread row beneath replies. Exceptional pending and launch-override state
+stays textual. `/agents` and `/status` retain full sources and confirmation in
+both modes; model reply prose
 is never used to infer execution identity.
 
 The generic picker foundation is also implemented entirely inside the terminal

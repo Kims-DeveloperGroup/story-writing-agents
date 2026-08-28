@@ -10907,7 +10907,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                     self.assertEqual(controller.run_session_lobby(), 0)
                 rendered = "".join(callbacks.records)
                 request_context = (
-                    "[context] Transcript request [completed]\n"
+                    "[context] Transcript request\n"
                     f"  Conversation: {conversation_id[:12]}\n"
                     "  Start: 1\n"
                     "  Count: 24\n"

@@ -941,7 +941,6 @@ class InteractiveCliPtyTests(unittest.TestCase):
         title: str,
         content: str,
         provider: str = "Codex",
-        provider_source: str = "system default",
         details: bool = False,
     ) -> str:
         """Wait for and verify one live speaker-rail reply."""
@@ -955,22 +954,19 @@ class InteractiveCliPtyTests(unittest.TestCase):
         compact_plain = " ".join(plain.split())
         self.assertEqual(plain.count(f"{title} → You"), 1)
         self.assertIn(f"│ {content}\n", plain)
-        diagnostics = (
-            f"Provider: {provider} [{provider_source}]",
-            "Model: provider default [provider default]",
-            "Effort: provider default [provider default]",
-            "Confirmation: confirmed",
-        )
         if details:
-            self.assertIn(f"{title} → You · Provider:", plain)
-            for diagnostic in diagnostics:
-                self.assertIn(diagnostic, compact_plain)
+            self.assertIn(f"{title} → You\n", plain)
+            self.assertIn(
+                f"{provider} / provider default / provider default ·",
+                compact_plain,
+            )
             self.assertRegex(
                 compact_plain,
-                r"Thread: (?:resumed|reused|fresh)",
+                r"(?:resumed|reused|fresh(?: after provider switch)?)",
             )
+            self.assertNotIn("Confirmation:", compact_plain)
         else:
-            self.assertIn(f"{title} → You [completed]\n", plain)
+            self.assertIn(f"{title} → You\n", plain)
             for label in (
                 "Provider:",
                 "Model:",
@@ -2111,7 +2107,7 @@ print("RESULT=" + outcome.kind.value)
         submitted = process.wait_for_text("RESULT=commit", after=submit_mark)
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
 
-        record = "user [completed]> accepted marker 🌊"
+        record = "user> accepted marker 🌊"
         self.assertEqual(submitted.count(record), 1)
         record_offset = submitted.index(record)
         cleanup_offset = submitted.rfind("\x1b[J", 0, record_offset)
@@ -2202,29 +2198,29 @@ print("RESULT=done")
                 )
 
         expected_plain = (
-            "you [completed]\n"
+            "you\n"
             "│ user body\n"
             "\n"
-            "lead [completed]\n"
+            "lead\n"
             "│ agent body\n"
             "\n"
-            "plot [completed]\n"
+            "plot\n"
             "│ agent body\n"
             "\n"
-            "character [completed]\n"
+            "character\n"
             "│ agent body\n"
             "\n"
-            "execution [completed]\n"
+            "execution\n"
             "│ agent body\n"
             "\n"
             "RESULT=done\n"
         )
         styled_headers = (
-            ("\x1b[1;35m", "you [completed]"),
-            ("\x1b[1;36m", "lead [completed]"),
-            ("\x1b[1;33m", "plot [completed]"),
-            ("\x1b[1;32m", "character [completed]"),
-            ("\x1b[1;34m", "execution [completed]"),
+            ("\x1b[1;35m", "you"),
+            ("\x1b[1;36m", "lead"),
+            ("\x1b[1;33m", "plot"),
+            ("\x1b[1;32m", "character"),
+            ("\x1b[1;34m", "execution"),
         )
         ansi = captures["ansi"]
         header_stripped = ansi
@@ -2338,11 +2334,11 @@ print(
         self.assertIn(b"\x1b[0m", ansi.raw_bytes)
         mark = ansi.output_mark()
         ansi.send_text("/help /run\n\n")
-        ansi.wait_for_text("Help [completed]", after=mark)
+        ansi.wait_for_text("Help", after=mark)
         ansi.wait_for_text("story[lobby]> ", after=mark)
         dense_ansi = bytes(ansi.raw_bytes[mark:])
-        self.assertIn(b"\x1b[1m--- Help [completed] ", dense_ansi)
-        self.assertIn(b"\x1b[35m  [command] [completed]", dense_ansi)
+        self.assertIn(b"\x1b[1m--- Help ", dense_ansi)
+        self.assertIn(b"\x1b[35m  [command]", dense_ansi)
         ansi.send_text("/quit\n\n")
         self.assertEqual(ansi.wait_for_exit(), 0, ansi.normalized_text)
         self.assertEqual(
@@ -2360,7 +2356,7 @@ print(
         self.assertNotIn(b"\x1b[33m  [warning]", no_color.raw_bytes)
         mark = no_color.output_mark()
         no_color.send_text("/agents\n\n")
-        no_color.wait_for_text("Agents (4) [completed]", after=mark)
+        no_color.wait_for_text("Agents (4)", after=mark)
         no_color.wait_for_text("story[lobby]> ", after=mark)
         dense_plain = bytes(no_color.raw_bytes[mark:])
         self.assertNotIn(b"\x1b[1mAgents", dense_plain)
@@ -2819,7 +2815,7 @@ print(
             "or/statusforthreadandsourcedetails.",
             compact_result,
         )
-        completion = result.rsplit("Settings [completed]", 1)[-1]
+        completion = result.rsplit("Settings", 1)[-1]
         self.assertNotIn("Before", completion)
         self.assertNotIn("Active now", completion)
         self.assertNotIn("active roster", completion)
@@ -4432,11 +4428,11 @@ raise SystemExit(cli.main([]))
         help_mark = lobby.output_mark()
         lobby.send_text("/help\n\n")
         lobby.wait_for_text(
-            "Writing artifact references [completed]",
+            "Writing artifact references",
             after=help_mark,
         )
         help_output = lobby.wait_for_text("story[lobby]> ", after=help_mark)
-        self.assertIn("Writing artifact references [completed]", help_output)
+        self.assertIn("Writing artifact references", help_output)
         self.assertIn(
             "".join(guidance.split()),
             "".join(help_output.split()),
@@ -5817,7 +5813,7 @@ print(
             "/run --output part-01/fallback.md fallback consensus body"
         )
         process.wait_for_text(
-            "Consensus [completed] [success]",
+            "Consensus [success]",
             after=consensus_mark,
         )
         process.wait_for_text("story[alpha:lead]> ", after=consensus_mark)
@@ -5836,13 +5832,13 @@ print(
             self.assertIn(f"--- {heading}", consensus)
             self.assertNotIn(f"{heading} [loading]", consensus)
         self.assertIn(
-            "--- Debate phase · Consensus [completed]",
+            "--- Debate phase · Consensus",
             consensus,
         )
         self.assertEqual(consensus.count("deterministic candidate"), 1)
         self.assertLess(
             consensus.rfind("--- Debate phase"),
-            consensus.index("Consensus [completed] [success]"),
+            consensus.index("Consensus [success]"),
         )
 
         process.send_line("/quit")
@@ -6231,15 +6227,15 @@ print(
             advisory_output.encode("utf-8"),
         ).decode("utf-8")
         accepted_message = (
-            "You → Lead Orchestrator [completed]\n"
+            "You → Lead Orchestrator\n"
             "│ harbor beacon beside the vessel"
         )
         self.assertEqual(advisory_plain.count(accepted_message), 1)
         self.assertLess(
             advisory_plain.index(accepted_message),
-            advisory_plain.index("Lead Orchestrator → You · Provider:"),
+            advisory_plain.index("Lead Orchestrator → You\n"),
         )
-        self.assertNotIn("You → Lead Orchestrator · Provider:", advisory_plain)
+        self.assertNotIn("You → Lead Orchestrator\n  Codex /", advisory_plain)
         advisory_raw = bytes(process.raw_bytes[mark:])
         self.assertIn(b"\x1b[1;35m", advisory_raw)
         self.assertIn(b"\x1b[1;36m", advisory_raw)
@@ -6254,11 +6250,11 @@ print(
 
         mark = process.output_mark()
         process.send_line("/history 2")
-        process.wait_for_text("History (1/2) [completed]", after=mark)
+        process.wait_for_text("History (1/2)", after=mark)
         process.wait_for_text("harbor beacon beside the vessel", after=mark)
         history = process.wait_for_text("deterministic advisory reply", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
-        self.assertIn("History (2/2) [completed]", history)
+        self.assertIn("History (2/2)", history)
         self.assertIn("deterministic advisory reply", history)
         first_events = FilesystemConversationEventStore(
             self.workspace,
@@ -6286,27 +6282,27 @@ print(
         mark = process.output_mark()
         process.send_line("/search harbor beacon")
         search_output = process.wait_for_text(
-            "Search results (1/1) [completed]",
+            "Search results (1/1)",
             after=mark,
         )
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         search_output = process.text_after(mark)
         search_context = (
-            "[context] Search request [completed]\n"
+            "[context] Search request\n"
             "  Query: harbor beacon\n"
             "  Scope: active"
         )
         self.assertEqual(search_output.count(search_context), 1)
         self.assertLess(
             search_output.index(search_context),
-            search_output.index("Search results (1/1) [completed]"),
+            search_output.index("Search results (1/1)"),
         )
         self.assertIn("Citation: conversation", search_output)
         self.assertIn(selected.subject, " ".join(search_output.split()))
 
         mark = process.output_mark()
         process.send_line(f"/transcript {selected.conversation_id} 2")
-        process.wait_for_text("Transcript (1/2) [completed]", after=mark)
+        process.wait_for_text("Transcript (1/2)", after=mark)
         process.wait_for_text(
             "harbor beacon beside the vessel",
             after=mark,
@@ -6318,7 +6314,7 @@ print(
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         transcript_output = process.text_after(mark)
         transcript_context = (
-            "[context] Transcript request [completed]\n"
+            "[context] Transcript request\n"
             f"  Conversation: {selected.conversation_id[:12]}\n"
             "  Start: 1\n"
             "  Count: 2"
@@ -6326,7 +6322,7 @@ print(
         self.assertEqual(transcript_output.count(transcript_context), 1)
         self.assertLess(
             transcript_output.index(transcript_context),
-            transcript_output.index("Transcript (1/2) [completed]"),
+            transcript_output.index("Transcript (1/2)"),
         )
         self.assertIn("deterministic advisory reply", transcript_output)
         transcript_plain = _ANSI_SGR_BYTES.sub(
@@ -6374,7 +6370,7 @@ print(
             content="retrieval-assisted answer",
             details=True,
         )
-        process.wait_for_text("[context] Source 1 [completed]", after=mark)
+        process.wait_for_text("[context] Source 1", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         retrieval_output = process.text_after(mark)
         self.assertIn(f"Conversation: {selected.conversation_id}", retrieval_output)
@@ -6386,7 +6382,7 @@ print(
         self.assertIn("\x1b[K", retrieval_output)
         self.assertLess(
             retrieval_output.index("retrieval-assisted answer"),
-            retrieval_output.index("[context] Source 1 [completed]"),
+            retrieval_output.index("[context] Source 1"),
         )
 
         started = [
@@ -6504,17 +6500,17 @@ print(
                 successful_compact,
             )
         self.assertIn(
-            "---Debatephase·Consensus[completed]",
+            "---Debatephase·Consensus",
             successful_compact,
         )
         self.assertEqual(successful_compact.count("deterministiccandidate"), 1)
         self.assertLess(
             successful_compact.rfind("---Debatephase"),
-            successful_compact.index("Consensus[completed][success]"),
+            successful_compact.index("Consensus[success]"),
         )
         collapsed = "".join(successful_output.split())
         accepted_prompt = (
-            "You→Consensus[completed]││/send│/cancel│finalliteralline"
+            "You→Consensus││/send│/cancel│finalliteralline"
         )
         self.assertEqual(collapsed.count(accepted_prompt), 1)
         self.assertLess(
@@ -6522,7 +6518,7 @@ print(
             collapsed.index("Startedpromptconsensus."),
         )
         self.assertIn(
-            "[context]Consensusrequest[completed]"
+            "[context]Consensusrequest"
             "Output:part-01/composed.md",
             collapsed,
         )
@@ -6537,7 +6533,7 @@ print(
             "Auditcompletedforr0atround0;conflicts:none.",
             "Artifactscommittedforr0:",
             "Consensusreachedonr0after0revisionrounds.",
-            "Consensus[completed][success]revision:r0",
+            "Consensus[success]revision:r0",
         )
         for fragment in ordered_fragments:
             with self.subTest(fragment=fragment):
@@ -6915,7 +6911,7 @@ asyncio.run(main())
         process.send_line(
             "/run --output part-01/seed-consensus.md seed consensus"
         )
-        process.wait_for_text("Consensus [completed] [success]", after=mark)
+        process.wait_for_text("Consensus [success]", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         mark = process.output_mark()
         process.send_line("establish current lead thread")
@@ -7049,7 +7045,7 @@ asyncio.run(main())
         process.send_line(
             "/run --output part-01/recovered-consensus.md recovered consensus"
         )
-        process.wait_for_text("Consensus [completed] [success]", after=mark)
+        process.wait_for_text("Consensus [success]", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         manifest = self.workspace.read_json(manifest_path)
         self.assertIs(
@@ -7129,7 +7125,7 @@ asyncio.run(main())
         before = _durable_tree_without_access(self.workspace.root)
         mark = process.output_mark()
         process.send_line("/history 24")
-        process.wait_for_text("History (1/24) [completed]", after=mark)
+        process.wait_for_text("History (1/24)", after=mark)
         process.send_interrupt()
         process.wait_for_text(
             "[cancelled] History cancelled; attached state is unchanged.",
@@ -7387,7 +7383,7 @@ asyncio.run(main())
 
         mark = process.output_mark()
         process.send_line("/history 2")
-        process.wait_for_text("[context] [completed]", after=mark)
+        process.wait_for_text("[context]", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         malformed_history = process.text_after(mark)
         self.assertIn(

@@ -777,8 +777,8 @@ class InteractiveConsensusResultTests(InteractiveConversationTestCase):
         self.assertNotIn("Debate phase [loading]", rendered)
         self.assertNotIn("Debate phase · Started [loading]", rendered)
         self.assertIn("--- Debate phase · Started", rendered)
-        self.assertIn("--- Debate phase · Consensus [completed]", rendered)
-        self.assertEqual(rendered.count("Consensus [completed] [success]"), 1)
+        self.assertIn("--- Debate phase · Consensus", rendered)
+        self.assertEqual(rendered.count("Consensus [success]"), 1)
         self.assertNotIn("RAW_RESULT_SECRET", rendered)
         self.assertEqual(file_bytes(workspace), before)
 
@@ -796,7 +796,7 @@ class InteractiveConsensusResultTests(InteractiveConversationTestCase):
         )
         self.assertEqual(controller.run_session_lobby(), 0)
         rendered = "".join(callbacks.records)
-        self.assertIn("Consensus [completed]", rendered)
+        self.assertIn("Consensus", rendered)
         self.assertNotIn(operation_id, rendered)
 
     def test_all_terminal_mappings_are_safe_and_recover_to_the_prompt(self) -> None:

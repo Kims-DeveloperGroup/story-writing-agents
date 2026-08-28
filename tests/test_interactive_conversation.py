@@ -102,7 +102,7 @@ _REPLY_ACCENTS = {
 
 
 def _reply_header(agent_id: str) -> str:
-    return f"{AGENT_SPECS[agent_id].display_name} → You [completed]\n"
+    return f"{AGENT_SPECS[agent_id].display_name} → You\n"
 
 
 def _expected_reply_message(
@@ -925,6 +925,58 @@ class ControllerRagWorkflowTests(InteractiveConversationTestCase):
 class ControllerRoutingTests(InteractiveConversationTestCase):
     """Verify exact routing, sticky state, output, and parse categories."""
 
+    def test_compact_reply_metadata_keeps_only_routine_turn_evidence(self) -> None:
+        source = controller_core_module.ExecutionValueSource.AGENT_CONFIG
+        profile = controller_core_module.AgentExecutionProfile(
+            agent_id=LEAD_ORCHESTRATOR,
+            provider="antigravity",
+            provider_source=source,
+            model="gemini-3.1-pro-high",
+            model_source=source,
+            effort="high",
+            effort_source=source,
+        )
+
+        self.assertEqual(
+            controller_core_module._compact_reply_metadata(
+                profile,
+                confirmation="confirmed",
+                thread_status="reused",
+            ),
+            "Antigravity / gemini-3.1-pro-high / high · reused",
+        )
+
+    def test_compact_reply_metadata_adds_only_exceptional_qualifiers(self) -> None:
+        source = controller_core_module.ExecutionValueSource.LAUNCH_OVERRIDE
+        profile = controller_core_module.AgentExecutionProfile(
+            agent_id=LEAD_ORCHESTRATOR,
+            provider="codex",
+            provider_source=source,
+            model=None,
+            model_source=source,
+            effort=None,
+            effort_source=source,
+        )
+
+        self.assertEqual(
+            controller_core_module._compact_reply_metadata(
+                profile,
+                confirmation="pending",
+                thread_status="fresh_after_provider_switch",
+            ),
+            "Codex / provider default / provider default · "
+            "fresh after provider switch · pending · launch override",
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            "confirmation must be pending or confirmed",
+        ):
+            controller_core_module._compact_reply_metadata(
+                profile,
+                confirmation="unknown",
+                thread_status="reused",
+            )
+
     def test_runtime_input_header_tracks_only_an_exact_leading_one_shot_route(
         self,
     ) -> None:
@@ -1360,10 +1412,8 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             "}"
         )
         expected_metadata = (
-            "Provider: Codex [built in default] · "
-            "Model: provider default [provider default] · "
-            "Effort: provider default [provider default] · "
-            "Confirmation: pending · Thread: not observed"
+            "Codex / provider default / provider default · "
+            "not observed · pending"
         )
         self.assertEqual(
             accepted_components,
@@ -1394,11 +1444,9 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             ],
         )
         self.assertEqual(expected_metadata.split(" · "), [
-            "Provider: Codex [built in default]",
-            "Model: provider default [provider default]",
-            "Effort: provider default [provider default]",
-            "Confirmation: pending",
-            "Thread: not observed",
+            "Codex / provider default / provider default",
+            "not observed",
+            "pending",
         ])
         profile.assert_called_once_with(LEAD_ORCHESTRATOR)
         confirmation.assert_called_once_with(LEAD_ORCHESTRATOR)
@@ -1455,13 +1503,13 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             )
         )
         rendered = "".join(callbacks.records)
-        truncation_index = rendered.index("[context] [completed] [warning]")
+        truncation_index = rendered.index("[context] [warning]")
         reply_index = rendered.index(_reply_header(LEAD_ORCHESTRATOR))
         self.assertLess(truncation_index, reply_index)
         self.assertNotIn("[routing] ", rendered)
         self.assertNotIn("[waiting] ", rendered)
         self.assertIn(
-            "[context] [completed] [warning]\n"
+            "[context] [warning]\n"
             "  Context truncated: 4 events retained across 2 turns; "
             "3 earlier turns omitted.\n",
             rendered,
@@ -1620,20 +1668,20 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
 
         expected_records = (
             "[context] Retrieval search action 1 started.\n",
-            "[context] [completed]\n"
+            "[context]\n"
             "  Retrieval search action 1 completed: 2 hits; "
             "321 observation bytes; truncated: yes.\n",
             "[context] Retrieval read action 2 started.\n",
-            "[context] [completed]\n"
+            "[context]\n"
             "  Retrieval read action 2 completed: 2 turns; 4 events; "
             "654 observation bytes; truncated: no.\n",
             '│   "answer": "界",\n'
             '│   "ok": true\n'
             "│ }\n",
-            "[context] Source 1 [completed]\n"
+            "[context] Source 1\n"
             "  Subject: Conversation source\n"
             "  Conversation: source_conversation\n",
-            "[context] Source 2 [completed]\n"
+            "[context] Source 2\n"
             "  Subject: Event source\n"
             "  Conversation: source_conversation\n"
             "  Sequence: 7\n",

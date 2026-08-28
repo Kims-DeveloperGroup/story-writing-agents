@@ -431,9 +431,9 @@ that every record is persisted by a storage backend.
 The controller composes typed components and sends one component through the
 adapter for each established callback record. The plain form preserves the
 established facts, copy, order, and callback boundaries while adding explicit
-structure and applicable `loading`, `empty`, `error`, `cancelled`, and
-`completed` state markers. Capable real-CLI output may add fixed decorative
-ANSI; `NO_COLOR` removes only that decoration. Callback construction renders
+structure and applicable `loading`, `empty`, `error`, and `cancelled` state
+markers. Successful completion is visually silent. Capable real-CLI output may
+add fixed decorative ANSI; `NO_COLOR` removes only that decoration. Callback construction renders
 the same structure in plain text at its fixed width.
 
 ### Consensus progress records
@@ -447,9 +447,9 @@ other handled outcome does not erase them.
 Consensus-phase rendering builds one `Debate phase · DISPLAY_NAME` Panel and
 performs one semantic writer call per accepted event. Display names are a
 trusted exhaustive sentence-case projection of the canonical phase. Active
-headings omit `[loading]`; Consensus, Deadlock, Failed, and Interrupted retain
-completed, error, error, and cancelled states. The canonical Phase field and
-Outcome field role/state remain unchanged. Fields are ordered Debate ID, Phase,
+headings omit `[loading]`; Consensus completion is silent, while Deadlock,
+Failed, and Interrupted retain error, error, and cancelled states. The canonical
+Phase field and Outcome field role/state remain unchanged. Fields are ordered Debate ID, Phase,
 Round, Revision, Action, Outcome, and Conflicts; Message details On inserts
 Handoff between Revision and Action. `STARTED` adds its fixed included/fresh
 context notice. The panel then contains the uncommitted suffix of readable
@@ -829,14 +829,20 @@ Every semantic `Panel` uses an ASCII title-bearing top splitter and a bottom
 splitter, with no side borders:
 
 ```text
---- Panel title [completed] ------------
+--- Panel title ------------------------
   PANEL CONTENT
 ----------------------------------------
 ```
 
+Generated `COMPLETED` state is visually silent across every semantic component.
+Actionable states such as `[loading]`, `[open]`, `[error]`, `[cancelled]`, and
+`[empty]` remain textual, as do meaningful `[success]`, `[warning]`, `[error]`,
+and `[info]` role suffixes. Literal bracketed text in a sender, label, metadata
+value, or content body is never interpreted or removed.
+
 The top run fills the remaining usable width when at least four cells remain.
-At narrower widths, title and state text wrap with continuation indentation and
-the trailing top run may be omitted; the bottom splitter and content remain.
+At narrower widths, title and actionable state text wrap with continuation
+indentation and the trailing top run may be omitted; the bottom splitter and content remain.
 The frame is part of the Panel's existing single render and callback write, so
 callback cardinality and committed scrollback behavior are unchanged.
 Standalone `Prompt`, `Section`, `ListView`, `Record`, `SuggestionPalette`, and
@@ -864,8 +870,8 @@ Generic `Message` values retain the compatible inline default, and run output
 retains its record boundary:
 
 ```text
-ALIAS [completed]> FIRST LINE
-                   CONTINUATION
+ALIAS> FIRST LINE
+       CONTINUATION
 
 [run DEBATE_ID]
   CONTENT
@@ -878,10 +884,10 @@ the complete body. Command envelopes and options are excluded from accepted
 bodies:
 
 ```text
-You → Lead Orchestrator [completed]
+You → Lead Orchestrator
 │ EXACT ADVISORY BODY
 
-You → Consensus [completed]
+You → Consensus
 │ EXACT CONSENSUS PROMPT
 
 ```
@@ -903,10 +909,10 @@ order is `Query`, `Scope`; transcript field order is `Conversation`, `Start`,
 `Count`. For example:
 
 ```text
-[context] Consensus request [completed]
+[context] Consensus request
   Output: part-01/opening.md
 
-[context] Search request [completed]
+[context] Search request
   Query: opening scene
   Scope: active
 ```
@@ -930,12 +936,15 @@ rewritten.
 
 Direct agent replies always use the chat-block shape and retain their full body.
 Message details Off is compact and adds no diagnostic metadata. On adds one
-runtime-owned metadata string to the speaker header, in this exact field order:
-Provider, Model, Effort, Confirmation, Thread. Provider, Model, and Effort each
-include their resolved source. The exact plain topology is:
+runtime-owned default-styled row beneath the speaker header. Routine output is
+Provider / Model / Effort, then Thread. It adds `pending` only before the first
+successful call under the profile and `launch override` only when at least one
+effective value came from the launch command. The exact routine plain topology
+is:
 
 ```text
-Lead Orchestrator → You · Provider: Antigravity [agent config] · Model: agy-model-id [agent config] · Effort: high [agent config] · Confirmation: confirmed · Thread: fresh after provider switch [completed]
+Lead Orchestrator → You
+  Antigravity / agy-model-id / high · reused
 │ <agent reply>
 
 ```
@@ -967,14 +976,15 @@ and `not observed` are muted. `NO_COLOR` removes decoration only when its
 trimmed value is neither empty nor exact `0`; labels, states, sources, and
 values keep the complete meaning.
 
-Status roles and terminal states are textual. For example, consensus inspection
-uses `[run DEBATE_ID] [completed] [success]`, interrupted inspection uses
+Status roles and actionable terminal states are textual; generated completion
+is silent. For example, consensus inspection uses `[run DEBATE_ID] [success]`,
+interrupted inspection uses
 `[cancelled] [warning]`, failed/deadlocked inspection uses `[error]`, active
 inspection uses `[loading] [info]`, and a missing debate uses `[empty]`. These
 markers are present in plain and `NO_COLOR` output; color is redundant.
 
-Full help is one completed `Panel` titled `Help`. It retains registry group
-order; each completed group section contains one completed `Commands` list
+Full help is one complete `Panel` titled `Help`. It retains registry group
+order; each group section contains one `Commands` list
 whose records retain syntax, aliases, provider-call, and artifact-write facts.
 Context help is one completed `Panel` titled `Help` containing one command
 record in `Group`, `Syntax`, `Aliases`, `Calls provider`,
@@ -990,8 +1000,8 @@ Session, conversation, search, transcript, and focused-history rows use this
 positioned form, with one row per callback:
 
 ```text
-TITLE (POSITION/TOTAL) [completed]
-  [RECORD] [completed]
+TITLE (POSITION/TOTAL)
+  [RECORD]
     LABEL: VALUE
 ```
 
