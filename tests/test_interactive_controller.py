@@ -7769,6 +7769,24 @@ class ControllerSettingsTests(ControllerTestCase):
                 for call in picker.call_args_list
             )
         )
+        confirmation_calls = [
+            call
+            for call in picker.call_args_list
+            if call.args[1].name in {"Apply changes?", "Discard changes?"}
+        ]
+        self.assertEqual(len(confirmation_calls), 1)
+        self.assertEqual(len(confirmation_calls[0].kwargs["transient_context"]), 1)
+        self.assertIsInstance(
+            confirmation_calls[0].kwargs["transient_context"][0],
+            terminal_module.Panel,
+        )
+        self.assertTrue(
+            all(
+                call.kwargs["transient_context"] == ()
+                for call in picker.call_args_list
+                if call not in confirmation_calls
+            )
+        )
         root_calls = [
             call
             for call in picker.call_args_list
@@ -7897,18 +7915,22 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         self.assertEqual(picker_call.kwargs["highlighted_id"], "yes")
         self.assertTrue(picker_call.kwargs["transient"])
+        self.assertEqual(picker_call.kwargs["transient_context"], (expected,))
         confirmation_prompt = next(
             prompt for prompt in callbacks.prompts if "Apply changes?" in prompt
         )
         self.assertIn("YES", confirmation_prompt)
-        expected_record = f"{render_plain(expected, width=48).text}\n"
+        self.assertIn("NO", confirmation_prompt)
+        for omitted in ("--- Settings", "Current", "Pending", "(Changed)"):
+            with self.subTest(omitted=omitted):
+                self.assertNotIn(omitted, confirmation_prompt)
         self.assertEqual(
             [
                 record
                 for record in callbacks.records
                 if record.startswith("--- Settings [open]")
             ],
-            [expected_record],
+            [],
         )
         self.assertIn(
             "[savedandapplied]Settingssavedandappliedtothisrunningshellnow.",
@@ -7922,6 +7944,128 @@ class ControllerSettingsTests(ControllerTestCase):
             settings_module.load_settings_state(workspace).pending.system_defaults.language,
             "EN",
         )
+
+    def test_settings_confirmation_routes_context_without_semantic_write_for_all_outcomes(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        state = settings_module.update_language(
+            settings_module.load_settings_state(workspace),
+            "EN",
+        )
+        expected_context = (self.expected_panel(state),)
+        controller, _backend, _callbacks = self.make_controller(workspace)
+        outcomes = (
+            (
+                "save-yes",
+                "save",
+                terminal_module.ControlOutcome(
+                    terminal_module.ControlOutcomeKind.COMMIT,
+                    text="yes",
+                ),
+                "save",
+            ),
+            (
+                "save-no",
+                "save",
+                terminal_module.ControlOutcome(
+                    terminal_module.ControlOutcomeKind.COMMIT,
+                    text="no",
+                ),
+                "return",
+            ),
+            (
+                "discard-yes",
+                "cancel",
+                terminal_module.ControlOutcome(
+                    terminal_module.ControlOutcomeKind.COMMIT,
+                    text="yes",
+                ),
+                "cancel",
+            ),
+            (
+                "discard-no",
+                "cancel",
+                terminal_module.ControlOutcome(
+                    terminal_module.ControlOutcomeKind.COMMIT,
+                    text="no",
+                ),
+                "return",
+            ),
+            (
+                "escape",
+                "save",
+                terminal_module.ControlOutcome(
+                    terminal_module.ControlOutcomeKind.CANCEL,
+                ),
+                "return",
+            ),
+            (
+                "interrupt",
+                "cancel",
+                terminal_module.ControlOutcome(
+                    terminal_module.ControlOutcomeKind.INTERRUPT,
+                ),
+                "cancel",
+            ),
+            (
+                "eof",
+                "save",
+                terminal_module.ControlOutcome(
+                    terminal_module.ControlOutcomeKind.EOF,
+                ),
+                "cancel",
+            ),
+        )
+        for label, action, outcome, expected in outcomes:
+            with self.subTest(label=label):
+                with (
+                    mock.patch.object(
+                        InteractiveController,
+                        "_read_settings_picker",
+                        autospec=True,
+                        return_value=outcome,
+                    ) as picker,
+                    mock.patch.object(
+                        type(controller._semantic_output),
+                        "write_component",
+                        autospec=True,
+                    ) as output,
+                ):
+                    self.assertEqual(
+                        controller._settings_save_confirmation(
+                            state,
+                            action=action,
+                        ),
+                        expected,
+                    )
+
+                output.assert_not_called()
+                picker.assert_called_once()
+                called_controller, prompt, choices = picker.call_args.args
+                self.assertIs(called_controller, controller)
+                self.assertEqual(
+                    prompt.name,
+                    "Apply changes?"
+                    if action == "save"
+                    else "Discard changes?",
+                )
+                self.assertEqual(
+                    choices,
+                    (
+                        terminal_module.Choice("yes", "YES"),
+                        terminal_module.Choice("no", "NO"),
+                    ),
+                )
+                self.assertEqual(
+                    picker.call_args.kwargs["transient_context"],
+                    expected_context,
+                )
+                self.assertEqual(
+                    picker.call_args.kwargs["highlighted_id"],
+                    "yes",
+                )
+                self.assertTrue(picker.call_args.kwargs["transient"])
 
     def test_message_details_only_save_is_confirmed_and_transaction_only(
         self,

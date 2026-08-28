@@ -679,6 +679,9 @@ class Panel:
         _require_state(self.state)
 
 
+InputContext: TypeAlias = Panel | Section | Field | Notice
+
+
 @dataclass(frozen=True, slots=True)
 class Choice:
     """One stable selectable semantic option used by palettes and pickers."""
@@ -736,6 +739,7 @@ class Picker:
     choices: tuple[Choice, ...]
     _: KW_ONLY
     presentation: InputPresentation = InputPresentation.STANDARD
+    transient_context: tuple[InputContext, ...] = ()
     visible_choice_limit: int = 7
     highlighted_id: str | None = None
     selected_id: str | None = None
@@ -747,6 +751,19 @@ class Picker:
             raise TypeError("prompt must be a Prompt")
         if not isinstance(self.presentation, InputPresentation):
             raise TypeError("presentation must be an InputPresentation")
+        if type(self.transient_context) is not tuple or any(
+            type(item) not in {Panel, Section, Field, Notice}
+            for item in self.transient_context
+        ):
+            raise TypeError(
+                "transient_context must be a tuple of Panel, Section, Field, "
+                "or Notice values"
+            )
+        if (
+            self.transient_context
+            and self.presentation is not InputPresentation.FORM
+        ):
+            raise ValueError("transient_context requires form presentation")
         if type(self.visible_choice_limit) is not int:
             raise TypeError("visible_choice_limit must be an integer")
         if not 1 <= self.visible_choice_limit <= 9:
@@ -851,10 +868,6 @@ class PickerViewport:
             )
             if not self.start <= highlighted_index < self.stop:
                 raise ValueError("viewport must contain the highlighted choice")
-
-
-InputContext: TypeAlias = Panel | Section | Field | Notice
-
 
 @dataclass(frozen=True, slots=True)
 class InputPromptView:

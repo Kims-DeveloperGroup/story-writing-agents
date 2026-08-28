@@ -2564,6 +2564,7 @@ class InteractiveController:
         prompt: Prompt,
         choices: tuple[Choice, ...],
         *,
+        transient_context: tuple[Panel | Section | Field | Notice, ...] = (),
         highlighted_id: str | None = None,
         selected_id: str | None = None,
         notice: Notice | None = None,
@@ -2577,6 +2578,7 @@ class InteractiveController:
             prompt,
             choices,
             presentation=InputPresentation.FORM,
+            transient_context=transient_context,
             visible_choice_limit=visible_choice_limit,
             highlighted_id=highlighted_id,
             selected_id=selected_id,
@@ -3404,11 +3406,11 @@ class InteractiveController:
 
         if action not in {"save", "cancel"}:
             raise ValueError("action must be save or cancel")
-        self._semantic_output.write_component(
+        transient_context = (
             self._settings_panel(
                 state,
                 provider_overrides=self._backend.backend_overrides,
-            )
+            ),
         )
         outcome = self._read_settings_picker(
             Prompt(
@@ -3420,6 +3422,7 @@ class InteractiveController:
                 ),
             ),
             (Choice("yes", "YES"), Choice("no", "NO")),
+            transient_context=transient_context,
             highlighted_id="yes",
             transient=True,
         )

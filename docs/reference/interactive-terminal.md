@@ -46,7 +46,9 @@
 > value returns one level. A clean Settings root exposes no persistence action;
 > dirty state alone appends Apply Changes and Discard Changes. Root Settings
 > Escape retains its cancellation behavior. Generic picker/prompt reads, resume
-> pickers, and dirty Apply/Discard confirmations remain one-shot.
+> pickers, and dirty Apply/Discard confirmations remain one-shot. A capable
+> Apply/Discard confirmation owns its changed comparison inside the same live
+> frame and clears it on exit; line fallback omits that comparison.
 > The root Settings picker also exposes nested Conversation RAG before Message
 > details. RAG edits a startup-fixed Provider/Automatic policy; Message details
 > Off is the compact default and On reveals documented diagnostics without
@@ -669,6 +671,13 @@ displayed values carry the `(Changed)` cue; the defensive no-changes Apply confi
 only `No pending settings changes.` without empty Current or Pending sections.
 The activation notice contains only applicable current-shell runtime,
 next-shell storage, and next-shell Conversation RAG sentences.
+On a capable stream, the comparison, activation notice, and YES/NO picker are
+one live FORM frame. The driver clears that entire frame before YES, NO,
+Escape, Ctrl-C, or EOF returns and attempts the same cleanup before propagating
+a failure. The controller emits no separate durable comparison panel.
+Ordinary-line fallback, including `TERM=dumb`, omits the comparison and
+activation notice, including on invalid-input retries, because those readers
+cannot erase printed output.
 These confirmations are one-shot: selecting `YES` commits and closes the
 requested action, while `NO` or confirmation Escape returns to the root
 Settings picker. Ctrl-C and EOF still cancel the whole flow without writing and
@@ -704,8 +713,9 @@ passed form presentation.
 
 Within `/settings`, the visible per-agent fields and editor titles are exactly
 Provider, Model, and Effort. Current/Pending confirmations remain
-provider-qualified—Codex model/reasoning and Antigravity model/effort rows—so
-inactive persisted values remain unambiguous.
+provider-qualified on capable streams—Codex model/reasoning and Antigravity
+model/effort rows—so inactive persisted values remain unambiguous while the
+transient comparison is visible. Line fallback omits the comparison entirely.
 
 The visible top-level roster choice and roster picker are both named Agents.
 Selecting an agent opens Agent settings; Provider remains the field-level
@@ -1354,9 +1364,11 @@ remains fatal. Callback and
 line fallback cannot erase the already printed numbered prompt or input, so
 they retain it and add no synthetic terminal-state frame. Nested settings Escape
 returns to the parent silently. Apply Changes and Discard Changes confirmations
-show a selectable YES/NO control with changed-only Current/Pending context; unchanged context
-contains only the no-changes notice. Top-level cancellation does not claim a
-snapshot that was not rendered.
+show a selectable YES/NO control. On capable streams, changed-only
+Current/Pending context is part of that same live frame and is cleared with it;
+unchanged context contains only the no-changes notice. Line fallback omits all
+of this transient context. Top-level cancellation does not claim a snapshot
+that was not rendered.
 
 A permanently fallback driver, or a first input call with non-TTY,
 `TERM=dumb`, non-POSIX, or uncertain capability, uses the numbered fallback

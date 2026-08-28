@@ -684,7 +684,12 @@ def _form_picker_viewport_lines(
     """Render one settings-style live picker with separated form regions."""
 
     picker = viewport.picker
-    lines = _form_picker_heading_lines(picker, width)
+    lines: list[_SemanticLine] = []
+    for item in picker.transient_context:
+        lines.extend(_component_lines(item, width, indent=0))
+    if picker.transient_context:
+        lines.append(("", SemanticRole.DEFAULT))
+    lines.extend(_form_picker_heading_lines(picker, width))
     lines.append(("", SemanticRole.DEFAULT))
     lines.extend(_form_picker_header_lines(picker, width))
     for index in range(viewport.start, viewport.stop):
