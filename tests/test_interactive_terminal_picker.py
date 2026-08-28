@@ -47,16 +47,19 @@ from story_writing_agents.interactive_terminal._driver import RawTerminalDriver
 from story_writing_agents.interactive_terminal._model import (
     CapabilityProfile,
     Component,
+    Field,
     InputPromptView,
     KeyEvent,
     KeyKind,
     MainInputHistoryState,
+    Panel,
     Picker,
     PickerControlState,
     PickerViewport,
     RenderedFrame,
     RenderedInputFrame,
     SemanticRole,
+    Section,
     TerminalCapabilities,
     display_character_width,
 )
@@ -111,6 +114,35 @@ def _choices() -> tuple[Choice, ...]:
         Choice("secret-8", "Theta"),
         Choice("secret-9", "Iota"),
         Choice("secret-10", "Kappa"),
+    )
+
+
+def _transient_context() -> tuple[Panel, ...]:
+    """Return one changed-only Settings diff for live FORM picker tests."""
+
+    return (
+        Panel(
+            "Settings",
+            (
+                Section("Current", (Field("Language", "KO (Changed)"),)),
+                Section(
+                    "Pending",
+                    (
+                        Field(
+                            "Language",
+                            "EN (Changed)",
+                            role=SemanticRole.WARNING,
+                        ),
+                    ),
+                ),
+                Notice(
+                    "Runtime changes apply to this shell after Apply Changes.",
+                    label="activation",
+                    role=SemanticRole.INFO,
+                ),
+            ),
+            state=ViewState.OPEN,
+        ),
     )
 
 
@@ -315,7 +347,12 @@ def _driver(
     )
 
 
-def _read_picker(driver: RawTerminalDriver, state: PickerControlState) -> ControlOutcome:
+def _read_picker(
+    driver: RawTerminalDriver,
+    state: PickerControlState,
+    *,
+    transient: bool = False,
+) -> ControlOutcome:
     """Call the supported picker driver with the production pure seams."""
 
     return driver.read_picker(
@@ -325,6 +362,7 @@ def _read_picker(driver: RawTerminalDriver, state: PickerControlState) -> Contro
         project_picker_viewport,
         render_picker_viewport,
         render_picker_fallback,
+        transient=transient,
     )
 
 
@@ -388,6 +426,7 @@ class PickerModelContractTests(unittest.TestCase):
                 "prompt",
                 "choices",
                 "presentation",
+                "transient_context",
                 "visible_choice_limit",
                 "highlighted_id",
                 "selected_id",
@@ -567,10 +606,12 @@ class PickerModelContractTests(unittest.TestCase):
 
     def test_form_presentation_and_visible_limits_are_strict_values(self) -> None:
         choices = (Choice("one", "One"),)
+        transient_context = _transient_context()
         picker = Picker(
             Prompt("Choose"),
             choices,
             presentation=InputPresentation.FORM,
+            transient_context=transient_context,
             visible_choice_limit=9,
         )
         prompt = InputPromptView(
@@ -580,6 +621,7 @@ class PickerModelContractTests(unittest.TestCase):
             initial_value="seed",
         )
         self.assertIs(picker.presentation, InputPresentation.FORM)
+        self.assertEqual(picker.transient_context, transient_context)
         self.assertEqual(picker.visible_choice_limit, 9)
         self.assertIs(prompt.presentation, InputPresentation.FORM)
         self.assertEqual(prompt.initial_value, "seed")
@@ -588,6 +630,7 @@ class PickerModelContractTests(unittest.TestCase):
             Picker(Prompt("Choose"), choices).presentation,
             InputPresentation.STANDARD,
         )
+        self.assertEqual(Picker(Prompt("Choose"), choices).transient_context, ())
         self.assertIs(
             InputPromptView((), Prompt("Value")).presentation,
             InputPresentation.STANDARD,
@@ -630,6 +673,56 @@ class PickerModelContractTests(unittest.TestCase):
                         Prompt("Value"),
                         presentation=value,  # type: ignore[arg-type]
                     )
+
+        transient_parameter = inspect.signature(Picker).parameters[
+            "transient_context"
+        ]
+        self.assertIs(transient_parameter.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertEqual(transient_parameter.default, ())
+        self.assertIn("transient_context", tuple(field.name for field in fields(Picker)))
+        self.assertEqual(pickle.loads(pickle.dumps(picker)), picker)
+        self.assertFalse(hasattr(picker, "__dict__"))
+        with self.assertRaises(FrozenInstanceError):
+            picker.transient_context = ()  # type: ignore[misc]
+
+        exact_context = (
+            transient_context[0],
+            Section("Scope", (Notice("Section notice"),)),
+            Field("Current value", "one"),
+            Notice("Notice"),
+        )
+        self.assertEqual(
+            Picker(
+                Prompt("Choose"),
+                choices,
+                presentation=InputPresentation.FORM,
+                transient_context=exact_context,
+            ).transient_context,
+            exact_context,
+        )
+        for invalid_context in (
+            [transient_context[0]],
+            (Choice("bad", "Unsupported"),),
+            (object(),),
+        ):
+            with self.subTest(invalid_context=invalid_context), self.assertRaisesRegex(
+                TypeError,
+                "transient_context",
+            ):
+                Picker(
+                    Prompt("Choose"),
+                    choices,
+                    presentation=InputPresentation.FORM,
+                    transient_context=invalid_context,  # type: ignore[arg-type]
+                )
+        with self.assertRaisesRegex(ValueError, "form presentation"):
+            Picker(
+                Prompt("Choose"),
+                choices,
+                transient_context=transient_context,
+            )
+        for namespace in (_model.__all__, terminal_facade.__all__, story_writing_agents.__all__):
+            self.assertNotIn("transient_context", namespace)
 
 
 class PurePickerControlTests(unittest.TestCase):
@@ -908,10 +1001,12 @@ class PurePickerControlTests(unittest.TestCase):
     def test_form_limit_controls_viewport_and_survives_all_state_transitions(
         self,
     ) -> None:
+        transient_context = _transient_context()
         picker = Picker(
             Prompt("Settings"),
             _choices(),
             presentation=InputPresentation.FORM,
+            transient_context=transient_context,
             visible_choice_limit=3,
             highlighted_id="secret-8",
             selected_id="secret-1",
@@ -922,14 +1017,17 @@ class PurePickerControlTests(unittest.TestCase):
             PickerViewport(state.picker, 5, 8),
         )
         self.assertIs(state.picker.presentation, InputPresentation.FORM)
+        self.assertEqual(state.picker.transient_context, transient_context)
         self.assertEqual(state.picker.visible_choice_limit, 3)
 
         moved, outcome = transition_picker(state, KeyEvent(KeyKind.DOWN))
         self.assertIsNone(outcome)
         self.assertEqual(moved.picker.highlighted_id, "secret-9")
+        self.assertEqual(moved.picker.transient_context, transient_context)
         self.assertEqual(project_picker_viewport(moved).start, 6)
         reconciled = reconcile_picker(moved, _choices()[1:])
         self.assertIs(reconciled.picker.presentation, InputPresentation.FORM)
+        self.assertEqual(reconciled.picker.transient_context, transient_context)
         self.assertEqual(reconciled.picker.visible_choice_limit, 3)
         self.assertEqual(
             (
@@ -945,16 +1043,36 @@ class PurePickerControlTests(unittest.TestCase):
         )
         self.assertEqual(outcome.text, "secret-9")
         self.assertIs(completed.picker.presentation, InputPresentation.FORM)
+        self.assertEqual(completed.picker.transient_context, transient_context)
         self.assertEqual(completed.picker.visible_choice_limit, 3)
 
         rejected, outcome = transition_picker_fallback(state, "0")
         self.assertIs(outcome.kind, ControlOutcomeKind.REJECTED)
         self.assertIs(rejected.picker.presentation, InputPresentation.FORM)
+        self.assertEqual(rejected.picker.transient_context, transient_context)
         self.assertEqual(rejected.picker.visible_choice_limit, 3)
         cancelled, outcome = transition_picker_fallback(rejected, "/cancel")
         self.assertIs(outcome.kind, ControlOutcomeKind.CANCEL)
         self.assertIs(cancelled.picker.presentation, InputPresentation.FORM)
+        self.assertEqual(cancelled.picker.transient_context, transient_context)
         self.assertEqual(cancelled.picker.visible_choice_limit, 3)
+
+        live_cancelled, outcome = transition_picker(
+            state,
+            KeyEvent(KeyKind.ESCAPE),
+        )
+        self.assertIs(outcome.kind, ControlOutcomeKind.CANCEL)
+        self.assertEqual(
+            live_cancelled.picker.transient_context,
+            transient_context,
+        )
+
+        fallback_committed, outcome = transition_picker_fallback(state, "1")
+        self.assertIs(outcome.kind, ControlOutcomeKind.COMMIT)
+        self.assertEqual(
+            fallback_committed.picker.transient_context,
+            transient_context,
+        )
 
     def test_fallback_grammar_blank_cancel_ordinals_and_huge_values_are_exact(self) -> None:
         initial = initialize_picker(
@@ -1295,6 +1413,103 @@ class PickerRenderingTests(unittest.TestCase):
         ):
             with self.subTest(noisy=noisy):
                 self.assertNotIn(noisy, expected)
+
+    def test_form_transient_context_is_live_only_ordered_and_counted(self) -> None:
+        context = _transient_context()
+        picker = Picker(
+            Prompt(
+                "Apply changes?",
+                instruction="Choose YES to apply changes, or NO to return.",
+            ),
+            (Choice("yes", "YES"), Choice("no", "NO")),
+            presentation=InputPresentation.FORM,
+            transient_context=context,
+            highlighted_id="yes",
+        )
+        state = initialize_picker(picker)
+        without_context = initialize_picker(
+            Picker(
+                picker.prompt,
+                picker.choices,
+                presentation=InputPresentation.FORM,
+                highlighted_id="yes",
+            )
+        )
+
+        for profile in (CapabilityProfile.PLAIN, CapabilityProfile.ANSI):
+            with self.subTest(profile=profile):
+                capabilities = _capabilities(profile)
+                rendered = render_picker_viewport(
+                    project_picker_viewport(state),
+                    capabilities,
+                )
+                context_frame = _render.render_component(
+                    context[0],
+                    capabilities,
+                )
+                picker_frame = render_picker_viewport(
+                    project_picker_viewport(without_context),
+                    capabilities,
+                )
+                self.assertEqual(
+                    rendered.text,
+                    f"{context_frame.text}\n\n{picker_frame.text}",
+                )
+                self.assertEqual(
+                    rendered.line_count,
+                    context_frame.line_count + 1 + picker_frame.line_count,
+                )
+                self.assertEqual(rendered.line_count, len(rendered.text.splitlines()))
+                self.assertLess(
+                    rendered.text.index("Current"),
+                    rendered.text.index("Apply changes?"),
+                )
+                self.assertLess(
+                    rendered.text.index("Apply changes?"),
+                    rendered.text.index("Choices 1/2"),
+                )
+
+        ansi = render_picker_viewport(
+            project_picker_viewport(state),
+            _capabilities(CapabilityProfile.ANSI),
+        )
+        plain = render_picker_viewport(
+            project_picker_viewport(state),
+            _capabilities(CapabilityProfile.PLAIN),
+        )
+        self.assertEqual(strip_decorative_sgr(ansi.text), plain.text)
+
+        narrow = render_picker_viewport(
+            project_picker_viewport(state),
+            _capabilities(CapabilityProfile.PLAIN, 20),
+        )
+        self.assertEqual(narrow.line_count, len(narrow.text.splitlines()))
+        self.assertLess(narrow.text.index("Current"), narrow.text.index("Apply changes?"))
+        for line in narrow.text.splitlines():
+            self.assertLessEqual(_physical_width(line), 20)
+
+        fallback = render_picker_fallback(
+            state,
+            _capabilities(CapabilityProfile.LINE),
+        )
+        fallback_without_context = render_picker_fallback(
+            without_context,
+            _capabilities(CapabilityProfile.LINE),
+        )
+        self.assertEqual(fallback, fallback_without_context)
+        static = _render.render_component(
+            state.picker,
+            _capabilities(CapabilityProfile.LINE),
+        )
+        static_without_context = _render.render_component(
+            without_context.picker,
+            _capabilities(CapabilityProfile.LINE),
+        )
+        self.assertEqual(static, static_without_context)
+        for omitted in ("Current", "Pending", "(Changed)", "[activation]"):
+            with self.subTest(omitted=omitted):
+                self.assertNotIn(omitted, fallback.text)
+                self.assertNotIn(omitted, static.text)
 
     def test_form_picker_window_uses_absolute_position_and_wraps_safely(self) -> None:
         state = initialize_picker(
@@ -2210,6 +2425,212 @@ class PickerDriverTests(unittest.TestCase):
                     self.assertIn("[selected] [highlighted] One", rendered)
                     self.assertTrue(rendered.endswith("\n"))
 
+    def test_transient_form_context_cleanup_uses_latest_frame_for_every_exit(
+        self,
+    ) -> None:
+        state = initialize_picker(
+            Picker(
+                Prompt("Apply changes?"),
+                (Choice("yes", "YES"), Choice("no", "NO")),
+                presentation=InputPresentation.FORM,
+                transient_context=_transient_context(),
+                highlighted_id="yes",
+            )
+        )
+        cases = (
+            ("yes", "\n", ControlOutcomeKind.COMMIT, "yes", False, 80),
+            ("no", "\x1b[B\n", ControlOutcomeKind.COMMIT, "no", True, 80),
+            ("escape", "\x1b", ControlOutcomeKind.CANCEL, None, False, 24),
+            ("interrupt", "\x03", ControlOutcomeKind.INTERRUPT, None, False, 80),
+            ("veof", "\x04", ControlOutcomeKind.EOF, None, True, 80),
+            ("physical-eof", "", ControlOutcomeKind.EOF, None, False, 24),
+        )
+        for label, characters, kind, text, no_color, width in cases:
+            with self.subTest(label=label):
+                driver, _input, output, fallback, termios_double, _sizes = _driver(
+                    characters,
+                    widths=(width,),
+                    no_color=no_color,
+                )
+                renderer = mock.Mock(wraps=render_picker_viewport)
+                with mock.patch.object(
+                    driver_module._select,
+                    "select",
+                    return_value=(
+                        ((), (), ())
+                        if label == "escape"
+                        else ((7,), (), ())
+                    ),
+                ):
+                    outcome = driver.read_picker(
+                        state,
+                        transition_picker,
+                        transition_picker_fallback,
+                        project_picker_viewport,
+                        renderer,
+                        render_picker_fallback,
+                        transient=True,
+                    )
+
+                self.assertEqual(outcome.kind, kind)
+                self.assertEqual(outcome.text, text)
+                fallback.assert_not_called()
+                latest_frame = render_picker_viewport(
+                    *renderer.call_args_list[-1].args
+                )
+                self.assertEqual(
+                    output.records[-1],
+                    "\r"
+                    + "\x1b[A" * (latest_frame.line_count - 1)
+                    + "\r\x1b[J",
+                )
+                rendered = "".join(output.records)
+                self.assertIn("Current", rendered)
+                self.assertIn("Pending", rendered)
+                self.assertIn("Apply changes?", rendered)
+                self.assertNotIn("[completed]", rendered)
+                self.assertNotIn("[cancelled]", rendered)
+                self.assertEqual(
+                    [when for _fd, when, _attrs in termios_double.set_calls],
+                    [termios_double.TCSANOW, termios_double.TCSADRAIN],
+                )
+
+        driver, _input, output, fallback, _termios, _sizes = _driver(
+            "\x1b[B\n",
+            widths=(80, 80, 80, 20, 20, 20),
+        )
+        renderer = mock.Mock(wraps=render_picker_viewport)
+        with mock.patch.object(
+            driver_module._select,
+            "select",
+            return_value=((7,), (), ()),
+        ):
+            outcome = driver.read_picker(
+                state,
+                transition_picker,
+                transition_picker_fallback,
+                project_picker_viewport,
+                renderer,
+                render_picker_fallback,
+                transient=True,
+            )
+        self.assertEqual(outcome.text, "no")
+        rendered_widths = tuple(call.args[1].width for call in renderer.call_args_list)
+        self.assertGreater(len(set(rendered_widths)), 1)
+        latest_frame = render_picker_viewport(*renderer.call_args_list[-1].args)
+        self.assertEqual(
+            output.records[-1],
+            "\r" + "\x1b[A" * (latest_frame.line_count - 1) + "\r\x1b[J",
+        )
+        fallback.assert_not_called()
+
+    def test_transient_form_context_failures_clear_last_trusted_frame_and_restore(
+        self,
+    ) -> None:
+        state = initialize_picker(
+            Picker(
+                Prompt("Discard changes?"),
+                (Choice("yes", "YES"), Choice("no", "NO")),
+                presentation=InputPresentation.FORM,
+                transient_context=_transient_context(),
+                highlighted_id="yes",
+            )
+        )
+        capabilities = _capabilities(CapabilityProfile.ANSI, 79)
+        initial_frame = render_picker_viewport(
+            project_picker_viewport(state),
+            capabilities,
+        )
+        expected_failure_clear = (
+            "\r"
+            + "\x1b[A" * (initial_frame.line_count - 1)
+            + "\r\x1b[J\n"
+        )
+
+        driver, _input, output, fallback, termios_double, _sizes = _driver(
+            "\x1b[B",
+            widths=(80,),
+        )
+        renderer = mock.Mock(
+            side_effect=(initial_frame, RuntimeError("render failed"))
+        )
+        with (
+            mock.patch.object(
+                driver_module._select,
+                "select",
+                return_value=((7,), (), ()),
+            ),
+            self.assertRaisesRegex(RuntimeError, "render failed"),
+        ):
+            driver.read_picker(
+                state,
+                transition_picker,
+                transition_picker_fallback,
+                project_picker_viewport,
+                renderer,
+                render_picker_fallback,
+                transient=True,
+            )
+        self.assertEqual(output.records[-1], expected_failure_clear)
+        fallback.assert_not_called()
+        self.assertEqual(
+            [when for _fd, when, _attrs in termios_double.set_calls],
+            [termios_double.TCSANOW, termios_double.TCSADRAIN],
+        )
+
+        output = _RecordingOutput()
+        write_calls = 0
+
+        def fail_second_write(text: str) -> int:
+            nonlocal write_calls
+            write_calls += 1
+            output.records.append(text)
+            if write_calls == 2:
+                raise OSError("write failed")
+            return len(text)
+
+        output.write = fail_second_write  # type: ignore[method-assign]
+        driver, _input, _bound_output, fallback, termios_double, _sizes = _driver(
+            "\x1b[B",
+            widths=(80,),
+            output=output,
+        )
+        with (
+            mock.patch.object(
+                driver_module._select,
+                "select",
+                return_value=((7,), (), ()),
+            ),
+            self.assertRaisesRegex(OSError, "write failed"),
+        ):
+            _read_picker(driver, state, transient=True)
+        self.assertEqual(output.records[-1], expected_failure_clear)
+        self.assertEqual(write_calls, 3)
+        fallback.assert_not_called()
+        self.assertEqual(
+            [when for _fd, when, _attrs in termios_double.set_calls],
+            [termios_double.TCSANOW, termios_double.TCSADRAIN],
+        )
+
+        restoring_termios = _FakeTermios()
+        restoring_termios.restoration_failure = OSError("restore secret")
+        driver, _input, output, fallback, _termios, _sizes = _driver(
+            "\x03",
+            widths=(80,),
+            termios_double=restoring_termios,
+        )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "^interactive terminal restoration failed$",
+        ) as caught:
+            _read_picker(driver, state, transient=True)
+        self.assertIs(caught.exception.__cause__, restoring_termios.restoration_failure)
+        self.assertEqual(
+            output.records[-1],
+            expected_failure_clear.removesuffix("\n"),
+        )
+        fallback.assert_not_called()
+
     def test_fallback_retries_complete_numbered_frames_and_never_uses_history(self) -> None:
         answers = mock.Mock(side_effect=("2", "9" * 10_000, "3"))
         driver, input_stream, output, _fallback, termios_double, size_calls = _driver(
@@ -2581,6 +3002,8 @@ class PickerAdapterCompatibilityTests(unittest.TestCase):
         outcome = adapter.read_picker(
             Prompt("Choose"),
             _choices()[:3],
+            presentation=InputPresentation.FORM,
+            transient_context=_transient_context(),
             highlighted_id="secret-3",
             selected_id="secret-1",
         )
@@ -2592,10 +3015,14 @@ class PickerAdapterCompatibilityTests(unittest.TestCase):
         self.assertNotIn("[validation]", prompts[0])
         self.assertEqual(prompts[1].count("[validation]"), 1)
         for prompt in prompts:
-            self.assertIn("1. [selected] Alpha", prompt)
-            self.assertIn("2. [disabled] Beta", prompt)
-            self.assertIn("3. [highlighted] Gamma", prompt)
+            self.assertIn("1. Alpha (selected)", prompt)
+            self.assertIn("2. Beta (disabled)", prompt)
+            self.assertIn("> 3. Gamma", prompt)
             self.assertNotIn("secret-", prompt)
+            self.assertNotIn("Current", prompt)
+            self.assertNotIn("Pending", prompt)
+            self.assertNotIn("(Changed)", prompt)
+            self.assertNotIn("[activation]", prompt)
         self.assertEqual(writes, [])
 
     def test_adapters_forward_form_presentation_limit_context_and_initial_value(
@@ -2634,6 +3061,7 @@ class PickerAdapterCompatibilityTests(unittest.TestCase):
             Prompt("Settings"),
             _choices(),
             presentation=InputPresentation.FORM,
+            transient_context=_transient_context(),
             visible_choice_limit=9,
             highlighted_id="secret-8",
         )
@@ -2654,6 +3082,10 @@ class PickerAdapterCompatibilityTests(unittest.TestCase):
         )
         self.assertEqual(picker_states[0].picker.visible_choice_limit, 9)
         self.assertEqual(picker_states[0].picker.highlighted_id, "secret-8")
+        self.assertEqual(
+            picker_states[0].picker.transient_context,
+            _transient_context(),
+        )
         self.assertEqual(
             prompt_views,
             [

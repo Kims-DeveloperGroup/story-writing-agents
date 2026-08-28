@@ -611,7 +611,15 @@ equal and open that
 transient confirmation only when they differ. Confirmation context shows only
 changed Current/Pending fields and marks each displayed value `(Changed)`;
 the defensive no-changes Apply confirmation shows
-`No pending settings changes.` Committed YES proceeds; committed NO or
+`No pending settings changes.` On a capable stream, this context and its
+applicable activation notice are prepended to the same live FORM frame as the
+YES/NO picker. They are counted as part of that frame and cleared with it
+before commit, decline, Escape, interrupt, or EOF returns; the driver attempts
+the same complete-frame cleanup before a render, read, write, or flush failure
+propagates. The controller does not write a separate durable comparison panel.
+Ordinary-line fallback, including `TERM=dumb`, omits the context and activation
+notice on both the initial prompt and invalid-input retries because it cannot
+erase printed output. Committed YES proceeds; committed NO or
 confirmation Escape returns to the root settings
 picker; invalid fallback input retries with a trusted notice. Top-level
 cancellation does not claim a snapshot that was not rendered.

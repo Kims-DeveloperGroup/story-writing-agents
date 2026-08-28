@@ -780,6 +780,23 @@ class PtyCliProcess:
 class InteractiveCliPtyTests(unittest.TestCase):
     """Exercise the real CLI process with deterministic local terminal resources."""
 
+    def assert_transient_settings_diff_cleared_before(
+        self,
+        rendered: str,
+        boundary: str,
+    ) -> None:
+        """Require the last visible Settings diff to precede cleanup and output."""
+
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", rendered)
+        boundary_offset = plain.find(boundary)
+        self.assertNotEqual(boundary_offset, -1, plain)
+        diff_offset = plain.rfind("(Changed)", 0, boundary_offset)
+        self.assertNotEqual(diff_offset, -1, plain)
+        clear_offset = plain.rfind("\x1b[J", diff_offset, boundary_offset)
+        self.assertNotEqual(clear_offset, -1, plain)
+        self.assertLess(diff_offset, clear_offset)
+        self.assertLess(clear_offset, boundary_offset)
+
     def setUp(self) -> None:
         """Create one isolated workspace root and local fake provider command."""
 
@@ -2438,8 +2455,25 @@ print(
         cancel_mark = process.output_mark()
         process.send_text("\x1b")
         process.wait_for_text("Discard changes?", after=cancel_mark)
+        process.send_text("\x1b[B\n")
+        returned = process.wait_for_text(
+            "Choices 9/9",
+            after=cancel_mark,
+        )
+        self.assert_transient_settings_diff_cleared_before(
+            returned,
+            "Choices 9/9",
+        )
+
+        discard_mark = process.output_mark()
+        process.send_text("\x1b")
+        process.wait_for_text("Discard changes?", after=discard_mark)
         process.send_text("\n")
-        discarded = process.wait_for_text("story[lobby]> ", after=cancel_mark)
+        discarded = process.wait_for_text("story[lobby]> ", after=discard_mark)
+        self.assert_transient_settings_diff_cleared_before(
+            discarded,
+            "[cancelled]",
+        )
         self.assertEqual(
             "".join(discarded.split()).count(
                 "[cancelled]Pendingchangesdiscarded."
@@ -2634,6 +2668,10 @@ print(
                     "[saved and applied]",
                     after=returned_mark,
                 )
+                self.assert_transient_settings_diff_cleared_before(
+                    saved,
+                    "[saved and applied]",
+                )
                 self.assertIn("(Changed)", saved)
                 self.assertIn(
                     "Settingssavedandappliedtothisrunningshellnow.",
@@ -2645,8 +2683,6 @@ print(
                         ).split()
                     ),
                 )
-                confirmation = saved.rsplit("Settings [open]", 1)[-1]
-                self.assertNotIn("Persona", confirmation)
                 process.wait_for_text("story[lobby]> ", after=returned_mark)
 
                 history_mark = process.output_mark()
@@ -3169,6 +3205,10 @@ print(
         )
         process.send_text("\n")
         discarded = process.wait_for_text("story[lobby]> ", after=cancelled_mark)
+        self.assert_transient_settings_diff_cleared_before(
+            discarded,
+            "[cancelled]",
+        )
         compact_discarded = "".join(discarded.split())
         self.assertIn(
             "[cancelled]Pendingchangesdiscarded.",
@@ -3303,7 +3343,20 @@ print(
             "ChooseApplyChangestopersistpendingchanges",
             "".join(returned_settings.split()),
         )
+        confirmation_mark = process.output_mark()
         process.send_line("8")
+        process.wait_for_text("Apply changes?", after=confirmation_mark)
+        process.send_line("0")
+        retry = process.wait_for_text("[validation]", after=confirmation_mark)
+        self.assertEqual(retry.count("[validation]"), 1)
+        for omitted in (
+            "--- Settings [open]",
+            "(Changed)",
+            "[activation]",
+            "Runtime changes apply to this shell",
+        ):
+            with self.subTest(omitted=omitted):
+                self.assertNotIn(omitted, retry)
         process.send_line("1")
         process.wait_for_text("Settings saved", after=mark)
         process.wait_for_text("story[lobby]> ", after=mark)

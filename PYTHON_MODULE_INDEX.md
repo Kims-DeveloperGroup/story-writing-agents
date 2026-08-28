@@ -2799,7 +2799,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   different success replaces it, and a second consecutive success of the same
   value returns silently to the parent. Invalid input, authentication failure,
   Custom-model navigation, and editor re-entry reset or recreate that state. The
-  flow constructs its changed-only confirmation context. Except for the exact
+  flow constructs its changed-only confirmation context and passes it only as
+  picker-owned transient input context rather than as a separate durable
+  semantic write. Except for the exact
   message-details-only transaction above, Dirty Apply Changes stages and
   provider-preflights one complete backend generation, quiesces and stages the
   runtime prompt snapshot, delegates the persona-catalog guard, storage
@@ -3203,10 +3205,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   `InteractivePickerInput`, `Choice`, `Picker`, `Prompt`, `ControlOutcome`, and
   `ControlOutcomeKind` bindings provide one resource-free generic picker input
   boundary without exposing opaque choice identities, terminal leaves, or a
-  new package-supported API. Its additive package-internal presentation and
-  visible-choice-limit keywords default to the exact established standard
-  layout and seven-row live viewport; the explicit form layout accepts the same
-  validated one-through-nine bound. Existing `Choice` values may carry one
+  new package-supported API. Its additive package-internal presentation,
+  form-only transient-context, and visible-choice-limit keywords default to the
+  exact established standard layout, empty context, and seven-row live
+  viewport; the explicit form layout accepts an exact tuple of semantic input
+  context plus the same validated one-through-nine bound. Existing `Choice`
+  values may carry one
   optional validated plain warning suffix plus an additive keyword-only validated
   semantic description role whose default preserves established construction
   and rendering. Capable ANSI independently decorates the warning suffix and
@@ -3222,8 +3226,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   sole-driver-backed implementations without changing the exact public
   `__all__`. The installed main, subject, composition, confirmation, picker, and
   cancellable-prompt routes enforce one submitted-input lifecycle: each
-  complete capable live frame clears before return and cleanup is attempted on
-  failure, while callback and line fallback retain printed prompts and input
+  complete capable live frame, including any picker-owned transient context,
+  clears before return and cleanup is attempted on failure, while callback and
+  line fallback omit that transient context, retain printed prompts and input,
   and emit no synthetic `completed` or `cancelled` control frame. The picker
   and prompt adapters validate their retained `transient` arguments but cannot
   opt out of that lifecycle. These adapters do not expand the exact public
@@ -3312,10 +3317,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   I/O. The ranged-source namespace reuses that same main-command palette state;
   it introduces no second live picker state. Picker-control values retain one
   validated semantic picker and its call-local window origin. A picker carries
-  one validated standard/form presentation discriminator and a bounded
-  one-through-nine visible-choice limit whose default is seven, while viewport
-  values carry one contiguous slice within that exact limit; stable choice
-  identities remain internal correlation keys. A message owns only validated
+  one validated standard/form presentation discriminator, an exact tuple of
+  `Panel`, `Section`, `Field`, or `Notice` transient context accepted only for
+  form presentation, and a bounded one-through-nine visible-choice limit whose
+  default is seven, while viewport values carry one contiguous slice within
+  that exact limit; stable choice identities remain internal correlation keys.
+  The context is presentation-only and carries no terminal or durable-output
+  ownership. A message owns only validated
   attributed text and immutable presentation metadata; it performs no
   sanitization or layout and its default
   cyan accent has no effect under the default inline presentation. A choice
@@ -3393,7 +3401,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   generic single-select lifecycle: deterministic enabled highlight selection,
   stable-identity refresh, disabled-row skipping with clamped navigation,
   minimal movement within each picker's validated visible-choice limit, exact
-  numbered or blank fallback
+  preservation of its transient context through every reconstructed picker,
+  exact numbered or blank fallback
   commit, `/cancel`, and one semantic rejected-attempt notice. Choice identities
   are correlation-only and never become presentation text. Composition
   suggestions remain preview-only and nonselectable.
@@ -3430,10 +3439,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   heading, context, guidance, current value, choices, descriptions, and the
   active input with blank rows; renders the concise absolute `Choices N/M`
   counter; uses a plain `>` active pointer, `(selected)`, and explicit disabled
-  copy rather than available/highlighted/focused/open labels; and can render the
-  Settings root's bounded nine-row viewport. `render_picker_fallback` renders
-  the complete numbered list and semantic input prompt under the selected
-  presentation. Both layouts keep opaque identities internal and preserve
+  copy rather than available/highlighted/focused/open labels; can render the
+  Settings root's bounded nine-row viewport; and renders any picker-owned
+  transient semantic context before the heading with one separating blank row.
+  `render_picker_fallback` renders the complete numbered list and semantic input
+  prompt under the selected presentation while intentionally omitting that
+  context. Both layouts keep opaque identities internal and preserve
   equivalent sanitized plain and fixed-ANSI meaning. Their generalized segment-aware
   physical-cell wrapping projects ordered non-overlapping semantic spans across
   narrow rows, independently preserving an optional warning suffix and an
@@ -3960,9 +3971,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   for RUN/CHAT while retaining the established public `compose` behavior and
   signature. Resource-free
   `InteractivePickerInput`
-  validates additive standard/form presentation and one-through-nine
-  visible-choice-limit keywords, initializes one generic picker, then delegates
-  only its immutable control state; callback construction binds deterministic
+  validates additive standard/form presentation, an exact form-only transient
+  semantic-context tuple, and one-through-nine visible-choice-limit keywords,
+  initializes one generic picker, then delegates only its immutable control
+  state; callback construction binds deterministic
   plain complete-list picker input, and stream construction binds the same adapter to
   the sole driver's dedicated picker lifecycle with pure control and rendering
   collaborators. Resource-free `InteractivePromptInput` constructs one existing
