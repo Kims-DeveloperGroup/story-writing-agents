@@ -9,6 +9,7 @@ from ._core import (
     InteractiveCompositionInput,
     InteractiveDebateProgress,
     InteractiveMainInput,
+    InputPresentation,
     INTERACTIVE_ERROR_SPECS,
     AttachmentKind,
     Choice,

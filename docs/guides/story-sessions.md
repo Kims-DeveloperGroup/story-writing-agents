@@ -135,18 +135,75 @@ selecting Local leaves Automatic Off; On requires pending Local. Message
 details offers Off and On. Off is the default compact presentation; it never
 removes stored message content.
 
+Every view entered through `/settings` uses a structured form layout, including
+the provider-authentication picker opened from Agent settings. The current view
+name stands alone, optional agent/provider scope appears as `Context:`, guidance
+has its own region, and choice descriptions are stacked below their labels.
+`>` marks the active row, `(selected)` marks the selected value, and unavailable
+rows retain `(disabled)` plus a textual `Disabled:` reason. The form omits the
+generic `[available]`, `[highlighted]`, `[focused]`, and `[open]` labels and
+does not print a `Settings/Agents/...` breadcrumb. Global `/auth`, session and
+conversation resume, and other non-Settings pickers keep their established
+presentation.
+
+The clean root renders all seven rows in its current frame. As soon as a value
+is pending, the dirty root renders all nine rows, including Apply and Discard,
+regardless of which row is active. This means the complete live redraw or
+fallback prompt is available in the current terminal frame/scrollback; it does
+not promise that nine rows fit the physical terminal height without terminal
+scrolling. Nested catalogs retain a seven-row window. Their heading stays
+absolute and concise—`Choices 6/10`, for example—with no shown-range text. A
+form with no active row reports only its total, such as `Choices 3`.
+
+A dirty root can look like this without color:
+
+```text
+Settings
+
+Choose a setting to edit, apply changes, or discard changes.
+
+Choices 6/9
+  1. Language
+     Current: KO
+  2. Persona
+     Current: default_kim_eun_hee
+  3. Maximum debate rounds
+     Pending: 2
+  4. Conversation storage
+     Current: filesystem
+  5. Conversation RAG
+     Current: Provider Disabled; Automatic Off
+> 6. Message details
+     Current: Off
+  7. Agents
+  8. Apply Changes (*Required)
+  9. Discard Changes
+     Pending changes will be discarded.
+  [save required] Choose Apply Changes to persist pending changes
+```
+
 Choose Agents to select an agent in canonical roster order. Each agent shows
-its effective `(Provider/model/effort)` values beside its name. Agent settings
-then shows the effective value beside each Provider, Model, and Effort field:
+its effective `(Provider/model/effort)` values in the description directly
+below its name. Agent settings then gives Provider, Model, and Effort their own
+rows and shows the effective value below each field:
 
 ```text
 Agents
-  Lead Orchestrator — Pending: (Antigravity/agy-pro/high)
 
-Agent settings [Lead Orchestrator]
-  Provider — Current: Antigravity
-  Model — Current: agy-pro
-  Effort — Pending: high
+Choices 1/4
+> 1. Lead Orchestrator
+     Pending: (Antigravity/agy-pro/high)
+
+Agent settings
+Context: Lead Orchestrator
+
+Choices 3/3
+  1. Provider
+     Current: Antigravity
+  2. Model
+     Current: agy-pro
+> 3. Effort
+     Pending: high
 ```
 
 The displayed profile is labeled `Current` when it matches the active runtime
@@ -200,6 +257,10 @@ memory and are not saved; choose Apply Changes in Settings to persist them.` Thi
 visible when the editor first opens, after a valid value is entered, and while
 fixing validation. Entering a value changes only the pending in-memory settings;
 the completed result confirms that pending change, not a file save.
+
+Text and numeric inputs similarly separate the header and guidance from
+`Current value: VALUE` and the final `New value > ` line. The current value
+remains prefilled in the editable buffer, so input semantics are unchanged.
 
 When you return to the top-level Settings picker, it shows `[save required]
 Choose Apply Changes to persist pending changes` exactly while the complete

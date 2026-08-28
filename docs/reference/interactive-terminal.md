@@ -123,10 +123,13 @@ compatibility editor; they likewise remain unlisted and unsupported.
 unlisted internal bindings for the shared selectable main route. Its completion
 models remain package-private and outside the closed `Component` union; only
 their projected existing `SuggestionPalette` is rendered.
-The facade also exposes the unlisted `Choice`, `Picker`, `Prompt`, `ControlOutcome`,
-`ControlOutcomeKind`, `InteractiveMainInput`, `InteractivePickerInput`, and
-`InteractivePromptInput` identities for controller-owned main choices, the
-generic picker, and cancellable-line seams.
+The facade also exposes the unlisted `Choice`, `Picker`, `Prompt`,
+`InputPresentation`, `ControlOutcome`, `ControlOutcomeKind`,
+`InteractiveMainInput`, `InteractivePickerInput`, and `InteractivePromptInput`
+identities for controller-owned main choices, the generic picker, and
+cancellable-line seams. `InputPresentation.STANDARD` is the compatible default;
+the internal `FORM` option selects the Settings-only layout. Picker callers may
+also set the internal validated visible-choice limit from one through nine.
 `PickerControlState` and `PickerViewport` remain package-private; the existing
 semantic `Picker` remains a `Component`. None of these additions changes public
 `__all__`, root exports, or supported signatures.
@@ -573,18 +576,32 @@ or a first input call that cannot safely preflight live mode, renders the
 complete numbered list through the ordinary line callback. Opaque choice
 identities are control state and are never rendered.
 
-Settings custom-model and numeric values use a separate context-free semantic
-`Prompt`. That route is history- and completion-free. Enter commits the exact
-line for validation. A valid commit applies the pending value and immediately
-reopens the same prompt with its default updated and one inline `Notice` using
-`SemanticRole.SUCCESS` and `ViewState.COMPLETED`; a later valid commit replaces
-that result. The prompt remains `ViewState.FOCUSED`. The `/settings` controller
-may consume the next commit of that same normalized value as a silent return to
-the parent; the Prompt itself still completes once per read and has no key-timing
-policy. Escape returns one settings level without undoing applied pending
-values, while Ctrl-C or EOF cancels the whole settings transaction. In fallback
-an exact ESC line returns one level, while `/cancel` remains literal input. The
-same sole driver owns raw input, redraw, cleanup, and restoration.
+Settings selects the internal form presentation for every picker and input it
+owns, including the authentication picker borrowed from the global coordinator.
+The form projects a simple view title and optional `Context:` before guidance,
+then uses blank rows to separate choices or editable values. Pickers use
+`Choices N/M`, `>` for the active row, `(selected)`, `(disabled)`, and textual
+`Disabled:` reasons; descriptions occupy their own indented rows. The form
+does not project `[available]`, `[highlighted]`, `[focused]`, `[open]`, a shown
+range, or a breadcrumb-like composite title. Standard presentation remains the
+default for global `/auth`, omitted-resume choices, and every other generic
+picker.
+
+Settings Custom model and Maximum debate rounds use the form input projection.
+It renders the title, optional `Context:`, guidance, validation or completed
+context, `Current value: VALUE`, and final `New value > ` as distinct regions.
+That route is history- and completion-free. Enter commits the exact line for
+validation. A valid commit applies the pending value and immediately reopens
+the same prompt with its initial editable value updated and one inline `Notice`
+using `SemanticRole.SUCCESS` and `ViewState.COMPLETED`; a later valid commit
+replaces that result. The prompt remains `ViewState.FOCUSED`. The `/settings`
+controller may consume the next commit of that same normalized value as a
+silent return to the parent; the Prompt itself still completes once per read
+and has no key-timing policy. Escape returns one settings level without undoing
+applied pending values, while Ctrl-C or EOF cancels the whole settings
+transaction. In fallback an exact ESC line returns one level, while `/cancel`
+remains literal input. The same sole driver owns raw input, redraw, cleanup,
+and restoration.
 
 One permanent input latch now serves every input route on a stream-backed
 terminal. Construction is resource-free; the first actual input read makes the
@@ -669,6 +686,21 @@ Off, selecting Local leaves Off, and On requires pending Local. Message details
 offers Off and On. Off is the default compact presentation; it does not delete
 stored content. Dirty state appends Apply Changes and Discard Changes, for nine
 top-level choices.
+
+All controls reached through `/settings` use `InputPresentation.FORM`. The root
+passes its current complete choice count as the visible limit, so a clean frame
+contains all seven rows and a dirty frame all nine rows regardless of the
+active ordinal. This is the complete live redraw or fallback prompt available
+in the current terminal frame/scrollback; physical terminal height may still
+require terminal scrolling. Every nested Settings picker keeps the default
+seven-row limit. With an active row, its form heading is `Choices N/M`, where
+`N` is the active absolute ordinal and `M` is the complete choice count; with no
+active row it is `Choices M`. It never adds `showing X-Y/M`. A form row uses
+`>` rather than a bracketed highlighted label,
+keeps `(selected)` and `(disabled)` textual, and stacks descriptions and
+`Disabled:` reasons beneath the label. Global `/auth` selects standard
+presentation, while authentication borrowed inside Settings is explicitly
+passed form presentation.
 
 Within `/settings`, the visible per-agent fields and editor titles are exactly
 Provider, Model, and Effort. Current/Pending confirmations remain
@@ -1200,6 +1232,9 @@ read. A successful read with eligible rows opens this picker live on a capable
 stream or numbered in fallback; an empty or failed read does not open it. A
 caller supplies one semantic prompt and immutable choices whose opaque
 identities are returned on commit but never rendered as picker identities.
+The presentation defaults to `STANDARD`. `/settings` explicitly chooses
+`FORM` for its own pickers and prompts and passes that presentation when it
+borrows authentication; invoking global `/auth` directly remains standard.
 
 `Choice` has an additive package-internal `description_role` field whose
 default is `SemanticRole.DEFAULT`. Existing callers therefore retain their
@@ -1270,15 +1305,23 @@ prior selection. Configured VINTR/Ctrl-C and VEOF/physical EOF return the typed
 `interrupt` and `eof` outcomes. Other edit and completion keys do nothing and
 the picker never owns main completion state.
 
-Live rendering shows a contiguous viewport of at most seven choices and
-re-observes capability and width on each redraw. Selection and highlight may
+Existing standard consumers retain the default seven-choice contiguous viewport
+and re-observe capability and width on each redraw. Selection and highlight may
 appear simultaneously on one row; a selected choice outside the viewport is
-summarized by ordinal and label. Choice-set reconciliation preserves enabled
-selection and highlight by identity when possible and deterministically finds
-the next enabled highlight when not. Opaque identities remain absent from
-plain, fixed-ANSI, `NO_COLOR`, narrow, and fallback text.
+summarized by ordinal and label. The validated one-to-nine limit is independent
+of presentation; Settings is the only current caller overriding the default.
+Nested Settings controls retain seven, and the Settings root uses its complete
+clean/dirty count of seven or nine. Form selection outside a nested window is
+summarized as `Selected: N. LABEL`.
+Choice-set reconciliation preserves enabled selection and highlight by identity
+when possible and deterministically finds the next enabled highlight when not.
+Opaque identities remain absent from plain, fixed-ANSI, `NO_COLOR`, narrow, and
+fallback text.
 
-Line fallback renders every choice as a numbered row and accepts only:
+Line fallback renders every choice as a numbered row. Standard presentation
+retains its established guidance and prompt; form presentation ends with
+`Enter a choice number, press Enter for the active choice, or enter /cancel.`
+and `Choice > `. Both accept only:
 
 - exact `/cancel`, which cancels;
 - a blank line when an enabled choice is highlighted, which commits that

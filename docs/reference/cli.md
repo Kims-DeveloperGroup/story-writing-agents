@@ -813,6 +813,11 @@ Persona, Maximum debate rounds, Conversation storage, Conversation RAG,
 Message details, and Agents. A clean root shows exactly those seven choices in
 that order, with no persistence action or save guidance. Dirty state appends
 `Apply Changes (*Required)` and then `Discard Changes`, for nine choices.
+The clean root's current rendered frame contains all seven rows; the dirty
+root's current frame contains all nine rows regardless of the active choice.
+This describes the complete live redraw or fallback prompt in terminal
+scrollback, not a guarantee that the physical terminal height shows every row
+without scrolling. Nested Settings catalogs retain a seven-row window.
 Conversation storage
 independently offers Filesystem and SQLite for the next shell; it is not an
 agent-provider route. Conversation RAG opens a nested editor with Provider
@@ -838,6 +843,19 @@ These summaries use only already validated local Settings and backend state;
 rendering them does not authenticate, discover a provider catalog, persist a
 value, or invoke a story provider.
 
+Every picker and text/number input reached through `/settings`, including a
+Provider editor's subordinate authentication picker, uses the Settings form
+presentation. It separates the current-view title, optional `Context:`,
+guidance, choices, stacked descriptions, notices, current value, and editable
+value. With an active row, a picker heading is `Choices N/M`, using its absolute
+ordinal and the complete choice count; without one, it is `Choices M`. It
+contains no shown-range text. `>` marks the active row, `(selected)` marks the selected value, and
+unavailable choices show `(disabled)` plus `Disabled: REASON`. The form omits
+`[available]`, `[highlighted]`, `[focused]`, and `[open]`, and does not build a
+breadcrumb title. Global `/auth`, omitted-resume selection, and every other
+generic picker retain the standard presentation and seven-row window. ANSI
+color reinforces these textual facts but never replaces them.
+
 At the Settings root, each one-level value, including Conversation storage,
 Conversation RAG, and Message details, shows one effective description: neutral
 `Current` when unchanged or warning-semantic `Pending` when changed. Agents
@@ -858,6 +876,11 @@ remain pending in memory and are not saved; choose Apply Changes in Settings to
 persist them.` The text is present on initial entry, after a valid Enter reopens
 the editor, and during validation. The established entered-value success result
 remains unchanged and is still the only inline completed result.
+Maximum debate rounds and Custom model render the view name and optional
+`Context:` first, guidance next, validation or completed context when present,
+then `Current value: VALUE` and the final `New value > ` input. The initial
+editable value, exact validation, retained-commit behavior, and fallback input
+semantics are unchanged.
 
 The dirty top-level Settings picker shows `[save required] Choose Apply Changes to persist
 pending changes` if and only if the

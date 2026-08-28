@@ -2308,11 +2308,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   `InteractiveAuthResult`, exact `InteractiveAuthResultKind` outcomes,
   `InteractiveAuthCoordinator`, and pure `select_default_provider` policy are
   consumed by CLI and controller orchestration without entering either package
-  facade.
+  facade. The coordinator's additive internal picker-presentation keyword
+  defaults to the standard layout and accepts the terminal's validated form
+  layout without changing authentication, selection, or native-login results.
 - **Direct internal dependencies:** `interactive_terminal` and `provider_auth`.
 - **State, resources, and side effects:** The coordinator retains borrowed
   authentication and terminal collaborators plus a resource-free picker and
-  startup-presentation adapter. Each full or selected native-status probe runs
+  startup-presentation adapter. Each `run` call forwards its validated
+  call-local presentation to that picker and retains none of it afterward; the
+  global authentication flow omits it and therefore remains standard, while
+  Settings explicitly supplies form presentation. Each full or selected
+  native-status probe runs
   in a bounded local Runner/default-executor span under terminal-owned progress;
   callback and incapable terminals remain silent. It projects stable Codex and Antigravity rows
   with explicit authenticated, unauthenticated, unavailable, and indeterminate
@@ -2534,9 +2540,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   numbered in line fallback, and its selected identity is freshly validated.
   An empty result or read failure emits its applicable result or error without
   opening the picker. The submitted omitted main line's history eligibility is
-  independent of that post-submit outcome. Settings continues to consume picker
-  and prompt adapters for its call-local edit flow. When the optional
-  coordinator is supplied, global `/auth`, provider-status choices,
+  independent of that post-submit outcome. Settings explicitly selects the
+  terminal's form presentation for every controller-owned picker and
+  cancellable value prompt through its private helpers, and for either borrowed
+  authentication picker through the coordinator's call-local presentation
+  seam; no prompt-title or scope inference is used. The clean root requests its
+  complete seven-row viewport, while a dirty
+  candidate requests all nine rows so Apply Changes and Discard Changes remain
+  visible; nested settings catalogs retain the standard seven-row limit. When
+  the optional coordinator is supplied, global `/auth`, provider-status choices,
   authenticated route assignment, missing-default coordination, and a fresh
   effective-route authentication gate before dirty settings Apply Changes use
   that borrowed collaborator. The controller owns no native authentication child, cursor
@@ -3144,9 +3156,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   use, and the existing `Field`, `ListView`,
   `Message`, `Notice`, `Panel`, `Record`, `Section`, `SemanticRole`, and
   `ViewState` contracts are likewise facade-bound but omitted from `__all__`.
-  Unlisted `MessagePresentation` and `SpeakerAccent` additionally bind the
-  internal inline/chat-block layout and fixed speaker-accent contracts without
-  becoming supported exports. `Message` retains exact inline compatibility and
+  Unlisted `InputPresentation`, `MessagePresentation`, and `SpeakerAccent`
+  additionally bind the internal standard/form input-layout,
+  inline/chat-block layout, and fixed speaker-accent contracts without becoming
+  supported exports. `Message` retains exact inline compatibility and
   accepts only additive keyword-only presentation, optional metadata, and
   accent values; `ListView` accepts messages alongside its established record
   and field rows. These bindings support count-aware dense semantic and
@@ -3187,8 +3200,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `InteractivePickerInput`, `Choice`, `Picker`, `Prompt`, `ControlOutcome`, and
   `ControlOutcomeKind` bindings provide one resource-free generic picker input
   boundary without exposing opaque choice identities, terminal leaves, or a
-  new package-supported API. Existing `Choice` values may carry one optional
-  validated plain warning suffix plus an additive keyword-only validated
+  new package-supported API. Its additive package-internal presentation and
+  visible-choice-limit keywords default to the exact established standard
+  layout and seven-row live viewport; the explicit form layout accepts the same
+  validated one-through-nine bound. Existing `Choice` values may carry one
+  optional validated plain warning suffix plus an additive keyword-only validated
   semantic description role whose default preserves established construction
   and rendering. Capable ANSI independently decorates the warning suffix and
   description across wrapped rows only when no disabled, selected, or
@@ -3196,7 +3212,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   projections retain the exact same text. The exact 12-name `__all__` remains
   unchanged, and this adds no supported facade export. Unlisted
   `InteractivePromptInput` binds one
-  resource-free semantic cancellable-line capability for nested settings input;
+  resource-free semantic cancellable-line capability whose additive internal
+  presentation keyword defaults to the established standard layout and permits
+  explicit form rendering for nested settings input;
   callback and stream factories respectively provide deterministic plain and
   sole-driver-backed implementations without changing the exact public
   `__all__`. The installed main, subject, composition, confirmation, picker, and
@@ -3269,14 +3287,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   design-component contract outside the general `Component` union, the closed
   `Prompt`, `Panel`, `Section`, `Field`, `Notice`, `Message`, `Record`,
   `ListView`, `SuggestionPalette`, and `Picker` component vocabulary, internal
-  `MessagePresentation` inline/chat-block and `SpeakerAccent`
+  `InputPresentation` standard/form, `MessagePresentation` inline/chat-block,
+  and `SpeakerAccent`
   magenta/cyan/yellow/green/blue enums, additive keyword-only message
   presentation, optional metadata, and accent values whose defaults preserve
   exact inline construction and rendering, message-capable list rows, shared
   `Choice` with its optional keyword-only validated plain `warning_suffix` and
   additive keyword-only validated `SemanticRole` description metadata,
-  `RenderedFrame`, internal `InputPromptView` with an optional keyword-only
-  exact one-line initial value, and
+  `RenderedFrame`, internal `InputPromptView` with additive keyword-only
+  standard/form presentation plus an optional exact one-line initial value, and
   `RenderedInputFrame` transfer contracts outside the closed component
   vocabulary, terminal-text sanitization, and deterministic physical-cell
   measurement.
@@ -3289,11 +3308,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   buffer/cursor snapshot, and restored-state latch without owning projection or
   I/O. The ranged-source namespace reuses that same main-command palette state;
   it introduces no second live picker state. Picker-control values retain one
-  validated semantic picker and its
-  call-local window origin, while viewport values carry one contiguous
-  at-most-seven-choice slice; stable choice identities remain internal
-  correlation keys. A message owns only validated attributed text and immutable
-  presentation metadata; it performs no sanitization or layout and its default
+  validated semantic picker and its call-local window origin. A picker carries
+  one validated standard/form presentation discriminator and a bounded
+  one-through-nine visible-choice limit whose default is seven, while viewport
+  values carry one contiguous slice within that exact limit; stable choice
+  identities remain internal correlation keys. A message owns only validated
+  attributed text and immutable presentation metadata; it performs no
+  sanitization or layout and its default
   cyan accent has no effect under the default inline presentation. A choice
   owns its immutable warning-suffix and description-
   role semantics but no styling or control precedence. Composer values retain exact accepted lines
@@ -3368,7 +3389,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `transition_picker_fallback`, and `project_picker_viewport` own the pure
   generic single-select lifecycle: deterministic enabled highlight selection,
   stable-identity refresh, disabled-row skipping with clamped navigation,
-  minimal at-most-seven-row window movement, exact numbered or blank fallback
+  minimal movement within each picker's validated visible-choice limit, exact
+  numbered or blank fallback
   commit, `/cancel`, and one semantic rejected-attempt notice. Choice identities
   are correlation-only and never become presentation text. Composition
   suggestions remain preview-only and nonselectable.
@@ -3396,14 +3418,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   of the allowed decorative SGR vocabulary, semantic state labels, physical-cell
   wrapping, narrow-layout stacking, explicit empty/selection cues, and trusted
   semantic input rendering with equivalent plain and styled projections.
-  Opted-in prefilled prompts add one sanitized `Current value` field after all
-  supplied context and before the focused prompt in every layout and profile.
-  `render_picker_viewport` renders at most seven numbered live choices with
-  absolute position/range facts, simultaneous selected and highlighted cues,
-  and an ordinal/label-only selected-outside-window summary;
-  `render_picker_fallback` renders the complete numbered list and semantic input
-  prompt. Both keep opaque identities internal and preserve equivalent
-  sanitized plain and fixed-ANSI meaning. Their generalized segment-aware
+  Standard presentation remains the exact established default: opted-in
+  prefilled prompts add one sanitized `Current value` field after all supplied
+  context and before the focused prompt, and `render_picker_viewport` renders
+  numbered live choices with the default seven-row limit, absolute
+  position/range facts, simultaneous selected and highlighted cues, plus an ordinal/label-only
+  selected-outside-window summary. Explicit form presentation instead separates
+  heading, context, guidance, current value, choices, descriptions, and the
+  active input with blank rows; renders the concise absolute `Choices N/M`
+  counter; uses a plain `>` active pointer, `(selected)`, and explicit disabled
+  copy rather than available/highlighted/focused/open labels; and can render the
+  Settings root's bounded nine-row viewport. `render_picker_fallback` renders
+  the complete numbered list and semantic input prompt under the selected
+  presentation. Both layouts keep opaque identities internal and preserve
+  equivalent sanitized plain and fixed-ANSI meaning. Their generalized segment-aware
   physical-cell wrapping projects ordered non-overlapping semantic spans across
   narrow rows, independently preserving an optional warning suffix and an
   optional role-bearing description. Fixed ANSI decorates each span only on
@@ -3925,13 +3953,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   for RUN/CHAT while retaining the established public `compose` behavior and
   signature. Resource-free
   `InteractivePickerInput`
-  validates and initializes one generic picker, then delegates only its
-  immutable control state; callback construction binds deterministic plain
-  complete-list picker input, and stream construction binds the same adapter to
+  validates additive standard/form presentation and one-through-nine
+  visible-choice-limit keywords, initializes one generic picker, then delegates
+  only its immutable control state; callback construction binds deterministic
+  plain complete-list picker input, and stream construction binds the same adapter to
   the sole driver's dedicated picker lifecycle with pure control and rendering
   collaborators. Resource-free `InteractivePromptInput` constructs one existing
-  `InputPromptView` and returns typed commit, nested-cancel, interrupt, or EOF.
-  Its optional keyword-only initial value preserves the unseeded route when
+  `InputPromptView` from an additive standard/form presentation keyword and
+  returns typed commit, nested-cancel, interrupt, or EOF. Its standard default
+  preserves every established caller and rendering path. Its optional
+  keyword-only initial value preserves the unseeded route when
   omitted, seeds capable editing, and substitutes only an exact-empty borrowed
   fallback result; callback and stream construction bind it to plain or driver-owned input
   without adding a component kind or raw resource owner. The picker and prompt

@@ -13,6 +13,7 @@ from .interactive_terminal import (
     Choice,
     ControlOutcomeKind,
     InteractiveAdvisoryProgress,
+    InputPresentation,
     InteractivePickerInput,
     InteractiveStartupPresentation,
     InteractiveTerminal,
@@ -210,10 +211,13 @@ class InteractiveAuthCoordinator:
         self,
         snapshot: ProviderAuthSnapshot | None = None,
         *,
+        presentation: InputPresentation = InputPresentation.STANDARD,
         selected_provider: str | None = None,
     ) -> InteractiveAuthResult:
         """Read one picker and optionally perform one explicit native login."""
 
+        if not isinstance(presentation, InputPresentation):
+            raise TypeError("presentation must be an InputPresentation")
         if snapshot is None:
             snapshot = self.probe_all()
         else:
@@ -240,6 +244,7 @@ class InteractiveAuthCoordinator:
                 ),
             ),
             choices,
+            presentation=presentation,
             highlighted_id=selected_id,
             selected_id=selected_id,
             notice=Notice(
