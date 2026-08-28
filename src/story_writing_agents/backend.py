@@ -601,13 +601,84 @@ class BoundAgent:
         if finalize:
             self.backend._finalize_bound_agent(self)
 
-    def _context_provider(
+    def context_provider(
         self,
         reference_read: ReferenceReadInvocation | None = None,
     ) -> ContextProvider:
         """Return the package-internal physical seam for contextual execution."""
 
         return _BoundContextProvider(self, reference_read)
+
+    def _context_provider(
+        self,
+        reference_read: ReferenceReadInvocation | None = None,
+    ) -> ContextProvider:
+        """Compatibility delegate for the original package-internal seam."""
+
+        return self.context_provider(reference_read)
+
+    def decode_context_conversation_answer(
+        self,
+        request: ConversationRequest,
+        text: str,
+    ) -> ConversationReply:
+        """Purely decode one correlated contextual conversation answer."""
+
+        validated = self._validated_conversation_request(request)
+        return self.backend._decode_conversation_reply(
+            validated,
+            text,
+            provider_name=("Codex" if self.vendor == "codex" else "Antigravity"),
+        )
+
+    def decode_context_retrieval_answer(
+        self,
+        request: ConversationRetrievalRequest,
+        text: str,
+    ) -> ConversationRetrievalAnswerAction:
+        """Purely decode one terminal contextual retrieval envelope."""
+
+        validated = self._validated_conversation_retrieval_request(request)
+        action = self.backend._decode_conversation_retrieval_action(
+            text,
+            provider_name=("Codex" if self.vendor == "codex" else "Antigravity"),
+        )
+        if type(action) is not ConversationRetrievalAnswerAction or (
+            action.session_id != validated.session_id
+            or action.conversation_id != validated.conversation_id
+            or action.turn_id != validated.turn_id
+        ):
+            raise BackendProtocolError(
+                "contextual retrieval answer does not match its request"
+            )
+        return action
+
+    def decode_context_agent_answer(
+        self,
+        request: AgentRequest,
+        text: str,
+    ) -> AgentReply:
+        """Purely decode one phase- and revision-correlated debate answer."""
+
+        if type(request) is not AgentRequest or (
+            request.agent_id != self.definition.agent_id
+            or type(request.phase) is not Phase
+            or type(request.revision_id) is not str
+            or not request.revision_id
+        ):
+            raise BackendProtocolError(
+                "agent request is invalid for contextual answer decoding"
+            )
+        reply = self.backend._decode_reply(
+            request.phase,
+            text,
+            provider_name=("Codex" if self.vendor == "codex" else "Antigravity"),
+        )
+        if reply.revision_id != request.revision_id:
+            raise BackendProtocolError(
+                "contextual agent answer revision does not match its request"
+            )
+        return reply
 
     async def invoke(
         self,

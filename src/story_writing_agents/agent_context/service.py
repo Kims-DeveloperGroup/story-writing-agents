@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import inspect
 import json
 import secrets
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
@@ -61,6 +62,7 @@ from .planning import (
     DEFAULT_CONTEXT_PLANNING_POLICY,
     MAX_MANDATORY_REFERENCE_RESERVATION_UTF8_BYTES,
     ContextDeliveryMode,
+    ContextDecisionKind,
     ContextMaterial,
     MandatoryReferenceReservation,
     ContextPlanningConditions,
@@ -130,6 +132,64 @@ class ContextInvocationState(StrEnum):
     READING = "reading"
     ANSWER_AUTHORIZED = "answer_authorized"
     FAILED = "failed"
+
+
+class ContextExecutionEventKind(StrEnum):
+    """Content-free lifecycle facts emitted by contextual execution."""
+
+    BOOTSTRAP = "bootstrap"
+    DELTA = "delta"
+    OMISSION = "omission"
+    SEARCH_STARTED = "search_started"
+    SEARCH_COMPLETED = "search_completed"
+    READ_STARTED = "read_started"
+    READ_COMPLETED = "read_completed"
+    ANSWER_AUTHORIZED = "answer_authorized"
+    INVALIDATED = "invalidated"
+    BUDGET_EXHAUSTED = "budget_exhausted"
+    ACTION_EXHAUSTED = "action_exhausted"
+    TAINTED = "tainted"
+    CHECKPOINT_ADVANCED = "checkpoint_advanced"
+    CHECKPOINT_NOT_ADVANCED = "checkpoint_not_advanced"
+
+
+@dataclass(frozen=True, slots=True)
+class ContextExecutionEvent:
+    """One typed lifecycle event containing counts and identities only."""
+
+    kind: ContextExecutionEventKind
+    scope: ContextScope
+    action_index: int | None = None
+    source_count: int = 0
+    search_hit_count: int = 0
+    transcript_turn_count: int = 0
+    transcript_event_count: int = 0
+    observation_utf8_bytes: int = 0
+    truncated: bool = False
+
+    def __post_init__(self) -> None:
+        if type(self.kind) is not ContextExecutionEventKind or type(
+            self.scope
+        ) is not ContextScope:
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        if self.action_index is not None and (
+            type(self.action_index) is not int or self.action_index < 1
+        ):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        for value in (
+            self.source_count,
+            self.search_hit_count,
+            self.transcript_turn_count,
+            self.transcript_event_count,
+            self.observation_utf8_bytes,
+        ):
+            if type(value) is not int or value < 0:
+                raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        if type(self.truncated) is not bool:
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+
+
+ContextExecutionEventSink = Callable[[ContextExecutionEvent], None]
 
 
 def _action_error(code: ContextActionErrorCode) -> ContextActionError:
@@ -333,6 +393,75 @@ class ContextExecutionError(ValueError):
 
 def _execution_error(code: ContextExecutionErrorCode) -> ContextExecutionError:
     return ContextExecutionError(code)
+
+
+def _validate_sync_callback(value: object, *, optional: bool = True) -> None:
+    if value is None and optional:
+        return
+    if not callable(value):
+        raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+    call = getattr(value, "__call__", None)
+    if (
+        inspect.iscoroutinefunction(value)
+        or inspect.isasyncgenfunction(value)
+        or inspect.iscoroutinefunction(call)
+        or inspect.isasyncgenfunction(call)
+    ):
+        raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+
+
+def _require_sync_none(value: object) -> None:
+    if inspect.isawaitable(value):
+        if inspect.iscoroutine(value):
+            value.close()
+        raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+    if inspect.isasyncgen(value) or value is not None:
+        raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+
+
+def _emit_context_event(
+    sink: ContextExecutionEventSink | None,
+    event: ContextExecutionEvent,
+) -> None:
+    if sink is None:
+        return
+    _require_sync_none(sink(event))
+
+
+def _emit_context_event_without_replacing(
+    sink: ContextExecutionEventSink | None,
+    event: ContextExecutionEvent,
+) -> None:
+    """Best-effort emit after an authoritative outcome already exists."""
+
+    try:
+        _emit_context_event(sink, event)
+    except BaseException:
+        pass
+
+
+def _conversation_read_counts(
+    observation: ContextReadObservation,
+) -> tuple[int, int]:
+    """Count complete conversation pairs without retaining or emitting bodies."""
+
+    turns = 0
+    for evidence in observation.evidence:
+        receipt = evidence.receipt
+        if receipt.source_kind is not ContextSourceKind.CONVERSATION:
+            continue
+        if receipt.boundary.kind is ContextSourceBoundaryKind.CONVERSATION_TURNS:
+            turns += 1
+            continue
+        if receipt.boundary.kind is not ContextSourceBoundaryKind.WHOLE:
+            continue
+        try:
+            value = json.loads(evidence.content)
+        except (json.JSONDecodeError, RecursionError, TypeError, UnicodeError):
+            continue
+        if type(value) is dict and type(value.get("pairs")) is list:
+            turns += len(value["pairs"])
+    return turns, turns * 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -2148,7 +2277,7 @@ class AgentContextService:
             return ContextLedgerAttemptOutcome.MALFORMED
         if stage in {"source", "source_revalidation"}:
             return ContextLedgerAttemptOutcome.SOURCE_INVALID
-        if stage == "answer":
+        if stage in {"answer", "answer_validation"}:
             return ContextLedgerAttemptOutcome.OUTPUT_INVALID
         if stage in {"reference", "reference_complete"}:
             return ContextLedgerAttemptOutcome.REFERENCE_INVALID
@@ -2198,11 +2327,16 @@ class AgentContextService:
         focused_conversation: FocusedConversationSourceAdapter,
         active_debate: ActiveDebateSourceAdapter,
         own_agent_state: OwnAgentStateSourceAdapter,
+        answer_validator: Callable[[str, ContextAnswerAuthorization], object]
+        | None = None,
+        event_sink: ContextExecutionEventSink | None = None,
     ) -> ContextInvocationResult:
         """Execute one complete contextual lifecycle under its exact scope lock."""
 
         if type(request) is not ContextInvocationRequest:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        _validate_sync_callback(answer_validator)
+        _validate_sync_callback(event_sink)
         provider_id, definition_fingerprint = self._provider_identity(provider)
         reference_operation_id = getattr(provider, "reference_operation_id", None)
         if reference_operation_id != request.reference_operation_id:
@@ -2228,6 +2362,8 @@ class AgentContextService:
                     focused_conversation=focused_conversation,
                     active_debate=active_debate,
                     own_agent_state=own_agent_state,
+                    answer_validator=answer_validator,
+                    event_sink=event_sink,
                 )
 
     async def _invoke_locked(
@@ -2242,6 +2378,9 @@ class AgentContextService:
         focused_conversation: FocusedConversationSourceAdapter,
         active_debate: ActiveDebateSourceAdapter,
         own_agent_state: OwnAgentStateSourceAdapter,
+        answer_validator: Callable[[str, ContextAnswerAuthorization], object]
+        | None,
+        event_sink: ContextExecutionEventSink | None,
     ) -> ContextInvocationResult:
         policy_fingerprint = self._planning_policy.fingerprint
         key = ContextLedgerKey(scope, provider_id)
@@ -2288,6 +2427,35 @@ class AgentContextService:
                 mandatory_references=request.mandatory_references,
                 fresh=request.fresh,
             )
+            _emit_context_event(
+                event_sink,
+                ContextExecutionEvent(
+                    (
+                        ContextExecutionEventKind.BOOTSTRAP
+                        if projection.mode is ContextDeliveryMode.BOOTSTRAP
+                        else ContextExecutionEventKind.DELTA
+                    ),
+                    scope,
+                    source_count=len(projection.decisions),
+                ),
+            )
+            omitted_count = sum(
+                decision.decision
+                in {
+                    ContextDecisionKind.OMITTED_CLASS_BUDGET,
+                    ContextDecisionKind.OMITTED_MATERIAL,
+                }
+                for decision in projection.decisions
+            )
+            if omitted_count:
+                _emit_context_event_without_replacing(
+                    event_sink,
+                    ContextExecutionEvent(
+                        ContextExecutionEventKind.OMISSION,
+                        scope,
+                        source_count=omitted_count,
+                    ),
+                )
             attempt_id = _attempt_identifier()
             proposal_digest = context_checkpoint_proposal_digest(
                 projection.checkpoint_proposal
@@ -2568,17 +2736,62 @@ class AgentContextService:
                 if type(action) is ContextSearchAction:
                     stage = "action"
                     history_advanced = True
+                    _emit_context_event(
+                        event_sink,
+                        ContextExecutionEvent(
+                            ContextExecutionEventKind.SEARCH_STARTED,
+                            scope,
+                            action_index=action_index,
+                        ),
+                    )
                     search_observation = action_session.search(action)
                     observation = serialize_context_action_observation(
                         search_observation
+                    )
+                    _emit_context_event(
+                        event_sink,
+                        ContextExecutionEvent(
+                            ContextExecutionEventKind.SEARCH_COMPLETED,
+                            scope,
+                            action_index=action_index,
+                            search_hit_count=len(search_observation.hits),
+                            observation_utf8_bytes=len(
+                                observation.encode("utf-8", errors="strict")
+                            ),
+                            truncated=search_observation.truncated,
+                        ),
                     )
                     continue
                 if type(action) is ContextReadAction:
                     stage = "action"
                     history_advanced = True
+                    _emit_context_event(
+                        event_sink,
+                        ContextExecutionEvent(
+                            ContextExecutionEventKind.READ_STARTED,
+                            scope,
+                            action_index=action_index,
+                        ),
+                    )
                     read_observation, pending_read = action_session.read(action)
                     observation = serialize_context_action_observation(
                         read_observation
+                    )
+                    turn_count, event_count = _conversation_read_counts(
+                        read_observation
+                    )
+                    _emit_context_event(
+                        event_sink,
+                        ContextExecutionEvent(
+                            ContextExecutionEventKind.READ_COMPLETED,
+                            scope,
+                            action_index=action_index,
+                            transcript_turn_count=turn_count,
+                            transcript_event_count=event_count,
+                            observation_utf8_bytes=len(
+                                observation.encode("utf-8", errors="strict")
+                            ),
+                        ),
                     )
                     continue
 
@@ -2602,6 +2815,17 @@ class AgentContextService:
                     or revalidated_materials != materials
                 ):
                     raise ContextSourceError(ContextSourceErrorCode.SOURCE_DRIFT)
+                stage = "answer_validation"
+                if answer_validator is not None:
+                    _require_sync_none(answer_validator(action.answer, authorization))
+                _emit_context_event(
+                    event_sink,
+                    ContextExecutionEvent(
+                        ContextExecutionEventKind.ANSWER_AUTHORIZED,
+                        scope,
+                        action_index=action_index,
+                    ),
+                )
                 if request.mandatory_references:
                     stage = "reference_complete"
                     provider.complete_references(scope, policy_fingerprint)
@@ -2628,6 +2852,13 @@ class AgentContextService:
                     ),
                 )
                 terminal_provider_succeeded = False
+                _emit_context_event_without_replacing(
+                    event_sink,
+                    ContextExecutionEvent(
+                        ContextExecutionEventKind.CHECKPOINT_ADVANCED,
+                        scope,
+                    ),
+                )
                 return ContextInvocationResult(
                     action.answer,
                     authorization,
@@ -2639,6 +2870,37 @@ class AgentContextService:
             stage = "exhausted"
             raise _execution_error(ContextExecutionErrorCode.ACTION_EXHAUSTED)
         except BaseException as failure:
+            if isinstance(failure, ContextSourceError) or stage in {
+                "source",
+                "source_revalidation",
+            }:
+                _emit_context_event_without_replacing(
+                    event_sink,
+                    ContextExecutionEvent(
+                        ContextExecutionEventKind.INVALIDATED,
+                        scope,
+                    ),
+                )
+            failure_code = getattr(getattr(failure, "code", None), "value", "")
+            if isinstance(failure_code, str) and (
+                "budget_exceeded" in failure_code
+                or "limit_exceeded" in failure_code
+            ):
+                _emit_context_event_without_replacing(
+                    event_sink,
+                    ContextExecutionEvent(
+                        ContextExecutionEventKind.BUDGET_EXHAUSTED,
+                        scope,
+                    ),
+                )
+            if stage == "exhausted":
+                _emit_context_event_without_replacing(
+                    event_sink,
+                    ContextExecutionEvent(
+                        ContextExecutionEventKind.ACTION_EXHAUSTED,
+                        scope,
+                    ),
+                )
             if action_session is not None:
                 try:
                     action_session.fail()
@@ -2660,16 +2922,24 @@ class AgentContextService:
                     )
                 except BaseException:
                     pass
-            if self._should_taint_context(
+            should_taint = self._should_taint_context(
                 failure,
                 outcome,
                 history_advanced=history_advanced,
                 terminal_provider_succeeded=terminal_provider_succeeded,
-            ):
+            )
+            if should_taint:
                 try:
                     provider.taint_context_thread(scope, policy_fingerprint)
                 except BaseException:
                     pass
+                _emit_context_event_without_replacing(
+                    event_sink,
+                    ContextExecutionEvent(
+                        ContextExecutionEventKind.TAINTED,
+                        scope,
+                    ),
+                )
             if attempt_id is not None and generation is not None:
                 try:
                     self._ledger.taint_attempt(
@@ -2680,4 +2950,11 @@ class AgentContextService:
                     )
                 except BaseException:
                     pass
+            _emit_context_event_without_replacing(
+                event_sink,
+                ContextExecutionEvent(
+                    ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED,
+                    scope,
+                ),
+            )
             raise

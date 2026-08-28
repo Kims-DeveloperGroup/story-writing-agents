@@ -11,11 +11,13 @@ from pathlib import PurePosixPath
 
 from ..conversations import (
     ConversationCatalog,
+    ConversationContextWindow,
     ConversationEvent,
     ConversationEventKind,
     ConversationEventStore,
     ConversationMetadata,
     ConversationStatus,
+    validate_conversation_context_window,
 )
 from ..errors import (
     ConversationNotFoundError,
@@ -247,7 +249,11 @@ def _structured_source_id(prefix: str, identity: str) -> str:
     return f"{prefix}:{identity}"
 
 
-def _writing_artifact_source_id(path: str) -> str:
+def writing_artifact_source_id(path: str) -> str:
+    """Return the canonical content-free source identity for an artifact path."""
+
+    if not _artifact_locator_is_lexically_safe(path):
+        raise _source_error(ContextSourceErrorCode.SOURCE_UNSAFE)
     digest = hashlib.sha256(path.encode("utf-8", errors="strict")).hexdigest()
     return f"writing_artifact:sha256:{digest}"
 
@@ -388,7 +394,7 @@ class ContextSourceDescriptor:
                 eligible = reference_source_kind(locator) is not None
             except (TypeError, ValueError):
                 pass
-            exact_identity = self.source_id == _writing_artifact_source_id(locator)
+            exact_identity = self.source_id == writing_artifact_source_id(locator)
         elif self.source_kind is ContextSourceKind.CONVERSATION:
             identity = self.source_id.removeprefix("conversation:")
             eligible = self.source_id == _structured_source_id(
@@ -495,7 +501,7 @@ class ContextSourceSnapshot:
             )
             if (
                 self.descriptor.source_id
-                != _writing_artifact_source_id(self.descriptor.provenance.locator)
+                != writing_artifact_source_id(self.descriptor.provenance.locator)
                 or tuple(record.boundary for record in self.records) != expected
                 or any(record.search_text != record.content for record in self.records)
                 or reconstructed != self.content
@@ -514,15 +520,18 @@ class ContextSourceSnapshot:
         if self.descriptor.revision != self.descriptor.content_digest:
             raise _source_error(ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION)
         if self.descriptor.source_kind is ContextSourceKind.CONVERSATION:
-            if type(parsed) is not dict or set(parsed) != {"metadata", "pairs"}:
+            if type(parsed) is not dict or frozenset(parsed) not in {
+                frozenset({"metadata", "pairs"}),
+                frozenset({"pairs", "window"}),
+            }:
                 raise _source_error(
                     ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
                 )
             metadata = parsed.get("metadata")
             pairs = parsed.get("pairs")
-            if (
-                type(metadata) is not dict
-                or set(metadata) != {
+            conversation_id: object
+            if metadata is not None:
+                if type(metadata) is not dict or set(metadata) != {
                     "conversation_id",
                     "created_at",
                     "schema_version",
@@ -531,16 +540,42 @@ class ContextSourceSnapshot:
                     "subject",
                     "subject_revision",
                     "updated_at",
-                }
-                or metadata.get("session_id") != self.descriptor.scope.session_id
-                or metadata.get("status") != ConversationStatus.ACTIVE.value
-                or self.descriptor.source_id
-                != _structured_source_id(
-                    "conversation",
-                    str(metadata.get("conversation_id")),
+                }:
+                    raise _source_error(
+                        ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
+                    )
+                conversation_id = metadata.get("conversation_id")
+                valid_context_identity = (
+                    metadata.get("session_id") == self.descriptor.scope.session_id
+                    and metadata.get("status") == ConversationStatus.ACTIVE.value
                 )
+            else:
+                window = parsed.get("window")
+                prefix = "conversation/"
+                locator = self.descriptor.provenance.locator
+                conversation_id = (
+                    locator[len(prefix):] if locator.startswith(prefix) else None
+                )
+                valid_context_identity = bool(
+                    type(window) is dict
+                    and set(window)
+                    == {"omitted_turns", "total_complete_turns", "truncated"}
+                    and type(window.get("omitted_turns")) is int
+                    and window.get("omitted_turns", -1) >= 0
+                    and type(window.get("total_complete_turns")) is int
+                    and window.get("total_complete_turns", -1)
+                    >= window.get("omitted_turns", 0)
+                    and type(window.get("truncated")) is bool
+                    and window.get("truncated")
+                    is (window.get("omitted_turns", 0) > 0)
+                )
+            if (
+                not valid_context_identity
+                or type(conversation_id) is not str
+                or self.descriptor.source_id
+                != _structured_source_id("conversation", conversation_id)
                 or self.descriptor.provenance.locator
-                != f"conversation/{metadata.get('conversation_id')}"
+                != f"conversation/{conversation_id}"
                 or type(pairs) is not list
                 or len(pairs) != len(self.records)
             ):
@@ -583,10 +618,8 @@ class ContextSourceSnapshot:
                 if (
                     user.get("session_id") != self.descriptor.scope.session_id
                     or reply.get("session_id") != self.descriptor.scope.session_id
-                    or user.get("conversation_id")
-                    != metadata.get("conversation_id")
-                    or reply.get("conversation_id")
-                    != metadata.get("conversation_id")
+                    or user.get("conversation_id") != conversation_id
+                    or reply.get("conversation_id") != conversation_id
                     or user.get("kind") != ConversationEventKind.USER_MESSAGE.value
                     or reply.get("kind") != ConversationEventKind.AGENT_REPLY.value
                     or reply.get("sender") != user.get("recipient")
@@ -948,7 +981,7 @@ class WritingArtifactSourceAdapter:
         )
         descriptor = _descriptor(
             scope=self.scope,
-            source_id=_writing_artifact_source_id(locator),
+            source_id=writing_artifact_source_id(locator),
             source_kind=self.source_kind,
             revision=revision,
             provenance=provenance,
@@ -973,7 +1006,7 @@ class WritingArtifactSourceAdapter:
 
 
 class FocusedConversationSourceAdapter:
-    """Capture one exact focused same-session visible conversation."""
+    """Capture focused or opt-in active same-session visible conversations."""
 
     source_kind = ContextSourceKind.CONVERSATION
 
@@ -985,6 +1018,8 @@ class FocusedConversationSourceAdapter:
         conversation_id: str | None,
         *,
         excluded_turn_id: str | None = None,
+        include_same_session_active: bool = False,
+        captured_context: ConversationContextWindow | None = None,
     ) -> None:
         if type(scope) is not ContextScope:
             raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
@@ -997,8 +1032,32 @@ class FocusedConversationSourceAdapter:
                 raise _source_error(ContextSourceErrorCode.SCOPE_MISMATCH)
         if excluded_turn_id is not None:
             _safe_identity(excluded_turn_id)
+        if type(include_same_session_active) is not bool:
+            raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
+        if include_same_session_active and conversation_id is None:
+            raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
+        if captured_context is not None:
+            if (
+                type(captured_context) is not ConversationContextWindow
+                or conversation_id is None
+                or excluded_turn_id is not None
+                or include_same_session_active
+            ):
+                raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
+            try:
+                captured_context = validate_conversation_context_window(
+                    captured_context,
+                    session_id=scope.session_id,
+                    conversation_id=conversation_id,
+                )
+            except (TypeError, ValueError):
+                raise _source_error(ContextSourceErrorCode.INVALID_VALUE) from None
         if not callable(getattr(catalog, "get", None)) or not callable(
             getattr(event_store, "read", None)
+        ):
+            raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
+        if include_same_session_active and not callable(
+            getattr(catalog, "list", None)
         ):
             raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
         self._catalog = catalog
@@ -1006,19 +1065,69 @@ class FocusedConversationSourceAdapter:
         self.scope = scope
         self._conversation_id = conversation_id
         self._excluded_turn_id = excluded_turn_id
+        self._include_same_session_active = include_same_session_active
+        self._captured_context = captured_context
 
     def inventory(
         self,
         policy: ContextSourcePolicy,
     ) -> tuple[ContextSourceDescriptor, ...]:
         policy = _require_source_policy(policy)
-        if self._conversation_id is None:
-            return ()
-        return (self.capture(self._locator(), policy).descriptor,)
+        return tuple(
+            self.capture(self._locator(conversation_id), policy).descriptor
+            for conversation_id in self._active_conversation_ids()
+        )
 
-    def _locator(self) -> str:
-        assert self._conversation_id is not None
-        return f"conversation/{self._conversation_id}"
+    @staticmethod
+    def _locator(conversation_id: str) -> str:
+        return f"conversation/{conversation_id}"
+
+    def _active_conversation_ids(self) -> tuple[str, ...]:
+        if self._captured_context is not None or not self._include_same_session_active:
+            return (() if self._conversation_id is None else (self._conversation_id,))
+        raw: tuple[ConversationMetadata, ...] | None = None
+        try:
+            raw = self._catalog.list(
+                self.scope.session_id,
+                include_archived=False,
+            )
+        except (StoryWritingAgentsError, OSError, TypeError, ValueError):
+            pass
+        if type(raw) is not tuple:
+            raise _source_error(ContextSourceErrorCode.SOURCE_UNAVAILABLE)
+        identifiers: list[str] = []
+        for metadata in raw:
+            if type(metadata) is not ConversationMetadata:
+                raise _source_error(
+                    ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
+                )
+            if metadata.session_id != self.scope.session_id:
+                raise _source_error(ContextSourceErrorCode.SCOPE_MISMATCH)
+            if metadata.status is not ConversationStatus.ACTIVE:
+                raise _source_error(
+                    ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
+                )
+            identifiers.append(metadata.conversation_id)
+        if len(set(identifiers)) != len(identifiers):
+            raise _source_error(ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION)
+        if self._conversation_id not in identifiers:
+            raise _source_error(ContextSourceErrorCode.SOURCE_MISSING)
+        return tuple(identifiers)
+
+    def _authorized_conversation_id(self, locator: str) -> str:
+        prefix = "conversation/"
+        if not locator.startswith(prefix):
+            raise _source_error(ContextSourceErrorCode.AUTHORITY_MISMATCH)
+        conversation_id = locator[len(prefix):]
+        try:
+            _safe_identity(conversation_id)
+        except ContextSourceError:
+            raise _source_error(
+                ContextSourceErrorCode.AUTHORITY_MISMATCH
+            ) from None
+        if conversation_id not in self._active_conversation_ids():
+            raise _source_error(ContextSourceErrorCode.AUTHORITY_MISMATCH)
+        return conversation_id
 
     def _capture_once(
         self,
@@ -1026,19 +1135,24 @@ class FocusedConversationSourceAdapter:
         policy: ContextSourcePolicy,
     ) -> ContextSourceSnapshot:
         policy = _require_source_policy(policy)
-        if self._conversation_id is None or locator != self._locator():
-            raise _source_error(ContextSourceErrorCode.AUTHORITY_MISMATCH)
+        conversation_id = self._authorized_conversation_id(locator)
+        if self._captured_context is not None:
+            return self._capture_context_window(
+                conversation_id,
+                locator,
+                policy,
+            )
         metadata: ConversationMetadata | None = None
         events: tuple[ConversationEvent, ...] | None = None
         owner_error: ContextSourceErrorCode | None = None
         try:
             metadata = self._catalog.get(
                 self.scope.session_id,
-                self._conversation_id,
+                conversation_id,
             )
             events = self._event_store.read(
                 self.scope.session_id,
-                self._conversation_id,
+                conversation_id,
             )
         except ConversationNotFoundError:
             owner_error = ContextSourceErrorCode.SOURCE_MISSING
@@ -1050,7 +1164,7 @@ class FocusedConversationSourceAdapter:
             raise _source_error(ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION)
         if (
             metadata.session_id != self.scope.session_id
-            or metadata.conversation_id != self._conversation_id
+            or metadata.conversation_id != conversation_id
         ):
             raise _source_error(ContextSourceErrorCode.SCOPE_MISMATCH)
         if metadata.status is not ConversationStatus.ACTIVE:
@@ -1061,7 +1175,7 @@ class FocusedConversationSourceAdapter:
             if (
                 type(event) is not ConversationEvent
                 or event.session_id != self.scope.session_id
-                or event.conversation_id != self._conversation_id
+                or event.conversation_id != conversation_id
                 or event.sequence != sequence
             ):
                 raise _source_error(
@@ -1094,9 +1208,22 @@ class FocusedConversationSourceAdapter:
                 raise _source_error(
                     ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION
                 )
-        if self._excluded_turn_id is not None:
-            excluded_user = users.get(self._excluded_turn_id)
-            excluded_outcome = outcomes.get(self._excluded_turn_id)
+        excluded_turn_id = (
+            self._excluded_turn_id
+            if conversation_id == self._conversation_id
+            else None
+        )
+        if excluded_turn_id is None and self._include_same_session_active:
+            pending = tuple(
+                user
+                for turn_id, user in users.items()
+                if turn_id not in outcomes
+            )
+            if len(pending) == 1 and pending[0].sequence == len(events):
+                excluded_turn_id = pending[0].turn_id
+        if excluded_turn_id is not None:
+            excluded_user = users.get(excluded_turn_id)
+            excluded_outcome = outcomes.get(excluded_turn_id)
             if excluded_outcome is not None or (
                 excluded_user is not None
                 and excluded_user.sequence != len(events)
@@ -1106,7 +1233,7 @@ class FocusedConversationSourceAdapter:
                 )
         for turn_id, user in users.items():
             outcome = outcomes.get(turn_id)
-            if turn_id == self._excluded_turn_id:
+            if turn_id == excluded_turn_id:
                 continue
             if outcome is None or outcome.sequence <= user.sequence:
                 raise _source_error(
@@ -1118,7 +1245,7 @@ class FocusedConversationSourceAdapter:
             if event.kind is not ConversationEventKind.USER_MESSAGE:
                 continue
             outcome = outcomes.get(event.turn_id)
-            if event.turn_id == self._excluded_turn_id:
+            if event.turn_id == excluded_turn_id:
                 continue
             assert outcome is not None
             if outcome.kind is ConversationEventKind.RUNTIME_ERROR:
@@ -1156,10 +1283,81 @@ class FocusedConversationSourceAdapter:
         )
         descriptor = _descriptor(
             scope=self.scope,
-            source_id=_structured_source_id("conversation", self._conversation_id),
+            source_id=_structured_source_id("conversation", conversation_id),
             source_kind=self.source_kind,
             revision=_digest(body),
             provenance=provenance,
+            content=body,
+            record_count=len(records),
+        )
+        return ContextSourceSnapshot(descriptor, tuple(records), body)
+
+    def _capture_context_window(
+        self,
+        conversation_id: str,
+        locator: str,
+        policy: ContextSourcePolicy,
+    ) -> ContextSourceSnapshot:
+        """Project one caller-captured immutable focused-context window."""
+
+        context = self._captured_context
+        if context is None or conversation_id != self._conversation_id:
+            raise _source_error(ContextSourceErrorCode.AUTHORITY_MISMATCH)
+        outcomes = {
+            event.turn_id: event
+            for event in context.events
+            if event.kind is not ConversationEventKind.USER_MESSAGE
+        }
+        records: list[ContextSourceRecord] = []
+        pairs: list[dict[str, object]] = []
+        for event in context.events:
+            if event.kind is not ConversationEventKind.USER_MESSAGE:
+                continue
+            outcome = outcomes[event.turn_id]
+            if outcome.kind is ConversationEventKind.RUNTIME_ERROR:
+                continue
+            pair = {
+                "agent_reply": outcome.to_dict(),
+                "user_message": event.to_dict(),
+            }
+            pairs.append(pair)
+            content = _canonical_json_bytes(pair).decode("utf-8")
+            records.append(
+                _record(
+                    event.turn_id,
+                    ContextSourceBoundary.conversation_turns(
+                        event.sequence,
+                        outcome.sequence,
+                        event.turn_id,
+                        outcome.turn_id,
+                    ),
+                    content,
+                    f"{event.content}\n{outcome.content}",
+                )
+            )
+        if len(records) > policy.max_records_per_source:
+            raise _source_error(ContextSourceErrorCode.SOURCE_LIMIT_EXCEEDED)
+        body = _canonical_json_bytes(
+            {
+                "pairs": pairs,
+                "window": {
+                    "omitted_turns": context.omitted_turns,
+                    "total_complete_turns": context.total_complete_turns,
+                    "truncated": context.truncated,
+                },
+            }
+        )
+        if len(body) > policy.max_source_utf8_bytes:
+            raise _source_error(ContextSourceErrorCode.SOURCE_LIMIT_EXCEEDED)
+        descriptor = _descriptor(
+            scope=self.scope,
+            source_id=_structured_source_id("conversation", conversation_id),
+            source_kind=self.source_kind,
+            revision=_digest(body),
+            provenance=ContextProvenance(
+                ContextAuthorityKind.CONVERSATION_STORAGE,
+                locator,
+            ),
             content=body,
             record_count=len(records),
         )
@@ -1171,8 +1369,7 @@ class FocusedConversationSourceAdapter:
         policy: ContextSourcePolicy,
     ) -> ContextSourceSnapshot:
         policy = _require_source_policy(policy)
-        if self._conversation_id is None or locator != self._locator():
-            raise _source_error(ContextSourceErrorCode.AUTHORITY_MISMATCH)
+        self._authorized_conversation_id(locator)
         for _attempt in range(2):
             first = self._capture_once(locator, policy)
             second = self._capture_once(locator, policy)
