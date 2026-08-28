@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import errno
+import hashlib
 import inspect
 import json
 import os
@@ -47,6 +48,18 @@ from .agent_context import (
     ProviderCallAccounting,
     ProviderCallKind,
     ProviderCallState,
+)
+from .agent_context.service import (
+    ContextExecutionError,
+    ContextExecutionErrorCode,
+    ContextProvider,
+    ContextProviderCallRequest,
+    ContextProviderCallResult,
+    ContextProviderFailureFacts,
+    ContextReferencePreludeRequest,
+    ContextReferencePreludeResult,
+    ContextScope,
+    record_context_provider_failure,
 )
 from .antigravity_adapter import AntigravityAdapter
 from .config import ConfigurationSnapshot, ConfigManager
@@ -114,9 +127,10 @@ from .provider_adapter import (
     ProviderBinding,
     ProviderInvocation,
     ProviderInvocationError,
+    ProviderResult,
     provider_failure_accounting,
 )
-from .provider_process import stop_process
+from .provider_process import ProcessTimedOut, stop_process
 from .session_lifecycle import (
     SessionAccessState,
     SessionDurableState,
@@ -141,12 +155,16 @@ from .workspace import Workspace
 _SESSION_SCHEMA_VERSION = 2
 _ACCESS_CLAIM_SCHEMA_VERSION = 2
 _SESSION_DIRECTORY = "agent_states/orchestrator_state/provider_sessions"
+_CONTEXT_THREAD_SCHEMA_VERSION = 1
+_CONTEXT_THREAD_DIRECTORY = f"{_SESSION_DIRECTORY}/.contextual/v1"
+_CONTEXT_REFERENCE_TERMINATED_ATTRIBUTE = "_context_reference_terminated"
 _ACCESS_CLAIM_GUARD = f"{_SESSION_DIRECTORY}/.access-claims.lock"
 _UNSUPPORTED_V1_ACCESS_CLAIM_GUARD = f"{_SESSION_DIRECTORY}/.lease-claims.lock"
 _WINDOWS_LOCK_RETRY_SECONDS = 0.05
 _ACCESS_DIAGNOSTIC_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
 _SAFE_THREAD_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 _SAFE_FINGERPRINT = re.compile(r"[0-9a-f]{64}")
+_SAFE_CONTEXT_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 
 _CONVERSATION_RETRIEVAL_RULES = (
     "Return exactly one structured retrieval action with the supplied "
@@ -210,6 +228,258 @@ class BackendRuntimeConfigurationCandidate:
     correlation_id: str
     previous_profiles: Mapping[str, AgentExecutionProfile]
     generation: _AdapterGeneration
+
+
+class _BoundContextProvider:
+    """Bind the service-owned contextual protocol to one backend binding."""
+
+    def __init__(
+        self,
+        bound_agent: BoundAgent,
+        reference_read: ReferenceReadInvocation | None,
+    ) -> None:
+        self._bound_agent = bound_agent
+        self._reference_read = reference_read
+        self._reference_prepared = False
+        self._reference_terminal = False
+        self._active_scope: ContextScope | None = None
+        self._active_policy_fingerprint: str | None = None
+        if reference_read is None:
+            self.reference_operation_id = None
+        else:
+            request = getattr(reference_read, "request", None)
+            methods = (
+                "handle_reference_read_action",
+                "record_result_received",
+                "accept",
+                "terminate",
+            )
+            if type(request) is not ReferenceReadRequest or any(
+                not callable(getattr(reference_read, name, None))
+                for name in methods
+            ):
+                raise TypeError(
+                    "reference_read must provide a synchronous ReferenceReadInvocation"
+                )
+            for name in methods:
+                method = getattr(reference_read, name)
+                method_call = getattr(method, "__call__", None)
+                if (
+                    inspect.iscoroutinefunction(method)
+                    or inspect.isasyncgenfunction(method)
+                    or inspect.iscoroutinefunction(method_call)
+                    or inspect.isasyncgenfunction(method_call)
+                ):
+                    raise TypeError(
+                        "reference_read must provide synchronous lifecycle methods"
+                    )
+            if request.correlation.agent_id != bound_agent.definition.agent_id:
+                raise ReferenceAuthorizationError(
+                    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
+                )
+            self.reference_operation_id = request.correlation.operation_id
+
+    @property
+    def provider_id(self) -> str:
+        return self._bound_agent.vendor
+
+    @property
+    def definition_fingerprint(self) -> str:
+        return f"sha256:{self._bound_agent.definition.fingerprint}"
+
+    @asynccontextmanager
+    async def invocation(
+        self,
+        scope: ContextScope,
+        policy_fingerprint: str,
+    ) -> AsyncIterator[None]:
+        if (
+            type(scope) is not ContextScope
+            or scope.agent_id != self._bound_agent.definition.agent_id
+            or type(policy_fingerprint) is not str
+            or self._active_scope is not None
+        ):
+            raise ContextExecutionError(
+                ContextExecutionErrorCode.PROVIDER_CONTRACT
+            )
+        with self._bound_agent._reference_call_use(self._reference_read):
+            try:
+                lock = self._bound_agent.backend._context_thread_lock(
+                    scope,
+                    self.provider_id,
+                    self.definition_fingerprint,
+                    policy_fingerprint,
+                )
+            except BaseException as failure:
+                self._bound_agent._terminate_reference_before_provider(
+                    self._reference_read,
+                    failure,
+                )
+                raise
+            async with self._bound_agent._reference_thread_lock(
+                lock,
+                self._reference_read,
+            ):
+                self._active_scope = scope
+                self._active_policy_fingerprint = policy_fingerprint
+                try:
+                    yield
+                finally:
+                    self._active_scope = None
+                    self._active_policy_fingerprint = None
+
+    def _require_active(
+        self,
+        scope: ContextScope,
+        policy_fingerprint: str,
+    ) -> None:
+        if (
+            scope != self._active_scope
+            or policy_fingerprint != self._active_policy_fingerprint
+        ):
+            raise ContextExecutionError(
+                ContextExecutionErrorCode.PROVIDER_CONTRACT
+            )
+
+    def inspect_context_thread(
+        self,
+        scope: ContextScope,
+        policy_fingerprint: str,
+    ) -> str | None:
+        self._require_active(scope, policy_fingerprint)
+        return self._bound_agent.backend._load_context_thread(
+            scope,
+            self.provider_id,
+            self.definition_fingerprint,
+            policy_fingerprint,
+        )
+
+    async def prepare_references(
+        self,
+        request: ContextReferencePreludeRequest,
+    ) -> ContextReferencePreludeResult:
+        self._require_active(request.scope, request.policy_fingerprint)
+        if (
+            self._reference_read is None
+            or self._reference_prepared
+            or self._reference_terminal
+            or request.reference_operation_id != self.reference_operation_id
+        ):
+            raise ReferenceAuthorizationError(
+                ReferenceAuthorizationErrorCode.INVALID_TRANSITION
+            )
+        try:
+            result = await self._bound_agent.backend._prepare_context_references(
+                self._bound_agent,
+                self._reference_read,
+                request,
+            )
+        except BaseException as failure:
+            if getattr(
+                failure,
+                _CONTEXT_REFERENCE_TERMINATED_ATTRIBUTE,
+                False,
+            ) is True:
+                self._reference_terminal = True
+            raise
+        self._reference_prepared = True
+        return result
+
+    async def invoke_context(
+        self,
+        request: ContextProviderCallRequest,
+    ) -> ContextProviderCallResult:
+        self._require_active(request.scope, request.policy_fingerprint)
+        return await self._bound_agent.backend._invoke_context_physical(
+            self._bound_agent,
+            scope=request.scope,
+            policy_fingerprint=request.policy_fingerprint,
+            expected_thread_id=request.expected_thread_id,
+            schema=request.schema,
+            payload=request.payload,
+            call_kind=request.call_kind,
+            component_paths=request.component_paths,
+            mandatory_reference_paths=request.mandatory_reference_paths,
+        )
+
+    def complete_references(
+        self,
+        scope: ContextScope,
+        policy_fingerprint: str,
+    ) -> None:
+        self._require_active(scope, policy_fingerprint)
+        if self._reference_read is None:
+            return
+        if not self._reference_prepared or self._reference_terminal:
+            raise ReferenceAuthorizationError(
+                ReferenceAuthorizationErrorCode.INVALID_TRANSITION
+            )
+        try:
+            for name in ("record_result_received", "accept"):
+                outcome = getattr(self._reference_read, name)()
+                if inspect.isawaitable(outcome):
+                    if inspect.iscoroutine(outcome):
+                        outcome.close()
+                    raise BackendProtocolError(
+                        f"reference read {name}() returned an awaitable"
+                    )
+                if inspect.isasyncgen(outcome):
+                    raise BackendProtocolError(
+                        f"reference read {name}() returned an async generator"
+                    )
+                if outcome is not None:
+                    raise BackendProtocolError(
+                        f"reference read {name}() returned a value"
+                    )
+        except BaseException:
+            self._terminate_reference(
+                ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
+            )
+            raise
+        self._reference_terminal = True
+
+    def abort_references(
+        self,
+        scope: ContextScope,
+        policy_fingerprint: str,
+        *,
+        cancelled: bool,
+        provider_failure: bool,
+    ) -> None:
+        self._require_active(scope, policy_fingerprint)
+        if self._reference_read is None or self._reference_terminal:
+            return
+        if cancelled:
+            outcome = ReferenceAuthorizationErrorCode.CANCELLED
+        elif provider_failure:
+            outcome = ReferenceAuthorizationErrorCode.PROVIDER_FAILURE
+        else:
+            outcome = ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
+        self._terminate_reference(outcome)
+
+    def _terminate_reference(
+        self,
+        outcome: ReferenceAuthorizationErrorCode,
+    ) -> None:
+        assert self._reference_read is not None
+        self._reference_terminal = True
+        AgentBackend._terminate_reference_read_without_replacing(
+            self._reference_read,
+            outcome,
+        )
+
+    def taint_context_thread(
+        self,
+        scope: ContextScope,
+        policy_fingerprint: str,
+    ) -> None:
+        self._require_active(scope, policy_fingerprint)
+        self._bound_agent.backend._taint_context_thread(
+            scope,
+            self.provider_id,
+            self.definition_fingerprint,
+            policy_fingerprint,
+        )
 
 
 class BoundAgent:
@@ -330,6 +600,14 @@ class BoundAgent:
                 finalize = True
         if finalize:
             self.backend._finalize_bound_agent(self)
+
+    def _context_provider(
+        self,
+        reference_read: ReferenceReadInvocation | None = None,
+    ) -> ContextProvider:
+        """Return the package-internal physical seam for contextual execution."""
+
+        return _BoundContextProvider(self, reference_read)
 
     async def invoke(
         self,
@@ -1019,6 +1297,7 @@ class AgentBackend:
         self._codex_reasoning_effort = self._codex_adapter.reasoning_effort
         self._access_claim_tokens: dict[str, str] = {}
         self._thread_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
+        self._context_thread_locks: dict[tuple[str, ...], asyncio.Lock] = {}
         self._staging_directories = self._codex_adapter.staging_directories
         self._bound_agents: set[BoundAgent] = set()
         self._closed = False
@@ -2187,6 +2466,7 @@ class AgentBackend:
                 )
         self._access_claim_tokens.clear()
         self._thread_locks.clear()
+        self._context_thread_locks.clear()
         for adapter in self._adapters.values():
             try:
                 adapter.close()
@@ -3488,6 +3768,441 @@ class AgentBackend:
                 else "Antigravity CLI returned malformed structured output"
             )
             raise BackendProtocolError(diagnostic) from exc
+
+    @staticmethod
+    def _context_failure_accounting(
+        invocation: ProviderInvocation,
+        failure: BaseException,
+    ) -> ProviderCallAccounting | None:
+        """Complete prepared accounting from validated adapter failure facts."""
+
+        accounting = invocation.call_accounting
+        if accounting is None:
+            return None
+        failure_accounting = provider_failure_accounting(failure)
+        return replace(
+            accounting,
+            state=failure_accounting.state,
+            actual_transport_utf8_bytes=(
+                failure_accounting.actual_transport_utf8_bytes
+            ),
+            usage=failure_accounting.usage,
+        )
+
+    @staticmethod
+    def _context_failure_timed_out(failure: BaseException) -> bool:
+        """Recognize only the backend's explicit bounded-process timeout."""
+
+        current: BaseException | None = failure
+        seen: set[int] = set()
+        while current is not None and id(current) not in seen:
+            if isinstance(current, ProcessTimedOut):
+                return True
+            seen.add(id(current))
+            current = current.__cause__
+        return False
+
+    def _taint_context_thread_without_replacing(
+        self,
+        scope: ContextScope,
+        provider_id: str,
+        definition_fingerprint: str,
+        policy_fingerprint: str,
+    ) -> None:
+        """Best-effort invalidate one scoped continuation."""
+
+        try:
+            self._taint_context_thread(
+                scope,
+                provider_id,
+                definition_fingerprint,
+                policy_fingerprint,
+            )
+        except BaseException:
+            pass
+
+    async def _invoke_context_physical(
+        self,
+        bound_agent: BoundAgent,
+        *,
+        scope: ContextScope,
+        policy_fingerprint: str,
+        expected_thread_id: str | None,
+        schema: Mapping[str, object],
+        payload: Mapping[str, object],
+        call_kind: ProviderCallKind,
+        component_paths: Mapping[JsonPath, ContextComponentKind],
+        mandatory_reference_paths: tuple[JsonPath, ...],
+    ) -> ContextProviderCallResult:
+        """Build and submit one exact contextual ProviderInvocation."""
+
+        self._ensure_open()
+        if (
+            type(scope) is not ContextScope
+            or scope.agent_id != bound_agent.definition.agent_id
+            or type(call_kind) is not ProviderCallKind
+            or call_kind is ProviderCallKind.UNCLASSIFIED
+        ):
+            raise ContextExecutionError(
+                ContextExecutionErrorCode.PROVIDER_CONTRACT
+            )
+        session = self.workspace.validate_identifier(scope.session_id)
+        self._assert_provider_work_ready(session)
+        stored_thread_id = self._load_context_thread(
+            scope,
+            bound_agent.vendor,
+            f"sha256:{bound_agent.definition.fingerprint}",
+            policy_fingerprint,
+        )
+        if stored_thread_id != expected_thread_id:
+            raise ContextExecutionError(
+                ContextExecutionErrorCode.CONTINUATION_MISMATCH
+            )
+
+        generation = bound_agent._adapter_generation
+        adapter = (
+            self._adapter_for(bound_agent.vendor)
+            if generation is None
+            else generation.adapters[bound_agent.vendor]
+        )
+        invocation = ProviderInvocation(
+            session_id=session,
+            schema=schema,
+            payload=payload,
+            thread_id=expected_thread_id,
+            call_kind=call_kind,
+            component_paths=component_paths,
+            mandatory_reference_paths=mandatory_reference_paths,
+            binding_components=bound_agent._provider_binding.binding_components,
+        )
+        if invocation.call_accounting is None or invocation.payload_json is None:
+            raise ContextExecutionError(
+                ContextExecutionErrorCode.PROVIDER_CONTRACT
+            )
+
+        definition_fingerprint = f"sha256:{bound_agent.definition.fingerprint}"
+        try:
+            result = await adapter.invoke(bound_agent._provider_binding, invocation)
+        except ProviderInvocationError as failure:
+            accounting = self._context_failure_accounting(invocation, failure)
+            self._observe_context_accounting(accounting)
+            submitted = (
+                accounting is not None
+                and accounting.state is ProviderCallState.SUBMITTED
+            )
+            taint = bool(failure.taint_existing_thread or submitted)
+            if taint:
+                self._taint_context_thread_without_replacing(
+                    scope,
+                    bound_agent.vendor,
+                    definition_fingerprint,
+                    policy_fingerprint,
+                )
+            translated = BackendProtocolError(failure.diagnostic)
+            record_context_provider_failure(
+                translated,
+                ContextProviderFailureFacts(
+                    accounting,
+                    timed_out=self._context_failure_timed_out(failure),
+                    taint_existing_thread=taint,
+                ),
+            )
+            if failure.__cause__ is None:
+                raise translated from None
+            raise translated from failure.__cause__
+        except asyncio.CancelledError as failure:
+            accounting = self._context_failure_accounting(invocation, failure)
+            self._observe_context_accounting(accounting)
+            submitted = (
+                accounting is not None
+                and accounting.state is ProviderCallState.SUBMITTED
+            )
+            if submitted:
+                self._taint_context_thread_without_replacing(
+                    scope,
+                    bound_agent.vendor,
+                    definition_fingerprint,
+                    policy_fingerprint,
+                )
+            record_context_provider_failure(
+                failure,
+                ContextProviderFailureFacts(
+                    accounting,
+                    taint_existing_thread=submitted,
+                ),
+            )
+            raise
+        except BaseException as failure:
+            accounting = self._context_failure_accounting(invocation, failure)
+            self._observe_context_accounting(accounting)
+            submitted = (
+                accounting is not None
+                and accounting.state is ProviderCallState.SUBMITTED
+            )
+            if submitted:
+                self._taint_context_thread_without_replacing(
+                    scope,
+                    bound_agent.vendor,
+                    definition_fingerprint,
+                    policy_fingerprint,
+                )
+            record_context_provider_failure(
+                failure,
+                ContextProviderFailureFacts(
+                    accounting,
+                    timed_out=self._context_failure_timed_out(failure),
+                    taint_existing_thread=submitted,
+                ),
+            )
+            raise
+
+        prepared = invocation.call_accounting
+        assert prepared is not None
+        accounting = replace(
+            prepared,
+            state=ProviderCallState.SUBMITTED,
+            actual_transport_utf8_bytes=(
+                result.actual_transport_utf8_bytes
+                if type(result) is ProviderResult
+                else None
+            ),
+            usage=result.usage if type(result) is ProviderResult else None,
+        )
+        self._observe_context_accounting(accounting)
+        if type(result) is not ProviderResult or type(result.response_text) is not str:
+            failure = ContextExecutionError(
+                ContextExecutionErrorCode.PROVIDER_CONTRACT
+            )
+            record_context_provider_failure(
+                failure,
+                ContextProviderFailureFacts(
+                    accounting,
+                    taint_existing_thread=True,
+                ),
+            )
+            self._taint_context_thread_without_replacing(
+                scope,
+                bound_agent.vendor,
+                definition_fingerprint,
+                policy_fingerprint,
+            )
+            raise failure
+        if (
+            type(result.thread_id) is not str
+            or _SAFE_THREAD_ID.fullmatch(result.thread_id) is None
+        ):
+            failure = ContextExecutionError(
+                ContextExecutionErrorCode.PROVIDER_CONTRACT
+            )
+            record_context_provider_failure(
+                failure,
+                ContextProviderFailureFacts(
+                    accounting,
+                    taint_existing_thread=True,
+                ),
+            )
+            self._taint_context_thread_without_replacing(
+                scope,
+                bound_agent.vendor,
+                definition_fingerprint,
+                policy_fingerprint,
+            )
+            raise failure
+        if expected_thread_id is not None and result.thread_id != expected_thread_id:
+            failure = ContextExecutionError(
+                ContextExecutionErrorCode.CONTINUATION_MISMATCH
+            )
+            record_context_provider_failure(
+                failure,
+                ContextProviderFailureFacts(
+                    accounting,
+                    taint_existing_thread=True,
+                ),
+            )
+            self._taint_context_thread_without_replacing(
+                scope,
+                bound_agent.vendor,
+                definition_fingerprint,
+                policy_fingerprint,
+            )
+            raise failure
+        try:
+            self._store_context_thread(
+                scope,
+                bound_agent.vendor,
+                definition_fingerprint,
+                policy_fingerprint,
+                result.thread_id,
+                tainted=False,
+            )
+        except BaseException as failure:
+            record_context_provider_failure(
+                failure,
+                ContextProviderFailureFacts(
+                    accounting,
+                    taint_existing_thread=True,
+                ),
+            )
+            self._taint_context_thread_without_replacing(
+                scope,
+                bound_agent.vendor,
+                definition_fingerprint,
+                policy_fingerprint,
+            )
+            raise
+        return ContextProviderCallResult(
+            result.response_text,
+            result.thread_id,
+            accounting,
+        )
+
+    async def _prepare_context_references(
+        self,
+        bound_agent: BoundAgent,
+        reference_read: ReferenceReadInvocation,
+        request: ContextReferencePreludeRequest,
+    ) -> ContextReferencePreludeResult:
+        """Run the established exact reference-read action on a scoped thread."""
+
+        reference_request = reference_read.request
+        if (
+            type(reference_request) is not ReferenceReadRequest
+            or reference_request.correlation.operation_id
+            != request.reference_operation_id
+            or reference_request.correlation.agent_id != request.scope.agent_id
+        ):
+            raise ReferenceAuthorizationError(
+                ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
+            )
+        payload = self._reference_read_prelude_payload(reference_request)
+        component_paths, mandatory_paths = self._provider_component_paths(
+            payload,
+            call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
+        )
+        result = await self._invoke_context_physical(
+            bound_agent,
+            scope=request.scope,
+            policy_fingerprint=request.policy_fingerprint,
+            expected_thread_id=request.expected_thread_id,
+            schema=self._reference_read_action_schema(reference_request),
+            payload=payload,
+            call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
+            component_paths=component_paths,
+            mandatory_reference_paths=mandatory_paths,
+        )
+        reference_stage = "decode"
+        try:
+            action = self._decode_reference_read_action(
+                result.response_text,
+                provider_name=(
+                    "Codex" if bound_agent.vendor == "codex" else "Antigravity"
+                ),
+            )
+            reference_stage = "authorization"
+            if action != ReferenceReadAction(
+                ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
+                reference_request.correlation,
+                reference_request.references,
+            ):
+                raise ReferenceAuthorizationError(
+                    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
+                )
+            reference_result = reference_read.handle_reference_read_action(action)
+            if inspect.isawaitable(reference_result):
+                if inspect.iscoroutine(reference_result):
+                    reference_result.close()
+                raise BackendProtocolError(
+                    "reference read handler returned an awaitable"
+                )
+            if inspect.isasyncgen(reference_result):
+                raise BackendProtocolError(
+                    "reference read handler returned an async generator"
+                )
+            if (
+                type(reference_result) is not ReferenceReadResult
+                or reference_result.request != reference_request
+            ):
+                if type(reference_result) is ReferenceReadResult:
+                    reference_result.close()
+                raise BackendProtocolError(
+                    "reference read handler returned an invalid result"
+            )
+            with reference_result:
+                context = tuple(
+                    dict(item)
+                    for item in self._reference_read_context(reference_result)
+                )
+            return ContextReferencePreludeResult(
+                context,
+                result.thread_id,
+                result.accounting,
+            )
+        except BaseException as failure:
+            record_context_provider_failure(
+                failure,
+                ContextProviderFailureFacts(
+                    result.accounting,
+                    taint_existing_thread=True,
+                ),
+            )
+            self._taint_context_thread_without_replacing(
+                request.scope,
+                bound_agent.vendor,
+                f"sha256:{bound_agent.definition.fingerprint}",
+                request.policy_fingerprint,
+            )
+            if isinstance(failure, asyncio.CancelledError):
+                outcome = ReferenceAuthorizationErrorCode.CANCELLED
+            elif isinstance(failure, ReferenceAuthorizationError):
+                outcome = failure.code
+            elif reference_stage == "decode":
+                outcome = ReferenceAuthorizationErrorCode.PROVIDER_FAILURE
+            else:
+                outcome = ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
+            self._terminate_reference_read_without_replacing(
+                reference_read,
+                outcome,
+            )
+            try:
+                setattr(
+                    failure,
+                    _CONTEXT_REFERENCE_TERMINATED_ATTRIBUTE,
+                    True,
+                )
+            except (AttributeError, TypeError):
+                pass
+            raise
+
+    def _context_thread_lock(
+        self,
+        scope: ContextScope,
+        provider_id: str,
+        definition_fingerprint: str,
+        policy_fingerprint: str,
+    ) -> asyncio.Lock:
+        """Return the process-local lock for one complete contextual lifecycle."""
+
+        self._ensure_open()
+        if type(scope) is not ContextScope:
+            raise ContextExecutionError(
+                ContextExecutionErrorCode.PROVIDER_CONTRACT
+            )
+        session = self.workspace.validate_identifier(scope.session_id)
+        key = (
+            scope.workspace_id,
+            session,
+            scope.subject_kind.value,
+            scope.subject_id,
+            scope.agent_id,
+            provider_id,
+            definition_fingerprint,
+            policy_fingerprint,
+        )
+        lock = self._context_thread_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._context_thread_locks[key] = lock
+        return lock
 
     def _thread_lock(
         self,
@@ -4839,6 +5554,254 @@ class AgentBackend:
             failure.add_note(
                 f"failed creation access cleanup: {type(cleanup_error).__name__}"
             )
+
+    @staticmethod
+    def _context_thread_key_payload(
+        scope: ContextScope,
+        provider_id: str,
+        definition_fingerprint: str,
+        policy_fingerprint: str,
+    ) -> dict[str, object]:
+        """Return the exact content-free identity for a contextual thread."""
+
+        return {
+            "definition_fingerprint": definition_fingerprint,
+            "policy_fingerprint": policy_fingerprint,
+            "provider_id": provider_id,
+            "scope": {
+                "agent_id": scope.agent_id,
+                "session_id": scope.session_id,
+                "subject_id": scope.subject_id,
+                "subject_kind": scope.subject_kind.value,
+                "workspace_id": scope.workspace_id,
+            },
+        }
+
+    @classmethod
+    def _context_thread_relative(
+        cls,
+        scope: ContextScope,
+        provider_id: str,
+        definition_fingerprint: str,
+        policy_fingerprint: str,
+    ) -> str:
+        payload = cls._context_thread_key_payload(
+            scope,
+            provider_id,
+            definition_fingerprint,
+            policy_fingerprint,
+        )
+        encoded = json.dumps(
+            ["provider-context-thread-v1", payload],
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8", errors="strict")
+        digest = hashlib.sha256(encoded).hexdigest()
+        return f"{_CONTEXT_THREAD_DIRECTORY}/{scope.session_id}/{digest}.json"
+
+    @classmethod
+    def _validated_context_thread_record(
+        cls,
+        value: object,
+        *,
+        scope: ContextScope,
+        provider_id: str,
+        definition_fingerprint: str,
+        policy_fingerprint: str,
+    ) -> dict[str, object] | None:
+        """Validate an exact record; corruption or key mismatch means unusable."""
+
+        expected_fields = {
+            "definition_fingerprint",
+            "key",
+            "policy_fingerprint",
+            "provider_id",
+            "schema_version",
+            "tainted",
+            "thread_id",
+            "updated_at",
+        }
+        if type(value) is not dict or set(value) != expected_fields:
+            return None
+        expected_key = cls._context_thread_key_payload(
+            scope,
+            provider_id,
+            definition_fingerprint,
+            policy_fingerprint,
+        )
+        if (
+            value["schema_version"] != _CONTEXT_THREAD_SCHEMA_VERSION
+            or value["key"] != expected_key
+            or value["provider_id"] != provider_id
+            or value["definition_fingerprint"] != definition_fingerprint
+            or value["policy_fingerprint"] != policy_fingerprint
+            or type(value["tainted"]) is not bool
+            or type(value["thread_id"]) is not str
+            or _SAFE_THREAD_ID.fullmatch(value["thread_id"]) is None
+            or type(value["updated_at"]) is not str
+        ):
+            return None
+        try:
+            _parse_timestamp(value["updated_at"], label="context thread updated_at")
+        except (TypeError, ValueError, WorkspaceFormatError):
+            return None
+        return dict(value)
+
+    @staticmethod
+    def _validate_context_thread_key(
+        scope: ContextScope,
+        provider_id: str,
+        definition_fingerprint: str,
+        policy_fingerprint: str,
+    ) -> None:
+        if (
+            type(scope) is not ContextScope
+            or type(provider_id) is not str
+            or not provider_id
+            or _SAFE_CONTEXT_DIGEST.fullmatch(definition_fingerprint) is None
+            or _SAFE_CONTEXT_DIGEST.fullmatch(policy_fingerprint) is None
+        ):
+            raise ContextExecutionError(
+                ContextExecutionErrorCode.PROVIDER_CONTRACT
+            )
+
+    def _load_context_thread(
+        self,
+        scope: ContextScope,
+        provider_id: str,
+        definition_fingerprint: str,
+        policy_fingerprint: str,
+    ) -> str | None:
+        """Load only one usable exact scoped continuation; otherwise bootstrap."""
+
+        self._validate_context_thread_key(
+            scope,
+            provider_id,
+            definition_fingerprint,
+            policy_fingerprint,
+        )
+        self._assert_provider_work_ready(scope.session_id)
+        relative = self._context_thread_relative(
+            scope,
+            provider_id,
+            definition_fingerprint,
+            policy_fingerprint,
+        )
+        target = self.workspace.path(relative)
+        if not target.exists():
+            return None
+        try:
+            value = self.workspace.read_json(relative)
+        except WorkspaceFormatError:
+            return None
+        record = self._validated_context_thread_record(
+            value,
+            scope=scope,
+            provider_id=provider_id,
+            definition_fingerprint=definition_fingerprint,
+            policy_fingerprint=policy_fingerprint,
+        )
+        if record is None or record["tainted"]:
+            return None
+        thread_id = record["thread_id"]
+        assert isinstance(thread_id, str)
+        return thread_id
+
+    def _store_context_thread(
+        self,
+        scope: ContextScope,
+        provider_id: str,
+        definition_fingerprint: str,
+        policy_fingerprint: str,
+        thread_id: str,
+        *,
+        tainted: bool,
+    ) -> None:
+        """Persist a native continuation in the distinct contextual store."""
+
+        self._validate_context_thread_key(
+            scope,
+            provider_id,
+            definition_fingerprint,
+            policy_fingerprint,
+        )
+        if (
+            type(thread_id) is not str
+            or _SAFE_THREAD_ID.fullmatch(thread_id) is None
+            or type(tainted) is not bool
+        ):
+            raise ContextExecutionError(
+                ContextExecutionErrorCode.PROVIDER_CONTRACT
+            )
+        self._assert_owned_access(scope.session_id)
+        key = self._context_thread_key_payload(
+            scope,
+            provider_id,
+            definition_fingerprint,
+            policy_fingerprint,
+        )
+        self.workspace.write_json(
+            self._context_thread_relative(
+                scope,
+                provider_id,
+                definition_fingerprint,
+                policy_fingerprint,
+            ),
+            {
+                "definition_fingerprint": definition_fingerprint,
+                "key": key,
+                "policy_fingerprint": policy_fingerprint,
+                "provider_id": provider_id,
+                "schema_version": _CONTEXT_THREAD_SCHEMA_VERSION,
+                "tainted": tainted,
+                "thread_id": thread_id,
+                "updated_at": _now(),
+            },
+        )
+
+    def _taint_context_thread(
+        self,
+        scope: ContextScope,
+        provider_id: str,
+        definition_fingerprint: str,
+        policy_fingerprint: str,
+    ) -> None:
+        """Mark one matching contextual continuation permanently unusable."""
+
+        self._validate_context_thread_key(
+            scope,
+            provider_id,
+            definition_fingerprint,
+            policy_fingerprint,
+        )
+        self._assert_owned_access(scope.session_id)
+        relative = self._context_thread_relative(
+            scope,
+            provider_id,
+            definition_fingerprint,
+            policy_fingerprint,
+        )
+        target = self.workspace.path(relative)
+        if not target.exists():
+            return
+        try:
+            value = self.workspace.read_json(relative)
+        except WorkspaceFormatError:
+            return
+        record = self._validated_context_thread_record(
+            value,
+            scope=scope,
+            provider_id=provider_id,
+            definition_fingerprint=definition_fingerprint,
+            policy_fingerprint=policy_fingerprint,
+        )
+        if record is None or record["tainted"]:
+            return
+        record["tainted"] = True
+        record["updated_at"] = _now()
+        self.workspace.write_json(relative, record)
 
     def _load_thread(
         self,

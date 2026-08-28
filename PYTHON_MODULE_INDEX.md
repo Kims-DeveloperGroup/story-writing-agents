@@ -18,7 +18,7 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 84.
 
-Direct internal dependency edges indexed: 336.
+Direct internal dependency edges indexed: 340.
 
 ## Current Dependency Direction
 
@@ -52,7 +52,7 @@ __main__ -> cli -> conversation_rag_cli
                  |               -> errors/models/session_lifecycle/workspace
                  |               -> writing_artifacts/writing_artifacts.repository
                  |               -> writing_artifacts.runtime_references
-                 -> backend -> agent_context
+                 -> backend -> agent_context/agent_context.service
                  |          -> antigravity_adapter -> agent_context/models
                  |          |                        -> provider_adapter
                  |          |                        -> provider_process
@@ -174,7 +174,9 @@ agent_context.ledger -> agent_context.accounting/manifest/planning
                      -> workspace
 agent_context.manifest -> (standard library only)
 agent_context.planning -> agent_context.manifest
-agent_context.service -> agent_context.actions/manifest/planning/sources
+agent_context.service -> agent_context.accounting/actions/ledger
+                      -> agent_context.manifest/planning/sources
+                      -> workspace
 agent_context.sources -> agent_context.actions/manifest
                       -> conversations/errors/models/workspace
                       -> writing_artifacts.filesystem_sources
@@ -444,33 +446,54 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.agent_context.service`
 
 - **Source:** `src/story_writing_agents/agent_context/service.py`
-- **Responsibility:** Coordinate one call-local manifest-bound context action
-  session.
+- **Responsibility:** Coordinate workspace-scoped provider-neutral contextual
+  invocation lifecycles.
 - **Supported surface:** No project-root or `agent_context`-facade-supported
   API. The direct-module package-internal `__all__` exposes
-  `ContextInvocationBinding`, `ContextInvocationSession`,
-  `ContextInvocationState`, and `ContextReadReceipt`. The synchronized session
-  owns exact sequential action correlation, fresh invocation-local HMAC source
-  handles, fixed action/source counters, canonical source acquisition with
-  request-ordered observations, all-or-nothing one-use reads,
-  outstanding-delivery receipts, completed-source final revalidation, and
-  manifest/read/answer-bound terminal authorization with unchanged pass-through
-  of ordered mandatory reference facts.
-- **Direct internal dependencies:** `agent_context.actions`,
-  `agent_context.manifest`, `agent_context.planning`, and
-  `agent_context.sources`.
-- **State, resources, and side effects:** Each instance owns one fresh 32-byte
-  secret, a bounded in-memory handle table, counters, receipt metadata, and a
-  reentrant synchronization lock. It owns no provider, ledger, filesystem,
-  process, clock, network, or persistence resource; source I/O remains delegated
-  to the injected registry. Search trims only canonical tail hits to its
-  remaining framed-observation budget, while read failure remains atomic.
-  Failure and answer authorization zero and discard the secret, manifest and
-  search handles, and pending/completed handle-bearing receipt state. Importing
-  performs no I/O or entropy acquisition.
+  `AgentContextService`, `ContextExecutionError`,
+  `ContextExecutionErrorCode`, `ContextInvocationBinding`,
+  `ContextInvocationRequest`, `ContextInvocationResult`,
+  `ContextInvocationSession`, `ContextInvocationState`, `ContextProvider`,
+  `ContextProviderCallRequest`, `ContextProviderCallResult`,
+  `ContextProviderFailureFacts`, `ContextReferencePreludeRequest`,
+  `ContextReferencePreludeResult`, `ContextReadReceipt`, `ContextScope`,
+  `ContextSourceClassification`, `context_provider_failure_facts`, and
+  `record_context_provider_failure`. `AgentContextService` derives the exact
+  workspace identity from the public canonical Workspace root, composes a
+  manifest and transient material from the four authorized source adapters,
+  plans against the scoped ledger checkpoint, reserves INCOMPLETE before any
+  physical provider call, and drives the finite SEARCH/READ/ANSWER loop through
+  the service-owned `ContextProvider` inversion. The synchronized call-local
+  session retains exact action correlation, fresh HMAC source handles, bounded
+  counters, atomic one-use reads, delivery receipts, final source revalidation,
+  and answer authorization. Mandatory-reference reservations stay separate
+  from source search/read, use the provider prelude before the substantive
+  action budget, and must complete before verified ledger commit. The two
+  failure-fact helpers attach and recover only validated content-free physical
+  call facts without replacing the original exception.
+- **Direct internal dependencies:** `agent_context.accounting`,
+  `agent_context.actions`, `agent_context.ledger`, `agent_context.manifest`,
+  `agent_context.planning`, `agent_context.sources`, and `workspace`.
+- **State, resources, and side effects:** A workspace-scoped service retains
+  immutable planning/action/source policies, one ledger collaborator, the
+  content-free workspace digest, and process-local async locks keyed by exact
+  scope/provider/definition/policy identity. Each invocation creates bounded
+  transient manifests, source materials, provider payload mappings, call
+  accounting, and an invocation session whose 32-byte HMAC secret, handle
+  table, counters, and receipts are cleared on answer or failure. Source I/O is
+  delegated to the injected registry adapters, ledger persistence remains
+  ledger-owned, and provider transport/native-thread storage remains delegated
+  through `ContextProvider`. Every physical call is appended in order; only a
+  revalidated terminal answer commits READY, while cancellation, timeout,
+  malformed action, source/reference failure, exhaustion, or ambiguous
+  submitted continuation taints the attempt and, where required, the native
+  continuation. Importing performs no I/O, entropy acquisition, registration,
+  or mutation; service construction performs no filesystem mutation.
 - **Primary verification/documentation:**
-  `tests/test_agent_context_service.py`; module-inventory, dependency,
-  facade, and import-boundary assertions across
+  `tests/test_agent_context_service.py`,
+  `tests/test_agent_context_execution.py`, `tests/test_codex_backend.py`,
+  `tests/test_antigravity_adapter.py`, and `tests/test_antigravity_parity.py`;
+  module-inventory, dependency, facade, and import-boundary assertions across
   `tests/test_rag_module_and_packaging_boundary.py`,
   `tests/test_session_lifecycle.py`, and
   `tests/test_interactive_controller.py`.
@@ -618,19 +641,21 @@ every intermediate arrow. The current runtime graph is acyclic.
   without exposing the backend's private storage; unexported package-internal
   `release_bound_agent(bound_agent)` requests exact binding retirement without
   exposing or mutating backend collections.
-- **Direct internal dependencies:** `agent_context`, `agents`,
-  `antigravity_adapter`, `codex_adapter`, `config`, `conversation_retrieval`,
-  `debug_log`, `errors`, `interactive_settings`, `models`, `provider_adapter`,
-  `provider_process`, `session_lifecycle`, and `workspace`, plus the provider-neutral
-  `writing_artifacts.read_actions` boundary.
+- **Direct internal dependencies:** `agent_context`, `agent_context.service`,
+  `agents`, `antigravity_adapter`, `codex_adapter`, `config`,
+  `conversation_retrieval`, `debug_log`, `errors`, `interactive_settings`,
+  `models`, `provider_adapter`, `provider_process`, `session_lifecycle`, and
+  `workspace`, plus the provider-neutral `writing_artifacts.read_actions`
+  boundary.
 - **State, resources, and side effects:** Owns exact V2 provider-session
   manifests at
   `agent_states/orchestrator_state/provider_sessions/<session_id>.json`, exact
   V2 process-access claims at sibling `<session_id>.access.json` paths, the
   lazily created workspace-global `.access-claims.lock` OS advisory guard,
   in-memory claim tokens, persisted `provider_threads`, shared
-  debate/conversation/retrieval per-thread locks, adapter routing, and
-  structured domain-response validation. Manifests contain only `schema_version`,
+  debate/conversation/retrieval per-thread locks, distinct contextual-thread
+  locks, adapter routing, and structured domain-response validation. Manifests
+  contain only `schema_version`,
   `session_id`, `durable_state`, `created_at`, `updated_at`, and
   `provider_threads`; claims contain only `schema_version`, `session_id`,
   `owner_hostname`, `owner_pid`, `claim_token`, and `claimed_at`. The guard
@@ -654,11 +679,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   immediately, then defers access-claim release, in-memory thread-lock cleanup,
   and remaining adapter cleanup until no active binding can use them. One
   retrieval thread lock covers the complete repeated-call action loop and
-  synchronous handler invocations. The backend owns the exact provider-neutral
-  action schemas, initial and continuation payloads, canonical observation
-  framing handoff, provider timeout/cancellation behavior, incomplete-history
-  taint, and fixed provider-labelled,
-  provider-value-free process/response-validation diagnostics. It drains both
+  synchronous handler invocations. For the legacy conversation-retrieval path,
+  the backend owns the exact provider-neutral action schemas, initial and
+  continuation payloads, canonical observation framing handoff, provider
+  timeout/cancellation behavior, incomplete-history taint, and fixed
+  provider-labelled, provider-value-free process/response-validation
+  diagnostics. It drains both
   subprocess output streams through its adapters but discards and never decodes
   stderr after a nonzero provider exit; it receives no memory service and
   performs no retrieval search or transcript-storage call. For a referenced
@@ -697,7 +723,24 @@ every intermediate arrow. The current runtime graph is acyclic.
   sink absence or failure cannot change provider, decoding, thread, retrieval,
   or reference behavior, and no accounting record is persisted. Adapter-owned
   exact transport-byte and recognized usage facts complete a submitted record;
-  unavailable usage remains absent and is never estimated. At
+  unavailable usage remains absent and is never estimated. At the contextual
+  boundary, a binding-scoped adapter implements the service-owned
+  `ContextProvider` protocol without giving the backend planner, ledger, or
+  source authority. It retains the bound provider for the complete lifecycle,
+  runs the existing exact reference prelude when requested, builds one
+  `ProviderInvocation` from each service-supplied schema/payload/component
+  mapping, passes its single canonical `payload_json` to the selected adapter,
+  and returns raw response, thread identity, and exact content-free accounting
+  for service-owned action decoding and ledger transitions. Contextual native
+  continuations are isolated from legacy `provider_threads` beneath
+  `agent_states/orchestrator_state/provider_sessions/.contextual/v1/<session-id>/<scope-hash>.json`;
+  their key binds the complete scope, provider, definition fingerprint, and
+  policy fingerprint, and their content-free schema stores only that key,
+  thread identity, taint, and update facts. Missing, malformed, mismatched, or
+  tainted records yield bootstrap rather than implicit reuse. Submitted
+  cancellation, timeout, malformed result, continuation mismatch, and failed
+  reference completion preserve fixed failure facts and taint the exact
+  contextual continuation without mutating the legacy thread slot. At
   construction it validates and snapshots the complete workspace system and
   per-agent configuration, reconciles the settings-owned durable provider-route
   generations, and solely resolves the roster's authoritative immutable
@@ -744,7 +787,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   access-claim owner/token facts and never replace the established result,
   exception, or cancellation flow; `debug_log` retains ownership of its files,
   locks, schema, and rotation.
-- **Primary verification/documentation:** `tests/test_codex_backend.py`,
+- **Primary verification/documentation:**
+  `tests/test_agent_context_execution.py`, `tests/test_codex_backend.py`,
   `tests/test_context_accounting_baseline.py`, `tests/test_prompts.py`,
   `tests/test_conversation_retrieval.py`,
   `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`,
@@ -5471,14 +5515,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   values, fixed policies and errors, and canonical untrusted frames;
   `agent_context.sources` owns the exact four concrete authority adapters and
   deterministic bounded capture/search; and `agent_context.service` alone owns
-  one invocation's HMAC handles, counters, receipts, transitions, and final
-  source revalidation. Source adapters call only public owner operations on the
-  writing-artifact repository, conversation catalog/event store, and Workspace.
+  workspace-scoped manifest/planner/ledger composition plus each invocation's
+  HMAC handles, provider-neutral action loop, accounting handoff, counters,
+  receipts, transitions, and final source revalidation. Source adapters call
+  only public owner operations on the writing-artifact repository, conversation
+  catalog/event store, and Workspace.
   They never import orchestration, providers, prompts, runtime, or ledger, and
-  no existing owner imports these new direct modules. Mandatory references pass
-  through answer authorization unchanged and remain outside source search/read
-  authority. None of the three modules is re-exported by the accounting-only
-  `agent_context` facade.
+  backend imports only the service-owned provider protocol rather than its
+  planner, ledger, or source collaborators. Mandatory references pass through
+  answer authorization unchanged, remain outside source search/read authority,
+  and execute as a separately accounted backend prelude before the substantive
+  context-action budget. Native contextual continuation storage stays
+  backend-owned and is keyed independently from legacy session threads. None
+  of the three modules is re-exported by the accounting-only `agent_context`
+  facade.
 
 - Explicit artifact reads retain split, one-way ownership.
   `writing_artifacts.authorization` owns pure content-free evidence contracts
