@@ -1326,10 +1326,16 @@ conversation-migration, provisioning, selection, and conversation-RAG modules
 are also supported direct-module surfaces and match their own `__all__` values.
 None is re-exported by the package-root or conversation-storage facade.
 
+`story_writing_agents.agent_context` is an internal 11-name coordination
+facade for exact provider-context accounting. It is absent from the 120-name
+package-root facade and is not a supported application integration API. Its
+runtime meaning and fixed comparison baseline are documented in
+[provider-context accounting](../design/prompts-and-provider.md#exact-provider-context-accounting).
+
 The exact current inventories are package root `120`, conversation storage
 `64`, conversation search `13`, SQLite database owner `12`, SQLite adapter
 `14`, literal-search mechanics `6`, SQLite companion owner `5`, conversation
 migration `7`, provisioning `4`, selection `8`, conversation RAG contracts
 `35`, generic RAG adapter `3`, local RAG provider `5`, RAG generation store `8`,
 RAG composition `10`, RAG runtime `10`, and RAG CLI `7`. The production module
-inventory is `76`.
+inventory is `78`.

@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping, Protocol
 
+from .agent_context import (
+    ContextComponentBytes,
+    ContextComponentKind,
+    JsonPath,
+    ProviderCallAccounting,
+    ProviderCallKind,
+    ProviderCallState,
+    ProviderJsonEncodingError,
+    ProviderPayloadAccounting,
+    ProviderUsage,
+    account_provider_payload,
+)
 from .models import AgentDefinition
 
 
@@ -58,6 +70,16 @@ class ProviderBinding:
     vendor: str
     definition: AgentDefinition
     staging_directory: Path
+    binding_components: tuple[ContextComponentBytes, ...] = ()
+
+    def __post_init__(self) -> None:
+        if type(self.binding_components) is not tuple or any(
+            type(component) is not ContextComponentBytes
+            for component in self.binding_components
+        ):
+            raise TypeError(
+                "provider binding components must be ContextComponentBytes values"
+            )
 
 
 @dataclass(frozen=True)
@@ -65,13 +87,66 @@ class ProviderInvocation:
     """One structured provider turn independent of vendor transport details."""
 
     session_id: str
-    schema: Mapping[str, Any]
-    payload: Mapping[str, Any]
+    schema: Mapping[str, Any] = field(repr=False)
+    payload: Mapping[str, Any] = field(repr=False)
     thread_id: str | None
+    call_kind: ProviderCallKind = ProviderCallKind.UNCLASSIFIED
+    component_paths: Mapping[JsonPath, ContextComponentKind] = field(
+        default_factory=dict,
+        repr=False,
+    )
+    mandatory_reference_paths: tuple[JsonPath, ...] = field(
+        default=(),
+        repr=False,
+    )
+    binding_components: tuple[ContextComponentBytes, ...] = field(
+        default=(),
+        repr=False,
+    )
+    payload_json: bytes | None = field(init=False, repr=False)
+    payload_accounting: ProviderPayloadAccounting | None = field(init=False)
+    call_accounting: ProviderCallAccounting | None = field(init=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "schema", MappingProxyType(dict(self.schema)))
-        object.__setattr__(self, "payload", MappingProxyType(dict(self.payload)))
+        schema = MappingProxyType(dict(self.schema))
+        payload = MappingProxyType(dict(self.payload))
+        component_paths = MappingProxyType(dict(self.component_paths))
+        if type(self.binding_components) is not tuple or any(
+            type(component) is not ContextComponentBytes
+            for component in self.binding_components
+        ):
+            raise TypeError(
+                "provider invocation binding components must be "
+                "ContextComponentBytes values"
+            )
+        try:
+            payload_json, accounting = account_provider_payload(
+                schema,
+                payload,
+                call_kind=self.call_kind,
+                component_paths=component_paths,
+                mandatory_reference_paths=self.mandatory_reference_paths,
+            )
+        except ProviderJsonEncodingError:
+            payload_json = None
+            accounting = None
+        object.__setattr__(self, "schema", schema)
+        object.__setattr__(self, "payload", payload)
+        object.__setattr__(self, "component_paths", component_paths)
+        object.__setattr__(self, "payload_json", payload_json)
+        object.__setattr__(self, "payload_accounting", accounting)
+        object.__setattr__(
+            self,
+            "call_accounting",
+            (
+                None
+                if accounting is None
+                else ProviderCallAccounting(
+                    payload=accounting,
+                    binding_components=self.binding_components,
+                )
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -80,6 +155,53 @@ class ProviderResult:
 
     thread_id: str
     response_text: str
+    usage: ProviderUsage | None = field(default=None, compare=False)
+    actual_transport_utf8_bytes: int | None = field(default=None, compare=False)
+
+    def __post_init__(self) -> None:
+        if self.usage is not None and type(self.usage) is not ProviderUsage:
+            raise TypeError("provider result usage must be ProviderUsage or None")
+        if self.actual_transport_utf8_bytes is not None:
+            if type(self.actual_transport_utf8_bytes) is not int:
+                raise TypeError("provider transport UTF-8 bytes must be an integer")
+            if self.actual_transport_utf8_bytes < 0:
+                raise ValueError(
+                    "provider transport UTF-8 bytes must be nonnegative"
+                )
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderFailureAccounting:
+    """Validated content-free transport facts carried across one failure."""
+
+    state: ProviderCallState = ProviderCallState.PREPARED
+    actual_transport_utf8_bytes: int | None = None
+    usage: ProviderUsage | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.state) is not ProviderCallState:
+            raise TypeError("provider failure state must be a ProviderCallState")
+        if self.actual_transport_utf8_bytes is not None:
+            if type(self.actual_transport_utf8_bytes) is not int:
+                raise TypeError(
+                    "provider failure transport UTF-8 bytes must be an integer"
+                )
+            if self.actual_transport_utf8_bytes < 0:
+                raise ValueError(
+                    "provider failure transport UTF-8 bytes must be nonnegative"
+                )
+            if self.state is not ProviderCallState.SUBMITTED:
+                raise ValueError(
+                    "provider failure transport bytes require a submitted call"
+                )
+        if self.usage is not None:
+            if type(self.usage) is not ProviderUsage:
+                raise TypeError("provider failure usage must be ProviderUsage or None")
+            if self.state is not ProviderCallState.SUBMITTED:
+                raise ValueError("provider failure usage requires a submitted call")
+
+
+_PREPARED_PROVIDER_FAILURE = ProviderFailureAccounting()
 
 
 class ProviderInvocationError(Exception):
@@ -94,6 +216,44 @@ class ProviderInvocationError(Exception):
         super().__init__(diagnostic)
         self.diagnostic = diagnostic
         self.taint_existing_thread = taint_existing_thread
+        self._call_accounting = _PREPARED_PROVIDER_FAILURE
+
+
+def record_provider_failure_accounting(
+    failure: BaseException,
+    *,
+    state: ProviderCallState,
+    actual_transport_utf8_bytes: int | None = None,
+    usage: ProviderUsage | None = None,
+) -> None:
+    """Attach validated, content-free call facts without replacing a failure."""
+
+    accounting = ProviderFailureAccounting(
+        state=state,
+        actual_transport_utf8_bytes=actual_transport_utf8_bytes,
+        usage=usage,
+    )
+    if isinstance(failure, ProviderInvocationError):
+        failure._call_accounting = accounting
+        return
+    try:
+        setattr(failure, "_provider_call_accounting", accounting)
+    except (AttributeError, TypeError):
+        pass
+
+
+def provider_failure_accounting(
+    failure: BaseException,
+) -> ProviderFailureAccounting:
+    """Return only validated private accounting attached to one failure."""
+
+    if isinstance(failure, ProviderInvocationError):
+        accounting = failure._call_accounting
+    else:
+        accounting = getattr(failure, "_provider_call_accounting", None)
+    if type(accounting) is not ProviderFailureAccounting:
+        return _PREPARED_PROVIDER_FAILURE
+    return accounting
 
 
 class ProviderAdapter(Protocol):

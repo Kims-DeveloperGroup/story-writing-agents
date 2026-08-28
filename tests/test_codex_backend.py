@@ -79,6 +79,13 @@ from story_writing_agents.conversation_search import (
 )
 from story_writing_agents.cli import _parse_backend_overrides, build_parser, main
 from story_writing_agents.backend import backend_configuration_snapshot
+from story_writing_agents.agent_context import (
+    ContextComponentKind,
+    ProviderCallAccounting,
+    ProviderCallKind,
+    ProviderCallState,
+    ProviderUsage,
+)
 from story_writing_agents.config import ConfigManager, ConfigurationSnapshot
 from story_writing_agents.errors import (
     BackendProtocolError,
@@ -124,6 +131,7 @@ from story_writing_agents.provider_adapter import (
     ExecutionValueSource,
     ProviderInvocationError,
     ProviderResult,
+    record_provider_failure_accounting,
 )
 from story_writing_agents.provider_process import (
     ProcessRequest,
@@ -290,6 +298,11 @@ elif "resume" not in argv:
                 else payload["correlation"]["agent_id"]
             )
         ),
+    }))
+if "STORY_FAKE_CODEX_USAGE" in os.environ:
+    print(json.dumps({
+        "type": "turn.completed",
+        "usage": json.loads(os.environ["STORY_FAKE_CODEX_USAGE"]),
     }))
 """
 )
@@ -2180,6 +2193,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         ]
         backend = AgentBackend(self.workspace, executable=str(self.executable))
         self.addCleanup(backend.close)
+        accounting_records: list[ProviderCallAccounting] = []
+        backend._context_accounting_sink = accounting_records.append
         backend.create_session_with_access("story_session")
 
         bound = await backend.bind(definition)
@@ -2187,6 +2202,22 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bound.vendor, "codex")
         staged = (bound.staging_directory / "AGENTS.md").read_text(
             encoding="utf-8"
+        )
+        binding_components = bound._provider_binding.binding_components
+        self.assertEqual(
+            sum(component.serialized_utf8_bytes for component in binding_components),
+            len(staged.encode("utf-8")),
+        )
+        self.assertEqual(
+            tuple(
+                component.identity
+                for component in binding_components
+                if component.kind is ContextComponentKind.CORE_DOCUMENT
+            ),
+            tuple(
+                f"core_documents/{reference.path.name}"
+                for reference in definition.context_document_files
+            ),
         )
         self.assertIn(role, staged)
         self.assertIn(persona, staged)
@@ -2225,6 +2256,22 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertNotIn("resume", argv)
+        self.assertEqual(len(accounting_records), 1)
+        accounting = accounting_records[0]
+        self.assertIs(accounting.state, ProviderCallState.SUBMITTED)
+        self.assertIs(accounting.payload.call_kind, ProviderCallKind.DEBATE)
+        self.assertEqual(
+            accounting.actual_transport_utf8_bytes,
+            len(invocation["raw_payload"].encode("utf-8")),
+        )
+        self.assertIsNone(accounting.usage)
+        self.assertEqual(
+            sum(
+                component.serialized_utf8_bytes
+                for component in accounting.binding_components
+            ),
+            len(staged.encode("utf-8")),
+        )
 
     async def test_binding_stages_immutable_bytes_after_all_source_paths_become_unsafe(
         self,
@@ -2283,9 +2330,291 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         staged = bound.staging_directory.joinpath("AGENTS.md").read_text(
             encoding="utf-8"
         )
+        self.assertEqual(
+            sum(
+                component.serialized_utf8_bytes
+                for component in bound._provider_binding.binding_components
+            ),
+            len(staged.encode("utf-8")),
+        )
         for content in expected:
             with self.subTest(content=content[:32]):
                 self.assertIn(content, staged)
+
+    def test_codex_usage_accepts_only_one_recognized_exact_terminal_snapshot(
+        self,
+    ) -> None:
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        parse = backend._codex_adapter.provider_usage
+        cases = (
+            ((), None),
+            (({"type": "turn.completed"},), None),
+            (({"type": "turn.completed", "usage": {"unknown": 7}},), None),
+            (
+                (
+                    {
+                        "type": "turn.completed",
+                        "usage": {
+                            "input_tokens": 0,
+                            "output_tokens": 2,
+                            "cached_input_tokens": 3,
+                        },
+                    },
+                ),
+                ProviderUsage(0, 2, 3),
+            ),
+            (
+                ({"type": "turn.completed", "usage": {"input_tokens": 4}},),
+                ProviderUsage(input_tokens=4),
+            ),
+            (
+                (
+                    {
+                        "type": "turn.completed",
+                        "usage": {
+                            "input_tokens": 5,
+                            "output_tokens": -1,
+                            "cached_input_tokens": True,
+                            "unknown": 9,
+                        },
+                    },
+                ),
+                ProviderUsage(input_tokens=5),
+            ),
+            (
+                (
+                    {
+                        "type": "turn.completed",
+                        "usage": {
+                            "input_tokens": -1,
+                            "output_tokens": "2",
+                            "cached_input_tokens": False,
+                        },
+                    },
+                ),
+                None,
+            ),
+            (
+                (
+                    {"type": "turn.completed", "usage": {"input_tokens": 1}},
+                    {"type": "turn.completed", "usage": {"input_tokens": 2}},
+                ),
+                None,
+            ),
+        )
+        for events, expected in cases:
+            with self.subTest(events=events):
+                self.assertEqual(parse(events), expected)
+
+    async def test_malformed_usage_never_invalidates_a_valid_provider_reply(
+        self,
+    ) -> None:
+        session_id = "malformed_usage_reply"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        records: list[ProviderCallAccounting] = []
+        backend._context_accounting_sink = records.append
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        malformed_usage = json.dumps(
+            {
+                "input_tokens": True,
+                "output_tokens": -1,
+                "cached_input_tokens": "3",
+                "unknown": 4,
+            },
+            separators=(",", ":"),
+        )
+
+        with mock.patch.dict(
+            os.environ,
+            {"STORY_FAKE_CODEX_USAGE": malformed_usage},
+        ):
+            reply = await bound.invoke(self.request(session_id=session_id))
+
+        self.assertEqual(reply, AgentReply.candidate("r0", "generated candidate"))
+        self.assertEqual(len(records), 1)
+        self.assertIsNone(records[0].usage)
+
+    async def test_context_sink_records_prepared_submitted_and_cancellation_once(
+        self,
+    ) -> None:
+        session_id = "context_sink_states"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        records: list[ProviderCallAccounting] = []
+        backend._context_accounting_sink = records.append
+
+        prepared = ProviderInvocationError(
+            "prepared provider failure",
+            taint_existing_thread=False,
+        )
+        submitted = ProviderInvocationError(
+            "submitted provider failure",
+            taint_existing_thread=True,
+        )
+        record_provider_failure_accounting(
+            submitted,
+            state=ProviderCallState.SUBMITTED,
+            actual_transport_utf8_bytes=31,
+        )
+        cancellation = asyncio.CancelledError("PRIVATE_CANCELLED_PROVIDER")
+        record_provider_failure_accounting(
+            cancellation,
+            state=ProviderCallState.SUBMITTED,
+            actual_transport_utf8_bytes=32,
+        )
+        effects = (prepared, submitted, cancellation)
+        with mock.patch.object(
+            backend._codex_adapter,
+            "invoke",
+            new=mock.AsyncMock(side_effect=effects),
+        ):
+            for index, failure in enumerate(effects, 1):
+                request = self.conversation_request(
+                    session_id=session_id,
+                    turn_id=f"sink_failure_{index}",
+                )
+                if isinstance(failure, asyncio.CancelledError):
+                    with self.assertRaises(asyncio.CancelledError) as caught:
+                        await bound.converse(request)
+                    self.assertIs(caught.exception, failure)
+                else:
+                    with self.assertRaises(BackendProtocolError):
+                        await bound.converse(request)
+
+        self.assertEqual(len(records), 3)
+        self.assertEqual(
+            tuple(record.state for record in records),
+            (
+                ProviderCallState.PREPARED,
+                ProviderCallState.SUBMITTED,
+                ProviderCallState.SUBMITTED,
+            ),
+        )
+        self.assertEqual(
+            tuple(record.actual_transport_utf8_bytes for record in records),
+            (None, 31, 32),
+        )
+        self.assertTrue(
+            all(
+                record.payload.call_kind is ProviderCallKind.CONVERSATION
+                for record in records
+            )
+        )
+
+    async def test_every_sink_control_failure_is_observational_only(self) -> None:
+        session_id = "context_sink_isolation"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        provider = mock.AsyncMock(
+            return_value=ProviderResult(
+                "context-sink-thread",
+                '{"session_id":"context_sink_isolation",'
+                '"conversation_id":"conversation_a",'
+                '"turn_id":"placeholder","content":"safe reply"}',
+                actual_transport_utf8_bytes=19,
+            )
+        )
+        failures: tuple[BaseException, ...] = (
+            RuntimeError("PRIVATE_RUNTIME_SINK"),
+            asyncio.CancelledError("PRIVATE_CANCELLED_SINK"),
+            KeyboardInterrupt("PRIVATE_INTERRUPT_SINK"),
+            SystemExit("PRIVATE_EXIT_SINK"),
+        )
+        sink_calls: list[ProviderCallAccounting] = []
+
+        with mock.patch.object(backend._codex_adapter, "invoke", new=provider):
+            for index, failure in enumerate(failures, 1):
+                turn_id = f"sink_control_{index}"
+                provider.return_value = ProviderResult(
+                    "context-sink-thread",
+                    json.dumps(
+                        {
+                            "session_id": session_id,
+                            "conversation_id": "conversation_a",
+                            "turn_id": turn_id,
+                            "content": "safe reply",
+                        },
+                        separators=(",", ":"),
+                    ),
+                    actual_transport_utf8_bytes=19,
+                )
+
+                def failing_sink(
+                    accounting: ProviderCallAccounting,
+                    *,
+                    active_failure: BaseException = failure,
+                ) -> None:
+                    sink_calls.append(accounting)
+                    raise active_failure
+
+                backend._context_accounting_sink = failing_sink
+                reply = await bound.converse(
+                    self.conversation_request(
+                        session_id=session_id,
+                        turn_id=turn_id,
+                    )
+                )
+                self.assertEqual(reply.content, "safe reply")
+
+        self.assertEqual(len(sink_calls), len(failures))
+        self.assertEqual(provider.await_count, len(failures))
+        self.assertTrue(
+            all(record.state is ProviderCallState.SUBMITTED for record in sink_calls)
+        )
+
+    async def test_sink_control_failures_do_not_mask_provider_failure(self) -> None:
+        session_id = "context_sink_failure_isolation"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        failures: tuple[BaseException, ...] = (
+            RuntimeError("PRIVATE_RUNTIME_SINK"),
+            asyncio.CancelledError("PRIVATE_CANCELLED_SINK"),
+            KeyboardInterrupt("PRIVATE_INTERRUPT_SINK"),
+            SystemExit("PRIVATE_EXIT_SINK"),
+        )
+        sink_calls: list[ProviderCallAccounting] = []
+        provider = mock.AsyncMock(
+            side_effect=ProviderInvocationError(
+                "stable provider failure",
+                taint_existing_thread=False,
+            )
+        )
+
+        with mock.patch.object(backend._codex_adapter, "invoke", new=provider):
+            for index, failure in enumerate(failures, 1):
+
+                def failing_sink(
+                    accounting: ProviderCallAccounting,
+                    *,
+                    active_failure: BaseException = failure,
+                ) -> None:
+                    sink_calls.append(accounting)
+                    raise active_failure
+
+                backend._context_accounting_sink = failing_sink
+                with self.assertRaises(BackendProtocolError) as caught:
+                    await bound.converse(
+                        self.conversation_request(
+                            session_id=session_id,
+                            turn_id=f"sink_domain_failure_{index}",
+                        )
+                    )
+                self.assertEqual(str(caught.exception), "stable provider failure")
+
+        self.assertEqual(len(sink_calls), len(failures))
+        self.assertEqual(provider.await_count, len(failures))
+        self.assertTrue(
+            all(record.state is ProviderCallState.PREPARED for record in sink_calls)
+        )
 
     async def test_adapter_selected_bind_records_exact_lifecycle_terminals(
         self,
@@ -4684,6 +5013,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             with self.subTest(mode=mode):
                 session = f"failure_session_{index}"
                 backend = AgentBackend(self.workspace, executable=executable)
+                accounting_records: list[ProviderCallAccounting] = []
+                backend._context_accounting_sink = accounting_records.append
                 backend.create_session_with_access(session)
                 bound = await backend.bind(self.definition())
                 environment = (
@@ -4701,6 +5032,22 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     ) as caught:
                         await bound.invoke(self.request(session_id=session))
                 self.assertNotIn("dynamic user input", str(caught.exception))
+                self.assertEqual(len(accounting_records), 1)
+                expected_state = (
+                    ProviderCallState.PREPARED
+                    if mode is None
+                    else ProviderCallState.SUBMITTED
+                )
+                self.assertIs(accounting_records[0].state, expected_state)
+                if expected_state is ProviderCallState.PREPARED:
+                    self.assertIsNone(
+                        accounting_records[0].actual_transport_utf8_bytes
+                    )
+                else:
+                    self.assertGreater(
+                        accounting_records[0].actual_transport_utf8_bytes or 0,
+                        0,
+                    )
                 backend.close()
 
     async def test_timeout_terminates_the_codex_process(self) -> None:
@@ -4710,6 +5057,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             timeout_seconds=0.3,
         )
         self.addCleanup(backend.close)
+        accounting_records: list[ProviderCallAccounting] = []
+        backend._context_accounting_sink = accounting_records.append
         backend.create_session_with_access("timeout_session")
         bound = await backend.bind(self.definition())
         real_wait_for = asyncio.wait_for
@@ -4736,6 +5085,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             any(item.get("terminated") is True for item in self.invocations())
         )
+        self.assertEqual(len(accounting_records), 1)
+        self.assertIs(accounting_records[0].state, ProviderCallState.SUBMITTED)
+        self.assertGreater(accounting_records[0].actual_transport_utf8_bytes or 0, 0)
 
     async def test_cancellation_terminates_the_codex_process(self) -> None:
         backend = AgentBackend(
@@ -4743,6 +5095,8 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             executable=str(self.executable),
         )
         self.addCleanup(backend.close)
+        accounting_records: list[ProviderCallAccounting] = []
+        backend._context_accounting_sink = accounting_records.append
         backend.create_session_with_access("cancel_session")
         bound = await backend.bind(self.definition())
         with mock.patch.dict(
@@ -4759,6 +5113,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             any(item.get("terminated") is True for item in self.invocations())
         )
+        self.assertEqual(len(accounting_records), 1)
+        self.assertIs(accounting_records[0].state, ProviderCallState.SUBMITTED)
+        self.assertGreater(accounting_records[0].actual_transport_utf8_bytes or 0, 0)
 
     async def test_unexpected_communication_failure_stops_process_and_propagates(
         self,
