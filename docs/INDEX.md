@@ -106,8 +106,8 @@ Use this index to find one canonical answer instead of searching a long manual.
 
 - [Overview](design/overview.md)
 - [Interactive CLI design system contract](design/interactive-cli-design-system.md)
-- [Canonical Python module inventory (76 production units)](../PYTHON_MODULE_INDEX.md)
-- [Prompts and provider boundary](design/prompts-and-provider.md)
+- [Canonical Python module inventory (78 production units)](../PYTHON_MODULE_INDEX.md)
+- [Prompts, provider boundary, and exact context accounting](design/prompts-and-provider.md)
 - [Session lifecycle](design/session-lifecycle.md)
 - [Consensus workflow](design/consensus-workflow.md)
 - [Persistence](design/persistence.md)

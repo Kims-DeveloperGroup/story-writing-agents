@@ -18,7 +18,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType
@@ -41,6 +41,13 @@ else:
     _msvcrt = None
 
 from .agents import CORE_DOCUMENTS, ROSTER
+from .agent_context import (
+    ContextComponentKind,
+    JsonPath,
+    ProviderCallAccounting,
+    ProviderCallKind,
+    ProviderCallState,
+)
 from .antigravity_adapter import AntigravityAdapter
 from .config import ConfigurationSnapshot, ConfigManager
 from .codex_adapter import CodexAdapter
@@ -107,6 +114,7 @@ from .provider_adapter import (
     ProviderBinding,
     ProviderInvocation,
     ProviderInvocationError,
+    provider_failure_accounting,
 )
 from .provider_process import stop_process
 from .session_lifecycle import (
@@ -841,6 +849,9 @@ class AgentBackend:
             workspace if isinstance(workspace, Workspace) else Workspace(workspace)
         )
         self._debug_log = WorkspaceDebugLog(self.workspace)
+        self._context_accounting_sink: (
+            Callable[[ProviderCallAccounting], object] | None
+        ) = None
         if not isinstance(executable, str) or not executable:
             raise ValueError("Codex executable must be non-empty text")
         manager = ConfigManager(self.workspace)
@@ -2155,10 +2166,7 @@ class AgentBackend:
     def _discard_staging_directory(self, directory: Path) -> None:
         """Remove one staging resource at most once."""
 
-        if directory not in self._staging_directories:
-            return
-        self._staging_directories.remove(directory)
-        shutil.rmtree(directory, ignore_errors=True)
+        self._codex_adapter.discard_staging_directory(directory)
 
     def _finalize_close_if_ready(self) -> None:
         """Clean backend-global resources once no binding can still use them."""
@@ -2201,6 +2209,7 @@ class AgentBackend:
         payload: Mapping[str, Any],
         decode: Callable[[str], _StructuredReply],
         provider_name: str,
+        call_kind: ProviderCallKind,
     ) -> _StructuredReply:
         """Run one mandatory read prelude and one substantive provider call."""
 
@@ -2220,6 +2229,7 @@ class AgentBackend:
                 payload=framed_payload,
                 decode=decode,
                 best_effort_taint=True,
+                call_kind=call_kind,
             )
         except BaseException as exc:
             self._fail_reference_read_without_replacing(
@@ -2259,6 +2269,7 @@ class AgentBackend:
                     provider_name=provider_name,
                 ),
                 best_effort_taint=True,
+                call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
             )
         except BaseException as exc:
             self._fail_reference_read_without_replacing(
@@ -2800,6 +2811,7 @@ class AgentBackend:
                 schema=schema,
                 payload=payload,
                 decode=decode,
+                call_kind=ProviderCallKind.DEBATE,
             )
         return await self._invoke_codex_after_reference_read(
             bound_agent,
@@ -2809,6 +2821,7 @@ class AgentBackend:
             payload=payload,
             decode=decode,
             provider_name=_provider_name,
+            call_kind=ProviderCallKind.DEBATE,
         )
 
     async def _converse_provider(
@@ -2890,6 +2903,7 @@ class AgentBackend:
                 schema=schema,
                 payload=payload,
                 decode=decode,
+                call_kind=ProviderCallKind.CONVERSATION,
             )
         return await self._invoke_codex_after_reference_read(
             bound_agent,
@@ -2899,6 +2913,7 @@ class AgentBackend:
             payload=payload,
             decode=decode,
             provider_name=_provider_name,
+            call_kind=ProviderCallKind.CONVERSATION,
         )
 
     async def _converse_with_retrieval_provider(
@@ -3008,6 +3023,9 @@ class AgentBackend:
                     after_read=after_read,
                 )
                 if observation_frame is None:
+                    call_kind = (
+                        ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL
+                    )
                     payload = self._conversation_retrieval_initial_payload(
                         request,
                         allowed_actions=allowed_actions,
@@ -3018,6 +3036,9 @@ class AgentBackend:
                         )
                         reference_context = None
                 else:
+                    call_kind = (
+                        ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION
+                    )
                     payload = self._conversation_retrieval_continuation_payload(
                         request,
                         action_index=action_index,
@@ -3037,6 +3058,7 @@ class AgentBackend:
                         )
                     ),
                     best_effort_taint=reference_read is not None,
+                    call_kind=call_kind,
                 )
                 reference_provider_failure = False
                 if type(action) in {
@@ -3250,6 +3272,101 @@ class AgentBackend:
         except BaseException:
             pass
 
+    @staticmethod
+    def _provider_component_paths(
+        payload: Mapping[str, Any],
+        *,
+        call_kind: ProviderCallKind,
+    ) -> tuple[dict[JsonPath, ContextComponentKind], tuple[JsonPath, ...]]:
+        """Attribute known payload values without changing their wire shape."""
+
+        paths: dict[JsonPath, ContextComponentKind] = {}
+        top_level = {
+            "user_payload": ContextComponentKind.CURRENT_INPUT,
+            "content": ContextComponentKind.CURRENT_INPUT,
+            "candidate_payload": ContextComponentKind.CANDIDATE,
+            "messages": ContextComponentKind.DEBATE_MESSAGES,
+            "agent_state": ContextComponentKind.AGENT_STATE,
+            "conversation_context": ContextComponentKind.CONVERSATION_CONTEXT,
+            "context": ContextComponentKind.CONVERSATION_CONTEXT,
+            "rag_context": ContextComponentKind.RAG_CONTEXT,
+            "observation": ContextComponentKind.RETRIEVED_OBSERVATION,
+        }
+        for key, kind in top_level.items():
+            if key in payload:
+                paths[(key,)] = kind
+
+        story_context = payload.get("story_session_context")
+        if isinstance(story_context, Mapping):
+            for key, kind in (
+                ("owner_outcomes", ContextComponentKind.AGENT_STATE),
+                ("focused_context", ContextComponentKind.CONVERSATION_CONTEXT),
+            ):
+                if key in story_context:
+                    paths[("story_session_context", key)] = kind
+
+        if (
+            call_kind is ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ
+            and "references" in payload
+        ):
+            paths[("references",)] = (
+                ContextComponentKind.MANDATORY_REFERENCE_DESCRIPTOR
+            )
+
+        reference_root = "untrusted_writing_artifact_context"
+        reference_context = payload.get(reference_root)
+        mandatory_paths: list[JsonPath] = []
+        if type(reference_context) is list:
+            paths[(reference_root,)] = (
+                ContextComponentKind.MANDATORY_REFERENCE_DESCRIPTOR
+            )
+            for index, item in enumerate(reference_context):
+                if isinstance(item, Mapping) and "content" in item:
+                    content_path = (reference_root, index, "content")
+                    paths[content_path] = (
+                        ContextComponentKind.MANDATORY_REFERENCE_CONTENT
+                    )
+                    mandatory_paths.append(content_path)
+        return paths, tuple(mandatory_paths)
+
+    def _observe_context_accounting(
+        self,
+        accounting: ProviderCallAccounting | None,
+    ) -> None:
+        """Offer one content-free call record without changing provider behavior."""
+
+        sink = self._context_accounting_sink
+        if accounting is None or sink is None:
+            return
+        try:
+            outcome = sink(accounting)
+            if inspect.iscoroutine(outcome):
+                outcome.close()
+        except BaseException:
+            pass
+
+    def _observe_provider_failure(
+        self,
+        invocation: ProviderInvocation,
+        failure: BaseException,
+    ) -> None:
+        """Complete one prepared record from validated adapter failure facts."""
+
+        accounting = invocation.call_accounting
+        if accounting is None:
+            return
+        failure_accounting = provider_failure_accounting(failure)
+        self._observe_context_accounting(
+            replace(
+                accounting,
+                state=failure_accounting.state,
+                actual_transport_utf8_bytes=(
+                    failure_accounting.actual_transport_utf8_bytes
+                ),
+                usage=failure_accounting.usage,
+            )
+        )
+
     async def _invoke_provider_structured(
         self,
         bound_agent: BoundAgent,
@@ -3259,6 +3376,7 @@ class AgentBackend:
         payload: Mapping[str, Any],
         decode: Callable[[str], _StructuredReply],
         best_effort_taint: bool = False,
+        call_kind: ProviderCallKind = ProviderCallKind.UNCLASSIFIED,
     ) -> _StructuredReply:
         """Coordinate one structured call through the selected provider adapter.
 
@@ -3289,27 +3407,59 @@ class AgentBackend:
             if generation is None
             else generation.adapters[bound_agent.vendor]
         )
+        component_paths, mandatory_reference_paths = self._provider_component_paths(
+            payload,
+            call_kind=call_kind,
+        )
+        invocation = ProviderInvocation(
+            session_id=session,
+            schema=schema,
+            payload=payload,
+            thread_id=thread_id,
+            call_kind=call_kind,
+            component_paths=component_paths,
+            mandatory_reference_paths=mandatory_reference_paths,
+            binding_components=(
+                bound_agent._provider_binding.binding_components
+            ),
+        )
         provider_diagnostic: str | None = None
         provider_cause: BaseException | None = None
         try:
             result = await adapter.invoke(
                 bound_agent._provider_binding,
-                ProviderInvocation(
-                    session_id=session,
-                    schema=schema,
-                    payload=payload,
-                    thread_id=thread_id,
-                ),
+                invocation,
             )
         except ProviderInvocationError as exc:
+            self._observe_provider_failure(invocation, exc)
             if stored is not None and exc.taint_existing_thread:
                 taint_thread()
             provider_diagnostic = exc.diagnostic
             provider_cause = exc.__cause__
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as exc:
+            self._observe_provider_failure(invocation, exc)
             if stored is not None:
                 taint_thread()
             raise
+        except BaseException as exc:
+            self._observe_provider_failure(invocation, exc)
+            raise
+        else:
+            accounting = invocation.call_accounting
+            self._observe_context_accounting(
+                (
+                    None
+                    if accounting is None
+                    else replace(
+                        accounting,
+                        state=ProviderCallState.SUBMITTED,
+                        actual_transport_utf8_bytes=(
+                            result.actual_transport_utf8_bytes
+                        ),
+                        usage=result.usage,
+                    )
+                )
+            )
         if provider_diagnostic is not None:
             translated = BackendProtocolError(provider_diagnostic)
             if provider_cause is None:

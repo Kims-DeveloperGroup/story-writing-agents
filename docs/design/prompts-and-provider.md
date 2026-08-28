@@ -14,6 +14,133 @@ hash-derived identity; **binding**—the provider object for a definition;
 **visible context**—events explicitly sent in a request; **provider-private
 history**—state behind a provider thread ID.
 
+<a id="exact-provider-context-accounting"></a>
+
+## Exact provider-context accounting
+
+This accounting slice does not change what users can ask agents to do, which
+material agents search or read, prompt selection, provider-call order or count,
+provider-thread scope, or agent-visible story output. It adds content-free
+internal measurement and a fixed comparison baseline. Context selection,
+omission, compaction, and durable accounting history are not implemented here.
+
+### Model-input boundary and canonical encoding
+
+For each physical provider call, the provider-neutral model-input boundary is
+the exact bytes of three inputs:
+
+1. the staged `AGENTS.md` binding instruction, measured from the same snapshot
+   that is written for the provider;
+2. the canonical output schema; and
+3. the canonical inner turn-prompt JSON.
+
+The exact formulas are:
+
+```text
+gross model input = binding instruction + output schema + inner turn prompt
+non-reference model input = gross model input
+                            - exact raw mandatory-reference source bytes delivered
+```
+
+Only the raw strict-UTF-8 bytes of mandatory referenced source text actually
+delivered to an agent are subtracted. Reference paths and ranges, descriptors,
+JSON keys and envelopes, punctuation, escaping, instructions, schema bytes,
+repeated material, and retrieved non-reference text all remain counted.
+
+`canonical_provider_json()` is the sole encoder for accounted schemas and inner
+prompts. It emits strict UTF-8 JSON in insertion order with no insignificant
+whitespace: `ensure_ascii=False`, `allow_nan=False`, and
+`separators=(",", ":")`. It does not sort keys. Rejected values produce a
+fixed content-free diagnostic that does not echo the rejected input.
+
+Codex sends the inner prompt itself on standard input, so its diagnostic
+transport byte count is the inner-prompt count. Antigravity wraps that same
+inner JSON string in its provider-owned outer NDJSON input event. The outer
+NDJSON byte count is retained only as provider-specific transport evidence; it
+is not added to provider-neutral gross model input.
+
+Every serialized byte is attributed once. Binding attribution separates
+binding structure, role system prompt, persona, response language, each core
+document under its canonical identity, and provider constraints. Schema bytes
+belong to output schema. Turn-prompt attribution separates control and envelope
+structure, current input, candidate, debate messages, conversation context,
+agent state, retrieved observation, RAG context, mandatory-reference
+descriptors, and mandatory-reference bodies.
+
+### Call state, observation, and provider usage
+
+`prepared` means the exact accountable input was constructed but provider
+submission was not established. `submitted` means the provider process was
+started; actual transport bytes and provider usage can exist only in that
+state. Every canonically accountable physical call is offered exactly once on
+success, failure, or cancellation to an optional internal observation sink. An
+absent sink or any sink failure cannot change the domain result. An input that
+cannot be canonically encoded has no accounting record. There is no durable
+ledger or accounting persistence yet.
+
+Provider token usage is evidence reported by the provider, not an estimate.
+Only recognized counters whose values are exact nonnegative integers (and not
+booleans) are accepted. A missing, malformed, negative, or unrecognized value
+remains `None`; the runtime never derives a replacement. Provider values must
+be treated as reported snapshots. In particular, Antigravity streaming usage
+for a provider conversation may be cumulative and must not be summed as if
+each snapshot were an independent call delta.
+
+<a id="provider-context-baseline-v1"></a>
+
+### Fixed provider-free baseline v1
+
+The version-1 baseline runs real `StoryRuntime`, `AgentBackend`, binding, and
+payload construction with deterministic provider responses. It blocks network
+and subprocess provider execution, disables semantic RAG, and fixes identities,
+timestamps, paths, revisions, schemas, and response decisions. Its controlled
+timing is fixture data for repeatability, not a measurement of provider or
+runtime performance.
+
+The 14 scenarios produce 56 physical provider calls:
+
+| Scenario | Calls |
+| --- | ---: |
+| Fresh ordinary conversation | 1 |
+| Continued ordinary conversation | 1 |
+| Retrieval with a direct answer | 1 |
+| Retrieval with search, transcript read, and answer | 3 |
+| Whole-file reference | 2 |
+| Ranged-file reference | 2 |
+| Multiple ordered references | 2 |
+| Straight consensus debate | 5 |
+| Conflict, revision, and consensus | 10 |
+| Terminal deadlock | 9 |
+| Outline modification | 5 |
+| Character-sheet modification | 5 |
+| Narrative-rule modification | 5 |
+| Create-only manuscript revision | 5 |
+
+Its frozen cumulative evidence is:
+
+| Measurement | Exact value |
+| --- | ---: |
+| Staged binding instructions | 54,563 UTF-8 bytes |
+| Output schemas | 21,497 UTF-8 bytes |
+| Inner prompts | 104,677 UTF-8 bytes |
+| Fixture transport | 104,677 UTF-8 bytes |
+| Gross model input | 180,737 UTF-8 bytes |
+| Raw mandatory references | 162 UTF-8 bytes |
+| Non-reference model input | 180,575 UTF-8 bytes |
+| Controlled provider elapsed value | 257,000,000 ns |
+| Exact later 50% ceiling | 90,287 UTF-8 bytes |
+
+The ceiling is half of the cumulative non-reference baseline, rounded down; it
+is a comparison target for later work, not a reduction delivered by this
+slice. Provider usage is unavailable in the fixture and remains `None`.
+
+The canonical verification is the
+[baseline test](../../tests/test_context_accounting_baseline.py), and the
+versioned evidence is the
+[v1 golden report](../../tests/fixtures/agent_context/provider_context_baseline_v1.json).
+The report is content-free: it stores counts, call categories, scenario IDs,
+and stable source identities, never prompt, source, reference, or reply bodies.
+
 Stable prompt context and dynamic call data use different channels. During
 definition construction, role prompts and personas are read once, while the
 artifact repository selectively reads only present safe current core

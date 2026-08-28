@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 76.
+Importable production units indexed: 78.
 
-Direct internal dependency edges indexed: 311.
+Direct internal dependency edges indexed: 316.
 
 ## Current Dependency Direction
 
@@ -52,8 +52,12 @@ __main__ -> cli -> conversation_rag_cli
                  |               -> errors/models/session_lifecycle/workspace
                  |               -> writing_artifacts/writing_artifacts.repository
                  |               -> writing_artifacts.runtime_references
-                 -> backend -> antigravity_adapter -> models/provider_adapter/provider_process
-                 |          -> codex_adapter -> agents/config/errors/models
+                 -> backend -> agent_context
+                 |          -> antigravity_adapter -> agent_context/models
+                 |          |                        -> provider_adapter
+                 |          |                        -> provider_process
+                 |          -> codex_adapter -> agent_context/agents/config
+                 |          |                 -> errors/models
                  |          |                 -> provider_adapter/provider_process
                  |          -> config/conversation_retrieval/debug_log
                  |          -> interactive_settings
@@ -163,7 +167,9 @@ conversation_storage.sqlite -> conversation_literal_search/conversation_search
 orchestrator -> conversation_rag_runtime
              -> conversation_storage.composition/contracts
 models -> conversations/agents/errors
-provider_adapter -> models
+agent_context -> agent_context.accounting
+agent_context.accounting -> (standard library only)
+provider_adapter -> agent_context/models
 provider_auth -> (standard library only)
 provider_catalog -> (standard library only)
 provider_process -> (standard library only)
@@ -295,6 +301,57 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:** `tests/test_workspace_and_config.py`,
   `docs/concepts.md`, and `docs/reference/configuration/agent-configuration.md`.
 
+### `story_writing_agents.agent_context`
+
+- **Source:** `src/story_writing_agents/agent_context/__init__.py`
+- **Responsibility:** Provide the internal provider-neutral agent-context
+  facade.
+- **Supported surface:** No project-root-supported API. The package facade
+  exposes exactly 11 package-internal accounting contracts:
+  `ContextComponentBytes`, `ContextComponentKind`, `JsonPath`,
+  `ProviderCallAccounting`, `ProviderCallKind`, `ProviderCallState`,
+  `ProviderJsonEncodingError`, `ProviderPayloadAccounting`, `ProviderUsage`,
+  `account_provider_payload`, and `canonical_provider_json`. This is the
+  package's complete implemented surface.
+- **Direct internal dependencies:** `agent_context.accounting`.
+- **State, resources, and side effects:** Re-exports immutable values and pure
+  functions only. Importing performs no I/O and creates no mutable state or
+  external resource.
+- **Primary verification/documentation:**
+  `tests/test_agent_context_accounting.py`, `tests/test_codex_backend.py`,
+  `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`, and
+  `docs/design/prompts-and-provider.md`.
+
+### `story_writing_agents.agent_context.accounting`
+
+- **Source:** `src/story_writing_agents/agent_context/accounting.py`
+- **Responsibility:** Canonically encode and account for exact provider model
+  input without retaining its content.
+- **Supported surface:** No project-root-supported API. The owning package
+  exposes immutable component, payload, physical-call, state, and exact-usage
+  values; the stable call/component vocabularies; content-free
+  `ProviderJsonEncodingError`; and pure `canonical_provider_json` and
+  `account_provider_payload`. The compact insertion-ordered encoder emits
+  strict UTF-8 JSON with `ensure_ascii=False`; schema and payload component
+  counts partition every emitted byte exactly. Binding components permit
+  distinct content-free core-document path identities. Raw mandatory-reference
+  bytes are a validated non-additive subset, and missing or malformed provider
+  token metadata is never estimated.
+- **Direct internal dependencies:** None.
+- **State, resources, and side effects:** Owns no mutable module state or
+  external resource. Encoding and accounting use call-local memory only;
+  returned payload bytes remain content-bearing caller-owned transport input,
+  while every retained accounting value contains only kinds, safe identities,
+  counts, state, and exact optional usage. Importing performs no I/O.
+- **Primary verification/documentation:**
+  `tests/test_agent_context_accounting.py` and
+  `tests/test_context_accounting_baseline.py`, supported by
+  `tests/context_accounting_baseline_fixture.py` and
+  `tests/fixtures/agent_context/provider_context_baseline_v1.json`;
+  `tests/test_codex_backend.py`, `tests/test_antigravity_adapter.py`,
+  `tests/test_antigravity_parity.py`, and
+  `docs/design/prompts-and-provider.md`.
+
 ### `story_writing_agents.backend`
 
 - **Source:** `src/story_writing_agents/backend.py`
@@ -324,10 +381,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   without exposing the backend's private storage; unexported package-internal
   `release_bound_agent(bound_agent)` requests exact binding retirement without
   exposing or mutating backend collections.
-- **Direct internal dependencies:** `agents`, `antigravity_adapter`,
-  `codex_adapter`, `config`, `conversation_retrieval`, `debug_log`, `errors`,
-  `interactive_settings`, `models`, `provider_adapter`, `provider_process`,
-  `session_lifecycle`, and `workspace`, plus the provider-neutral
+- **Direct internal dependencies:** `agent_context`, `agents`,
+  `antigravity_adapter`, `codex_adapter`, `config`, `conversation_retrieval`,
+  `debug_log`, `errors`, `interactive_settings`, `models`, `provider_adapter`,
+  `provider_process`, `session_lifecycle`, and `workspace`, plus the provider-neutral
   `writing_artifacts.read_actions` boundary.
 - **State, resources, and side effects:** Owns exact V2 provider-session
   manifests at
@@ -393,7 +450,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   payloads serialize that exact bounded envelope and omit their legacy owner-
   state/focused-context projections; omission preserves the established payload
   for compatibility construction. Operation-specific input, candidates,
-  messages, and retrieval controls remain separate payload fields. At
+  messages, and retrieval controls remain separate payload fields. For every
+  physical provider-call boundary, the backend classifies the existing
+  schema and payload values without changing their shape, identifies raw
+  mandatory-reference bodies separately from their descriptors, and combines
+  the adapter-owned binding snapshot with canonical schema/payload accounting.
+  Its optional private, call-local accounting sink receives content-free
+  prepared or submitted records for successful, failed, and cancelled calls;
+  sink absence or failure cannot change provider, decoding, thread, retrieval,
+  or reference behavior, and no accounting record is persisted. Adapter-owned
+  exact transport-byte and recognized usage facts complete a submitted record;
+  unavailable usage remains absent and is never estimated. At
   construction it validates and snapshots the complete workspace system and
   per-agent configuration, reconciles the settings-owned durable provider-route
   generations, and solely resolves the roster's authoritative immutable
@@ -441,7 +508,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   exception, or cancellation flow; `debug_log` retains ownership of its files,
   locks, schema, and rotation.
 - **Primary verification/documentation:** `tests/test_codex_backend.py`,
-  `tests/test_prompts.py`, `tests/test_conversation_retrieval.py`,
+  `tests/test_context_accounting_baseline.py`, `tests/test_prompts.py`,
+  `tests/test_conversation_retrieval.py`,
   `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`,
   `tests/test_session_lifecycle.py`, `docs/reference/backend-and-sessions.md`,
   `docs/guides/antigravity.md`,
@@ -458,8 +526,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   Antigravity CLI protocol.
 - **Supported surface:** No package-supported API. Package-internal
   `AntigravityAdapter` implements the private provider-adapter contract.
-- **Direct internal dependencies:** `models`, `provider_adapter`, and
-  `provider_process`.
+- **Direct internal dependencies:** `agent_context`, `models`,
+  `provider_adapter`, and `provider_process`.
 - **State, resources, and side effects:** Owns the Antigravity executable,
   defensive immutable copies of explicit/system/per-agent model and effort
   primitives, bound-agent selection, exact explicit-over-agent-over-system-
@@ -471,7 +539,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   a compatibility fallback for direct adapter construction. Per-binding release
   deliberately retains provider-native definition and conversation state for
   later backend instances.
-  Binding writes deterministic rules beneath
+  Binding constructs deterministic rules and an exact same-snapshot,
+  content-free component partition for binding structure, role, persona,
+  language, each canonical core-document path, and provider constraints beneath
   `agent_states/orchestrator_state/provider_sessions/.antigravity/definitions/<agent>/<fingerprint>/AGENTS.md`.
   Before definition writes or provider launch, the adapter sequentially
   prepares its owned `state_root`, definitions chain, sessions/runtime chain,
@@ -495,9 +565,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   history. Parent traversal remains pathname-based rather than descriptor-
   anchored, so these rules-file protections likewise do not claim application
   access control or race-proof containment.
-  Invocation serializes its output schema, payload, and NDJSON stdin event
+  Invocation uses the shared canonical encoder for its output schema and
+  payload, then accounts for the exact provider-specific NDJSON stdin bytes
   before creating any new per-session runtime tree; encoding failure therefore
-  creates no new provider or workspace directory. After serialization, it
+  creates no new provider or workspace directory. Process creation distinguishes
+  prepared from submitted failures without replacing established diagnostics,
+  and only recognized nonnegative terminal usage counters become exact usage;
+  missing or malformed counters remain unavailable. After serialization, it
   retains provider-native state and isolated cwd beneath
   `agent_states/orchestrator_state/provider_sessions/.antigravity/sessions/<session>/<agent>/<fingerprint>/provider`
   and sibling `workspace`, copies only the bound rules into that workspace,
@@ -522,13 +596,21 @@ every intermediate arrow. The current runtime graph is acyclic.
   Codex CLI protocol.
 - **Supported surface:** No package-supported API. Package-internal
   `CodexAdapter` implements the private provider-adapter contract.
-- **Direct internal dependencies:** `agents`, `config`, `errors`, `models`,
-  `provider_adapter`, and `provider_process`.
+- **Direct internal dependencies:** `agent_context`, `agents`, `config`,
+  `errors`, `models`, `provider_adapter`, and `provider_process`.
 - **State, resources, and side effects:** Owns construction-time Codex
   executable/model/reasoning settings, isolated binding directories and their
-  generated `AGENTS.md` files, invocation-scoped schema/final-response
-  directories, exact Codex argv construction, JSONL event and thread parsing,
-  and provider-specific safe process diagnostics. When supplied by the backend,
+  generated `AGENTS.md` files plus exact same-snapshot content-free component
+  partitions, invocation-scoped schema/final-response directories, exact Codex
+  argv construction, JSONL event and thread parsing, and provider-specific safe
+  process diagnostics. Binding partitions distinguish structure, role, persona,
+  language, every canonical core-document path, and provider constraints; they
+  are retained only with their corresponding ephemeral staging directory.
+  Invocation uses shared canonical schema and payload bytes, distinguishes
+  prepared from submitted failures, reports exact stdin bytes, and accepts
+  usage only from one recognized `turn.completed` event with nonnegative exact
+  counters. Missing or malformed usage remains unavailable. When supplied by
+  the backend,
   the roster-filtered immutable execution profiles are the exact model/effort
   source for command flags; the older private resolution path remains a
   compatibility fallback for direct adapter construction. Exact per-binding
@@ -551,15 +633,26 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** No package-supported API. Package-internal frozen
   `ExecutionValueSource` and `AgentExecutionProfile` define the immutable
   provider/model/effort identity and authoritative source of every effective
-  value. Frozen `ProviderBinding`, `ProviderInvocation`, and `ProviderResult`
-  values, `ProviderInvocationError`, and `ProviderAdapter` protocol are consumed
-  by the coordinator and concrete adapters. The protocol's private
-  `release(binding)` operation gives the binding owner an exact, idempotent
-  retirement seam.
-- **Direct internal dependencies:** `models`.
-- **State, resources, and side effects:** Owns no mutable state or external
-  resource; importing and constructing its values perform no I/O.
-- **Primary verification/documentation:** `tests/test_codex_backend.py` and
+  value. Frozen `ProviderBinding` carries an exact binding-component snapshot;
+  `ProviderInvocation` retains compatibility mappings while hiding those
+  content-bearing mappings and canonical payload bytes from representation and
+  exposes prepared content-free accounting;
+  `ProviderResult` additively carries optional exact usage and transport-byte
+  facts without changing value equality. `ProviderFailureAccounting`,
+  `record_provider_failure_accounting`, and `provider_failure_accounting`
+  provide the coordinator and concrete adapters one validated package-internal
+  prepared/submitted failure seam. `ProviderInvocationError` and the
+  `ProviderAdapter` protocol retain their existing substitution and taint
+  contracts, including exact idempotent `release(binding)` retirement.
+- **Direct internal dependencies:** `agent_context` and `models`.
+- **State, resources, and side effects:** Owns no mutable module state or
+  external resource. Construction creates only immutable mappings, canonical
+  call-local bytes, and content-free accounting; failure helpers attach only
+  validated content-free facts to the current exception. Importing performs no
+  I/O.
+- **Primary verification/documentation:**
+  `tests/test_agent_context_accounting.py`, `tests/test_codex_backend.py`,
+  `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`, and
   `docs/design/overview.md`.
 
 ### `story_writing_agents.provider_process`
@@ -4270,6 +4363,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   synthesized candidates and final core updates. Only unanimous results enter
   the repository's recoverable, part-scoped publication operation.
 - **Primary verification/documentation:** `tests/test_conversation_runtime.py`,
+  `tests/test_context_accounting_baseline.py`,
   `tests/test_conversation_retrieval.py`, `tests/test_interactive_consensus.py`,
   `tests/test_interactive_conversation.py` for retained runtime use through the
   controller-owned persistent Runner and its single lifecycle event loop,
