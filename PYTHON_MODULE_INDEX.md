@@ -18,7 +18,7 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 84.
 
-Direct internal dependency edges indexed: 340.
+Direct internal dependency edges indexed: 345.
 
 ## Current Dependency Direction
 
@@ -36,7 +36,8 @@ __main__ -> cli -> conversation_rag_cli
                  -> provider_catalog -> (standard library only)
                  -> run_inputs -> errors
                  -> debug_log -> agents/provider_adapter/workspace
-                 -> orchestrator -> conversation_rag_runtime
+                 -> orchestrator -> agent_context.actions/manifest/planning/service/sources
+                 |               -> conversation_rag_runtime
                  |               |  -> conversation_literal_search/conversation_rag
                  |               |  -> conversation_retrieval/conversation_search
                  |               |  -> conversation_storage.contracts/conversations
@@ -164,7 +165,8 @@ conversation_storage.sqlite -> conversation_literal_search/conversation_search
                             -> conversation_storage.sqlite_database
                             -> conversation_storage.sqlite_search_index
                             -> conversation_storage.composition/contracts
-orchestrator -> conversation_rag_runtime
+orchestrator -> agent_context.actions/manifest/planning/service/sources
+             -> conversation_rag_runtime
              -> conversation_storage.composition/contracts
 models -> conversations/agents/errors
 agent_context -> agent_context.accounting
@@ -413,9 +415,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ContextSourcePolicy`, `ContextSourceRecord`, `ContextSourceRegistry`,
   `ContextSourceSearchMatch`, `ContextSourceSnapshot`,
   `FocusedConversationSourceAdapter`, `OwnAgentStateSourceAdapter`, and
-  `WritingArtifactSourceAdapter`. The exact four-slot registry binds canonical
-  writing artifacts, one focused same-session conversation, one active public
-  debate, and the invoking agent's own session state. It owns content-free
+  `WritingArtifactSourceAdapter`. The non-facade package-internal
+  `writing_artifact_source_id(path)` helper is the single canonical source-ID
+  projection consumed by runtime composition. The exact four-slot registry
+  binds canonical writing artifacts, focused same-session conversation
+  authority, one active public debate, and the invoking agent's own session
+  state. The conversation adapter defaults to one focused conversation; its
+  explicit retrieval mode inventories all active conversations in the same
+  session through the borrowed public catalog/event-store ports, while its
+  captured-window mode projects one already-validated immutable focused
+  context without widening authority. It owns content-free
   identities and revisions, exact physical artifact lines, canonical structured
   conversation/debate/owner-state bodies, and repr-hidden strict-UTF-8 captures.
   Active-debate records expose canonical public state first and durable messages
@@ -431,7 +440,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** Adapters retain only borrowed public
   owner collaborators and immutable scope identities. The registry owns no
   cache, descriptor, lock, or file handle. Inventory performs stable
-  list/capture/re-list validation; capture double-reads mutable owners; search
+  list/capture/re-list validation; capture double-reads mutable owners, while
+  captured immutable conversation windows are identity-validated once; search
   prechecks manifest byte facts, acquires sources in canonical manifest order,
   omits over-limit records without minting handles, and revalidates every
   touched source after selection. All source bodies and normalization buffers
@@ -470,7 +480,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   from source search/read, use the provider prelude before the substantive
   action budget, and must complete before verified ledger commit. The two
   failure-fact helpers attach and recover only validated content-free physical
-  call facts without replacing the original exception.
+  call facts without replacing the original exception. Its package-internal,
+  intentionally non-`__all__` `ContextExecutionEventKind`,
+  `ContextExecutionEvent`, and synchronous event-sink type expose only scoped
+  identities, counts, sizes, truncation, and fixed lifecycle outcomes. The
+  optional synchronous answer validator receives the exact authorized answer
+  and authorization after final source revalidation but before reference
+  completion and READY commit, so invalid domain output cannot advance the
+  checkpoint.
 - **Direct internal dependencies:** `agent_context.accounting`,
   `agent_context.actions`, `agent_context.ledger`, `agent_context.manifest`,
   `agent_context.planning`, `agent_context.sources`, and `workspace`.
@@ -484,8 +501,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   delegated to the injected registry adapters, ledger persistence remains
   ledger-owned, and provider transport/native-thread storage remains delegated
   through `ContextProvider`. Every physical call is appended in order; only a
-  revalidated terminal answer commits READY, while cancellation, timeout,
-  malformed action, source/reference failure, exhaustion, or ambiguous
+  revalidated and synchronously domain-validated terminal answer commits READY.
+  Typed lifecycle delivery is synchronous; diagnostic consumers can isolate
+  their own failures, while an intentional public progress-observer failure
+  remains an invocation failure. Cancellation, timeout, malformed action,
+  source/reference or answer-validation failure, exhaustion, or ambiguous
   submitted continuation taints the attempt and, where required, the native
   continuation. Importing performs no I/O, entropy acquisition, registration,
   or mutation; service construction performs no filesystem mutation.
@@ -640,7 +660,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   the same immutable construction-time configuration to the bound runtime
   without exposing the backend's private storage; unexported package-internal
   `release_bound_agent(bound_agent)` requests exact binding retirement without
-  exposing or mutating backend collections.
+  exposing or mutating backend collections. `BoundAgent.context_provider()` is
+  the synchronous package-internal contextual transport capability, with the
+  original private spelling retained as a compatibility delegate. Its pure
+  `decode_context_conversation_answer`, `decode_context_retrieval_answer`, and
+  `decode_context_agent_answer` helpers reuse the backend's canonical domain
+  decoders and enforce exact request correlation before orchestration can
+  authorize a contextual checkpoint.
 - **Direct internal dependencies:** `agent_context`, `agent_context.service`,
   `agents`, `antigravity_adapter`, `codex_adapter`, `config`,
   `conversation_retrieval`, `debug_log`, `errors`, `interactive_settings`,
@@ -2562,7 +2588,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   or caller-supplied timestamp, message, path, traceback field, or serialized
   value is accepted. The separate exact `execution_profile_event` seam accepts
   only validated profile transition, active-snapshot, and confirmation fields
-  for the four dedicated execution-profile operations.
+  for the four dedicated execution-profile operations. The fixed internal
+  taxonomy includes one `agent_context` operation and content-free
+  bootstrap/delta, omission, search/read, answer, invalidation, exhaustion,
+  taint, and checkpoint outcomes; it adds vocabulary without changing the
+  diagnostic record schema.
 - **Direct internal dependencies:** `agents`, `provider_adapter`, and
   `workspace`.
 - **State, resources, and side effects:** Import and construction perform no
@@ -4516,7 +4546,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   default-disabled automatic policy. Supplying no service and no query
   preserves no-attempt behavior; forcing without a service yields an explicit
   disabled fallback.
-- **Direct internal dependencies:** `agents`, `backend`, `config`,
+- **Direct internal dependencies:** `agent_context.actions`,
+  `agent_context.manifest`, `agent_context.planning`, `agent_context.service`,
+  `agent_context.sources`, `agents`, `backend`, `config`,
   `conversation_rag_runtime`, `conversation_retrieval`, `conversation_search`,
   `conversation_storage.composition`, `conversation_storage.contracts`,
   `debug_log`, `directives`, `conversations`, `errors`, `models`, `prompts`,
@@ -4563,7 +4595,30 @@ every intermediate arrow. The current runtime graph is acyclic.
   runtime configuration and prompt assembler. The same runtime, workspace,
   event store, transcript, memory collaborator, session access, focus, and
   workflow locks survive activation. Backend-free construction retains the
-  established on-demand configuration path. For an included consensus request
+  established on-demand configuration path. A runtime with both the concrete
+  backend and complete conversation-storage bundle retains one workspace-bound
+  `AgentContextService` and routes every built-in advisory, retrieval, and
+  debate-agent provider invocation through it. Those routes bind stable
+  definitions without mutable core-document bytes, construct canonical P0
+  current/candidate material, classify role core documents and focused
+  conversation/debate/owner state as bounded working context, and leave other
+  searchable artifacts optional. The four concrete source adapters remain the
+  only read authorities. Runtime-reference proofs become the same ordered
+  content-free reservations while each addressed call receives its matching
+  read invocation, so the mandatory prelude remains outside the substantive
+  action budget and retains the existing operation completion rules.
+  Orchestrator-owned pure validator closures reuse backend domain decoders
+  after service authorization and before reference completion or ledger commit;
+  invalid advisory, retrieval, debate, citation, or publication-shaped output
+  therefore cannot advance READY. Retrieval uses the conversation adapter's
+  explicit active same-session mode, maps only completed used read evidence to
+  public sources, preserves supplied RAG source order, existing progress and
+  transcript persistence, and never runs the legacy provider retrieval loop in
+  parallel. Content-free service events map through the existing private debug
+  guard and, for search/read, the existing retrieval progress sink. When the
+  contextual capability is unavailable, the established eager-definition and
+  direct backend paths remain the compatibility fallback. For an included
+  consensus request
   it captures one canonical immutable context window before reservation, reuses
   that exact snapshot for every agent phase, and delegates create-only sidecar
   persistence to `Workspace`; fresh mode persists identity with no focused
@@ -4672,16 +4727,24 @@ every intermediate arrow. The current runtime graph is acyclic.
   Its optional provider-route-generation map and package-internal
   `build_story_session_context` seam bind durable route identity and bounded
   provider-neutral continuity to the exact definition used by a turn.
+  `build_contextual_definition()` uses the same stable system prompt, persona,
+  language, provider route generation, and fingerprint construction while
+  deliberately returning an empty `context_document_files` tuple; the
+  established `build_definition()` keeps eager core-document binding for
+  legacy and explicitly custom direct callers.
 - **Direct internal dependencies:** `agents`, `config`, `conversations`,
   `models`, `workspace`, `writing_artifacts`, and
   `writing_artifacts.repository`.
 - **State, resources, and side effects:** Reads verified prompt references and
   owner-isolated agent history. With no injected snapshot it resolves persisted
   configuration on demand; with a snapshot it reuses those persisted values but
-  still loads session runtime overrides for every definition. It requests only
-  the agent's core context paths and binds stable, strict-UTF-8, NUL-free
-  immutable byte snapshots into prompt references; no later provider step
-  reopens an artifact path. Present safe empty, initialized, manual,
+  still loads session runtime overrides for every definition. The legacy path
+  requests only the agent's core context paths and binds stable, strict-UTF-8,
+  NUL-free immutable byte snapshots into prompt references; no later provider
+  step reopens an artifact path. The contextual path performs no core-document
+  read and leaves mutable role artifacts outside the provider-binding
+  fingerprint for source-owned runtime selection. Present safe empty,
+  initialized, manual,
   pre-provenance, published, and hash-divergent files are included; absent or
   unsafe files are omitted, while invalid UTF-8 or NUL content fails closed.
   A nonzero provider-route generation participates in the definition
@@ -5129,6 +5192,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   and provider-text projections and uses a no-operation-ID fast path when no
   references exist. Each referenced provider attempt receives a fresh
   contiguous ordinal, UUID-backed invocation identity, and attempt value 1.
+  While open, `reference_proofs` projects the exact ordered immutable
+  content-free authorized-reference facts without exposing captured bytes or
+  the repository-owned authorization capability, allowing context composition
+  to reserve the same reference batch without private-state access.
   Successful completion requires no pending invocation before repository
   finalization; failures terminate unfinished invocations and return one safe,
   structured `ReferenceOperationFailure`.
@@ -5522,10 +5589,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   catalog/event store, and Workspace.
   They never import orchestration, providers, prompts, runtime, or ledger, and
   backend imports only the service-owned provider protocol rather than its
-  planner, ledger, or source collaborators. Mandatory references pass through
-  answer authorization unchanged, remain outside source search/read authority,
-  and execute as a separately accounted backend prelude before the substantive
-  context-action budget. Native contextual continuation storage stays
+  planner, ledger, or source collaborators. Orchestrator is the sole production
+  composition consumer: it imports the five direct context contracts, builds
+  runtime manifests and classifications, supplies the fixed authorities,
+  validates domain answers, and projects typed context events into existing
+  debug/progress owners without reversing any context dependency. Prompts owns
+  the stable no-core-byte runtime definition while retaining its eager legacy
+  definition. Mandatory references pass through answer authorization unchanged,
+  remain outside source search/read authority, and execute as a separately
+  accounted backend prelude before the substantive context-action budget; the
+  runtime-reference coordinator exposes only ordered content-free proof facts
+  for reservation construction. Native contextual continuation storage stays
   backend-owned and is keyed independently from legacy session threads. None
   of the three modules is re-exported by the accounting-only `agent_context`
   facade.
