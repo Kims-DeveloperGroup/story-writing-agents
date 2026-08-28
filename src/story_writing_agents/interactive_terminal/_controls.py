@@ -51,7 +51,6 @@ _ARTIFACT_REFERENCE_NO_MATCH_TEXT = (
 )
 _MAIN_INPUT_HISTORY_LIMIT = 100
 _MAIN_CHOICE_POSITION_PREFIX = "main.choice:"
-_PICKER_WINDOW_SIZE = 7
 _PICKER_EMPTY_TEXT = "No choices available."
 _PICKER_VALIDATION_TEXT = (
     "Enter an enabled choice number, press Enter for the highlighted choice, "
@@ -582,6 +581,8 @@ def initialize_picker(picker: Picker) -> PickerControlState:
     initialized = Picker(
         picker.prompt,
         picker.choices,
+        presentation=picker.presentation,
+        visible_choice_limit=picker.visible_choice_limit,
         highlighted_id=highlighted_id,
         selected_id=picker.selected_id,
         notice=notice,
@@ -591,6 +592,7 @@ def initialize_picker(picker: Picker) -> PickerControlState:
         0,
         _picker_highlighted_index(initialized),
         len(initialized.choices),
+        initialized.visible_choice_limit,
     )
     return PickerControlState(initialized, window_start)
 
@@ -613,7 +615,12 @@ def reconcile_picker(
     picker = state.picker
     # Constructing the candidate vocabulary validates identity uniqueness before
     # any reconciliation result is derived.
-    Picker(picker.prompt, choices)
+    Picker(
+        picker.prompt,
+        choices,
+        presentation=picker.presentation,
+        visible_choice_limit=picker.visible_choice_limit,
+    )
     enabled_by_id = {
         choice.identity: choice for choice in choices if choice.enabled
     }
@@ -657,6 +664,8 @@ def reconcile_picker(
     reconciled = Picker(
         picker.prompt,
         choices,
+        presentation=picker.presentation,
+        visible_choice_limit=picker.visible_choice_limit,
         highlighted_id=highlighted_id,
         selected_id=selected_id,
         notice=notice,
@@ -664,12 +673,13 @@ def reconcile_picker(
     )
     clamped_start = min(
         state.window_start,
-        max(0, len(choices) - _PICKER_WINDOW_SIZE),
+        max(0, len(choices) - picker.visible_choice_limit),
     )
     window_start = _picker_window_start(
         clamped_start,
         _picker_highlighted_index(reconciled),
         len(choices),
+        reconciled.visible_choice_limit,
     )
     return PickerControlState(reconciled, window_start)
 
@@ -728,6 +738,8 @@ def transition_picker(
     moved = Picker(
         picker.prompt,
         picker.choices,
+        presentation=picker.presentation,
+        visible_choice_limit=picker.visible_choice_limit,
         highlighted_id=picker.choices[moved_index].identity,
         selected_id=picker.selected_id,
         notice=picker.notice,
@@ -741,6 +753,7 @@ def transition_picker(
                 visible_start,
                 moved_index,
                 len(moved.choices),
+                moved.visible_choice_limit,
             ),
         ),
         None,
@@ -795,7 +808,7 @@ def transition_picker_fallback(
 
 
 def project_picker_viewport(state: PickerControlState) -> PickerViewport:
-    """Project an at-most-seven-row window that minimally contains highlight."""
+    """Project a bounded window that minimally contains the highlight."""
 
     if type(state) is not PickerControlState:
         raise TypeError("state must be a PickerControlState")
@@ -805,15 +818,16 @@ def project_picker_viewport(state: PickerControlState) -> PickerViewport:
     start = _picker_window_start(
         min(
             state.window_start,
-            max(0, choice_count - _PICKER_WINDOW_SIZE),
+            max(0, choice_count - state.picker.visible_choice_limit),
         ),
         _picker_highlighted_index(state.picker),
         choice_count,
+        state.picker.visible_choice_limit,
     )
     return PickerViewport(
         state.picker,
         start,
-        min(choice_count, start + _PICKER_WINDOW_SIZE),
+        min(choice_count, start + state.picker.visible_choice_limit),
     )
 
 
@@ -848,18 +862,19 @@ def _picker_window_start(
     start: int,
     highlighted_index: int | None,
     choice_count: int,
+    visible_choice_limit: int,
 ) -> int:
     """Clamp a window and minimally shift it around one highlighted ordinal."""
 
     if choice_count == 0:
         return 0
-    start = min(start, max(0, choice_count - _PICKER_WINDOW_SIZE))
+    start = min(start, max(0, choice_count - visible_choice_limit))
     if highlighted_index is None:
         return start
     if highlighted_index < start:
         return highlighted_index
-    if highlighted_index >= start + _PICKER_WINDOW_SIZE:
-        return highlighted_index - (_PICKER_WINDOW_SIZE - 1)
+    if highlighted_index >= start + visible_choice_limit:
+        return highlighted_index - (visible_choice_limit - 1)
     return start
 
 
@@ -883,6 +898,8 @@ def _commit_picker(
     committed = Picker(
         picker.prompt,
         picker.choices,
+        presentation=picker.presentation,
+        visible_choice_limit=picker.visible_choice_limit,
         highlighted_id=identity,
         selected_id=identity,
         notice=notice,
@@ -896,6 +913,7 @@ def _commit_picker(
                 visible_start,
                 committed_index,
                 len(committed.choices),
+                committed.visible_choice_limit,
             ),
         ),
         ControlOutcome(ControlOutcomeKind.COMMIT, text=identity),
@@ -911,6 +929,8 @@ def _reject_picker(
     rejected = Picker(
         picker.prompt,
         picker.choices,
+        presentation=picker.presentation,
+        visible_choice_limit=picker.visible_choice_limit,
         highlighted_id=picker.highlighted_id,
         selected_id=picker.selected_id,
         notice=Notice(
@@ -943,6 +963,8 @@ def _picker_with_state(
         Picker(
             picker.prompt,
             picker.choices,
+            presentation=picker.presentation,
+            visible_choice_limit=picker.visible_choice_limit,
             highlighted_id=picker.highlighted_id,
             selected_id=picker.selected_id,
             notice=notice,

@@ -571,6 +571,11 @@ class PublicCompatibilityFoundationTests(unittest.TestCase):
             ),
             InteractivePromptInput.read_prompt: (
                 ("prompt", positional, required),
+                (
+                    "presentation",
+                    keyword,
+                    _model.InputPresentation.STANDARD,
+                ),
                 ("context", keyword, ()),
                 ("initial_value", keyword, None),
                 ("transient", keyword, True),
@@ -897,10 +902,36 @@ class SemanticModelFoundationTests(unittest.TestCase):
         prompt = Prompt("Input")
         unseeded = _model.InputPromptView((), prompt)
         self.assertIsNone(unseeded.initial_value)
+        self.assertIs(
+            unseeded.presentation,
+            _model.InputPresentation.STANDARD,
+        )
         self.assertEqual(
             tuple(field.name for field in fields(unseeded)),
-            ("context", "prompt", "initial_value"),
+            ("context", "prompt", "presentation", "initial_value"),
         )
+        presentation = inspect.signature(_model.InputPromptView).parameters[
+            "presentation"
+        ]
+        self.assertIs(presentation.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIs(presentation.default, _model.InputPresentation.STANDARD)
+
+        form = _model.InputPromptView(
+            (),
+            prompt,
+            presentation=_model.InputPresentation.FORM,
+        )
+        self.assertIs(form.presentation, _model.InputPresentation.FORM)
+        for invalid in ("form", ViewState.OPEN, object()):
+            with self.subTest(presentation=invalid), self.assertRaisesRegex(
+                TypeError,
+                "InputPresentation",
+            ):
+                _model.InputPromptView(
+                    (),
+                    prompt,
+                    presentation=invalid,  # type: ignore[arg-type]
+                )
 
         for initial_value in ("", "  ", "초기 界"):
             with self.subTest(initial_value=initial_value):

@@ -122,6 +122,7 @@ from ..interactive_terminal import (
     InteractiveDebateProgress,
     InteractiveCompositionInput,
     InteractiveMainInput,
+    InputPresentation,
     format_agent_reply_content,
     AttachmentKind,
     Choice,
@@ -2528,6 +2529,50 @@ class InteractiveController:
             return provider
         return None
 
+    def _read_settings_picker(
+        self,
+        prompt: Prompt,
+        choices: tuple[Choice, ...],
+        *,
+        highlighted_id: str | None = None,
+        selected_id: str | None = None,
+        notice: Notice | None = None,
+        state: ViewState = ViewState.OPEN,
+        visible_choice_limit: int = 7,
+        transient: bool = True,
+    ) -> ControlOutcome:
+        """Read one controller-owned Settings picker in form presentation."""
+
+        return self._picker_input.read_picker(
+            prompt,
+            choices,
+            presentation=InputPresentation.FORM,
+            visible_choice_limit=visible_choice_limit,
+            highlighted_id=highlighted_id,
+            selected_id=selected_id,
+            notice=notice,
+            state=state,
+            transient=transient,
+        )
+
+    def _read_settings_prompt(
+        self,
+        prompt: Prompt,
+        *,
+        context: tuple[Panel | Section | Field | Notice, ...] = (),
+        initial_value: str | None = None,
+        transient: bool = True,
+    ) -> ControlOutcome:
+        """Read one controller-owned Settings value in form presentation."""
+
+        return self._prompt_input.read_prompt(
+            prompt,
+            presentation=InputPresentation.FORM,
+            context=context,
+            initial_value=initial_value,
+            transient=transient,
+        )
+
     def _run_settings(self) -> None:
         """Edit one isolated configuration candidate and save only on request."""
 
@@ -2694,7 +2739,7 @@ class InteractiveController:
                 )
             if top_highlight not in {choice.identity for choice in choices}:
                 top_highlight = None
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Settings",
                     instruction=(
@@ -2706,6 +2751,7 @@ class InteractiveController:
                 choices,
                 highlighted_id=top_highlight,
                 notice=_settings_pending_save_notice(state),
+                visible_choice_limit=len(choices),
                 transient=True,
             )
             if outcome.kind in {
@@ -3295,6 +3341,7 @@ class InteractiveController:
             before = snapshot
             result = coordinator.run(
                 snapshot,
+                presentation=InputPresentation.FORM,
                 selected_provider=provider,
             )
             if result.kind is InteractiveAuthResultKind.CANCEL:
@@ -3333,7 +3380,7 @@ class InteractiveController:
                 provider_overrides=self._backend.backend_overrides,
             )
         )
-        outcome = self._picker_input.read_picker(
+        outcome = self._read_settings_picker(
             Prompt(
                 ("Apply changes?" if action == "save" else "Discard changes?"),
                 instruction=(
@@ -3409,7 +3456,7 @@ class InteractiveController:
         armed_value: object = _SETTINGS_UNARMED
         while True:
             pending = state.pending.system_defaults.language
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Language",
                     instruction=_settings_value_instruction(
@@ -3453,7 +3500,7 @@ class InteractiveController:
         armed_value: object = _SETTINGS_UNARMED
         while True:
             pending = state.pending.system_defaults.persona
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Persona",
                     instruction=_settings_value_instruction(
@@ -3487,7 +3534,7 @@ class InteractiveController:
         notice: Notice | None = None
         armed_value: object = _SETTINGS_UNARMED
         while True:
-            outcome = self._prompt_input.read_prompt(
+            outcome = self._read_settings_prompt(
                 Prompt(
                     "Maximum debate rounds",
                     scope="settings",
@@ -3542,7 +3589,7 @@ class InteractiveController:
                 state.pending.system_defaults.conversation_storage_backend
                 or "filesystem"
             )
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Conversation storage",
                     instruction=_settings_value_instruction(
@@ -3603,7 +3650,7 @@ class InteractiveController:
             )
             current_automatic = "On" if current.conversation_rag_automatic else "Off"
             pending_automatic = "On" if pending.conversation_rag_automatic else "Off"
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Conversation RAG",
                     instruction=(
@@ -3663,7 +3710,7 @@ class InteractiveController:
         while True:
             pending = state.pending.system_defaults.conversation_rag_provider
             pending_id = "local" if pending == "local" else "disabled"
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Conversation RAG Provider",
                     instruction=_settings_value_instruction(
@@ -3713,7 +3760,7 @@ class InteractiveController:
         while True:
             automatic = state.pending.system_defaults.conversation_rag_automatic
             pending_id = "on" if automatic else "off"
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Conversation RAG Automatic",
                     instruction=_settings_value_instruction(
@@ -3769,7 +3816,7 @@ class InteractiveController:
             pending = (
                 "on" if state.pending.system_defaults.show_message_details else "off"
             )
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Message details",
                     instruction=_settings_value_instruction(
@@ -3835,7 +3882,7 @@ class InteractiveController:
                 state=ViewState.OPEN,
             )
         )
-        outcome = self._picker_input.read_picker(
+        outcome = self._read_settings_picker(
             Prompt(
                 "Install SQLite prerequisite?",
                 instruction="Choose the exact YES to run the command.",
@@ -3884,7 +3931,7 @@ class InteractiveController:
                         ),
                     )
                 )
-            agent_outcome = self._picker_input.read_picker(
+            agent_outcome = self._read_settings_picker(
                 Prompt(
                     "Agents",
                     instruction=(
@@ -3992,7 +4039,7 @@ class InteractiveController:
                     if enabled_fields
                     else None
                 )
-                field_outcome = self._picker_input.read_picker(
+                field_outcome = self._read_settings_picker(
                     Prompt(
                         "Agent settings",
                         scope=AGENT_SPECS[agent_id].display_name,
@@ -4053,7 +4100,7 @@ class InteractiveController:
                 agent_id,
                 provider_overrides=self._backend.backend_overrides,
             )
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Provider",
                     scope=AGENT_SPECS[agent_id].display_name,
@@ -4134,7 +4181,7 @@ class InteractiveController:
                 (choice.identity for choice in choices if choice.enabled),
                 None,
             )
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Provider",
                     scope=AGENT_SPECS[agent_id].display_name,
@@ -4174,6 +4221,7 @@ class InteractiveController:
 
             result = coordinator.run(
                 snapshot,
+                presentation=InputPresentation.FORM,
                 selected_provider=provider,
             )
             if result.kind is InteractiveAuthResultKind.CANCEL:
@@ -4332,7 +4380,7 @@ class InteractiveController:
             choice_ids = {choice.identity for choice in choices}
             if highlighted_id not in choice_ids:
                 highlighted_id = selected_id
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Model",
                     scope=(f"{AGENT_SPECS[agent_id].display_name} · {provider_name}"),
@@ -4426,7 +4474,7 @@ class InteractiveController:
         while True:
             agent = state.pending.agent_configs[agent_id]
             pending = agent.antigravity_model if antigravity else agent.codex_model
-            outcome = self._prompt_input.read_prompt(
+            outcome = self._read_settings_prompt(
                 Prompt(
                     "Custom model",
                     scope=(f"{AGENT_SPECS[agent_id].display_name} · {provider_name}"),
@@ -4610,7 +4658,7 @@ class InteractiveController:
             choice_ids = {choice.identity for choice in choices}
             if highlighted_id not in choice_ids:
                 highlighted_id = selected_id
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Effort",
                     scope=(f"{AGENT_SPECS[agent_id].display_name} · {provider_name}"),
