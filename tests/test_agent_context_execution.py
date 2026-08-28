@@ -53,6 +53,7 @@ from story_writing_agents.agent_context.service import (
     ContextProviderFailureFacts,
     ContextReferencePreludeRequest,
     ContextReferencePreludeResult,
+    ContextSourceClassification,
     context_provider_failure_facts,
     record_context_provider_failure,
 )
@@ -508,6 +509,59 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
         self.assertEqual(context_provider_failure_facts(ValueError()), ContextProviderFailureFacts())
         self.assertNotIn("PRIVATE_PROVIDER_EXCEPTION", repr(facts))
 
+    def test_conditional_source_classification_is_exact_and_legacy_compatible(
+        self,
+    ) -> None:
+        legacy = ContextSourceClassification(
+            "source-legacy",
+            ContextSemanticChannel.HARD_CONSTRAINT,
+            ContextPriority.P2_WORKING,
+            0,
+        )
+        self.assertIs(legacy.allow_absent, False)
+        conditional = ContextSourceClassification(
+            "source-conditional",
+            ContextSemanticChannel.HARD_CONSTRAINT,
+            ContextPriority.P2_WORKING,
+            1,
+            allow_absent=True,
+        )
+        self.assertIs(conditional.allow_absent, True)
+        for channel, priority, allow_absent in (
+            (
+                ContextSemanticChannel.HARD_CONSTRAINT,
+                ContextPriority.P2_WORKING,
+                1,
+            ),
+            (
+                ContextSemanticChannel.HARD_CONSTRAINT,
+                ContextPriority.P3_OPTIONAL,
+                True,
+            ),
+            (
+                ContextSemanticChannel.OPTIONAL_BACKGROUND,
+                ContextPriority.P2_WORKING,
+                True,
+            ),
+        ):
+            with self.subTest(
+                channel=channel,
+                priority=priority,
+                allow_absent=allow_absent,
+            ):
+                with self.assertRaises(ContextExecutionError) as caught:
+                    ContextSourceClassification(
+                        "source-invalid",
+                        channel,
+                        priority,
+                        0,
+                        allow_absent=allow_absent,  # type: ignore[arg-type]
+                    )
+                self.assertIs(
+                    caught.exception.code,
+                    ContextExecutionErrorCode.INVALID_VALUE,
+                )
+
 
 class ContextExecutionLifecycleTests(ContextExecutionTestCase):
     async def test_no_action_reserves_before_provider_and_commits_exact_call(self) -> None:
@@ -663,6 +717,30 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
 
 
 class ContextExecutionFailureTests(ContextExecutionTestCase):
+    async def test_unmatched_strict_classification_fails_before_provider(
+        self,
+    ) -> None:
+        request = self.request(
+            source_classifications=(
+                ContextSourceClassification(
+                    "source-not-in-authoritative-inventory",
+                    ContextSemanticChannel.HARD_CONSTRAINT,
+                    ContextPriority.P2_WORKING,
+                    0,
+                ),
+            )
+        )
+        provider = _ScriptedProvider((_answer,))
+
+        with self.assertRaises(ContextExecutionError) as caught:
+            await self.invoke(provider, request)
+
+        self.assertIs(
+            caught.exception.code,
+            ContextExecutionErrorCode.INVALID_VALUE,
+        )
+        self.assertEqual(provider.calls, [])
+
     async def test_final_provider_call_is_answer_only_and_rejects_nonterminal(self) -> None:
         self.publish()
         request = self.request(

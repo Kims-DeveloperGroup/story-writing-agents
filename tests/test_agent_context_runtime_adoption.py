@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import tempfile
 import unittest
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any
 from unittest import mock
 
@@ -22,11 +24,19 @@ from story_writing_agents import (
     ROSTER,
     SPECIALIST_IDS,
     StoryRuntime,
+    Workspace,
 )
 from story_writing_agents.agent_context import (
     ProviderCallKind,
     ProviderCallState,
 )
+from story_writing_agents.agent_context.ledger import (
+    ContextLedger,
+    ContextLedgerKey,
+    ContextLedgerRecordState,
+)
+from story_writing_agents.agent_context.manifest import ContextSubjectKind
+from story_writing_agents.agent_context.service import AgentContextService
 from story_writing_agents.agent_context.sources import writing_artifact_source_id
 from story_writing_agents.conversation_retrieval import (
     ConversationRagAttemptOutcome,
@@ -515,6 +525,178 @@ class ContextualRuntimeAdoptionTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def source_id(filename: str) -> str:
         return writing_artifact_source_id(f"core_documents/{filename}")
+
+    async def test_raw_workspace_first_turns_and_late_role_core_are_contextual(
+        self,
+    ) -> None:
+        temporary = tempfile.TemporaryDirectory(prefix="raw-context-runtime-")
+        self.addCleanup(temporary.cleanup)
+        workspace = Workspace(Path(temporary.name) / "workspace").initialize()
+        services = compose_filesystem_conversation_storage(workspace)
+        backend = AgentBackend(workspace, executable=sys.executable)
+        self.addCleanup(backend.close)
+        provider = _ContextAdapterHarness()
+        adapter_patch = mock.patch.object(
+            backend._codex_adapter,
+            "invoke",
+            side_effect=provider.invoke,
+        )
+        adapter_patch.start()
+        self.addCleanup(adapter_patch.stop)
+        runtime = StoryRuntime(
+            workspace,
+            backend,
+            conversation_storage_services=services,
+        )
+        session_id = "raw-first-turns"
+        backend.create_session_with_access(session_id)
+        ordinary_id = services.catalog.create(
+            session_id,
+            "Fresh ordinary",
+        ).conversation_id
+        retrieval_id = services.catalog.create(
+            session_id,
+            "Fresh retrieval",
+        ).conversation_id
+
+        ordinary = await runtime.converse(
+            session_id,
+            ordinary_id,
+            PLOT_ARCHITECT,
+            "first ordinary request",
+        )
+        retrieval = await runtime.converse_with_retrieval(
+            session_id,
+            retrieval_id,
+            PLOT_ARCHITECT,
+            "first retrieval request",
+            memory_service=ConversationMemoryService(
+                ConversationSearchScope(session_id),
+                services.catalog,
+                services.event_store,
+            ),
+        )
+        self.assertEqual(ordinary.content, "contextual reply: first ordinary request")
+        self.assertEqual(retrieval.content, "retrieved reply: first retrieval request")
+        self.assertEqual(len(provider.context_payloads), 2)
+
+        absent_core_ids = {
+            writing_artifact_source_id(f"core_documents/{filename}")
+            for filename in AGENT_SPECS[PLOT_ARCHITECT].context_documents
+        }
+        for payload in provider.context_payloads:
+            available_ids = {
+                item["source_id"] for item in payload["available_sources"]
+            }
+            projected_ids = set(_projected_source_ids(payload))
+            self.assertTrue(absent_core_ids.isdisjoint(available_ids))
+            self.assertTrue(absent_core_ids.isdisjoint(projected_ids))
+
+        for payload, conversation_id, pending_text in (
+            (
+                provider.context_payloads[0],
+                ordinary_id,
+                "first ordinary request",
+            ),
+            (
+                provider.context_payloads[1],
+                retrieval_id,
+                "first retrieval request",
+            ),
+        ):
+            source_id = f"conversation:{conversation_id}"
+            self.assertIn(
+                source_id,
+                {item["source_id"] for item in payload["available_sources"]},
+            )
+            unit = next(
+                unit
+                for unit in payload["projected_units"]
+                if source_id
+                in {
+                    source["source_id"] for source in unit["sources"]
+                }
+            )
+            self.assertEqual(json.loads(unit["content"])["pairs"], [])
+            self.assertNotIn(pending_text, unit["content"])
+
+        self.assertEqual(
+            tuple(
+                event.kind
+                for event in services.event_store.read(session_id, ordinary_id)
+            ),
+            (
+                ConversationEventKind.USER_MESSAGE,
+                ConversationEventKind.AGENT_REPLY,
+            ),
+        )
+        self.assertEqual(
+            tuple(
+                event.kind
+                for event in services.event_store.read(session_id, retrieval_id)
+            ),
+            (
+                ConversationEventKind.USER_MESSAGE,
+                ConversationEventKind.AGENT_REPLY,
+            ),
+        )
+
+        core_id = writing_artifact_source_id(
+            "core_documents/global_outline.md"
+        )
+        WritingArtifactRepository(workspace.root).commit_consensus(
+            output_path="part-01/raw-context.md",
+            candidate="raw context publication",
+            core_updates={"global_outline.md": "LATE_ROLE_CORE_MARKER"},
+            session_id=session_id,
+            debate_id="raw-context-publication",
+            revision_id="r0",
+            candidate_author_agent_id=EXECUTION_SPECIALIST,
+        )
+        follow_up = await runtime.converse(
+            session_id,
+            ordinary_id,
+            PLOT_ARCHITECT,
+            "ordinary after core creation",
+        )
+        self.assertEqual(
+            follow_up.content,
+            "contextual reply: ordinary after core creation",
+        )
+        delta = provider.context_payloads[2]
+        self.assertEqual(delta["delivery_mode"], "delta")
+        core_entry = next(
+            item for item in delta["available_sources"]
+            if item["source_id"] == core_id
+        )
+        self.assertEqual(core_entry["priority"], "p2_working")
+        self.assertEqual(core_entry["semantic_channel"], "hard_constraint")
+        self.assertIn(core_id, _projected_source_ids(delta))
+        self.assertIn(
+            "LATE_ROLE_CORE_MARKER",
+            "\n".join(
+                unit["content"]
+                for unit in delta["projected_units"]
+                if core_id
+                in {
+                    source["source_id"] for source in unit["sources"]
+                }
+            ),
+        )
+        scope = AgentContextService(workspace).scope(
+            session_id,
+            ContextSubjectKind.CONVERSATION,
+            ordinary_id,
+            PLOT_ARCHITECT,
+        )
+        inspection = ContextLedger(workspace).inspect(
+            ContextLedgerKey(scope, "codex")
+        )
+        self.assertIs(inspection.record.state, ContextLedgerRecordState.READY)
+        self.assertEqual(
+            len(services.event_store.read(session_id, ordinary_id)),
+            4,
+        )
 
     async def test_four_roles_bootstrap_delta_core_refresh_and_scope_switch(
         self,
