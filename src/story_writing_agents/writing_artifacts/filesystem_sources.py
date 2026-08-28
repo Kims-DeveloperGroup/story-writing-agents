@@ -5,7 +5,11 @@ from __future__ import annotations
 import hashlib
 
 from ..errors import WorkspaceFormatError, WorkspaceSecurityError
-from ._storage import ArtifactEntrySecurityError, SecureWorkspaceStorage
+from ._storage import (
+    ArtifactEntrySecurityError,
+    ArtifactTraversalLimitError,
+    SecureWorkspaceStorage,
+)
 from .catalog import (
     CORE_ARTIFACT_PATHS,
     MAX_ARTIFACT_PATH_BYTES,
@@ -17,6 +21,13 @@ from .references import (
     ArtifactSourceIdentity,
     reference_source_kind,
 )
+
+MAX_ARTIFACT_SOURCE_TRAVERSAL_ENTRIES = 8_192
+MAX_ARTIFACT_SOURCE_INVENTORY = 4_096
+
+
+class ArtifactSourceInventoryLimitError(WorkspaceFormatError):
+    """Writing-artifact source discovery exceeded one fixed inventory limit."""
 
 
 class ArtifactSourceInvalidUtf8Error(WorkspaceFormatError):
@@ -38,6 +49,31 @@ class CanonicalArtifactFilesystem:
     def list_paths(self) -> tuple[str, ...]:
         """Return deterministic eligible paths using metadata-only inspection."""
 
+        return self.list_paths_bounded(
+            max_visited_entries=MAX_ARTIFACT_SOURCE_TRAVERSAL_ENTRIES,
+            max_eligible_sources=MAX_ARTIFACT_SOURCE_INVENTORY,
+        )
+
+    def list_paths_bounded(
+        self,
+        *,
+        max_visited_entries: int,
+        max_eligible_sources: int,
+    ) -> tuple[str, ...]:
+        """Return the complete eligible inventory or fail at either hard cap."""
+
+        if (
+            type(max_visited_entries) is not int
+            or max_visited_entries < 1
+            or max_visited_entries > MAX_ARTIFACT_SOURCE_TRAVERSAL_ENTRIES
+        ):
+            raise ValueError("max_visited_entries is outside the supported range")
+        if (
+            type(max_eligible_sources) is not int
+            or max_eligible_sources < 1
+            or max_eligible_sources > MAX_ARTIFACT_SOURCE_INVENTORY
+        ):
+            raise ValueError("max_eligible_sources is outside the supported range")
         found: list[str] = []
         for path in CORE_ARTIFACT_PATHS:
             try:
@@ -45,14 +81,23 @@ class CanonicalArtifactFilesystem:
             except (FileNotFoundError, ArtifactEntrySecurityError):
                 continue
             found.append(path)
+            if len(found) > max_eligible_sources:
+                raise ArtifactSourceInventoryLimitError(
+                    "writing-artifact source inventory exceeds its limit"
+                )
 
         try:
             manuscripts = self._storage.list_regular_files(
                 "manuscript",
                 max_path_bytes=MAX_ARTIFACT_PATH_BYTES,
+                max_visited_entries=max_visited_entries,
             )
         except FileNotFoundError:
             manuscripts = ()
+        except ArtifactTraversalLimitError:
+            raise ArtifactSourceInventoryLimitError(
+                "writing-artifact source inventory exceeds its limit"
+            ) from None
         for path, _identity in manuscripts:
             try:
                 kind = reference_source_kind(path)
@@ -60,6 +105,10 @@ class CanonicalArtifactFilesystem:
                 continue
             if kind is ArtifactKind.MANUSCRIPT:
                 found.append(path)
+                if len(found) > max_eligible_sources:
+                    raise ArtifactSourceInventoryLimitError(
+                        "writing-artifact source inventory exceeds its limit"
+                    )
         return tuple(sorted(found))
 
     def read_snapshot(
