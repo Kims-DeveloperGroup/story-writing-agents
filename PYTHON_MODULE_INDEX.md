@@ -389,8 +389,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   codes, exact source/authority/boundary evidence matrices, repr-hidden answer
   payloads, and terminal answer authorizations bound to the manifest, ordered
   completed evidence, used subset, answer/result digest, and unchanged pending
-  reference facts. Search and read observations serialize as one compact sorted
-  JSON frame between the established untrusted story-data delimiters.
+  reference facts. Search and read observations project only the agent-needed
+  query order, source identity and kind, exact boundary, handle, snippet,
+  truncation, or read content into compact array frames between the established
+  untrusted story-data delimiters. Complete correlation, provenance, revision,
+  digest, size, and receipt facts remain on the validated in-process values and
+  are not duplicated in those provider-facing frames.
 - **Direct internal dependencies:** `agent_context.manifest` and
   `agent_context.planning`.
 - **State, resources, and side effects:** Owns one frozen default policy and
@@ -474,15 +478,29 @@ every intermediate arrow. The current runtime graph is acyclic.
   manifest and transient material from the four authorized source adapters,
   plans against the scoped ledger checkpoint, reserves INCOMPLETE before any
   physical provider call, and drives the finite SEARCH/READ/ANSWER loop through
-  the service-owned `ContextProvider` inversion. The synchronized call-local
-  session retains exact action correlation, fresh HMAC source handles, bounded
-  counters, atomic one-use reads, delivery receipts, final source revalidation,
-  and answer authorization. Mandatory-reference reservations stay separate
-  from source search/read, use the provider prelude before the substantive
-  action budget, and must complete before verified ledger commit. The two
-  failure-fact helpers attach and recover only validated content-free physical
-  call facts without replacing the original exception. Its package-internal,
-  intentionally non-`__all__` `ContextExecutionEventKind`,
+  the service-owned `ContextProvider` inversion. Every substantive call uses
+  one byte-identical compact wire-v2 schema; a full-correlation-derived URL-safe
+  token, fixed four-field action envelope, strict service decoder, compact
+  action-control vector, and bootstrap/delta source catalogs preserve the
+  complete internal action contract without repeating scope or manifest proof
+  metadata. Projected units reference compact source identities instead of
+  repeating full entries and losslessly remove a redundant JSON-string layer
+  only for canonical structured source bodies; delta catalogs carry only
+  non-checkpoint-suppressed searchable descriptors and exact removed source
+  IDs. A composite execution fingerprint binds the wire version and every
+  planning, action, and source policy value to ledger and native-thread
+  compatibility. A prior incompatible checkpoint is treated as
+  stale and its contextual thread is not resumed, while the pure planner still
+  receives its planning-policy fingerprint. The synchronized call-local session
+  retains exact reconstructed action correlation, fresh HMAC source handles,
+  bounded counters, atomic one-use reads, delivery receipts, final source
+  revalidation, and answer authorization. Mandatory-reference reservations stay
+  separate from source search/read, use the unchanged provider prelude before
+  the substantive action budget, and must complete before verified ledger
+  commit. The two failure-fact helpers attach and recover only validated
+  content-free physical call facts without replacing the original exception.
+  Its package-internal, intentionally non-`__all__`
+  `ContextExecutionEventKind`,
   `ContextExecutionEvent`, and synchronous event-sink type expose only scoped
   identities, counts, sizes, truncation, and fixed lifecycle outcomes. The
   optional synchronous answer validator receives the exact authorized answer
