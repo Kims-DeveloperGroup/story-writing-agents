@@ -3,7 +3,8 @@
 > **Availability:** V2 defaults, provider sessions, debates, conversations,
 > current writing-artifact reference sources, provenance-backed publication records,
 > part-scoped manuscripts, explicit-reference evidence, provider-native state,
-> and bounded runtime debug logs persist as plaintext workspace files.
+> bounded runtime debug logs, and bounded rejected-provider-response artifacts
+> persist as plaintext workspace files.
 > Runtime-managed documents and records are strict UTF-8.
 
 Key terms: **default**—a persisted command or conversation fallback;
@@ -56,7 +57,11 @@ workspace/
 ├── debug_logs/
 │   ├── .runtime.lock                                           [lazy guard]
 │   ├── runtime.jsonl                                           [lazy active log]
-│   └── runtime.jsonl.{1..5}                                    [lazy backups]
+│   ├── runtime.jsonl.{1..5}                                    [lazy backups]
+│   └── provider_error_responses/                               [lazy bounded rejected responses]
+│       ├── .lock                                               [lazy persistent guard]
+│       ├── .pending                                            [temporary reusable staging leaf]
+│       └── <UTC-basic-timestamp>-<UUID-hex>.json               [complete response artifact]
 ├── discussion_logs/
 │   ├── conversation_storage.sqlite3                            [lazy explicit authoritative SQLite provision]
 │   ├── .conversation_storage_fts5.sqlite3                      [lazy derived SQLite search companion]
@@ -288,6 +293,32 @@ JSONL stream. Their schemas are documented in
 [Persistence](../../design/persistence.md#workspace-runtime-debug-log),
 their containment and failure behavior in [Filesystem safety](../../operations/filesystem-safety.md#debug-log-filesystem-safety),
 and their content boundary in [Privacy](../../operations/privacy-and-provider.md#workspace-debug-log-privacy).
+
+<a id="rejected-provider-response-storage"></a>
+
+## Rejected provider-response storage
+
+`debug_logs/provider_error_responses/` is a separate lazy plaintext store for
+completed Codex or Antigravity response text rejected by structured decoding.
+Workspace initialization, module import, backend construction, successful
+provider work, and ineligible provider failures do not create it. An eligible
+backend rejection attempts storage, but bounded lock contention, unsupported or
+unsafe filesystem state, malformed existing entries, or another storage failure
+can leave the directory or record absent without replacing the original error.
+
+The persistent `.lock` serializes writers with a 0.1-second acquisition bound.
+`.pending` is a synchronized same-directory staging leaf; a later storage
+attempt can validate and remove a stale one before atomically publishing a
+complete timestamp-and-UUID `.json` file. `.pending`, `.lock`, and unknown or
+unsafe entries are not complete response records and must not be hand-edited.
+
+Each complete schema-v1 file is at most 2,097,152 bytes. Its body retains at
+most 262,144 UTF-8 bytes at a complete code-point boundary while its digest and
+original byte count describe the full response. Before publication, the store
+prunes the oldest verified complete files until no more than 32 files and
+16,777,216 total serialized bytes remain. Pruning and ordinary user deletion
+are not secure erasure. The exact content boundary and safe inspection workflow
+are in [Privacy](../../operations/privacy-and-provider.md#rejected-provider-response-artifacts).
 
 ## Default records
 

@@ -165,6 +165,25 @@ feature. See
 [retention](../reference/configuration/session-storage.md#runtime-debug-log-storage),
 and [filesystem safety](../operations/filesystem-safety.md#debug-log-filesystem-safety).
 
+## Inspect a rejected provider response
+
+For a sanitized `provider_protocol_error`, start with
+`debug_logs/runtime.jsonl` for content-safe exception type and frame metadata.
+If Codex or Antigravity returned a completed body that structured decoding
+rejected, a separate record may exist under
+`debug_logs/provider_error_responses/`. The terminal does not print that path or
+body, and transport, timeout, cancellation, nonzero-exit, stderr, and other
+pre-response failures do not produce one.
+
+Use a trusted plain-text editor, not a terminal renderer, Markdown/HTML preview,
+shell command, or executable workflow. Match candidate records by provider,
+agent, session, and debate or conversation metadata rather than assuming the
+newest file belongs to the failure. The body is hostile provider-controlled
+plaintext. The directory is lazy, and contention, unsafe existing state, or a
+storage failure can leave it absent while the original provider error remains
+unchanged. See the safe inspection workflow and exact eligibility in
+[Privacy](../operations/privacy-and-provider.md#rejected-provider-response-artifacts).
+
 ## Provider configuration or session contention
 
 For Codex, rerun `/auth` and require a fresh `codex login status` result, then

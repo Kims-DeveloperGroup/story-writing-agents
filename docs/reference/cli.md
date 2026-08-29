@@ -481,6 +481,17 @@ retention limits are in
 [Privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy)
 and [Session storage](configuration/session-storage.md#runtime-debug-log-storage).
 
+The CLI adds no output, command, or hint for rejected-response artifacts. When
+a completed Codex or Antigravity response reaches structured decoding and is
+rejected, a separate best-effort JSON record may exist beneath
+`debug_logs/provider_error_responses/`; runtime JSONL remains content-safe. The
+directory can be absent, and it never contains provider stderr or a
+pre-response transport/timeout/cancellation failure. Correlate a candidate by
+provider, agent, session, and debate or conversation metadata, and inspect its
+hostile provider-controlled body only in a trusted plain-text editor. See the
+exact eligibility and safe workflow in
+[Privacy](../operations/privacy-and-provider.md#rejected-provider-response-artifacts).
+
 <a id="interactive-provider-authentication"></a>
 
 ## Interactive provider authentication

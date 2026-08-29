@@ -62,6 +62,10 @@ from story_writing_agents.agent_context.manifest import (
 from story_writing_agents.agent_context.service import ContextProviderCallRequest
 from story_writing_agents.prompts import PromptAssembler
 from story_writing_agents.provider_adapter import ProviderResult
+from story_writing_agents.provider_error_artifacts import (
+    PROVIDER_ERROR_ARTIFACT_DIRECTORY,
+    WorkspaceProviderErrorArtifacts,
+)
 from story_writing_agents.writing_artifacts import (
     ArtifactLineRange,
     ArtifactReference,
@@ -84,6 +88,18 @@ _PROCESS_EXIT_HANDSHAKE_SECONDS = 2.0
 _PROCESS_TERMINATE_GRACE_SECONDS = 0.5
 _PROCESS_KILL_GRACE_SECONDS = 1.0
 _PROCESS_POLL_INTERVAL_SECONDS = 0.01
+
+
+def _provider_error_records(workspace: object) -> list[dict[str, object]]:
+    """Read complete rejected-response artifacts, excluding guard leaves."""
+
+    directory = workspace.path(PROVIDER_ERROR_ARTIFACT_DIRECTORY)  # type: ignore[attr-defined]
+    if not directory.exists():
+        return []
+    return [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(directory.glob("*.json"))
+    ]
 
 
 _FAKE_AGY = (
@@ -1999,11 +2015,203 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
+    async def test_completed_rejection_artifacts_match_codex_for_debate_and_conversation(
+        self,
+    ) -> None:
+        backend = self.backend()
+        definition = self.definition()
+        bound = await backend.bind(definition)
+
+        debate_session = "agy_capture_debate_session"
+        debate_id = "agy_capture_debate"
+        debate_body = (
+            '{"revision_id":"other-revision","content":"PRIVATE_AGY_REJECTED_한🙂"}'
+        )
+        backend.create_session_with_access(debate_session)
+        invoke = mock.AsyncMock(
+            side_effect=(
+                ProviderResult(
+                    thread_id="agy-capture-seeded-thread",
+                    response_text=(
+                        '{"revision_id":"seed-revision","content":"seeded response"}'
+                    ),
+                ),
+                ProviderResult(
+                    thread_id="agy-capture-rejected-thread",
+                    response_text=debate_body,
+                ),
+                ProviderResult(
+                    thread_id="agy-capture-recovered-thread",
+                    response_text=(
+                        '{"revision_id":"recovery-revision",'
+                        '"content":"recovered response"}'
+                    ),
+                ),
+            )
+        )
+        with mock.patch.object(backend._antigravity_adapter, "invoke", invoke):
+            await bound.invoke(
+                self.request(
+                    session_id=debate_session,
+                    debate_id="agy-capture-seed",
+                    phase=Phase.DRAFT,
+                    revision_id="seed-revision",
+                )
+            )
+            with (
+                mock.patch.object(
+                    backend,
+                    "_taint_thread",
+                    wraps=backend._taint_thread,
+                ) as taint,
+                self.assertRaises(BackendProtocolError) as failure,
+            ):
+                await bound.invoke(
+                    self.request(
+                        session_id=debate_session,
+                        debate_id=debate_id,
+                        phase=Phase.DRAFT,
+                        revision_id="expected-revision",
+                    )
+                )
+            self.assertEqual(
+                str(failure.exception),
+                "Antigravity reply revision_id does not match its request",
+            )
+            taint.assert_called_once_with(debate_session, definition)
+            failed_thread = self.manifest(debate_session)["provider_threads"][
+                "antigravity:plot_architect"
+            ]
+            self.assertEqual(
+                {
+                    "thread_id": failed_thread["thread_id"],
+                    "tainted": failed_thread["tainted"],
+                },
+                {
+                    "thread_id": "agy-capture-seeded-thread",
+                    "tainted": True,
+                },
+            )
+            await bound.invoke(
+                self.request(
+                    session_id=debate_session,
+                    debate_id="agy-capture-recovery",
+                    phase=Phase.DRAFT,
+                    revision_id="recovery-revision",
+                )
+            )
+
+        provider_calls = [call.args[1] for call in invoke.await_args_list]
+        self.assertEqual(
+            [call.thread_id for call in provider_calls],
+            [None, "agy-capture-seeded-thread", None],
+        )
+        self.assertEqual(
+            {
+                key: self.manifest(debate_session)["provider_threads"][
+                    "antigravity:plot_architect"
+                ][key]
+                for key in ("thread_id", "tainted")
+            },
+            {
+                "thread_id": "agy-capture-recovered-thread",
+                "tainted": False,
+            },
+        )
+
+        conversation_session = "agy_capture_conversation_session"
+        conversation_id = "agy_capture_conversation"
+        conversation_body = json.dumps(
+            {
+                "session_id": conversation_session,
+                "conversation_id": "other-conversation",
+                "turn_id": "agy-capture-turn",
+                "content": "PRIVATE_AGY_CONVERSATION_REJECTED_한🙂",
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        backend.create_session_with_access(conversation_session)
+        conversation_invoke = mock.AsyncMock(
+            return_value=ProviderResult(
+                thread_id="agy-capture-conversation-rejected-thread",
+                response_text=conversation_body,
+            )
+        )
+        with (
+            mock.patch.object(
+                backend._antigravity_adapter,
+                "invoke",
+                conversation_invoke,
+            ),
+            self.assertRaises(BackendProtocolError) as conversation_failure,
+        ):
+            await bound.converse(
+                ConversationRequest(
+                    session_id=conversation_session,
+                    conversation_id=conversation_id,
+                    turn_id="agy-capture-turn",
+                    agent_id=PLOT_ARCHITECT,
+                    content="PRIVATE_AGY_CONVERSATION_REQUEST",
+                    context=_empty_context(),
+                )
+            )
+        self.assertEqual(
+            str(conversation_failure.exception),
+            (
+                "Antigravity conversation reply conversation_id does not "
+                "match its request"
+            ),
+        )
+        self.assertEqual(
+            self.manifest(conversation_session)["provider_threads"],
+            {},
+        )
+
+        records = _provider_error_records(self.workspace)
+        self.assertEqual(len(records), 2)
+        debate_record = next(
+            record for record in records if record["body"] == debate_body
+        )
+        conversation_record = next(
+            record for record in records if record["body"] == conversation_body
+        )
+        self.assertEqual(debate_record["provider"], "antigravity")
+        self.assertEqual(debate_record["debate_id"], debate_id)
+        self.assertNotIn("conversation_id", debate_record)
+        self.assertEqual(conversation_record["provider"], "antigravity")
+        self.assertEqual(
+            conversation_record["conversation_id"],
+            conversation_id,
+        )
+        self.assertNotIn("debate_id", conversation_record)
+        self.assertEqual(
+            set(debate_record) - {"debate_id"},
+            set(conversation_record) - {"conversation_id"},
+        )
+        runtime_log = self.workspace.path("debug_logs/runtime.jsonl").read_text(
+            encoding="utf-8"
+        )
+        for private_value in (
+            debate_body,
+            conversation_body,
+            "PRIVATE_AGY_REJECTED_한🙂",
+            "PRIVATE_AGY_CONVERSATION_REJECTED_한🙂",
+            "PRIVATE_AGY_CONVERSATION_REQUEST",
+        ):
+            self.assertNotIn(private_value, runtime_log)
+
     def test_public_surface_and_provider_schema_remain_provider_neutral(self) -> None:
         import story_writing_agents as facade
 
         self.assertNotIn("AntigravityAdapter", facade.__all__)
         self.assertFalse(hasattr(facade, "AntigravityAdapter"))
+        for private_name in (
+            "WorkspaceProviderErrorArtifacts",
+            "PROVIDER_ERROR_ARTIFACT_DIRECTORY",
+            "PROVIDER_ERROR_ARTIFACT_FAILURE_CATEGORY",
+        ):
+            self.assertNotIn(private_name, facade.__all__)
         self.assertEqual(
             tuple(inspect.signature(AgentBackend).parameters),
             (
@@ -2017,6 +2225,37 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 "antigravity_effort",
             ),
         )
+        self.assertEqual(
+            tuple(inspect.signature(ProviderResult).parameters),
+            (
+                "thread_id",
+                "response_text",
+                "usage",
+                "actual_transport_utf8_bytes",
+            ),
+        )
+        owner = WorkspaceProviderErrorArtifacts(self.workspace)
+        self.assertFalse(owner.directory.exists())
+        backend = self.backend()
+        self.assertFalse(owner.directory.exists())
+        backend.close()
+
+        package = Path(inspect.getfile(AgentBackend)).parent
+        self.assertIn(
+            "from .provider_error_artifacts import",
+            (package / "backend.py").read_text(encoding="utf-8"),
+        )
+        for module_name in (
+            "antigravity_adapter.py",
+            "codex_adapter.py",
+            "debug_log.py",
+            "provider_auth.py",
+            "provider_catalog.py",
+        ):
+            self.assertNotIn(
+                "provider_error_artifacts",
+                (package / module_name).read_text(encoding="utf-8"),
+            )
         manager = ConfigManager(self.workspace)
         self.assertEqual(manager.validate_backend("codex"), "codex")
         self.assertEqual(

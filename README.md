@@ -146,7 +146,9 @@ story run --output part-01/opening.md --prompt 'Draft the opening.'
 - [Consensus-run guide](docs/guides/consensus-runs.md) covers prompts, drafts, outputs, and round limits.
 - [CLI reference](docs/reference/cli.md) is the exact installed command contract.
 - [Package API](docs/reference/package-api.md) starts the Python reference.
-- [Security and provider privacy](docs/operations/privacy-and-provider.md) should be read before using sensitive material.
+- [Security and provider privacy](docs/operations/privacy-and-provider.md)
+  should be read before using sensitive material; it also explains how to
+  inspect an eligible rejected provider response safely.
 
 <a id="backends"></a>
 
@@ -239,7 +241,8 @@ See the [CLI contract](docs/reference/cli.md#conversation-storage-migration).
 
 - Provider calls have a timeout but no automatic retry or rate limiter.
 - Deadlocked and interrupted debates cannot resume under the same debate ID.
-- Workspace content, logs, provider metadata, agent state, and manuscripts are plaintext.
+- Workspace content, logs, rejected-provider-response artifacts, provider
+  metadata, agent state, and manuscripts are plaintext.
 - Writing-artifact publication is journaled and catalog-last, and rolls forward
   on the next catalog or publication access after an interruption. It is not
   one transaction with debate logs, lifecycle state, or result files.

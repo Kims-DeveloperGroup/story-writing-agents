@@ -61,7 +61,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Discover a writing artifact or select an inclusive range | Provider-bound shell prompt spans use `$`, `$${path}`, or `$$`; `$` scans the four supported core paths and every eligible lowercase-`.md` descendant under `manuscript/`, while exact `$$` shows ranged-source choices on the second dollar. Completion/viewer return to the exact draft without submission. The viewer remains package-internal, with no standalone command, public selection API, or automation UI. |
 | Cancel active advisory/consensus work or partial local rendering | Installed shell; process-level PTY verified on supported POSIX. [Delivery and platform scope](operations/recovery-and-limitations.md#posix-pty-boundary) |
 | Show one focused transcript snapshot and context accounting | Attached shell `/history`; active focus required |
-| Locate bounded runtime diagnostics and exact failure hints | Workspace `debug_logs/runtime.jsonl`; [CLI output](reference/cli.md#runtime-debug-logs) and [privacy boundary](operations/privacy-and-provider.md#workspace-debug-log-privacy) |
+| Locate safe runtime diagnostics or inspect an eligible rejected provider response | Safe exception metadata is in workspace `debug_logs/runtime.jsonl`; completed rejected bodies may be in `debug_logs/provider_error_responses/`. Start with the [inspection and privacy boundary](operations/privacy-and-provider.md#rejected-provider-response-artifacts); CLI hints name only the [runtime debug log](reference/cli.md#runtime-debug-logs). |
 | Standalone artifact commands | Not implemented in the shell |
 
 ## Start and concepts
@@ -114,7 +114,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 - [Overview](design/overview.md)
 - [Agent-context ownership, wire v5, checkpoints, candidate deltas, and recovery](design/agent-context.md)
 - [Interactive CLI design system contract](design/interactive-cli-design-system.md)
-- [Canonical Python module inventory (84 production units)](../PYTHON_MODULE_INDEX.md)
+- [Canonical Python module inventory (85 production units)](../PYTHON_MODULE_INDEX.md)
 - [Prompts, provider boundary, and exact context accounting](design/prompts-and-provider.md)
 - [Session lifecycle](design/session-lifecycle.md)
 - [Consensus workflow](design/consensus-workflow.md)
@@ -123,7 +123,8 @@ Use this index to find one canonical answer instead of searching a long manual.
 ## Operations
 
 - [Filesystem safety](operations/filesystem-safety.md)
-- [Privacy, provider exposure, and runtime debug logs](operations/privacy-and-provider.md)
+- [Privacy, provider exposure, runtime debug logs, and rejected-response
+  inspection](operations/privacy-and-provider.md)
 - [Terminal display safety](operations/terminal-safety.md)
 - [Recovery and limitations](operations/recovery-and-limitations.md)
 - [Provider authentication recovery](operations/recovery-and-limitations.md#authentication-recovery)

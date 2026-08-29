@@ -16,9 +16,11 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 84.
+Importable production units indexed: 85.
 
-Direct internal dependency edges indexed: 346.
+Direct internal dependency edges indexed: 349.
+
+Directed internal dependency cycles indexed: 0.
 
 ## Current Dependency Direction
 
@@ -63,8 +65,8 @@ __main__ -> cli -> conversation_rag_cli
                  |          -> config/conversation_retrieval/debug_log
                  |          -> interactive_settings
                  |          -> workspace/models/errors/agents
-                 |          -> provider_adapter/provider_process/session_lifecycle
-                 |          -> writing_artifacts.read_actions
+                 |          -> provider_adapter/provider_error_artifacts/provider_process
+                 |          -> session_lifecycle/writing_artifacts.read_actions
                  -> cli_context -> workspace/errors/agents
 
 interactive_controller._core -> interactive_controller._session_policy
@@ -185,6 +187,7 @@ agent_context.sources -> agent_context.actions/manifest
                       -> writing_artifacts.filesystem_sources
                       -> writing_artifacts.references/repository
 provider_adapter -> agent_context/models
+provider_error_artifacts -> agents/workspace
 provider_auth -> (standard library only)
 provider_catalog -> (standard library only)
 provider_process -> (standard library only)
@@ -757,7 +760,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `agent_context`, `agent_context.service`,
   `agents`, `antigravity_adapter`, `codex_adapter`, `config`,
   `conversation_retrieval`, `debug_log`, `errors`, `interactive_settings`,
-  `models`, `provider_adapter`, `provider_process`, `session_lifecycle`, and
+  `models`, `provider_adapter`, `provider_error_artifacts`, `provider_process`,
+  `session_lifecycle`, and
   `workspace`, plus the provider-neutral `writing_artifacts.read_actions`
   boundary.
 - **State, resources, and side effects:** Owns exact V2 provider-session
@@ -800,8 +804,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   diagnostics. It drains both
   subprocess output streams through its adapters but discards and never decodes
   stderr after a nonzero provider exit; it receives no memory service and
-  performs no retrieval search or transcript-storage call. For a referenced
-  logical invocation, the
+  performs no retrieval search or transcript-storage call. Only after an
+  adapter returns a completed `ProviderResult`, rejection of its exact
+  `response_text` by the shared structured decoder with `BackendProtocolError`,
+  `JSONDecodeError`, or `UnicodeError` submits that text, provider, canonical
+  agent, session, and the applicable debate or conversation correlation to the
+  private `provider_error_artifacts` owner. The submission catches
+  `BaseException`, so artifact-storage failure cannot replace the original
+  decoding exception or change established thread taint, restart, cleanup,
+  cancellation, output, exit, or retry behavior. Pre-result/provider-invocation
+  failures, requests, prompts, accepted replies, stderr or raw provider streams,
+  credentials, authentication output, and provider-native history remain
+  ineligible; response bodies are neither rendered nor sent through
+  `debug_log`. For a referenced logical invocation, the
   same thread lock first runs one strict content-free read-action prelude. The
   provider must echo the exact correlation and complete ordered path/range
   batch under a request-specific output schema before the synchronous
@@ -1069,6 +1084,51 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_agent_context_accounting.py`, `tests/test_codex_backend.py`,
   `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`, and
   `docs/design/overview.md`.
+
+### `story_writing_agents.provider_error_artifacts`
+
+- **Source:** `src/story_writing_agents/provider_error_artifacts.py`
+- **Responsibility:** Persist bounded rejected provider responses as private
+  workspace artifacts.
+- **Supported surface:** No package-supported or project-root API. The
+  module-supported internal surface is `WorkspaceProviderErrorArtifacts`, its
+  I/O-free `directory` projection, the exact keyword-only
+  `record_rejected_response(...)` seam, and the fixed path, schema-category,
+  body/file/retention bounds, and lock-timeout constants listed in the module's
+  `__all__`. `backend` is the sole production consumer of the recording seam.
+- **Direct internal dependencies:** `agents` and `workspace`.
+- **State, resources, and side effects:** Import and construction perform no
+  filesystem work. One storage call validates an exact `codex` or
+  `antigravity` provider, canonical agent and session identities, at most one
+  debate/conversation correlation, the fixed `structured_response_rejected`
+  category, and strict-UTF-8 provider-controlled plaintext. Schema-v1 compact
+  UTF-8 JSON records retain the exact body up to 262,144 bytes at a complete
+  code-point boundary plus full-response byte count and SHA-256; one serialized
+  record is limited to 2,097,152 bytes. Complete timestamp-and-UUID artifacts
+  live under `debug_logs/provider_error_responses/`, with at most 32 files and
+  16,777,216 serialized bytes. The owner holds a weakly registered
+  per-workspace process lock and makes a bounded 100-millisecond attempt on the
+  independent `.lock` advisory guard. It borrows `Workspace`'s identity-bound
+  root open/reverification seam, then holds and reverifies the root,
+  `debug_logs`, and artifact-directory descriptors. All namespace operations
+  are descriptor-relative and no-follow; directories must retain exact spelling
+  and identity, and leaf files must be regular, singly linked, size-bounded,
+  stably readable, strict-UTF-8, duplicate-free canonical JSON with the exact
+  managed schema. Unknown, malformed, aliased, symlinked, hard-linked,
+  nonregular, oversized, replaced, or concurrently changed state fails closed
+  without pruning that state. Under the acquired guard, the owner removes only
+  a verified stale fixed `.pending`, synchronizes a new exclusive pending file,
+  validates existing complete artifacts before oldest-first pruning, and uses
+  the platform's native atomic no-replace rename before final directory
+  synchronization and validation. Unsupported safe primitives or native
+  no-replace publication fail before using a weaker fallback; bounded lock
+  contention drops the attempted artifact. Storage failures and process-control
+  exceptions propagate to the caller, no redaction or terminal rendering occurs,
+  and ordinary deletion is not secure erasure.
+- **Primary verification/documentation:**
+  `tests/test_provider_error_artifacts.py`,
+  `docs/operations/privacy-and-provider.md#rejected-provider-response-artifacts`, and
+  `docs/reference/configuration/session-storage.md#rejected-provider-response-storage`.
 
 ### `story_writing_agents.provider_process`
 
