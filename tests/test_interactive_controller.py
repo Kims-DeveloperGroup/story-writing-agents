@@ -4659,9 +4659,56 @@ class ControllerSettingsTests(ControllerTestCase):
             for choice in dirty_settings.args[2]
             if choice.identity == "conversation_rag"
         )
+        self.assertEqual(
+            rag_choice.form_summary,
+            "Pending: Provider Local; Automatic On",
+        )
         self.assertIs(
-            rag_choice.description_role,
+            rag_choice.form_summary_role,
             terminal_module.SemanticRole.WARNING,
+        )
+        self.assertIsNone(rag_choice.description)
+        rag_picker_calls = tuple(
+            call
+            for call in picker.call_args_list
+            if call.args[1].name == "Conversation RAG"
+        )
+        rag_summary_states = tuple(
+            tuple(
+                (choice.form_summary, choice.form_summary_role)
+                for choice in call.args[2]
+            )
+            for call in rag_picker_calls
+        )
+        muted = terminal_module.SemanticRole.MUTED
+        warning = terminal_module.SemanticRole.WARNING
+        self.assertIn(
+            (
+                ("Current: Disabled", muted),
+                ("Current: Off", muted),
+            ),
+            rag_summary_states,
+        )
+        self.assertIn(
+            (
+                ("Pending: Local", warning),
+                ("Current: Off", muted),
+            ),
+            rag_summary_states,
+        )
+        self.assertIn(
+            (
+                ("Pending: Local", warning),
+                ("Pending: On", warning),
+            ),
+            rag_summary_states,
+        )
+        self.assertTrue(
+            all(
+                choice.description is None
+                for call in rag_picker_calls
+                for choice in call.args[2]
+            )
         )
         rendered = "".join(callbacks.records)
         exact_notice = (
@@ -5481,7 +5528,7 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         self.assertEqual(
             tuple(
-                tuple(choice.description for choice in call.args[2])
+                tuple(choice.form_summary for choice in call.args[2])
                 for call in top_level_calls
             ),
             (
@@ -5503,7 +5550,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "Current: Off",
                     None,
                     None,
-                    "Pending changes will be discarded.",
+                    None,
                 ),
                 (
                     f"Current: {baseline}",
@@ -5526,27 +5573,40 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
         )
         default = terminal_module.SemanticRole.DEFAULT
+        muted = terminal_module.SemanticRole.MUTED
         warning = terminal_module.SemanticRole.WARNING
         self.assertEqual(
             tuple(
-                tuple(choice.description_role for choice in call.args[2])
+                tuple(choice.form_summary_role for choice in call.args[2])
                 for call in top_level_calls
             ),
             (
-                (default, default, default, default, default, default, default),
+                (muted, muted, muted, muted, muted, muted, default),
                 (
                     warning,
-                    default,
-                    default,
-                    default,
-                    default,
-                    default,
+                    muted,
+                    muted,
+                    muted,
+                    muted,
+                    muted,
                     default,
                     default,
                     default,
                 ),
-                (default, default, default, default, default, default, default),
-                (default, default, default, default, default, default, default),
+                (muted, muted, muted, muted, muted, muted, default),
+                (muted, muted, muted, muted, muted, muted, default),
+            ),
+        )
+        self.assertEqual(
+            tuple(
+                tuple(choice.description for choice in call.args[2])
+                for call in top_level_calls
+            ),
+            (
+                (None,) * 7,
+                (None,) * 8 + ("Pending changes will be discarded.",),
+                (None,) * 7,
+                (None,) * 7,
             ),
         )
         self.assertEqual(
@@ -5580,7 +5640,7 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertNotIn("[saved] Settings saved.", "".join(callbacks.records))
         self.assertIsNone(top_level_calls[-1].kwargs["highlighted_id"])
 
-    def test_agents_root_description_counts_every_ordered_pending_agent_value(
+    def test_agents_root_summary_counts_every_ordered_pending_agent_value(
         self,
     ) -> None:
         workspace = self.make_workspace()
@@ -5628,7 +5688,7 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
         )
 
-        def agents_description(state) -> tuple[str | None, object]:
+        def agents_summary(state) -> tuple[str | None, object, str | None]:
             controller, _backend, _callbacks = self.make_controller(workspace)
             interrupt = terminal_module.ControlOutcome(
                 terminal_module.ControlOutcomeKind.INTERRUPT
@@ -5658,25 +5718,37 @@ class ControllerSettingsTests(ControllerTestCase):
                 for choice in choices
                 if choice.identity == "providers"
             )
-            return choice.description, choice.description_role
+            return (
+                choice.form_summary,
+                choice.form_summary_role,
+                choice.description,
+            )
 
         self.assertEqual(
-            agents_description(baseline),
-            (None, terminal_module.SemanticRole.DEFAULT),
+            agents_summary(baseline),
+            (None, terminal_module.SemanticRole.DEFAULT, None),
         )
         for label, edit in edits:
             with self.subTest(label=label):
                 self.assertEqual(
-                    agents_description(edit(baseline)),
-                    ("1 pending change", terminal_module.SemanticRole.WARNING),
+                    agents_summary(edit(baseline)),
+                    (
+                        "1 pending change",
+                        terminal_module.SemanticRole.WARNING,
+                        None,
+                    ),
                 )
 
         plural = baseline
         for _label, edit in edits:
             plural = edit(plural)
         self.assertEqual(
-            agents_description(plural),
-            ("5 pending changes", terminal_module.SemanticRole.WARNING),
+            agents_summary(plural),
+            (
+                "5 pending changes",
+                terminal_module.SemanticRole.WARNING,
+                None,
+            ),
         )
 
         panel = InteractiveController._settings_panel(edits[0][1](baseline))
@@ -5912,14 +5984,17 @@ class ControllerSettingsTests(ControllerTestCase):
             tuple(AGENT_SPECS[agent_id].display_name for agent_id in ROSTER),
         )
         self.assertEqual(
-            tuple(choice.description for choice in initial_agents),
+            tuple(choice.form_summary for choice in initial_agents),
             ("Current: (Codex/provider default/provider default)",) * len(ROSTER),
         )
         self.assertTrue(
             all(
-                choice.description_role is terminal_module.SemanticRole.DEFAULT
+                choice.form_summary_role is terminal_module.SemanticRole.MUTED
                 for choice in initial_agents
             )
+        )
+        self.assertTrue(
+            all(choice.description is None for choice in initial_agents)
         )
 
         initial_fields = picker.call_args_list[1].args[2]
@@ -5932,17 +6007,24 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
         )
         self.assertEqual(
-            tuple(choice.description for choice in initial_fields),
+            tuple(choice.form_summary for choice in initial_fields),
             (
                 "Current: Codex",
                 "Current: provider default",
                 "Current: provider default",
             ),
         )
+        self.assertEqual(
+            tuple(choice.form_summary_role for choice in initial_fields),
+            (terminal_module.SemanticRole.MUTED,) * 3,
+        )
+        self.assertTrue(
+            all(choice.description is None for choice in initial_fields)
+        )
 
         redrawn_fields = picker.call_args_list[2].args[2]
         self.assertEqual(
-            tuple(choice.description for choice in redrawn_fields),
+            tuple(choice.form_summary for choice in redrawn_fields),
             (
                 "Pending: Antigravity",
                 "Current: provider default",
@@ -5950,12 +6032,15 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
         )
         self.assertEqual(
-            tuple(choice.description_role for choice in redrawn_fields),
+            tuple(choice.form_summary_role for choice in redrawn_fields),
             (
                 terminal_module.SemanticRole.WARNING,
-                terminal_module.SemanticRole.DEFAULT,
-                terminal_module.SemanticRole.DEFAULT,
+                terminal_module.SemanticRole.MUTED,
+                terminal_module.SemanticRole.MUTED,
             ),
+        )
+        self.assertTrue(
+            all(choice.description is None for choice in redrawn_fields)
         )
         redrawn_agents = picker.call_args_list[3].args[2]
         plot_choice = next(
@@ -5964,13 +6049,14 @@ class ControllerSettingsTests(ControllerTestCase):
             if choice.identity == PLOT_ARCHITECT
         )
         self.assertEqual(
-            plot_choice.description,
+            plot_choice.form_summary,
             "Pending: (Antigravity/provider default/provider default)",
         )
         self.assertIs(
-            plot_choice.description_role,
+            plot_choice.form_summary_role,
             terminal_module.SemanticRole.WARNING,
         )
+        self.assertIsNone(plot_choice.description)
 
         model_effort_pending = settings_module.update_agent_codex_model(
             state,
@@ -5997,7 +6083,7 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertEqual(unchanged, model_effort_pending)
         pending_fields = pending_picker.call_args_list[1].args[2]
         self.assertEqual(
-            tuple(choice.description for choice in pending_fields),
+            tuple(choice.form_summary for choice in pending_fields),
             (
                 "Current: Codex",
                 "Pending: gpt-pending",
@@ -6005,12 +6091,15 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
         )
         self.assertEqual(
-            tuple(choice.description_role for choice in pending_fields),
+            tuple(choice.form_summary_role for choice in pending_fields),
             (
-                terminal_module.SemanticRole.DEFAULT,
+                terminal_module.SemanticRole.MUTED,
                 terminal_module.SemanticRole.WARNING,
                 terminal_module.SemanticRole.WARNING,
             ),
+        )
+        self.assertTrue(
+            all(choice.description is None for choice in pending_fields)
         )
 
         inactive_only = settings_module.update_agent_antigravity_model(
@@ -6035,13 +6124,14 @@ class ControllerSettingsTests(ControllerTestCase):
             if choice.identity == PLOT_ARCHITECT
         )
         self.assertEqual(
-            inactive_plot.description,
+            inactive_plot.form_summary,
             "Current: (Codex/provider default/provider default)",
         )
         self.assertIs(
-            inactive_plot.description_role,
-            terminal_module.SemanticRole.DEFAULT,
+            inactive_plot.form_summary_role,
+            terminal_module.SemanticRole.MUTED,
         )
+        self.assertIsNone(inactive_plot.description)
 
     def test_launch_override_fields_stay_disabled_and_show_effective_values(
         self,
@@ -6095,7 +6185,7 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         fields = picker.call_args_list[1].args[2]
         self.assertEqual(
-            tuple(choice.description for choice in fields),
+            tuple(choice.form_summary for choice in fields),
             (
                 "Current: Antigravity",
                 "Current: agy-override",
@@ -6111,9 +6201,10 @@ class ControllerSettingsTests(ControllerTestCase):
             * 3,
         )
         self.assertEqual(
-            tuple(choice.description_role for choice in fields),
-            (terminal_module.SemanticRole.DEFAULT,) * 3,
+            tuple(choice.form_summary_role for choice in fields),
+            (terminal_module.SemanticRole.MUTED,) * 3,
         )
+        self.assertTrue(all(choice.description is None for choice in fields))
         self.assertEqual(auth.events, [])
         self.assertEqual(catalog.events, [])
         popen.assert_not_called()
@@ -6176,18 +6267,12 @@ class ControllerSettingsTests(ControllerTestCase):
             "Choose a setting to edit.\n"
             "\n"
             "Choices 1/7\n"
-            "> 1. Language\n"
-            "     Current: KO\n"
-            "  2. Persona\n"
-            "     Current: default_kim_eun_hee\n"
-            "  3. Maximum debate rounds\n"
-            "     Current: 1\n"
-            "  4. Conversation storage\n"
-            "     Current: filesystem\n"
-            "  5. Conversation RAG\n"
-            "     Current: Provider Disabled; Automatic Off\n"
-            "  6. Message details\n"
-            "     Current: Off\n"
+            "> 1. Language              — Current: KO\n"
+            "  2. Persona               — Current: default_kim_eun_hee\n"
+            "  3. Maximum debate rounds — Current: 1\n"
+            "  4. Conversation storage  — Current: filesystem\n"
+            "  5. Conversation RAG      — Current: Provider Disabled; Automatic Off\n"
+            "  6. Message details       — Current: Off\n"
             "  7. Agents\n"
             "\n"
             "Enter a choice number, press Enter for the active choice, or enter /cancel.\n"
@@ -6218,7 +6303,7 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
         )
         self.assertEqual(
-            tuple(choice.description for choice in settings_call.args[2]),
+            tuple(choice.form_summary for choice in settings_call.args[2]),
             (
                 "Current: KO",
                 "Current: default_kim_eun_hee",
@@ -6229,11 +6314,15 @@ class ControllerSettingsTests(ControllerTestCase):
                 None,
             ),
         )
+        self.assertEqual(
+            tuple(
+                choice.form_summary_role for choice in settings_call.args[2]
+            ),
+            (terminal_module.SemanticRole.MUTED,) * 6
+            + (terminal_module.SemanticRole.DEFAULT,),
+        )
         self.assertTrue(
-            all(
-                choice.description_role is terminal_module.SemanticRole.DEFAULT
-                for choice in settings_call.args[2]
-            )
+            all(choice.description is None for choice in settings_call.args[2])
         )
         self.assertTrue(
             all(choice.warning_suffix is None for choice in settings_call.args[2])
@@ -7811,18 +7900,12 @@ class ControllerSettingsTests(ControllerTestCase):
             "Choose a setting to edit, apply changes, or discard changes.\n"
             "\n"
             "Choices 3/9\n"
-            "  1. Language\n"
-            "     Current: KO\n"
-            "  2. Persona\n"
-            "     Current: default_kim_eun_hee\n"
-            "> 3. Maximum debate rounds\n"
-            "     Pending: 0\n"
-            "  4. Conversation storage\n"
-            "     Current: filesystem\n"
-            "  5. Conversation RAG\n"
-            "     Current: Provider Disabled; Automatic Off\n"
-            "  6. Message details\n"
-            "     Current: Off\n"
+            "  1. Language                  — Current: KO\n"
+            "  2. Persona                   — Current: default_kim_eun_hee\n"
+            "> 3. Maximum debate rounds     — Pending: 0\n"
+            "  4. Conversation storage      — Current: filesystem\n"
+            "  5. Conversation RAG          — Current: Provider Disabled; Automatic Off\n"
+            "  6. Message details           — Current: Off\n"
             "  7. Agents\n"
             "  8. Apply Changes (*Required)\n"
             "  9. Discard Changes\n"

@@ -482,11 +482,22 @@ class PickerModelContractTests(unittest.TestCase):
                 self.assertIs(getattr(terminal_facade, name), value)
                 self.assertNotIn(name, terminal_facade.__all__)
 
-    def test_choice_inline_roles_are_keyword_only_strict_immutable_values(self) -> None:
+    def test_choice_form_summary_and_inline_roles_are_strict_immutable_values(
+        self,
+    ) -> None:
         signature = inspect.signature(Choice)
         parameter = signature.parameters["warning_suffix"]
         self.assertIs(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
         self.assertIsNone(parameter.default)
+        summary_parameter = signature.parameters["form_summary"]
+        self.assertIs(summary_parameter.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIsNone(summary_parameter.default)
+        summary_role_parameter = signature.parameters["form_summary_role"]
+        self.assertIs(
+            summary_role_parameter.kind,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+        self.assertIs(summary_role_parameter.default, SemanticRole.DEFAULT)
         role_parameter = signature.parameters["description_role"]
         self.assertIs(role_parameter.kind, inspect.Parameter.KEYWORD_ONLY)
         self.assertIs(role_parameter.default, SemanticRole.DEFAULT)
@@ -496,6 +507,8 @@ class PickerModelContractTests(unittest.TestCase):
                 "identity",
                 "label",
                 "warning_suffix",
+                "form_summary",
+                "form_summary_role",
                 "description",
                 "description_role",
                 "enabled",
@@ -508,6 +521,8 @@ class PickerModelContractTests(unittest.TestCase):
         explicit_default = Choice(
             "save",
             "Save",
+            form_summary=None,
+            form_summary_role=SemanticRole.DEFAULT,
             description_role=SemanticRole.DEFAULT,
         )
         warned = Choice("save", "Save", warning_suffix="(*Required)")
@@ -516,6 +531,16 @@ class PickerModelContractTests(unittest.TestCase):
         self.assertEqual(hash(default), hash(explicit_default))
         self.assertNotEqual(default, warned)
         self.assertEqual(warned.warning_suffix, "(*Required)")
+        summarized = Choice(
+            "save",
+            "Save",
+            form_summary="Pending: yes",
+            form_summary_role=SemanticRole.WARNING,
+        )
+        self.assertEqual(summarized.form_summary, "Pending: yes")
+        self.assertIs(summarized.form_summary_role, SemanticRole.WARNING)
+        self.assertNotEqual(default, summarized)
+        self.assertIsInstance(hash(summarized), int)
         described = Choice(
             "save",
             "Save",
@@ -526,6 +551,9 @@ class PickerModelContractTests(unittest.TestCase):
         self.assertNotEqual(default, described)
         self.assertFalse(hasattr(described, "__dict__"))
         self.assertEqual(pickle.loads(pickle.dumps(described)), described)
+        self.assertEqual(pickle.loads(pickle.dumps(summarized)), summarized)
+        with self.assertRaises(FrozenInstanceError):
+            summarized.form_summary = None  # type: ignore[misc]
         with self.assertRaises(FrozenInstanceError):
             described.description_role = SemanticRole.DEFAULT  # type: ignore[misc]
         self.assertIsNone(
@@ -542,6 +570,8 @@ class PickerModelContractTests(unittest.TestCase):
 
         with self.assertRaises(TypeError):
             Choice("save", "Save", "(*Required)")  # type: ignore[misc]
+        with self.assertRaises(TypeError):
+            Choice("save", "Save", None, "Current: yes")  # type: ignore[misc]
         for invalid, exception in (
             (1, TypeError),
             ("", ValueError),
@@ -550,6 +580,18 @@ class PickerModelContractTests(unittest.TestCase):
             with self.subTest(invalid=invalid):
                 with self.assertRaises(exception):
                     Choice("save", "Save", warning_suffix=invalid)  # type: ignore[arg-type]
+                with self.assertRaises(exception):
+                    Choice("save", "Save", form_summary=invalid)  # type: ignore[arg-type]
+        for invalid in ("muted", ViewState.IDLE, object()):
+            with self.subTest(invalid_summary_role=invalid), self.assertRaisesRegex(
+                TypeError,
+                "form_summary_role must be a SemanticRole",
+            ):
+                Choice(
+                    "save",
+                    "Save",
+                    form_summary_role=invalid,  # type: ignore[arg-type]
+                )
         for invalid in ("warning", ViewState.ERROR, object()):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(
                 TypeError,
@@ -1325,12 +1367,17 @@ class PickerRenderingTests(unittest.TestCase):
         self,
     ) -> None:
         choices = (
-            Choice("language", "Language", description="Current: KO"),
+            Choice(
+                "language",
+                "Language",
+                form_summary="Current: KO",
+                form_summary_role=SemanticRole.MUTED,
+            ),
             Choice(
                 "persona",
                 "Persona",
-                description="Pending: noir",
-                description_role=SemanticRole.WARNING,
+                form_summary="Pending: noir",
+                form_summary_role=SemanticRole.WARNING,
             ),
             Choice(
                 "save",
@@ -1341,6 +1388,8 @@ class PickerRenderingTests(unittest.TestCase):
             Choice(
                 "off",
                 "Unavailable",
+                form_summary="Pending: unavailable",
+                form_summary_role=SemanticRole.WARNING,
                 enabled=False,
                 disabled_reason="Not supported.",
             ),
@@ -1366,13 +1415,11 @@ class PickerRenderingTests(unittest.TestCase):
             "Choose a setting to edit.\n"
             "\n"
             "Choices 3/4\n"
-            "  1. Language\n"
-            "     Current: KO\n"
-            "  2. Persona (selected)\n"
-            "     Pending: noir\n"
+            "  1. Language                  — Current: KO\n"
+            "  2. Persona (selected)        — Pending: noir\n"
             "> 3. Apply Changes (*Required)\n"
             "     Save pending settings.\n"
-            "  4. Unavailable (disabled)\n"
+            "  4. Unavailable (disabled)    — Pending: unavailable\n"
             "     Disabled: Not supported."
         )
         plain = render_picker_viewport(
@@ -1385,7 +1432,17 @@ class PickerRenderingTests(unittest.TestCase):
         )
         self.assertEqual(plain.text, expected)
         self.assertEqual(strip_decorative_sgr(ansi.text), expected)
-        self.assertIn("\x1b[33m     Pending: noir\x1b[0m", ansi.text)
+        self.assertIn("— \x1b[37mCurrent: KO\x1b[0m", ansi.text)
+        self.assertIn(
+            "\x1b[32m  2. Persona (selected)        — \x1b[0m"
+            "\x1b[33mPending: noir\x1b[0m",
+            ansi.text,
+        )
+        self.assertIn(
+            "\x1b[37m  4. Unavailable (disabled)    — \x1b[0m"
+            "\x1b[33mPending: unavailable\x1b[0m",
+            ansi.text,
+        )
         self.assertIn(
             "\x1b[36m> 3. Apply Changes \x1b[0m"
             "\x1b[33m(*Required)\x1b[0m",
@@ -1413,6 +1470,295 @@ class PickerRenderingTests(unittest.TestCase):
         ):
             with self.subTest(noisy=noisy):
                 self.assertNotIn(noisy, expected)
+
+    def test_form_summary_exact_twenty_cell_boundary_uses_complete_picker(
+        self,
+    ) -> None:
+        choices = (
+            Choice(
+                "short",
+                "A",
+                form_summary="Current: 12345678901234567890",
+                form_summary_role=SemanticRole.MUTED,
+            ),
+            Choice(
+                "long",
+                "Longest label",
+                form_summary="Pending: two",
+                form_summary_role=SemanticRole.WARNING,
+            ),
+        )
+        state = initialize_picker(
+            Picker(
+                Prompt("Settings"),
+                choices,
+                presentation=InputPresentation.FORM,
+                visible_choice_limit=1,
+                highlighted_id="short",
+            )
+        )
+        self.assertEqual(project_picker_viewport(state).stop, 1)
+
+        inline = render_picker_viewport(
+            project_picker_viewport(state),
+            _capabilities(CapabilityProfile.PLAIN, 41),
+        )
+        self.assertEqual(
+            inline.text,
+            "Settings\n\n"
+            "Choices 1/2\n"
+            "> 1. A             — Current: 12345678901\n"
+            "                     234567890",
+        )
+        inline_summary = next(
+            line for line in inline.text.splitlines() if "Current:" in line
+        )
+        self.assertEqual(
+            _physical_width(inline_summary[: inline_summary.index("Current:")]),
+            21,
+        )
+        self.assertEqual((inline.width, inline.line_count), (41, 5))
+
+        moved, outcome = transition_picker(state, KeyEvent(KeyKind.DOWN))
+        self.assertIsNone(outcome)
+        self.assertEqual(project_picker_viewport(moved).start, 1)
+        moved_inline = render_picker_viewport(
+            project_picker_viewport(moved),
+            _capabilities(CapabilityProfile.PLAIN, 41),
+        )
+        pending_line = next(
+            line for line in moved_inline.text.splitlines() if "Pending:" in line
+        )
+        self.assertEqual(pending_line, "> 2. Longest label — Pending: two")
+        self.assertEqual(
+            _physical_width(pending_line[: pending_line.index("Pending:")]),
+            21,
+        )
+
+        stacked = render_picker_viewport(
+            project_picker_viewport(state),
+            _capabilities(CapabilityProfile.PLAIN, 40),
+        )
+        self.assertEqual(
+            stacked.text,
+            "Settings\n\n"
+            "Choices 1/2\n"
+            "> 1. A\n"
+            "     Current: 12345678901234567890",
+        )
+        self.assertNotIn(" — ", stacked.text)
+        self.assertEqual((stacked.width, stacked.line_count), (40, 5))
+
+        inline_fallback = render_picker_fallback(
+            state,
+            _capabilities(CapabilityProfile.LINE, 41),
+        )
+        stacked_fallback = render_picker_fallback(
+            state,
+            _capabilities(CapabilityProfile.LINE, 40),
+        )
+        self.assertIn(
+            "> 1. A             — Current: 12345678901\n"
+            "                     234567890\n"
+            "  2. Longest label — Pending: two",
+            inline_fallback.text,
+        )
+        self.assertNotIn(" — ", stacked_fallback.text)
+        self.assertIn(
+            "> 1. A\n"
+            "     Current: 12345678901234567890\n"
+            "  2. Longest label\n"
+            "     Pending: two",
+            stacked_fallback.text,
+        )
+        for frame in (inline_fallback, stacked_fallback):
+            self.assertEqual(frame.line_count, len(frame.text.splitlines()))
+
+    def test_form_summary_unicode_controls_wrap_and_keep_independent_roles(
+        self,
+    ) -> None:
+        choices = (
+            Choice(
+                "current",
+                "Current e\u0301",
+                form_summary="Current: one",
+                form_summary_role=SemanticRole.MUTED,
+            ),
+            Choice(
+                "pending",
+                "Pending 界e\u0301",
+                form_summary=(
+                    "Pending: 界e\u0301 danger\x1b[31m\x00 across rows"
+                ),
+                form_summary_role=SemanticRole.WARNING,
+            ),
+            Choice(
+                "disabled",
+                "Disabled",
+                form_summary="Pending: three",
+                form_summary_role=SemanticRole.WARNING,
+                enabled=False,
+                disabled_reason="Unavailable",
+            ),
+        )
+        state = initialize_picker(
+            Picker(
+                Prompt("Settings"),
+                choices,
+                presentation=InputPresentation.FORM,
+                highlighted_id="current",
+                selected_id="pending",
+            )
+        )
+        plain = render_picker_viewport(
+            project_picker_viewport(state),
+            _capabilities(CapabilityProfile.PLAIN, 52),
+        )
+        ansi = render_picker_viewport(
+            project_picker_viewport(state),
+            _capabilities(CapabilityProfile.ANSI, 52),
+        )
+        self.assertEqual(strip_decorative_sgr(ansi.text), plain.text)
+        compact = "".join(plain.text.split())
+        self.assertIn("Currente\u0301—Current:one", compact)
+        self.assertIn(
+            r"Pending界é(selected)—Pending:界édanger\x1b[31m\x00acrossrows",
+            compact,
+        )
+        summary_starts = []
+        for line in plain.text.splitlines():
+            if " — " not in line:
+                continue
+            token = "Current:" if "Current:" in line else "Pending:"
+            summary_starts.append(
+                _physical_width(line[: line.index(token)])
+            )
+        self.assertEqual(len(summary_starts), 3)
+        self.assertEqual(len(set(summary_starts)), 1)
+        self.assertNotIn("\x1b[31m", plain.text)
+        self.assertNotIn("\x00", plain.text)
+        self.assertIn(
+            "\x1b[36m> 1. Current e\u0301",
+            ansi.text,
+        )
+        self.assertIn("\x1b[37mCurrent: one\x1b[0m", ansi.text)
+        long_pending_lines = tuple(
+            line
+            for line in ansi.text.splitlines()
+            if "Pending: 界" in line or "b[31m\\x00 across rows" in line
+        )
+        self.assertEqual(len(long_pending_lines), 2)
+        self.assertTrue(
+            all("\x1b[33m" in line for line in long_pending_lines)
+        )
+        self.assertIn("\x1b[33mPending: three\x1b[0m", ansi.text)
+        for line in plain.text.splitlines():
+            self.assertLessEqual(_physical_width(line), 52)
+        self.assertEqual(plain.line_count, len(plain.text.splitlines()))
+
+        narrow = render_picker_viewport(
+            project_picker_viewport(state),
+            _capabilities(CapabilityProfile.PLAIN, 24),
+        )
+        fallback = render_picker_fallback(
+            state,
+            _capabilities(CapabilityProfile.LINE, 24),
+        )
+        for rendered in (narrow, fallback):
+            rendered_compact = "".join(rendered.text.split())
+            self.assertIn(
+                r"Pending:界édanger\x1b[31m\x00acrossrows",
+                rendered_compact,
+            )
+            self.assertNotIn("\x1b", rendered.text)
+            self.assertNotIn("\x00", rendered.text)
+            self.assertEqual(rendered.line_count, len(rendered.text.splitlines()))
+            for line in rendered.text.splitlines():
+                self.assertLessEqual(_physical_width(line), 24)
+
+    def test_form_summary_is_inert_for_standard_static_and_palette_rendering(
+        self,
+    ) -> None:
+        summarized = Choice(
+            "one",
+            "One",
+            form_summary="Must stay hidden",
+            form_summary_role=SemanticRole.ERROR,
+            description="Visible detail",
+        )
+        ordinary = Choice("one", "One", description="Visible detail")
+        summarized_picker = Picker(
+            Prompt("Choose"),
+            (summarized,),
+            highlighted_id="one",
+        )
+        ordinary_picker = Picker(
+            Prompt("Choose"),
+            (ordinary,),
+            highlighted_id="one",
+        )
+        for profile in (CapabilityProfile.PLAIN, CapabilityProfile.ANSI):
+            with self.subTest(profile=profile):
+                capabilities = _capabilities(profile)
+                self.assertEqual(
+                    render_picker_viewport(
+                        project_picker_viewport(initialize_picker(summarized_picker)),
+                        capabilities,
+                    ),
+                    render_picker_viewport(
+                        project_picker_viewport(initialize_picker(ordinary_picker)),
+                        capabilities,
+                    ),
+                )
+        self.assertEqual(
+            render_picker_fallback(
+                initialize_picker(summarized_picker),
+                _capabilities(CapabilityProfile.LINE),
+            ),
+            render_picker_fallback(
+                initialize_picker(ordinary_picker),
+                _capabilities(CapabilityProfile.LINE),
+            ),
+        )
+
+        static_summarized = Picker(
+            Prompt("Choose"),
+            (summarized,),
+            presentation=InputPresentation.FORM,
+            highlighted_id="one",
+        )
+        static_ordinary = Picker(
+            Prompt("Choose"),
+            (ordinary,),
+            presentation=InputPresentation.FORM,
+            highlighted_id="one",
+        )
+        summarized_palette = _model.SuggestionPalette(
+            "/",
+            (summarized,),
+            highlighted_id="one",
+        )
+        ordinary_palette = _model.SuggestionPalette(
+            "/",
+            (ordinary,),
+            highlighted_id="one",
+        )
+        for left, right in (
+            (static_summarized, static_ordinary),
+            (summarized_palette, ordinary_palette),
+        ):
+            for profile in (CapabilityProfile.PLAIN, CapabilityProfile.ANSI):
+                with self.subTest(component=type(left).__name__, profile=profile):
+                    rendered = _render.render_component(
+                        left,
+                        _capabilities(profile),
+                    )
+                    self.assertEqual(
+                        rendered,
+                        _render.render_component(right, _capabilities(profile)),
+                    )
+                    self.assertNotIn("Must stay hidden", rendered.text)
+                    self.assertIn("Visible detail", rendered.text)
 
     def test_form_transient_context_is_live_only_ordered_and_counted(self) -> None:
         context = _transient_context()
@@ -2377,6 +2723,80 @@ class PickerDriverTests(unittest.TestCase):
             [termios_double.TCSANOW, termios_double.TCSADRAIN],
         )
 
+    def test_form_summary_resize_cleanup_uses_latest_stacked_frame_count(
+        self,
+    ) -> None:
+        state = initialize_picker(
+            Picker(
+                Prompt("Settings"),
+                (
+                    Choice(
+                        "short",
+                        "A",
+                        form_summary="Current: 12345678901234567890",
+                        form_summary_role=SemanticRole.MUTED,
+                    ),
+                    Choice(
+                        "long",
+                        "Longest label",
+                        form_summary="Pending: two",
+                        form_summary_role=SemanticRole.WARNING,
+                    ),
+                ),
+                presentation=InputPresentation.FORM,
+                highlighted_id="short",
+            )
+        )
+        driver, _input, output, fallback, termios_double, _sizes = _driver(
+            "\x1b[B\n",
+            widths=(80, 80, 42, 41, 41, 41),
+            no_color=True,
+        )
+        renderer = mock.Mock(wraps=render_picker_viewport)
+        with mock.patch.object(
+            driver_module._select,
+            "select",
+            return_value=((7,), (), ()),
+        ):
+            outcome = driver.read_picker(
+                state,
+                transition_picker,
+                transition_picker_fallback,
+                project_picker_viewport,
+                renderer,
+                render_picker_fallback,
+                transient=True,
+            )
+
+        self.assertEqual(
+            outcome,
+            ControlOutcome(ControlOutcomeKind.COMMIT, text="long"),
+        )
+        rendered_widths = tuple(
+            call.args[1].width for call in renderer.call_args_list
+        )
+        self.assertIn(41, rendered_widths)
+        self.assertIn(40, rendered_widths)
+        rendered = strip_decorative_sgr("".join(output.records))
+        self.assertIn(" — Current:", rendered)
+        self.assertIn("\n     Current:", rendered)
+        latest_frame = render_picker_viewport(*renderer.call_args_list[-1].args)
+        self.assertEqual(
+            output.records[-1],
+            "\r"
+            + "\x1b[A" * (latest_frame.line_count - 1)
+            + "\r\x1b[J",
+        )
+        self.assertEqual(
+            latest_frame.line_count,
+            len(latest_frame.text.splitlines()),
+        )
+        fallback.assert_not_called()
+        self.assertEqual(
+            [when for _fd, when, _attrs in termios_double.set_calls],
+            [termios_double.TCSANOW, termios_double.TCSADRAIN],
+        )
+
     def test_escape_interrupt_veof_and_physical_eof_have_exact_final_frames(self) -> None:
         state = initialize_picker(
             Picker(
@@ -2990,6 +3410,26 @@ class PickerAdapterCompatibilityTests(unittest.TestCase):
         prompts: list[str] = []
         answers = iter(("2", ""))
         writes: list[str] = []
+        choices = (
+            Choice(
+                "secret-1",
+                "Alpha",
+                form_summary="Current: alpha",
+                form_summary_role=SemanticRole.MUTED,
+            ),
+            Choice(
+                "secret-2",
+                "Beta",
+                enabled=False,
+                disabled_reason="Unavailable",
+            ),
+            Choice(
+                "secret-3",
+                "Gamma",
+                form_summary="Pending: gamma",
+                form_summary_role=SemanticRole.WARNING,
+            ),
+        )
 
         def read_line(prompt: str) -> str:
             prompts.append(prompt)
@@ -3001,7 +3441,7 @@ class PickerAdapterCompatibilityTests(unittest.TestCase):
         self.assertEqual(writes, [])
         outcome = adapter.read_picker(
             Prompt("Choose"),
-            _choices()[:3],
+            choices,
             presentation=InputPresentation.FORM,
             transient_context=_transient_context(),
             highlighted_id="secret-3",
@@ -3018,9 +3458,11 @@ class PickerAdapterCompatibilityTests(unittest.TestCase):
             self.assertIn("1. Alpha (selected)", prompt)
             self.assertIn("2. Beta (disabled)", prompt)
             self.assertIn("> 3. Gamma", prompt)
+            self.assertIn("Current: alpha", prompt)
+            self.assertIn("Pending: gamma", prompt)
             self.assertNotIn("secret-", prompt)
-            self.assertNotIn("Current", prompt)
-            self.assertNotIn("Pending", prompt)
+            self.assertNotIn("KO (Changed)", prompt)
+            self.assertNotIn("EN (Changed)", prompt)
             self.assertNotIn("(Changed)", prompt)
             self.assertNotIn("[activation]", prompt)
         self.assertEqual(writes, [])

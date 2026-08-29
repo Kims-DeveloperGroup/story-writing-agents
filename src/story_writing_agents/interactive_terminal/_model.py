@@ -690,6 +690,8 @@ class Choice:
     label: str
     _: KW_ONLY
     warning_suffix: str | None = None
+    form_summary: str | None = None
+    form_summary_role: SemanticRole = SemanticRole.DEFAULT
     description: str | None = None
     description_role: SemanticRole = SemanticRole.DEFAULT
     enabled: bool = True
@@ -699,6 +701,9 @@ class Choice:
         _require_text("identity", self.identity)
         _require_text("label", self.label)
         _require_optional_text("warning_suffix", self.warning_suffix)
+        _require_optional_text("form_summary", self.form_summary)
+        if not isinstance(self.form_summary_role, SemanticRole):
+            raise TypeError("form_summary_role must be a SemanticRole")
         _require_optional_text("description", self.description)
         if not isinstance(self.description_role, SemanticRole):
             raise TypeError("description_role must be a SemanticRole")

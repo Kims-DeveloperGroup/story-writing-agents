@@ -2655,92 +2655,92 @@ class InteractiveController:
                 Choice(
                     "language",
                     "Language",
-                    description=(
+                    form_summary=(
                         f"Pending: {root_values['language'][1]}"
                         if root_changed["language"]
                         else f"Current: {root_values['language'][0]}"
                     ),
-                    description_role=(
+                    form_summary_role=(
                         SemanticRole.WARNING
                         if root_changed["language"]
-                        else SemanticRole.DEFAULT
+                        else SemanticRole.MUTED
                     ),
                 ),
                 Choice(
                     "persona",
                     "Persona",
-                    description=(
+                    form_summary=(
                         f"Pending: {root_values['persona'][1]}"
                         if root_changed["persona"]
                         else f"Current: {root_values['persona'][0]}"
                     ),
-                    description_role=(
+                    form_summary_role=(
                         SemanticRole.WARNING
                         if root_changed["persona"]
-                        else SemanticRole.DEFAULT
+                        else SemanticRole.MUTED
                     ),
                 ),
                 Choice(
                     "max_debate_rounds",
                     "Maximum debate rounds",
-                    description=(
+                    form_summary=(
                         f"Pending: {root_values['max_debate_rounds'][1]}"
                         if root_changed["max_debate_rounds"]
                         else f"Current: {root_values['max_debate_rounds'][0]}"
                     ),
-                    description_role=(
+                    form_summary_role=(
                         SemanticRole.WARNING
                         if root_changed["max_debate_rounds"]
-                        else SemanticRole.DEFAULT
+                        else SemanticRole.MUTED
                     ),
                 ),
                 Choice(
                     "conversation_storage",
                     "Conversation storage",
-                    description=(
+                    form_summary=(
                         f"Pending: {root_values['conversation_storage'][1]}"
                         if root_values["conversation_storage"][0]
                         != root_values["conversation_storage"][1]
                         else f"Current: {root_values['conversation_storage'][0]}"
                     ),
-                    description_role=(
+                    form_summary_role=(
                         SemanticRole.WARNING
                         if root_changed["conversation_storage"]
-                        else SemanticRole.DEFAULT
+                        else SemanticRole.MUTED
                     ),
                 ),
                 Choice(
                     "conversation_rag",
                     "Conversation RAG",
-                    description=(
+                    form_summary=(
                         f"Pending: {pending_rag}"
                         if current_rag != pending_rag
                         else f"Current: {current_rag}"
                     ),
-                    description_role=(
+                    form_summary_role=(
                         SemanticRole.WARNING
                         if current_rag != pending_rag
-                        else SemanticRole.DEFAULT
+                        else SemanticRole.MUTED
                     ),
                 ),
                 Choice(
                     "show_message_details",
                     "Message details",
-                    description=(
+                    form_summary=(
                         f"Pending: {root_values['show_message_details'][1]}"
                         if root_changed["show_message_details"]
                         else f"Current: {root_values['show_message_details'][0]}"
                     ),
-                    description_role=(
+                    form_summary_role=(
                         SemanticRole.WARNING
                         if root_changed["show_message_details"]
-                        else SemanticRole.DEFAULT
+                        else SemanticRole.MUTED
                     ),
                 ),
                 Choice(
                     "providers",
                     "Agents",
-                    description=(
+                    form_summary=(
                         None
                         if agent_change_count == 0
                         else (
@@ -2749,7 +2749,7 @@ class InteractiveController:
                             else f"{agent_change_count} pending changes"
                         )
                     ),
-                    description_role=(
+                    form_summary_role=(
                         SemanticRole.WARNING
                         if agent_change_count
                         else SemanticRole.DEFAULT
@@ -3696,19 +3696,29 @@ class InteractiveController:
                     Choice(
                         "provider",
                         "Provider",
-                        description=(
+                        form_summary=(
                             f"Pending: {pending_provider}"
                             if current_provider != pending_provider
                             else f"Current: {current_provider}"
+                        ),
+                        form_summary_role=(
+                            SemanticRole.WARNING
+                            if current_provider != pending_provider
+                            else SemanticRole.MUTED
                         ),
                     ),
                     Choice(
                         "automatic",
                         "Automatic",
-                        description=(
+                        form_summary=(
                             f"Pending: {pending_automatic}"
                             if current_automatic != pending_automatic
                             else f"Current: {current_automatic}"
+                        ),
+                        form_summary_role=(
+                            SemanticRole.WARNING
+                            if current_automatic != pending_automatic
+                            else SemanticRole.MUTED
                         ),
                     ),
                 ),
@@ -3955,12 +3965,12 @@ class InteractiveController:
                     Choice(
                         agent_id,
                         AGENT_SPECS[agent_id].display_name,
-                        description=(
+                        form_summary=(
                             f"{'Current' if is_current else 'Pending'}: "
                             f"{_compact_execution_profile(pending_profile)}"
                         ),
-                        description_role=(
-                            SemanticRole.DEFAULT if is_current else SemanticRole.WARNING
+                        form_summary_role=(
+                            SemanticRole.MUTED if is_current else SemanticRole.WARNING
                         ),
                     )
                 )
@@ -4007,12 +4017,12 @@ class InteractiveController:
                     Choice(
                         "provider",
                         "Provider",
-                        description=(
+                        form_summary=(
                             f"{'Current' if provider_is_current else 'Pending'}: "
                             f"{_provider_display_name(pending_profile.provider)}"
                         ),
-                        description_role=(
-                            SemanticRole.DEFAULT
+                        form_summary_role=(
+                            SemanticRole.MUTED
                             if provider_is_current
                             else SemanticRole.WARNING
                         ),
@@ -4026,12 +4036,12 @@ class InteractiveController:
                     Choice(
                         "model",
                         "Model",
-                        description=(
+                        form_summary=(
                             f"{'Current' if model_is_current else 'Pending'}: "
                             f"{_execution_value(pending_profile.model)}"
                         ),
-                        description_role=(
-                            SemanticRole.DEFAULT
+                        form_summary_role=(
+                            SemanticRole.MUTED
                             if model_is_current
                             else SemanticRole.WARNING
                         ),
@@ -4045,12 +4055,12 @@ class InteractiveController:
                     Choice(
                         "reasoning",
                         "Effort",
-                        description=(
+                        form_summary=(
                             f"{'Current' if effort_is_current else 'Pending'}: "
                             f"{_execution_value(pending_profile.effort)}"
                         ),
-                        description_role=(
-                            SemanticRole.DEFAULT
+                        form_summary_role=(
+                            SemanticRole.MUTED
                             if effort_is_current
                             else SemanticRole.WARNING
                         ),
