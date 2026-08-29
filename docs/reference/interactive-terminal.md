@@ -49,6 +49,8 @@
 > pickers, and dirty Apply/Discard confirmations remain one-shot. A capable
 > Apply/Discard confirmation owns its changed comparison inside the same live
 > frame and clears it on exit; line fallback omits that comparison.
+> Settings state facts now share a responsive inline column when physical width
+> leaves at least 20 cells for their content and stack when it does not.
 > The root Settings picker also exposes nested Conversation RAG before Message
 > details. RAG edits a startup-fixed Provider/Automatic policy; Message details
 > Off is the compact default and On reveals documented diagnostics without
@@ -583,11 +585,14 @@ owns, including the authentication picker borrowed from the global coordinator.
 The form projects a simple view title and optional `Context:` before guidance,
 then uses blank rows to separate choices or editable values. Pickers use
 `Choices N/M`, `>` for the active row, `(selected)`, `(disabled)`, and textual
-`Disabled:` reasons; descriptions occupy their own indented rows. The form
-does not project `[available]`, `[highlighted]`, `[focused]`, `[open]`, a shown
-range, or a breadcrumb-like composite title. Standard presentation remains the
-default for global `/auth`, omitted-resume choices, and every other generic
-picker.
+`Disabled:` reasons. Eligible Settings state summaries align after ` — ` in
+one complete-picker physical-cell column when at least 20 cells remain for
+summary content. With 19 or fewer cells they occupy their own established
+indented detail rows. Descriptions and `Disabled:` reasons always retain their
+own indented rows. The form does not project `[available]`, `[highlighted]`,
+`[focused]`, `[open]`, a shown range, or a breadcrumb-like composite title.
+Standard presentation remains the default for global `/auth`, omitted-resume
+choices, and every other generic picker.
 
 Settings Custom model and Maximum debate rounds use the form input projection.
 It renders the title, optional `Context:`, guidance, validation or completed
@@ -707,15 +712,31 @@ seven-row limit. With an active row, its form heading is `Choices N/M`, where
 active row it is `Choices M`. It never adds `showing X-Y/M`. A form row uses
 `>` rather than a bracketed highlighted label,
 keeps `(selected)` and `(disabled)` textual, and stacks descriptions and
-`Disabled:` reasons beneath the label. Global `/auth` selects standard
-presentation, while authentication borrowed inside Settings is explicitly
-passed form presentation.
+`Disabled:` reasons beneath the label. For interactive FORM picker input, the
+widest fully decorated label in the complete picker defines one physical-cell
+summary column. When at least 20 cells remain, summarized rows place ` — `
+before that column; long summary text wraps without truncation and continues
+at the column. When 19 or fewer cells remain, the summary stacks at the
+existing detail indent. Live and numbered fallback projections make the same
+decision. A live resize can switch layouts; cleanup uses the resulting latest
+complete-frame line count. Global `/auth` selects standard presentation, while
+authentication borrowed inside Settings is explicitly passed form presentation.
 
 Within `/settings`, the visible per-agent fields and editor titles are exactly
 Provider, Model, and Effort. Current/Pending confirmations remain
 provider-qualified on capable streams—Codex model/reasoning and Antigravity
 model/effort rows—so inactive persisted values remain unambiguous while the
 transient comparison is visible. Line fallback omits the comparison entirely.
+
+The responsive state-summary opt-in is limited to root Current/Pending facts,
+a nonzero root Agents pending-change count, nested Conversation RAG
+Provider/Automatic facts, Agents roster execution profiles, and Agent settings
+Provider/Model/Effort facts. Clean Agents has no summary. Current summaries use
+muted semantics; Pending summaries and the nonzero count use warning semantics,
+but `Current`, `Pending`, and the count remain literal text in plain,
+`NO_COLOR`, narrow, and fallback output. Persona paths, provider/model/effort
+help, custom/inherit guidance, discard guidance, authentication text, and
+disabled reasons remain descriptions in their stacked regions.
 
 The visible top-level roster choice and roster picker are both named Agents.
 Selecting an agent opens Agent settings; Provider remains the field-level
@@ -1267,6 +1288,17 @@ styling takes precedence over selected styling, selected over highlighted, and
 those interaction states over suffix or description roles. `Choice` and this
 field remain unlisted internal contracts, with no supported package or root
 export added.
+
+`Choice` also has additive package-internal `form_summary` and
+`form_summary_role` fields, defaulting to no summary and
+`SemanticRole.DEFAULT`. Only interactive FORM picker viewport and numbered
+fallback rendering consume them. They provide the responsive state column
+described above without reclassifying ordinary descriptions. STANDARD picker
+input, statically rendered `Picker` components, and `SuggestionPalette`
+rendering ignore them, so existing consumers remain exact. Summary text is
+sanitized and wrapped in physical cells like other inline content; its semantic
+role remains independent across wrapped lines. These fields are likewise
+unlisted and add no supported API.
 
 The generic picker remains commit-once. `/settings` alone may consume that
 commit, immediately open a new value-editor read with updated state and an

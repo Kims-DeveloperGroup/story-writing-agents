@@ -83,6 +83,21 @@ output width. The internal live picker observes capability and width on every
 redraw and limits its contiguous viewport to seven choices; its line fallback
 renders the complete list.
 
+Interactive Settings FORM pickers derive one optional state-summary column from
+the fully decorated labels in the complete picker, including rows outside a
+nested live viewport. The calculation uses sanitized physical-cell width. If
+at least 20 cells remain after the shared start, summarized rows use
+`LABEL — SUMMARY`; wrapped continuation starts at that column and is never
+truncated. At 19 cells or fewer, summaries stack at the existing detail indent.
+The live viewport and complete numbered line fallback use the same rule at
+their observed or retained width. A live resize may therefore change the
+frame's row count; the driver records the newly rendered full-frame line count
+and uses it for the next redraw or cleanup. Ordinary descriptions and disabled
+reasons stay stacked. `Current` remains literal muted text, while `Pending`
+and a nonzero Agents count remain literal warning text; removing decorative
+color does not remove their meaning. This projection changes no choice identity,
+selection, configuration value, input-mode latch, or provider/runtime action.
+
 The internal profiles are fixed ANSI, capable plain, and line fallback. The
 application color gate keeps ANSI eligible when `NO_COLOR` is unset, empty,
 whitespace-only, or whitespace-trimmed exact `0`; `NO_COLOR=0` is therefore an

@@ -825,10 +825,10 @@ Disabled/Local and Automatic Off/On. Disabled forces Automatic Off, selecting
 Local does not enable Automatic, and On requires pending Local. Message details
 offers Off and On. Off is the default compact presentation and does not delete
 stored content. `Agents` opens a nested canonical-agent picker. Each canonical
-agent is followed by `Current:` or `Pending:` and its effective
+agent has a responsive `Current:` or `Pending:` summary with its effective
 `(Provider/model/effort)` profile. Selecting an agent opens a provider-neutral
 Provider/Model/Effort picker; each field independently shows `Current:` or
-`Pending:` followed by its effective value. An omitted effective model or
+`Pending:` with its effective value. An omitted effective model or
 effort is displayed as `provider default`. Current/Pending confirmation
 comparisons retain provider-qualified rows for both providers on capable
 streams, so inactive stored values remain identifiable while the transient
@@ -837,7 +837,7 @@ comparison is visible. Ordinary-line fallback omits that comparison.
 The inline agent and field comparisons are against the active runtime profile,
 not a flattening of every configuration property. An edit to only an inactive
 provider's stored model or effort can therefore leave the effective agent and
-field descriptions `Current`; the warning-semantic pending-change count beside
+field summaries `Current`; the warning-semantic pending-change count beside
 the top-level Agents choice still records that unsaved configuration change.
 Launch-override fields remain disabled and show the effective override value.
 These summaries use only already validated local Settings and backend state;
@@ -847,30 +847,43 @@ value, or invoke a story provider.
 Every picker and text/number input reached through `/settings`, including a
 Provider editor's subordinate authentication picker, uses the Settings form
 presentation. It separates the current-view title, optional `Context:`,
-guidance, choices, stacked descriptions, notices, current value, and editable
-value. With an active row, a picker heading is `Choices N/M`, using its absolute
-ordinal and the complete choice count; without one, it is `Choices M`. It
-contains no shown-range text. `>` marks the active row, `(selected)` marks the selected value, and
-unavailable choices show `(disabled)` plus `Disabled: REASON`. The form omits
+guidance, choices, responsive state summaries, stacked descriptions, notices,
+current value, and editable value. With an active row, a picker heading is
+`Choices N/M`, using its absolute ordinal and the complete choice count;
+without one, it is `Choices M`. It contains no shown-range text. `>` marks the
+active row, `(selected)` marks the selected value, and unavailable choices show
+`(disabled)` plus `Disabled: REASON`. The form omits
 `[available]`, `[highlighted]`, `[focused]`, and `[open]`, and does not build a
 breadcrumb title. Global `/auth`, omitted-resume selection, and every other
 generic picker retain the standard presentation and seven-row window. ANSI
 color reinforces these textual facts but never replaces them.
 
+For state summaries, the complete picker—not only its visible seven-row
+window—sets one shared column from its widest fully decorated label. Physical
+cell width includes wide and combining Unicode correctly. If at least 20 cells
+remain from that column to the right edge, eligible rows render
+`LABEL — Current: VALUE` or `LABEL — Pending: VALUE`; wrapped summary text
+continues at the same column without truncation. If only 19 cells remain, or at
+any narrower width, the same summary moves to the established indented row
+below its label. Live and numbered fallback views use this same boundary. A
+resize can switch the layout without changing selection or values.
+
 At the Settings root, each one-level value, including Conversation storage,
-Conversation RAG, and Message details, shows one effective description: neutral
+Conversation RAG, and Message details, shows one effective summary: muted
 `Current` when unchanged or warning-semantic `Pending` when changed. Agents
 similarly warning-marks its explicit nonzero nested pending-change count. In
-Agents and Agent settings, effective `Current` descriptions remain neutral and
-effective `Pending` descriptions use warning semantics. Dirty confirmation
+Agents and Agent settings, effective `Current` summaries remain muted and
+effective `Pending` summaries use warning semantics. Dirty confirmation
 context on capable streams keeps Current neutral and Pending warning. These
-roles reinforce the visible words and counts; warning suffix and description
-spans wrap independently, and whole-row disabled/selected/highlighted
-precedence remains authoritative. Root and editor views retain complete
+roles reinforce the visible words and counts. The summary opt-in covers only
+those root facts, a nonzero root Agents count, nested Conversation RAG
+Provider/Automatic, the Agents roster profile, and Agent settings
+Provider/Model/Effort. Clean Agents has no summary. Persona paths, help and
+custom/inherit guidance, Discard guidance, authentication text, and disabled
+reasons remain stacked descriptions. Root and editor views retain complete
 textual values under narrow, plain, fallback, and `NO_COLOR` output, so color
 is never required to identify state; fallback confirmation context is omitted
-as described below. The additive Choice description role remains
-package-internal.
+as described below.
 
 Every retained Language, Persona, Maximum debate rounds, Conversation storage,
 Conversation RAG Provider, Conversation RAG Automatic, Message details,

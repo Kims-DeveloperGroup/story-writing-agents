@@ -2622,15 +2622,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   globally low, medium, and high without slug inference. The settings flow
   gives every value editor pending, not-saved, and dirty-only Apply Changes
   guidance. One
-  private ordered settings projection supplies root Current/Pending
-  descriptions, the nested Agents pending-change count, and changed-only
+  private ordered settings projection supplies root Current/Pending state
+  summaries, the nested Agents pending-change count, and changed-only
   confirmation fields in stable settings and roster order. Structurally
   unchanged root values, including Conversation storage, retain explicit
-  `Current:` descriptions with default semantic roles; changed root values
-  retain explicit `Pending:` descriptions with warning roles. A clean Agents
-  row has no description, while its nonzero pending-change count has a warning
-  role. On every top-level read, structural inequality between the pending
-  configuration and opening baseline exposes the two persistence actions and
+  `Current:` summaries with muted semantic roles; changed root values retain
+  explicit `Pending:` summaries with warning roles. Nested Conversation RAG
+  Provider/Automatic, Agents roster profiles, and agent Provider/Model/Effort
+  rows use the same Current/Pending summary semantics. A clean Agents row has
+  no summary, while its nonzero pending-change count has a warning role. Other
+  help and guidance remain descriptions, while disabled reasons remain separate
+  detail rows. On every top-level read, structural inequality between the
+  pending configuration and opening baseline exposes the two persistence
+  actions and
   retains both `(*Required)` on Apply Changes and the exact warning-styled
   `Choose Apply Changes to persist pending changes` notice; all are absent
   initially and after a complete revert, while the notice remains absent from
@@ -3300,8 +3304,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   magenta/cyan/yellow/green/blue enums, additive keyword-only message
   presentation, optional metadata, and accent values whose defaults preserve
   exact inline construction and rendering, message-capable list rows, shared
-  `Choice` with its optional keyword-only validated plain `warning_suffix` and
-  additive keyword-only validated `SemanticRole` description metadata,
+  `Choice` with its optional keyword-only validated plain `warning_suffix`,
+  FORM-only state-summary text and `SemanticRole`, and additive keyword-only
+  validated description text/role metadata,
   `RenderedFrame`, internal `InputPromptView` with additive keyword-only
   standard/form presentation plus an optional exact one-line initial value, and
   `RenderedInputFrame` transfer contracts outside the closed component
@@ -3327,8 +3332,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   attributed text and immutable presentation metadata; it performs no
   sanitization or layout and its default
   cyan accent has no effect under the default inline presentation. A choice
-  owns its immutable warning-suffix and description-
-  role semantics but no styling or control precedence. Composer values retain exact accepted lines
+  owns its immutable warning-suffix, FORM-summary, and description semantics but
+  no styling or control precedence. Composer values retain exact accepted lines
   and derive joined content and code-point counts without mutation. Startup
   welcome values carry only one validated semantic stage and no terminal,
   presentation, provider, or authentication data. Models create no ANSI and own
@@ -3442,13 +3447,21 @@ every intermediate arrow. The current runtime graph is acyclic.
   copy rather than available/highlighted/focused/open labels; can render the
   Settings root's bounded nine-row viewport; and renders any picker-owned
   transient semantic context before the heading with one separating blank row.
+  Form choices with state summaries share one complete-picker column after an
+  em-dash separator when the physical width leaves at least 20 content cells;
+  continuation rows align to that column. The calculation includes every
+  choice rather than only the live viewport. At narrower widths, each summary
+  stacks at the existing detail indentation so labels remain legible.
   `render_picker_fallback` renders the complete numbered list and semantic input
   prompt under the selected presentation while intentionally omitting that
-  context. Both layouts keep opaque identities internal and preserve
+  context and uses the same responsive summary calculation. Standard pickers
+  and suggestion palettes ignore FORM-only summaries. Both form layouts keep
+  opaque identities internal and preserve
   equivalent sanitized plain and fixed-ANSI meaning. Their generalized segment-aware
   physical-cell wrapping projects ordered non-overlapping semantic spans across
-  narrow rows, independently preserving an optional warning suffix and an
-  optional role-bearing description. Fixed ANSI decorates each span only on
+  narrow rows, independently preserving an optional warning suffix, FORM
+  summary role, and optional role-bearing description. Fixed ANSI decorates each
+  span only on
   otherwise available rows; disabled, selected, and highlighted whole-row roles
   retain precedence, with selected winning simultaneous selected/highlighted
   state, and every rich projection strips to the exact plain, `NO_COLOR`, and
