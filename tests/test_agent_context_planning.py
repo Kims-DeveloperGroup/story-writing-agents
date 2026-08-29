@@ -37,6 +37,8 @@ from story_writing_agents.agent_context.planning import (
     ContextBootstrapReason,
     ContextBudgetAccounting,
     ContextCheckpointProposal,
+    ContextCatalogCursor,
+    ContextCheckpointRecord,
     ContextCheckpointSource,
     ContextCheckpointState,
     ContextCheckpointView,
@@ -51,6 +53,8 @@ from story_writing_agents.agent_context.planning import (
     ContextProjectedUnit,
     ContextProjection,
     ContextProjectionAccounting,
+    ContextRecordCursor,
+    ContextRecordMaterial,
     ContextReferenceBudgetUsage,
     ContextSearchableAccounting,
     ContextSourceBudgetUsage,
@@ -167,6 +171,43 @@ def _source(
     return entry, ContextMaterial(entry, body_utf8)
 
 
+def _record(
+    record_id: str,
+    body_utf8: bytes,
+    ordinal: int,
+) -> ContextRecordMaterial:
+    return ContextRecordMaterial(
+        ContextRecordCursor(
+            record_id,
+            "records",
+            ordinal,
+            ordinal,
+            None,
+            None,
+            _digest(body_utf8),
+            len(body_utf8),
+        ),
+        body_utf8,
+    )
+
+
+def _checkpoint_from_projection(
+    projection: ContextProjection,
+    *,
+    provider_thread_id: str = "thread",
+) -> ContextCheckpointView:
+    proposal = projection.checkpoint_proposal
+    return ContextCheckpointView(
+        ContextCheckpointState.READY,
+        proposal.conditions,
+        provider_thread_id,
+        proposal.sources,
+        proposal.delta_depth,
+        proposal.catalog_sources,
+        proposal.source_alias_high_watermark,
+    )
+
+
 def _policy(**overrides: int) -> ContextPlanningPolicy:
     values = {
         "total_source_utf8_bytes": 64,
@@ -206,12 +247,29 @@ def _ready_checkpoint(
     provider_thread_id: str | None = "thread",
     delta_depth: int = 0,
 ) -> ContextCheckpointView:
+    catalog_entries = tuple(
+        entry
+        for entry in sorted(entries, key=lambda value: value.ordinal)
+        if entry.source_kind
+        in {
+            ContextSourceKind.WRITING_ARTIFACT,
+            ContextSourceKind.CONVERSATION,
+            ContextSourceKind.ACTIVE_DEBATE,
+            ContextSourceKind.OWN_AGENT_STATE,
+        }
+    )
+    catalog = tuple(
+        ContextCatalogCursor(entry, f"s{ordinal}")
+        for ordinal, entry in enumerate(catalog_entries, start=1)
+    )
     return ContextCheckpointView(
         ContextCheckpointState.READY,
         conditions,
         provider_thread_id,
         tuple(ContextCheckpointSource(entry) for entry in entries),
         delta_depth,
+        catalog,
+        len(catalog),
     )
 
 
@@ -309,7 +367,12 @@ def _decision_allowed(
         )
     return (
         priority is ContextPriority.P3_OPTIONAL
-        and channel is ContextSemanticChannel.OPTIONAL_BACKGROUND
+        and channel
+        in {
+            ContextSemanticChannel.OPTIONAL_BACKGROUND,
+            ContextSemanticChannel.RETRIEVED_EVIDENCE,
+            ContextSemanticChannel.HISTORY,
+        }
     )
 
 
@@ -483,6 +546,10 @@ class PlanningSurfaceTests(PlanningTestCase):
                 "removed_checkpoint_sources",
                 "accounting",
                 "checkpoint_proposal",
+                "projected_records",
+                "removed_checkpoint_records",
+                "catalog_updates",
+                "removed_catalog_sources",
             ),
         )
         value = ContextSourceBudgetUsage(3, 1, 2)
@@ -506,10 +573,10 @@ class PlanningPolicyTests(PlanningTestCase):
                 policy.mandatory_reference_utf8_bytes,
                 policy.max_delta_depth,
             ),
-            (131_072, 73_728, 16_384, 32_768, 8_192, 262_144, 16),
+            (131_072, 73_728, 16_384, 32_768, 0, 262_144, 16),
         )
         serialized = (
-            b"total=131072;p0=73728;p1=16384;p2=32768;p3=8192;"
+            b"total=131072;p0=73728;p1=16384;p2=32768;p3=0;"
             b"references=262144;depth=16"
         )
         self.assertEqual(policy.fingerprint, _digest(serialized))
@@ -743,6 +810,111 @@ class PlanningValueTests(PlanningTestCase):
             provider_thread_id=None,
         )
         self.assertIsNone(no_thread.provider_thread_id)
+
+    def test_catalog_aliases_are_unique_exact_integers_and_high_water_bounded(
+        self,
+    ) -> None:
+        policy = _policy()
+        conditions = _conditions(policy)
+        entry, _material = _source("catalog-source")
+        cursor = _record("record-one", b"record", 1).cursor
+
+        for alias in (
+            True,
+            0,
+            -1,
+            planning_module._MAX_RECORD_ALIAS + 1,
+        ):
+            with self.subTest(record_alias=alias):
+                self.assert_planning_error(
+                    lambda alias=alias: ContextCheckpointRecord(cursor, alias),
+                    ContextPlanningErrorCode.INVALID_CHECKPOINT,
+                )
+        for high_water in (
+            True,
+            -1,
+            planning_module._MAX_RECORD_ALIAS + 1,
+        ):
+            with self.subTest(record_high_water=high_water):
+                self.assert_planning_error(
+                    lambda high_water=high_water: ContextCatalogCursor(
+                        entry,
+                        "s1",
+                        high_water,
+                    ),
+                    ContextPlanningErrorCode.INVALID_CHECKPOINT,
+                )
+        for source_alias in (
+            "",
+            "s0",
+            "s01",
+            "h1",
+        ):
+            with self.subTest(source_alias=source_alias):
+                self.assert_planning_error(
+                    lambda source_alias=source_alias: ContextCatalogCursor(
+                        entry,
+                        source_alias,
+                    ),
+                    ContextPlanningErrorCode.INVALID_CHECKPOINT,
+                )
+
+        checkpoint_record = ContextCheckpointRecord(cursor, 2)
+        source = ContextCheckpointSource(entry, (checkpoint_record,))
+        too_low = ContextCatalogCursor(entry, "s1", 1)
+        self.assert_planning_error(
+            lambda: ContextCheckpointView(
+                ContextCheckpointState.READY,
+                conditions,
+                "thread",
+                (source,),
+                0,
+                (too_low,),
+                1,
+            ),
+            ContextPlanningErrorCode.INVALID_CHECKPOINT,
+        )
+        valid_catalog = ContextCatalogCursor(entry, "s1", 2)
+        for high_water in (True, 0):
+            with self.subTest(source_high_water=high_water):
+                self.assert_planning_error(
+                    lambda high_water=high_water: ContextCheckpointView(
+                        ContextCheckpointState.READY,
+                        conditions,
+                        "thread",
+                        (source,),
+                        0,
+                        (valid_catalog,),
+                        high_water,
+                    ),
+                    ContextPlanningErrorCode.INVALID_CHECKPOINT,
+                )
+
+        sibling = replace(entry, source_id="catalog-sibling", ordinal=1)
+        duplicate_alias = ContextCatalogCursor(sibling, "s1")
+        self.assert_planning_error(
+            lambda: ContextCheckpointView(
+                ContextCheckpointState.READY,
+                conditions,
+                "thread",
+                (source,),
+                0,
+                (valid_catalog, duplicate_alias),
+                1,
+            ),
+            ContextPlanningErrorCode.INVALID_CHECKPOINT,
+        )
+        duplicate_record_alias = ContextCheckpointRecord(
+            replace(cursor, record_id="record-two"),
+            2,
+        )
+        self.assert_planning_error(
+            lambda: ContextCheckpointSource(
+                entry,
+                (checkpoint_record, duplicate_record_alias),
+            ),
+            ContextPlanningErrorCode.INVALID_CHECKPOINT,
+        )
 
     def test_decision_priority_channel_matrix_is_exhaustive(self) -> None:
         valid_entries = (
@@ -1413,7 +1585,7 @@ class RequiredAndStableSelectionTests(PlanningTestCase):
         self.assertEqual(removed.units, ())
         self.assertEqual(
             tuple(source.entry for source in removed.removed_checkpoint_sources),
-            (current,),
+            (),
         )
 
         sibling, sibling_material = _source(
@@ -1688,7 +1860,219 @@ class DeltaAndReferencePlanningTests(PlanningTestCase):
         self.assertEqual(projection.checkpoint_proposal.delta_depth, 4)
         self.assertEqual(
             tuple(source.entry for source in projection.removed_checkpoint_sources),
-            (previous_changed,),
+            (),
+        )
+        self.assertEqual(
+            tuple(source.entry for source in projection.catalog_updates),
+            (changed, optional),
+        )
+
+    def test_catalog_alias_and_record_epochs_cover_add_change_remove_reappear(
+        self,
+    ) -> None:
+        policy = _policy(p3_source_utf8_bytes=0)
+        conditions = _conditions(policy)
+
+        first_record = _record("record-one", b"one", 1)
+        first_entry = _entry("artifact", b"[one]", revision="revision-1")
+        first_material = ContextMaterial(
+            first_entry,
+            b"[one]",
+            (first_record,),
+        )
+        first = _project(
+            (first_entry,),
+            (first_material,),
+            policy=policy,
+            conditions=conditions,
+        )
+        self.assertIs(first.mode, ContextDeliveryMode.BOOTSTRAP)
+        self.assertEqual(
+            tuple(
+                (
+                    item.source_alias,
+                    item.record_alias_high_watermark,
+                )
+                for item in first.checkpoint_proposal.catalog_sources
+            ),
+            (("s1", 1),),
+        )
+        self.assertEqual(
+            tuple(
+                (item.record.cursor.record_id, item.record.record_alias)
+                for item in first.projected_records
+            ),
+            (("record-one", 1),),
+        )
+        self.assertEqual(first.catalog_updates, first.checkpoint_proposal.catalog_sources)
+
+        changed_record = _record("record-one", b"one-v2", 1)
+        new_record = _record("record-two", b"two", 2)
+        changed_entry = _entry(
+            "artifact",
+            b"[one-v2,two]",
+            revision="revision-2",
+        )
+        changed_material = ContextMaterial(
+            changed_entry,
+            b"[one-v2,two]",
+            (changed_record, new_record),
+        )
+        changed = _project(
+            (changed_entry,),
+            (changed_material,),
+            policy=policy,
+            conditions=conditions,
+            checkpoint=_checkpoint_from_projection(first),
+            active_provider_thread_id="thread",
+        )
+        changed_source = changed.checkpoint_proposal.sources[0]
+        self.assertEqual(
+            tuple(
+                (item.cursor.record_id, item.record_alias)
+                for item in changed_source.records
+            ),
+            (("record-one", 1), ("record-two", 2)),
+        )
+        self.assertEqual(
+            tuple(
+                (
+                    item.source_alias,
+                    item.record.record_alias,
+                    item.record.cursor.record_id,
+                )
+                for item in changed.projected_records
+            ),
+            (("s1", 1, "record-one"), ("s1", 2, "record-two")),
+        )
+        self.assertEqual(
+            changed.checkpoint_proposal.catalog_sources[0].record_alias_high_watermark,
+            2,
+        )
+
+        retained_entry = _entry(
+            "artifact",
+            b"[two]",
+            revision="revision-3",
+        )
+        retained_material = ContextMaterial(
+            retained_entry,
+            b"[two]",
+            (new_record,),
+        )
+        retained = _project(
+            (retained_entry,),
+            (retained_material,),
+            policy=policy,
+            conditions=conditions,
+            checkpoint=_checkpoint_from_projection(changed),
+            active_provider_thread_id="thread",
+        )
+        self.assertEqual(retained.projected_records, ())
+        self.assertEqual(
+            tuple(
+                (item.source_alias, item.record_alias, item.record_id)
+                for item in retained.removed_checkpoint_records
+            ),
+            (("s1", 1, "record-one"),),
+        )
+        self.assertEqual(
+            retained.checkpoint_proposal.catalog_sources[0].record_alias_high_watermark,
+            2,
+        )
+
+        removed = _project(
+            (),
+            (),
+            policy=policy,
+            conditions=conditions,
+            checkpoint=_checkpoint_from_projection(retained),
+            active_provider_thread_id="thread",
+        )
+        self.assertEqual(removed.checkpoint_proposal.catalog_sources, ())
+        self.assertEqual(
+            tuple(item.source_alias for item in removed.removed_catalog_sources),
+            ("s1",),
+        )
+        self.assertEqual(
+            removed.checkpoint_proposal.source_alias_high_watermark,
+            1,
+        )
+
+        reappeared_record = _record("record-three", b"three", 1)
+        reappeared_entry = _entry(
+            "artifact",
+            b"[three]",
+            revision="revision-4",
+        )
+        reappeared_material = ContextMaterial(
+            reappeared_entry,
+            b"[three]",
+            (reappeared_record,),
+        )
+        reappeared = _project(
+            (reappeared_entry,),
+            (reappeared_material,),
+            policy=policy,
+            conditions=conditions,
+            checkpoint=_checkpoint_from_projection(removed),
+            active_provider_thread_id="thread",
+        )
+        self.assertEqual(
+            tuple(
+                (item.source_alias, item.record_alias_high_watermark)
+                for item in reappeared.checkpoint_proposal.catalog_sources
+            ),
+            (("s2", 1),),
+        )
+        self.assertEqual(
+            reappeared.checkpoint_proposal.source_alias_high_watermark,
+            2,
+        )
+        self.assertEqual(
+            tuple(item.source_alias for item in reappeared.catalog_updates),
+            ("s2",),
+        )
+
+    def test_accepted_source_omission_retains_epoch_and_emits_delivery_removal(
+        self,
+    ) -> None:
+        policy = _policy(p2_source_utf8_bytes=4, p3_source_utf8_bytes=0)
+        conditions = _conditions(policy)
+        accepted_entry = _entry("bounded", b"four", revision="revision-1")
+        accepted = _project(
+            (accepted_entry,),
+            (ContextMaterial(accepted_entry, b"four"),),
+            policy=policy,
+            conditions=conditions,
+        )
+        omitted_entry = _entry("bounded", b"fives", revision="revision-2")
+        omitted = _project(
+            (omitted_entry,),
+            (ContextMaterial(omitted_entry, b"fives"),),
+            policy=policy,
+            conditions=conditions,
+            checkpoint=_checkpoint_from_projection(accepted),
+            active_provider_thread_id="thread",
+        )
+        decision = _decision_map(omitted)["bounded"]
+        self.assertIs(
+            decision.decision,
+            ContextDecisionKind.OMITTED_CLASS_BUDGET,
+        )
+        self.assertEqual(omitted.checkpoint_proposal.sources, ())
+        self.assertEqual(
+            tuple(item.entry.source_id for item in omitted.removed_checkpoint_sources),
+            ("bounded",),
+        )
+        self.assertEqual(omitted.removed_catalog_sources, ())
+        self.assertEqual(
+            tuple(item.source_alias for item in omitted.checkpoint_proposal.catalog_sources),
+            ("s1",),
+        )
+        self.assertEqual(
+            omitted.checkpoint_proposal.source_alias_high_watermark,
+            1,
         )
 
     def test_same_scope_revision_content_conflict_fails_even_when_thread_changes(

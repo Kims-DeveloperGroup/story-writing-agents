@@ -11,8 +11,11 @@ import unittest
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import FrozenInstanceError, fields, replace
+from types import SimpleNamespace
+from unittest import mock
 
 from story_writing_agents import Workspace
+from story_writing_agents.agent_context import service as service_module
 from story_writing_agents.agent_context.accounting import (
     ContextComponentKind,
     ProviderCallAccounting,
@@ -20,12 +23,17 @@ from story_writing_agents.agent_context.accounting import (
     ProviderCallState,
     ProviderUsage,
     account_provider_payload,
+    canonical_provider_json,
 )
 from story_writing_agents.agent_context.ledger import (
     ContextLedger,
     ContextLedgerAttemptOutcome,
     ContextLedgerKey,
     ContextLedgerRecordState,
+)
+from story_writing_agents.agent_context.actions import (
+    CONTEXT_ACTION_POLICY,
+    ContextActionPolicy,
 )
 from story_writing_agents.agent_context.manifest import (
     ContextAuthorityKind,
@@ -37,6 +45,7 @@ from story_writing_agents.agent_context.manifest import (
     ContextSubjectKind,
 )
 from story_writing_agents.agent_context.planning import (
+    DEFAULT_CONTEXT_PLANNING_POLICY,
     ContextDeliveryMode,
     ContextMaterial,
     ContextPlanningPolicy,
@@ -58,10 +67,12 @@ from story_writing_agents.agent_context.service import (
     record_context_provider_failure,
 )
 from story_writing_agents.agent_context.sources import (
+    CONTEXT_SOURCE_POLICY,
     ActiveDebateSourceAdapter,
     FocusedConversationSourceAdapter,
     OwnAgentStateSourceAdapter,
     WritingArtifactSourceAdapter,
+    ContextSourcePolicy,
 )
 from story_writing_agents.agents import EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR
 from story_writing_agents.conversation_storage import (
@@ -132,10 +143,10 @@ def _materials() -> tuple[ContextMaterial, ...]:
     )
 
 
-def _correlation(call: ContextProviderCallRequest) -> dict[str, object]:
-    value = call.payload["correlation"]
-    assert isinstance(value, Mapping)
-    return dict(value)
+def _correlation(call: ContextProviderCallRequest) -> str:
+    value = call.payload["c"]
+    assert isinstance(value, str)
+    return value
 
 
 def _answer(
@@ -147,10 +158,10 @@ def _answer(
 ) -> str:
     return json.dumps(
         {
-            "action": "answer",
-            "content": content,
-            "correlation": _correlation(call),
-            "used_handles": list(used_handles),
+            "a": "a",
+            "c": _correlation(call),
+            "d": [content],
+            "u": list(used_handles),
         },
         ensure_ascii=False,
         separators=(",", ":"),
@@ -163,14 +174,10 @@ def _search(
 ) -> str:
     return json.dumps(
         {
-            "action": "search",
-            "correlation": _correlation(call),
-            "queries": [
-                {
-                    "source_kinds": ["writing_artifact"],
-                    "text": "needle",
-                }
-            ],
+            "a": "s",
+            "c": _correlation(call),
+            "d": [["needle", ["w"]]],
+            "u": [],
         },
         separators=(",", ":"),
     )
@@ -180,16 +187,16 @@ def _read_search_hit(
     call: ContextProviderCallRequest,
     provider: "_ScriptedProvider",
 ) -> str:
-    observation = call.payload["observation"]
-    assert isinstance(observation, str)
-    framed = json.loads(observation.splitlines()[1])
-    handle = framed["hits"][0]["handle"]
+    framed = call.payload["o"]
+    assert isinstance(framed, list) and framed[0] == "s"
+    handle = framed[2][0][5]
     provider.used_handles = (handle,)
     return json.dumps(
         {
-            "action": "read",
-            "correlation": _correlation(call),
-            "handles": [handle],
+            "a": "r",
+            "c": _correlation(call),
+            "d": [handle],
+            "u": [],
         },
         separators=(",", ":"),
     )
@@ -199,10 +206,9 @@ def _answer_with_read(
     call: ContextProviderCallRequest,
     provider: "_ScriptedProvider",
 ) -> str:
-    observation = call.payload["observation"]
-    assert isinstance(observation, str)
-    framed = json.loads(observation.splitlines()[1])
-    assert framed["evidence"][0]["handle"] == provider.used_handles[0]
+    framed = call.payload["o"]
+    assert isinstance(framed, list) and framed[0] == "r"
+    assert framed[1][0][4] == provider.used_handles[0]
     return _answer(call, provider, used_handles=provider.used_handles)
 
 
@@ -239,6 +245,8 @@ class _ScriptedProvider:
         self.before_call: Callable[[ContextProviderCallRequest], object] | None = None
         self.invocation_entries = 0
         self.second_invocation_entered = asyncio.Event()
+        self.inspections: list[tuple[object, str, str | None]] = []
+        self._next_thread = 1
 
     @asynccontextmanager
     async def invocation(self, _scope: object, _policy: str):
@@ -252,7 +260,9 @@ class _ScriptedProvider:
         return scope, policy_fingerprint
 
     def inspect_context_thread(self, scope: object, policy_fingerprint: str):
-        return self.threads.get(self._key(scope, policy_fingerprint))
+        value = self.threads.get(self._key(scope, policy_fingerprint))
+        self.inspections.append((scope, policy_fingerprint, value))
+        return value
 
     def _accounting(
         self,
@@ -296,7 +306,10 @@ class _ScriptedProvider:
         current = self.threads.get(key)
         if current != request.expected_thread_id:
             raise AssertionError("service supplied a mismatched continuation")
-        thread_id = current or f"thread-{len(self.threads) + 1}"
+        thread_id = current
+        if thread_id is None:
+            thread_id = f"thread-{self._next_thread}"
+            self._next_thread += 1
         self.threads[key] = thread_id
         return ContextProviderCallResult(response, thread_id, accounting)
 
@@ -327,7 +340,10 @@ class _ScriptedProvider:
         current = self.threads.get(key)
         if current != request.expected_thread_id:
             raise AssertionError("reference continuation mismatch")
-        thread_id = current or f"thread-{len(self.threads) + 1}"
+        thread_id = current
+        if thread_id is None:
+            thread_id = f"thread-{self._next_thread}"
+            self._next_thread += 1
         self.threads[key] = thread_id
         return ContextReferencePreludeResult(
             ({"content": "PRIVATE_REFERENCE_BODY", "ordinal": 1},),
@@ -489,6 +505,7 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
                 "reference_operation_id",
                 "mandatory_references",
                 "fresh",
+                "allowed_search_source_kinds",
             ),
         )
         request = self.request()
@@ -509,16 +526,16 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
         self.assertEqual(context_provider_failure_facts(ValueError()), ContextProviderFailureFacts())
         self.assertNotIn("PRIVATE_PROVIDER_EXCEPTION", repr(facts))
 
-    def test_conditional_source_classification_is_exact_and_legacy_compatible(
+    def test_conditional_source_classification_is_exact(
         self,
     ) -> None:
-        legacy = ContextSourceClassification(
-            "source-legacy",
+        required = ContextSourceClassification(
+            "source-required",
             ContextSemanticChannel.HARD_CONSTRAINT,
             ContextPriority.P2_WORKING,
             0,
         )
-        self.assertIs(legacy.allow_absent, False)
+        self.assertIs(required.allow_absent, False)
         conditional = ContextSourceClassification(
             "source-conditional",
             ContextSemanticChannel.HARD_CONSTRAINT,
@@ -562,6 +579,78 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
                     ContextExecutionErrorCode.INVALID_VALUE,
                 )
 
+    def test_composite_policy_fingerprint_covers_wire_planning_and_every_limit(
+        self,
+    ) -> None:
+        action_names = tuple(field.name for field in fields(ContextActionPolicy))
+        source_names = tuple(field.name for field in fields(ContextSourcePolicy))
+        self.assertEqual(
+            action_names,
+            service_module._ACTION_POLICY_FINGERPRINT_FIELDS,
+        )
+        self.assertEqual(
+            source_names,
+            service_module._SOURCE_POLICY_FINGERPRINT_FIELDS,
+        )
+        self.assertEqual((len(action_names), len(source_names)), (19, 7))
+        baseline = service_module._execution_policy_fingerprint(
+            DEFAULT_CONTEXT_PLANNING_POLICY,
+            CONTEXT_ACTION_POLICY,
+            CONTEXT_SOURCE_POLICY,
+        )
+        self.assertEqual(
+            baseline,
+            "sha256:b021416cd09fefe611ab2704a73a08a802d7349e55c4967a43d93c5d18a89a31",
+        )
+
+        variants = {
+            service_module._execution_policy_fingerprint(
+                replace(DEFAULT_CONTEXT_PLANNING_POLICY, max_delta_depth=15),
+                CONTEXT_ACTION_POLICY,
+                CONTEXT_SOURCE_POLICY,
+            )
+        }
+        action_values = {
+            name: getattr(CONTEXT_ACTION_POLICY, name) for name in action_names
+        }
+        for name in action_names:
+            candidate = dict(action_values)
+            candidate[name] += 1
+            variants.add(
+                service_module._execution_policy_fingerprint(
+                    DEFAULT_CONTEXT_PLANNING_POLICY,
+                    SimpleNamespace(**candidate),  # type: ignore[arg-type]
+                    CONTEXT_SOURCE_POLICY,
+                )
+            )
+        source_values = {
+            name: getattr(CONTEXT_SOURCE_POLICY, name) for name in source_names
+        }
+        for name in source_names:
+            candidate = dict(source_values)
+            candidate[name] += 1
+            variants.add(
+                service_module._execution_policy_fingerprint(
+                    DEFAULT_CONTEXT_PLANNING_POLICY,
+                    CONTEXT_ACTION_POLICY,
+                    SimpleNamespace(**candidate),  # type: ignore[arg-type]
+                )
+            )
+        with mock.patch.object(
+            service_module,
+            "_CONTEXT_WIRE_VERSION",
+            "agent-context-wire-v4-test",
+        ):
+            variants.add(
+                service_module._execution_policy_fingerprint(
+                    DEFAULT_CONTEXT_PLANNING_POLICY,
+                    CONTEXT_ACTION_POLICY,
+                    CONTEXT_SOURCE_POLICY,
+                )
+            )
+        self.assertNotIn(baseline, variants)
+        self.assertEqual(len(variants), 28)
+
 
 class ContextExecutionLifecycleTests(ContextExecutionTestCase):
     async def test_no_action_reserves_before_provider_and_commits_exact_call(self) -> None:
@@ -584,7 +673,8 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertEqual(result.answer, _PRIVATE_ANSWER)
         self.assertEqual(len(provider.calls), 1)
         self.assertEqual(hook_calls, 1)
-        self.assertEqual(provider.calls[0].payload["delivery_mode"], "bootstrap")
+        self.assertEqual(set(provider.calls[0].payload), {"c", "q", "i"})
+        self.assertEqual(provider.calls[0].payload["q"][0], "conversation")
         self.assertIsNone(provider.calls[0].expected_thread_id)
         self.assertEqual(result.provider_calls[0].accounting.usage, provider.usage)
         self.assertEqual(
@@ -597,7 +687,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
             inspection.record.attempt.outcome,
             ContextLedgerAttemptOutcome.COMMITTED,
         )
-        ledger_root = self.workspace.root / "agent_states/orchestrator_state/context_ledger/v1"
+        ledger_root = self.workspace.root / "agent_states/orchestrator_state/context_ledger/v2"
         persisted = b"".join(path.read_bytes() for path in ledger_root.glob("*.json"))
         for private in (_PRIVATE_INPUT, _PRIVATE_DEFINITION, _PRIVATE_ANSWER):
             self.assertNotIn(private.encode("utf-8"), persisted)
@@ -609,18 +699,44 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         result = await self.invoke(provider, request)
         self.assertEqual(result.answer, _PRIVATE_ANSWER)
         self.assertEqual(len(provider.calls), 3)
+        self.assertEqual(tuple(sorted(call.payload) for call in provider.calls), (
+            ["c", "i", "q"],
+            ["c", "o", "q"],
+            ["c", "o", "q"],
+        ))
         self.assertEqual(
-            tuple(call.payload["operation"] for call in provider.calls),
+            tuple(call.payload["q"] for call in provider.calls),
             (
-                "agent_context_v1",
-                "agent_context_v1_continuation",
-                "agent_context_v1_continuation",
+                [
+                    "conversation",
+                    "sa",
+                    "wcdo",
+                    [4, 2, 2, 4, 8, 8, 16, 200],
+                    "text",
+                ],
+                [
+                    "conversation",
+                    "sra",
+                    "wcdo",
+                    [3, 1, 2, 4, 7, 8, 16, 200],
+                    "text",
+                ],
+                [
+                    "conversation",
+                    "sa",
+                    "wcdo",
+                    [2, 1, 1, 4, 7, 8, 15, 200],
+                    "text",
+                ],
             ),
         )
-        self.assertEqual(
-            tuple(_correlation(call)["action_index"] for call in provider.calls),
-            (1, 2, 3),
+        schemas = tuple(
+            canonical_provider_json(call.schema) for call in provider.calls
         )
+        self.assertEqual(len(set(schemas)), 1)
+        self.assertEqual(len(schemas[0]), 218)
+        self.assertTrue(all(len(_correlation(call)) == 43 for call in provider.calls))
+        self.assertEqual(len({_correlation(call) for call in provider.calls}), 3)
         self.assertEqual(
             tuple(call.call_kind for call in provider.calls),
             (
@@ -647,21 +763,129 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertIs(third.projection_accounting.mode, ContextDeliveryMode.BOOTSTRAP)
         self.assertIsNone(provider.calls[2].expected_thread_id)
 
-    async def test_scope_provider_definition_policy_and_legacy_dimensions_bootstrap(self) -> None:
+    async def test_explicit_bootstrap_retires_reinspects_and_replaces_active_thread(
+        self,
+    ) -> None:
+        provider = _ScriptedProvider((_answer, _answer))
+        first = await self.invoke(
+            provider,
+            self.request(
+                operation_id="bootstrap-first",
+                result_correlation_id="bootstrap-first-result",
+            ),
+        )
+        inspections_before = len(provider.inspections)
+        second = await self.invoke(
+            provider,
+            self.request(
+                operation_id="bootstrap-fresh",
+                result_correlation_id="bootstrap-fresh-result",
+                fresh=True,
+            ),
+        )
+        self.assertIs(first.projection_accounting.mode, ContextDeliveryMode.BOOTSTRAP)
+        self.assertIs(second.projection_accounting.mode, ContextDeliveryMode.BOOTSTRAP)
+        self.assertNotEqual(first.provider_thread_id, second.provider_thread_id)
+        self.assertIsNone(provider.calls[1].expected_thread_id)
+        self.assertEqual(len(provider.tainted), 1)
+        self.assertEqual(
+            tuple(value for _scope, _policy, value in provider.inspections[inspections_before:]),
+            (first.provider_thread_id, None),
+        )
+
+    async def test_delta_wire_distinguishes_record_delivery_and_source_tombstones(
+        self,
+    ) -> None:
+        self.repository.commit_consensus(
+            output_path="part-01/chapter-01.md",
+            candidate="first line\nsecond line\n",
+            core_updates={},
+            session_id="session",
+            debate_id="publication",
+            revision_id="r0",
+            candidate_author_agent_id=EXECUTION_SPECIALIST,
+        )
+        service = self.service
+        base_request = self.request()
+        authorities = self.authorities(base_request, service=service)
+        writing = authorities["writing_artifacts"]
+        self.assertIsInstance(writing, WritingArtifactSourceAdapter)
+        assert isinstance(writing, WritingArtifactSourceAdapter)
+        descriptor = next(
+            item
+            for item in writing.inventory(CONTEXT_SOURCE_POLICY)
+            if item.provenance.locator == "manuscript/part-01/chapter-01.md"
+        )
+        classification = ContextSourceClassification(
+            descriptor.source_id,
+            ContextSemanticChannel.HARD_CONSTRAINT,
+            ContextPriority.P2_WORKING,
+            0,
+        )
+        provider = _ScriptedProvider((_answer,) * 4)
+
+        async def invoke_revision(
+            index: int,
+            *,
+            classify: bool = True,
+        ) -> ContextInvocationResult:
+            request = self.request(
+                operation_id=f"tombstone-{index}",
+                result_correlation_id=f"tombstone-result-{index}",
+                source_classifications=(classification,) if classify else (),
+            )
+            return await self.invoke(
+                provider,
+                request,
+                service=service,
+                authorities=self.authorities(request, service=service),
+            )
+
+        first = await invoke_revision(1)
+        self.workspace.path("manuscript/part-01/chapter-01.md").write_text(
+            "changed first line\n",
+            encoding="utf-8",
+        )
+        second = await invoke_revision(2)
+        third = await invoke_revision(3, classify=False)
+        self.workspace.path("manuscript/part-01/chapter-01.md").unlink()
+        fourth = await invoke_revision(4, classify=False)
+
+        self.assertIs(first.projection_accounting.mode, ContextDeliveryMode.BOOTSTRAP)
+        self.assertEqual(
+            provider.calls[0].payload["docs"],
+            [[1, "manuscript/part-01/chapter-01.md", "first line\nsecond line\n"]],
+        )
+        self.assertIs(second.projection_accounting.mode, ContextDeliveryMode.DELTA)
+        self.assertEqual(provider.calls[1].payload["t"], [["r", 1, 2]])
+        self.assertEqual(provider.calls[2].payload["t"], [["d", 1]])
+        self.assertEqual(provider.calls[3].payload["t"], [["s", 1]])
+        self.assertNotIn("p", provider.calls[2].payload)
+        self.assertNotIn("p", provider.calls[3].payload)
+        self.assertEqual(
+            tuple(result.answer for result in (first, second, third, fourth)),
+            (_PRIVATE_ANSWER,) * 4,
+        )
+
+    async def test_scope_provider_definition_and_policy_dimensions_bootstrap(self) -> None:
         provider = _ScriptedProvider((_answer,) * 8)
         await self.invoke(provider, self.request(operation_id="base", result_correlation_id="base-result"))
         cases = (
             {"session_id": "other-session"},
-            {"subject_kind": ContextSubjectKind.DEBATE},
+            {
+                "subject_kind": ContextSubjectKind.DEBATE,
+                "operation_id": "debate_draft_scope-2",
+            },
             {"subject_id": "other-subject"},
             {"agent_id": "plot_architect"},
         )
         for index, overrides in enumerate(cases, 1):
-            request = self.request(
-                operation_id=f"scope-{index}",
-                result_correlation_id=f"scope-result-{index}",
+            values = {
+                "operation_id": f"scope-{index}",
+                "result_correlation_id": f"scope-result-{index}",
                 **overrides,
-            )
+            }
+            request = self.request(**values)
             result = await self.invoke(provider, request)
             self.assertIs(result.projection_accounting.mode, ContextDeliveryMode.BOOTSTRAP)
             self.assertIsNone(provider.calls[-1].expected_thread_id)
@@ -768,16 +992,11 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
         )
         self.assertEqual(len(provider.calls), 5)
         self.assertEqual(len(provider.responses), 1)
-        for call in provider.calls[:-1]:
-            controls = call.payload["action_controls"]
-            self.assertIsInstance(controls, Mapping)
-            self.assertEqual(
-                controls["allowed_actions"],
-                ["search", "read", "answer"],
-            )
-        final_controls = provider.calls[-1].payload["action_controls"]
-        self.assertIsInstance(final_controls, Mapping)
-        self.assertEqual(final_controls["allowed_actions"], ["answer"])
+        self.assertEqual(
+            tuple(call.payload["q"][1] for call in provider.calls[:-1]),
+            ("sa", "sra", "sa", "ra"),
+        )
+        self.assertEqual(provider.calls[-1].payload["q"][1], "a")
 
         inspection = self.inspect(provider, request)
         self.assertIs(inspection.record.state, ContextLedgerRecordState.TAINTED)
@@ -853,7 +1072,7 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
         with self.assertRaises(Exception):
             await self.invoke(provider, request)
         inspection = self.inspect(provider, request)
-        self.assertIs(inspection.record.attempt.outcome, ContextLedgerAttemptOutcome.OUTPUT_INVALID)
+        self.assertIs(inspection.record.attempt.outcome, ContextLedgerAttemptOutcome.MALFORMED)
         self.assertIsNone(inspection.record.ready_checkpoint)
 
         self.publish()

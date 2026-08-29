@@ -147,6 +147,7 @@ class PromptAssembler:
             persona_file=persona_file,
             context_document_files=context_document_file_tuple,
             provider_route_generation=self.provider_route_generations[agent_id],
+            provider_managed_context=not include_context_documents,
         )
         return AgentDefinition(
             agent_id=agent_id,
@@ -156,6 +157,7 @@ class PromptAssembler:
             persona_file=persona_file,
             language=resolved.language,
             context_document_files=context_document_file_tuple,
+            provider_managed_context=not include_context_documents,
         )
 
     def build_request(
@@ -292,6 +294,7 @@ class PromptAssembler:
         persona_file: PromptFileReference,
         context_document_files: tuple[PromptFileReference, ...],
         provider_route_generation: int = 0,
+        provider_managed_context: bool = False,
     ) -> str:
         components = (
             ("system_prompt", system_prompt_file),
@@ -320,6 +323,14 @@ class PromptAssembler:
             raise ValueError("provider route generation must be non-negative")
         if provider_route_generation:
             value["provider_route_generation"] = provider_route_generation
+        if type(provider_managed_context) is not bool:
+            raise TypeError("provider_managed_context must be a bool")
+        if provider_managed_context:
+            if context_document_files:
+                raise ValueError(
+                    "provider-managed context cannot bind context documents"
+                )
+            value["provider_managed_context"] = True
         encoded = json.dumps(
             value,
             ensure_ascii=False,

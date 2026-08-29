@@ -2557,8 +2557,9 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
         )
         policy = "sha256:" + "7" * 64
         payload = {
-            "content": "CONTEXTUAL_UNICODE_한🙂",
-            "operation": "agent_context_v1",
+            "c": "A" * 43,
+            "q": ["conversation", "sa", "wco", [4, 2, 2, 4, 8, 8, 16, 200], "text"],
+            "i": "CONTEXTUAL_UNICODE_한🙂",
         }
         schema = {"type": "object"}
         captured = []
@@ -2585,7 +2586,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL,
                         schema,
                         payload,
-                        {("content",): ContextComponentKind.CURRENT_INPUT},
+                        {("i",): ContextComponentKind.CURRENT_INPUT},
                     )
                 )
                 self.assertEqual(
@@ -2599,9 +2600,19 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         "context-call-2",
                         ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION,
                         schema,
-                        {"observation": "bounded"},
                         {
-                            ("observation",): (
+                            "c": "B" * 43,
+                            "q": [
+                                "conversation",
+                                "sa",
+                                "wco",
+                                [3, 1, 2, 4, 7, 8, 16, 200],
+                                "text",
+                            ],
+                            "o": ["r", [[1, "c", "bounded"]]],
+                        },
+                        {
+                            ("o",): (
                                 ContextComponentKind.RETRIEVED_OBSERVATION
                             )
                         },

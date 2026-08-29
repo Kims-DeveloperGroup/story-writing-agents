@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import unittest
 from dataclasses import FrozenInstanceError, fields, replace
 from unittest import mock
 
 from story_writing_agents.agent_context import service as service_module
+from story_writing_agents.agent_context.accounting import canonical_provider_json
 from story_writing_agents.agent_context.actions import (
     CONTEXT_ACTION_POLICY,
     ContextActionCorrelation,
@@ -152,6 +154,51 @@ def _registry(
     return registry
 
 
+def _search_matches(
+    manifest: ContextManifest,
+    snapshots: dict[str, ContextSourceSnapshot],
+) -> tuple[ContextSourceSearchMatch, ...]:
+    return tuple(
+        ContextSourceSearchMatch(
+            1,
+            snapshots[entry.source_id].descriptor,
+            snapshots[entry.source_id].records[0],
+            "needle",
+            len(b"needle"),
+        )
+        for entry in manifest.entries
+        if entry.source_id in snapshots
+    )
+
+
+def _mint_handles(
+    session: ContextInvocationSession,
+    registry: ContextSourceRegistry,
+    snapshots: dict[str, ContextSourceSnapshot],
+) -> tuple[tuple[ContextManifestEntry, ContextSourceHandle], ...]:
+    matches = _search_matches(session.binding.manifest, snapshots)
+    registry.search = mock.Mock(
+        return_value=(
+            matches,
+            False,
+            sum(match.descriptor.utf8_bytes for match in matches),
+        )
+    )
+    observation = session.search(
+        ContextSearchAction(
+            _correlation(session.binding, session.next_action_index),
+            (
+                ContextSearchQuery(
+                    "needle",
+                    (ContextSourceKind.WRITING_ARTIFACT,),
+                ),
+            ),
+        )
+    )
+    by_id = {entry.source_id: entry for entry in session.binding.manifest.entries}
+    return tuple((by_id[hit.source_id], hit.handle) for hit in observation.hits)
+
+
 def _binding(
     manifest: ContextManifest,
     *,
@@ -211,6 +258,10 @@ def _session(
     secret: bytes = b"k" * 32,
     action_policy: ContextActionPolicy = CONTEXT_ACTION_POLICY,
     source_policy: ContextSourcePolicy = CONTEXT_SOURCE_POLICY,
+    source_aliases: dict[str, str] | None = None,
+    allowed_search_source_kinds: tuple[ContextSourceKind, ...] = (
+        service_module._SEARCH_SOURCE_KIND_ORDER
+    ),
 ) -> ContextInvocationSession:
     with mock.patch(
         "story_writing_agents.agent_context.service.secrets.token_bytes",
@@ -221,6 +272,8 @@ def _session(
             registry,
             action_policy=action_policy,
             source_policy=source_policy,
+            source_aliases=source_aliases,
+            allowed_search_source_kinds=allowed_search_source_kinds,
         )
 
 
@@ -317,6 +370,443 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
                 self.assertNotIn("PRIVATE", repr(caught.exception))
 
 
+class CompactWireDecoderTests(unittest.TestCase):
+    """Verify the complete strict wire-v5 response contract in isolation."""
+
+    def setUp(self) -> None:
+        manifest, _snapshots = _manifest_fixture()
+        self.correlation = _correlation(_binding(manifest), 1)
+        self.token = service_module._correlation_token(self.correlation)
+
+    @staticmethod
+    def _resolve_handle(value: object) -> ContextSourceHandle:
+        if type(value) is not str or not value.startswith("h"):
+            return ContextSourceHandle(value)  # type: ignore[arg-type]
+        digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
+        return ContextSourceHandle(f"ctxh_v1_{digest}")
+
+    def decode(
+        self,
+        action: object,
+        *,
+        allowed: tuple[str, ...] = ("search", "read", "answer"),
+        contract: object = "text",
+        source_kinds: tuple[ContextSourceKind, ...] = (
+            service_module._SEARCH_SOURCE_KIND_ORDER
+        ),
+    ) -> ContextSearchAction | ContextReadAction | ContextAnswerAction:
+        response = (
+            action
+            if type(action) is str
+            else json.dumps(action, ensure_ascii=False, separators=(",", ":"))
+        )
+        assert isinstance(response, str)
+        return service_module._decode_context_action(
+            response,
+            correlation=self.correlation,
+            allowed_actions=allowed,
+            result_contract=contract,
+            allowed_search_source_kinds=source_kinds,
+            resolve_handle=self._resolve_handle,
+        )
+
+    def assert_malformed(
+        self,
+        action: object,
+        *,
+        allowed: tuple[str, ...] = ("search", "read", "answer"),
+        contract: object = "text",
+        source_kinds: tuple[ContextSourceKind, ...] = (
+            service_module._SEARCH_SOURCE_KIND_ORDER
+        ),
+    ) -> None:
+        with self.assertRaises(service_module.ContextExecutionError) as caught:
+            self.decode(
+                action,
+                allowed=allowed,
+                contract=contract,
+                source_kinds=source_kinds,
+            )
+        self.assertIs(
+            caught.exception.code,
+            service_module.ContextExecutionErrorCode.MALFORMED_ACTION,
+        )
+        self.assertIsNone(caught.exception.__cause__)
+
+    def test_schema_and_full_correlation_token_are_exact(self) -> None:
+        schema = service_module._context_action_schema()
+        self.assertEqual(
+            schema,
+            {
+                "additionalProperties": False,
+                "properties": {
+                    "a": {"enum": ["a", "r", "s"]},
+                    "c": {"type": "string"},
+                    "d": {"items": {}, "type": "array"},
+                    "u": {"items": {"type": "string"}, "type": "array"},
+                },
+                "required": ["a", "c", "d", "u"],
+                "type": "object",
+            },
+        )
+        self.assertEqual(len(canonical_provider_json(schema)), 218)
+        self.assertRegex(self.token, r"\A[A-Za-z0-9_-]{43}\Z")
+        variants = (
+            replace(
+                self.correlation,
+                scope=replace(self.correlation.scope, session_id="other"),
+            ),
+            replace(self.correlation, operation_id="other"),
+            replace(self.correlation, result_correlation_id="other"),
+            replace(self.correlation, action_index=2),
+        )
+        tokens = (self.token,) + tuple(
+            service_module._correlation_token(value) for value in variants
+        )
+        self.assertEqual(len(set(tokens)), len(tokens))
+        compare = service_module.hmac.compare_digest
+        with mock.patch.object(
+            service_module.hmac,
+            "compare_digest",
+            wraps=compare,
+        ) as checked:
+            self.assertIsInstance(
+                self.decode(
+                    {"a": "a", "c": self.token, "d": ["answer"], "u": []},
+                    allowed=("answer",),
+                ),
+                ContextAnswerAction,
+            )
+        checked.assert_called_once()
+
+    def test_valid_search_read_and_natural_result_shapes_decode_exactly(self) -> None:
+        search = self.decode(
+            {
+                "a": "s",
+                "c": self.token,
+                "d": [["Needle", ["w", "c", "d", "o"]]],
+                "u": [],
+            },
+            allowed=("search", "answer"),
+        )
+        self.assertIsInstance(search, ContextSearchAction)
+        assert isinstance(search, ContextSearchAction)
+        self.assertEqual(search.queries[0].normalized_text, "needle")
+        self.assertEqual(
+            search.queries[0].source_kinds,
+            service_module._SEARCH_SOURCE_KIND_ORDER,
+        )
+
+        read = self.decode(
+            {"a": "r", "c": self.token, "d": ["h1", "h2"], "u": []},
+            allowed=("read", "answer"),
+        )
+        self.assertIsInstance(read, ContextReadAction)
+        assert isinstance(read, ContextReadAction)
+        answer_handle = read.handles[0]
+
+        cases = (
+            ("text", "visible text", "visible text"),
+            (
+                ["retrieval", "text", "citations"],
+                ["visible retrieval", [1, 2]],
+                '["visible retrieval",[1,2]]',
+            ),
+            (["audit", "approve-or-conflict"], "a", '"a"'),
+            (
+                ["audit", "approve-or-conflict"],
+                ["c", "reason"],
+                '["c","reason"]',
+            ),
+            (
+                ["finalize", "path-and-replacement-list"],
+                [["global_outline.md", "replacement"], ["rules.md", ""]],
+                '[["global_outline.md","replacement"],["rules.md",""]]',
+            ),
+            (["finalize", "path-and-replacement-list"], [], "[]"),
+        )
+        for contract, result, expected in cases:
+            with self.subTest(contract=contract, result=result):
+                decoded = self.decode(
+                    {
+                        "a": "a",
+                        "c": self.token,
+                        "d": [result],
+                        "u": ["h1"] if contract == "text" else [],
+                    },
+                    allowed=("answer",),
+                    contract=contract,
+                )
+                self.assertIsInstance(decoded, ContextAnswerAction)
+                assert isinstance(decoded, ContextAnswerAction)
+                self.assertEqual(decoded.answer, expected)
+                self.assertEqual(
+                    decoded.used_handles,
+                    (answer_handle,) if contract == "text" else (),
+                )
+
+    def test_search_wire_supports_shared_artifact_prefix_and_kind_matrix(self) -> None:
+        unprefixed = self.decode(
+            {
+                "a": "s",
+                "c": self.token,
+                "d": [
+                    ["First", ["w"]],
+                    ["Second", ["c", "d", "o"]],
+                ],
+                "u": [],
+            },
+            allowed=("search",),
+        )
+        self.assertIsInstance(unprefixed, ContextSearchAction)
+        assert isinstance(unprefixed, ContextSearchAction)
+        self.assertEqual(
+            tuple(
+                (
+                    query.normalized_text,
+                    query.source_kinds,
+                    query.artifact_path_prefix,
+                )
+                for query in unprefixed.queries
+            ),
+            (
+                ("first", (ContextSourceKind.WRITING_ARTIFACT,), None),
+                (
+                    "second",
+                    (
+                        ContextSourceKind.CONVERSATION,
+                        ContextSourceKind.ACTIVE_DEBATE,
+                        ContextSourceKind.OWN_AGENT_STATE,
+                    ),
+                    None,
+                ),
+            ),
+        )
+
+        prefix = "manuscript/part-01/"
+        prefixed = self.decode(
+            {
+                "a": "s",
+                "c": self.token,
+                "d": [prefix, ["Alpha", ["w"]], ["Beta", ["w"]]],
+                "u": [],
+            },
+            allowed=("search",),
+        )
+        self.assertIsInstance(prefixed, ContextSearchAction)
+        assert isinstance(prefixed, ContextSearchAction)
+        self.assertEqual(
+            tuple(query.artifact_path_prefix for query in prefixed.queries),
+            (prefix, prefix),
+        )
+        self.assertEqual(
+            tuple(query.normalized_text for query in prefixed.queries),
+            ("alpha", "beta"),
+        )
+
+        for code, kind in zip(
+            ("w", "c", "d", "o"),
+            service_module._SEARCH_SOURCE_KIND_ORDER,
+            strict=True,
+        ):
+            with self.subTest(code=code):
+                action = self.decode(
+                    {
+                        "a": "s",
+                        "c": self.token,
+                        "d": [["needle", [code]]],
+                        "u": [],
+                    },
+                    allowed=("search",),
+                    source_kinds=(kind,),
+                )
+                assert isinstance(action, ContextSearchAction)
+                self.assertEqual(action.queries[0].source_kinds, (kind,))
+
+    def test_artifact_prefix_validation_is_exact_and_one_scope_per_search(self) -> None:
+        valid = (
+            "core_documents/",
+            "manuscript/",
+            "manuscript/part-01/",
+            "manuscript/part-01/scene.md/",
+            "manuscript/space dir/",
+            "manuscript/.hidden%25/",
+            "manuscript/private-\ue000/",
+            "manuscript/unassigned-\u0378/",
+        )
+        for prefix in valid:
+            with self.subTest(valid=prefix):
+                query = ContextSearchQuery(
+                    "needle",
+                    (ContextSourceKind.WRITING_ARTIFACT,),
+                    prefix,
+                )
+                self.assertEqual(query.artifact_path_prefix, prefix)
+
+        invalid = (
+            "",
+            "/manuscript/",
+            "manuscript",
+            "manuscript\\part-01/",
+            "manuscript//part-01/",
+            "manuscript/./",
+            "manuscript/../",
+            "discussion_logs/",
+            "core_documents/nested/",
+            "manuscript/part-01/chapter.md",
+            "manuscript/}/",
+            "manuscript/\u2028/",
+            "manuscript/\u2029/",
+            "manuscript/new\nline/",
+            "manuscript/joiner-\u200d/",
+            "manuscript/surrogate-\ud800/",
+        )
+        for prefix in invalid:
+            with self.subTest(invalid=repr(prefix)), self.assertRaises(
+                ContextActionError
+            ):
+                ContextSearchQuery(
+                    "needle",
+                    (ContextSourceKind.WRITING_ARTIFACT,),
+                    prefix,
+                )
+
+        with self.assertRaises(ContextActionError):
+            ContextSearchQuery(
+                "needle",
+                (ContextSourceKind.CONVERSATION,),
+                "manuscript/",
+            )
+        with self.assertRaises(ContextActionError):
+            ContextSearchAction(
+                self.correlation,
+                (
+                    ContextSearchQuery(
+                        "one",
+                        (ContextSourceKind.WRITING_ARTIFACT,),
+                        "manuscript/part-01/",
+                    ),
+                    ContextSearchQuery(
+                        "two",
+                        (ContextSourceKind.WRITING_ARTIFACT,),
+                        "manuscript/part-02/",
+                    ),
+                ),
+            )
+
+    def test_malformed_exact_shape_types_routes_duplicates_and_limits_reject(self) -> None:
+        base = {"a": "a", "c": self.token, "d": ["answer"], "u": []}
+        malformed = (
+            {},
+            {**base, "extra": 1},
+            {key: value for key, value in base.items() if key != "u"},
+            {**base, "a": "unknown"},
+            {**base, "c": "A" * 43},
+            {**base, "c": True},
+            {**base, "d": True},
+            {**base, "u": True},
+            {**base, "d": []},
+            {**base, "d": ["one", "two"]},
+            {**base, "u": ["h1", "h1"]},
+            '{"a":"a","a":"a","c":"%s","d":["answer"],"u":[]}'
+            % self.token,
+        )
+        for value in malformed:
+            with self.subTest(value=value):
+                self.assert_malformed(value)
+
+        self.assert_malformed(base, allowed=("search",))
+        self.assert_malformed(
+            {"a": "s", "c": self.token, "d": [["x", ["c"]]], "u": []},
+            source_kinds=(ContextSourceKind.WRITING_ARTIFACT,),
+        )
+        self.assert_malformed(
+            {
+                "a": "s",
+                "c": self.token,
+                "d": [["x", ["w"]], ["x", ["w"]]],
+                "u": [],
+            }
+        )
+        for data in (
+            [],
+            ["manuscript/"],
+            [["x", ["w"], "manuscript/"]],
+            ["manuscript/", ["x", ["w"], "legacy"]],
+            [["x", ["w"]], "manuscript/"],
+            ["manuscript/", ["x", ["w"]], ["x", ["w"]]],
+            ["manuscript/part-01/chapter.md", ["x", ["w"]]],
+            ["manuscript/", ["x", ["c"]]],
+        ):
+            with self.subTest(search_data=data):
+                self.assert_malformed(
+                    {"a": "s", "c": self.token, "d": data, "u": []}
+                )
+        self.assert_malformed(
+            {
+                "a": "s",
+                "c": self.token,
+                "d": ["manuscript/", ["x", ["w"]]],
+                "u": [],
+            },
+            source_kinds=(ContextSourceKind.CONVERSATION,),
+        )
+        self.assert_malformed(
+            {"a": "r", "c": self.token, "d": ["h1", "h1"], "u": []}
+        )
+        self.assert_malformed(
+            {"a": "r", "c": self.token, "d": ["h1"], "u": ["h1"]}
+        )
+        self.assert_malformed(
+            {
+                "a": "s",
+                "c": self.token,
+                "d": [
+                    [f"q{index}", ["w"]]
+                    for index in range(CONTEXT_ACTION_POLICY.max_queries_per_search + 1)
+                ],
+                "u": [],
+            }
+        )
+        self.assert_malformed(
+            {
+                "a": "r",
+                "c": self.token,
+                "d": [
+                    f"h{index}"
+                    for index in range(CONTEXT_ACTION_POLICY.max_handles_per_read + 1)
+                ],
+                "u": [],
+            }
+        )
+
+    def test_double_encoded_or_invalid_structured_results_reject(self) -> None:
+        cases = (
+            (
+                ["retrieval", "text", "citations"],
+                json.dumps(["reply", [1]]),
+            ),
+            (["audit", "approve-or-conflict"], json.dumps("a")),
+            (
+                ["finalize", "path-and-replacement-list"],
+                json.dumps([["path", "replacement"]]),
+            ),
+            (["audit", "approve-or-conflict"], ["c", ""]),
+            (
+                ["finalize", "path-and-replacement-list"],
+                [["path", "one"], ["path", "two"]],
+            ),
+            ("text", ""),
+        )
+        for contract, result in cases:
+            with self.subTest(contract=contract, result=result):
+                self.assert_malformed(
+                    {"a": "a", "c": self.token, "d": [result], "u": []},
+                    allowed=("answer",),
+                    contract=contract,
+                )
+
+
 class HandleAndReadLifecycleTests(unittest.TestCase):
     """Verify opaque handles and atomic ordered READ behavior."""
 
@@ -324,53 +814,59 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
         self.manifest, self.snapshots = _manifest_fixture()
         self.binding = _binding(self.manifest)
 
-    def test_manifest_handles_are_canonical_opaque_and_exclude_oversized_sources(self) -> None:
+    def test_initial_read_is_impossible_and_search_handles_are_canonical_opaque(self) -> None:
         registry = _registry(_SCOPE, self.snapshots)
         session = _session(self.binding, registry)
-        pairs = session.manifest_handles
+        with self.assertRaises(ContextActionError) as initial_read:
+            session.read(
+                ContextReadAction(
+                    _correlation(self.binding, 1),
+                    (ContextSourceHandle("ctxh_v1_" + "0" * 64),),
+                )
+            )
+        self.assertEqual(
+            initial_read.exception.code,
+            ContextActionErrorCode.HANDLE_INVALID,
+        )
+        self.assertEqual(session.state, ContextInvocationState.FAILED)
+
+        registry = _registry(_SCOPE, self.snapshots)
+        session = _session(self.binding, registry)
+        pairs = _mint_handles(session, registry, self.snapshots)
         self.assertEqual(tuple(entry for entry, _ in pairs), self.manifest.entries)
         self.assertEqual(len({handle.value for _, handle in pairs}), len(pairs))
         for entry, handle in pairs:
             self.assertRegex(handle.value, r"\Actxh_v1_[0-9a-f]{64}\Z")
             self.assertNotIn(handle.value, repr(handle))
             self.assertNotIn(entry.provenance.locator, repr(handle))
-        oversized = replace(
-            self.manifest.entries[0],
-            source_id=_artifact_id("core_documents/narrative_rules.md"),
-            provenance=ContextProvenance(
-                ContextAuthorityKind.WRITING_ARTIFACT_REPOSITORY,
-                "core_documents/narrative_rules.md",
-            ),
-            utf8_bytes=CONTEXT_ACTION_POLICY.max_excerpt_utf8_bytes + 1,
-            content_digest="sha256:" + "9" * 64,
-            revision="sha256:" + "8" * 64,
-        )
-        manifest = ContextManifest(_SCOPE, (*self.manifest.entries, oversized))
-        session = _session(_binding(manifest), _registry(_SCOPE, self.snapshots))
-        self.assertNotIn(oversized, tuple(entry for entry, _ in session.manifest_handles))
 
     def test_handles_are_invocation_bound_unforgeable_and_terminal_on_reuse(self) -> None:
-        first = _session(self.binding, _registry(_SCOPE, self.snapshots), secret=b"a" * 32)
-        second = _session(self.binding, _registry(_SCOPE, self.snapshots), secret=b"b" * 32)
-        first_handle = first.manifest_handles[0][1]
-        second_handle = second.manifest_handles[0][1]
+        first_registry = _registry(_SCOPE, self.snapshots)
+        second_registry = _registry(_SCOPE, self.snapshots)
+        first = _session(self.binding, first_registry, secret=b"a" * 32)
+        second = _session(self.binding, second_registry, secret=b"b" * 32)
+        first_handle = _mint_handles(first, first_registry, self.snapshots)[0][1]
+        second_handle = _mint_handles(second, second_registry, self.snapshots)[0][1]
         self.assertNotEqual(first_handle, second_handle)
         with self.assertRaises(ContextActionError) as crossed:
-            second.read(ContextReadAction(_correlation(self.binding, 1), (first_handle,)))
+            second.read(ContextReadAction(_correlation(self.binding, 2), (first_handle,)))
         self.assertEqual(crossed.exception.code, ContextActionErrorCode.HANDLE_INVALID)
         self.assertEqual(second.state, ContextInvocationState.FAILED)
         forged = ContextSourceHandle(
             first_handle.value[:-1] + ("0" if first_handle.value[-1] != "0" else "1")
         )
-        third = _session(self.binding, _registry(_SCOPE, self.snapshots), secret=b"a" * 32)
+        third_registry = _registry(_SCOPE, self.snapshots)
+        third = _session(self.binding, third_registry, secret=b"a" * 32)
+        _mint_handles(third, third_registry, self.snapshots)
         with self.assertRaises(ContextActionError):
-            third.read(ContextReadAction(_correlation(self.binding, 1), (forged,)))
-        fourth = _session(self.binding, _registry(_SCOPE, self.snapshots))
-        handle = fourth.manifest_handles[0][1]
-        _, receipt = fourth.read(ContextReadAction(_correlation(self.binding, 1), (handle,)))
+            third.read(ContextReadAction(_correlation(self.binding, 2), (forged,)))
+        fourth_registry = _registry(_SCOPE, self.snapshots)
+        fourth = _session(self.binding, fourth_registry)
+        handle = _mint_handles(fourth, fourth_registry, self.snapshots)[0][1]
+        _, receipt = fourth.read(ContextReadAction(_correlation(self.binding, 2), (handle,)))
         fourth.complete_read(receipt)
         with self.assertRaises(ContextActionError) as reused:
-            fourth.read(ContextReadAction(_correlation(self.binding, 2), (handle,)))
+            fourth.read(ContextReadAction(_correlation(self.binding, 3), (handle,)))
         self.assertEqual(reused.exception.code, ContextActionErrorCode.HANDLE_INVALID)
 
     def test_read_captures_canonical_sources_twice_but_returns_requested_order(self) -> None:
@@ -381,11 +877,14 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
             return self.snapshots[entry.source_id]
         registry.capture = mock.Mock(side_effect=capture)
         session = _session(self.binding, registry)
-        handles = {entry.source_id: handle for entry, handle in session.manifest_handles}
+        handles = {
+            entry.source_id: handle
+            for entry, handle in _mint_handles(session, registry, self.snapshots)
+        }
         requested_ids = tuple(entry.source_id for entry in reversed(self.manifest.entries))
         observation, receipt = session.read(
             ContextReadAction(
-                _correlation(self.binding, 1),
+                _correlation(self.binding, 2),
                 tuple(handles[source_id] for source_id in requested_ids),
             )
         )
@@ -408,13 +907,17 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
             )
         )
         session = _session(self.binding, registry)
-        handles = tuple(handle for _, handle in reversed(session.manifest_handles))
+        handles = tuple(
+            handle
+            for _, handle in reversed(
+                _mint_handles(session, registry, self.snapshots)
+            )
+        )
         with self.assertRaises(ContextSourceError) as caught:
-            session.read(ContextReadAction(_correlation(self.binding, 1), handles))
+            session.read(ContextReadAction(_correlation(self.binding, 2), handles))
         self.assertEqual(caught.exception.code, ContextSourceErrorCode.SOURCE_MISSING)
         self.assertEqual(session.state, ContextInvocationState.FAILED)
-        self.assertEqual(session.next_action_index, 2)
-        self.assertEqual(session.manifest_handles, ())
+        self.assertEqual(session.next_action_index, 3)
 
     def test_preflight_failure_is_not_charged_but_executed_byte_failure_is_charged(self) -> None:
         preflight_policy = replace(
@@ -423,15 +926,18 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
         )
         registry = _registry(_SCOPE, self.snapshots)
         session = _session(self.binding, registry, action_policy=preflight_policy)
+        handles = tuple(
+            handle for _, handle in _mint_handles(session, registry, self.snapshots)
+        )
         with self.assertRaises(ContextActionError) as caught:
             session.read(
                 ContextReadAction(
-                    _correlation(self.binding, 1),
-                    tuple(handle for _, handle in session.manifest_handles),
+                    _correlation(self.binding, 2),
+                    handles,
                 )
             )
         self.assertEqual(caught.exception.code, ContextActionErrorCode.READ_LIMIT_EXCEEDED)
-        self.assertEqual(session.next_action_index, 1)
+        self.assertEqual(session.next_action_index, 2)
         registry.capture.assert_not_called()
         byte_policy = replace(
             CONTEXT_ACTION_POLICY,
@@ -442,15 +948,18 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
         )
         registry = _registry(_SCOPE, self.snapshots)
         session = _session(self.binding, registry, action_policy=byte_policy)
+        handles = tuple(
+            handle for _, handle in _mint_handles(session, registry, self.snapshots)
+        )
         with self.assertRaises(ContextActionError) as executed:
             session.read(
                 ContextReadAction(
-                    _correlation(self.binding, 1),
-                    tuple(handle for _, handle in session.manifest_handles),
+                    _correlation(self.binding, 2),
+                    handles,
                 )
             )
         self.assertEqual(executed.exception.code, ContextActionErrorCode.READ_LIMIT_EXCEEDED)
-        self.assertEqual(session.next_action_index, 2)
+        self.assertEqual(session.next_action_index, 3)
         self.assertGreater(registry.capture.call_count, 0)
 
     def test_post_selection_drift_and_reentrant_failure_cannot_resurrect_session(self) -> None:
@@ -465,35 +974,38 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
         registry = _registry(_SCOPE, self.snapshots)
         registry.capture = mock.Mock(side_effect=(stable, drifted))
         session = _session(self.binding, registry)
-        handle = dict((item.source_id, value) for item, value in session.manifest_handles)[entry.source_id]
+        handle = dict(
+            _mint_handles(session, registry, self.snapshots)
+        )[entry]
         with self.assertRaises(ContextActionError) as caught:
-            session.read(ContextReadAction(_correlation(self.binding, 1), (handle,)))
+            session.read(ContextReadAction(_correlation(self.binding, 2), (handle,)))
         self.assertEqual(caught.exception.code, ContextActionErrorCode.HANDLE_INVALID)
         self.assertEqual(session.state, ContextInvocationState.FAILED)
         registry = _registry(_SCOPE, self.snapshots)
         session = _session(self.binding, registry)
-        handle = session.manifest_handles[0][1]
+        handle = _mint_handles(session, registry, self.snapshots)[0][1]
         def reentrant(*_args: object) -> ContextSourceSnapshot:
             session.fail()
             return self.snapshots[session.binding.manifest.entries[0].source_id]
         registry.capture = mock.Mock(side_effect=reentrant)
         with self.assertRaises(ContextActionError) as reentered:
-            session.read(ContextReadAction(_correlation(self.binding, 1), (handle,)))
+            session.read(ContextReadAction(_correlation(self.binding, 2), (handle,)))
         self.assertEqual(reentered.exception.code, ContextActionErrorCode.INVALID_TRANSITION)
         self.assertEqual(session.state, ContextInvocationState.FAILED)
 
     def test_outstanding_read_requires_exact_receipt_and_blocks_answer(self) -> None:
         registry = _registry(_SCOPE, self.snapshots)
         session = _session(self.binding, registry)
-        handle = session.manifest_handles[0][1]
-        _, receipt = session.read(ContextReadAction(_correlation(self.binding, 1), (handle,)))
+        handle = _mint_handles(session, registry, self.snapshots)[0][1]
+        _, receipt = session.read(ContextReadAction(_correlation(self.binding, 2), (handle,)))
         with self.assertRaises(ContextActionError) as blocked:
-            session.authorize_answer(ContextAnswerAction(_correlation(self.binding, 2), _PRIVATE_ANSWER, (handle,)))
+            session.authorize_answer(ContextAnswerAction(_correlation(self.binding, 3), _PRIVATE_ANSWER, (handle,)))
         self.assertEqual(blocked.exception.code, ContextActionErrorCode.OUTSTANDING_READ)
         self.assertEqual(session.state, ContextInvocationState.FAILED)
-        session = _session(self.binding, _registry(_SCOPE, self.snapshots))
-        handle = session.manifest_handles[0][1]
-        _, receipt = session.read(ContextReadAction(_correlation(self.binding, 1), (handle,)))
+        registry = _registry(_SCOPE, self.snapshots)
+        session = _session(self.binding, registry)
+        handle = _mint_handles(session, registry, self.snapshots)[0][1]
+        _, receipt = session.read(ContextReadAction(_correlation(self.binding, 2), (handle,)))
         wrong = replace(receipt, observation_digest="sha256:" + "f" * 64)
         with self.assertRaises(ContextActionError) as mismatch:
             session.complete_read(wrong)
@@ -533,6 +1045,308 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         self.assertTrue(all(re.fullmatch(r"ctxh_v1_[0-9a-f]{64}", hit.handle.value) for hit in observation.hits))
         self.assertEqual(session.next_action_index, 2)
         registry.search.assert_called_once()
+
+    def test_prefixed_search_filters_before_one_capture_revalidation_pair(self) -> None:
+        scoped_body = "needle" + "x" * 979 + "\n"
+        self.assertEqual(len(scoped_body.encode("utf-8")), 986)
+        snapshots_tuple = (
+            _snapshot(
+                _SCOPE,
+                "manuscript/part_01/chapter.md",
+                scoped_body,
+            ),
+            _snapshot(
+                _SCOPE,
+                "manuscript/part_010/chapter.md",
+                "needle outside exact part prefix\n",
+            ),
+            _snapshot(
+                _SCOPE,
+                "core_documents/global_outline.md",
+                "needle outside manuscript prefix\n",
+            ),
+        )
+        manifest = ContextManifest(
+            _SCOPE,
+            tuple(
+                _entry(snapshot, index)
+                for index, snapshot in enumerate(snapshots_tuple)
+            ),
+        )
+        snapshots = {
+            snapshot.descriptor.source_id: snapshot
+            for snapshot in snapshots_tuple
+        }
+        registry = _registry(_SCOPE, snapshots)
+        registry.search = ContextSourceRegistry.search.__get__(registry)
+        session = _session(_binding(manifest), registry)
+        query = ContextSearchQuery(
+            "needle",
+            (ContextSourceKind.WRITING_ARTIFACT,),
+            "manuscript/part_01/",
+        )
+
+        observation = session.search(
+            ContextSearchAction(
+                _correlation(session.binding, 1),
+                (query,),
+            )
+        )
+
+        self.assertEqual(len(observation.hits), 1)
+        self.assertEqual(observation.hits[0].query_index, 1)
+        self.assertEqual(
+            observation.hits[0].source_id,
+            snapshots_tuple[0].descriptor.source_id,
+        )
+        self.assertEqual(registry.capture.call_count, 2)
+        captured_manifests = tuple(
+            call.args[0] for call in registry.capture.call_args_list
+        )
+        self.assertTrue(
+            all(
+                current.entries == (manifest.entries[0],)
+                for current in captured_manifests
+            )
+        )
+        self.assertEqual(
+            sum(
+                snapshots[entry.source_id].descriptor.utf8_bytes
+                for entry in captured_manifests[0].entries
+            ),
+            986,
+        )
+        self.assertEqual(session._scan_utf8_bytes, 986)
+
+    def test_compact_search_read_evidence_retains_all_authoritative_facts(self) -> None:
+        scope = replace(
+            _SCOPE,
+            subject_kind=ContextSubjectKind.DEBATE,
+            subject_id="debate-one",
+        )
+        cases = (
+            (
+                ContextSourceKind.WRITING_ARTIFACT,
+                ContextAuthorityKind.WRITING_ARTIFACT_REPOSITORY,
+                "manuscript/part-01/chapter.md",
+                ContextSourceBoundary.artifact_lines(1, 1),
+                "artifact needle\n",
+            ),
+            (
+                ContextSourceKind.CONVERSATION,
+                ContextAuthorityKind.CONVERSATION_STORAGE,
+                "conversation/conversation-one",
+                ContextSourceBoundary.conversation_turns(
+                    1,
+                    2,
+                    "turn-one",
+                    "turn-one",
+                ),
+                "conversation needle",
+            ),
+            (
+                ContextSourceKind.ACTIVE_DEBATE,
+                ContextAuthorityKind.ACTIVE_DEBATE,
+                "debate/debate-one",
+                ContextSourceBoundary.records(1, 1),
+                "active debate needle",
+            ),
+            (
+                ContextSourceKind.OWN_AGENT_STATE,
+                ContextAuthorityKind.OWN_AGENT_STATE,
+                "agent-state/lead_orchestrator",
+                ContextSourceBoundary.records(1, 1),
+                '{"debate_id":"debate-one","note":"own state needle"}',
+            ),
+        )
+        snapshots_list: list[ContextSourceSnapshot] = []
+        for index, (kind, authority, locator, boundary, content) in enumerate(
+            cases,
+            start=1,
+        ):
+            encoded = content.encode("utf-8")
+            record = ContextSourceRecord(
+                f"record-{index}",
+                boundary,
+                content,
+                content,
+                _digest(encoded),
+                len(encoded),
+            )
+            source_id = {
+                ContextSourceKind.WRITING_ARTIFACT: _artifact_id(locator),
+                ContextSourceKind.CONVERSATION: "conversation:conversation-one",
+                ContextSourceKind.ACTIVE_DEBATE: "active_debate:debate-one",
+                ContextSourceKind.OWN_AGENT_STATE: (
+                    "own_agent_state:lead_orchestrator"
+                ),
+            }[kind]
+            content_digest = _digest(encoded)
+            descriptor = ContextSourceDescriptor(
+                scope,
+                source_id,
+                kind,
+                (
+                    _digest(f"revision-{index}".encode())
+                    if kind is ContextSourceKind.WRITING_ARTIFACT
+                    else content_digest
+                ),
+                ContextProvenance(authority, locator),
+                content_digest,
+                len(encoded),
+                1,
+            )
+            snapshot = object.__new__(ContextSourceSnapshot)
+            object.__setattr__(snapshot, "descriptor", descriptor)
+            object.__setattr__(snapshot, "records", (record,))
+            object.__setattr__(snapshot, "content", encoded)
+            snapshots_list.append(snapshot)
+        manifest = ContextManifest(
+            scope,
+            tuple(
+                _entry(snapshot, index)
+                for index, snapshot in enumerate(snapshots_list)
+            ),
+        )
+        snapshots = {
+            snapshot.descriptor.source_id: snapshot
+            for snapshot in snapshots_list
+        }
+        registry = _registry(scope, snapshots)
+        registry.search = ContextSourceRegistry.search.__get__(registry)
+        aliases = {
+            entry.source_id: f"s{index}"
+            for index, entry in enumerate(manifest.entries, start=1)
+        }
+        session = _session(
+            _binding(manifest),
+            registry,
+            source_aliases=aliases,
+        )
+        search = session.search(
+            ContextSearchAction(
+                _correlation(session.binding, 1),
+                (
+                    ContextSearchQuery(
+                        "needle",
+                        service_module._SEARCH_SOURCE_KIND_ORDER,
+                    ),
+                ),
+            )
+        )
+        search_serialized = session.serialize_observation(search)
+        search_wire = json.loads(search_serialized)
+        self.assertEqual(search_wire[:2], ["s", False])
+        self.assertEqual(len(search_wire[2]), 4)
+        for expected_index, (hit, expected) in enumerate(
+            zip(search_wire[2], cases, strict=True),
+            start=1,
+        ):
+            kind, authority, locator, boundary, content = expected
+            snapshot = snapshots_list[expected_index - 1]
+            source = hit[1]
+            boundary_facts = hit[2]
+            provenance = hit[3]
+            digest_facts = (
+                [
+                    "revision",
+                    snapshot.descriptor.revision,
+                    "source_digest",
+                    snapshot.descriptor.content_digest,
+                ]
+                if kind is ContextSourceKind.WRITING_ARTIFACT
+                else [
+                    "revision=source_digest",
+                    snapshot.descriptor.revision,
+                ]
+            )
+            self.assertEqual(hit[0], 1)
+            self.assertEqual(
+                source,
+                [
+                    "source",
+                    expected_index,
+                    snapshot.descriptor.source_id,
+                    kind.value,
+                    digest_facts,
+                    snapshot.descriptor.utf8_bytes,
+                ],
+            )
+            self.assertEqual(
+                boundary_facts,
+                [
+                    "boundary",
+                    boundary.kind.value,
+                    boundary.start,
+                    boundary.end,
+                    boundary.first_id,
+                    boundary.last_id,
+                    _digest(content.encode("utf-8")),
+                    len(content.encode("utf-8")),
+                ],
+            )
+            safe_locator = (
+                f"{locator}/debate-one"
+                if kind is ContextSourceKind.OWN_AGENT_STATE
+                else locator
+            )
+            self.assertEqual(provenance, ["provenance", authority.value, safe_locator])
+            self.assertEqual(
+                hit[4],
+                {
+                    ContextSourceKind.WRITING_ARTIFACT: "w",
+                    ContextSourceKind.CONVERSATION: "c",
+                    ContextSourceKind.ACTIVE_DEBATE: "d",
+                    ContextSourceKind.OWN_AGENT_STATE: "o",
+                }[kind],
+            )
+            self.assertRegex(hit[5], r"\Ah[A-Za-z0-9_-]{16}\Z")
+            self.assertEqual(hit[6][0], "snippet")
+            self.assertEqual(
+                hit[6][2],
+                len(hit[6][1].encode("utf-8")),
+            )
+
+        handles = tuple(hit.handle for hit in search.hits)
+        read, receipt = session.read(
+            ContextReadAction(_correlation(session.binding, 2), handles)
+        )
+        read_serialized = session.serialize_observation(read)
+        read_wire = json.loads(read_serialized)
+        self.assertEqual(read_wire[0], "r")
+        self.assertEqual(len(read_wire[1]), 4)
+        for search_hit, evidence, expected in zip(
+            search_wire[2],
+            read_wire[1],
+            cases,
+            strict=True,
+        ):
+            self.assertEqual(evidence[:5], search_hit[1:6])
+            self.assertEqual(evidence[5], expected[4])
+        session.complete_read(receipt)
+        authorization = session.authorize_answer(
+            ContextAnswerAction(
+                _correlation(session.binding, 3),
+                _PRIVATE_ANSWER,
+                handles,
+            )
+        )
+        self.assertEqual(
+            tuple(item.handle for item in authorization.used_evidence),
+            handles,
+        )
+        framed = json.dumps(
+            [search_wire, read_wire],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        self.assertNotIn("/Users/", framed)
+        self.assertNotIn("character_custodian", framed)
+        self.assertLessEqual(
+            len(search_serialized.encode("utf-8"))
+            + len(read_serialized.encode("utf-8")),
+            CONTEXT_ACTION_POLICY.max_observation_utf8_bytes,
+        )
 
     def test_search_preflight_and_executed_failures_charge_differently(self) -> None:
         registry = _registry(_SCOPE, self.snapshots)
@@ -676,7 +1490,6 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         self.assertIs(authorization.mandatory_references, references)
         self.assertEqual(tuple(item.ordinal for item in authorization.mandatory_references), (1, 2, 3))
         self.assertEqual(session.state, ContextInvocationState.ANSWER_AUTHORIZED)
-        self.assertEqual(session.manifest_handles, ())
         registry.capture.assert_not_called()
         rendered = repr(authorization)
         for canary in (_PRIVATE_ANSWER, _PRIVATE_BODY_A, "ctxh_v1_"):
@@ -695,29 +1508,30 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
             return self.snapshots[entry.source_id]
         registry.capture = mock.Mock(side_effect=capture)
         session = _session(self.binding, registry)
-        pairs = tuple(reversed(session.manifest_handles))
+        pairs = tuple(
+            reversed(_mint_handles(session, registry, self.snapshots))
+        )
         observation, receipt = session.read(
-            ContextReadAction(_correlation(self.binding, 1), tuple(handle for _, handle in pairs))
+            ContextReadAction(_correlation(self.binding, 2), tuple(handle for _, handle in pairs))
         )
         session.complete_read(receipt)
         used = (pairs[0][1],)
         authorization = session.authorize_answer(
-            ContextAnswerAction(_correlation(self.binding, 2), _PRIVATE_ANSWER, used)
+            ContextAnswerAction(_correlation(self.binding, 3), _PRIVATE_ANSWER, used)
         )
         requested_ids = tuple(entry.source_id for entry, _ in pairs)
         self.assertEqual(tuple(item.source_id for item in authorization.completed_evidence), requested_ids)
         self.assertEqual(tuple(item.handle for item in authorization.used_evidence), used)
         canonical_ids = [entry.source_id for entry in self.manifest.entries]
         self.assertEqual(seen, canonical_ids + canonical_ids + canonical_ids)
-        self.assertEqual(session.manifest_handles, ())
         self.assertEqual(tuple(item.receipt.source_id for item in observation.evidence), requested_ids)
 
     def test_unused_or_substituted_handle_cannot_authorize_and_baseexception_cleans(self) -> None:
         registry = _registry(_SCOPE, self.snapshots)
         session = _session(self.binding, registry)
-        unused = session.manifest_handles[0][1]
+        unused = _mint_handles(session, registry, self.snapshots)[0][1]
         with self.assertRaises(ContextActionError) as unauthorized:
-            session.authorize_answer(ContextAnswerAction(_correlation(self.binding, 1), _PRIVATE_ANSWER, (unused,)))
+            session.authorize_answer(ContextAnswerAction(_correlation(self.binding, 2), _PRIVATE_ANSWER, (unused,)))
         self.assertEqual(unauthorized.exception.code, ContextActionErrorCode.ANSWER_NOT_AUTHORIZED)
         self.assertEqual(session.state, ContextInvocationState.FAILED)
         for failure in (
@@ -732,7 +1546,6 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
                     session.search(ContextSearchAction(_correlation(self.binding, 1), (ContextSearchQuery("needle", (ContextSourceKind.WRITING_ARTIFACT,)),)))
                 self.assertEqual(session.state, ContextInvocationState.FAILED)
                 self.assertEqual(session.next_action_index, 2)
-                self.assertEqual(session.manifest_handles, ())
 
 
 if __name__ == "__main__":  # pragma: no cover

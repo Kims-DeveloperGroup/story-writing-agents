@@ -452,6 +452,7 @@ class PromptAssemblerTests(unittest.TestCase):
                 "persona_file",
                 "language",
                 "context_document_files",
+                "provider_managed_context",
             ),
         )
         self.assertEqual(definition.agent_id, PLOT_ARCHITECT)

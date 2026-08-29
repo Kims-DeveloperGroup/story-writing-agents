@@ -364,6 +364,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_context_accounting_baseline.py`, supported by
   `tests/context_accounting_baseline_fixture.py` and
   `tests/fixtures/agent_context/provider_context_baseline_v1.json`;
+  `tests/test_context_accounting_optimized.py`;
   `tests/test_codex_backend.py`, `tests/test_antigravity_adapter.py`,
   `tests/test_antigravity_parity.py`, and
   `docs/design/prompts-and-provider.md`.
@@ -383,14 +384,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ContextSearchObservation`, `ContextSearchQuery`, `ContextSourceBoundary`,
   `ContextSourceBoundaryKind`, `ContextSourceEvidence`, `ContextSourceHandle`,
   and `serialize_context_action_observation`. It owns exact invocation
-  correlation, canonical source-kind-constrained literal queries, tagged
+  correlation, canonical source-kind-constrained literal queries whose optional
+  writing-artifact directory prefix uses the reference-source path namespace
+  and must be shared by every query in one SEARCH action, tagged
   whole/line/turn/record boundaries, ordered actions and observations,
   content-free evidence receipts, repr-hidden excerpts, fixed limits and error
   codes, exact source/authority/boundary evidence matrices, repr-hidden answer
   payloads, and terminal answer authorizations bound to the manifest, ordered
   completed evidence, used subset, answer/result digest, and unchanged pending
-  reference facts. Search and read observations serialize as one compact sorted
-  JSON frame between the established untrusted story-data delimiters.
+  reference facts. Established direct observation serialization retains its
+  complete delimited object frames. Contextual serialization projects complete
+  tagged provider evidence into compact positional JSON frames: query order;
+  numeric alias and canonical source identity, kind, revision, digest, and
+  UTF-8 size; exact boundary identity, digest, and size; safe authority and
+  locator provenance; a fresh invocation handle; and snippet/truncation or
+  exact read content. It collapses only an explicit revision/source-digest
+  equality, while complete correlation and receipt facts remain on the
+  validated in-process values.
 - **Direct internal dependencies:** `agent_context.manifest` and
   `agent_context.planning`.
 - **State, resources, and side effects:** Owns one frozen default policy and
@@ -474,15 +484,48 @@ every intermediate arrow. The current runtime graph is acyclic.
   manifest and transient material from the four authorized source adapters,
   plans against the scoped ledger checkpoint, reserves INCOMPLETE before any
   physical provider call, and drives the finite SEARCH/READ/ANSWER loop through
-  the service-owned `ContextProvider` inversion. The synchronized call-local
-  session retains exact action correlation, fresh HMAC source handles, bounded
-  counters, atomic one-use reads, delivery receipts, final source revalidation,
-  and answer authorization. Mandatory-reference reservations stay separate
-  from source search/read, use the provider prelude before the substantive
-  action budget, and must complete before verified ledger commit. The two
-  failure-fact helpers attach and recover only validated content-free physical
-  call facts without replacing the original exception. Its package-internal,
-  intentionally non-`__all__` `ContextExecutionEventKind`,
+  the service-owned `ContextProvider` inversion. Every substantive call uses
+  one provider-neutral compact wire-v5 schema and a full-correlation-derived
+  URL-safe token in the fixed four-field response envelope. Initial payloads
+  carry compact current input plus only applicable candidate, named P2 document,
+  record-patch, tombstone, and mandatory-reference sections; continuations carry
+  only the exact untrusted observation. A later-round debate candidate remains
+  full text unless a named base/target record pointer or maximal Unicode-code-
+  point single splice reconstructs the exact latest P0 candidate from retained,
+  resolved provider state and its complete digest/size facts; the service emits
+  an operation only when its canonical JSON is strictly smaller than the full
+  candidate. Candidate duplicate resolution precedes alias-keyed record-patch
+  upsert and typed tombstone removal, while the durable ledger remains
+  content-free. The per-call `q` tuple is the
+  authoritative phase, dynamically available action, route-specific searchable
+  kind, remaining-limit, and result-shape contract, and the strict decoder and
+  session enforce that same tuple and canonicalize accepted structured results
+  into the existing internal answer string before domain validation. SEARCH
+  decodes one optional action-scoped artifact prefix, projects it across every
+  internal query, filters the authorized manifest, and performs one shared
+  bounded registry scan. Numeric source/record aliases and compact structured
+  records avoid eager universal-catalog replay, while SEARCH/READ observations
+  carry complete tagged source identity, kind, revision, digest, size,
+  boundary, safe provenance, handle, and snippet/content evidence. No universal
+  catalog or action-index-zero read handle is exposed:
+  READ becomes available only for a fresh live handle returned by SEARCH in the
+  current invocation, including zero-hit and consumed-handle suppression. A
+  composite execution fingerprint binds the wire version and every planning,
+  action, and source policy value to ledger and native-thread compatibility.
+  Every bootstrap explicitly taints any prior contextual thread and starts a
+  new native thread; incompatible checkpoints are stale and never resumed,
+  while the pure planner still receives its planning-policy fingerprint. The
+  synchronized call-local session retains exact reconstructed action
+  correlation, route authorization, fresh HMAC search handles and safe
+  locators, bounded counters, atomic one-use reads, delivery receipts, final
+  source revalidation, and answer authorization. Mandatory-reference
+  reservations stay
+  separate from source search/read, use the unchanged provider prelude before
+  the substantive action budget, and must complete before verified ledger
+  commit. The two failure-fact helpers attach and recover only validated
+  content-free physical call facts without replacing the original exception.
+  Its package-internal, intentionally non-`__all__`
+  `ContextExecutionEventKind`,
   `ContextExecutionEvent`, and synchronous event-sink type expose only scoped
   identities, counts, sizes, truncation, and fixed lifecycle outcomes. The
   optional synchronous answer validator receives the exact authorized answer
@@ -517,7 +560,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:**
   `tests/test_agent_context_service.py`,
   `tests/test_agent_context_execution.py`,
-  `tests/test_agent_context_runtime_adoption.py`, `tests/test_codex_backend.py`,
+  `tests/test_agent_context_runtime_adoption.py`,
+  `tests/test_context_accounting_optimized.py`, `tests/test_codex_backend.py`,
   `tests/test_antigravity_adapter.py`, and `tests/test_antigravity_parity.py`;
   module-inventory, dependency, facade, and import-boundary assertions across
   `tests/test_rag_module_and_packaging_boundary.py`,
@@ -545,17 +589,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   `context_ledger_scope_key`. `ContextLedger` owns `inspect`,
   `reserve_attempt`, `append_provider_call`, `taint_attempt`, `commit_attempt`,
   and `invalidate` transitions with optimistic generation checks and exact
-  idempotent replay.
+  idempotent replay. Its schema-v2 READY checkpoint durably retains the
+  content-free universal source catalog, stable source aliases, per-source
+  record aliases and high-water marks, canonical record cursors, exact proposal
+  digest, and physical-call accounting. Codec validation, size/count limits,
+  and digest reconstruction map malformed, duplicate, non-reusable, or
+  inconsistent alias/cursor state to corruption without loading source bodies.
 - **Direct internal dependencies:** `agent_context.accounting`,
   `agent_context.manifest`, `agent_context.planning`, and `workspace`.
-- **State, resources, and side effects:** Sole owner of lazy schema-v1 records
-  under `agent_states/orchestrator_state/context_ledger/v1/`, hash-only record
+- **State, resources, and side effects:** Sole owner of lazy schema-v2 records
+  under `agent_states/orchestrator_state/context_ledger/v2/`, hash-only record
   names, a weak in-process writer registry, descriptor-relative traversal,
   `0600` POSIX advisory lock files, and same-directory atomic replacement with
   file and directory synchronization. Importing, construction, and a missing
   inspection perform no I/O mutation. Readers remain lock-free and use bounded
   verification and retry to return one complete predecessor or successor
-  across atomic replacement. Stored values contain no prompts, bodies,
+  across atomic replacement. Prior schema-v1 records are intentionally neither
+  read nor migrated. Stored values contain no prompts, bodies,
   excerpts, outputs, transcripts, exception text, reference descriptors, or
   projected units.
 - **Primary verification/documentation:** `tests/test_agent_context_ledger.py`
@@ -621,16 +671,25 @@ every intermediate arrow. The current runtime graph is acyclic.
   compatible unchanged non-P0 sources, deduplicates eligible same-channel
   P2/P3 material only after byte equality, atomically requires hard
   constraints, and applies deterministic class-budget first-fit-with-skip to
-  other searchable sources. Content-free accounting partitions every source
-  decision, exact unique/logical bytes, cap usage, reference reservations, and
-  checkpoint proposal metadata.
+  other searchable sources. The default P3 budget is zero, making optional
+  artifacts and own-agent history SEARCH-first while P2 working constraints
+  remain eager. Unlisted package-internal record contracts keep pre-planning
+  canonical cursors alias-free, pair accepted delivery records with positive
+  stable aliases, and retain independent source and per-source record alias
+  epochs/high-water marks. Pure planning preserves aliases for retained record
+  identities, never reuses removed aliases, emits exact record patches and
+  record/source/delivery tombstones, and resets alias epochs only for a new
+  bootstrap thread. Content-free accounting partitions every source decision,
+  exact unique/logical bytes, cap usage, reference reservations, and checkpoint
+  proposal metadata.
 - **Direct internal dependencies:** `agent_context.manifest`.
 - **State, resources, and side effects:** Owns a frozen default policy and pure
   planning contracts only. Transient strict-UTF-8 bodies are caller-owned,
   immutable, hidden from representation, and retained only in returned
-  projected units; no body enters errors, accounting, manifests, references,
-  or checkpoint proposals. Planning performs no I/O, persistence, provider
-  work, source authorization, clock/environment access, caching, or mutation.
+  projected units and record patches; no body enters errors, accounting,
+  manifests, references, or checkpoint proposals. Planning performs no I/O,
+  persistence, provider work, source authorization, clock/environment access,
+  caching, or mutation.
 - **Primary verification/documentation:**
   `tests/test_agent_context_planning.py` verifies the exact direct-module
   surface, policy, material and checkpoint validation, exhaustive decision and
@@ -822,7 +881,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:**
   `tests/test_agent_context_execution.py`,
   `tests/test_agent_context_runtime_adoption.py`, `tests/test_codex_backend.py`,
-  `tests/test_context_accounting_baseline.py`, `tests/test_prompts.py`,
+  `tests/test_context_accounting_baseline.py`,
+  `tests/test_context_accounting_optimized.py`, `tests/test_prompts.py`,
   `tests/test_conversation_retrieval.py`,
   `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`,
   `tests/test_session_lifecycle.py`, `docs/reference/backend-and-sessions.md`,
@@ -853,9 +913,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   a compatibility fallback for direct adapter construction. Per-binding release
   deliberately retains provider-native definition and conversation state for
   later backend instances.
-  Binding constructs deterministic rules and an exact same-snapshot,
-  content-free component partition for binding structure, role, persona,
-  language, each canonical core-document path, and provider constraints beneath
+  Direct binding constructs the established deterministic rules bytes and exact
+  same-snapshot content-free component partition for binding structure, role,
+  persona, language, each canonical core-document path, and provider
+  constraints. A definition's internal `provider_managed_context` marker instead
+  selects the compact contextual rules: the same role/persona/language facts
+  plus the symmetric wire-v5 grammar for untrusted evidence, action-scoped
+  prefix search, the per-call `q` contract, retained-state candidate
+  reconstruction, alias-keyed patch upsert, and typed tombstone removal, with
+  no bound core-document bytes. `agent_context.service` and
+  `agent_context.actions` retain the inner protocol semantics; Codex and
+  Antigravity stage equivalent contextual instructions while their direct
+  definitions remain byte-exact. Antigravity retains those rules beneath
   `agent_states/orchestrator_state/provider_sessions/.antigravity/definitions/<agent>/<fingerprint>/AGENTS.md`.
   Before definition writes or provider launch, the adapter sequentially
   prepares its owned `state_root`, definitions chain, sessions/runtime chain,
@@ -917,9 +986,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   generated `AGENTS.md` files plus exact same-snapshot content-free component
   partitions, invocation-scoped schema/final-response directories, exact Codex
   argv construction, JSONL event and thread parsing, and provider-specific safe
-  process diagnostics. Binding partitions distinguish structure, role, persona,
-  language, every canonical core-document path, and provider constraints; they
-  are retained only with their corresponding ephemeral staging directory.
+  process diagnostics. Direct binding partitions distinguish structure, role,
+  persona, language, every canonical core-document path, and provider
+  constraints without changing their established bytes. A definition's
+  internal `provider_managed_context` marker instead selects the compact
+  contextual binding shared semantically with Antigravity: role, persona,
+  language, and the symmetric wire-v5 grammar for untrusted evidence,
+  action-scoped prefix search, the authoritative per-call `q` contract,
+  retained-state candidate reconstruction, alias-keyed patch upsert, and typed
+  tombstone removal, with no bound core-document bytes.
+  `agent_context.service` and `agent_context.actions` retain the inner protocol
+  semantics, and direct-definition bytes remain unchanged.
+  Partitions are retained only with their corresponding ephemeral staging
+  directory.
   Invocation uses shared canonical schema and payload bytes, distinguishes
   prepared from submitted failures, reports exact stdin bytes, and accepts
   usage only from one recognized `turn.completed` event with nonnegative exact
@@ -4501,7 +4580,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   the bounded provider-neutral continuity envelope without a project-root
   export. `AgentRequest` carries optional canonical `conversation_context` and
   `story_session_context` fields, and `ConversationRequest` carries the latter,
-  without changing context-free construction.
+  without changing context-free construction. `AgentDefinition` carries an
+  additive default-false, repr-hidden `provider_managed_context` execution-
+  strategy marker; the true form rejects bound context documents and lets
+  prompt assembly and both adapters distinguish contextual binding without a
+  provider-specific sentinel.
   `ConversationResult` and `DebateResult` each carry an additive optional,
   validated, content-free `reference_operation_id`; its default is `None`, and
   `DebateResult.to_dict()` omits the key in that default no-reference case.
@@ -4607,15 +4690,24 @@ every intermediate arrow. The current runtime graph is acyclic.
   backend and complete conversation-storage bundle retains one workspace-bound
   `AgentContextService` and routes every built-in advisory, retrieval, and
   debate-agent provider invocation through it. Those routes bind stable
-  definitions without mutable core-document bytes, construct canonical P0
-  current/candidate material, classify role core documents and focused
-  conversation/debate/owner state as bounded working context, and leave other
-  searchable artifacts optional. Only role-core classifications explicitly
-  allow absence, matching the established workspace rule that missing core
-  documents are omitted; when a role core later appears, the same classification
-  delivers it as a new P2 hard constraint. Conversation, debate, owner-state,
-  and retrieved-source classifications remain strict. The four concrete source
-  adapters remain the only read authorities. Runtime-reference proofs become
+  definitions without mutable core-document bytes and construct compact
+  canonical P0 current/candidate material. Named role core documents are eager
+  P2 hard constraints; focused conversation and active debate are eager P2
+  evidence; nonfocused conversations, other artifacts, and own-agent state are
+  P3 SEARCH-first sources under the zero default P3 budget. Only role-core
+  classifications explicitly allow absence, matching the workspace rule that a
+  missing core document is omitted and a later appearance becomes a new P2
+  constraint; all conversation, debate, owner-state, and retrieved-source
+  classifications remain strict. Ordinary conversation authorizes writing-
+  artifact/conversation/owner-state search, retrieval authorizes conversation
+  search only, and debate phases additionally authorize active-debate search.
+  Orchestrator-owned semantic projection preserves named document paths,
+  bounded conversation completeness plus user/replying-agent/reply records,
+  debate state and sender/phase/round/base-revision/kind/content records, and
+  phase-specific compact result contracts; it reconstructs and validates the
+  unchanged public domain replies after service authorization. The four
+  concrete source adapters remain the only read authorities. Runtime-reference
+  proofs become
   the same ordered
   content-free reservations while each addressed call receives its matching
   read invocation, so the mandatory prelude remains outside the substantive
@@ -4716,6 +4808,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   the repository's recoverable, part-scoped publication operation.
 - **Primary verification/documentation:** `tests/test_conversation_runtime.py`,
   `tests/test_context_accounting_baseline.py`,
+  `tests/test_context_accounting_optimized.py`,
   `tests/test_agent_context_runtime_adoption.py`,
   `tests/test_conversation_retrieval.py`, `tests/test_interactive_consensus.py`,
   `tests/test_interactive_conversation.py` for retained runtime use through the
@@ -4745,10 +4838,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   `build_story_session_context` seam bind durable route identity and bounded
   provider-neutral continuity to the exact definition used by a turn.
   `build_contextual_definition()` uses the same stable system prompt, persona,
-  language, provider route generation, and fingerprint construction while
-  deliberately returning an empty `context_document_files` tuple; the
-  established `build_definition()` keeps eager core-document binding for
-  legacy and explicitly custom direct callers.
+  language, and provider route generation while deliberately returning an
+  empty `context_document_files` tuple and setting the internal provider-managed
+  context marker. That marker participates in the contextual definition
+  fingerprint, so a direct binding cannot be resumed as a contextual binding;
+  the established `build_definition()` keeps its exact eager core-document
+  binding and fingerprint behavior for direct and explicitly custom callers.
 - **Direct internal dependencies:** `agents`, `config`, `conversations`,
   `models`, `workspace`, `writing_artifacts`, and
   `writing_artifacts.repository`.

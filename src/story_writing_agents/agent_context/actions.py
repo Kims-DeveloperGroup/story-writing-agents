@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import unicodedata
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TypeAlias
@@ -50,12 +51,19 @@ _BEGIN_UNTRUSTED_STORY_DATA = "<<<BEGIN_UNTRUSTED_STORY_DATA>>>"
 _END_UNTRUSTED_STORY_DATA = "<<<END_UNTRUSTED_STORY_DATA>>>"
 _HANDLE_PATTERN = re.compile(r"ctxh_v1_[0-9a-f]{64}\Z")
 _AUTHORIZATION_PATTERN = re.compile(r"ctxa_v1_[0-9a-f]{64}\Z")
+_MAX_ARTIFACT_PREFIX_UTF8_BYTES = 1_024
 _SEARCHABLE_SOURCE_KIND_ORDER = (
     ContextSourceKind.WRITING_ARTIFACT,
     ContextSourceKind.CONVERSATION,
     ContextSourceKind.ACTIVE_DEBATE,
     ContextSourceKind.OWN_AGENT_STATE,
 )
+_SOURCE_KIND_WIRE_CODE = {
+    ContextSourceKind.WRITING_ARTIFACT: "w",
+    ContextSourceKind.CONVERSATION: "c",
+    ContextSourceKind.ACTIVE_DEBATE: "d",
+    ContextSourceKind.OWN_AGENT_STATE: "o",
+}
 _ACTION_POLICY_MAXIMA = {
     "max_nonterminal_actions": 4,
     "max_provider_calls": 5,
@@ -231,6 +239,42 @@ def _strict_text(value: object, *, allow_empty: bool = False) -> str:
     return value
 
 
+def _artifact_directory_prefix(value: object) -> str:
+    """Validate one canonical writing-artifact directory prefix."""
+
+    if type(value) is not str or not value:
+        raise _invalid()
+    assert isinstance(value, str)
+    prefix = value
+    try:
+        encoded = prefix.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
+        raise _invalid() from None
+    if (
+        len(encoded) > _MAX_ARTIFACT_PREFIX_UTF8_BYTES
+        or not prefix.endswith("/")
+        or prefix.startswith("/")
+        or "\\" in prefix
+        or "//" in prefix
+    ):
+        raise _invalid()
+    body = prefix[:-1]
+    parts = body.split("/")
+    if (
+        not body
+        or any(part in {"", ".", ".."} for part in parts)
+        or any(
+            character in {"}", "\u2028", "\u2029"}
+            or unicodedata.category(character) in {"Cc", "Cf", "Cs"}
+            for character in prefix
+        )
+        or parts[0] not in {"core_documents", "manuscript"}
+        or (parts[0] == "core_documents" and len(parts) != 1)
+    ):
+        raise _invalid()
+    return prefix
+
+
 def _validate_source_facts(
     source_kind: object,
     provenance: object,
@@ -340,6 +384,7 @@ class ContextSearchQuery:
 
     text: str = field(repr=False)
     source_kinds: tuple[ContextSourceKind, ...]
+    artifact_path_prefix: str | None = None
 
     def __post_init__(self) -> None:
         text = _strict_text(self.text)
@@ -364,6 +409,10 @@ class ContextSearchQuery:
             self.source_kinds
         ):
             raise _invalid()
+        if self.artifact_path_prefix is not None:
+            if self.source_kinds != (ContextSourceKind.WRITING_ARTIFACT,):
+                raise _invalid()
+            _artifact_directory_prefix(self.artifact_path_prefix)
 
     @property
     def normalized_text(self) -> str:
@@ -470,8 +519,16 @@ class ContextSearchAction:
             or any(type(query) is not ContextSearchQuery for query in self.queries)
         ):
             raise _invalid()
+        prefixes = {query.artifact_path_prefix for query in self.queries}
+        if len(prefixes) != 1:
+            raise _invalid()
         normalized = tuple(
-            (query.normalized_text, query.source_kinds) for query in self.queries
+            (
+                query.normalized_text,
+                query.source_kinds,
+                query.artifact_path_prefix,
+            )
+            for query in self.queries
         )
         if len(set(normalized)) != len(normalized):
             raise _invalid()
@@ -795,7 +852,9 @@ def _boundary_value(boundary: ContextSourceBoundary) -> dict[str, object]:
     }
 
 
-def _correlation_value(correlation: ContextActionCorrelation) -> dict[str, object]:
+def _correlation_value(
+    correlation: ContextActionCorrelation,
+) -> dict[str, object]:
     return {
         "action_index": correlation.action_index,
         "operation_id": correlation.operation_id,
@@ -843,13 +902,193 @@ def _completed_evidence_digest(
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
+def _wire_boundary_value(boundary: ContextSourceBoundary) -> list[object]:
+    """Project one exact boundary identity."""
+
+    return [
+        boundary.kind.value,
+        boundary.start,
+        boundary.end,
+        boundary.first_id,
+        boundary.last_id,
+    ]
+
+
+def _wire_source_facts(
+    *,
+    source_alias: int,
+    source_id: str,
+    source_kind: ContextSourceKind,
+    revision: str,
+    source_digest: str,
+    source_utf8_bytes: int,
+) -> list[object]:
+    """Project complete source facts, collapsing only an explicit digest equality."""
+
+    digest_facts: list[object]
+    if revision == source_digest:
+        digest_facts = ["revision=source_digest", revision]
+    else:
+        digest_facts = ["revision", revision, "source_digest", source_digest]
+    return [
+        "source",
+        source_alias,
+        source_id,
+        source_kind.value,
+        digest_facts,
+        source_utf8_bytes,
+    ]
+
+
+def _wire_boundary_facts(
+    boundary: ContextSourceBoundary,
+    boundary_digest: str,
+    boundary_utf8_bytes: int,
+) -> list[object]:
+    """Project complete exact boundary identity, digest, and size facts."""
+
+    return [
+        "boundary",
+        *_wire_boundary_value(boundary),
+        boundary_digest,
+        boundary_utf8_bytes,
+    ]
+
+
+def _wire_provenance_facts(
+    authority_kind: ContextAuthorityKind,
+    locator: str,
+) -> list[object]:
+    """Project complete safe provenance facts."""
+
+    return ["provenance", authority_kind.value, locator]
+
+
 def serialize_context_action_observation(
     observation: ContextActionObservation,
+    *,
+    source_aliases: Mapping[str, str] | None = None,
+    handle_aliases: Mapping[str, str] | None = None,
+    safe_locators: Mapping[str, str] | None = None,
 ) -> str:
-    """Serialize exactly one observation inside the established trust markers."""
+    """Serialize one complete observation inside the established trust markers."""
 
-    if type(observation) is ContextSearchObservation:
-        payload: dict[str, object] = {
+    compact = source_aliases is not None
+    if compact is not (handle_aliases is not None) or compact is not (
+        safe_locators is not None
+    ):
+        raise _invalid()
+
+    def source_value(source_id: str) -> int:
+        if source_aliases is None:
+            raise _invalid()
+        value = source_aliases.get(source_id)
+        if (
+            type(value) is not str
+            or not value.startswith("s")
+            or not value[1:].isdigit()
+            or value[1:].startswith("0")
+        ):
+            raise _invalid()
+        return int(value[1:])
+
+    def handle_value(handle: ContextSourceHandle) -> str:
+        if handle_aliases is None:
+            return handle.value
+        value = handle_aliases.get(handle.value)
+        if (
+            type(value) is not str
+            or len(value) != 17
+            or value[0] != "h"
+            or any(
+                character
+                not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+                for character in value[1:]
+            )
+        ):
+            raise _invalid()
+        return value
+
+    def locator_value(
+        handle: ContextSourceHandle,
+        established: str,
+    ) -> str:
+        if safe_locators is None:
+            return established
+        value = safe_locators.get(handle.value)
+        if type(value) is not str or not value:
+            raise _invalid()
+        try:
+            value.encode("utf-8", errors="strict")
+        except UnicodeEncodeError:
+            raise _invalid() from None
+        return value
+
+    if compact and type(observation) is ContextSearchObservation:
+        payload: object = [
+            "s",
+            observation.truncated,
+            [
+                [
+                    hit.query_index,
+                    _wire_source_facts(
+                        source_alias=source_value(hit.source_id),
+                        source_id=hit.source_id,
+                        source_kind=hit.source_kind,
+                        revision=hit.revision,
+                        source_digest=hit.source_digest,
+                        source_utf8_bytes=hit.source_utf8_bytes,
+                    ),
+                    _wire_boundary_facts(
+                        hit.boundary,
+                        hit.boundary_digest,
+                        hit.boundary_utf8_bytes,
+                    ),
+                    _wire_provenance_facts(
+                        hit.provenance.authority_kind,
+                        locator_value(hit.handle, hit.provenance.locator),
+                    ),
+                    _SOURCE_KIND_WIRE_CODE[hit.source_kind],
+                    handle_value(hit.handle),
+                    ["snippet", hit.snippet, hit.snippet_utf8_bytes],
+                ]
+                for hit in observation.hits
+            ],
+        ]
+    elif compact and type(observation) is ContextReadObservation:
+        payload = [
+            "r",
+            [
+                [
+                    _wire_source_facts(
+                        source_alias=source_value(item.receipt.source_id),
+                        source_id=item.receipt.source_id,
+                        source_kind=item.receipt.source_kind,
+                        revision=item.receipt.revision,
+                        source_digest=item.receipt.source_digest,
+                        source_utf8_bytes=item.receipt.source_utf8_bytes,
+                    ),
+                    _wire_boundary_facts(
+                        item.receipt.boundary,
+                        item.receipt.boundary_digest,
+                        item.receipt.boundary_utf8_bytes,
+                    ),
+                    _wire_provenance_facts(
+                        item.receipt.provenance.authority_kind,
+                        locator_value(
+                            item.receipt.handle,
+                            item.receipt.provenance.locator,
+                        ),
+                    ),
+                    _SOURCE_KIND_WIRE_CODE[item.receipt.source_kind],
+                    handle_value(item.receipt.handle),
+                    item.content,
+                ]
+                for item in observation.evidence
+            ],
+        ]
+    elif type(observation) is ContextSearchObservation:
+        payload = {
             "correlation": _correlation_value(observation.correlation),
             "hits": [
                 {
@@ -899,6 +1138,8 @@ def serialize_context_action_observation(
         pass
     if encoded is None:
         raise _invalid()
+    if compact:
+        return encoded
     return (
         f"{_BEGIN_UNTRUSTED_STORY_DATA}\n"
         f"{encoded}\n"

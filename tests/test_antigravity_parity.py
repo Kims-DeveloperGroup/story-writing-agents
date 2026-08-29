@@ -191,86 +191,70 @@ payload = json.loads(user_event["message"]["content"])
 schema = json.loads(option("--json-schema"))
 provider_state = Path(next(value.split("=", 1)[1] for value in argv if value.startswith("--gemini_dir=")))
 
-def context_current(value):
-    if value.get("operation") != "agent_context_v1":
+def compact_context_current(value):
+    query = value.get("q")
+    correlation = value.get("c")
+    if (
+        not isinstance(correlation, str)
+        or not isinstance(query, list)
+        or not query
+        or not isinstance(query[0], str)
+        or "i" not in value
+    ):
         return None
-    for unit in value.get("projected_units", []):
-        if not isinstance(unit, dict):
-            continue
-        if any(
-            isinstance(source, dict)
-            and source.get("source_id") == "runtime_input:current"
-            for source in unit.get("sources", [])
-        ):
-            current = json.loads(unit["content"])
-            return current if isinstance(current, dict) else None
+    current = value["i"]
+    if isinstance(current, dict):
+        return dict(current)
+    if isinstance(current, str):
+        return {
+            "workflow": (
+                "conversation_retrieval"
+                if query[0] == "retrieval"
+                else "conversation"
+                if query[0] == "conversation"
+                else "debate"
+            ),
+            "command": current,
+        }
     return None
 
-def context_observation(value):
-    frames = []
-    for line in value.get("observation", "").splitlines():
-        try:
-            frame = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(frame, dict):
-            frames.append(frame)
-    return frames[-1] if frames else {}
-
-def contextual_domain(current, correlation, used_handles):
-    workflow = current["workflow"]
-    identity = current["identity"]
-    if workflow == "conversation":
-        return {
-            "session_id": identity["session_id"],
-            "conversation_id": identity["conversation_id"],
-            "turn_id": identity["turn_id"],
-            "content": "conversation answer",
-        }
-    if workflow == "conversation_retrieval":
-        return {"action": {
-            "kind": "answer",
-            "session_id": identity["session_id"],
-            "conversation_id": identity["conversation_id"],
-            "turn_id": identity["turn_id"],
-            "action_index": correlation["action_index"],
-            "content": "retrieval answer",
-            "citation_ids": [
-                f"r{index}" for index in range(1, len(used_handles) + 1)
-            ],
-        }}
-    phase = current["phase"]
-    revision = current["revision"]
+def compact_contextual_answer(value):
+    phase = value["q"][0]
     if phase == "audit":
-        return {"revision_id": revision, "verdict": "approve", "content": ""}
-    if phase == "finalize":
-        return {
-            "revision_id": revision,
-            "core_updates": [{
-                "filename": "global_outline.md",
-                "content": "bounded outline update",
-            }],
-        }
-    return {"revision_id": revision, "content": "reply-" + phase}
+        result = "a"
+    elif phase == "finalize":
+        result = [["global_outline.md", "bounded outline update"]]
+    elif phase == "retrieval":
+        result = ["retrieval answer", []]
+    elif phase == "conversation":
+        result = "conversation answer"
+    else:
+        result = "reply-" + phase
+    return {"a": "a", "c": value["c"], "d": [result], "u": []}
 
-def contextual_answer(current, correlation, used_handles=()):
-    return {
-        "action": "answer",
-        "content": json.dumps(
-            contextual_domain(current, correlation, used_handles),
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ),
-        "correlation": correlation,
-        "used_handles": list(used_handles),
-    }
-
-current = context_current(payload)
+current = compact_context_current(payload)
 correlation = payload.get("correlation", {})
 scope = correlation.get("scope", {}) if isinstance(correlation, dict) else {}
 identity = current.get("identity", {}) if isinstance(current, dict) else {}
-logical_session_id = identity.get("session_id", scope.get("session_id"))
-logical_agent_id = identity.get("agent_id", scope.get("agent_id"))
+provider_parts = provider_state.parts
+sessions_index = max(
+    (index for index, part in enumerate(provider_parts) if part == "sessions"),
+    default=-1,
+)
+staged_session_id = (
+    provider_parts[sessions_index + 1]
+    if sessions_index >= 0 and sessions_index + 2 < len(provider_parts)
+    else None
+)
+staged_agent_id = (
+    provider_parts[sessions_index + 2]
+    if sessions_index >= 0 and sessions_index + 2 < len(provider_parts)
+    else None
+)
+logical_session_id = (
+    identity.get("session_id", scope.get("session_id")) or staged_session_id
+)
+logical_agent_id = identity.get("agent_id", scope.get("agent_id")) or staged_agent_id
 resumed_id = option("--conversation")
 known_path = provider_state / ".fake-known-conversations.json"
 known_ids = set(json.loads(known_path.read_text(encoding="utf-8"))) if known_path.exists() else set()
@@ -310,7 +294,13 @@ record = {
     "payload_keys": list(payload),
     "session_id": logical_session_id or payload.get("session_id"),
     "agent_id": logical_agent_id or payload.get("agent_id"),
-    "phase": current.get("phase") if current is not None else payload.get("phase"),
+    "phase": (
+        current.get("phase")
+        if current is not None and current.get("phase") is not None
+        else payload["q"][0]
+        if isinstance(payload.get("q"), list) and payload["q"]
+        else payload.get("phase")
+    ),
     "revision_id": (
         current.get("revision") if current is not None else payload.get("revision_id")
     ),
@@ -319,8 +309,8 @@ record = {
     ),
     "turn_id": identity.get("turn_id") or payload.get("turn_id"),
     "retrieval_action_index": (
-        correlation.get("action_index")
-        if payload.get("operation", "").startswith("agent_context_v1")
+        1
+        if compact_context_current(payload) is not None
         else payload.get("retrieval", {}).get("action_index")
     ),
     "resumed_id": resumed_id,
@@ -353,52 +343,8 @@ if mode == "hang":
 if mode == "ignore_term":
     threading.Event().wait()
 
-if payload.get("operation") == "agent_context_v1":
-    if current["workflow"] == "conversation_retrieval":
-        query = current["command"]
-        if query.startswith("retrieve "):
-            query = query.removeprefix("retrieve ")
-        output = {
-            "action": "search",
-            "correlation": correlation,
-            "queries": [{"source_kinds": ["conversation"], "text": query}],
-        }
-    else:
-        output = contextual_answer(current, correlation)
-elif payload.get("operation") == "agent_context_v1_continuation":
-    observation = context_observation(payload)
-    scope = correlation["scope"]
-    current = {
-        "workflow": "conversation_retrieval",
-        "identity": {
-            "session_id": scope["session_id"],
-            "conversation_id": scope["subject_id"],
-            "turn_id": correlation["result_correlation_id"].removeprefix(
-                "retrieval_reply_"
-            ),
-        },
-    }
-    if "hits" in observation:
-        handles = [
-            item["handle"]
-            for item in observation["hits"]
-            if isinstance(item, dict) and isinstance(item.get("handle"), str)
-        ]
-        if handles:
-            output = {
-                "action": "read",
-                "correlation": correlation,
-                "handles": handles,
-            }
-        else:
-            output = contextual_answer(current, correlation)
-    else:
-        handles = [
-            item["handle"]
-            for item in observation.get("evidence", [])
-            if isinstance(item, dict) and isinstance(item.get("handle"), str)
-        ]
-        output = contextual_answer(current, correlation, handles)
+if compact_context_current(payload) is not None:
+    output = compact_contextual_answer(payload)
 elif payload.get("operation") == "writing_artifact_reference_read":
     output = {"action": {
         "kind": "read_writing_artifacts",
@@ -927,7 +873,11 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         )
         policy = "sha256:" + "6" * 64
         schema = {"type": "object"}
-        payload = {"operation": "agent_context_v1", "content": "PARITY_한🙂"}
+        payload = {
+            "c": "A" * 43,
+            "q": ["conversation", "sa", "wco", [4, 2, 2, 4, 8, 8, 16, 200], "text"],
+            "i": "PARITY_한🙂",
+        }
         invocations = []
 
         async def invoke(_binding, invocation):
@@ -959,7 +909,17 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                         "parity-call-2",
                         ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION,
                         schema,
-                        {"observation": "bounded"},
+                        {
+                            "c": "B" * 43,
+                            "q": [
+                                "conversation",
+                                "sa",
+                                "wco",
+                                [3, 1, 2, 4, 7, 8, 16, 200],
+                                "text",
+                            ],
+                            "o": ["r", [[1, "c", "bounded"]]],
+                        },
                         expected_thread_id=first.thread_id,
                     )
                 )
@@ -1557,7 +1517,11 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             debate_id="runtime-debate",
             output_path="part-01/runtime-result.md",
         )
-        self.assertIs(result.status, DebateStatus.CONSENSUS)
+        self.assertIs(
+            result.status,
+            DebateStatus.CONSENSUS,
+            (result, self.provider_invocations()),
+        )
         self.assertEqual(result.final_candidate, "reply-draft")
         self.assertEqual(
             runtime.artifacts.read_text("manuscript/part-01/runtime-result.md"),
