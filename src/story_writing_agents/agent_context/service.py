@@ -67,7 +67,6 @@ from .planning import (
     ContextCheckpointSource,
     ContextCheckpointView,
     ContextDeliveryMode,
-    ContextDecisionKind,
     ContextMaterial,
     ContextRecordCursor,
     ContextRecordMaterial,
@@ -107,6 +106,9 @@ __all__ = [
     "AgentContextService",
     "ContextExecutionError",
     "ContextExecutionErrorCode",
+    "ContextExecutionEvent",
+    "ContextExecutionEventKind",
+    "ContextExecutionEventSink",
     "ContextInvocationBinding",
     "ContextInvocationRequest",
     "ContextInvocationResult",
@@ -218,37 +220,185 @@ class ContextExecutionEventKind(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ContextExecutionEvent:
-    """One typed lifecycle event containing counts and identities only."""
+    """One typed lifecycle event containing exact content-free facts only."""
 
     kind: ContextExecutionEventKind
     scope: ContextScope
+    operation_id: str
+    phase: str | None = None
+    round_number: int | None = None
     action_index: int | None = None
-    source_count: int = 0
-    search_hit_count: int = 0
-    transcript_turn_count: int = 0
-    transcript_event_count: int = 0
-    observation_utf8_bytes: int = 0
-    truncated: bool = False
+    selected_source_count: int | None = None
+    selected_source_utf8_bytes: int | None = None
+    omitted_searchable_source_count: int | None = None
+    omitted_searchable_source_utf8_bytes: int | None = None
+    search_hit_count: int | None = None
+    retrieved_source_count: int | None = None
+    retrieved_source_utf8_bytes: int | None = None
+    mandatory_reference_count: int | None = None
+    mandatory_reference_utf8_bytes: int | None = None
+    provider_input_tokens: int | None = None
+    transcript_turn_count: int | None = None
+    transcript_event_count: int | None = None
+    observation_utf8_bytes: int | None = None
+    truncated: bool | None = None
 
     def __post_init__(self) -> None:
         if type(self.kind) is not ContextExecutionEventKind or type(
             self.scope
         ) is not ContextScope:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        _safe_identity(self.operation_id)
+        if self.scope.subject_kind is ContextSubjectKind.DEBATE:
+            if self.phase is None or self.round_number is None:
+                raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+            _safe_identity(self.phase)
+            if type(self.round_number) is not int or self.round_number < 0:
+                raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        elif self.phase is not None or self.round_number is not None:
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         if self.action_index is not None and (
             type(self.action_index) is not int or self.action_index < 1
         ):
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         for value in (
-            self.source_count,
+            self.selected_source_count,
+            self.selected_source_utf8_bytes,
+            self.omitted_searchable_source_count,
+            self.omitted_searchable_source_utf8_bytes,
             self.search_hit_count,
+            self.retrieved_source_count,
+            self.retrieved_source_utf8_bytes,
+            self.mandatory_reference_count,
+            self.mandatory_reference_utf8_bytes,
+            self.provider_input_tokens,
             self.transcript_turn_count,
             self.transcript_event_count,
             self.observation_utf8_bytes,
         ):
-            if type(value) is not int or value < 0:
+            if value is not None and (type(value) is not int or value < 0):
                 raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
-        if type(self.truncated) is not bool:
+        if self.truncated is not None and type(self.truncated) is not bool:
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        plan_facts = (
+            self.selected_source_count,
+            self.selected_source_utf8_bytes,
+            self.omitted_searchable_source_count,
+            self.omitted_searchable_source_utf8_bytes,
+            self.mandatory_reference_count,
+            self.mandatory_reference_utf8_bytes,
+        )
+        read_facts = (
+            self.retrieved_source_count,
+            self.retrieved_source_utf8_bytes,
+            self.transcript_turn_count,
+            self.transcript_event_count,
+            self.observation_utf8_bytes,
+        )
+        all_optional_facts = (
+            *plan_facts,
+            self.search_hit_count,
+            *read_facts,
+            self.provider_input_tokens,
+            self.truncated,
+        )
+        if self.kind in {
+            ContextExecutionEventKind.BOOTSTRAP,
+            ContextExecutionEventKind.DELTA,
+        }:
+            if any(value is None for value in plan_facts) or any(
+                value is not None
+                for value in (
+                    self.action_index,
+                    self.search_hit_count,
+                    *read_facts,
+                    self.provider_input_tokens,
+                    self.truncated,
+                )
+            ):
+                raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+            return
+        if self.kind is ContextExecutionEventKind.OMISSION:
+            if (
+                self.omitted_searchable_source_count is None
+                or self.omitted_searchable_source_count < 1
+                or self.omitted_searchable_source_utf8_bytes is None
+                or any(
+                    value is not None
+                    for value in (
+                        self.action_index,
+                        self.selected_source_count,
+                        self.selected_source_utf8_bytes,
+                        self.search_hit_count,
+                        *read_facts,
+                        self.mandatory_reference_count,
+                        self.mandatory_reference_utf8_bytes,
+                        self.provider_input_tokens,
+                        self.truncated,
+                    )
+                )
+            ):
+                raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+            return
+        if self.kind in {
+            ContextExecutionEventKind.SEARCH_STARTED,
+            ContextExecutionEventKind.READ_STARTED,
+            ContextExecutionEventKind.ANSWER_AUTHORIZED,
+        }:
+            if self.action_index is None or any(
+                value is not None for value in all_optional_facts
+            ):
+                raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+            return
+        if self.kind is ContextExecutionEventKind.SEARCH_COMPLETED:
+            if (
+                self.action_index is None
+                or self.search_hit_count is None
+                or self.observation_utf8_bytes is None
+                or self.truncated is None
+                or any(
+                    value is not None
+                    for value in (
+                        *plan_facts,
+                        self.retrieved_source_count,
+                        self.retrieved_source_utf8_bytes,
+                        self.provider_input_tokens,
+                        self.transcript_turn_count,
+                        self.transcript_event_count,
+                    )
+                )
+            ):
+                raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+            return
+        if self.kind is ContextExecutionEventKind.READ_COMPLETED:
+            if (
+                self.action_index is None
+                or any(value is None for value in read_facts)
+                or any(
+                    value is not None
+                    for value in (
+                        *plan_facts,
+                        self.search_hit_count,
+                        self.provider_input_tokens,
+                        self.truncated,
+                    )
+                )
+            ):
+                raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+            return
+        if self.kind in {
+            ContextExecutionEventKind.CHECKPOINT_ADVANCED,
+            ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED,
+        }:
+            if self.action_index is not None or any(
+                value is not None
+                for value in (*plan_facts, self.search_hit_count, *read_facts, self.truncated)
+            ):
+                raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+            return
+        if self.action_index is not None or any(
+            value is not None for value in all_optional_facts
+        ):
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
 
 
@@ -508,16 +658,17 @@ def _require_sync_none(value: object) -> None:
 
 def _emit_context_event(
     sink: ContextExecutionEventSink | None,
-    event: ContextExecutionEvent,
+    event: ContextExecutionEvent | None,
 ) -> None:
     if sink is None:
         return
+    assert event is not None
     _require_sync_none(sink(event))
 
 
 def _emit_context_event_without_replacing(
     sink: ContextExecutionEventSink | None,
-    event: ContextExecutionEvent,
+    event: ContextExecutionEvent | None,
 ) -> None:
     """Best-effort emit after an authoritative outcome already exists."""
 
@@ -525,6 +676,22 @@ def _emit_context_event_without_replacing(
         _emit_context_event(sink, event)
     except BaseException:
         pass
+
+
+def _provider_input_token_total(
+    accountings: list[ProviderCallAccounting],
+) -> int | None:
+    """Sum exact submitted input tokens only when every call supplies them."""
+
+    if not accountings:
+        return None
+    total = 0
+    for accounting in accountings:
+        usage = accounting.usage
+        if usage is None or usage.input_tokens is None:
+            return None
+        total += usage.input_tokens
+    return total
 
 
 def _conversation_read_counts(
@@ -3231,6 +3398,8 @@ class AgentContextService:
         answer_validator: Callable[[str, ContextAnswerAuthorization], object]
         | None = None,
         event_sink: ContextExecutionEventSink | None = None,
+        phase: str | None = None,
+        round_number: int | None = None,
     ) -> ContextInvocationResult:
         """Execute one complete contextual lifecycle under its exact scope lock."""
 
@@ -3238,6 +3407,17 @@ class AgentContextService:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         _validate_sync_callback(answer_validator)
         _validate_sync_callback(event_sink)
+        if request.subject_kind is ContextSubjectKind.DEBATE:
+            if event_sink is not None and (phase is None or round_number is None):
+                raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+            if (phase is None) is not (round_number is None):
+                raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+            if phase is not None:
+                _safe_identity(phase)
+                if type(round_number) is not int or round_number < 0:
+                    raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        elif phase is not None or round_number is not None:
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         provider_id, definition_fingerprint = self._provider_identity(provider)
         reference_operation_id = getattr(provider, "reference_operation_id", None)
         if reference_operation_id != request.reference_operation_id:
@@ -3265,6 +3445,8 @@ class AgentContextService:
                     own_agent_state=own_agent_state,
                     answer_validator=answer_validator,
                     event_sink=event_sink,
+                    phase=phase,
+                    round_number=round_number,
                 )
 
     async def _invoke_locked(
@@ -3282,12 +3464,15 @@ class AgentContextService:
         answer_validator: Callable[[str, ContextAnswerAuthorization], object]
         | None,
         event_sink: ContextExecutionEventSink | None,
+        phase: str | None,
+        round_number: int | None,
     ) -> ContextInvocationResult:
         policy_fingerprint = self._execution_policy_fingerprint
         key = ContextLedgerKey(scope, provider_id)
         attempt_id: str | None = None
         generation: int | None = None
         calls: list[ContextLedgerProviderCall] = []
+        submitted_accountings: list[ProviderCallAccounting] = []
         action_session: ContextInvocationSession | None = None
         reference_started = False
         history_advanced = False
@@ -3295,6 +3480,25 @@ class AgentContextService:
         stage = "preflight"
         provider_failure = False
         retired_thread_id: str | None = None
+        checkpoint_committed = False
+
+        def execution_event(
+            kind: ContextExecutionEventKind,
+            **facts: object,
+        ) -> ContextExecutionEvent | None:
+            """Build one event with authoritative call-local identity facts."""
+
+            if event_sink is None:
+                return None
+            return ContextExecutionEvent(
+                kind,
+                scope,
+                request.operation_id,
+                phase=phase,
+                round_number=round_number,
+                **facts,
+            )
+
         try:
             stage = "source"
             registry, manifest, materials = self._compose_context(
@@ -3375,31 +3579,44 @@ class AgentContextService:
                 active_thread_id = None
             _emit_context_event(
                 event_sink,
-                ContextExecutionEvent(
+                execution_event(
                     (
                         ContextExecutionEventKind.BOOTSTRAP
                         if projection.mode is ContextDeliveryMode.BOOTSTRAP
                         else ContextExecutionEventKind.DELTA
                     ),
-                    scope,
-                    source_count=len(projection.decisions),
+                    selected_source_count=(
+                        projection.accounting.selected_logical_source_count
+                    ),
+                    selected_source_utf8_bytes=(
+                        projection.accounting.selected_logical_utf8_bytes
+                    ),
+                    omitted_searchable_source_count=(
+                        projection.accounting.searchable.unprojected_source_count
+                    ),
+                    omitted_searchable_source_utf8_bytes=(
+                        projection.accounting.searchable.unprojected_source_utf8_bytes
+                    ),
+                    mandatory_reference_count=(
+                        projection.accounting.mandatory_reference_count
+                    ),
+                    mandatory_reference_utf8_bytes=(
+                        projection.accounting.mandatory_reference_utf8_bytes
+                    ),
                 ),
             )
-            omitted_count = sum(
-                decision.decision
-                in {
-                    ContextDecisionKind.OMITTED_CLASS_BUDGET,
-                    ContextDecisionKind.OMITTED_MATERIAL,
-                }
-                for decision in projection.decisions
+            omitted_count = (
+                projection.accounting.searchable.unprojected_source_count
             )
             if omitted_count:
-                _emit_context_event_without_replacing(
+                _emit_context_event(
                     event_sink,
-                    ContextExecutionEvent(
+                    execution_event(
                         ContextExecutionEventKind.OMISSION,
-                        scope,
-                        source_count=omitted_count,
+                        omitted_searchable_source_count=omitted_count,
+                        omitted_searchable_source_utf8_bytes=(
+                            projection.accounting.searchable.unprojected_source_utf8_bytes
+                        ),
                     ),
                 )
             attempt_id = _attempt_identifier()
@@ -3468,6 +3685,8 @@ class AgentContextService:
                 except BaseException as failure:
                     facts = context_provider_failure_facts(failure)
                     if facts.accounting is not None:
+                        if facts.accounting.state is ProviderCallState.SUBMITTED:
+                            submitted_accountings.append(facts.accounting)
                         generation = self._append_failure_call_without_replacing(
                             self._ledger,
                             key,
@@ -3490,6 +3709,7 @@ class AgentContextService:
                         type(accounting) is ProviderCallAccounting
                         and accounting.state is ProviderCallState.SUBMITTED
                     ):
+                        submitted_accountings.append(accounting)
                         record_context_provider_failure(
                             failure,
                             ContextProviderFailureFacts(
@@ -3507,6 +3727,7 @@ class AgentContextService:
                             accounting,
                         )
                     raise failure
+                submitted_accountings.append(prelude.accounting)
                 generation = self._append_call(
                     self._ledger,
                     key,
@@ -3617,6 +3838,8 @@ class AgentContextService:
                 except BaseException as failure:
                     facts = context_provider_failure_facts(failure)
                     if facts.accounting is not None:
+                        if facts.accounting.state is ProviderCallState.SUBMITTED:
+                            submitted_accountings.append(facts.accounting)
                         generation = self._append_failure_call_without_replacing(
                             self._ledger,
                             key,
@@ -3637,6 +3860,7 @@ class AgentContextService:
                         type(accounting) is ProviderCallAccounting
                         and accounting.state is ProviderCallState.SUBMITTED
                     ):
+                        submitted_accountings.append(accounting)
                         record_context_provider_failure(
                             failure,
                             ContextProviderFailureFacts(
@@ -3654,6 +3878,7 @@ class AgentContextService:
                             accounting,
                         )
                     raise failure
+                submitted_accountings.append(result.accounting)
                 generation = self._append_call(
                     self._ledger,
                     key,
@@ -3712,25 +3937,56 @@ class AgentContextService:
                     action_session.complete_read(pending_read)
                     pending_read = None
                 stage = "decode"
-                action = _decode_context_action(
-                    result.response_text,
-                    correlation=correlation,
-                    allowed_actions=allowed_actions,
-                    result_contract=phase_contract[1],
-                    allowed_search_source_kinds=(
-                        request.allowed_search_source_kinds
-                    ),
-                    resolve_handle=action_session.resolve_wire_handle,
-                )
+                try:
+                    action = _decode_context_action(
+                        result.response_text,
+                        correlation=correlation,
+                        allowed_actions=allowed_actions,
+                        result_contract=phase_contract[1],
+                        allowed_search_source_kinds=(
+                            request.allowed_search_source_kinds
+                        ),
+                        resolve_handle=action_session.resolve_wire_handle,
+                    )
+                except ContextExecutionError as decode_failure:
+                    if (
+                        decode_failure.code
+                        is ContextExecutionErrorCode.MALFORMED_ACTION
+                        and action_index
+                        == self._action_policy.max_provider_calls
+                    ):
+                        try:
+                            exhausted_action = _decode_context_action(
+                                result.response_text,
+                                correlation=correlation,
+                                allowed_actions=("search", "read", "answer"),
+                                result_contract=phase_contract[1],
+                                allowed_search_source_kinds=(
+                                    request.allowed_search_source_kinds
+                                ),
+                                resolve_handle=(
+                                    action_session.resolve_wire_handle
+                                ),
+                            )
+                        except ContextExecutionError:
+                            raise decode_failure
+                        if type(exhausted_action) in {
+                            ContextSearchAction,
+                            ContextReadAction,
+                        }:
+                            stage = "exhausted"
+                            raise _execution_error(
+                                ContextExecutionErrorCode.ACTION_EXHAUSTED
+                            )
+                    raise
                 terminal_provider_succeeded = False
                 if type(action) is ContextSearchAction:
                     stage = "action"
                     history_advanced = True
                     _emit_context_event(
                         event_sink,
-                        ContextExecutionEvent(
+                        execution_event(
                             ContextExecutionEventKind.SEARCH_STARTED,
-                            scope,
                             action_index=action_index,
                         ),
                     )
@@ -3742,9 +3998,8 @@ class AgentContextService:
                     previous_search_had_hits = bool(search_observation.hits)
                     _emit_context_event(
                         event_sink,
-                        ContextExecutionEvent(
+                        execution_event(
                             ContextExecutionEventKind.SEARCH_COMPLETED,
-                            scope,
                             action_index=action_index,
                             search_hit_count=len(search_observation.hits),
                             observation_utf8_bytes=len(
@@ -3759,9 +4014,8 @@ class AgentContextService:
                     history_advanced = True
                     _emit_context_event(
                         event_sink,
-                        ContextExecutionEvent(
+                        execution_event(
                             ContextExecutionEventKind.READ_STARTED,
-                            scope,
                             action_index=action_index,
                         ),
                     )
@@ -3776,10 +4030,14 @@ class AgentContextService:
                     )
                     _emit_context_event(
                         event_sink,
-                        ContextExecutionEvent(
+                        execution_event(
                             ContextExecutionEventKind.READ_COMPLETED,
-                            scope,
                             action_index=action_index,
+                            retrieved_source_count=len(read_observation.evidence),
+                            retrieved_source_utf8_bytes=sum(
+                                evidence.receipt.boundary_utf8_bytes
+                                for evidence in read_observation.evidence
+                            ),
                             transcript_turn_count=turn_count,
                             transcript_event_count=event_count,
                             observation_utf8_bytes=len(
@@ -3806,9 +4064,8 @@ class AgentContextService:
                     _require_sync_none(answer_validator(action.answer, authorization))
                 _emit_context_event(
                     event_sink,
-                    ContextExecutionEvent(
+                    execution_event(
                         ContextExecutionEventKind.ANSWER_AUTHORIZED,
-                        scope,
                         action_index=action_index,
                     ),
                 )
@@ -3838,11 +4095,14 @@ class AgentContextService:
                     ),
                 )
                 terminal_provider_succeeded = False
-                _emit_context_event_without_replacing(
+                checkpoint_committed = True
+                _emit_context_event(
                     event_sink,
-                    ContextExecutionEvent(
+                    execution_event(
                         ContextExecutionEventKind.CHECKPOINT_ADVANCED,
-                        scope,
+                        provider_input_tokens=_provider_input_token_total(
+                            submitted_accountings
+                        ),
                     ),
                 )
                 return ContextInvocationResult(
@@ -3856,15 +4116,16 @@ class AgentContextService:
             stage = "exhausted"
             raise _execution_error(ContextExecutionErrorCode.ACTION_EXHAUSTED)
         except BaseException as failure:
+            if checkpoint_committed:
+                raise
             if isinstance(failure, ContextSourceError) or stage in {
                 "source",
                 "source_revalidation",
             }:
                 _emit_context_event_without_replacing(
                     event_sink,
-                    ContextExecutionEvent(
+                    execution_event(
                         ContextExecutionEventKind.INVALIDATED,
-                        scope,
                     ),
                 )
             failure_code = getattr(getattr(failure, "code", None), "value", "")
@@ -3874,17 +4135,15 @@ class AgentContextService:
             ):
                 _emit_context_event_without_replacing(
                     event_sink,
-                    ContextExecutionEvent(
+                    execution_event(
                         ContextExecutionEventKind.BUDGET_EXHAUSTED,
-                        scope,
                     ),
                 )
             if stage == "exhausted":
                 _emit_context_event_without_replacing(
                     event_sink,
-                    ContextExecutionEvent(
+                    execution_event(
                         ContextExecutionEventKind.ACTION_EXHAUSTED,
-                        scope,
                     ),
                 )
             if action_session is not None:
@@ -3921,9 +4180,8 @@ class AgentContextService:
                     pass
                 _emit_context_event_without_replacing(
                     event_sink,
-                    ContextExecutionEvent(
+                    execution_event(
                         ContextExecutionEventKind.TAINTED,
-                        scope,
                     ),
                 )
             if attempt_id is not None and generation is not None:
@@ -3938,9 +4196,11 @@ class AgentContextService:
                     pass
             _emit_context_event_without_replacing(
                 event_sink,
-                ContextExecutionEvent(
+                execution_event(
                     ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED,
-                    scope,
+                    provider_input_tokens=_provider_input_token_total(
+                        submitted_accountings
+                    ),
                 ),
             )
             raise

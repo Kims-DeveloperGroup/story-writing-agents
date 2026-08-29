@@ -42,6 +42,7 @@ from .agent_context.service import (
     ContextExecutionErrorCode,
     ContextExecutionEvent,
     ContextExecutionEventKind,
+    ContextExecutionEventSink,
     ContextInvocationRequest,
     ContextSourceClassification,
 )
@@ -210,6 +211,14 @@ class _ProgressEmitter:
         if outcome is not None:
             cause = TypeError("debate progress sink must return None")
             raise ProgressObserverError() from cause
+
+
+class _ContextEventObserverFailure(Exception):
+    """Carry one generic observer failure through debate aggregation."""
+
+    def __init__(self, cause: BaseException) -> None:
+        self.cause = cause
+        super().__init__("context lifecycle observer failed")
 
 
 class _ConversationRetrievalProgressEmitter:
@@ -1553,9 +1562,12 @@ class StoryRuntime:
         conversation_id: str,
         agent_id: str,
         text: str,
+        *,
+        context_event_sink: ContextExecutionEventSink | None = None,
     ) -> ConversationResult:
         """Run and persist one advisory turn in an explicit conversation."""
 
+        context_events = self._validate_context_event_sink(context_event_sink)
         session = self.workspace.validate_identifier(session_id)
         conversation = self.workspace.validate_identifier(
             conversation_id,
@@ -1713,6 +1725,7 @@ class StoryRuntime:
                             request,
                             reference_operation=reference_operation,
                             reference_read=reference_read,
+                            context_event_sink=context_events,
                         )
                     elif reference_read is None:
                         assert bound_converse is not None
@@ -1745,6 +1758,34 @@ class StoryRuntime:
                     reference_operation_id=reference_operation.operation_id,
                 )
                 reference_operation.finish()
+            except _ContextEventObserverFailure as observer_failure:
+                try:
+                    reference_operation.failure(observer_failure)
+                except BaseException:
+                    pass
+                failure = ConversationEventAppend(
+                    session_id=session,
+                    conversation_id=conversation,
+                    turn_id=turn_id,
+                    sender="runtime",
+                    recipient="user",
+                    kind=ConversationEventKind.RUNTIME_ERROR,
+                    content=(
+                        "ContextObserverError: context lifecycle observer failed"
+                    ),
+                )
+                try:
+                    self._append_conversation_event(append, failure)
+                except BaseException:
+                    pass
+                self._record_debug_error(
+                    DebugOperation.ADVISORY_TURN,
+                    observer_failure,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                )
+                raise observer_failure.cause
             except asyncio.CancelledError as cancellation_error:
                 reference_failure = reference_operation.failure(cancellation_error)
                 cancellation = ConversationEventAppend(
@@ -1864,6 +1905,7 @@ class StoryRuntime:
         memory_service: ConversationMemoryService,
         progress_sink: ConversationRetrievalProgressSink | None = None,
         rag_query: str | None = None,
+        context_event_sink: ContextExecutionEventSink | None = None,
     ) -> ConversationRetrievalResult:
         """Run one durable advisory turn with bounded agent-directed retrieval.
 
@@ -1878,6 +1920,7 @@ class StoryRuntime:
         taint or a second outcome append.
         """
 
+        context_events = self._validate_context_event_sink(context_event_sink)
         session = self.workspace.validate_identifier(session_id)
         conversation = self.workspace.validate_identifier(
             conversation_id,
@@ -2096,6 +2139,7 @@ class StoryRuntime:
                                 reference_operation=reference_operation,
                                 reference_read=reference_read,
                                 progress=progress,
+                                context_event_sink=context_events,
                             )
                         )
                     elif reference_read is None:
@@ -2143,6 +2187,34 @@ class StoryRuntime:
                     rag_sources=rag_sources,
                 )
                 reference_operation.finish()
+            except _ContextEventObserverFailure as observer_failure:
+                try:
+                    reference_operation.failure(observer_failure)
+                except BaseException:
+                    pass
+                failure = ConversationEventAppend(
+                    session_id=session,
+                    conversation_id=conversation,
+                    turn_id=turn_id,
+                    sender="runtime",
+                    recipient="user",
+                    kind=ConversationEventKind.RUNTIME_ERROR,
+                    content=(
+                        "ContextObserverError: context lifecycle observer failed"
+                    ),
+                )
+                try:
+                    self._append_conversation_event(append, failure)
+                except BaseException:
+                    pass
+                self._record_debug_error(
+                    DebugOperation.RETRIEVAL_TURN,
+                    observer_failure,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                )
+                raise observer_failure.cause
             except asyncio.CancelledError as cancellation_error:
                 reference_failure = reference_operation.failure(cancellation_error)
                 cancellation = ConversationEventAppend(
@@ -2265,6 +2337,7 @@ class StoryRuntime:
         debate_id: str | None = None,
         conversation_context: DebateContextRequest | None = None,
         progress_sink: DebateProgressSink | None = None,
+        context_event_sink: ContextExecutionEventSink | None = None,
     ) -> DebateResult:
         """Run a prompt debate with optional included context and progress facts.
 
@@ -2284,6 +2357,7 @@ class StoryRuntime:
             debate_id=debate_id,
             conversation_context=conversation_context,
             progress_sink=progress_sink,
+            context_event_sink=context_event_sink,
         )
 
     async def run_draft(
@@ -2296,6 +2370,7 @@ class StoryRuntime:
         debate_id: str | None = None,
         conversation_context: DebateContextRequest | None = None,
         progress_sink: DebateProgressSink | None = None,
+        context_event_sink: ContextExecutionEventSink | None = None,
     ) -> DebateResult:
         """Run a supplied-draft debate with optional context and progress facts.
 
@@ -2315,6 +2390,7 @@ class StoryRuntime:
             debate_id=debate_id,
             conversation_context=conversation_context,
             progress_sink=progress_sink,
+            context_event_sink=context_event_sink,
         )
 
     async def _run(
@@ -2328,6 +2404,7 @@ class StoryRuntime:
         debate_id: str | None,
         conversation_context: DebateContextRequest | None,
         progress_sink: DebateProgressSink | None,
+        context_event_sink: ContextExecutionEventSink | None,
     ) -> DebateResult:
         """Validate, capture requested context, reserve, and run one debate.
 
@@ -2337,6 +2414,7 @@ class StoryRuntime:
         failures preserve their typed control flow with best-effort interruption.
         """
 
+        context_events = self._validate_context_event_sink(context_event_sink)
         if self.backend is None:
             raise BackendProtocolError(
                 "running a debate requires an AgentBackend adapter"
@@ -2510,6 +2588,7 @@ class StoryRuntime:
                 ),
                 progress=progress,
                 reference_operation=reference_operation,
+                context_event_sink=context_events,
             ),
             name=f"debate:{session}:{debate}",
         )
@@ -2568,6 +2647,33 @@ class StoryRuntime:
             if reference_failure is not None:
                 raise cancellation from reference_failure
             raise
+        except _ContextEventObserverFailure as observer_failure:
+            try:
+                reference_operation.failure(observer_failure)
+            except BaseException:
+                pass
+            if not progress.terminal_durable:
+                try:
+                    self.workspace.transition_debate(
+                        session,
+                        debate,
+                        owner_token=reservation_token,
+                        status="interrupted",
+                        terminal=True,
+                        revision_id=None,
+                        rounds_completed=0,
+                        error="ContextObserverError: context observer failed",
+                    )
+                except Exception:
+                    pass
+            self._record_debug_error(
+                DebugOperation.CONSENSUS_RUN,
+                observer_failure,
+                session_id=session,
+                debate_id=debate,
+                outcome=DebugOutcome.INTERRUPTED,
+            )
+            raise observer_failure.cause
         except ProgressObserverError as exc:
             if not progress.terminal_durable:
                 try:
@@ -2637,6 +2743,7 @@ class StoryRuntime:
         focused_conversation_id: str | None,
         progress: _ProgressEmitter,
         reference_operation: RuntimeReferenceOperation,
+        context_event_sink: ContextExecutionEventSink | None,
     ) -> DebateResult:
         """Execute a reserved debate with durable records before progress facts.
 
@@ -2732,8 +2839,11 @@ class StoryRuntime:
                     focused_conversation_id=focused_conversation_id,
                 ),
                 reference_operation=reference_operation,
+                context_event_sink=context_event_sink,
             )
             self._validate_candidate_reply(reply, current_revision)
+        except _ContextEventObserverFailure:
+            raise
         except Exception as exc:
             failure_kind = self._classify_debate_failure(exc)
             reference_failure = reference_operation.failure(
@@ -2838,6 +2948,7 @@ class StoryRuntime:
                 focused_context_mode=focused_context_mode,
                 focused_conversation_id=focused_conversation_id,
                 reference_operation=reference_operation,
+                context_event_sink=context_event_sink,
             )
             if audit_error is not None:
                 failure_kind = self._classify_debate_failure(audit_error)
@@ -2938,6 +3049,7 @@ class StoryRuntime:
                 focused_context_mode=focused_context_mode,
                 focused_conversation_id=focused_conversation_id,
                 reference_operation=reference_operation,
+                context_event_sink=context_event_sink,
             )
             if proposal_error is not None:
                 failure_kind = self._classify_debate_failure(proposal_error)
@@ -2992,8 +3104,11 @@ class StoryRuntime:
                         focused_conversation_id=focused_conversation_id,
                     ),
                     reference_operation=reference_operation,
+                    context_event_sink=context_event_sink,
                 )
                 self._validate_candidate_reply(synthesis, next_revision)
+            except _ContextEventObserverFailure:
+                raise
             except Exception as exc:
                 failure_kind = self._classify_debate_failure(exc)
                 reference_failure = reference_operation.failure(
@@ -3099,6 +3214,7 @@ class StoryRuntime:
                     focused_conversation_id=focused_conversation_id,
                 ),
                 reference_operation=reference_operation,
+                context_event_sink=context_event_sink,
             )
             updates = self._validate_finalization_reply(
                 finalization, current_revision, candidate
@@ -3132,6 +3248,8 @@ class StoryRuntime:
                 revision_id=current_revision,
                 candidate_author_agent_id=candidate_author_agent_id,
             )
+        except _ContextEventObserverFailure:
+            raise
         except Exception as exc:
             failure_kind = self._classify_debate_failure(
                 exc,
@@ -3225,6 +3343,7 @@ class StoryRuntime:
         focused_context_mode: StoryFocusedContextMode,
         focused_conversation_id: str | None,
         reference_operation: RuntimeReferenceOperation,
+        context_event_sink: ContextExecutionEventSink | None,
     ) -> tuple[dict[str, AgentReply], Exception | None]:
         """Run all specialist audits, durably record each, and return first failure.
 
@@ -3266,6 +3385,7 @@ class StoryRuntime:
             self._validate_audit_reply,
             revision_id,
             reference_operation=reference_operation,
+            context_event_sink=context_event_sink,
         )
         replies: dict[str, AgentReply] = {}
         first_error: Exception | None = None
@@ -3333,6 +3453,7 @@ class StoryRuntime:
         focused_context_mode: StoryFocusedContextMode,
         focused_conversation_id: str | None,
         reference_operation: RuntimeReferenceOperation,
+        context_event_sink: ContextExecutionEventSink | None,
     ) -> tuple[dict[str, AgentReply], Exception | None]:
         """Run responsible proposals, durably record them, and return first failure.
 
@@ -3373,6 +3494,7 @@ class StoryRuntime:
             self._validate_proposal_reply,
             revision_id,
             reference_operation=reference_operation,
+            context_event_sink=context_event_sink,
         )
         replies: dict[str, AgentReply] = {}
         first_error: Exception | None = None
@@ -3772,6 +3894,30 @@ class StoryRuntime:
             or inspect.isasyncgenfunction(sink_call)
         ):
             raise TypeError("progress_sink must be synchronous")
+        return sink
+
+    def _validate_context_event_sink(
+        self,
+        sink: ContextExecutionEventSink | None,
+    ) -> ContextExecutionEventSink | None:
+        """Validate one generic observer before any contextual side effect."""
+
+        if sink is None:
+            return None
+        if not callable(sink):
+            raise TypeError("context_event_sink must be callable or None")
+        sink_call = getattr(sink, "__call__", None)
+        if (
+            inspect.iscoroutinefunction(sink)
+            or inspect.isasyncgenfunction(sink)
+            or inspect.iscoroutinefunction(sink_call)
+            or inspect.isasyncgenfunction(sink_call)
+        ):
+            raise TypeError("context_event_sink must be synchronous")
+        if not self._contextual_execution_enabled():
+            raise BackendProtocolError(
+                "context_event_sink requires contextual execution"
+            )
         return sink
 
     @staticmethod
@@ -4433,8 +4579,9 @@ class StoryRuntime:
         *,
         retrieval_request: ConversationRetrievalRequest | None = None,
         retrieval_progress: _ConversationRetrievalProgressEmitter | None = None,
-    ) -> Callable[[ContextExecutionEvent], None]:
-        """Map private context lifecycle facts to debug and optional public progress."""
+        context_event_sink: ContextExecutionEventSink | None = None,
+    ) -> ContextExecutionEventSink:
+        """Compose debug, established retrieval, then generic observation."""
 
         outcomes = {
             ContextExecutionEventKind.BOOTSTRAP: DebugOutcome.CONTEXT_BOOTSTRAP,
@@ -4512,40 +4659,65 @@ class StoryRuntime:
                 agent_id=event.scope.agent_id,
                 outcome=outcomes[event.kind],
             )
-            if retrieval_request is None or retrieval_progress is None:
+            if retrieval_request is not None and retrieval_progress is not None:
+                progress_phase = {
+                    ContextExecutionEventKind.SEARCH_STARTED: (
+                        ConversationRetrievalProgressPhase.SEARCH_STARTED
+                    ),
+                    ContextExecutionEventKind.SEARCH_COMPLETED: (
+                        ConversationRetrievalProgressPhase.SEARCH_COMPLETED
+                    ),
+                    ContextExecutionEventKind.READ_STARTED: (
+                        ConversationRetrievalProgressPhase.READ_STARTED
+                    ),
+                    ContextExecutionEventKind.READ_COMPLETED: (
+                        ConversationRetrievalProgressPhase.READ_COMPLETED
+                    ),
+                }.get(event.kind)
+                if progress_phase is not None:
+                    assert event.action_index is not None
+                    retrieval_progress.emit(
+                        ConversationRetrievalProgressEvent(
+                            session_id=retrieval_request.session_id,
+                            conversation_id=retrieval_request.conversation_id,
+                            turn_id=retrieval_request.turn_id,
+                            agent_id=retrieval_request.agent_id,
+                            action_index=event.action_index,
+                            phase=progress_phase,
+                            search_hit_count=event.search_hit_count or 0,
+                            transcript_turn_count=(
+                                event.transcript_turn_count or 0
+                            ),
+                            transcript_event_count=(
+                                event.transcript_event_count or 0
+                            ),
+                            observation_utf8_bytes=(
+                                event.observation_utf8_bytes or 0
+                            ),
+                            truncated=(
+                                False
+                                if event.truncated is None
+                                else event.truncated
+                            ),
+                        )
+                    )
+            if context_event_sink is None:
                 return
-            progress_phase = {
-                ContextExecutionEventKind.SEARCH_STARTED: (
-                    ConversationRetrievalProgressPhase.SEARCH_STARTED
-                ),
-                ContextExecutionEventKind.SEARCH_COMPLETED: (
-                    ConversationRetrievalProgressPhase.SEARCH_COMPLETED
-                ),
-                ContextExecutionEventKind.READ_STARTED: (
-                    ConversationRetrievalProgressPhase.READ_STARTED
-                ),
-                ContextExecutionEventKind.READ_COMPLETED: (
-                    ConversationRetrievalProgressPhase.READ_COMPLETED
-                ),
-            }.get(event.kind)
-            if progress_phase is None:
-                return
-            assert event.action_index is not None
-            retrieval_progress.emit(
-                ConversationRetrievalProgressEvent(
-                    session_id=retrieval_request.session_id,
-                    conversation_id=retrieval_request.conversation_id,
-                    turn_id=retrieval_request.turn_id,
-                    agent_id=retrieval_request.agent_id,
-                    action_index=event.action_index,
-                    phase=progress_phase,
-                    search_hit_count=event.search_hit_count,
-                    transcript_turn_count=event.transcript_turn_count,
-                    transcript_event_count=event.transcript_event_count,
-                    observation_utf8_bytes=event.observation_utf8_bytes,
-                    truncated=event.truncated,
-                )
-            )
+            try:
+                outcome = context_event_sink(event)
+            except BaseException as exc:
+                raise _ContextEventObserverFailure(exc) from exc
+            if inspect.isawaitable(outcome):
+                if inspect.iscoroutine(outcome):
+                    outcome.close()
+                cause = TypeError("context_event_sink must be synchronous")
+                raise _ContextEventObserverFailure(cause) from cause
+            if inspect.isasyncgen(outcome):
+                cause = TypeError("context_event_sink must be synchronous")
+                raise _ContextEventObserverFailure(cause) from cause
+            if outcome is not None:
+                cause = TypeError("context_event_sink must return None")
+                raise _ContextEventObserverFailure(cause) from cause
 
         return emit
 
@@ -4569,6 +4741,7 @@ class StoryRuntime:
         *,
         reference_operation: RuntimeReferenceOperation,
         reference_read: Any,
+        context_event_sink: ContextExecutionEventSink | None,
     ) -> ConversationReply:
         """Execute one ordinary advisory reply through the generic context loop."""
 
@@ -4650,7 +4823,9 @@ class StoryRuntime:
                 active_debate=authorities[2],
                 own_agent_state=authorities[3],
                 answer_validator=validate,
-                event_sink=self._context_event_sink(),
+                event_sink=self._context_event_sink(
+                    context_event_sink=context_event_sink
+                ),
             )
         except ContextExecutionError as exc:
             translated = self._contextual_backend_error(exc)
@@ -4748,6 +4923,7 @@ class StoryRuntime:
         reference_operation: RuntimeReferenceOperation,
         reference_read: Any,
         progress: _ConversationRetrievalProgressEmitter,
+        context_event_sink: ContextExecutionEventSink | None,
     ) -> tuple[ConversationRetrievalReply, tuple[ConversationRetrievalSource, ...]]:
         """Run retrieval with generic search/read/answer and public projections."""
 
@@ -4974,6 +5150,7 @@ class StoryRuntime:
                 event_sink=self._context_event_sink(
                     retrieval_request=request,
                     retrieval_progress=progress,
+                    context_event_sink=context_event_sink,
                 ),
             )
         except ContextExecutionError as exc:
@@ -4990,6 +5167,7 @@ class StoryRuntime:
         *,
         reference_operation: RuntimeReferenceOperation | None,
         reference_read: Any,
+        context_event_sink: ContextExecutionEventSink | None,
     ) -> AgentReply:
         """Execute any debate phase with scoped contextual composition."""
 
@@ -5170,7 +5348,11 @@ class StoryRuntime:
                 active_debate=authorities[2],
                 own_agent_state=authorities[3],
                 answer_validator=validate,
-                event_sink=self._context_event_sink(),
+                event_sink=self._context_event_sink(
+                    context_event_sink=context_event_sink
+                ),
+                phase=request.phase.value,
+                round_number=request.round_number,
             )
         except ContextExecutionError as exc:
             translated = self._contextual_backend_error(exc)
@@ -5185,6 +5367,7 @@ class StoryRuntime:
         *,
         reference_operation: RuntimeReferenceOperation | None = None,
         reference_read: Any = None,
+        context_event_sink: ContextExecutionEventSink | None = None,
     ) -> AgentReply:
         if type(prepared) is _PreparedAgentRequest:
             request = prepared.request
@@ -5221,6 +5404,7 @@ class StoryRuntime:
                         prepared,
                         reference_operation=reference_operation,
                         reference_read=reference_read,
+                        context_event_sink=context_event_sink,
                     )
                 elif reference_read is None:
                     reply = await bound_agent.invoke(request)
@@ -5508,6 +5692,7 @@ class StoryRuntime:
         revision_id: str,
         *,
         reference_operation: RuntimeReferenceOperation,
+        context_event_sink: ContextExecutionEventSink | None,
     ) -> tuple[AgentReply | Exception, ...]:
         """Invoke one phase concurrently and close every peer on first failure."""
 
@@ -5528,6 +5713,7 @@ class StoryRuntime:
                 prepared,
                 reference_operation=reference_operation,
                 reference_read=reference_read,
+                context_event_sink=context_event_sink,
             )
             validator(reply, revision_id)
             return reply
@@ -5606,6 +5792,8 @@ class StoryRuntime:
                 continue
             try:
                 outcomes.append(task.result())
+            except _ContextEventObserverFailure:
+                raise
             except Exception as exc:
                 outcomes.append(exc)
         return tuple(outcomes)
@@ -5919,6 +6107,8 @@ class RuntimeSession:
         conversation_id: str,
         agent_id: str,
         text: str,
+        *,
+        context_event_sink: ContextExecutionEventSink | None = None,
     ) -> ConversationResult:
         """Delegate the supported advisory turn through this bound session.
 
@@ -5933,6 +6123,7 @@ class RuntimeSession:
             conversation_id,
             agent_id,
             text,
+            context_event_sink=context_event_sink,
         )
 
     async def converse_with_retrieval(
@@ -5944,6 +6135,7 @@ class RuntimeSession:
         memory_service: ConversationMemoryService,
         progress_sink: ConversationRetrievalProgressSink | None = None,
         rag_query: str | None = None,
+        context_event_sink: ContextExecutionEventSink | None = None,
     ) -> ConversationRetrievalResult:
         """Delegate one bounded retrieval turn through this bound session.
 
@@ -5961,6 +6153,7 @@ class RuntimeSession:
             memory_service=memory_service,
             progress_sink=progress_sink,
             rag_query=rag_query,
+            context_event_sink=context_event_sink,
         )
 
     async def run_prompt(
@@ -5972,6 +6165,7 @@ class RuntimeSession:
         debate_id: str | None = None,
         conversation_context: DebateContextRequest | None = None,
         progress_sink: DebateProgressSink | None = None,
+        context_event_sink: ContextExecutionEventSink | None = None,
     ) -> DebateResult:
         """Delegate a prompt debate with optional context and progress reporting.
 
@@ -5987,6 +6181,7 @@ class RuntimeSession:
             debate_id=debate_id,
             conversation_context=conversation_context,
             progress_sink=progress_sink,
+            context_event_sink=context_event_sink,
         )
 
     async def run_draft(
@@ -5998,6 +6193,7 @@ class RuntimeSession:
         debate_id: str | None = None,
         conversation_context: DebateContextRequest | None = None,
         progress_sink: DebateProgressSink | None = None,
+        context_event_sink: ContextExecutionEventSink | None = None,
     ) -> DebateResult:
         """Delegate a draft debate with optional context and progress reporting.
 
@@ -6013,6 +6209,7 @@ class RuntimeSession:
             debate_id=debate_id,
             conversation_context=conversation_context,
             progress_sink=progress_sink,
+            context_event_sink=context_event_sink,
         )
 
 
