@@ -102,6 +102,20 @@ def _provider_error_records(workspace: object) -> list[dict[str, object]]:
     ]
 
 
+def _agent_exchange_records(workspace: object) -> list[dict[str, object]]:
+    """Read durable provider exchanges in global sequence order."""
+
+    directory = workspace.path("debug_logs/agent_exchanges")  # type: ignore[attr-defined]
+    if not directory.exists():
+        return []
+    records = [
+        json.loads(line)
+        for path in directory.rglob("*.jsonl")
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    return sorted(records, key=lambda record: record["workspace_sequence"])
+
+
 _FAKE_AGY = (
     r"""#!/usr/bin/env python3
 import json
@@ -2201,6 +2215,46 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertNotIn(private_value, runtime_log)
 
+        exchange_records = _agent_exchange_records(self.workspace)
+        self.assertEqual(
+            [record["request_type"] for record in exchange_records],
+            ["request", "response", "outcome"] * 4,
+        )
+        self.assertEqual(
+            [record["provider"] for record in exchange_records],
+            ["antigravity"] * 12,
+        )
+        self.assertEqual(
+            [
+                json.loads(record["content"])["call_kind"]
+                for record in exchange_records
+                if record["request_type"] == "request"
+            ],
+            ["debate", "debate", "debate", "conversation"],
+        )
+        self.assertEqual(
+            [
+                json.loads(record["content"])
+                for record in exchange_records
+                if record["request_type"] == "outcome"
+            ],
+            [
+                {"code": "accepted", "outcome": "accepted"},
+                {
+                    "code": "response_semantic_rejected",
+                    "outcome": "rejected",
+                },
+                {"code": "accepted", "outcome": "accepted"},
+                {
+                    "code": "response_semantic_rejected",
+                    "outcome": "rejected",
+                },
+            ],
+        )
+        serialized_exchanges = json.dumps(exchange_records, ensure_ascii=False)
+        for prohibited in ("stderr", "authentication", "environment", "credentials"):
+            self.assertNotIn(prohibited, serialized_exchanges)
+
     def test_public_surface_and_provider_schema_remain_provider_neutral(self) -> None:
         import story_writing_agents as facade
 
@@ -2469,6 +2523,37 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                     )
 
                 self.assertEqual(str(caught.exception), diagnostic)
+                if mode == "malformed":
+                    malformed_exchange = [
+                        record
+                        for record in _agent_exchange_records(self.workspace)
+                        if record["session_id"] == session_id
+                        and record["scope_id"] == "failure"
+                    ]
+                    self.assertEqual(
+                        [record["request_type"] for record in malformed_exchange],
+                        ["request", "outcome"],
+                    )
+                    self.assertEqual(
+                        json.loads(malformed_exchange[-1]["content"]),
+                        {
+                            "code": "provider_invocation_failed",
+                            "outcome": "provider_failure",
+                        },
+                    )
+                    malformed_serialized = json.dumps(
+                        malformed_exchange,
+                        ensure_ascii=False,
+                    )
+                    for prohibited in (
+                        "CONFIDENTIAL_PROVIDER",
+                        "CONFIDENTIAL_CREDENTIAL",
+                        "stderr",
+                        "authentication",
+                        "environment",
+                        "credentials",
+                    ):
+                        self.assertNotIn(prohibited, malformed_serialized)
                 taint.assert_called_once_with(session_id, definition)
                 write_manifest.assert_called_once()
                 external_error = str(caught.exception)

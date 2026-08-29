@@ -3,7 +3,8 @@
 > **Availability:** filesystem persistence covers configuration, sessions,
 > conversations, debates, optional debate-context sidecars, canonical writing
 > artifacts, content-free explicit-reference authorization evidence, and
-> bounded runtime debug-log infrastructure, and bounded agent-exchange storage.
+> bounded runtime debug-log infrastructure and automatic bounded agent-exchange
+> diagnostics.
 > Direct Python callers can also
 > construct canonical conversation-only archive bytes and use the privileged
 > filesystem transfer adapter. A separate optional SQLite conversation store is
@@ -43,7 +44,7 @@ provisioning nor migration alone selects runtime authority.
 | Conversation RAG opt-in defaults and CLI reports | Configuration owns nullable provider/exact automatic values; `conversation_rag_cli` owns complete noninteractive CAS workflows and ephemeral schema-v1 reports; interactive Settings reuses its guarded configuration transaction |
 | Pending one-turn RAG query | Controller memory only; exact session/conversation scope, never configuration or transcript persistence |
 | Bounded runtime diagnostics | Internal `debug_log` writer |
-| Bounded agent request/response/no-response records | `agent_exchanges`; independent direct-package storage, not yet wired to provider calls |
+| Bounded agent request/response/outcome records | `AgentBackend` capture projects each physical structured call; `agent_exchanges` independently owns storage |
 | Retrieval actions, observations, progress, sources | Process/terminal only |
 | Current conversation and agent focus | Controller memory only |
 | Canonical writing artifacts and provenance | `WritingArtifactRepository` |
@@ -437,17 +438,36 @@ and [recovery procedure](../operations/recovery-and-limitations.md#conversation-
 The `story_writing_agents.agent_exchanges` package owns one bounded diagnostic
 store independently of conversations, debate blackboards, agent state, runtime
 debug records, and rejected-provider-response artifacts. Its direct store
-constructor is I/O-free. This issue establishes durable contracts and storage;
-no backend or runtime path calls `append()` yet, and no shell command reads the
-store.
+constructor is I/O-free. `AgentBackend` now composes one workspace capture and
+offers every physical structured call at both the established and contextual
+provider seams. There is still no shell command or viewer for this store.
 
 The caller supplies one immutable strict-UTF-8 `AgentExchangeRecordInput` with
 session, conversation/debate scope, canonical agent, provider, physical-call
-`exchange_id`, `request`/`response`/`no_response` type, and content. The store
-does not call a provider, choose a provider outcome, synthesize a response pair,
-or decide whether a missing response occurred. It also does not require an
-exchange ID to be unique: a later capture owner will use the same ID to
-correlate the physical request and its response or no-response outcome.
+`exchange_id`, `request`/`response`/`no_response`/`outcome` type, and content.
+The storage API remains policy-free: it does not call a provider, choose an
+outcome, synthesize a record sequence, or require an exchange ID to be unique.
+The capture owner generates one fresh exchange ID and reuses it for the
+physical request, any valid completed response, and exactly one terminal
+attempt.
+
+Capture is ordered around provider behavior, not as one storage transaction:
+
+1. append the canonical request immediately before `adapter.invoke()`;
+2. if the adapter returns an exact `ProviderResult`, append its canonical
+   projection immediately before accounting observation, decoding, the
+   rejected-response artifact, or provider-thread persistence; and
+3. append one closed outcome when the owning layer can classify the call as
+   `accepted`, `rejected`, `provider_failure`, `cancelled`, or
+   `post_response_runtime_failure`.
+
+A provider failure before a result has request plus outcome and no response. A
+cancellation may close before or after a response. Context SEARCH/READ calls
+are accepted after completion-observer delivery, ANSWER is accepted after the
+checkpoint commit but before the later checkpoint observer, and a successful
+reference prelude is accepted in the backend before its result is returned.
+These are append-only historical facts: a later failure does not rewrite an
+already accepted call.
 
 One append holds both the weakly retained process lock and the store's
 cross-process advisory guard. Beneath that guard it performs this ordered
@@ -508,14 +528,19 @@ retry can add another record because `exchange_id` is correlation, not an
 idempotency key. `KeyboardInterrupt` and other control exceptions retain
 priority over cleanup failure, while all acquired resources are still released.
 
-The future capture integration owns fail-open wrapping so a diagnostic-storage
-failure cannot replace provider behavior; that tradeoff means a physical call
-may have no stored exchange record. The future `/exchanges` integration owns
-session/scope/agent pickers, subject resolution, and viewer lifecycle. The
-storage package intentionally has no subject field, viewer dependency,
-terminal ownership, provider import, or capture policy. It neither imports nor
-double-writes sibling runtime/provider-error records into exchange JSONL. See
-the exact
+Capture is fail-open and advances its in-memory lifecycle before each append.
+It catches every storage/serialization failure, never retries, and cannot
+replace provider behavior. Thus a physical call can have no diagnostic, or a
+recorded request can lack its response or outcome; durable sequence gaps and a
+cleanup-only `io_failed` remain inconclusive. Blind diagnostic retry is not an
+idempotent recovery mechanism.
+
+The future `/exchanges` integration owns session/scope/agent pickers, subject
+resolution, and isolated viewer lifecycle. The storage package intentionally
+has no subject field, viewer dependency, terminal ownership, provider import,
+or capture policy. Capture does not import raw provider streams and neither
+imports nor double-writes sibling runtime/provider-error records into exchange
+JSONL. See the exact
 [layout and schema](../reference/configuration/session-storage.md#agent-exchange-storage),
 [filesystem guarantees](../operations/filesystem-safety.md#agent-exchange-filesystem-safety),
 and [privacy boundary](../operations/privacy-and-provider.md#agent-exchange-privacy).

@@ -53,13 +53,21 @@ from .agent_context.service import (
     ContextExecutionError,
     ContextExecutionErrorCode,
     ContextProvider,
+    ContextProviderCallFinalizer,
     ContextProviderCallRequest,
     ContextProviderCallResult,
     ContextProviderFailureFacts,
+    ContextProviderTerminalCode,
     ContextReferencePreludeRequest,
     ContextReferencePreludeResult,
     ContextScope,
     record_context_provider_failure,
+)
+from .agent_exchanges import AgentExchangeProvider, AgentExchangeScopeKind
+from .agent_exchanges.capture import (
+    AgentExchangeCaptureLifecycle,
+    AgentExchangeTerminalCode,
+    WorkspaceAgentExchangeCapture,
 )
 from .antigravity_adapter import AntigravityAdapter
 from .config import ConfigurationSnapshot, ConfigManager
@@ -232,6 +240,87 @@ class BackendRuntimeConfigurationCandidate:
     correlation_id: str
     previous_profiles: Mapping[str, AgentExecutionProfile]
     generation: _AdapterGeneration
+
+
+_CONTEXT_REJECTION_CODES = {
+    ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE: (
+        AgentExchangeTerminalCode.MALFORMED_STRUCTURED_RESPONSE
+    ),
+    ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH: (
+        AgentExchangeTerminalCode.RESPONSE_CORRELATION_MISMATCH
+    ),
+    ContextProviderTerminalCode.RESPONSE_SEMANTIC_REJECTED: (
+        AgentExchangeTerminalCode.RESPONSE_SEMANTIC_REJECTED
+    ),
+    ContextProviderTerminalCode.ACTION_EXHAUSTED: (
+        AgentExchangeTerminalCode.ACTION_EXHAUSTED
+    ),
+    ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED: (
+        AgentExchangeTerminalCode.ANSWER_VALIDATION_FAILED
+    ),
+}
+
+_CONTEXT_RUNTIME_FAILURE_CODES = {
+    ContextProviderTerminalCode.REFERENCE_RUNTIME_FAILED: (
+        AgentExchangeTerminalCode.REFERENCE_RUNTIME_FAILED
+    ),
+    ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED: (
+        AgentExchangeTerminalCode.CONTEXT_RUNTIME_FAILED
+    ),
+}
+
+
+class _ContextExchangeFinalizer:
+    """Adapt one capture lifecycle to the provider-neutral context protocol."""
+
+    __slots__ = ("_lifecycle",)
+
+    def __init__(
+        self,
+        lifecycle: AgentExchangeCaptureLifecycle | None,
+    ) -> None:
+        self._lifecycle = lifecycle
+
+    def accepted(self) -> None:
+        """Best-effort record one accepted contextual response."""
+
+        try:
+            if self._lifecycle is not None:
+                self._lifecycle.accepted()
+        except BaseException:
+            pass
+
+    def rejected(self, code: ContextProviderTerminalCode) -> None:
+        """Best-effort map one provider-neutral semantic rejection."""
+
+        try:
+            mapped = _CONTEXT_REJECTION_CODES.get(code)
+            if self._lifecycle is not None and mapped is not None:
+                self._lifecycle.rejected(mapped)
+        except BaseException:
+            pass
+
+    def cancelled(self) -> None:
+        """Best-effort record contextual cancellation."""
+
+        try:
+            if self._lifecycle is not None:
+                self._lifecycle.cancelled()
+        except BaseException:
+            pass
+
+    def post_response_runtime_failure(
+        self,
+        code: ContextProviderTerminalCode,
+    ) -> None:
+        """Best-effort map one provider-neutral runtime failure."""
+
+        try:
+            mapped = _CONTEXT_RUNTIME_FAILURE_CODES.get(code)
+            if self._lifecycle is not None and mapped is not None:
+                self._lifecycle.post_response_runtime_failure(mapped)
+        except BaseException:
+            pass
 
 
 class _BoundContextProvider:
@@ -1202,6 +1291,7 @@ class AgentBackend:
             workspace if isinstance(workspace, Workspace) else Workspace(workspace)
         )
         self._debug_log = WorkspaceDebugLog(self.workspace)
+        self._agent_exchange_capture = WorkspaceAgentExchangeCapture(self.workspace)
         self._context_accounting_sink: (
             Callable[[ProviderCallAccounting], object] | None
         ) = None
@@ -3762,6 +3852,221 @@ class AgentBackend:
             )
         )
 
+    def _begin_agent_exchange(
+        self,
+        bound_agent: BoundAgent,
+        *,
+        session_id: str,
+        scope_kind: AgentExchangeScopeKind,
+        scope_id: str,
+        invocation: ProviderInvocation,
+    ) -> AgentExchangeCaptureLifecycle | None:
+        """Begin one exact capture without affecting provider execution."""
+
+        try:
+            return self._agent_exchange_capture.begin(
+                session_id=session_id,
+                scope_kind=scope_kind,
+                scope_id=scope_id,
+                agent_id=bound_agent.definition.agent_id,
+                provider=AgentExchangeProvider(bound_agent.vendor),
+                invocation=invocation,
+            )
+        except BaseException:
+            return None
+
+    def _begin_legacy_agent_exchange(
+        self,
+        bound_agent: BoundAgent,
+        *,
+        session_id: str,
+        debate_id: str | None,
+        conversation_id: str | None,
+        invocation: ProviderInvocation,
+    ) -> AgentExchangeCaptureLifecycle | None:
+        """Begin capture only when one exact legacy scope is available."""
+
+        if debate_id is not None and conversation_id is None:
+            scope_kind = AgentExchangeScopeKind.DEBATE
+            scope_id = debate_id
+        elif conversation_id is not None and debate_id is None:
+            scope_kind = AgentExchangeScopeKind.CONVERSATION
+            scope_id = conversation_id
+        else:
+            return None
+        return self._begin_agent_exchange(
+            bound_agent,
+            session_id=session_id,
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+            invocation=invocation,
+        )
+
+    def _begin_context_agent_exchange(
+        self,
+        bound_agent: BoundAgent,
+        *,
+        scope: ContextScope,
+        invocation: ProviderInvocation,
+    ) -> AgentExchangeCaptureLifecycle | None:
+        """Begin capture from one already validated contextual scope."""
+
+        try:
+            scope_kind = AgentExchangeScopeKind(scope.subject_kind.value)
+        except BaseException:
+            return None
+        return self._begin_agent_exchange(
+            bound_agent,
+            session_id=scope.session_id,
+            scope_kind=scope_kind,
+            scope_id=scope.subject_id,
+            invocation=invocation,
+        )
+
+    @staticmethod
+    def _capture_provider_return_without_replacing(
+        lifecycle: AgentExchangeCaptureLifecycle | None,
+        result: object,
+    ) -> bool:
+        """Record the first valid provider response action, or no-response failure."""
+
+        try:
+            if type(result) is ProviderResult:
+                if lifecycle is not None:
+                    lifecycle.record_response(result)
+                return True
+            if lifecycle is not None:
+                lifecycle.provider_failure(
+                    AgentExchangeTerminalCode.PROVIDER_CONTRACT_INVALID
+                )
+        except BaseException:
+            pass
+        return False
+
+    @staticmethod
+    def _capture_provider_failure_without_replacing(
+        lifecycle: AgentExchangeCaptureLifecycle | None,
+        code: AgentExchangeTerminalCode,
+    ) -> None:
+        """Best-effort record one closed pre-response provider failure."""
+
+        try:
+            if lifecycle is not None:
+                lifecycle.provider_failure(code)
+        except BaseException:
+            pass
+
+    @staticmethod
+    def _capture_cancelled_without_replacing(
+        lifecycle: AgentExchangeCaptureLifecycle | None,
+    ) -> None:
+        """Best-effort record cancellation without changing propagation."""
+
+        try:
+            if lifecycle is not None:
+                lifecycle.cancelled()
+        except BaseException:
+            pass
+
+    @staticmethod
+    def _capture_rejected_without_replacing(
+        lifecycle: AgentExchangeCaptureLifecycle | None,
+        code: AgentExchangeTerminalCode,
+    ) -> None:
+        """Best-effort record one closed response rejection."""
+
+        try:
+            if lifecycle is not None:
+                lifecycle.rejected(code)
+        except BaseException:
+            pass
+
+    @staticmethod
+    def _capture_runtime_failure_without_replacing(
+        lifecycle: AgentExchangeCaptureLifecycle | None,
+        code: AgentExchangeTerminalCode,
+    ) -> None:
+        """Best-effort record one post-response runtime failure."""
+
+        try:
+            if lifecycle is not None:
+                lifecycle.post_response_runtime_failure(code)
+        except BaseException:
+            pass
+
+    @staticmethod
+    def _capture_accepted_without_replacing(
+        lifecycle: AgentExchangeCaptureLifecycle | None,
+    ) -> None:
+        """Best-effort record one accepted response."""
+
+        try:
+            if lifecycle is not None:
+                lifecycle.accepted()
+        except BaseException:
+            pass
+
+    @staticmethod
+    def _structured_rejection_code(
+        failure: BaseException,
+    ) -> AgentExchangeTerminalCode:
+        """Classify only typed malformed causes; never inspect error text."""
+
+        current: BaseException | None = failure
+        seen: set[int] = set()
+        while current is not None and id(current) not in seen:
+            if isinstance(current, (json.JSONDecodeError, UnicodeError)):
+                return AgentExchangeTerminalCode.MALFORMED_STRUCTURED_RESPONSE
+            seen.add(id(current))
+            current = current.__cause__
+        return AgentExchangeTerminalCode.RESPONSE_SEMANTIC_REJECTED
+
+    @staticmethod
+    def _accept_context_finalizer_without_replacing(
+        finalizer: ContextProviderCallFinalizer,
+    ) -> None:
+        """Best-effort accept one backend-owned contextual prelude."""
+
+        try:
+            finalizer.accepted()
+        except BaseException:
+            pass
+
+    @staticmethod
+    def _reject_context_finalizer_without_replacing(
+        finalizer: ContextProviderCallFinalizer,
+        code: ContextProviderTerminalCode,
+    ) -> None:
+        """Best-effort reject one backend-owned contextual prelude."""
+
+        try:
+            finalizer.rejected(code)
+        except BaseException:
+            pass
+
+    @staticmethod
+    def _cancel_context_finalizer_without_replacing(
+        finalizer: ContextProviderCallFinalizer,
+    ) -> None:
+        """Best-effort cancel one backend-owned contextual prelude."""
+
+        try:
+            finalizer.cancelled()
+        except BaseException:
+            pass
+
+    @staticmethod
+    def _fail_context_finalizer_without_replacing(
+        finalizer: ContextProviderCallFinalizer,
+        code: ContextProviderTerminalCode,
+    ) -> None:
+        """Best-effort fail one backend-owned contextual prelude."""
+
+        try:
+            finalizer.post_response_runtime_failure(code)
+        except BaseException:
+            pass
+
     async def _invoke_provider_structured(
         self,
         bound_agent: BoundAgent,
@@ -3822,24 +4127,55 @@ class AgentBackend:
         )
         provider_diagnostic: str | None = None
         provider_cause: BaseException | None = None
+        exchange = self._begin_legacy_agent_exchange(
+            bound_agent,
+            session_id=session,
+            debate_id=debate_id,
+            conversation_id=conversation_id,
+            invocation=invocation,
+        )
         try:
             result = await adapter.invoke(
                 bound_agent._provider_binding,
                 invocation,
             )
+            self._capture_provider_return_without_replacing(exchange, result)
         except ProviderInvocationError as exc:
-            self._observe_provider_failure(invocation, exc)
-            if stored is not None and exc.taint_existing_thread:
-                taint_thread()
+            try:
+                self._observe_provider_failure(invocation, exc)
+                if stored is not None and exc.taint_existing_thread:
+                    taint_thread()
+            finally:
+                self._capture_provider_failure_without_replacing(
+                    exchange,
+                    (
+                        AgentExchangeTerminalCode.PROVIDER_TIMED_OUT
+                        if self._context_failure_timed_out(exc)
+                        else AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED
+                    ),
+                )
             provider_diagnostic = exc.diagnostic
             provider_cause = exc.__cause__
         except asyncio.CancelledError as exc:
-            self._observe_provider_failure(invocation, exc)
-            if stored is not None:
-                taint_thread()
+            try:
+                self._observe_provider_failure(invocation, exc)
+                if stored is not None:
+                    taint_thread()
+            finally:
+                self._capture_cancelled_without_replacing(exchange)
             raise
         except BaseException as exc:
-            self._observe_provider_failure(invocation, exc)
+            try:
+                self._observe_provider_failure(invocation, exc)
+            finally:
+                self._capture_provider_failure_without_replacing(
+                    exchange,
+                    (
+                        AgentExchangeTerminalCode.PROVIDER_TIMED_OUT
+                        if self._context_failure_timed_out(exc)
+                        else AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED
+                    ),
+                )
             raise
         else:
             accounting = invocation.call_accounting
@@ -3865,16 +4201,22 @@ class AgentBackend:
         try:
             try:
                 reply = decode(result.response_text)
-            except BackendProtocolError:
-                self._record_rejected_provider_response_without_replacing_failure(
-                    bound_agent,
-                    session_id=session,
-                    debate_id=debate_id,
-                    conversation_id=conversation_id,
-                    response_text=result.response_text,
-                )
-                if stored is not None:
-                    taint_thread()
+            except BackendProtocolError as failure:
+                try:
+                    self._record_rejected_provider_response_without_replacing_failure(
+                        bound_agent,
+                        session_id=session,
+                        debate_id=debate_id,
+                        conversation_id=conversation_id,
+                        response_text=result.response_text,
+                    )
+                    if stored is not None:
+                        taint_thread()
+                finally:
+                    self._capture_rejected_without_replacing(
+                        exchange,
+                        self._structured_rejection_code(failure),
+                    )
                 raise
             except (json.JSONDecodeError, UnicodeError):
                 self._record_rejected_provider_response_without_replacing_failure(
@@ -3885,16 +4227,48 @@ class AgentBackend:
                     response_text=result.response_text,
                 )
                 raise
-            self._store_thread(
-                session,
-                bound_agent.definition,
-                result.thread_id,
-                tainted=False,
-            )
+            except (ConversationRetrievalSemanticError, ReferenceAuthorizationError):
+                self._capture_rejected_without_replacing(
+                    exchange,
+                    AgentExchangeTerminalCode.RESPONSE_SEMANTIC_REJECTED,
+                )
+                raise
+            except asyncio.CancelledError:
+                self._capture_cancelled_without_replacing(exchange)
+                raise
+            except BaseException:
+                self._capture_runtime_failure_without_replacing(
+                    exchange,
+                    AgentExchangeTerminalCode.CONTEXT_RUNTIME_FAILED,
+                )
+                raise
+            try:
+                self._store_thread(
+                    session,
+                    bound_agent.definition,
+                    result.thread_id,
+                    tainted=False,
+                )
+            except asyncio.CancelledError:
+                self._capture_cancelled_without_replacing(exchange)
+                raise
+            except BaseException:
+                self._capture_runtime_failure_without_replacing(
+                    exchange,
+                    AgentExchangeTerminalCode.THREAD_PERSISTENCE_FAILED,
+                )
+                raise
+            self._capture_accepted_without_replacing(exchange)
             return reply
         except (json.JSONDecodeError, UnicodeError) as exc:
-            if stored is not None:
-                taint_thread()
+            try:
+                if stored is not None:
+                    taint_thread()
+            finally:
+                self._capture_rejected_without_replacing(
+                    exchange,
+                    AgentExchangeTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+                )
             diagnostic = (
                 "Codex CLI returned malformed structured output"
                 if bound_agent.vendor == "codex"
@@ -4014,8 +4388,14 @@ class AgentBackend:
             )
 
         definition_fingerprint = f"sha256:{bound_agent.definition.fingerprint}"
+        exchange = self._begin_context_agent_exchange(
+            bound_agent,
+            scope=scope,
+            invocation=invocation,
+        )
         try:
             result = await adapter.invoke(bound_agent._provider_binding, invocation)
+            self._capture_provider_return_without_replacing(exchange, result)
         except ProviderInvocationError as failure:
             accounting = self._context_failure_accounting(invocation, failure)
             self._observe_context_accounting(accounting)
@@ -4038,6 +4418,14 @@ class AgentBackend:
                     accounting,
                     timed_out=self._context_failure_timed_out(failure),
                     taint_existing_thread=taint,
+                ),
+            )
+            self._capture_provider_failure_without_replacing(
+                exchange,
+                (
+                    AgentExchangeTerminalCode.PROVIDER_TIMED_OUT
+                    if self._context_failure_timed_out(failure)
+                    else AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED
                 ),
             )
             if failure.__cause__ is None:
@@ -4064,6 +4452,7 @@ class AgentBackend:
                     taint_existing_thread=submitted,
                 ),
             )
+            self._capture_cancelled_without_replacing(exchange)
             raise
         except BaseException as failure:
             accounting = self._context_failure_accounting(invocation, failure)
@@ -4085,6 +4474,14 @@ class AgentBackend:
                     accounting,
                     timed_out=self._context_failure_timed_out(failure),
                     taint_existing_thread=submitted,
+                ),
+            )
+            self._capture_provider_failure_without_replacing(
+                exchange,
+                (
+                    AgentExchangeTerminalCode.PROVIDER_TIMED_OUT
+                    if self._context_failure_timed_out(failure)
+                    else AgentExchangeTerminalCode.PROVIDER_INVOCATION_FAILED
                 ),
             )
             raise
@@ -4119,6 +4516,11 @@ class AgentBackend:
                 definition_fingerprint,
                 policy_fingerprint,
             )
+            if type(result) is ProviderResult:
+                self._capture_rejected_without_replacing(
+                    exchange,
+                    AgentExchangeTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+                )
             raise failure
         if (
             type(result.thread_id) is not str
@@ -4140,6 +4542,10 @@ class AgentBackend:
                 definition_fingerprint,
                 policy_fingerprint,
             )
+            self._capture_rejected_without_replacing(
+                exchange,
+                AgentExchangeTerminalCode.RESPONSE_CORRELATION_MISMATCH,
+            )
             raise failure
         if expected_thread_id is not None and result.thread_id != expected_thread_id:
             failure = ContextExecutionError(
@@ -4158,6 +4564,10 @@ class AgentBackend:
                 definition_fingerprint,
                 policy_fingerprint,
             )
+            self._capture_rejected_without_replacing(
+                exchange,
+                AgentExchangeTerminalCode.RESPONSE_CORRELATION_MISMATCH,
+            )
             raise failure
         try:
             self._store_context_thread(
@@ -4169,25 +4579,45 @@ class AgentBackend:
                 tainted=False,
             )
         except BaseException as failure:
-            record_context_provider_failure(
-                failure,
-                ContextProviderFailureFacts(
-                    accounting,
-                    taint_existing_thread=True,
-                ),
+            try:
+                record_context_provider_failure(
+                    failure,
+                    ContextProviderFailureFacts(
+                        accounting,
+                        taint_existing_thread=True,
+                    ),
+                )
+                self._taint_context_thread_without_replacing(
+                    scope,
+                    bound_agent.vendor,
+                    definition_fingerprint,
+                    policy_fingerprint,
+                )
+            finally:
+                if isinstance(failure, asyncio.CancelledError):
+                    self._capture_cancelled_without_replacing(exchange)
+                else:
+                    self._capture_runtime_failure_without_replacing(
+                        exchange,
+                        AgentExchangeTerminalCode.THREAD_PERSISTENCE_FAILED,
+                    )
+            raise
+        try:
+            return ContextProviderCallResult(
+                result.response_text,
+                result.thread_id,
+                accounting,
+                _ContextExchangeFinalizer(exchange),
             )
-            self._taint_context_thread_without_replacing(
-                scope,
-                bound_agent.vendor,
-                definition_fingerprint,
-                policy_fingerprint,
+        except asyncio.CancelledError:
+            self._capture_cancelled_without_replacing(exchange)
+            raise
+        except BaseException:
+            self._capture_runtime_failure_without_replacing(
+                exchange,
+                AgentExchangeTerminalCode.CONTEXT_RUNTIME_FAILED,
             )
             raise
-        return ContextProviderCallResult(
-            result.response_text,
-            result.thread_id,
-            accounting,
-        )
 
     async def _prepare_context_references(
         self,
@@ -4223,6 +4653,7 @@ class AgentBackend:
             component_paths=component_paths,
             mandatory_reference_paths=mandatory_paths,
         )
+        finalizer = result.finalizer
         reference_stage = "decode"
         try:
             action = self._decode_reference_read_action(
@@ -4240,6 +4671,7 @@ class AgentBackend:
                 raise ReferenceAuthorizationError(
                     ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
                 )
+            reference_stage = "handler"
             reference_result = reference_read.handle_reference_read_action(action)
             if inspect.isawaitable(reference_result):
                 if inspect.iscoroutine(reference_result):
@@ -4265,11 +4697,13 @@ class AgentBackend:
                     dict(item)
                     for item in self._reference_read_context(reference_result)
                 )
-            return ContextReferencePreludeResult(
+            prelude = ContextReferencePreludeResult(
                 context,
                 result.thread_id,
                 result.accounting,
             )
+            self._accept_context_finalizer_without_replacing(finalizer)
+            return prelude
         except BaseException as failure:
             record_context_provider_failure(
                 failure,
@@ -4304,6 +4738,34 @@ class AgentBackend:
                 )
             except (AttributeError, TypeError):
                 pass
+            if isinstance(failure, asyncio.CancelledError):
+                self._cancel_context_finalizer_without_replacing(finalizer)
+            elif isinstance(failure, ReferenceAuthorizationError):
+                self._reject_context_finalizer_without_replacing(
+                    finalizer,
+                    (
+                        ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH
+                        if failure.code
+                        is ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
+                        else ContextProviderTerminalCode.RESPONSE_SEMANTIC_REJECTED
+                    ),
+                )
+            elif reference_stage == "decode":
+                code = (
+                    ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE
+                    if self._structured_rejection_code(failure)
+                    is AgentExchangeTerminalCode.MALFORMED_STRUCTURED_RESPONSE
+                    else ContextProviderTerminalCode.RESPONSE_SEMANTIC_REJECTED
+                )
+                self._reject_context_finalizer_without_replacing(
+                    finalizer,
+                    code,
+                )
+            else:
+                self._fail_context_finalizer_without_replacing(
+                    finalizer,
+                    ContextProviderTerminalCode.REFERENCE_RUNTIME_FAILED,
+                )
             raise
 
     def _context_thread_lock(

@@ -315,11 +315,13 @@ create `debug_logs/agent_exchanges/`; `inventory()` on an absent store returns
 an empty tuple without creating it, and `snapshot()` on an absent or unmatched
 selection returns the fixed `not_found` storage failure without creating it.
 
-This leaf implements storage only. No installed runtime path records provider
-calls into it yet, and there is no `/exchanges` command or viewer in this
-version. Later capture code will map physical calls into these contracts; later
-viewer integration will resolve conversation/debate subjects outside this
-store and consume immutable snapshots.
+`AgentBackend` now automatically maps every physical structured provider call
+at its established and contextual seams into this store on a best-effort
+basis. It records the request before invocation, any exact valid
+`ProviderResult` immediately on return, and one closed outcome attempt. There
+is still no `/exchanges` command or viewer in this version. Future viewer
+integration will resolve conversation/debate subjects outside this store and
+consume immutable snapshots.
 
 Every stored line is one compact, key-sorted, strict-UTF-8 JSON object followed
 by exactly one newline. The expanded schema-v1 shape is:
@@ -349,15 +351,66 @@ by exactly one newline. The expanded schema-v1 shape is:
 
 The field set is closed: an extra, missing, duplicate, noncanonical, or
 wrong-typed field is corrupt. Exact enums are `codex`/`antigravity` for
-`provider`, `request`/`response`/`no_response` for `request_type`, and
-`conversation`/`debate` for `scope_kind`. `session_id` and `scope_id` match
+`provider`, `request`/`response`/`no_response`/`outcome` for `request_type`, and
+`conversation`/`debate` for `scope_kind`. Schema version 1 and its outer field
+set are unchanged; automatic capture adds the `outcome` record-kind vocabulary
+and a closed nested outcome vocabulary. `session_id` and `scope_id` match
 `[A-Za-z0-9][A-Za-z0-9_-]{0,63}`. `agent_id` is exactly
 `lead_orchestrator`, `plot_architect`, `character_custodian`, or
 `execution_specialist`. `exchange_id` matches
-`[A-Za-z0-9][A-Za-z0-9_-]{0,127}` and is the caller-supplied physical-call
-correlation identity. The store preserves correlation values but does not infer
-or enforce request/response pairs, outcomes, provider behavior, or a required
-`no_response` body.
+`[A-Za-z0-9][A-Za-z0-9_-]{0,127}` and is the record caller's physical-call
+correlation identity. Automatic capture generates
+`exchange_<32 lowercase hexadecimal characters>` and shares it across the
+request, optional response, and terminal attempt. All records also preserve the
+exact supplied session, scope kind/ID, agent, and provider; a reference prelude
+inherits its outer conversation/debate scope. The store itself does not infer
+or enforce record grouping, outcome transitions, provider behavior, or a
+required `no_response` body.
+
+Automatic capture places one compact key-sorted JSON value inside `content`.
+Expanded examples of the three nested shapes are:
+
+```json
+{
+  "call_kind": "conversation",
+  "payload": {},
+  "prior_thread_id": null,
+  "schema": {}
+}
+{
+  "actual_transport_utf8_bytes": null,
+  "response_text": "provider text",
+  "thread_id": "thread_1",
+  "usage": {
+    "cached_input_tokens": 3,
+    "input_tokens": 11,
+    "output_tokens": 7
+  }
+}
+{
+  "code": "accepted",
+  "outcome": "accepted"
+}
+```
+
+The request fields are exactly `call_kind`, `payload`, `prior_thread_id`, and
+`schema`. The response fields are exactly `actual_transport_utf8_bytes`,
+`response_text`, `thread_id`, and nullable `usage`; non-null usage has exactly
+`cached_input_tokens`, `input_tokens`, and `output_tokens`. Outcome values are
+exactly `accepted`, `rejected`, `provider_failure`, `cancelled`, and
+`post_response_runtime_failure`. Their permitted fixed codes are:
+
+| Outcome | Code |
+| --- | --- |
+| `accepted` | `accepted` |
+| `rejected` | `malformed_structured_response`, `response_correlation_mismatch`, `response_semantic_rejected`, `action_exhausted`, `answer_validation_failed` |
+| `provider_failure` | `provider_invocation_failed`, `provider_timed_out`, `provider_contract_invalid` |
+| `cancelled` | `cancelled` |
+| `post_response_runtime_failure` | `thread_persistence_failed`, `reference_runtime_failed`, `context_runtime_failed` |
+
+Direct store callers may still use `no_response`; automatic backend capture
+uses `outcome` for its closed terminal record and never stores arbitrary
+exception text there.
 
 The store assigns both sequence values and the timestamp. `workspace_sequence`
 is one workspace-wide high-water sequence. `sequence` is independent for each
@@ -413,6 +466,12 @@ repair storage, and create nothing when the store is absent.
 `exchange_id`, both assigned sequences, the assigned timestamp, both content
 byte counts, both character counts, the truncation boolean, and the full
 digest. It does not return content, a path, or a writable storage object.
+
+Automatic capture treats every append as fail-open. Its lifecycle state moves
+before each append, catches every serialization/storage failure, and never
+retries. A request failure disables that exchange; a later failure can leave a
+request without a response or outcome. Gaps, absent exchange IDs, and cleanup-
+only storage failures are therefore not proof that no provider call occurred.
 
 All store files are verified owner-only regular single-link leaves with mode
 `0600`; the exchange and session directories are mode `0700`. The independent

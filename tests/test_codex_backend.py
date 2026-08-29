@@ -94,6 +94,8 @@ from story_writing_agents.agent_context.manifest import (
 )
 from story_writing_agents.agent_context.service import (
     ContextProviderCallRequest,
+    ContextProviderTerminalCode,
+    ContextReferencePreludeRequest,
     context_provider_failure_facts,
 )
 from story_writing_agents.config import ConfigManager, ConfigurationSnapshot
@@ -422,6 +424,20 @@ def _provider_error_records(workspace: Any) -> list[dict[str, object]]:
         json.loads(path.read_text(encoding="utf-8"))
         for path in sorted(directory.glob("*.json"))
     ]
+
+
+def _agent_exchange_records(workspace: Any) -> list[dict[str, object]]:
+    """Read durable exchange JSONL in global workspace sequence order."""
+
+    directory = workspace.path("debug_logs/agent_exchanges")
+    if not directory.exists():
+        return []
+    records = [
+        json.loads(line)
+        for path in directory.rglob("*.jsonl")
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    return sorted(records, key=lambda record: record["workspace_sequence"])
 
 
 def _debug_signature(record: dict[str, object]) -> tuple[object, ...]:
@@ -2557,6 +2573,184 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    async def test_debate_and_conversation_capture_order_scope_and_exact_bodies(
+        self,
+    ) -> None:
+        session_id = "exchange_capture_success"
+        debate_id = "exchange_debate"
+        conversation_id = "exchange_conversation"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+
+        debate = await bound.invoke(
+            self.request(session_id=session_id, debate_id=debate_id)
+        )
+        conversation = await bound.converse(
+            self.conversation_request(
+                session_id=session_id,
+                conversation_id=conversation_id,
+            )
+        )
+        self.assertIsInstance(debate, AgentReply)
+        self.assertIsInstance(conversation, ConversationReply)
+
+        records = _agent_exchange_records(self.workspace)
+        self.assertEqual(
+            [record["request_type"] for record in records],
+            ["request", "response", "outcome"] * 2,
+        )
+        self.assertEqual(
+            [record["scope_kind"] for record in records],
+            ["debate"] * 3 + ["conversation"] * 3,
+        )
+        self.assertEqual(
+            [record["scope_id"] for record in records],
+            [debate_id] * 3 + [conversation_id] * 3,
+        )
+        for offset, call_kind in ((0, "debate"), (3, "conversation")):
+            exchange = records[offset : offset + 3]
+            self.assertEqual(
+                {record["exchange_id"] for record in exchange},
+                {exchange[0]["exchange_id"]},
+            )
+            request = json.loads(exchange[0]["content"])
+            response = json.loads(exchange[1]["content"])
+            outcome = json.loads(exchange[2]["content"])
+            self.assertEqual(set(request), {"call_kind", "payload", "prior_thread_id", "schema"})
+            self.assertEqual(request["call_kind"], call_kind)
+            self.assertEqual(
+                set(response),
+                {
+                    "actual_transport_utf8_bytes",
+                    "response_text",
+                    "thread_id",
+                    "usage",
+                },
+            )
+            self.assertEqual(outcome, {"code": "accepted", "outcome": "accepted"})
+            self.assertNotIn("stderr", response)
+            self.assertNotIn("environment", response)
+            self.assertNotIn("credentials", response)
+
+    async def test_response_capture_precedes_accounting_decode_artifact_and_thread(
+        self,
+    ) -> None:
+        events: list[str] = []
+
+        class Lifecycle:
+            def record_response(self, _result: ProviderResult) -> None:
+                events.append("response")
+
+            def accepted(self) -> None:
+                events.append("accepted")
+
+            def rejected(self, _code: object) -> None:
+                events.append("rejected")
+
+            def provider_failure(self, _code: object) -> None:
+                events.append("provider_failure")
+
+            def cancelled(self) -> None:
+                events.append("cancelled")
+
+            def post_response_runtime_failure(self, _code: object) -> None:
+                events.append("runtime_failure")
+
+        session_id = "exchange_capture_timing"
+        backend = AgentBackend(self.workspace, executable=str(self.executable))
+        self.addCleanup(backend.close)
+        backend.create_session_with_access(session_id)
+        bound = await backend.bind(self.definition())
+        original_store_thread = backend._store_thread
+
+        def begin(*_args: object, **_kwargs: object) -> Lifecycle:
+            events.append("begin")
+            return Lifecycle()
+
+        async def invoke(*_args: object, **_kwargs: object) -> ProviderResult:
+            events.append("invoke")
+            return ProviderResult("timing-thread", "PRIVATE_TIMING_RESPONSE")
+
+        def decode(_response: str) -> AgentReply:
+            events.append("decode")
+            return AgentReply.candidate("r0", "accepted")
+
+        def store_thread(*args: object, **kwargs: object) -> None:
+            events.append("thread")
+            original_store_thread(*args, **kwargs)  # type: ignore[arg-type]
+
+        backend._context_accounting_sink = lambda _accounting: events.append(
+            "accounting"
+        )
+        with (
+            mock.patch.object(backend, "_begin_legacy_agent_exchange", side_effect=begin),
+            mock.patch.object(backend._codex_adapter, "invoke", side_effect=invoke),
+            mock.patch.object(backend, "_store_thread", side_effect=store_thread),
+        ):
+            reply = await backend._invoke_provider_structured(
+                bound,
+                session_id=session_id,
+                debate_id="timing_debate",
+                schema={},
+                payload={},
+                decode=decode,
+            )
+        self.assertEqual(reply, AgentReply.candidate("r0", "accepted"))
+        self.assertEqual(
+            events,
+            [
+                "begin",
+                "invoke",
+                "response",
+                "accounting",
+                "decode",
+                "thread",
+                "accepted",
+            ],
+        )
+
+        events.clear()
+
+        def malformed(_response: str) -> AgentReply:
+            events.append("decode")
+            raise json.JSONDecodeError("malformed", "x", 0)
+
+        def artifact(*_args: object, **_kwargs: object) -> None:
+            events.append("artifact")
+
+        with (
+            mock.patch.object(backend, "_begin_legacy_agent_exchange", side_effect=begin),
+            mock.patch.object(backend._codex_adapter, "invoke", side_effect=invoke),
+            mock.patch.object(
+                backend,
+                "_record_rejected_provider_response_without_replacing_failure",
+                side_effect=artifact,
+            ),
+            self.assertRaises(BackendProtocolError),
+        ):
+            await backend._invoke_provider_structured(
+                bound,
+                session_id=session_id,
+                conversation_id="timing_conversation",
+                schema={},
+                payload={},
+                decode=malformed,
+            )
+        self.assertEqual(
+            events,
+            [
+                "begin",
+                "invoke",
+                "response",
+                "accounting",
+                "decode",
+                "artifact",
+                "rejected",
+            ],
+        )
+
     async def test_contextual_physical_calls_use_canonical_payload_and_distinct_restartable_thread(
         self,
     ) -> None:
@@ -2611,6 +2805,7 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                     provider.inspect_context_thread(scope, policy),
                     first.thread_id,
                 )
+                first.finalizer.accepted()
                 second = await provider.invoke_context(
                     ContextProviderCallRequest(
                         scope,
@@ -2637,15 +2832,155 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         expected_thread_id=first.thread_id,
                     )
                 )
+                second.finalizer.accepted()
+                third = await backend._invoke_context_physical(
+                    bound,
+                    scope=scope,
+                    policy_fingerprint=policy,
+                    expected_thread_id=second.thread_id,
+                    schema=schema,
+                    payload={
+                        "references": [
+                            {"path": "core_documents/global_outline.md"}
+                        ]
+                    },
+                    call_kind=ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
+                    component_paths={
+                        ("references",): (
+                            ContextComponentKind.MANDATORY_REFERENCE_DESCRIPTOR
+                        )
+                    },
+                    mandatory_reference_paths=(),
+                )
+                third.finalizer.accepted()
 
-        self.assertEqual(second.thread_id, first.thread_id)
-        self.assertEqual(len(captured), 2)
+                async def contextual_result(call_id: str):
+                    return await provider.invoke_context(
+                        ContextProviderCallRequest(
+                            scope,
+                            policy,
+                            call_id,
+                            ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION,
+                            schema,
+                            {
+                                "c": call_id.ljust(43, "x"),
+                                "q": [
+                                    "conversation",
+                                    "a",
+                                    "wco",
+                                    [2, 0, 0, 4, 7, 8, 15, 200],
+                                    "text",
+                                ],
+                            },
+                            {},
+                            expected_thread_id=third.thread_id,
+                        )
+                    )
+
+                rejected = await contextual_result("context-call-4")
+                rejected.finalizer.rejected(
+                    ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH
+                )
+                cancelled = await contextual_result("context-call-5")
+                cancelled.finalizer.cancelled()
+                runtime_failed = await contextual_result("context-call-6")
+                runtime_failed.finalizer.post_response_runtime_failure(
+                    ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED
+                )
+                reference_failed = await contextual_result("context-call-7")
+                reference_failed.finalizer.post_response_runtime_failure(
+                    ContextProviderTerminalCode.REFERENCE_RUNTIME_FAILED
+                )
+                for result in (
+                    rejected,
+                    cancelled,
+                    runtime_failed,
+                    reference_failed,
+                ):
+                    result.finalizer.accepted()
+                    result.finalizer.cancelled()
+
+        self.assertEqual(
+            (
+                second.thread_id,
+                third.thread_id,
+                rejected.thread_id,
+                cancelled.thread_id,
+                runtime_failed.thread_id,
+                reference_failed.thread_id,
+            ),
+            (first.thread_id,) * 6,
+        )
+        self.assertEqual(len(captured), 7)
         self.assertEqual(captured[0].payload_json, canonical_provider_json(payload))
         self.assertEqual(
             first.accounting.actual_transport_utf8_bytes,
             len(captured[0].payload_json),
         )
         self.assertEqual(first.accounting.usage, ProviderUsage(0, 2))
+        records = _agent_exchange_records(self.workspace)
+        self.assertEqual(
+            [record["request_type"] for record in records],
+            ["request", "response", "outcome"] * 7,
+        )
+        exchanges = {
+            record["exchange_id"]: []
+            for record in records
+        }
+        for record in records:
+            exchanges[record["exchange_id"]].append(record)
+        self.assertEqual(len(exchanges), 7)
+        self.assertTrue(all(len(exchange) == 3 for exchange in exchanges.values()))
+        self.assertTrue(
+            all(
+                sum(record["request_type"] == "outcome" for record in exchange) == 1
+                for exchange in exchanges.values()
+            )
+        )
+        request_contents = [
+            json.loads(record["content"])
+            for record in records
+            if record["request_type"] == "request"
+        ]
+        self.assertEqual(
+            [content["call_kind"] for content in request_contents],
+            [
+                "conversation_retrieval_initial",
+                "conversation_retrieval_continuation",
+                "writing_artifact_reference_read",
+                "conversation_retrieval_continuation",
+                "conversation_retrieval_continuation",
+                "conversation_retrieval_continuation",
+                "conversation_retrieval_continuation",
+            ],
+        )
+        self.assertEqual(
+            [content["prior_thread_id"] for content in request_contents],
+            [None, first.thread_id, first.thread_id, *([first.thread_id] * 4)],
+        )
+        self.assertEqual(
+            [
+                json.loads(record["content"])
+                for record in records
+                if record["request_type"] == "outcome"
+            ],
+            [
+                *([{"code": "accepted", "outcome": "accepted"}] * 3),
+                {
+                    "code": "response_correlation_mismatch",
+                    "outcome": "rejected",
+                },
+                {"code": "cancelled", "outcome": "cancelled"},
+                {
+                    "code": "context_runtime_failed",
+                    "outcome": "post_response_runtime_failure",
+                },
+                {
+                    "code": "reference_runtime_failed",
+                    "outcome": "post_response_runtime_failure",
+                },
+            ],
+        )
         manifest = self.workspace.read_json(
             "agent_states/orchestrator_state/provider_sessions/"
             f"{session_id}.json"
@@ -7047,6 +7382,31 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                 authorization,
                 operation_id,
             )
+            exchange_records = [
+                record
+                for record in _agent_exchange_records(self.workspace)
+                if record["session_id"] == session_id
+            ]
+            self.assertEqual(
+                [record["request_type"] for record in exchange_records],
+                ["request", "response", "outcome"] * 2,
+            )
+            self.assertEqual(
+                [
+                    json.loads(record["content"])["call_kind"]
+                    for record in exchange_records
+                    if record["request_type"] == "request"
+                ],
+                ["writing_artifact_reference_read", "debate"],
+            )
+            self.assertEqual(
+                [
+                    json.loads(record["content"])
+                    for record in exchange_records
+                    if record["request_type"] == "outcome"
+                ],
+                [{"code": "accepted", "outcome": "accepted"}] * 2,
+            )
 
     async def test_reference_read_converse_uses_two_calls_and_one_context(
         self,
@@ -7093,6 +7453,134 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
             ],
         )
         self.assert_reference_accepted(repository, authorization, operation_id)
+
+    async def test_reference_prelude_handler_cancel_and_runtime_failure_are_durable(
+        self,
+    ) -> None:
+        cases: tuple[tuple[str, BaseException, dict[str, str]], ...] = (
+            (
+                "correlation",
+                ReferenceAuthorizationError(
+                    ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
+                ),
+                {
+                    "code": "response_correlation_mismatch",
+                    "outcome": "rejected",
+                },
+            ),
+            (
+                "cancelled",
+                asyncio.CancelledError("PRIVATE_REFERENCE_CANCEL"),
+                {"code": "cancelled", "outcome": "cancelled"},
+            ),
+            (
+                "runtime",
+                OSError("PRIVATE_REFERENCE_RUNTIME"),
+                {
+                    "code": "reference_runtime_failed",
+                    "outcome": "post_response_runtime_failure",
+                },
+            ),
+        )
+        for label, failure, expected in cases:
+            with self.subTest(label=label):
+                self.log_path.unlink(missing_ok=True)
+                session_id = f"reference_handler_{label}"
+                operation_id = f"reference_handler_operation_{label}"
+                backend = AgentBackend(
+                    self.workspace,
+                    executable=str(self.executable),
+                )
+                self.addCleanup(backend.close)
+                backend.create_session_with_access(session_id)
+                bound = await backend.bind(self.definition())
+                _repository, authorization, invocation = self.reference_invocation(
+                    operation_id=operation_id,
+                    invocation_id=f"reference_handler_invocation_{label}",
+                )
+                scope = ContextScope(
+                    "reference-workspace",
+                    session_id,
+                    ContextSubjectKind.DEBATE,
+                    f"reference_subject_{label}",
+                    PLOT_ARCHITECT,
+                )
+                policy = "sha256:" + "8" * 64
+                provider = bound._context_provider(invocation)
+                correlation_action = ReferenceReadAction(
+                    ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
+                    replace(
+                        invocation.request.correlation,
+                        invocation_id="foreign_reference_invocation",
+                    ),
+                    invocation.request.references,
+                )
+                decoder_patch = (
+                    mock.patch.object(
+                        backend,
+                        "_decode_reference_read_action",
+                        return_value=correlation_action,
+                    )
+                    if label == "correlation"
+                    else contextlib.nullcontext()
+                )
+                handler_patch = (
+                    contextlib.nullcontext()
+                    if label == "correlation"
+                    else mock.patch.object(
+                        type(invocation),
+                        "handle_reference_read_action",
+                        side_effect=failure,
+                    )
+                )
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        self.reference_environment(invocation),
+                    ),
+                    decoder_patch,
+                    handler_patch,
+                    self.assertRaises(type(failure)) as caught,
+                ):
+                    async with provider.invocation(scope, policy):
+                        await provider.prepare_references(
+                            ContextReferencePreludeRequest(
+                                scope,
+                                policy,
+                                f"reference_call_{label}",
+                                operation_id,
+                                None,
+                            )
+                        )
+                if label != "correlation":
+                    self.assertIs(caught.exception, failure)
+                else:
+                    self.assertIs(
+                        caught.exception.code,
+                        ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH,
+                    )
+                self.assertEqual(len(self.provider_invocations()), 1)
+                records = [
+                    record
+                    for record in _agent_exchange_records(self.workspace)
+                    if record["session_id"] == session_id
+                ]
+                self.assertEqual(
+                    [record["request_type"] for record in records],
+                    ["request", "response", "outcome"],
+                )
+                self.assertEqual(json.loads(records[-1]["content"]), expected)
+                self.assertEqual(
+                    len(
+                        [
+                            record
+                            for record in records
+                            if record["request_type"] == "outcome"
+                        ]
+                    ),
+                    1,
+                )
+                authorization.close()
 
     async def test_reference_read_retrieval_preserves_action_indices_and_budgets(
         self,
@@ -7345,6 +7833,59 @@ class CodexBackendTestCase(unittest.IsolatedAsyncioTestCase):
                         self.request(session_id=session_id),
                         reference_read=invocation,
                     )
+                reference_exchange = [
+                    record
+                    for record in _agent_exchange_records(self.workspace)
+                    if record["session_id"] == session_id
+                ]
+                expected_types = (
+                    ["request", "outcome"]
+                    if case == "nonzero"
+                    else ["request", "response", "outcome"]
+                )
+                self.assertEqual(
+                    [record["request_type"] for record in reference_exchange],
+                    expected_types,
+                )
+                expected_terminal = (
+                    {
+                        "code": "provider_invocation_failed",
+                        "outcome": "provider_failure",
+                    }
+                    if case == "nonzero"
+                    else (
+                        {"code": "accepted", "outcome": "accepted"}
+                        if case
+                        in {
+                            "partial",
+                            "reordered",
+                            "broadened",
+                            "foreign_path",
+                            "foreign_correlation",
+                            "drift",
+                        }
+                        else {
+                            "code": (
+                                "response_correlation_mismatch"
+                                if expected_outcome
+                                is ReferenceAuthorizationErrorCode.CORRELATION_MISMATCH
+                                else "response_semantic_rejected"
+                            ),
+                            "outcome": "rejected",
+                        }
+                    )
+                )
+                self.assertEqual(
+                    json.loads(reference_exchange[-1]["content"]),
+                    expected_terminal,
+                )
+                self.assertEqual(
+                    sum(
+                        record["request_type"] == "outcome"
+                        for record in reference_exchange
+                    ),
+                    1,
+                )
                 if case == "nonzero":
                     self.assertEqual(
                         str(raised.exception),

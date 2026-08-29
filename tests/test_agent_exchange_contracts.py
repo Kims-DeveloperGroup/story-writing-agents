@@ -20,6 +20,7 @@ from story_writing_agents.agent_exchanges import (
     AgentExchangeAppendReceipt,
     AgentExchangeFailure,
     AgentExchangeInventoryItem,
+    AgentExchangeOutcome,
     AgentExchangeProvider,
     AgentExchangeRecordInput,
     AgentExchangeRequestType,
@@ -66,6 +67,17 @@ class AgentExchangeContractTests(unittest.TestCase):
                 AgentExchangeRequestType.REQUEST,
                 AgentExchangeRequestType.RESPONSE,
                 AgentExchangeRequestType.NO_RESPONSE,
+                AgentExchangeRequestType.OUTCOME,
+            ),
+        )
+        self.assertEqual(
+            tuple(AgentExchangeOutcome),
+            (
+                AgentExchangeOutcome.ACCEPTED,
+                AgentExchangeOutcome.REJECTED,
+                AgentExchangeOutcome.PROVIDER_FAILURE,
+                AgentExchangeOutcome.CANCELLED,
+                AgentExchangeOutcome.POST_RESPONSE_RUNTIME_FAILURE,
             ),
         )
         self.assertEqual(
@@ -94,6 +106,7 @@ class AgentExchangeContractTests(unittest.TestCase):
             "AgentExchangeAppendReceipt",
             "AgentExchangeFailure",
             "AgentExchangeInventoryItem",
+            "AgentExchangeOutcome",
             "AgentExchangeProvider",
             "AgentExchangeRecordInput",
             "AgentExchangeRequestType",
@@ -311,7 +324,7 @@ class AgentExchangeContractTests(unittest.TestCase):
                 f"sys.path.insert(0, {str(ROOT / 'src')!r}); "
                 "before=tuple(pathlib.Path('.').iterdir()); "
                 "import story_writing_agents.agent_exchanges as a; "
-                "assert len(a.__all__)==14; "
+                "assert len(a.__all__)==15; "
                 "assert tuple(pathlib.Path('.').iterdir())==before"
             )
             environment = os.environ.copy()
