@@ -2,7 +2,9 @@
 
 > **Availability:** `StoryRuntime` provides unchanged one-step and additive
 > bounded-retrieval turns, optional programmatic conversation-RAG preflight and
-> projection, plus context-aware debates. Interactive `$`/`$$` discovery is a
+> projection, context-aware debates, and one optional synchronous
+> agent-context lifecycle observer across all four provider-bound entry points.
+> Interactive `$`/`$$` discovery is a
 > controller/terminal workflow and adds no runtime method. Separate
 > noninteractive `story rag` lifecycle/search commands are implemented without
 > adding a `StoryRuntime` method; the installed controller composes saved
@@ -10,8 +12,10 @@
 > `rag_query` parameter on the next eligible focused turn.
 
 Key terms: **context-omitted run**—no `conversation_context`; **included
-snapshot**—one transcript window reused for a debate; **progress
-sink**—a synchronous observer; **retrieval turn**—one bounded answer.
+snapshot**—one transcript window reused for a debate; **context lifecycle
+observer**—a synchronous per-agent invocation observer; **progress sink**—the
+established synchronous retrieval or debate workflow observer; **retrieval
+turn**—one bounded answer.
 
 ## Construction and entry points
 
@@ -29,23 +33,46 @@ StoryRuntime.inspect_debate(session_id: str, debate_id: str) -> dict[str, Any]
 StoryRuntime.inspect_debate_context(session_id: str, debate_id: str) -> dict[str, Any] | None
 StoryRuntime.inspect_reference_operation(operation_id: str) -> ReferenceOperationHistory | None
 await StoryRuntime.converse(session_id: str, conversation_id: str,
-                            agent_id: str, text: str) -> ConversationResult
-await StoryRuntime.converse_with_retrieval(session_id, conversation_id, agent_id, text, *, memory_service, progress_sink=None, rag_query=None) -> ConversationRetrievalResult
+                            agent_id: str, text: str, *,
+                            context_event_sink: ContextExecutionEventSink | None = None) -> ConversationResult
+await StoryRuntime.converse_with_retrieval(session_id, conversation_id,
+    agent_id, text, *, memory_service, progress_sink=None, rag_query=None,
+    context_event_sink: ContextExecutionEventSink | None = None) -> ConversationRetrievalResult
 await StoryRuntime.run_prompt(session_id: str, prompt: str, *,
     output_path: str,
     max_debate_rounds: int | None = None, debate_id: str | None = None,
     conversation_context: DebateContextRequest | None = None,
-    progress_sink: DebateProgressSink | None = None) -> DebateResult
+    progress_sink: DebateProgressSink | None = None,
+    context_event_sink: ContextExecutionEventSink | None = None) -> DebateResult
 await StoryRuntime.run_draft(session_id: str, draft: str, *,
     output_path: str,
     max_debate_rounds: int | None = None, debate_id: str | None = None,
     conversation_context: DebateContextRequest | None = None,
-    progress_sink: DebateProgressSink | None = None) -> DebateResult
+    progress_sink: DebateProgressSink | None = None,
+    context_event_sink: ContextExecutionEventSink | None = None) -> DebateResult
+await RuntimeSession.converse(conversation_id: str, agent_id: str, text: str, *,
+    context_event_sink: ContextExecutionEventSink | None = None) -> ConversationResult
+await RuntimeSession.converse_with_retrieval(conversation_id: str,
+    agent_id: str, text: str, *, memory_service, progress_sink=None,
+    rag_query=None,
+    context_event_sink: ContextExecutionEventSink | None = None) -> ConversationRetrievalResult
+await RuntimeSession.run_prompt(prompt: str, *, output_path: str,
+    max_debate_rounds: int | None = None, debate_id: str | None = None,
+    conversation_context: DebateContextRequest | None = None,
+    progress_sink: DebateProgressSink | None = None,
+    context_event_sink: ContextExecutionEventSink | None = None) -> DebateResult
+await RuntimeSession.run_draft(draft: str, *, output_path: str,
+    max_debate_rounds: int | None = None, debate_id: str | None = None,
+    conversation_context: DebateContextRequest | None = None,
+    progress_sink: DebateProgressSink | None = None,
+    context_event_sink: ContextExecutionEventSink | None = None) -> DebateResult
 ```
 
 `RuntimeSession` binds the session ID. Its `run_prompt()` and `run_draft()` share
-the required `output_path`, other options, and result type; it also exposes
-both conversation methods, `inspect_debate()`, and `inspect_debate_context()`.
+the required `output_path`, other options, result type, and optional
+`context_event_sink`; both session-bound conversation methods expose the same
+optional sink. It also exposes `inspect_debate()` and
+`inspect_debate_context()`.
 `RuntimeSession` also exposes session-scoped
 `inspect_reference_operation(operation_id)`: an operation ID from another
 session raises `ValueError`. `Runtime` and `Session` are exact aliases.
@@ -157,22 +184,103 @@ DebateContextRequest(*, conversation_id: str, mode: DebateContextMode)
 
 The request is frozen, slotted, keyword-only, and has no defaults. Included
 mode reads and canonicalizes one bounded context before debate reservation,
-persists and reuses it for every phase, and performs no search or retrieval.
+then persists and reuses that exact snapshot for every phase. Capturing the
+snapshot itself performs no search or retrieval; a subsequent contextual agent
+invocation may still search and read its separately authorized sources.
 Fresh mode records the supplied conversation identity but performs no context
 read and sends no context. A context-omitted call does neither and has no sidecar.
 
-These modes also select the focused portion of each substantive phase's
-package-internal schema-v1 `story_session_context`: `included` carries the
-bounded window, `fresh` carries only the conversation identity, and an omitted
-request carries neither. All three retain the receiving agent's bounded owner
-outcomes and current bound core-document path/hash identities. Thus `/run
---fresh` is fresh only for focused transcript context, not for the belonging
-story session. The exact envelope and caps are in
-[Prompts and provider boundary](../design/prompts-and-provider.md#story-session-continuity-envelope).
+These modes select the focused portion of package-internal capture: `included`
+captures the bounded window, `fresh` keeps only the conversation identity, and
+an omitted request keeps neither. The subsequent provider-managed invocation
+uses compact wire v5, current role-relevant authoritative sources, and bounded
+SEARCH/READ; `/run --fresh` is fresh only for focused transcript context. See
+[Agent-context design](../design/agent-context.md#compact-provider-wire-v5).
 
 `inspect_debate_context()` reads only the strict sidecar and returns `None` when
 it is absent; it does not alter the established debate/session inspection JSON.
 The exact stored schema lives in [Persistence](../design/persistence.md#debate-context-sidecar).
+
+<a id="context-lifecycle-observer"></a>
+
+## Context lifecycle observer
+
+The observer types are supported from their direct module only:
+
+```python
+from story_writing_agents.agent_context.service import (
+    ContextExecutionEvent,
+    ContextExecutionEventKind,
+    ContextExecutionEventSink,
+)
+```
+
+Neither `story_writing_agents.agent_context` nor the project root re-exports
+these names. The optional keyword-only `context_event_sink` appears on both
+runtime forms of `converse`, `converse_with_retrieval`, `run_prompt`, and
+`run_draft`. It is synchronous, is invoked inline in operation order, and must
+return exactly `None`:
+
+```python
+events: list[ContextExecutionEvent] = []
+observer: ContextExecutionEventSink = events.append
+
+result = await runtime.converse(
+    "story_review",
+    "c_main",
+    "lead_orchestrator",
+    "Make the ending quieter.",
+    context_event_sink=observer,
+)
+
+advanced = any(
+    event.kind is ContextExecutionEventKind.CHECKPOINT_ADVANCED
+    for event in events
+)
+```
+
+`ContextExecutionEvent` is frozen and slotted. Every event has a typed `kind`,
+content-free `scope`, and required `operation_id`. The scope carries workspace,
+session, conversation-or-debate subject, and canonical agent identity. Debate
+events additionally require `phase` and nonnegative `round_number`; those
+fields are `None` for conversation events.
+
+Kind-specific optional facts cover selected logical sources and bytes,
+omitted-searchable sources and bytes, mandatory references and selected bytes,
+one-based action index, search hits, retrieved sources and selected bytes,
+complete transcript turns/events, serialized observation bytes, and
+truncation. A terminal checkpoint event may carry aggregate provider input
+tokens only when every submitted physical call—including a submitted reference
+prelude—reported an exact nonnegative value. Nonapplicable or unavailable facts
+are `None`; the runtime never substitutes estimates.
+
+A normal sequence starts with `BOOTSTRAP` or `DELTA`, may add `OMISSION`, uses
+paired indexed SEARCH/READ events, authorizes an answer, and ends with exactly
+one checkpoint outcome. Failure facts may be first. An answer must precede a
+successful checkpoint, and nothing may follow either terminal checkpoint
+event. Interleaved debate invocations remain independent through their scope,
+operation, phase, and round correlation. See the progress guide's
+[state map](../guides/agent-context-progress.md#external-and-internal-state-map)
+for the `PREPARE -> PLAN -> INVOKE/ACTION -> VERIFY -> COMMIT|FAIL` mapping and
+its [fact table](../guides/agent-context-progress.md#identity-and-fact-meanings)
+for every event field and the live shell copy.
+
+A noncallable, declared coroutine, declared async-generator, or asynchronously
+callable sink raises `TypeError` before contextual side effects. A sink also
+raises `BackendProtocolError` before those effects when the selected backend
+does not support contextual execution. Once delivery begins, a callback
+exception, awaitable/async-generator result, or non-`None` result aborts before
+authority and re-raises its original cause or a validation `TypeError`. Failure
+while receiving `CHECKPOINT_ADVANCED` instead propagates after the READY context
+checkpoint has committed and cannot roll it back. A terminal observer error
+during an independent runtime failure is suppressed so the runtime failure
+remains primary. Omitting the sink preserves provider calls, values and
+schemas, persistence, and established progress behavior.
+
+The callback is the only supported detailed observation surface. It adds no
+result field or post-hoc runtime inspection; callers that retain events own
+that storage and its protection. See the
+[privacy boundary](../operations/privacy-and-provider.md#agent-context-progress-privacy).
 
 ## Progress types and observer rules
 
@@ -273,13 +381,12 @@ are in [Bounded conversation retrieval](conversation-retrieval.md#optional-conve
 Debate context never appends or modifies a transcript.
 
 For every runtime-built advisory, retrieval initial call, and consensus phase,
-the runtime builds the bounded belonging-session envelope from the receiving
-agent's current owner outcomes, focused mode, and the definition's bound core
-identities. Reference preludes do not carry it; retrieval continuations do not
-repeat it. A provider switch or taint may force a fresh native thread without
-discarding these story-session facts. Callers constructing the request values
-directly may leave the trailing optional envelope as `None` and preserve the
-legacy backend payload.
+the runtime captures authorized current sources and invokes provider-managed
+compact context. Reference preludes remain separate; contextual continuations
+carry only the new observation. A provider switch or taint starts a bootstrap
+epoch from authoritative local sources. Callers constructing request values
+directly may leave the trailing internal capture as `None` and preserve the
+direct compatibility path.
 
 Inline `${path}` and `${path}#Lx-Ly` indicators are supported by all four
 provider-bound entry points above. The runtime preserves the exact source text

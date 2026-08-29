@@ -11,6 +11,7 @@ from ._model import (
     Choice,
     Component,
     Field,
+    InputPresentation,
     InputPromptView,
     ListView,
     Message,
@@ -57,6 +58,7 @@ _SPEAKER_HEADER_SGR = {
     SpeakerAccent.BLUE: "\x1b[1;34m",
 }
 _DECORATIVE_SGR = re.compile(r"\x1b\[(?:0|1|3[1-7]|1;3[1-7])m")
+_FORM_SUMMARY_MIN_CONTENT_CELLS = 20
 _ADVISORY_PROGRESS_FRAMES = (
     "[█▓▒░░░░░░░░░░░░░]",
     "[▓█▓▒░░░░░░░░░░░░]",
@@ -494,6 +496,12 @@ def render_input_prompt(
     if type(capabilities) is not TerminalCapabilities:
         raise TypeError("capabilities must be TerminalCapabilities")
 
+    if view.presentation is InputPresentation.FORM:
+        lines = _form_input_prompt_lines(view, capabilities.width)
+        return _render_input_semantic_lines(lines, capabilities)
+    if view.presentation is not InputPresentation.STANDARD:
+        raise RuntimeError("input prompt has an unsupported presentation")
+
     lines: list[tuple[str, SemanticRole]] = []
     for item in view.context:
         lines.extend(_component_lines(item, capabilities.width, indent=0))
@@ -506,27 +514,7 @@ def render_input_prompt(
             )
         )
     lines.extend(_input_prompt_lines(view.prompt, capabilities.width))
-    plain = "\n".join(line for line, _role in lines)
-    if not plain.endswith(" "):
-        raise RuntimeError("input rendering lost its trailing space")
-
-    if capabilities.decorative_sgr:
-        decorated = [
-            _decorate(line, role) for line, role in lines[:-1]
-        ]
-        final_line, final_role = lines[-1]
-        decorated.append(f"{_decorate(final_line[:-1], final_role)} ")
-        text = "\n".join(decorated)
-        if strip_decorative_sgr(text) != plain:
-            raise RuntimeError("decorative input rendering changed semantic text")
-    else:
-        text = plain
-    return RenderedInputFrame(
-        text,
-        plain,
-        capabilities.width,
-        len(lines),
-    )
+    return _render_input_semantic_lines(lines, capabilities)
 
 
 def render_picker_viewport(
@@ -553,19 +541,35 @@ def render_picker_fallback(
         raise TypeError("state must be a PickerControlState")
     if type(capabilities) is not TerminalCapabilities:
         raise TypeError("capabilities must be TerminalCapabilities")
-    lines = _picker_fallback_lines(state.picker, capabilities.width)
+    if state.picker.presentation is InputPresentation.FORM:
+        lines = _form_picker_fallback_lines(state.picker, capabilities.width)
+    elif state.picker.presentation is InputPresentation.STANDARD:
+        lines = _picker_fallback_lines(state.picker, capabilities.width)
+    else:
+        raise RuntimeError("picker has an unsupported presentation")
+    return _render_input_semantic_lines(lines, capabilities, picker=True)
+
+
+def _render_input_semantic_lines(
+    lines: list[_SemanticLine],
+    capabilities: TerminalCapabilities,
+    *,
+    picker: bool = False,
+) -> RenderedInputFrame:
+    """Render semantic input lines while preserving one trailing input space."""
+
     plain = "\n".join(line for line, _role in lines)
     if not plain.endswith(" "):
-        raise RuntimeError("picker fallback rendering lost its trailing space")
+        kind = "picker fallback" if picker else "input"
+        raise RuntimeError(f"{kind} rendering lost its trailing space")
     if capabilities.decorative_sgr:
         decorated = [_decorate(line, role) for line, role in lines[:-1]]
         final_line, final_role = lines[-1]
         decorated.append(f"{_decorate(final_line[:-1], final_role)} ")
         text = "\n".join(decorated)
         if strip_decorative_sgr(text) != plain:
-            raise RuntimeError(
-                "decorative picker fallback rendering changed semantic text"
-            )
+            kind = "picker fallback" if picker else "input"
+            raise RuntimeError(f"decorative {kind} rendering changed semantic text")
     else:
         text = plain
     return RenderedInputFrame(
@@ -609,6 +613,10 @@ def _picker_viewport_lines(
     """Project one live picker window into safe semantic rows."""
 
     picker = viewport.picker
+    if picker.presentation is InputPresentation.FORM:
+        return _form_picker_viewport_lines(viewport, width)
+    if picker.presentation is not InputPresentation.STANDARD:
+        raise RuntimeError("picker has an unsupported presentation")
     lines = _prompt_lines(
         picker.prompt,
         width,
@@ -668,6 +676,277 @@ def _picker_viewport_lines(
                 )
             )
     return lines
+
+
+def _form_picker_viewport_lines(
+    viewport: PickerViewport,
+    width: int,
+) -> list[_SemanticLine]:
+    """Render one settings-style live picker with separated form regions."""
+
+    picker = viewport.picker
+    lines: list[_SemanticLine] = []
+    for item in picker.transient_context:
+        lines.extend(_component_lines(item, width, indent=0))
+    if picker.transient_context:
+        lines.append(("", SemanticRole.DEFAULT))
+    lines.extend(_form_picker_heading_lines(picker, width))
+    lines.append(("", SemanticRole.DEFAULT))
+    lines.extend(_form_picker_header_lines(picker, width))
+    summary_start = _form_picker_summary_start(picker, width)
+    for index in range(viewport.start, viewport.stop):
+        choice = picker.choices[index]
+        lines.extend(
+            _form_picker_choice_lines(
+                choice,
+                index + 1,
+                width,
+                highlighted=choice.identity == picker.highlighted_id,
+                selected=choice.identity == picker.selected_id,
+                summary_start=summary_start,
+            )
+        )
+    lines.extend(_picker_empty_or_notice_lines(picker, width, indent=2))
+    if picker.selected_id is not None:
+        selected_index = next(
+            index
+            for index, choice in enumerate(picker.choices)
+            if choice.identity == picker.selected_id
+        )
+        if not viewport.start <= selected_index < viewport.stop:
+            selected = picker.choices[selected_index]
+            lines.extend(
+                (line, SemanticRole.SUCCESS)
+                for line in _wrap(
+                    f"Selected: {selected_index + 1}. {_inline(selected.label)}",
+                    width,
+                    indent=2,
+                )
+            )
+    return lines
+
+
+def _form_picker_fallback_lines(
+    picker: Picker,
+    width: int,
+) -> list[_SemanticLine]:
+    """Render one complete settings-style picker with numbered line input."""
+
+    lines = _form_picker_heading_lines(picker, width)
+    lines.append(("", SemanticRole.DEFAULT))
+    lines.extend(_form_picker_header_lines(picker, width))
+    summary_start = _form_picker_summary_start(picker, width)
+    for index, choice in enumerate(picker.choices):
+        lines.extend(
+            _form_picker_choice_lines(
+                choice,
+                index + 1,
+                width,
+                highlighted=choice.identity == picker.highlighted_id,
+                selected=choice.identity == picker.selected_id,
+                summary_start=summary_start,
+            )
+        )
+    lines.extend(_picker_empty_or_notice_lines(picker, width, indent=2))
+    lines.append(("", SemanticRole.DEFAULT))
+    lines.extend(
+        (line, SemanticRole.MUTED)
+        for line in _wrap(
+            "Enter a choice number, press Enter for the active choice, or "
+            "enter /cancel.",
+            width,
+            indent=0,
+        )
+    )
+    lines.extend(
+        (line, SemanticRole.COMMAND)
+        for line in _wrap("Choice > ", width, indent=0)
+    )
+    return lines
+
+
+def _form_picker_heading_lines(
+    picker: Picker,
+    width: int,
+) -> list[_SemanticLine]:
+    """Render the title and guidance before the form's choices region."""
+
+    prompt = picker.prompt
+    lines: list[_SemanticLine] = [
+        (line, SemanticRole.COMMAND)
+        for line in _wrap(prompt.name, width, indent=0)
+    ]
+    if prompt.scope is not None:
+        lines.extend(
+            (line, SemanticRole.MUTED)
+            for line in _wrap(
+                f"Context: {_inline(prompt.scope)}",
+                width,
+                indent=0,
+            )
+        )
+    if prompt.instruction is not None or prompt.default is not None:
+        lines.append(("", SemanticRole.DEFAULT))
+    if prompt.instruction is not None:
+        lines.extend(
+            (line, SemanticRole.MUTED)
+            for line in _wrap(prompt.instruction, width, indent=0)
+        )
+    if prompt.default is not None:
+        lines.extend(
+            (line, SemanticRole.MUTED)
+            for line in _wrap(f"Default: {prompt.default}", width, indent=0)
+        )
+    return lines
+
+
+def _form_picker_header_lines(
+    picker: Picker,
+    width: int,
+) -> list[_SemanticLine]:
+    """Render only the active absolute position and total choice count."""
+
+    total = len(picker.choices)
+    if picker.highlighted_id is None:
+        title = f"Choices {total}"
+    else:
+        highlighted = next(
+            index
+            for index, choice in enumerate(picker.choices)
+            if choice.identity == picker.highlighted_id
+        )
+        title = f"Choices {highlighted + 1}/{total}"
+    return [
+        (line, SemanticRole.EMPHASIS)
+        for line in _wrap(title, width, indent=0)
+    ]
+
+
+def _form_picker_choice_lines(
+    choice: Choice,
+    ordinal: int,
+    width: int,
+    *,
+    highlighted: bool,
+    selected: bool,
+    summary_start: int | None,
+) -> list[_SemanticLine]:
+    """Render one form choice with responsive state and stacked detail rows."""
+
+    prefix, label, label_spans, role = _form_picker_choice_label(
+        choice,
+        ordinal,
+        highlighted=highlighted,
+        selected=selected,
+    )
+    spans = list(label_spans)
+    continuation_prefix = " " * len(prefix)
+    if choice.form_summary is not None and summary_start is not None:
+        separator = " — "
+        label_stop = summary_start - _cell_width(separator)
+        padding = max(0, label_stop - _cell_width(f"{prefix}{label}"))
+        label += f"{' ' * padding}{separator}"
+        start = len(label)
+        label += _inline(choice.form_summary)
+        spans.append(_InlineRoleSpan(start, len(label), choice.form_summary_role))
+        continuation_prefix = " " * summary_start
+
+    if spans:
+        lines = _wrap_inline_roles(
+            label,
+            tuple(spans),
+            width,
+            indent=0,
+            initial_prefix=prefix,
+            continuation_prefix=continuation_prefix,
+            base_role=role,
+        )
+    else:
+        lines = [
+            (line, role)
+            for line in _wrap(
+                label,
+                width,
+                indent=0,
+                initial_prefix=prefix,
+                continuation_prefix=continuation_prefix,
+            )
+        ]
+    detail_indent = min(max(len(prefix), 4), max(width - 1, 0))
+    if choice.form_summary is not None and summary_start is None:
+        lines.extend(
+            (line, choice.form_summary_role)
+            for line in _wrap(choice.form_summary, width, indent=detail_indent)
+        )
+    if choice.description is not None:
+        lines.extend(
+            (line, choice.description_role)
+            for line in _wrap(choice.description, width, indent=detail_indent)
+        )
+    if choice.disabled_reason is not None:
+        lines.extend(
+            (line, SemanticRole.MUTED)
+            for line in _wrap(
+                f"Disabled: {choice.disabled_reason}",
+                width,
+                indent=detail_indent,
+            )
+        )
+    return lines
+
+
+def _form_picker_summary_start(picker: Picker, width: int) -> int | None:
+    """Return one complete-picker summary column when it retains useful room."""
+
+    if not any(choice.form_summary is not None for choice in picker.choices):
+        return None
+    widest_label = 0
+    for index, choice in enumerate(picker.choices):
+        prefix, label, _spans, _role = _form_picker_choice_label(
+            choice,
+            index + 1,
+            highlighted=choice.identity == picker.highlighted_id,
+            selected=choice.identity == picker.selected_id,
+        )
+        widest_label = max(widest_label, _cell_width(f"{prefix}{label}"))
+    summary_start = widest_label + _cell_width(" — ")
+    if width - summary_start < _FORM_SUMMARY_MIN_CONTENT_CELLS:
+        return None
+    return summary_start
+
+
+def _form_picker_choice_label(
+    choice: Choice,
+    ordinal: int,
+    *,
+    highlighted: bool,
+    selected: bool,
+) -> tuple[str, str, tuple[_InlineRoleSpan, ...], SemanticRole]:
+    """Build one safe absolute form label and its independent warning span."""
+
+    pointer = ">" if highlighted else " "
+    prefix = f"{pointer} {ordinal}. "
+    label = _inline(choice.label)
+    spans: list[_InlineRoleSpan] = []
+    if choice.warning_suffix is not None:
+        label += " "
+        start = len(label)
+        label += _inline(choice.warning_suffix)
+        spans.append(_InlineRoleSpan(start, len(label), SemanticRole.WARNING))
+    if selected:
+        label += " (selected)"
+    if not choice.enabled:
+        label += " (disabled)"
+    role = (
+        SemanticRole.MUTED
+        if not choice.enabled
+        else SemanticRole.INFO
+        if highlighted
+        else SemanticRole.SUCCESS
+        if selected
+        else SemanticRole.DEFAULT
+    )
+    return prefix, label, tuple(spans), role
 
 
 def _picker_fallback_lines(
@@ -905,6 +1184,59 @@ def _input_prompt_lines(
     return lines
 
 
+def _form_input_prompt_lines(
+    view: InputPromptView,
+    width: int,
+) -> list[_SemanticLine]:
+    """Render one settings-style input as distinct title and value regions."""
+
+    prompt = view.prompt
+    lines: list[_SemanticLine] = [
+        (line, SemanticRole.COMMAND)
+        for line in _wrap(prompt.name, width, indent=0)
+    ]
+    if prompt.scope is not None:
+        lines.extend(
+            (line, SemanticRole.MUTED)
+            for line in _wrap(
+                f"Context: {_inline(prompt.scope)}",
+                width,
+                indent=0,
+            )
+        )
+    if prompt.instruction is not None or prompt.default is not None:
+        lines.append(("", SemanticRole.DEFAULT))
+    if prompt.instruction is not None:
+        lines.extend(
+            (line, SemanticRole.MUTED)
+            for line in _wrap(prompt.instruction, width, indent=0)
+        )
+    if prompt.default is not None:
+        lines.extend(
+            (line, SemanticRole.MUTED)
+            for line in _wrap(f"Default: {prompt.default}", width, indent=0)
+        )
+    if view.context:
+        lines.append(("", SemanticRole.DEFAULT))
+        for item in view.context:
+            lines.extend(_component_lines(item, width, indent=0))
+    lines.append(("", SemanticRole.DEFAULT))
+    if view.initial_value is not None:
+        lines.extend(
+            _component_lines(
+                Field("Current value", view.initial_value),
+                width,
+                indent=0,
+            )
+        )
+        lines.append(("", SemanticRole.DEFAULT))
+    lines.extend(
+        (line, SemanticRole.COMMAND)
+        for line in _wrap("New value > ", width, indent=0)
+    )
+    return lines
+
+
 def _panel_lines(
     panel: Panel,
     width: int,
@@ -1010,9 +1342,9 @@ def _notice_lines(
     label = notice.label
     if label is None:
         label = (
-            _state_label(notice.state)
-            if notice.state is not ViewState.IDLE
-            else _role_label(notice.role)
+            _role_label(notice.role)
+            if notice.state in {ViewState.IDLE, ViewState.COMPLETED}
+            else _state_label(notice.state)
         )
     prefix = f"[{_inline(label)}] "
     return [
@@ -1062,10 +1394,10 @@ def _chat_block_message_lines(
 ) -> list[_SemanticLine]:
     """Render one grouped speaker rail with a trailing block separator."""
 
-    header = _inline(message.sender)
-    if message.metadata is not None:
-        header += f" · {_inline(message.metadata)}"
-    header += _semantic_suffix(message.state, message.role)
+    header = (
+        f"{_inline(message.sender)}"
+        f"{_semantic_suffix(message.state, message.role)}"
+    )
     header_role = _SpeakerHeaderRole(message.accent)
     header_indent = " " * max(0, min(indent, max(width - 1, 0)))
     lines: list[_SemanticLine] = [
@@ -1077,6 +1409,17 @@ def _chat_block_message_lines(
             fallback_prefix="",
         )
     ]
+    if message.metadata is not None:
+        metadata_indent = " " * max(0, min(indent + 2, max(width - 1, 0)))
+        lines.extend(
+            (line, SemanticRole.DEFAULT)
+            for line in _word_wrapped_prefixed_lines(
+                _inline(message.metadata),
+                width,
+                prefix=metadata_indent,
+                fallback_prefix="",
+            )
+        )
     lines.extend(
         (line, SemanticRole.DEFAULT)
         for line in _chat_block_body_lines(message.content, width, indent=indent)
@@ -1385,9 +1728,11 @@ def _state_label(state: ViewState) -> str:
 
 
 def _state_suffix(state: ViewState) -> str:
-    """Return a visible non-default state annotation."""
+    """Return a visible actionable state annotation."""
 
-    return "" if state is ViewState.IDLE else f" [{state.value}]"
+    if state in {ViewState.IDLE, ViewState.COMPLETED}:
+        return ""
+    return f" [{state.value}]"
 
 
 def _role_label(role: SemanticRole) -> str:

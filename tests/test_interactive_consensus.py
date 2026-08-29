@@ -26,6 +26,8 @@ from story_writing_agents import (
     DebateResult,
     DebateStatus,
     InputKind,
+    LEAD_ORCHESTRATOR,
+    PLOT_ARCHITECT,
     Phase,
     ProgressObserverError,
     SessionAccessState,
@@ -33,6 +35,14 @@ from story_writing_agents import (
     SessionNotFoundError,
     WorkspaceFormatError,
     WorkspaceSecurityError,
+)
+from story_writing_agents.agent_context.manifest import (
+    ContextScope,
+    ContextSubjectKind,
+)
+from story_writing_agents.agent_context.service import (
+    ContextExecutionEvent,
+    ContextExecutionEventKind,
 )
 from story_writing_agents.cli_context import (
     load_default_conversation,
@@ -73,13 +83,22 @@ class ConsensusOutcome:
 class ScriptedConsensusRuntime:
     """Emit canonical progress while recording retained event-loop calls."""
 
-    def __init__(self, *outcomes: ConsensusOutcome | BaseException) -> None:
+    def __init__(
+        self,
+        *outcomes: ConsensusOutcome | BaseException,
+        supports_context_progress: bool = False,
+    ) -> None:
         self.outcomes = list(outcomes)
         self.calls: list[dict[str, Any]] = []
         self.output_paths: list[str] = []
         self.loops: list[asyncio.AbstractEventLoop] = []
         self.tasks: list[asyncio.Task[object] | None] = []
+        self.context_event_sinks: list[object] = []
+        self.context_event_emitter: Any = None
+        self._active_context_event_sink: object = None
         self.on_call: Any = None
+        if supports_context_progress:
+            self.conversation_storage_services = object()
 
     async def run_prompt(
         self,
@@ -89,17 +108,22 @@ class ScriptedConsensusRuntime:
         output_path,
         conversation_context,
         progress_sink,
+        context_event_sink=None,
     ) -> DebateResult:
         """Record and complete one prompt consensus action."""
 
-        return await self._complete(
-            session_id,
-            prompt,
-            InputKind.PROMPT,
-            output_path,
-            conversation_context,
-            progress_sink,
-        )
+        self._active_context_event_sink = context_event_sink
+        try:
+            return await self._complete(
+                session_id,
+                prompt,
+                InputKind.PROMPT,
+                output_path,
+                conversation_context,
+                progress_sink,
+            )
+        finally:
+            self._active_context_event_sink = None
 
     async def run_draft(
         self,
@@ -109,17 +133,22 @@ class ScriptedConsensusRuntime:
         output_path,
         conversation_context,
         progress_sink,
+        context_event_sink=None,
     ) -> DebateResult:
         """Record and complete one supplied-draft consensus action."""
 
-        return await self._complete(
-            session_id,
-            draft,
-            InputKind.DRAFT,
-            output_path,
-            conversation_context,
-            progress_sink,
-        )
+        self._active_context_event_sink = context_event_sink
+        try:
+            return await self._complete(
+                session_id,
+                draft,
+                InputKind.DRAFT,
+                output_path,
+                conversation_context,
+                progress_sink,
+            )
+        finally:
+            self._active_context_event_sink = None
 
     @staticmethod
     def _emit(progress_sink, event: DebateProgressEvent) -> None:
@@ -158,6 +187,8 @@ class ScriptedConsensusRuntime:
             }
         )
         self.output_paths.append(output_path)
+        context_event_sink = self._active_context_event_sink
+        self.context_event_sinks.append(context_event_sink)
         if self.on_call is not None:
             self.on_call()
         if isinstance(outcome, BaseException):
@@ -189,6 +220,14 @@ class ScriptedConsensusRuntime:
                 context_mode=conversation_context.mode,
             ),
         )
+        if self.context_event_emitter is not None:
+            if not callable(context_event_sink):
+                raise AssertionError("context observer was not forwarded")
+            self.context_event_emitter(
+                context_event_sink,
+                session_id,
+                debate_id,
+            )
         self._emit(
             progress_sink,
             DebateProgressEvent(
@@ -777,10 +816,222 @@ class InteractiveConsensusResultTests(InteractiveConversationTestCase):
         self.assertNotIn("Debate phase [loading]", rendered)
         self.assertNotIn("Debate phase · Started [loading]", rendered)
         self.assertIn("--- Debate phase · Started", rendered)
-        self.assertIn("--- Debate phase · Consensus [completed]", rendered)
-        self.assertEqual(rendered.count("Consensus [completed] [success]"), 1)
+        self.assertIn("--- Debate phase · Consensus", rendered)
+        self.assertEqual(rendered.count("Consensus [success]"), 1)
         self.assertNotIn("RAW_RESULT_SECRET", rendered)
         self.assertEqual(file_bytes(workspace), before)
+
+    def test_live_context_progress_renders_interleaved_agents_and_rounds_exactly(
+        self,
+    ) -> None:
+        runtime = ScriptedConsensusRuntime(supports_context_progress=True)
+
+        def emit_context(sink: Any, session_id: str, debate_id: str) -> None:
+            def scope(agent_id: str) -> ContextScope:
+                return ContextScope(
+                    "workspace",
+                    session_id,
+                    ContextSubjectKind.DEBATE,
+                    debate_id,
+                    agent_id,
+                )
+
+            def event(
+                kind: ContextExecutionEventKind,
+                agent_id: str,
+                operation_id: str,
+                phase: str,
+                round_number: int,
+                **facts: object,
+            ) -> None:
+                sink(
+                    ContextExecutionEvent(
+                        kind,
+                        scope(agent_id),
+                        operation_id,
+                        phase=phase,
+                        round_number=round_number,
+                        **facts,
+                    )
+                )
+
+            zero_plan = {
+                "selected_source_count": 0,
+                "selected_source_utf8_bytes": 0,
+                "omitted_searchable_source_count": 0,
+                "omitted_searchable_source_utf8_bytes": 0,
+                "mandatory_reference_count": 0,
+                "mandatory_reference_utf8_bytes": 0,
+            }
+            one_plan = {
+                "selected_source_count": 1,
+                "selected_source_utf8_bytes": 1,
+                "omitted_searchable_source_count": 0,
+                "omitted_searchable_source_utf8_bytes": 0,
+                "mandatory_reference_count": 0,
+                "mandatory_reference_utf8_bytes": 0,
+            }
+            event(
+                ContextExecutionEventKind.BOOTSTRAP,
+                LEAD_ORCHESTRATOR,
+                "lead-draft",
+                "draft",
+                0,
+                **zero_plan,
+            )
+            event(
+                ContextExecutionEventKind.SEARCH_STARTED,
+                LEAD_ORCHESTRATOR,
+                "lead-draft",
+                "draft",
+                0,
+                action_index=1,
+            )
+            event(
+                ContextExecutionEventKind.BOOTSTRAP,
+                PLOT_ARCHITECT,
+                "plot-audit",
+                "audit",
+                0,
+                **one_plan,
+            )
+            event(
+                ContextExecutionEventKind.ANSWER_AUTHORIZED,
+                PLOT_ARCHITECT,
+                "plot-audit",
+                "audit",
+                0,
+                action_index=1,
+            )
+            event(
+                ContextExecutionEventKind.SEARCH_COMPLETED,
+                LEAD_ORCHESTRATOR,
+                "lead-draft",
+                "draft",
+                0,
+                action_index=1,
+                search_hit_count=2,
+                observation_utf8_bytes=90,
+                truncated=False,
+            )
+            event(
+                ContextExecutionEventKind.CHECKPOINT_ADVANCED,
+                PLOT_ARCHITECT,
+                "plot-audit",
+                "audit",
+                0,
+                provider_input_tokens=9,
+            )
+            event(
+                ContextExecutionEventKind.READ_STARTED,
+                LEAD_ORCHESTRATOR,
+                "lead-draft",
+                "draft",
+                0,
+                action_index=2,
+            )
+            event(
+                ContextExecutionEventKind.READ_COMPLETED,
+                LEAD_ORCHESTRATOR,
+                "lead-draft",
+                "draft",
+                0,
+                action_index=2,
+                retrieved_source_count=1,
+                retrieved_source_utf8_bytes=512,
+                transcript_turn_count=0,
+                transcript_event_count=0,
+                observation_utf8_bytes=530,
+            )
+            event(
+                ContextExecutionEventKind.ANSWER_AUTHORIZED,
+                LEAD_ORCHESTRATOR,
+                "lead-draft",
+                "draft",
+                0,
+                action_index=3,
+            )
+            event(
+                ContextExecutionEventKind.CHECKPOINT_ADVANCED,
+                LEAD_ORCHESTRATOR,
+                "lead-draft",
+                "draft",
+                0,
+                provider_input_tokens=None,
+            )
+            event(
+                ContextExecutionEventKind.DELTA,
+                LEAD_ORCHESTRATOR,
+                "lead-finalize",
+                "finalize",
+                1,
+                selected_source_count=4,
+                selected_source_utf8_bytes=21192,
+                omitted_searchable_source_count=11,
+                omitted_searchable_source_utf8_bytes=8192,
+                mandatory_reference_count=0,
+                mandatory_reference_utf8_bytes=0,
+            )
+            event(
+                ContextExecutionEventKind.ANSWER_AUTHORIZED,
+                LEAD_ORCHESTRATOR,
+                "lead-finalize",
+                "finalize",
+                1,
+                action_index=1,
+            )
+            event(
+                ContextExecutionEventKind.CHECKPOINT_ADVANCED,
+                LEAD_ORCHESTRATOR,
+                "lead-finalize",
+                "finalize",
+                1,
+                provider_input_tokens=12,
+            )
+
+        runtime.context_event_emitter = emit_context
+        (
+            _workspace,
+            _catalog,
+            _entries,
+            controller,
+            _backend,
+            callbacks,
+            _store,
+        ) = self.prepared_selected_controller(
+            "/run PRIVATE_DEBATE_PROGRESS_PROMPT",
+            "/quit",
+            runtime=runtime,  # type: ignore[arg-type]
+        )
+        self.assertEqual(controller.run_session_lobby(), 0)
+        rendered = "".join(callbacks.records)
+        expected_in_order = (
+            "[context] lead_orchestrator · round 0 · draft: bootstrap: "
+            "0 selected / 0 bytes; 0 searchable\n",
+            "[context] lead_orchestrator · round 0 · draft: search action 1 started\n",
+            "[context] plot_architect · round 0 · audit: bootstrap: "
+            "1 selected / 1 bytes; 0 searchable\n",
+            "[context] plot_architect · round 0 · audit: answer accepted\n",
+            "[context] lead_orchestrator · round 0 · draft: search action 1 "
+            "completed: 2 hits; truncated: no\n",
+            "[context] plot_architect · round 0 · audit: checkpoint advanced\n",
+            "[context] lead_orchestrator · round 0 · draft: read action 2 started\n",
+            "[context] lead_orchestrator · round 0 · draft: read 1 sources / "
+            "512 bytes\n",
+            "[context] lead_orchestrator · round 0 · draft: answer accepted\n",
+            "[context] lead_orchestrator · round 0 · draft: checkpoint advanced\n",
+            "[context] lead_orchestrator · round 1 · finalize: delta: "
+            "4 selected / 21,192 bytes; 11 searchable\n",
+            "[context] lead_orchestrator · round 1 · finalize: answer accepted\n",
+            "[context] lead_orchestrator · round 1 · finalize: checkpoint advanced\n",
+        )
+        offsets = []
+        for record in expected_in_order:
+            with self.subTest(record=record):
+                self.assertEqual(rendered.count(record), 1)
+                offsets.append(rendered.index(record))
+        self.assertEqual(offsets, sorted(offsets))
+        self.assertNotIn("PRIVATE_DEBATE_PROGRESS_PROMPT", repr(runtime.context_event_sinks))
 
     def test_valid_reference_operation_identity_is_not_presented(self) -> None:
         operation_id = "rr_07_session_" + "a" * 32
@@ -796,7 +1047,7 @@ class InteractiveConsensusResultTests(InteractiveConversationTestCase):
         )
         self.assertEqual(controller.run_session_lobby(), 0)
         rendered = "".join(callbacks.records)
-        self.assertIn("Consensus [completed]", rendered)
+        self.assertIn("Consensus", rendered)
         self.assertNotIn(operation_id, rendered)
 
     def test_all_terminal_mappings_are_safe_and_recover_to_the_prompt(self) -> None:

@@ -32,6 +32,10 @@ class ArtifactRootSecurityError(WorkspaceSecurityError):
     """The workspace root or one of its traversed ancestors changed."""
 
 
+class ArtifactTraversalLimitError(WorkspaceFormatError):
+    """Recursive artifact discovery exceeded its explicit entry budget."""
+
+
 class ArtifactLeaseSecurityError(WorkspaceSecurityError):
     """The permanent repository lock identity is not stable."""
 
@@ -79,7 +83,11 @@ class SecureWorkspaceStorage:
         dir_fd_functions = (os.open, os.mkdir, os.stat, os.link)
         if any(function not in os.supports_dir_fd for function in dir_fd_functions):
             raise WorkspaceSecurityError("descriptor-relative artifact I/O unavailable")
-        if os.listdir not in os.supports_fd or fcntl is None:
+        if (
+            os.listdir not in os.supports_fd
+            or os.scandir not in os.supports_fd
+            or fcntl is None
+        ):
             raise WorkspaceSecurityError("safe artifact locking or listing unavailable")
         SecureWorkspaceStorage._native_rename_function()
 
@@ -602,13 +610,25 @@ class SecureWorkspaceStorage:
         chain: tuple[tuple[int, str, int, tuple[int, int]], ...],
         *,
         max_path_bytes: int,
+        max_visited_entries: int,
+        visited_entries: list[int],
         found: list[tuple[str, SecureFileIdentity]],
     ) -> None:
         """Walk one retained descriptor tree without following unsafe names."""
 
         cls._verify_directory_chain(chain)
+        names: list[str] = []
         try:
-            names = os.listdir(directory)
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    visited_entries[0] += 1
+                    if visited_entries[0] > max_visited_entries:
+                        raise ArtifactTraversalLimitError(
+                            "artifact traversal exceeds its entry limit"
+                        )
+                    names.append(entry.name)
+        except ArtifactTraversalLimitError:
+            raise
         except OSError as exc:
             raise ArtifactRootSecurityError(
                 "cannot securely list artifact directory"
@@ -670,6 +690,8 @@ class SecureWorkspaceStorage:
                         relative_parts,
                         child_chain,
                         max_path_bytes=max_path_bytes,
+                        max_visited_entries=max_visited_entries,
+                        visited_entries=visited_entries,
                         found=found,
                     )
                 except ArtifactRootSecurityError:
@@ -683,13 +705,17 @@ class SecureWorkspaceStorage:
         relative: str,
         *,
         max_path_bytes: int,
+        max_visited_entries: int = 8_192,
     ) -> tuple[tuple[str, SecureFileIdentity], ...]:
         """List metadata for safe regular descendants without reading content."""
 
         if type(max_path_bytes) is not int or max_path_bytes < 1:
             raise ValueError("max_path_bytes must be a positive integer")
+        if type(max_visited_entries) is not int or max_visited_entries < 1:
+            raise ValueError("max_visited_entries must be a positive integer")
         parts = self._parts(relative)
         found: list[tuple[str, SecureFileIdentity]] = []
+        visited_entries = [0]
         with self._open_root() as root:
             with self._open_directory(root, parts, create=False) as opened:
                 directory, chain = opened
@@ -698,6 +724,8 @@ class SecureWorkspaceStorage:
                     parts,
                     chain,
                     max_path_bytes=max_path_bytes,
+                    max_visited_entries=max_visited_entries,
+                    visited_entries=visited_entries,
                     found=found,
                 )
         return tuple(sorted(found, key=lambda item: item[0]))

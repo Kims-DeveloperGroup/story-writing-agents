@@ -83,6 +83,19 @@
 > with explicit Current/Pending text, and compacts the completed Settings panel
 > into scope notices plus one changed-profile summary and detailed-command
 > handoff.
+> #377 gives every `/settings` control a form presentation with distinct title,
+> context, guidance, choices, descriptions, and editable-value regions. It also
+> keeps all seven clean-root or all nine dirty-root choices visible in the
+> current rendered frame while leaving global `/auth` and other generic pickers
+> unchanged.
+> #391 makes the changed-only Settings comparison part of the capable
+> Apply/Discard confirmation frame itself. The complete frame clears on every
+> exit, while ordinary-line fallback omits comparison context that it could not
+> erase.
+> #397 keeps true Settings state facts beside their row labels when physical
+> width leaves a useful shared summary column, and stacks those facts when it
+> does not. Descriptions, disabled reasons, and guidance keep their established
+> regions; standard pickers and configuration/runtime semantics are unchanged.
 > #350 adds persisted compact/detailed message presentation and its
 > configuration-only Apply fast path. #351 adds the generic speaker-aware chat
 > block layout. #352 installs that layout for conversation and retrieval output,
@@ -105,7 +118,8 @@ The words **must**, **must not**, and **may** below constrain the delivery
 issues. Requirements beyond the implemented #82, #83, #84, #85, #86, #79,
 #87, #94, #93, #105, #106, #111, #115, #119, #123, #126, #127, #142,
 #160, #162, #164, #209 provider OAuth initiative, #237, #241, #249, #252,
-#270, #271, #287, #303, #312, #319, #343, #350, #351, #352, #353, and #73
+#270, #271, #287, #303, #312, #319, #343, #350, #351, #352, #353, #377, #391,
+#397, and #73
 slices do not describe
 current production behavior.
 
@@ -130,14 +144,17 @@ current production behavior.
 | #271 settings apply guidance | Implemented: every retained value editor always states that entered changes remain pending in memory until Apply Changes, including initial entry, a valid-commit reopen, and validation. Each top-level Settings read independently compares the complete pending configuration with the opening baseline and shows the exact `save required` warning only when they differ. Complete guidance remains available in capable, narrow, `NO_COLOR`, and fallback presentation without changing persistence or picker policy. |
 | #287 settings pending actions | Implemented and superseded in labeling by #319: pending-state comparison, warning-suffix styling, confirmation, and retained-editor commit behavior remain; current UI exposes only dirty `Apply Changes (*Required)` and `Discard Changes`, while a clean root exposes neither action. Generic Picker/Prompt and universal transient-after-submit behavior remain unchanged. |
 | #303 visible Settings values and cancellation | Implemented: each one-level Settings root choice shows only its effective value, labeled `Current` when unchanged from the opening baseline or `Pending` when changed; Agents summarizes its nested pending-change count instead of flattening agent fields into the root. Dirty state uses exact Apply Changes guidance. Maximum debate rounds displays and preloads the effective value; the first Enter applies and reopens a fresh transient editor, and a second consecutive Enter of the same normalized value returns one Settings level, matching retained picker traversal. Escape remains the visible return command within Settings and the Discard-equivalent at the root. Clean root Escape exits silently; dirty Discard or root Escape opens confirmation, and a confirmed discard or dirty Ctrl-C/EOF whole-flow exit reports that pending changes were discarded exactly once. Confirmation NO or Escape returns to Settings without discarding. This controller-local traversal does not retain a submitted picker/prompt frame, alter generic input retention, change session/conversation navigation, or prevent the session resume picker from closing after commitment. |
-| #312 pending emphasis | Implemented: package-internal `Choice` accepts an additive opt-in `description_role` whose default preserves existing rendering. Semantic description roles reinforce explicit text and never make color the only state cue. Warning suffix and description spans remain independent through wrapping; disabled styling takes precedence over selected, selected over highlighted, and interaction styling over inline semantic roles. Settings keeps `Current` and default descriptions neutral, applies warning semantics to explicit `Pending` descriptions and nonzero nested Agent counts, and uses the same neutral Current/warning Pending distinction in dirty confirmation context. Plain and `NO_COLOR` text remain unchanged. Only a dirty root exposes Apply/Discard; confirmed Apply performs a final dirty recheck and emits success only after persistence and any applicable activation complete. A clean final recheck or any cancelled, interrupted, gated, conflicted, failed, or rolled-back path suppresses success. The no-changes confirmation panel remains a defensive internal projection. No supported export, generic navigation change, input-retention change, or resume-picker change is added. |
+| #312 pending emphasis | Implemented: package-internal `Choice` accepts an additive opt-in `description_role` whose default preserves existing rendering. Semantic roles reinforce explicit text and never make color the only state cue. Warning suffix and description spans remain independent through wrapping; disabled styling takes precedence over selected, selected over highlighted, and interaction styling over inline semantic roles. #397 now carries true Settings Current/Pending facts in its separate FORM-only summary role, while ordinary descriptions retain this contract. Dirty confirmation context keeps the same neutral Current/warning Pending distinction. Plain and `NO_COLOR` text remain unchanged. Only a dirty root exposes Apply/Discard; confirmed Apply performs a final dirty recheck and emits success only after persistence and any applicable activation complete. A clean final recheck or any cancelled, interrupted, gated, conflicted, failed, or rolled-back path suppresses success. The no-changes confirmation panel remains a defensive internal projection. No supported export, generic navigation change, input-retention change, or resume-picker change is added. |
 | #319 dirty-only Settings actions | Implemented: the clean Settings root contains exactly Language, Persona, Maximum debate rounds, Conversation storage, Conversation RAG, Message details, and Agents, with no persistence action or save-required notice. Dirty state appends exact plain `Apply Changes (*Required)` followed by `Discard Changes`; only `(*Required)` receives eligible warning styling, and Discard carries the explicit description `Pending changes will be discarded.` The dirty notice is exactly `[save required] Choose Apply Changes to persist pending changes`. Apply retains dirty-only YES/NO confirmation, a final dirty recheck, and persistence; mixed candidates retain full authentication/activation, Message-details-only uses its live presentation fast path, and RAG-only uses its no-auth/no-storage/no-runtime next-shell persistence path. Success reports only the applicable current-shell, RAG-next-shell, and storage-restart effects. Discard retains dirty confirmation and discard reporting. Internal save/cancel identities and the defensive clean route are not selectable UX. Existing semantic-role precedence, plain/`NO_COLOR` facts, Settings Escape/cancellation, transient input, and closing resume-picker contracts are unchanged. |
 | #343 compact Settings values and result | Implemented: every canonical Agents row shows its effective `Current:` or `Pending:` `(Provider/model/effort)` profile, and Provider, Model, and Effort independently show their effective Current/Pending value. Omitted model/effort values render as `provider default`; launch overrides remain disabled and truthful. Pending stays textual under narrow, plain, fallback, and `NO_COLOR` rendering, and reading the summaries performs no authentication, discovery, persistence, or provider invocation. The completed Settings panel preserves distinct current-shell runtime, next-shell RAG, and next-shell storage scope notices, replaces verbose profile sections with one changed-profile count, adds fresh-thread/story-session-context guidance only for provider switches, and hands active values and confirmation to `/agents` and thread and source details to `/status`. |
+| #377 structured Settings controls | Implemented: every picker and text/number input owned by `/settings`, including its borrowed authentication pickers, uses the explicit internal form presentation. Titles, optional Context, guidance, Choices count, labels, state summaries, descriptions, notices, current value, and new-value input remain distinct without `[available]`, `[highlighted]`, `[focused]`, or `[open]` labels. The clean root renders all seven choices and the dirty root all nine in the current frame; nested catalogs retain a seven-choice window and an absolute `Choices N/M` count. Global `/auth`, omitted-resume selection, and other generic pickers retain their standard presentation and seven-row window. |
+| #397 responsive Settings state summaries | Implemented: internal FORM picker input aligns eligible Current/Pending state summaries after ` — ` in one complete-picker physical-cell column when at least 20 content cells remain, including the exact 20-cell boundary. With 19 or fewer cells it stacks summaries at the established detail indent. Summaries wrap without truncation and continue at the shared column; live and numbered fallback use the same decision. Current uses muted semantics and Pending or a nonzero Agents count uses warning semantics while the words remain visible without color. Only Settings root state, nested Conversation RAG Provider/Automatic state, Agents roster profiles, Agent Provider/Model/Effort state, and a nonzero Agents pending count opt in; clean Agents has no summary. Descriptions and disabled reasons stay stacked, and STANDARD/static Picker and SuggestionPalette rendering remain unchanged. |
 | #350 message-details preference | Implemented: `show_message_details` is a strict boolean in the closed twelve-key system schema, defaults to false when missing without read-time rewrite, and is edited through the exact Message details Off/On root row. Off is compact presentation rather than stored-content deletion. A details-only Apply prepares, verifies, and commits configuration without provider/storage/backend/runtime/route/thread activation work; mixed changes retain the full path. |
-| #351 speaker-aware message layout | Implemented and refined by #367: generic Message remains inline by default; opt-in chat blocks place the full stable-accent speaker header directly above the default-styled `│ ` body rail, then contribute one terminal-default trailing separator row. Unicode physical-cell wrapping and row-local narrow fallback remain intact. |
+| #351 speaker-aware message layout | Implemented and refined by #367/#372: generic Message remains inline by default; opt-in chat blocks place the full stable-accent speaker header above optional subordinate metadata and the default-styled `│ ` body rail, then contribute one terminal-default trailing separator row. Unicode physical-cell wrapping and row-local narrow fallback remain intact. |
 | #352 readable conversation output | Implemented: accepted user submissions, direct/retrieval replies, and transcript/history events use speaker-aware chat blocks. Message details gates only the documented execution/citation/identity diagnostics; full bodies, human direction, event position, and Sequence remain visible, while `/agents` and `/status` stay fully diagnostic. |
 | #353 atomic debate output | Implemented and refined by #368: each accepted event writes one phase-named `Debate phase · DISPLAY_NAME` Panel containing ordered progress fields, contiguous persisted speech sections, fixed safe error replacement or an in-panel read warning, and optional Handoff/Kind details. Cursor and event caches advance only after the atomic write; successful consensus receives a separate final `Consensus` Record, while deadlock/failed outcomes use typed errors. |
-| #368 named debate phases | Implemented: every progress Panel title is `Debate phase · DISPLAY_NAME` using a trusted exhaustive mapping. Active headings omit the meaningless `[loading]` marker while their Outcome field retains its existing loading/info state; Consensus, Deadlock, Failed, and Interrupted headings retain completed, error, error, and cancelled states. The canonical Phase field and one-write/cache-commit contract are unchanged. |
+| #368 named debate phases | Implemented and refined by #372: every progress Panel title is `Debate phase · DISPLAY_NAME` using a trusted exhaustive mapping. Active headings omit the meaningless `[loading]` marker while their Outcome field retains its existing loading/info state; successful completion is silent, while Deadlock, Failed, and Interrupted retain error, error, and cancelled states. The canonical Phase field and one-write/cache-commit contract are unchanged. |
+| #372 compact completion-free messages | Implemented: generated `COMPLETED` state is visually silent across the semantic renderer, while actionable states and semantic result roles remain textual. Chat-block execution metadata occupies a subordinate default-styled row; routine direct/retrieval details use `Provider / Model / Effort · Thread`, adding only exceptional `pending` and `launch override` qualifiers. Literal content is never rewritten, and `/agents` and `/status` retain full provenance. |
 | #105 agent reply presentation | Implemented: direct, retrieval, transcript, and focused-history agent replies use a presentation-only strict JSON object/array projection with exact unchanged fallback cases and two-space Unicode-preserving output; stored/provider content remains unchanged. Generic inline `AGENT` output retains bold terminal-default foreground styling, while chat blocks accent only the speaker header. |
 | #106 transient settings UI | Implemented: settings picker and prompt reads clear capable transient rows, suppress duplicate fallback finals, and keep nested Escape silent. #142 later makes this lifecycle universal for capable submitted input. |
 | #111 advisory progress indicator | Implemented: one advisory and consensus waiting indicator runs only on capable raw streams, including `NO_COLOR`; callback, non-TTY, `TERM=dumb`, and uncertain-capability paths remain silent, and no general animation or `[routing]`/`[waiting]` record is introduced. #331 supersedes its one-cell presentation. |
@@ -146,7 +163,8 @@ current production behavior.
 | #340 wider loading row | Implemented: the same text-free block-shade shimmer now uses a sixteen-cell track when width permits, while preserving width fitting, rightmost-cell reservation, color, and spatially equivalent `NO_COLOR` motion. |
 | #332 startup loading progress | Implemented: capable interactive startup shows the same text-free colorful shimmer during conversation-storage activation before the welcome and during one continuous authenticated CLI-context/backend/controller preparation span before the lobby; both rows clear before the next view, fallback is silent, and startup copy, errors, ordering, and ownership transfer remain unchanged. |
 | #333 delayed picker progress | Implemented: native authentication status probes and persisted session/conversation reads before omitted resume pickers run off-loop beneath the same text-free colorful shimmer; progress clears before refreshed authentication, picker, empty, or error views, while choices, fresh-read guarantees, cancellation, mapping, and silent fallback remain unchanged. |
-| #115 settings lifecycle | Implemented: capable committed `/settings` input is cleared from the live display without deleting its history entry; dirty-only Apply and Discard use transient selectable YES/NO confirmations; confirmation context shows only changed Current/Pending fields with `(Changed)` cues, while a no-changes panel remains defensive internal projection; fallback paths preserve visible committed input and report no cleanup they cannot perform. |
+| #115 settings lifecycle | Implemented: capable committed `/settings` input is cleared from the live display without deleting its history entry; dirty-only Apply and Discard use transient selectable YES/NO confirmations; capable confirmation context shows only changed Current/Pending fields with `(Changed)` cues, while a no-changes panel remains defensive internal projection; fallback paths preserve visible committed input and report no cleanup they cannot perform. #391 defines the current capable-frame ownership and fallback omission. |
+| #391 transient Settings confirmation context | Implemented: on capable streams, the changed-only Current/Pending comparison and applicable activation notice are prepended to the same live FORM frame as the Apply/Discard YES/NO picker. The driver clears that complete frame before every returned outcome and attempts the same cleanup before propagating a failure, so the comparison is not a separate durable semantic panel. Ordinary-line, `TERM=dumb`, non-POSIX, and uncertain-capability fallback omits the comparison and activation context, including validation retries, because it cannot erase printed output. Apply/Discard outcomes and persistence behavior are unchanged. |
 | #119 debate visibility | Implemented and superseded in presentation by #353/#368: its handoff/action facts and durable messages now appear together in one atomic phase-named Panel per progress event. |
 | #123 Panel splitters | Implemented: every semantic `Panel` renders a responsive ASCII top splitter carrying its title and state plus a bottom splitter, without side borders or changes to interaction/runtime behavior. |
 | #126 Enter completion and spacing | Implemented: at capable main prompts, Enter applies a highlighted suggestion without submitting and dismisses the palette so a second Enter submits; Enter and Tab add one ASCII trailing space only when the replaced token ends at the buffer end. |
@@ -749,12 +767,16 @@ story[novel:lead]> @plot Check the current constraints.
 ```
 
 Direct and retrieval replies always show their human speaker and full body.
-Message details On adds one compact metadata string in exact order: Provider
-with source, Model with source, Effort with source, Confirmation, and Thread.
-Off omits that string; the accepted user message receives no diagnostic
-metadata. These values come from the backend profile used for argv. Model prose
-and self-identification are not execution evidence, and metadata is not written
-to the transcript or retroactively added to prior replies.
+Message details On adds one subordinate default-styled metadata row in exact
+order: Provider / Model / Effort, then Thread. It appends `pending` only before
+the first successful call under the profile and `launch override` only when at
+least one effective value came from the launch command. Routine confirmed
+state and per-value source labels are omitted here; `/agents` and `/status`
+retain the full diagnostics. Off omits the row; the accepted user message
+receives no diagnostic metadata. These values come from the backend profile
+used for argv. Model prose and self-identification are not execution evidence,
+and metadata is not written to the transcript or retroactively added to prior
+replies.
 
 Retrieval sources always show Subject and Conversation. Event citations always
 add Sequence and, only with details On, Turn before Sequence and Kind after it.
@@ -772,8 +794,9 @@ sentence-case display names are Started, Drafted, Audit started, Audit
 completed, Synthesized, Artifacts committed, Consensus, Deadlock, Failed, and
 Interrupted. Active headings are state-neutral instead of displaying the
 meaningless `[loading]` marker; the Outcome field retains its existing
-loading/info state. Terminal headings retain `[completed]`, `[error]`, or
-`[cancelled]` as applicable. The canonical Phase field remains present. Fields
+loading/info state. Successful terminal headings are visually complete without
+a redundant state label; `[error]` and `[cancelled]` remain visible as
+applicable. The canonical Phase field remains present. Fields
 are ordered Debate ID, Phase, Round, Revision, Action, Outcome, and Conflicts.
 Message details On inserts Handoff between Revision and Action. `STARTED`
 appends the included/fresh context notice.
@@ -906,11 +929,12 @@ otherwise duplicate parser grammar.
 
 ### Picker semantics
 
-> **Implemented by #87 as a package-internal foundation and consumed by #93
-> and #142:** picker state, controls, rendering, driver input, callback
-> adaptation, and terminal outcomes remain internal. `/settings` uses the
-> dedicated picker. A submitted omitted resume command uses it only when a
-> fresh lifecycle/catalog read succeeds with eligible rows; empty and failed
+> **Implemented by #87 as a package-internal foundation and consumed by #93,
+> #142, and #377:** picker state, controls, rendering, driver input, callback
+> adaptation, presentation selection, and terminal outcomes remain internal.
+> `/settings` selects the form presentation; all other consumers use the
+> standard presentation. A submitted omitted resume command uses the picker
+> only when a fresh lifecycle/catalog read succeeds with eligible rows; empty and failed
 > reads report without opening it. Capable streams render an opened picker live
 > and transient, while ordinary-line fallback uses its numbered form. A
 > pre-Enter dynamic-choice commit is already explicit and bypasses this picker.
@@ -926,24 +950,43 @@ and `eof` outcomes without selection or cancellation. Other live keys are
 no-ops. Empty and all-disabled pickers expose explicit `empty` or `disabled`
 state and cannot commit.
 
-Selection and highlight are independent until commit, so one visible choice may
-be `[selected]` while another is `[highlighted]`; a committed choice carries
-both cues. Choice refresh preserves still-enabled selection and highlight by
-opaque identity, otherwise chooses an enabled item at or after the former
+Selection and highlight are independent until commit. Standard presentation
+uses its established bracketed selected/highlighted cues. Form presentation
+uses `>` for the active row, `(selected)` for the selected value, and
+`(disabled)` plus a stacked `Disabled:` reason for unavailable values; it does
+not print `[available]`, `[highlighted]`, `[focused]`, or `[open]`. Choice
+refresh preserves still-enabled selection and highlight by opaque identity,
+otherwise chooses an enabled item at or after the former
 ordinal and then before it. Missing or disabled selection clears. Opaque
 identities are correlation keys only and never render.
 
-Live rendering shows at most seven absolute-numbered choices in a contiguous
-window that minimally follows the highlight. It reports highlight/total and
-window range, retains disabled reasons and descriptions, and emits a numbered
-label-only `Selected outside view` summary when selection falls outside the
-window. Every redraw observes current width. Plain, fixed ANSI, `NO_COLOR`, and
-narrow output retain the same facts and simultaneous state cues without an
+Existing standard consumers retain the default seven-choice, absolute-numbered
+contiguous viewport that minimally follows the highlight. Standard presentation
+reports highlight/total and window range and retains its established out-of-
+window selection summary. The validated one-to-nine limit is independent of
+presentation; Settings is the only current caller overriding the default. Its
+nested catalogs retain seven, while its root uses the current complete choice
+count: seven while clean and nine while dirty. With an active row, its heading
+is only `Choices N/M`, where `N` is the active absolute ordinal; an all-disabled
+or empty form instead says `Choices M`. It omits the shown-range text.
+FORM picker input may opt a true state fact into a responsive summary. One
+column is derived from the widest fully decorated label in the complete picker
+using physical-cell width. When at least 20 cells remain from that column to
+the right edge, summarized rows align after ` — `; wrapped continuation begins
+at that same column. With 19 or fewer cells, each summary stacks at the
+established detail indent. Descriptions and `Disabled:` reasons always stay
+stacked below their labels, and an out-of-window selected value is summarized
+as `Selected: N. LABEL`. Every redraw observes current width and recomputes the
+complete frame line count. Plain, fixed ANSI, `NO_COLOR`, and narrow output
+retain the same untruncated facts and simultaneous state cues without an
 alternate screen or scrollback erasure.
 
 Plain fallback renders the complete numbered choice list, guidance, and a final
-focused prompt with trailing space and no LF. Exact `/cancel` cancels; blank
-commits the current highlight; an ASCII decimal ordinal without a leading zero
+prompt with trailing space and no LF. Form fallback uses `Choice > ` and says
+`Enter a choice number, press Enter for the active choice, or enter /cancel.`;
+standard fallback retains its established focused prompt and wording. Exact
+`/cancel` cancels; blank commits the current highlight; an ASCII decimal
+ordinal without a leading zero
 commits that enabled choice. Disabled, zero, leading-zero, signed, spaced,
 non-ASCII, named, out-of-range, and other answers are rejected with exactly one
 `[validation] Enter an enabled choice number, press Enter for the highlighted
@@ -1058,32 +1101,53 @@ runtime-owned freshness state rather than an editable settings field. Desired
 storage and Conversation RAG remain next-shell settings even when execution
 settings from the same Apply Changes action activate in the current shell.
 
-The presentation uses one `Panel` with `Section`, `Field`, and `Notice` values,
-plus one focused `Picker` or `Prompt`. It is not a new component or a
-general-purpose form abstraction. One section shows validated current values;
-another shows independent pending values. Controls render without the snapshot
-panel. A clean root contains exactly Language, Persona, Maximum debate rounds,
+The presentation reuses `Prompt`, `Picker`, `Choice`, `Field`, and `Notice`
+through the package-internal `FORM` presentation; it is not a new component or
+a general-purpose form abstraction. Every control entered from `/settings`
+uses that presentation, including the authentication picker borrowed while
+editing Provider. Global `/auth`, omitted-resume selection, and every other
+generic picker retain `STANDARD` presentation. Settings form controls show a
+simple current-view title, optional `Context:`, separate guidance, a blank-
+separated `Choices N/M` region, responsive state summaries, and stacked
+descriptions. They do not render a breadcrumb-like `Settings/Agents/...` title
+or the standard `[focused]`, `[open]`, `[available]`, or `[highlighted]`
+labels.
+
+A clean root contains exactly Language, Persona, Maximum debate rounds,
 Conversation storage, Conversation RAG, Message details, and Agents, with no
-persistence actions or guidance. Dirty state appends `Apply Changes
-(*Required)` and `Discard Changes`, for nine choices. Apply
-Changes opens the transient `Apply changes?` YES/NO confirmation; Discard
+persistence actions or guidance. Its current frame contains all seven rows.
+Dirty state appends `Apply Changes (*Required)` and `Discard Changes`, and its
+current frame contains all nine rows regardless of the active row. “Current
+frame” includes the live redraw or complete fallback prompt in terminal
+scrollback; it does not promise that all rows fit the physical terminal height
+without terminal scrolling. Nested catalogs retain a seven-row choice window.
+Apply Changes opens the transient `Apply changes?` YES/NO confirmation; Discard
 Changes or root Escape opens `Discard changes?` while dirty, and clean root
 Escape exits without confirmation. Confirmation context shows only changed
 fields in both Current and Pending, with each displayed value marked
 `(Changed)`, followed by one activation notice joining only the applicable
 sentences for live runtime, next-shell storage, and next-shell Conversation RAG
-effects.
+effects. On a capable stream, that context is prepended to the same live FORM
+frame as the YES/NO picker and the complete frame is cleared before any
+outcome returns; cleanup is also attempted before a failure propagates. The
+controller does not emit the comparison as a separate durable semantic panel.
+Ordinary-line fallback, including `TERM=dumb`, omits both the comparison and
+activation context because it cannot erase them; its YES/NO action remains the
+same.
 A defensive clean confirmation shows only `No pending settings changes.` and is
 not selectable clean-root UX.
 Within Agents, every canonical agent choice includes one effective
 `Current: (Provider/model/effort)` or
-`Pending: (Provider/model/effort)` description. Within Agent settings,
+`Pending: (Provider/model/effort)` state summary. Within Agent settings,
 Provider, Model, and Effort each independently include an effective
-`Current: value` or `Pending: value` description. Missing effective model and
-effort values render as `provider default`. The comparison is against the active runtime profile,
-so an inactive-provider-only stored-value edit can leave these effective
-descriptions `Current` while the root Agents pending count still records the
-configuration difference.
+`Current: value` or `Pending: value` state summary. The same summary contract
+is limited to the root one-level Current/Pending facts, a nonzero root Agents
+pending count, and nested Conversation RAG Provider/Automatic facts. Clean
+Agents has no summary. Missing effective model and effort values render as
+`provider default`. The comparison is against the active runtime profile, so
+an inactive-provider-only stored-value edit can leave these effective summaries
+`Current` while the root Agents pending count still records the configuration
+difference.
 The controller keeps snapshots
 call-local and does not emit the diff while opening, navigating, or editing;
 top-level cancellation does not claim a panel that was not rendered.
@@ -1096,6 +1160,28 @@ return, while fallback readers retain printed input and add no synthetic final
 control frame. Any implementation need for a new semantic
 component must first revise the closed vocabulary through the repository's
 modularity process.
+
+The [Story sessions guide](../guides/story-sessions.md#edit-persistent-settings)
+shows representative wide inline and narrow stacked Settings rows. ANSI may reinforce
+active, selected, pending, warning, and disabled states, but the pointer,
+suffixes, values, and reasons remain the authoritative text.
+
+Numeric and Custom model inputs separate title, optional context, guidance,
+current value, validation/result context, and the editable line. For example:
+
+```text
+Maximum debate rounds
+Context: settings
+
+Enter a nonnegative integer; 0 is audit-only. Enter applies the value and keeps this editor open; press Esc to return to Settings. Entered changes remain pending in memory and are not saved; choose Apply Changes in Settings to persist them.
+
+Current value: 1
+
+New value >
+```
+
+The live/fallback input text includes the required single trailing space after
+`>`; it is omitted from the Markdown sample to avoid invisible whitespace.
 
 Every retained Language, Persona, Maximum debate rounds, Conversation storage,
 Conversation RAG Provider/Automatic, Message details, Provider, Model, Custom
@@ -1149,15 +1235,17 @@ styling applies only to `(*Required)`; the preceding separator space and
 projections retain the same labels, order, description, and guidance.
 
 The nested edit controls and titles are exactly Provider, Model, and Effort.
-Current/Pending confirmation remains intentionally provider-qualified—each
-agent can show Codex model, Codex reasoning, Antigravity model, and Antigravity
-effort rows—so inactive stored routes and changes remain unambiguous.
+Capable Current/Pending confirmation context remains intentionally
+provider-qualified—each agent can show Codex model, Codex reasoning,
+Antigravity model, and Antigravity effort rows—so inactive stored routes and
+changes remain unambiguous while that transient context is visible. Fallback
+confirmation omits the comparison context.
 
-Agent and field descriptions use the backend's local validated effective-value
-resolver. `Current` is neutral and `Pending` is warning-semantic, but both words
+Agent and field summaries use the backend's local validated effective-value
+resolver. `Current` is muted and `Pending` is warning-semantic, but both words
 and all values remain textual in plain and `NO_COLOR` output and survive narrow
-stacking/windowing. Description rendering does not authenticate, discover
-catalogs, persist configuration, or invoke a provider. A launch-override field
+stacking/windowing. Summary rendering does not authenticate, discover catalogs,
+persist configuration, or invoke a provider. A launch-override field
 is disabled with its existing textual reason and displays the effective
 override value rather than the masked persisted candidate.
 
@@ -1277,7 +1365,10 @@ one control is focused:
   with highlighted YES and NO choices plus the changed-only Current/Pending
   context and a candidate-specific notice containing only applicable
   current-shell-runtime, next-shell-storage, and next-shell-RAG sentences. YES
-  first rechecks the exact immutable candidate. If Message details
+  first rechecks the exact immutable candidate. On capable streams the context
+  and picker form one live frame that clears before YES, NO, Escape, Ctrl-C, or
+  EOF returns and is also cleaned up on the established failure path. Line
+  fallback omits the context and displays only the confirmation control. If Message details
   is its sole difference from the opening baseline, the controller prepares,
   verifies, and commits configuration without authentication, backend/runtime
   staging or activation, storage readiness, route switching or generation, or
@@ -1571,14 +1662,21 @@ Every semantic `Panel` uses this canonical plain shape at a sufficiently wide
 width:
 
 ```text
---- Panel title [completed] ------------
+--- Panel title ------------------------
   PANEL CONTENT
 ----------------------------------------
 ```
 
+Generated `COMPLETED` state is visually silent for every component. Actionable
+states such as `[loading]`, `[open]`, `[error]`, `[cancelled]`, and `[empty]`
+remain visible, as do meaningful result-role suffixes such as `[success]`,
+`[warning]`, `[error]`, and `[info]`. Literal bracketed text supplied in a
+sender, label, metadata value, or content body is data and is never removed.
+
 The top splitter begins with the ASCII prefix `--- `, carries the sanitized
-title and textual state, and fills its remaining usable width with `-`. The
-bottom splitter uses `-` across the usable width. There are no side borders.
+title and actionable textual state, and fills its remaining usable width with
+`-`. The bottom splitter uses `-` across the usable width. There are no side
+borders.
 At narrow widths the title and state wrap with visible continuation indentation,
 and the trailing top run is omitted when fewer than four cells remain; content
 and the bottom splitter are retained. The splitter lines remain part of the
@@ -1804,11 +1902,17 @@ remain compatible.
 #87 adds package-private `PickerControlState` and `PickerViewport` contracts
 alongside the existing semantic `Picker`, plus the unlisted facade identities
 `Choice`, `Prompt`, `ControlOutcome`, `ControlOutcomeKind`, and
-`InteractivePickerInput`. `PickerControlState` and `PickerViewport` remain
-outside the closed `Component` union. `InteractivePickerInput` is a
-resource-free internal adapter over an `InteractiveTerminal`; its
-`read_picker()` method is not supported public API. No root export, public
-`__all__` entry, existing signature, or direct application consumer changes.
+`InteractivePickerInput`. #377 adds the unlisted `InputPresentation` identity
+and optional internal picker/prompt presentation arguments; `STANDARD` remains
+the default, while `/settings` alone selects `FORM` and may set a bounded
+choice limit. #397 adds package-private `Choice.form_summary` and
+`Choice.form_summary_role`; interactive FORM picker projections alone consume
+them, and their defaults preserve every existing caller. `PickerControlState`
+and `PickerViewport` remain outside the
+closed `Component` union. `InteractivePickerInput` is a resource-free internal
+adapter over an `InteractiveTerminal`; its `read_picker()` method is not
+supported public API. No root export, public `__all__` entry, supported
+signature, or direct application consumer changes.
 
 #162 adds the unlisted facade identities `InteractiveTextViewer`,
 `TextViewerExitKind`, and `TextViewerResult`. `read_range()` accepts supplied
@@ -1984,7 +2088,7 @@ edge.
 | Retrieval progress and summaries | `Notice`, `Record`, `ListView`, `Field`, `Message` | Loading, citations/context accounting, full reply; profile and event Turn/Kind only with details On, while source Subject/Conversation and event Sequence remain visible; result/error/cancelled | #83 and #352 (implemented accepted views) |
 | Consensus progress and summaries | `Panel`, `Section`, `Notice`, `Record`, `Field`, `Message` | Accepted exact-body inline/fresh/composed user prompt before request context and progress; validated output path; draft source path without source bytes; one atomic phase panel with ordered facts, contiguous persisted full speeches, fixed error/read-warning safety, optional Handoff/Kind details, and post-write cursor/cache commits; successful consensus gets a separate final `Consensus` Record, while deadlock/failed outcomes use typed errors | #83/#119 progress, #275 prompt context, and #353 atomic presentation (implemented) |
 | Interactive errors and recovery hints | `Notice`, `Field` | Trusted code, redaction, error state, next action, no raw diagnostics; post-workspace application errors supply one fixed sanitized debug-log availability notice, while pre-workspace errors include no debug-log path | #83, #131 terminal seam, and #132 application wiring (implemented) |
-| Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Exact seven-row clean Settings root for Language, Persona, Maximum debate rounds, Conversation storage, Conversation RAG, Message details, and Agents plus the Settings/Conversation RAG/Agents/Agent settings hierarchy; neutral `Current` or warning-semantic `Pending` descriptions, including the nested RAG provider/automatic summary and Agents pending count; dirty-only `Apply Changes (*Required)` then `Discard Changes`; retained value editors and provider-qualified agent summaries; candidate-specific live/storage/RAG activation notice; exact Message-details-only live fast path; exact RAG-only no-auth/no-storage/no-runtime/no-probe next-shell persistence path; mixed guarded persistence with only applicable live, RAG-next-shell, and storage-restart results; provider-switch fresh-thread/story-session-context guidance; and complete narrow/plain/`NO_COLOR` compatibility | #93, #106, #115, #252, #261, #270, #271, #287, #299, #303, #312, #319, #321, #343, #349, and #350 (implemented) |
+| Settings current/pending view | `Panel`, `Section`, `Field`, `Prompt`, `Picker`, `Notice` | Form-only separation of title/context, guidance, choices, state summaries, descriptions, current value, and new input; complete seven-row clean or nine-row dirty root frame; seven-row nested windows with absolute `Choices N/M`; exact Settings/Conversation RAG/Agents/Agent settings hierarchy; muted `Current` and warning-semantic `Pending` summaries plus the nonzero Agents count; complete-picker physical-cell alignment with exact 20-cell inline/19-cell stacked behavior and untruncated continuation; dirty-only `Apply Changes (*Required)` then `Discard Changes`; retained value editors and provider-qualified agent summaries; capable-only changed comparison and candidate-specific activation notice inside the transient confirmation frame, with complete cleanup on every exit and fallback omission; exact Message-details-only live fast path; exact RAG-only no-auth/no-storage/no-runtime/no-probe next-shell persistence path; mixed guarded persistence with only applicable live, RAG-next-shell, and storage-restart results; provider-switch fresh-thread/story-session-context guidance; and complete narrow/plain/`NO_COLOR` compatibility | #93, #106, #115, #252, #261, #270, #271, #287, #299, #303, #312, #319, #321, #343, #349, #350, #377, #391, and #397 (implemented) |
 | Welcome and provider authentication | Private startup wordmark renderer, `Prompt`, `Picker`, `Choice`, `Notice` | Four bounded capable welcome frames with physical-width wide/compact/narrow projections; clean prefix-free ASCII wordmark; static accessibility fallback; four explicit provider states; disabled unavailable choice; transient guidance/result; completion-aware exact-child return; no provider-controlled content | #209, #237, #241, #249 (implemented) |
 
 ### Control groups
@@ -2001,7 +2105,7 @@ edge.
 | Independent ranged text viewer | Private viewer document/state/viewport/result values, not a `Component` | Ordinary versus anchored clamped navigation, inclusive commit, typed noncommit exits, height-bounded alternate-screen rendering, strict complete-text fallback, and no retained caller or composer state | #162 foundation; #164 provider-bound shell caller (implemented) |
 | Artifact-reference activation | Private marker projection plus existing palette/viewer controls | Provider-span-only `$` completion; immediate exact-`$$` ranged-source palette; direct `$${path}` or highlighted Enter/Tab viewer entry; exact origin restoration; multiple ordered indicators; fixed content-free errors; and fallback second confirmation | #164 (implemented) |
 | Live omitted-resume choices | `SuggestionPalette`, `Picker`, `Prompt`, `Field` | Exact capable command only; controller-owned ordered rows/highlight/fresh validation; Up/Down preview; one-Enter explicit commit; Escape dismissal; Tab no-op; submitted omitted command uses a live capable or numbered fallback picker only after a successful fresh read returns eligible rows; empty/error short-circuit | #142 (implemented) |
-| Settings field and action navigation | `Panel`, `Prompt`, `Picker`, `Field`, `Notice` | Single focus; Settings > Conversation RAG and Settings > Agents > Agent settings navigation; retained Language/Persona/rounds/Conversation storage/RAG Provider/RAG Automatic/Message details/Provider/Model/Custom model/Effort editors; first-commit reopen and second-consecutive-equivalent-commit return; clean root with seven choices and no persistence actions; dirty-only Apply/Discard confirmation and final recheck; details-only live presentation fast path; RAG-only system-config persistence with no authentication, storage, runtime, route/thread, composition, probe/install, catalog, subprocess, socket, or network work; mixed full authentication/activation with next-shell-only storage and RAG; candidate-specific scope notices; subordinate authentication return to Provider; universal capable cleanup and honest fallback visibility; and no generic navigation, picker-retention, or session-resume change | #93, #106, #115, #142, #252, #261, #270, #271, #287, #299, #303, #312, #319, #321, #349, and #350 (implemented) |
+| Settings field and action navigation | `Panel`, `Prompt`, `Picker`, `Field`, `Notice` | Single focus; Settings-only form presentation, including borrowed authentication, with simple titles and textual active/selected/disabled cues; Settings > Conversation RAG and Settings > Agents > Agent settings navigation; retained Language/Persona/rounds/Conversation storage/RAG Provider/RAG Automatic/Message details/Provider/Model/Custom model/Effort editors; first-commit reopen and second-consecutive-equivalent-commit return; clean root with seven choices and no persistence actions; dirty root with all nine rows plus Apply/Discard confirmation and final recheck; details-only live presentation fast path; RAG-only system-config persistence with no authentication, storage, runtime, route/thread, composition, probe/install, catalog, subprocess, socket, or network work; mixed full authentication/activation with next-shell-only storage and RAG; candidate-specific scope notices; subordinate authentication return to Provider; universal capable cleanup and honest fallback visibility; and unchanged standard generic picker navigation and session-resume behavior | #93, #106, #115, #142, #252, #261, #270, #271, #287, #299, #303, #312, #319, #321, #349, #350, and #377 (implemented) |
 | Authentication and startup gate | Private `StartupWelcome`, `Picker`, `Choice`, `Notice`, unlisted progress adapter | Text-free colorful storage-activation shimmer before welcome; four stage-only startup values and dedicated projection; fresh probes; native-login handoff and completion-aware return; initial/effective-route loops; absent-only default; `/auth`; settings assignment/Apply gate; one continuous authenticated CLI-context/backend/controller shimmer before lobby; capable cleanup and silent fallback | #209, #241, #249, #332 (implemented) |
 
 Contextual non-main-prompt suggestions from completed issue #73 use the same
@@ -2077,6 +2181,16 @@ verifies unchanged stateless terminal, public API, and storage contracts.
 Issue #350 covers strict-boolean/missing-default/canonical-save/downgrade schema
 behavior, the exact sixth Settings row, Off/On semantics, field matrices, and
 the details-only prepare/verify/commit fast path versus mixed full activation.
+Issue #377 covers the internal standard/form presentation split, Settings-only
+form routing including subordinate authentication, complete clean/dirty root
+frames, bounded nested catalogs, absolute `Choices N/M`, structured choice facts,
+structured editable values, ANSI/plain equivalence, fallback wording, and
+unchanged generic picker behavior.
+Issue #397 covers the internal FORM-only state-summary opt-in, complete-picker
+physical-cell alignment, exact 20-cell inline/19-cell stacked boundary,
+untruncated wrapping and continuation alignment, live/fallback parity,
+Current/Pending color-independent roles, Settings-only controller scope, resize
+cleanup line counts, and unchanged standard/static/palette rendering.
 Issue #351 covers the unlisted inline/chat-block and speaker-accent values,
 header/separator/rail topology, header-only accents, sanitization before
 physical-cell wrapping, narrow row-local rail fallback, and the unchanged exact
@@ -2118,15 +2232,15 @@ provider-native threads.
 | Mode-gated accepted-input projection | The unlisted semantic adapter validates and renders one closed component before delegating its complete LF-terminated output; callback construction stays silent; stream `LIVE` writes exactly once after capable cleanup through the progress-safe persistent path; stream `FALLBACK` stays silent; `UNDECIDED` rejects without output; render/write failures propagate; no accepted payload or token is retained; public exports, constructor, actions, and supported method signatures remain exact. |
 | Informative-content retention | Capable ordinary, `/say`, and routed advisory turns clear the editable frame then render one exact-body attributed user `Message` before progress/reply; inline, fresh, and composer consensus prompts receive the same one-record treatment followed by safe output/source context; accepted content remains through success, provider failure, cancellation, and post-acceptance interrupt; pre-acceptance rejection never claims a send; normalized search/filter context and resolved transcript page context appear before their operations; fallback retains one visible representation without verbatim duplication; draft-file and referenced-source bytes, settings/configuration fields, picker choices, confirmations, credentials, provider-native input, and raw diagnostics receive no automatic echo; later input cleanup cannot erase existing informative output; no projection adds a storage, transcript-retention, provider-history, or audit guarantee. |
 | Panel framing | Every semantic `Panel` entry path uses the ASCII top-title and bottom splitters in plain, ANSI, and `NO_COLOR` output; wide, narrow, wrapped-title/state, and physical-cell widths preserve content and omit side borders; non-Panel components remain unframed; one Panel remains one callback write. |
-| Speaker-aware message and reply presentation | Generic Message remains inline; user/agent chat blocks place full headers directly above default-styled `│ ` rails and own one unrailed trailing separator, producing exactly one visible blank row between adjacent owners while preserving railed explicit blank/trailing body lines; header-only stable accents, physical-cell wrapping, whitespace/JSON/CJK safety, and row-local narrow fallback remain; complete strict JSON object/array formatting only with unchanged fallback and stored/provider bytes; compact direct/retrieval full replies versus detailed Provider/Model/Effort sources, Confirmation, and Thread; accepted users have no diagnostics; retrieval citations and transcript/history compact/detailed matrices remain exact; fallback meaning is complete and nonduplicated rather than topologically identical; `/agents` and `/status` remain fully diagnostic. |
-| Debate phase presentation | One `Debate phase · DISPLAY_NAME` Panel and writer call per event; exhaustive trusted sentence-case phase names; no loading marker in active headings; completed/error/cancelled terminal headings; unchanged canonical Phase and loading/info Outcome fields; exact field order with details-only Handoff; included/fresh notice; contiguous persisted phase/round/revision Sections; complete normal chat-block speech with details-only Kind; fixed error text and in-panel read warning; cursor-overrun restart; cursor/conflict/event/last-started state committed only after a successful write; retry sees the same suffix; successful consensus gets a separate final `Consensus` Record, while deadlock/failed outcomes use typed errors. |
+| Speaker-aware message and reply presentation | Generic Message remains inline; user/agent chat blocks place full headers directly above optional subordinate default-styled metadata and default-styled `│ ` rails, then own one unrailed trailing separator, producing exactly one visible blank row between adjacent owners while preserving railed explicit blank/trailing body lines; header-only stable accents, physical-cell wrapping, whitespace/JSON/CJK safety, and row-local narrow fallback remain; complete strict JSON object/array formatting only with unchanged fallback and stored/provider bytes; compact direct/retrieval full replies versus details-only `Provider / Model / Effort · Thread` with exceptional `pending`/`launch override`; accepted users have no diagnostics; retrieval citations and transcript/history compact/detailed matrices remain exact; fallback meaning is complete and nonduplicated rather than topologically identical; `/agents` and `/status` remain fully diagnostic. |
+| Debate phase presentation | One `Debate phase · DISPLAY_NAME` Panel and writer call per event; exhaustive trusted sentence-case phase names; no loading marker in active headings; silent completion with visible error/cancelled terminal headings; unchanged canonical Phase and loading/info Outcome fields; exact field order with details-only Handoff; included/fresh notice; contiguous persisted phase/round/revision Sections; complete normal chat-block speech with details-only Kind; fixed error text and in-panel read warning; cursor-overrun restart; cursor/conflict/event/last-started state committed only after a successful write; retry sees the same suffix; successful consensus gets a separate final `Consensus` Record, while deadlock/failed outcomes use typed errors. |
 | State transitions | Pure tests cover idle/focused/open/highlighted/selected/disabled/loading/empty/error/cancelled/completed states and invalid or boundary transitions. |
 | History | Exact whitespace-preserving commits including invalid commands, duplicates, `/quit`, fallback, and nonempty VEOF; blank/interrupt/empty-VEOF/physical-EOF/failure exclusion; 100-entry oldest eviction; older/newer bounds; exact draft/cursor restoration; editable copies; per-driver isolation; non-main exclusion; no persistence; and post-restoration append. |
 | Palette/history coordination | Slash opening with deterministic initial highlight and unchanged buffer; filtering; empty/error; canonical metadata projection including finite agent IDs/aliases; open-palette Up/Down clamped highlight navigation without replacement or history movement; Tab application of the highlighted candidate; Shift-Tab no-op; Escape full-snapshot restoration and exact-state dismissal; closed-palette Up/Down history; edited recall; and visible-buffer-only Enter commit. |
 | Picker and live resume choices | Highlight-versus-selection, disabled-skipping clamped navigation, exact resume ordering/highlights, Tab no-op and one-Enter dynamic commit, Escape cancel/dismissal, typed interrupt/EOF, empty/all-disabled/one/long lists, exact fallback acceptance/rejection, stable identity reconciliation and fresh controller validation, selected-outside-window summary, no synthetic final control frame, complete capable cleanup on every returned outcome/failure, honest fallback visibility, and resize on each live redraw. |
 | Permanent input lifecycle | Resource-free `UNDECIDED` construction; first-read irreversible `LIVE`/`FALLBACK`; sticky fallback and no post-live downgrade; stable source/decoder/configuration correlation; canonical ASCII/UTF-8/ISO-8859-1 plus built-in strict/surrogateescape admission; exact one-byte reads; fragmented code points; maximum four-code-point pending suffix before Escape readiness; clean and partial EOF; read/decode/shape poison; interrupt reset without mode change; synchronous reentry rejection; PENDIN-only tolerated configuration drift; capable history-free subject frames; and cross-prompt/viewer preservation without mixed wrapper/raw reads. |
 | Ranged text viewer | Exact `str`, display-name, strict-UTF-8, private 8 MiB source, exact 65,536-line and 16 MiB complete-fallback boundaries, initial-line, empty/final-LF validation before terminal access; ordinary and Shift+Arrow clamped selection including reversal; configured VINTR/VEOF raw-byte disable/decode/round-trip classification and priority; singleton/range commit; distinct cancel/interrupt/EOF; one row per logical line; safe CR/U+2028/control display; bounded-prefix plain/ANSI current and selected cues; wide/combining/ellipsis behavior; suffix-independent redraw work; bounded height and next-nonexit-key resize; exact untruncated `START-END` or `/cancel` fallback with reverse normalization and visible retry; content-free results; close-on-select/cancel, repeat-open disposal; and no workspace/artifact/runtime/controller dependencies. |
-| Settings | Two-snapshot current/pending separation; canonical twelve-key system persistence; exact seven-row clean Language/Persona/Maximum debate rounds/Conversation storage/Conversation RAG/Message details/Agents order plus dirty-only Apply Changes/Discard Changes; nested RAG Provider Disabled/Local and Automatic Off/On invariants; Current/Pending descriptions and one-level Escape hierarchy; exact retained-editor, Agents profile, launch-override, discovery, SQLite readiness, guarded persistence, rollback, activation, speaker/detail, and fallback contracts; Message-details-only live presentation persistence; RAG-only system-config persistence with no authentication, storage selection/readiness, backend/runtime prepare/commit/discard/activation, route/thread, composition, probe/install, catalog, subprocess, socket, network, or live-RAG work; full-path mixed activation with startup-fixed storage and RAG; exact applicable live, RAG-next-shell, and storage-restart results; provider-switch fresh-thread/story-session-context guidance; downgrade rejection by older closed schemas; and unchanged precedence, public, machine, parser, search, debate, consensus, and storage-adapter contracts. |
+| Settings | Two-snapshot current/pending separation; canonical twelve-key system persistence; form-only title/context/guidance/choice/state-summary/description/value regions without generic bracket labels; exact complete seven-row clean Language/Persona/Maximum debate rounds/Conversation storage/Conversation RAG/Message details/Agents root plus complete nine-row dirty root with Apply Changes/Discard Changes; seven-row nested windows and absolute `Choices N/M`; nested RAG Provider Disabled/Local and Automatic Off/On invariants; Settings-scoped Current/Pending summaries with complete-picker physical-cell alignment, exact 20-cell inline/19-cell stacked behavior, untruncated wrapping, live/fallback parity, and color-independent meaning; stacked descriptions and one-level Escape hierarchy; capable-only changed comparison inside the single transient confirmation frame, complete cleanup on all exits/failures, no separate durable comparison panel, and line-fallback omission; exact retained-editor, Agents profile, launch-override, discovery, SQLite readiness, guarded persistence, rollback, activation, speaker/detail, and fallback contracts; Message-details-only live presentation persistence; RAG-only system-config persistence with no authentication, storage selection/readiness, backend/runtime prepare/commit/discard/activation, route/thread, composition, probe/install, catalog, subprocess, socket, network, or live-RAG work; full-path mixed activation with startup-fixed storage and RAG; exact applicable live, RAG-next-shell, and storage-restart results; provider-switch fresh-thread/story-session-context guidance; downgrade rejection by older closed schemas; and unchanged global `/auth`, generic picker, precedence, public, machine, parser, search, debate, consensus, and storage-adapter contracts. |
 | Authentication startup | Exact Codex and resolved-executable Antigravity probes and logins; text-free storage-activation progress before welcome; four states; disabled unavailable choice; bounded null-stream monitoring while native login remains open; fresh-status-only authority; exact-child bounded stop/reap and automatic return; at most one provider-controlled code paste with no extra exit/confirmation; initial/effective-route hard gates; `/auth`; absent-only default policy; settings integration; inherited terminal/environment/root/process group; no output/URL/code/account/token/credential capture; four physical-width-aware welcome frames with exactly three 0.4-second waits; bold cyan/magenta/yellow/blue/green wordmark spans with local resets; one continuous post-authentication context/backend/controller progress span; reduced-motion one-final-colored-welcome-frame path; 0.8-second transient notices; right-margin/resize safety; foreground-process-group and termios restoration; no cursor hiding or alternate screen; `NO_COLOR` preserves progress motion without SGR while selecting a static plain welcome; callback/non-TTY/`TERM=dumb`/non-POSIX/uncertain paths use silent progress and a static welcome. |
 | Startup, picker, advisory, and Settings progress | One width-fitted, text-free sixteen-cell block-shade shimmer with a fixed bold cyan/blue/magenta/red/yellow/green ANSI color cycle for capable raw startup storage and authenticated runtime preparation, native authentication probes, persisted omitted-resume preparation, advisory and consensus awaitables, plus Provider/Model/Effort option preparation; rightmost-cell reservation; spatially equivalent `NO_COLOR`; complete-row clear/redraw around semantic writes; clear and task joining before welcome, lobby, refreshed authentication, resume picker, empty/error result, final/cancel/error record, or completed Settings picker; silent callback/non-TTY/`TERM=dumb`/uncertain fallback; operation-error precedence; indicator-only internal-error mapping; no false completion, status copy, `[routing]`/`[waiting]` records, or reusable animation API. |
 | Parser and mutation boundary | The exact visible committed main buffer reaches the established parser once; previews, recall, replacement, highlight, rerender, cancel, Ctrl-C, empty VEOF, and physical EOF cause no parser/runtime/storage call. |

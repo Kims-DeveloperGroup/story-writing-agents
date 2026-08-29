@@ -46,7 +46,11 @@
 > value returns one level. A clean Settings root exposes no persistence action;
 > dirty state alone appends Apply Changes and Discard Changes. Root Settings
 > Escape retains its cancellation behavior. Generic picker/prompt reads, resume
-> pickers, and dirty Apply/Discard confirmations remain one-shot.
+> pickers, and dirty Apply/Discard confirmations remain one-shot. A capable
+> Apply/Discard confirmation owns its changed comparison inside the same live
+> frame and clears it on exit; line fallback omits that comparison.
+> Settings state facts now share a responsive inline column when physical width
+> leaves at least 20 cells for their content and stack when it does not.
 > The root Settings picker also exposes nested Conversation RAG before Message
 > details. RAG edits a startup-fixed Provider/Automatic policy; Message details
 > Off is the compact default and On reveals documented diagnostics without
@@ -123,10 +127,13 @@ compatibility editor; they likewise remain unlisted and unsupported.
 unlisted internal bindings for the shared selectable main route. Its completion
 models remain package-private and outside the closed `Component` union; only
 their projected existing `SuggestionPalette` is rendered.
-The facade also exposes the unlisted `Choice`, `Picker`, `Prompt`, `ControlOutcome`,
-`ControlOutcomeKind`, `InteractiveMainInput`, `InteractivePickerInput`, and
-`InteractivePromptInput` identities for controller-owned main choices, the
-generic picker, and cancellable-line seams.
+The facade also exposes the unlisted `Choice`, `Picker`, `Prompt`,
+`InputPresentation`, `ControlOutcome`, `ControlOutcomeKind`,
+`InteractiveMainInput`, `InteractivePickerInput`, and `InteractivePromptInput`
+identities for controller-owned main choices, the generic picker, and
+cancellable-line seams. `InputPresentation.STANDARD` is the compatible default;
+the internal `FORM` option selects the Settings-only layout. Picker callers may
+also set the internal validated visible-choice limit from one through nine.
 `PickerControlState` and `PickerViewport` remain package-private; the existing
 semantic `Picker` remains a `Component`. None of these additions changes public
 `__all__`, root exports, or supported signatures.
@@ -428,9 +435,9 @@ that every record is persisted by a storage backend.
 The controller composes typed components and sends one component through the
 adapter for each established callback record. The plain form preserves the
 established facts, copy, order, and callback boundaries while adding explicit
-structure and applicable `loading`, `empty`, `error`, `cancelled`, and
-`completed` state markers. Capable real-CLI output may add fixed decorative
-ANSI; `NO_COLOR` removes only that decoration. Callback construction renders
+structure and applicable `loading`, `empty`, `error`, and `cancelled` state
+markers. Successful completion is visually silent. Capable real-CLI output may
+add fixed decorative ANSI; `NO_COLOR` removes only that decoration. Callback construction renders
 the same structure in plain text at its fixed width.
 
 ### Consensus progress records
@@ -444,9 +451,9 @@ other handled outcome does not erase them.
 Consensus-phase rendering builds one `Debate phase · DISPLAY_NAME` Panel and
 performs one semantic writer call per accepted event. Display names are a
 trusted exhaustive sentence-case projection of the canonical phase. Active
-headings omit `[loading]`; Consensus, Deadlock, Failed, and Interrupted retain
-completed, error, error, and cancelled states. The canonical Phase field and
-Outcome field role/state remain unchanged. Fields are ordered Debate ID, Phase,
+headings omit `[loading]`; Consensus completion is silent, while Deadlock,
+Failed, and Interrupted retain error, error, and cancelled states. The canonical
+Phase field and Outcome field role/state remain unchanged. Fields are ordered Debate ID, Phase,
 Round, Revision, Action, Outcome, and Conflicts; Message details On inserts
 Handoff between Revision and Action. `STARTED` adds its fixed included/fresh
 context notice. The panel then contains the uncommitted suffix of readable
@@ -573,18 +580,35 @@ or a first input call that cannot safely preflight live mode, renders the
 complete numbered list through the ordinary line callback. Opaque choice
 identities are control state and are never rendered.
 
-Settings custom-model and numeric values use a separate context-free semantic
-`Prompt`. That route is history- and completion-free. Enter commits the exact
-line for validation. A valid commit applies the pending value and immediately
-reopens the same prompt with its default updated and one inline `Notice` using
-`SemanticRole.SUCCESS` and `ViewState.COMPLETED`; a later valid commit replaces
-that result. The prompt remains `ViewState.FOCUSED`. The `/settings` controller
-may consume the next commit of that same normalized value as a silent return to
-the parent; the Prompt itself still completes once per read and has no key-timing
-policy. Escape returns one settings level without undoing applied pending
-values, while Ctrl-C or EOF cancels the whole settings transaction. In fallback
-an exact ESC line returns one level, while `/cancel` remains literal input. The
-same sole driver owns raw input, redraw, cleanup, and restoration.
+Settings selects the internal form presentation for every picker and input it
+owns, including the authentication picker borrowed from the global coordinator.
+The form projects a simple view title and optional `Context:` before guidance,
+then uses blank rows to separate choices or editable values. Pickers use
+`Choices N/M`, `>` for the active row, `(selected)`, `(disabled)`, and textual
+`Disabled:` reasons. Eligible Settings state summaries align after ` — ` in
+one complete-picker physical-cell column when at least 20 cells remain for
+summary content. With 19 or fewer cells they occupy their own established
+indented detail rows. Descriptions and `Disabled:` reasons always retain their
+own indented rows. The form does not project `[available]`, `[highlighted]`,
+`[focused]`, `[open]`, a shown range, or a breadcrumb-like composite title.
+Standard presentation remains the default for global `/auth`, omitted-resume
+choices, and every other generic picker.
+
+Settings Custom model and Maximum debate rounds use the form input projection.
+It renders the title, optional `Context:`, guidance, validation or completed
+context, `Current value: VALUE`, and final `New value > ` as distinct regions.
+That route is history- and completion-free. Enter commits the exact line for
+validation. A valid commit applies the pending value and immediately reopens
+the same prompt with its initial editable value updated and one inline `Notice`
+using `SemanticRole.SUCCESS` and `ViewState.COMPLETED`; a later valid commit
+replaces that result. The prompt remains `ViewState.FOCUSED`. The `/settings`
+controller may consume the next commit of that same normalized value as a
+silent return to the parent; the Prompt itself still completes once per read
+and has no key-timing policy. Escape returns one settings level without undoing
+applied pending values, while Ctrl-C or EOF cancels the whole settings
+transaction. In fallback an exact ESC line returns one level, while `/cancel`
+remains literal input. The same sole driver owns raw input, redraw, cleanup,
+and restoration.
 
 One permanent input latch now serves every input route on a stream-backed
 terminal. Construction is resource-free; the first actual input read makes the
@@ -652,6 +676,13 @@ displayed values carry the `(Changed)` cue; the defensive no-changes Apply confi
 only `No pending settings changes.` without empty Current or Pending sections.
 The activation notice contains only applicable current-shell runtime,
 next-shell storage, and next-shell Conversation RAG sentences.
+On a capable stream, the comparison, activation notice, and YES/NO picker are
+one live FORM frame. The driver clears that entire frame before YES, NO,
+Escape, Ctrl-C, or EOF returns and attempts the same cleanup before propagating
+a failure. The controller emits no separate durable comparison panel.
+Ordinary-line fallback, including `TERM=dumb`, omits the comparison and
+activation notice, including on invalid-input retries, because those readers
+cannot erase printed output.
 These confirmations are one-shot: selecting `YES` commits and closes the
 requested action, while `NO` or confirmation Escape returns to the root
 Settings picker. Ctrl-C and EOF still cancel the whole flow without writing and
@@ -670,10 +701,42 @@ offers Off and On. Off is the default compact presentation; it does not delete
 stored content. Dirty state appends Apply Changes and Discard Changes, for nine
 top-level choices.
 
+All controls reached through `/settings` use `InputPresentation.FORM`. The root
+passes its current complete choice count as the visible limit, so a clean frame
+contains all seven rows and a dirty frame all nine rows regardless of the
+active ordinal. This is the complete live redraw or fallback prompt available
+in the current terminal frame/scrollback; physical terminal height may still
+require terminal scrolling. Every nested Settings picker keeps the default
+seven-row limit. With an active row, its form heading is `Choices N/M`, where
+`N` is the active absolute ordinal and `M` is the complete choice count; with no
+active row it is `Choices M`. It never adds `showing X-Y/M`. A form row uses
+`>` rather than a bracketed highlighted label,
+keeps `(selected)` and `(disabled)` textual, and stacks descriptions and
+`Disabled:` reasons beneath the label. For interactive FORM picker input, the
+widest fully decorated label in the complete picker defines one physical-cell
+summary column. When at least 20 cells remain, summarized rows place ` — `
+before that column; long summary text wraps without truncation and continues
+at the column. When 19 or fewer cells remain, the summary stacks at the
+existing detail indent. Live and numbered fallback projections make the same
+decision. A live resize can switch layouts; cleanup uses the resulting latest
+complete-frame line count. Global `/auth` selects standard presentation, while
+authentication borrowed inside Settings is explicitly passed form presentation.
+
 Within `/settings`, the visible per-agent fields and editor titles are exactly
 Provider, Model, and Effort. Current/Pending confirmations remain
-provider-qualified—Codex model/reasoning and Antigravity model/effort rows—so
-inactive persisted values remain unambiguous.
+provider-qualified on capable streams—Codex model/reasoning and Antigravity
+model/effort rows—so inactive persisted values remain unambiguous while the
+transient comparison is visible. Line fallback omits the comparison entirely.
+
+The responsive state-summary opt-in is limited to root Current/Pending facts,
+a nonzero root Agents pending-change count, nested Conversation RAG
+Provider/Automatic facts, Agents roster execution profiles, and Agent settings
+Provider/Model/Effort facts. Clean Agents has no summary. Current summaries use
+muted semantics; Pending summaries and the nonzero count use warning semantics,
+but `Current`, `Pending`, and the count remain literal text in plain,
+`NO_COLOR`, narrow, and fallback output. Persona paths, provider/model/effort
+help, custom/inherit guidance, discard guidance, authentication text, and
+disabled reasons remain descriptions in their stacked regions.
 
 The visible top-level roster choice and roster picker are both named Agents.
 Selecting an agent opens Agent settings; Provider remains the field-level
@@ -797,14 +860,20 @@ Every semantic `Panel` uses an ASCII title-bearing top splitter and a bottom
 splitter, with no side borders:
 
 ```text
---- Panel title [completed] ------------
+--- Panel title ------------------------
   PANEL CONTENT
 ----------------------------------------
 ```
 
+Generated `COMPLETED` state is visually silent across every semantic component.
+Actionable states such as `[loading]`, `[open]`, `[error]`, `[cancelled]`, and
+`[empty]` remain textual, as do meaningful `[success]`, `[warning]`, `[error]`,
+and `[info]` role suffixes. Literal bracketed text in a sender, label, metadata
+value, or content body is never interpreted or removed.
+
 The top run fills the remaining usable width when at least four cells remain.
-At narrower widths, title and state text wrap with continuation indentation and
-the trailing top run may be omitted; the bottom splitter and content remain.
+At narrower widths, title and actionable state text wrap with continuation
+indentation and the trailing top run may be omitted; the bottom splitter and content remain.
 The frame is part of the Panel's existing single render and callback write, so
 callback cardinality and committed scrollback behavior are unchanged.
 Standalone `Prompt`, `Section`, `ListView`, `Record`, `SuggestionPalette`, and
@@ -832,8 +901,8 @@ Generic `Message` values retain the compatible inline default, and run output
 retains its record boundary:
 
 ```text
-ALIAS [completed]> FIRST LINE
-                   CONTINUATION
+ALIAS> FIRST LINE
+       CONTINUATION
 
 [run DEBATE_ID]
   CONTENT
@@ -846,10 +915,10 @@ the complete body. Command envelopes and options are excluded from accepted
 bodies:
 
 ```text
-You → Lead Orchestrator [completed]
+You → Lead Orchestrator
 │ EXACT ADVISORY BODY
 
-You → Consensus [completed]
+You → Consensus
 │ EXACT CONSENSUS PROMPT
 
 ```
@@ -871,10 +940,10 @@ order is `Query`, `Scope`; transcript field order is `Conversation`, `Start`,
 `Count`. For example:
 
 ```text
-[context] Consensus request [completed]
+[context] Consensus request
   Output: part-01/opening.md
 
-[context] Search request [completed]
+[context] Search request
   Query: opening scene
   Scope: active
 ```
@@ -898,12 +967,15 @@ rewritten.
 
 Direct agent replies always use the chat-block shape and retain their full body.
 Message details Off is compact and adds no diagnostic metadata. On adds one
-runtime-owned metadata string to the speaker header, in this exact field order:
-Provider, Model, Effort, Confirmation, Thread. Provider, Model, and Effort each
-include their resolved source. The exact plain topology is:
+runtime-owned default-styled row beneath the speaker header. Routine output is
+Provider / Model / Effort, then Thread. It adds `pending` only before the first
+successful call under the profile and `launch override` only when at least one
+effective value came from the launch command. The exact routine plain topology
+is:
 
 ```text
-Lead Orchestrator → You · Provider: Antigravity [agent config] · Model: agy-model-id [agent config] · Effort: high [agent config] · Confirmation: confirmed · Thread: fresh after provider switch [completed]
+Lead Orchestrator → You
+  Antigravity / agy-model-id / high · reused
 │ <agent reply>
 
 ```
@@ -935,14 +1007,15 @@ and `not observed` are muted. `NO_COLOR` removes decoration only when its
 trimmed value is neither empty nor exact `0`; labels, states, sources, and
 values keep the complete meaning.
 
-Status roles and terminal states are textual. For example, consensus inspection
-uses `[run DEBATE_ID] [completed] [success]`, interrupted inspection uses
+Status roles and actionable terminal states are textual; generated completion
+is silent. For example, consensus inspection uses `[run DEBATE_ID] [success]`,
+interrupted inspection uses
 `[cancelled] [warning]`, failed/deadlocked inspection uses `[error]`, active
 inspection uses `[loading] [info]`, and a missing debate uses `[empty]`. These
 markers are present in plain and `NO_COLOR` output; color is redundant.
 
-Full help is one completed `Panel` titled `Help`. It retains registry group
-order; each completed group section contains one completed `Commands` list
+Full help is one complete `Panel` titled `Help`. It retains registry group
+order; each group section contains one `Commands` list
 whose records retain syntax, aliases, provider-call, and artifact-write facts.
 Context help is one completed `Panel` titled `Help` containing one command
 record in `Group`, `Syntax`, `Aliases`, `Calls provider`,
@@ -958,8 +1031,8 @@ Session, conversation, search, transcript, and focused-history rows use this
 positioned form, with one row per callback:
 
 ```text
-TITLE (POSITION/TOTAL) [completed]
-  [RECORD] [completed]
+TITLE (POSITION/TOTAL)
+  [RECORD]
     LABEL: VALUE
 ```
 
@@ -1200,6 +1273,9 @@ read. A successful read with eligible rows opens this picker live on a capable
 stream or numbered in fallback; an empty or failed read does not open it. A
 caller supplies one semantic prompt and immutable choices whose opaque
 identities are returned on commit but never rendered as picker identities.
+The presentation defaults to `STANDARD`. `/settings` explicitly chooses
+`FORM` for its own pickers and prompts and passes that presentation when it
+borrows authentication; invoking global `/auth` directly remains standard.
 
 `Choice` has an additive package-internal `description_role` field whose
 default is `SemanticRole.DEFAULT`. Existing callers therefore retain their
@@ -1212,6 +1288,17 @@ styling takes precedence over selected styling, selected over highlighted, and
 those interaction states over suffix or description roles. `Choice` and this
 field remain unlisted internal contracts, with no supported package or root
 export added.
+
+`Choice` also has additive package-internal `form_summary` and
+`form_summary_role` fields, defaulting to no summary and
+`SemanticRole.DEFAULT`. Only interactive FORM picker viewport and numbered
+fallback rendering consume them. They provide the responsive state column
+described above without reclassifying ordinary descriptions. STANDARD picker
+input, statically rendered `Picker` components, and `SuggestionPalette`
+rendering ignore them, so existing consumers remain exact. Summary text is
+sanitized and wrapped in physical cells like other inline content; its semantic
+role remains independent across wrapped lines. These fields are likewise
+unlisted and add no supported API.
 
 The generic picker remains commit-once. `/settings` alone may consume that
 commit, immediately open a new value-editor read with updated state and an
@@ -1270,15 +1357,23 @@ prior selection. Configured VINTR/Ctrl-C and VEOF/physical EOF return the typed
 `interrupt` and `eof` outcomes. Other edit and completion keys do nothing and
 the picker never owns main completion state.
 
-Live rendering shows a contiguous viewport of at most seven choices and
-re-observes capability and width on each redraw. Selection and highlight may
+Existing standard consumers retain the default seven-choice contiguous viewport
+and re-observe capability and width on each redraw. Selection and highlight may
 appear simultaneously on one row; a selected choice outside the viewport is
-summarized by ordinal and label. Choice-set reconciliation preserves enabled
-selection and highlight by identity when possible and deterministically finds
-the next enabled highlight when not. Opaque identities remain absent from
-plain, fixed-ANSI, `NO_COLOR`, narrow, and fallback text.
+summarized by ordinal and label. The validated one-to-nine limit is independent
+of presentation; Settings is the only current caller overriding the default.
+Nested Settings controls retain seven, and the Settings root uses its complete
+clean/dirty count of seven or nine. Form selection outside a nested window is
+summarized as `Selected: N. LABEL`.
+Choice-set reconciliation preserves enabled selection and highlight by identity
+when possible and deterministically finds the next enabled highlight when not.
+Opaque identities remain absent from plain, fixed-ANSI, `NO_COLOR`, narrow, and
+fallback text.
 
-Line fallback renders every choice as a numbered row and accepts only:
+Line fallback renders every choice as a numbered row. Standard presentation
+retains its established guidance and prompt; form presentation ends with
+`Enter a choice number, press Enter for the active choice, or enter /cancel.`
+and `Choice > `. Both accept only:
 
 - exact `/cancel`, which cancels;
 - a blank line when an enabled choice is highlighted, which commits that
@@ -1301,9 +1396,11 @@ remains fatal. Callback and
 line fallback cannot erase the already printed numbered prompt or input, so
 they retain it and add no synthetic terminal-state frame. Nested settings Escape
 returns to the parent silently. Apply Changes and Discard Changes confirmations
-show a selectable YES/NO control with changed-only Current/Pending context; unchanged context
-contains only the no-changes notice. Top-level cancellation does not claim a
-snapshot that was not rendered.
+show a selectable YES/NO control. On capable streams, changed-only
+Current/Pending context is part of that same live frame and is cleared with it;
+unchanged context contains only the no-changes notice. Line fallback omits all
+of this transient context. Top-level cancellation does not claim a snapshot
+that was not rendered.
 
 A permanently fallback driver, or a first input call with non-TTY,
 `TERM=dumb`, non-POSIX, or uncertain capability, uses the numbered fallback

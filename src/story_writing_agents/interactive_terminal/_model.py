@@ -29,6 +29,13 @@ class MessagePresentation(StrEnum):
     CHAT_BLOCK = "chat_block"
 
 
+class InputPresentation(StrEnum):
+    """Select one deterministic picker or prompt-input layout."""
+
+    STANDARD = "standard"
+    FORM = "form"
+
+
 class SpeakerAccent(StrEnum):
     """Select one fixed accessible accent for a chat-block speaker header."""
 
@@ -672,6 +679,9 @@ class Panel:
         _require_state(self.state)
 
 
+InputContext: TypeAlias = Panel | Section | Field | Notice
+
+
 @dataclass(frozen=True, slots=True)
 class Choice:
     """One stable selectable semantic option used by palettes and pickers."""
@@ -680,6 +690,8 @@ class Choice:
     label: str
     _: KW_ONLY
     warning_suffix: str | None = None
+    form_summary: str | None = None
+    form_summary_role: SemanticRole = SemanticRole.DEFAULT
     description: str | None = None
     description_role: SemanticRole = SemanticRole.DEFAULT
     enabled: bool = True
@@ -689,6 +701,9 @@ class Choice:
         _require_text("identity", self.identity)
         _require_text("label", self.label)
         _require_optional_text("warning_suffix", self.warning_suffix)
+        _require_optional_text("form_summary", self.form_summary)
+        if not isinstance(self.form_summary_role, SemanticRole):
+            raise TypeError("form_summary_role must be a SemanticRole")
         _require_optional_text("description", self.description)
         if not isinstance(self.description_role, SemanticRole):
             raise TypeError("description_role must be a SemanticRole")
@@ -728,6 +743,9 @@ class Picker:
     prompt: Prompt
     choices: tuple[Choice, ...]
     _: KW_ONLY
+    presentation: InputPresentation = InputPresentation.STANDARD
+    transient_context: tuple[InputContext, ...] = ()
+    visible_choice_limit: int = 7
     highlighted_id: str | None = None
     selected_id: str | None = None
     notice: Notice | None = None
@@ -736,6 +754,25 @@ class Picker:
     def __post_init__(self) -> None:
         if type(self.prompt) is not Prompt:
             raise TypeError("prompt must be a Prompt")
+        if not isinstance(self.presentation, InputPresentation):
+            raise TypeError("presentation must be an InputPresentation")
+        if type(self.transient_context) is not tuple or any(
+            type(item) not in {Panel, Section, Field, Notice}
+            for item in self.transient_context
+        ):
+            raise TypeError(
+                "transient_context must be a tuple of Panel, Section, Field, "
+                "or Notice values"
+            )
+        if (
+            self.transient_context
+            and self.presentation is not InputPresentation.FORM
+        ):
+            raise ValueError("transient_context requires form presentation")
+        if type(self.visible_choice_limit) is not int:
+            raise TypeError("visible_choice_limit must be an integer")
+        if not 1 <= self.visible_choice_limit <= 9:
+            raise ValueError("visible_choice_limit must be between 1 and 9")
         identities = _validate_choices(self.choices, self.highlighted_id)
         if self.selected_id is not None:
             if self.selected_id not in identities:
@@ -811,7 +848,7 @@ class PickerViewport:
     stop: int
 
     def __post_init__(self) -> None:
-        """Require a valid at-most-seven-row slice containing its highlight."""
+        """Require a valid bounded slice containing its highlight."""
 
         if type(self.picker) is not Picker:
             raise TypeError("picker must be a Picker")
@@ -822,8 +859,10 @@ class PickerViewport:
                 raise ValueError(f"{name} must not be negative")
         if self.start > self.stop or self.stop > len(self.picker.choices):
             raise ValueError("viewport must identify a valid choice slice")
-        if self.stop - self.start > 7:
-            raise ValueError("a picker viewport contains at most seven choices")
+        if self.stop - self.start > self.picker.visible_choice_limit:
+            raise ValueError(
+                "a picker viewport exceeds its visible choice limit"
+            )
         if self.picker.choices and self.start == self.stop:
             raise ValueError("a nonempty picker viewport must contain a choice")
         if self.picker.highlighted_id is not None:
@@ -835,10 +874,6 @@ class PickerViewport:
             if not self.start <= highlighted_index < self.stop:
                 raise ValueError("viewport must contain the highlighted choice")
 
-
-InputContext: TypeAlias = Panel | Section | Field | Notice
-
-
 @dataclass(frozen=True, slots=True)
 class InputPromptView:
     """Order semantic input context before one focused active prompt."""
@@ -846,6 +881,7 @@ class InputPromptView:
     context: tuple[InputContext, ...]
     prompt: Prompt
     _: KW_ONLY
+    presentation: InputPresentation = InputPresentation.STANDARD
     initial_value: str | None = None
 
     def __post_init__(self) -> None:
@@ -860,6 +896,8 @@ class InputPromptView:
             )
         if type(self.prompt) is not Prompt:
             raise TypeError("prompt must be a Prompt")
+        if not isinstance(self.presentation, InputPresentation):
+            raise TypeError("presentation must be an InputPresentation")
         if self.prompt.state is not ViewState.FOCUSED:
             raise ValueError("input prompt must be focused")
         if self.initial_value is not None:

@@ -83,6 +83,21 @@ output width. The internal live picker observes capability and width on every
 redraw and limits its contiguous viewport to seven choices; its line fallback
 renders the complete list.
 
+Interactive Settings FORM pickers derive one optional state-summary column from
+the fully decorated labels in the complete picker, including rows outside a
+nested live viewport. The calculation uses sanitized physical-cell width. If
+at least 20 cells remain after the shared start, summarized rows use
+`LABEL — SUMMARY`; wrapped continuation starts at that column and is never
+truncated. At 19 cells or fewer, summaries stack at the existing detail indent.
+The live viewport and complete numbered line fallback use the same rule at
+their observed or retained width. A live resize may therefore change the
+frame's row count; the driver records the newly rendered full-frame line count
+and uses it for the next redraw or cleanup. Ordinary descriptions and disabled
+reasons stay stacked. `Current` remains literal muted text, while `Pending`
+and a nonzero Agents count remain literal warning text; removing decorative
+color does not remove their meaning. This projection changes no choice identity,
+selection, configuration value, input-mode latch, or provider/runtime action.
+
 The internal profiles are fixed ANSI, capable plain, and line fallback. The
 application color gate keeps ANSI eligible when `NO_COLOR` is unset, empty,
 whitespace-only, or whitespace-trimmed exact `0`; `NO_COLOR=0` is therefore an
@@ -611,7 +626,15 @@ equal and open that
 transient confirmation only when they differ. Confirmation context shows only
 changed Current/Pending fields and marks each displayed value `(Changed)`;
 the defensive no-changes Apply confirmation shows
-`No pending settings changes.` Committed YES proceeds; committed NO or
+`No pending settings changes.` On a capable stream, this context and its
+applicable activation notice are prepended to the same live FORM frame as the
+YES/NO picker. They are counted as part of that frame and cleared with it
+before commit, decline, Escape, interrupt, or EOF returns; the driver attempts
+the same complete-frame cleanup before a render, read, write, or flush failure
+propagates. The controller does not write a separate durable comparison panel.
+Ordinary-line fallback, including `TERM=dumb`, omits the context and activation
+notice on both the initial prompt and invalid-input retries because it cannot
+erase printed output. Committed YES proceeds; committed NO or
 confirmation Escape returns to the root settings
 picker; invalid fallback input retries with a trusted notice. Top-level
 cancellation does not claim a snapshot that was not rendered.

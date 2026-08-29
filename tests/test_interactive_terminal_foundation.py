@@ -571,6 +571,11 @@ class PublicCompatibilityFoundationTests(unittest.TestCase):
             ),
             InteractivePromptInput.read_prompt: (
                 ("prompt", positional, required),
+                (
+                    "presentation",
+                    keyword,
+                    _model.InputPresentation.STANDARD,
+                ),
                 ("context", keyword, ()),
                 ("initial_value", keyword, None),
                 ("transient", keyword, True),
@@ -897,10 +902,36 @@ class SemanticModelFoundationTests(unittest.TestCase):
         prompt = Prompt("Input")
         unseeded = _model.InputPromptView((), prompt)
         self.assertIsNone(unseeded.initial_value)
+        self.assertIs(
+            unseeded.presentation,
+            _model.InputPresentation.STANDARD,
+        )
         self.assertEqual(
             tuple(field.name for field in fields(unseeded)),
-            ("context", "prompt", "initial_value"),
+            ("context", "prompt", "presentation", "initial_value"),
         )
+        presentation = inspect.signature(_model.InputPromptView).parameters[
+            "presentation"
+        ]
+        self.assertIs(presentation.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIs(presentation.default, _model.InputPresentation.STANDARD)
+
+        form = _model.InputPromptView(
+            (),
+            prompt,
+            presentation=_model.InputPresentation.FORM,
+        )
+        self.assertIs(form.presentation, _model.InputPresentation.FORM)
+        for invalid in ("form", ViewState.OPEN, object()):
+            with self.subTest(presentation=invalid), self.assertRaisesRegex(
+                TypeError,
+                "InputPresentation",
+            ):
+                _model.InputPromptView(
+                    (),
+                    prompt,
+                    presentation=invalid,  # type: ignore[arg-type]
+                )
 
         for initial_value in ("", "  ", "초기 界"):
             with self.subTest(initial_value=initial_value):
@@ -1207,9 +1238,9 @@ class RenderingFoundationTests(unittest.TestCase):
         frame = render_plain(field, width=20)
         self.assertEqual(
             frame.text,
-            "Status [completed] [\nsuccess]:\n 界界 e\u0301 value",
+            "Status [success]:\n 界界 e\u0301 value",
         )
-        self.assertEqual(frame.line_count, 3)
+        self.assertEqual(frame.line_count, 2)
         for line in frame.text.splitlines():
             self.assertLessEqual(physical_width(line), 20)
         self.assertEqual(display_character_width("界"), 2)
@@ -1229,7 +1260,7 @@ class RenderingFoundationTests(unittest.TestCase):
     ) -> None:
         cases = (
             ("Story chat", ViewState.IDLE, ("--- Story chat -----",)),
-            ("Help", ViewState.COMPLETED, ("--- Help [completed]",)),
+            ("Help", ViewState.COMPLETED, ("--- Help -----------",)),
             (
                 "Interactive error",
                 ViewState.ERROR,
@@ -1244,7 +1275,7 @@ class RenderingFoundationTests(unittest.TestCase):
             (
                 "Result",
                 ViewState.COMPLETED,
-                ("--- Result", "    [completed] ----"),
+                ("--- Result ---------",),
             ),
         )
         for title, state, expected_heading in cases:
@@ -1271,7 +1302,7 @@ class RenderingFoundationTests(unittest.TestCase):
                     "--- "
                 ).replace("\n    ", "")
                 self.assertEqual(collapsed_heading.count(title), 1)
-                if state is not ViewState.IDLE:
+                if state not in {ViewState.IDLE, ViewState.COMPLETED}:
                     self.assertEqual(expected.count(f"[{state.value}]"), 1)
                 self.assertTrue(
                     all(
@@ -1328,8 +1359,8 @@ class RenderingFoundationTests(unittest.TestCase):
         rendered_states = render_plain(state_panel, width=40).text
         for state in ViewState:
             with self.subTest(state=state):
-                if state is ViewState.IDLE:
-                    self.assertIn("[info] idle", rendered_states)
+                if state in {ViewState.IDLE, ViewState.COMPLETED}:
+                    self.assertIn(f"[info] {state.value}", rendered_states)
                 else:
                     self.assertIn(f"[{state.value}] {state.value}", rendered_states)
 

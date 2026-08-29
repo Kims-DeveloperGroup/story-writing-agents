@@ -1506,11 +1506,11 @@ class PromptAndRenderingTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "[conversation c_0123456789] [completed]\n"
+                "[conversation c_0123456789]\n"
                 "  Status: active\n"
                 "  Focus: focused\n"
                 "  Subject: Opening scene\n",
-                "[conversation c_fedcba9876] [completed]\n"
+                "[conversation c_fedcba9876]\n"
                 "  Status: archived\n"
                 "  Focus: not focused\n"
                 "  Subject: Old\\x0asubject\\x1b\n",
@@ -1584,13 +1584,13 @@ class PromptAndRenderingTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "[search c_0123456789] [completed]\n"
+                "[search c_0123456789]\n"
                 "  Status: active\n"
                 "  Match: subject\n"
                 "  Subject: Opening scene\n"
                 "  Citation: conversation c_0123456789\n"
                 "  Snippet: council vessel\n",
-                "[search c_fedcba9876] [completed]\n"
+                "[search c_fedcba9876]\n"
                 "  Status: archived\n"
                 "  Match: event\n"
                 "  Subject: Old\\x0asubject\n"
@@ -1669,7 +1669,7 @@ class PromptAndRenderingTests(unittest.TestCase):
             content="\x1b[31mred\x00\nlast",
         )
         header = (
-            "[transcript c_0123456789] [completed]\n"
+            "[transcript c_0123456789]\n"
             "  Sequence: 2\n"
             "  Turn: turn_2\n"
             "  Kind: reply\n"
@@ -1700,7 +1700,7 @@ class PromptAndRenderingTests(unittest.TestCase):
             narrow_callbacks.records,
             [
                 "[transcript c_0123456789\n"
-                "] [completed]\n"
+                "]\n"
                 " Sequence:\n"
                 "  2\n"
                 " Turn:\n"
@@ -1769,21 +1769,21 @@ class PromptAndRenderingTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                "Agents (4) [completed]\n"
-                "  [agent] Lead Orchestrator [completed]\n"
+                "Agents (4)\n"
+                "  [agent] Lead Orchestrator\n"
                 "    ID: lead_orchestrator\n"
                 "    Aliases: lead, orchestrator, lead_orchestrator\n"
                 "    Advisory domain: Moderation, synthesis, and finalization.\n"
-                "  [agent] Plot & Structure Architect [completed]\n"
+                "  [agent] Plot & Structure Architect\n"
                 "    ID: plot_architect\n"
                 "    Aliases: plot, plot_architect\n"
                 "    Advisory domain: Plot, structure, flow, and pacing.\n"
-                "  [agent] Character & World Custodian [completed]\n"
+                "  [agent] Character & World Custodian\n"
                 "    ID: character_custodian\n"
                 "    Aliases: character, character_custodian\n"
                 "    Advisory domain: Characters, relationships, world, and "
                 "continuity.\n"
-                "  [agent] Tone & Execution Specialist [completed]\n"
+                "  [agent] Tone & Execution Specialist\n"
                 "    ID: execution_specialist\n"
                 "    Aliases: execution, prose, execution_specialist\n"
                 "    Advisory domain: Drafting, prose, point of view, tone, "
@@ -1804,7 +1804,7 @@ class PromptAndRenderingTests(unittest.TestCase):
             ),
             4,
         )
-        self.assertIn("Agents (4) [completed]\n", wrapped)
+        self.assertIn("Agents (4)\n", wrapped)
         self.assertTrue(all(len(line) <= 44 for line in wrapped.splitlines()))
 
         original = AGENT_SPECS[LEAD_ORCHESTRATOR]
@@ -1816,7 +1816,7 @@ class PromptAndRenderingTests(unittest.TestCase):
         ):
             terminal.write_agent_roster()
         self.assertIn(
-            "[agent] Unsafe\\x1bLead [completed]\n"
+            "[agent] Unsafe\\x1bLead\n"
             "    ID: lead_orchestrator",
             callbacks.records[0],
         )
@@ -1839,7 +1839,7 @@ class PromptAndRenderingTests(unittest.TestCase):
                 terminal.write_agent(agent_id, "reply")
                 self.assertEqual(
                     callbacks.records,
-                    [f"{alias} [completed]\n│ reply\n\n"],
+                    [f"{alias}\n│ reply\n\n"],
                 )
 
     def test_every_written_block_is_sanitized_and_gets_one_record_lf(self) -> None:
@@ -2229,8 +2229,8 @@ class HelpAndErrorTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                f"--- Help [completed] {'-' * 59}\n"
-                "  [command] [completed]\n"
+                f"--- Help {'-' * 71}\n"
+                "  [command]\n"
                 "    Group: Agents\n"
                 "    Syntax: /to NAME\n"
                 "    Aliases: /agent\n"
@@ -2252,8 +2252,8 @@ class HelpAndErrorTests(unittest.TestCase):
         self.assertEqual(
             callbacks.records,
             [
-                f"--- Help [completed] {'-' * 11}\n"
-                " [command] [completed]\n"
+                f"--- Help {'-' * 23}\n"
+                " [command]\n"
                 "  Group:\n"
                 "   Consensus\n"
                 "  Syntax:\n"

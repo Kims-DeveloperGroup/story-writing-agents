@@ -356,10 +356,11 @@ generation record; an existing shell does not. Never decrement, delete, or edit
 provider switch, including A→B→A, deliberately advances freshness. Restore a
 verified complete backup if the record is corrupt or inconsistent.
 
-A fresh target-provider thread still rehydrates bounded context from its
-belonging story session. It is expected to lack provider-native hidden history;
-use `/history`, `/status`, and the visible reply metadata to distinguish story-
-session continuity from native-thread reuse. See
+A fresh target-provider thread starts a new contextual epoch and bootstraps
+current role-relevant authoritative sources. It is expected to lack
+provider-native hidden history; that history is never correctness authority.
+Use `/history`, `/status`, live `[context]` progress, and reply metadata to
+distinguish story-session continuity from native-thread reuse. See
 [Story sessions](../guides/story-sessions.md#execution-identity-and-fresh-thread-continuity).
 
 ## Debate and shell-run recovery
@@ -807,6 +808,14 @@ workflow](privacy-and-provider.md#rejected-provider-response-artifacts).
   rejected with guidance to use `antigravity`.
 - Provider calls have a timeout but no retry or rate-limit manager.
 - Owner history has no compaction, expiry, or retention policy.
+- Agent-context planning, source inventory, SEARCH/READ rounds, observations,
+  references, and delta depth have independent finite limits. Required excess
+  fails explicitly; optional P3 material remains SEARCH-first. Checkpoint
+  absence/corruption/mismatch/taint/thread loss bootstraps from authoritative
+  sources. Provider usage is exact only when supplied and otherwise
+  unavailable. There is no semantic artifact RAG, free-form durable memory,
+  arbitrary filesystem discovery, or progress replay API. See
+  [Bounded agent context](../guides/agent-context.md#c20-decisions-limits-and-user-impact).
 - Artifact publication is recoverable and catalog-last, but does not share one
   transaction with debate logs, lifecycle, results, or provider state.
 - Advisory input is one line; `/run --output PART/PATH.md` without prompt text

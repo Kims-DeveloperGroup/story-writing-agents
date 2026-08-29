@@ -638,6 +638,15 @@ class AgentDefinition:
     persona_file: PromptFileReference
     language: str
     context_document_files: tuple[PromptFileReference, ...]
+    provider_managed_context: bool = field(default=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if type(self.provider_managed_context) is not bool:
+            raise TypeError("provider_managed_context must be a bool")
+        if self.provider_managed_context and self.context_document_files:
+            raise ValueError(
+                "provider-managed context cannot bind context documents"
+            )
 
     def file_references(self) -> tuple[PromptFileReference, ...]:
         """Return prompt components in their binding order."""

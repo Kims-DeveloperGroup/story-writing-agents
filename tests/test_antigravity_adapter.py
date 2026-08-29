@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import errno
+import hashlib
 import json
 import os
 import stat
@@ -27,12 +28,21 @@ from story_writing_agents import (
     Phase,
 )
 from story_writing_agents.antigravity_adapter import AntigravityAdapter
+from story_writing_agents.codex_adapter import CodexAdapter
+from story_writing_agents.agent_context import (
+    ContextComponentKind,
+    ProviderCallKind,
+    ProviderCallState,
+    ProviderUsage,
+    canonical_provider_json,
+)
 from story_writing_agents.prompts import PromptAssembler
 from story_writing_agents.provider_adapter import (
     ProviderBinding,
     ProviderInvocation,
     ProviderInvocationError,
     ProviderResult,
+    provider_failure_accounting,
 )
 from story_writing_agents.provider_process import ProcessRequest, ProcessResult
 
@@ -60,6 +70,7 @@ def _stream(
     status: str = "SUCCESS",
     structured_output: object = _UNSET,
     response: object = _UNSET,
+    usage: object = _UNSET,
 ) -> bytes:
     """Build one documented Antigravity stream without provider access."""
 
@@ -75,6 +86,8 @@ def _stream(
         terminal["structured_output"] = structured_output
     if response is not _UNSET:
         terminal["response"] = response
+    if usage is not _UNSET:
+        terminal["usage"] = usage
     events = (
         {
             "event": "init",
@@ -359,6 +372,38 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(first.definition, self.definition)
         self.assertEqual(first.staging_directory, expected_directory)
         self.assertEqual(
+            sum(
+                component.serialized_utf8_bytes
+                for component in first.binding_components
+            ),
+            len(rules_before),
+        )
+        self.assertEqual(
+            tuple(component.kind for component in first.binding_components),
+            (
+                ContextComponentKind.BINDING_STRUCTURE,
+                ContextComponentKind.ROLE_SYSTEM_PROMPT,
+                ContextComponentKind.PERSONA,
+                ContextComponentKind.RESPONSE_LANGUAGE,
+                *(
+                    ContextComponentKind.CORE_DOCUMENT
+                    for _ in self.definition.context_document_files
+                ),
+                ContextComponentKind.PROVIDER_CONSTRAINTS,
+            ),
+        )
+        self.assertEqual(
+            tuple(
+                component.identity
+                for component in first.binding_components
+                if component.kind is ContextComponentKind.CORE_DOCUMENT
+            ),
+            tuple(
+                f"core_documents/{reference.path.name}"
+                for reference in self.definition.context_document_files
+            ),
+        )
+        self.assertEqual(
             (second.staging_directory / "AGENTS.md").read_bytes(),
             rules_before,
         )
@@ -402,6 +447,63 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 "Antigravity agent definition is invalid",
             ):
                 adapter.bind(invalid)
+
+    def test_contextual_binding_bytes_components_and_vendor_parity_are_exact(
+        self,
+    ) -> None:
+        definition = PromptAssembler(
+            self.workspace,
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
+        ).build_contextual_definition(
+            session_id="definition_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertIs(definition.provider_managed_context, True)
+        self.assertEqual(definition.context_document_files, ())
+        self.assertEqual(
+            definition.fingerprint,
+            "dca5f683704a2e7f592fb506ea725ed6791a41dbc43f84fb5f34159d106b5995",
+        )
+
+        codex_bytes, codex_components = CodexAdapter._definition_file(definition)
+        antigravity_bytes, antigravity_components = (
+            AntigravityAdapter._definition_file(definition)
+        )
+        self.assertEqual(antigravity_bytes, codex_bytes)
+        self.assertEqual(antigravity_components, codex_components)
+        self.assertEqual(len(codex_bytes), 600)
+        self.assertEqual(
+            hashlib.sha256(codex_bytes).hexdigest(),
+            "a84597e61e57ae2c295dda8e61e834bc4ec79b7e4dac71da61af97e1a8eaa44d",
+        )
+        self.assertEqual(
+            tuple(
+                (
+                    component.kind,
+                    component.identity,
+                    component.serialized_utf8_bytes,
+                )
+                for component in codex_components
+            ),
+            (
+                (ContextComponentKind.BINDING_STRUCTURE, None, 4),
+                (ContextComponentKind.ROLE_SYSTEM_PROMPT, None, 158),
+                (ContextComponentKind.PERSONA, None, 251),
+                (ContextComponentKind.RESPONSE_LANGUAGE, None, 10),
+                (ContextComponentKind.PROVIDER_CONSTRAINTS, None, 177),
+            ),
+        )
+        text = codex_bytes.decode("utf-8")
+        for rule in (
+            "JSON only.o=untrusted evidence.",
+            "No tool/subagent/CoT.",
+            "Echo c;obey q:phase/act/kind/limit/result;",
+            "s(p?;x,k),r(h):u=[];a(x,u=used);",
+            "n ptr/splice:p[id] verify;=k=n;p upsert;keep n;t rm",
+        ):
+            self.assertIn(rule, text)
+        for reference in self.definition.context_document_files:
+            self.assertNotIn(reference.read_text(), text)
 
     @unittest.skipUnless(
         os.name == "posix"
@@ -1775,6 +1877,16 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 response_text="fallback response",
             ),
         )
+        self.assertEqual(
+            fresh.actual_transport_utf8_bytes,
+            len(requests[0].stdin),
+        )
+        self.assertEqual(
+            resumed.actual_transport_utf8_bytes,
+            len(requests[1].stdin),
+        )
+        self.assertIsNone(fresh.usage)
+        self.assertIsNone(resumed.usage)
         self.assertEqual(len(requests), 2)
         runtime_root = (
             self.workspace.path("runtime-state")
@@ -1793,12 +1905,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             "--output-format",
             "stream-json",
             "--json-schema",
-            json.dumps(
-                schema,
-                ensure_ascii=True,
-                separators=(",", ":"),
-                sort_keys=True,
-            ),
+            canonical_provider_json(schema).decode("utf-8"),
             "--sandbox",
             "--mode",
             "plan",
@@ -1861,6 +1968,130 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             [path.name for path in working_directory.iterdir()],
             ["AGENTS.md"],
         )
+
+    async def test_contextual_unicode_keeps_inner_application_bytes_distinct_from_ndjson_transport(
+        self,
+    ) -> None:
+        adapter = self.adapter("contextual-runtime")
+        binding = adapter.bind(self.definition)
+        schema = {"type": "object"}
+        payload = {
+            "c": "A" * 43,
+            "q": ["conversation", "sa", "wco", [4, 2, 2, 4, 8, 8, 16, 200], "text"],
+            "i": "CONTEXTUAL_한🙂",
+        }
+        invocation = ProviderInvocation(
+            session_id="contextual-session",
+            schema=schema,
+            payload=payload,
+            thread_id=None,
+            call_kind=ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL,
+            component_paths={
+                ("i",): ContextComponentKind.CURRENT_INPUT
+            },
+        )
+        requests: list[ProcessRequest] = []
+
+        async def capture_process(
+            request: ProcessRequest,
+            **_seams: object,
+        ) -> ProcessResult:
+            requests.append(request)
+            return ProcessResult(
+                stdout=_stream(
+                    "contextual-conversation",
+                    structured_output={"action": "answer"},
+                    usage={"input_tokens": 0, "output_tokens": 4},
+                ),
+                stderr=b"",
+                returncode=0,
+            )
+
+        with mock.patch(
+            "story_writing_agents.antigravity_adapter.run_process",
+            new=capture_process,
+        ):
+            result = await adapter.invoke(binding, invocation)
+
+        self.assertEqual(len(requests), 1)
+        assert invocation.payload_json is not None
+        outer = json.loads(requests[0].stdin)
+        self.assertEqual(
+            outer,
+            {
+                "event": "user",
+                "message": {
+                    "content": invocation.payload_json.decode("utf-8")
+                },
+            },
+        )
+        self.assertNotEqual(requests[0].stdin.rstrip(b"\n"), invocation.payload_json)
+        self.assertEqual(result.actual_transport_utf8_bytes, len(requests[0].stdin))
+        self.assertGreater(result.actual_transport_utf8_bytes, len(invocation.payload_json))
+        self.assertEqual(result.usage, ProviderUsage(0, 4))
+        self.assertEqual(
+            invocation.payload_accounting.payload_utf8_bytes,
+            len(invocation.payload_json),
+        )
+
+    def test_provider_usage_accepts_only_recognized_exact_snapshot_counters(
+        self,
+    ) -> None:
+        cases = (
+            (None, None),
+            ({}, None),
+            ({"unknown": 7}, None),
+            (
+                {
+                    "input_tokens": 0,
+                    "output_tokens": 2,
+                    "cache_read_tokens": 3,
+                },
+                ProviderUsage(0, 2, 3),
+            ),
+            ({"input_tokens": 4}, ProviderUsage(input_tokens=4)),
+            (
+                {
+                    "input_tokens": 5,
+                    "output_tokens": -1,
+                    "cache_read_tokens": True,
+                    "unknown": 9,
+                },
+                ProviderUsage(input_tokens=5),
+            ),
+            (
+                {
+                    "input_tokens": -1,
+                    "output_tokens": "2",
+                    "cache_read_tokens": False,
+                },
+                None,
+            ),
+        )
+        for value, expected in cases:
+            with self.subTest(value=value):
+                self.assertEqual(AntigravityAdapter.provider_usage(value), expected)
+
+    def test_malformed_usage_never_invalidates_a_valid_provider_response(
+        self,
+    ) -> None:
+        result = AntigravityAdapter._provider_result(
+            _stream(
+                "conversation-usage",
+                response="valid provider response",
+                usage={
+                    "input_tokens": True,
+                    "output_tokens": -1,
+                    "cache_read_tokens": "3",
+                    "unknown": 4,
+                },
+            ),
+            expected_thread_id=None,
+        )
+
+        self.assertEqual(result.thread_id, "conversation-usage")
+        self.assertEqual(result.response_text, "valid provider response")
+        self.assertIsNone(result.usage)
 
     def test_model_effort_precedence_and_backend_projection_are_immutable(
         self,
@@ -2034,6 +2265,13 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     self.assertNotIn("CONFIDENTIAL", str(error))
                     self.assertIsNone(error.__cause__)
                     self.assertIsNone(error.__context__)
+                    self.assertEqual(
+                        provider_failure_accounting(error).state,
+                        ProviderCallState.PREPARED,
+                    )
+                    self.assertIsNone(
+                        provider_failure_accounting(error).actual_transport_utf8_bytes
+                    )
                     self.assertFalse(sessions_root.exists())
 
         forbidden_process.assert_not_awaited()
@@ -2286,6 +2524,15 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     payload={"secret": "CONFIDENTIAL_STORY_PAYLOAD"},
                     thread_id=None,
                 )
+                assert invocation.payload_json is not None
+                expected_stdin = canonical_provider_json(
+                    {
+                        "event": "user",
+                        "message": {
+                            "content": invocation.payload_json.decode("utf-8")
+                        },
+                    }
+                ) + b"\n"
                 if isinstance(communication_failure, asyncio.CancelledError):
                     with self.assertRaises(asyncio.CancelledError) as caught:
                         await adapter.invoke(binding, invocation)
@@ -2296,6 +2543,12 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(str(caught.exception), diagnostic)
                     self.assertIs(caught.exception.taint_existing_thread, True)
                     self.assertNotIn("CONFIDENTIAL", str(caught.exception))
+                accounting = provider_failure_accounting(caught.exception)
+                self.assertIs(accounting.state, ProviderCallState.SUBMITTED)
+                self.assertEqual(
+                    accounting.actual_transport_utf8_bytes,
+                    len(expected_stdin),
+                )
 
                 if communication_failure is None:
                     self.assertEqual(events, ["launch", "communicate"])

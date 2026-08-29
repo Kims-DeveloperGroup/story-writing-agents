@@ -212,13 +212,158 @@ if argv in (["login", "status"], ["login"]):
 
 payload = json.loads(sys.stdin.read())
 control = json.loads(CONTROL_PATH.read_text(encoding="utf-8"))
+
+
+def compact_agent_id(arguments):
+    """Recover the bound agent id from Codex's isolated staging path."""
+
+    if "--cd" not in arguments:
+        return "agent"
+    name = Path(arguments[arguments.index("--cd") + 1]).name
+    prefix = "story-codex-"
+    if not name.startswith(prefix):
+        return "agent"
+    body = name[len(prefix):]
+    parts = body.rsplit("-", 2)
+    if len(parts) != 3 or len(parts[1]) != 12:
+        return "agent"
+    return parts[0]
+
+
+def compact_context_current(value, agent_id):
+    """Extract authoritative current material from compact wire v5."""
+
+    query = value.get("q")
+    correlation = value.get("c")
+    if (
+        not isinstance(correlation, str)
+        or len(correlation) != 43
+        or not isinstance(query, list)
+        or len(query) != 5
+        or not isinstance(query[0], str)
+        or "i" not in value
+    ):
+        return None
+    phase = query[0]
+    material = value["i"]
+    if isinstance(material, str):
+        command = material
+    elif (
+        isinstance(material, dict)
+        and isinstance(material.get("input"), str)
+    ):
+        command = material["input"]
+    else:
+        raise SystemExit(83)
+    return {
+        "workflow": (
+            "conversation_retrieval"
+            if phase == "retrieval"
+            else "conversation"
+            if phase == "conversation"
+            else "debate"
+        ),
+        "command": command,
+        "phase": phase,
+        "identity": {"agent_id": agent_id},
+    }
+
+
+def compact_observation_handles(value):
+    """Return the wire-v5 observation kind and its authorized handle aliases."""
+
+    observation = value.get("o")
+    if not isinstance(observation, list) or not observation:
+        return None, ()
+    if (
+        observation[0] == "s"
+        and len(observation) == 3
+        and isinstance(observation[2], list)
+    ):
+        return "search", tuple(
+            item[5]
+            for item in observation[2]
+            if isinstance(item, list)
+            and len(item) == 7
+            and isinstance(item[5], str)
+        )
+    if (
+        observation[0] == "r"
+        and len(observation) == 2
+        and isinstance(observation[1], list)
+    ):
+        return "read", tuple(
+            item[4]
+            for item in observation[1]
+            if isinstance(item, list)
+            and len(item) == 6
+            and isinstance(item[4], str)
+        )
+    raise SystemExit(84)
+
+
+def compact_answer(value, used_handles=(), *, after_retrieval=False):
+    """Encode one strict natural-result ANSWER for the live phase contract."""
+
+    phase = value["q"][0]
+    current = compact_context_current(value, compact_agent_id(argv))
+    command = current["command"] if current is not None else ""
+    if phase == "retrieval":
+        content = (
+            "retrieval-assisted answer"
+            if command.startswith("retrieve ") or after_retrieval
+            else "visible \x1b[31mred\x1b[0m and bell \x07"
+            if command == "show visible controls"
+            else "deterministic advisory reply"
+        )
+        result = [content, list(range(1, len(used_handles) + 1))]
+    elif phase == "conversation":
+        result = (
+            "visible \x1b[31mred\x1b[0m and bell \x07"
+            if command == "show visible controls"
+            else "deterministic advisory reply"
+        )
+    elif phase == "audit":
+        result = "a"
+    elif phase == "finalize":
+        result = [["global_outline.md", "updated outline"]]
+    else:
+        result = "deterministic candidate"
+    return {
+        "a": "a",
+        "c": value["c"],
+        "d": [result],
+        "u": list(used_handles),
+    }
+
+
+agent_id = compact_agent_id(argv)
+current = compact_context_current(payload, agent_id)
+query = payload.get("q")
+observation_kind, observation_handles = compact_observation_handles(payload)
+context_action_index = (
+    1
+    if current is not None
+    else 2
+    if observation_kind == "search"
+    else 3
+    if observation_kind == "read"
+    else None
+)
+correlation = payload.get("correlation", {})
 append_record(
     {
         "event": "started",
         "pid": os.getpid(),
         "argv": argv,
-        "operation": payload.get("operation"),
-        "phase": payload.get("phase"),
+        "operation": (
+            "agent_context_v5"
+            if isinstance(query, list)
+            else payload.get("operation")
+        ),
+        "phase": query[0] if isinstance(query, list) and query else payload.get("phase"),
+        "context_current": current,
+        "context_action_index": context_action_index,
         "payload": payload,
     }
 )
@@ -237,6 +382,46 @@ if control.get("mode") == "malformed":
         control.get("response", "not-json"),
         encoding="utf-8",
     )
+elif isinstance(query, list):
+    if (
+        len(query) != 5
+        or not isinstance(payload.get("c"), str)
+        or len(payload["c"]) != 43
+        or not isinstance(query[1], str)
+    ):
+        raise SystemExit(85)
+    if (
+        current is not None
+        and current["workflow"] == "conversation_retrieval"
+        and current["command"].startswith("retrieve ")
+        and "s" in query[1]
+    ):
+        response = {
+            "a": "s",
+            "c": payload["c"],
+            "d": [[current["command"].removeprefix("retrieve "), ["c"]]],
+            "u": [],
+        }
+    elif (
+        observation_kind == "search"
+        and observation_handles
+        and "r" in query[1]
+    ):
+        response = {
+            "a": "r",
+            "c": payload["c"],
+            "d": list(observation_handles),
+            "u": [],
+        }
+    else:
+        if "a" not in query[1]:
+            raise SystemExit(86)
+        response = compact_answer(
+            payload,
+            observation_handles if observation_kind == "read" else (),
+            after_retrieval=observation_kind in {"search", "read"},
+        )
+    output_path.write_text(json.dumps(response), encoding="utf-8")
 elif payload.get("operation") == "conversation_retrieval":
     action_index = payload["retrieval"]["action_index"]
     correlation = {
@@ -309,13 +494,27 @@ else:
     output_path.write_text(json.dumps(response), encoding="utf-8")
 
 if "resume" not in argv:
+    scope = correlation.get("scope", {}) if isinstance(correlation, dict) else {}
+    thread_session = payload.get("session_id", scope.get("session_id", "session"))
+    thread_agent = payload.get("agent_id", scope.get("agent_id", agent_id))
+    thread_subject = scope.get("subject_id", "direct")
+    thread_id = (
+        "thread-" + agent_id + "-" + payload["c"][:16]
+        if isinstance(query, list) and isinstance(payload.get("c"), str)
+        else (
+            "thread-"
+            + thread_session
+            + "-"
+            + thread_subject
+            + "-"
+            + thread_agent
+        )
+    )
     print(
         json.dumps(
             {
                 "type": "thread.started",
-                "thread_id": (
-                    "thread-" + payload["session_id"] + "-" + payload["agent_id"]
-                ),
+                "thread_id": thread_id,
             }
         )
     )
@@ -780,6 +979,29 @@ class PtyCliProcess:
 class InteractiveCliPtyTests(unittest.TestCase):
     """Exercise the real CLI process with deterministic local terminal resources."""
 
+    def assert_transient_settings_diff_cleared_before(
+        self,
+        rendered: str,
+        boundary: str,
+    ) -> None:
+        """Require the last visible Settings diff to precede cleanup and output."""
+
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", rendered)
+        boundary_offset = plain.find(boundary)
+        self.assertNotEqual(boundary_offset, -1, plain)
+        diff_offset = plain.rfind("(Changed)", 0, boundary_offset)
+        self.assertNotEqual(diff_offset, -1, plain)
+        clear_offset = plain.rfind("\x1b[J", diff_offset, boundary_offset)
+        self.assertNotEqual(clear_offset, -1, plain)
+        self.assertLess(diff_offset, clear_offset)
+        self.assertLess(clear_offset, boundary_offset)
+
+    @staticmethod
+    def plain_terminal_text(rendered: str) -> str:
+        """Remove only fixed decorative SGR from one normalized capture."""
+
+        return re.sub(r"\x1b\[[0-9;]*m", "", rendered)
+
     def setUp(self) -> None:
         """Create one isolated workspace root and local fake provider command."""
 
@@ -899,6 +1121,37 @@ class InteractiveCliPtyTests(unittest.TestCase):
                 if line
             ]
 
+    def _context_thread_records(
+        self,
+        session_id: str,
+        *,
+        agent_id: str | None = None,
+        subject_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Read exact content-free contextual continuation records."""
+
+        directory = self.workspace.path(
+            f"{_SESSION_DIRECTORY}/.contextual/v1/{session_id}"
+        )
+        if not directory.exists():
+            return []
+        records = [
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in sorted(directory.glob("*.json"))
+        ]
+        return [
+            record
+            for record in records
+            if (
+                agent_id is None
+                or record["key"]["scope"]["agent_id"] == agent_id
+            )
+            and (
+                subject_id is None
+                or record["key"]["scope"]["subject_id"] == subject_id
+            )
+        ]
+
     def _wait_for_provider_record(
         self,
         process: PtyCliProcess,
@@ -941,7 +1194,6 @@ class InteractiveCliPtyTests(unittest.TestCase):
         title: str,
         content: str,
         provider: str = "Codex",
-        provider_source: str = "system default",
         details: bool = False,
     ) -> str:
         """Wait for and verify one live speaker-rail reply."""
@@ -955,22 +1207,22 @@ class InteractiveCliPtyTests(unittest.TestCase):
         compact_plain = " ".join(plain.split())
         self.assertEqual(plain.count(f"{title} → You"), 1)
         self.assertIn(f"│ {content}\n", plain)
-        diagnostics = (
-            f"Provider: {provider} [{provider_source}]",
-            "Model: provider default [provider default]",
-            "Effort: provider default [provider default]",
-            "Confirmation: confirmed",
-        )
         if details:
-            self.assertIn(f"{title} → You · Provider:", plain)
-            for diagnostic in diagnostics:
-                self.assertIn(diagnostic, compact_plain)
+            self.assertIn(f"{title} → You\n", plain)
+            self.assertIn(
+                f"{provider} / provider default / provider default ·",
+                compact_plain,
+            )
             self.assertRegex(
                 compact_plain,
-                r"Thread: (?:resumed|reused|fresh)",
+                (
+                    r"(?:resumed|reused|fresh(?: after provider switch)?|"
+                    r"not observed)"
+                ),
             )
+            self.assertNotIn("Confirmation:", compact_plain)
         else:
-            self.assertIn(f"{title} → You [completed]\n", plain)
+            self.assertIn(f"{title} → You\n", plain)
             for label in (
                 "Provider:",
                 "Model:",
@@ -1132,6 +1384,9 @@ class InteractiveCliPtyTests(unittest.TestCase):
         }
         excluded = {
             "agent_states/file-picker/internal.md": "internal\n",
+            "agent_states/orchestrator_state/context_ledger/v1/checkpoint.json": (
+                "content-free internal ledger\n"
+            ),
             "core_documents/extra.md": "extra\n",
             "manuscript/bad}.md": "unsafe delimiter\n",
             "manuscript/chapter.MD": "unsupported suffix\n",
@@ -2111,7 +2366,7 @@ print("RESULT=" + outcome.kind.value)
         submitted = process.wait_for_text("RESULT=commit", after=submit_mark)
         self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
 
-        record = "user [completed]> accepted marker 🌊"
+        record = "user> accepted marker 🌊"
         self.assertEqual(submitted.count(record), 1)
         record_offset = submitted.index(record)
         cleanup_offset = submitted.rfind("\x1b[J", 0, record_offset)
@@ -2202,29 +2457,29 @@ print("RESULT=done")
                 )
 
         expected_plain = (
-            "you [completed]\n"
+            "you\n"
             "│ user body\n"
             "\n"
-            "lead [completed]\n"
+            "lead\n"
             "│ agent body\n"
             "\n"
-            "plot [completed]\n"
+            "plot\n"
             "│ agent body\n"
             "\n"
-            "character [completed]\n"
+            "character\n"
             "│ agent body\n"
             "\n"
-            "execution [completed]\n"
+            "execution\n"
             "│ agent body\n"
             "\n"
             "RESULT=done\n"
         )
         styled_headers = (
-            ("\x1b[1;35m", "you [completed]"),
-            ("\x1b[1;36m", "lead [completed]"),
-            ("\x1b[1;33m", "plot [completed]"),
-            ("\x1b[1;32m", "character [completed]"),
-            ("\x1b[1;34m", "execution [completed]"),
+            ("\x1b[1;35m", "you"),
+            ("\x1b[1;36m", "lead"),
+            ("\x1b[1;33m", "plot"),
+            ("\x1b[1;32m", "character"),
+            ("\x1b[1;34m", "execution"),
         )
         ansi = captures["ansi"]
         header_stripped = ansi
@@ -2338,11 +2593,11 @@ print(
         self.assertIn(b"\x1b[0m", ansi.raw_bytes)
         mark = ansi.output_mark()
         ansi.send_text("/help /run\n\n")
-        ansi.wait_for_text("Help [completed]", after=mark)
+        ansi.wait_for_text("Help", after=mark)
         ansi.wait_for_text("story[lobby]> ", after=mark)
         dense_ansi = bytes(ansi.raw_bytes[mark:])
-        self.assertIn(b"\x1b[1m--- Help [completed] ", dense_ansi)
-        self.assertIn(b"\x1b[35m  [command] [completed]", dense_ansi)
+        self.assertIn(b"\x1b[1m--- Help ", dense_ansi)
+        self.assertIn(b"\x1b[35m  [command]", dense_ansi)
         ansi.send_text("/quit\n\n")
         self.assertEqual(ansi.wait_for_exit(), 0, ansi.normalized_text)
         self.assertEqual(
@@ -2360,7 +2615,7 @@ print(
         self.assertNotIn(b"\x1b[33m  [warning]", no_color.raw_bytes)
         mark = no_color.output_mark()
         no_color.send_text("/agents\n\n")
-        no_color.wait_for_text("Agents (4) [completed]", after=mark)
+        no_color.wait_for_text("Agents (4)", after=mark)
         no_color.wait_for_text("story[lobby]> ", after=mark)
         dense_plain = bytes(no_color.raw_bytes[mark:])
         self.assertNotIn(b"\x1b[1mAgents", dense_plain)
@@ -2387,6 +2642,87 @@ print(
             line.original_terminal_attributes,
         )
 
+    def test_settings_summaries_inline_then_stack_after_resize_on_pty(
+        self,
+    ) -> None:
+        """Align wide state summaries, stack them after resize, and clean up."""
+
+        process = self._spawn_cli(
+            (),
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=100,
+            decorative_color=True,
+        )
+        process.wait_for_text("story[lobby]> ")
+        before = _durable_tree(self.workspace.root)
+        mark = process.output_mark()
+        process.send_text("/settings\n\n")
+        opened = process.wait_for_text("Choices 1/7", after=mark)
+        plain_opened = self.plain_terminal_text(opened)
+        expected_rows = (
+            "> 1. Language              — Current: KO",
+            "  2. Persona               — Current: default_kim_eun_hee",
+            "  3. Maximum debate rounds — Current: 1",
+            "  4. Conversation storage  — Current: filesystem",
+            "  5. Conversation RAG      — Current: Provider Disabled; Automatic Off",
+            "  6. Message details       — Current: Off",
+            "  7. Agents",
+        )
+        opened_lines = plain_opened.splitlines()
+        self.assertTrue(all(row in opened_lines for row in expected_rows))
+        summary_lines = tuple(
+            line for line in opened_lines if " — Current:" in line
+        )
+        self.assertEqual(len(summary_lines), 6)
+        self.assertEqual(
+            {line.index("Current:") for line in summary_lines},
+            {29},
+        )
+        self.assertIn(
+            "\x1b[36m> 1. Language              — \x1b[0m"
+            "\x1b[37mCurrent: KO\x1b[0m",
+            opened,
+        )
+
+        process.resize(40)
+        resize_mark = process.output_mark()
+        process.send_text("\x1b[B")
+        resized = process.wait_for_text("Choices 2/7", after=resize_mark)
+        plain_resized = self.plain_terminal_text(resized)
+        self.assertNotIn(" — Current:", plain_resized)
+        self.assertIn(
+            "> 2. Persona\n     Current: default_kim_eun_hee",
+            plain_resized,
+        )
+        compact_resized = "".join(plain_resized.split())
+        for fact in (
+            "LanguageCurrent:KO",
+            "PersonaCurrent:default_kim_eun_hee",
+            "MaximumdebateroundsCurrent:1",
+            "ConversationstorageCurrent:filesystem",
+            "ConversationRAGCurrent:ProviderDisabled;AutomaticOff",
+            "MessagedetailsCurrent:Off",
+            "Agents",
+        ):
+            with self.subTest(fact=fact):
+                self.assertIn(fact, compact_resized)
+
+        exit_mark = process.output_mark()
+        process.send_text("\x1b")
+        returned = process.wait_for_text("story[lobby]> ", after=exit_mark)
+        plain_returned = self.plain_terminal_text(returned)
+        boundary = plain_returned.index("story[lobby]> ")
+        clear = plain_returned.rfind("\x1b[J", 0, boundary)
+        self.assertNotEqual(clear, -1, plain_returned)
+        process.send_text("/quit\n\n")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
     def test_settings_rounds_prefill_double_enter_edit_and_discard_on_pty(
         self,
     ) -> None:
@@ -2402,7 +2738,7 @@ print(
         before = _durable_tree(self.workspace.root)
         mark = process.output_mark()
         process.send_text("/settings\n\n")
-        process.wait_for_text("Settings [focused] [open]", after=mark)
+        process.wait_for_text("Choices 1/7", after=mark)
         process.send_text(("\x1b[B" * 2) + "\n")
         opened = process.wait_for_text("Current value", after=mark)
         compact_opened = "".join(
@@ -2410,13 +2746,15 @@ print(
         )
         self.assertIn("Currentvalue:1", compact_opened)
         self.assertIn("Maximumdebaterounds", compact_opened)
+        self.assertIn("Newvalue>", compact_opened)
+        self.assertNotIn("[focused]", opened)
 
         first_enter = process.output_mark()
         process.send_text("\n")
         process.wait_for_text("Current value", after=first_enter)
         second_enter = process.output_mark()
         process.send_text("\n")
-        process.wait_for_text("Settings [focused] [open]", after=second_enter)
+        process.wait_for_text("Choices 3/7", after=second_enter)
 
         edit_mark = process.output_mark()
         process.send_text("\n")
@@ -2431,14 +2769,34 @@ print(
         compact_returned = "".join(
             re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", returned).split()
         )
-        self.assertIn("Maximumdebaterounds—Pending:2", compact_returned)
+        self.assertIn("MaximumdebateroundsPending:2", compact_returned)
         self.assertIn("ChooseApplyChangestopersistpendingchanges", compact_returned)
+        self.assertIn("ApplyChanges(*Required)", compact_returned)
+        self.assertIn("DiscardChanges", compact_returned)
+        self.assertIn("Choices3/9", compact_returned)
 
         cancel_mark = process.output_mark()
         process.send_text("\x1b")
         process.wait_for_text("Discard changes?", after=cancel_mark)
+        process.send_text("\x1b[B\n")
+        returned = process.wait_for_text(
+            "Choices 9/9",
+            after=cancel_mark,
+        )
+        self.assert_transient_settings_diff_cleared_before(
+            returned,
+            "Choices 9/9",
+        )
+
+        discard_mark = process.output_mark()
+        process.send_text("\x1b")
+        process.wait_for_text("Discard changes?", after=discard_mark)
         process.send_text("\n")
-        discarded = process.wait_for_text("story[lobby]> ", after=cancel_mark)
+        discarded = process.wait_for_text("story[lobby]> ", after=discard_mark)
+        self.assert_transient_settings_diff_cleared_before(
+            discarded,
+            "[cancelled]",
+        )
         self.assertEqual(
             "".join(discarded.split()).count(
                 "[cancelled]Pendingchangesdiscarded."
@@ -2478,27 +2836,37 @@ print(
                     "Choose a setting to edit.",
                     after=mark,
                 )
-                self.assertIn("Settings [focused] [open]", opened)
-                self.assertIn("[highlighted] Language", opened)
+                self.assertIn("Settings", opened)
+                self.assertIn("Choices 1/7", opened)
+                self.assertIn("> 1. Language", opened)
+                settings_frame = opened.rsplit("\x1b[35mSettings", 1)[-1]
+                for noisy in (
+                    "[available]",
+                    "[highlighted]",
+                    "[focused]",
+                    "[open]",
+                    "showing",
+                ):
+                    self.assertNotIn(noisy, settings_frame)
                 compact_opened = "".join(
                     re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", opened).split()
                 )
                 self.assertIn(
-                    f"Language—Current:{current_language}",
+                    f"LanguageCurrent:{current_language}",
                     compact_opened,
                 )
                 self.assertIn(
-                    "Persona—Current:default_kim_eun_hee",
+                    "PersonaCurrent:default_kim_eun_hee",
                     compact_opened,
                 )
-                self.assertIn("Maximumdebaterounds—Current:1", compact_opened)
+                self.assertIn("MaximumdebateroundsCurrent:1", compact_opened)
                 ordered_settings = (
-                    f"Language—Current:{current_language}",
-                    "Persona—Current:default_kim_eun_hee",
-                    "Maximumdebaterounds—Current:1",
-                    "Conversationstorage—Current:filesystem",
-                    "ConversationRAG—Current:ProviderDisabled;AutomaticOff",
-                    "Messagedetails—Current:Off",
+                    f"LanguageCurrent:{current_language}",
+                    "PersonaCurrent:default_kim_eun_hee",
+                    "MaximumdebateroundsCurrent:1",
+                    "ConversationstorageCurrent:filesystem",
+                    "ConversationRAGCurrent:ProviderDisabled;AutomaticOff",
+                    "MessagedetailsCurrent:Off",
                     "Agents",
                 )
                 self.assertEqual(
@@ -2514,7 +2882,7 @@ print(
                     ),
                 )
                 self.assertIn(
-                    b"\x1b[35mSettings [focused] [open] >\x1b[0m",
+                    b"\x1b[35mSettings\x1b[0m",
                     process.raw_bytes,
                 )
                 self.assertNotIn(
@@ -2533,7 +2901,8 @@ print(
                     f"[entered] Pending Language entered: {expected_language}.",
                     after=language_mark,
                 )
-                self.assertIn("Language [focused] [open]", language_result)
+                self.assertIn("Language", language_result)
+                self.assertIn("Choices", language_result)
                 self.assertIn(expected_language, language_result)
                 self.assertIn(
                     "Enteredchangesremainpendinginmemoryandarenotsaved;"
@@ -2563,7 +2932,7 @@ print(
                     ),
                 )
                 self.assertIn(
-                    f"Language—Pending:{expected_language}",
+                    f"LanguagePending:{expected_language}",
                     "".join(
                         re.sub(
                             r"\x1b\[[0-9;]*[A-Za-z]",
@@ -2572,42 +2941,59 @@ print(
                         ).split()
                     ),
                 )
-                self.assertNotIn(
-                    f"\x1b[33mPending: {expected_language}\x1b[0m".encode(),
+                self.assertIn(
+                    f"\x1b[33m     Pending: {expected_language}\x1b[0m".encode(),
                     bytes(process.raw_bytes[highlighted_pending_mark:]),
                 )
-                self.assertEqual(
-                    returned_settings.count("Settings [focused] [open]"),
-                    1,
+                compact_returned = "".join(
+                    re.sub(
+                        r"\x1b\[[0-9;]*[A-Za-z]",
+                        "",
+                        returned_settings,
+                    ).split()
                 )
+                self.assertIn("Choices1/9", compact_returned)
+                self.assertIn("ApplyChanges(*Required)", compact_returned)
+                self.assertIn("DiscardChanges", compact_returned)
                 idle_pending_mark = process.output_mark()
                 process.send_text("\x1b[B" * 8)
                 apply_view = process.wait_for_text(
                     "Discard Changes",
                     after=idle_pending_mark,
                 )
-                self.assertIn("Apply Changes (*Required)", apply_view)
+                compact_apply_view = "".join(
+                    re.sub(
+                        r"\x1b\[[0-9;]*[A-Za-z]",
+                        "",
+                        apply_view,
+                    ).split()
+                )
+                self.assertIn("ApplyChanges(*Required)", compact_apply_view)
                 self.assertIn(
                     b"Apply Changes \x1b[33m(*Required)\x1b[0m",
                     bytes(process.raw_bytes[idle_pending_mark:]),
                 )
                 process.send_text("\x1b[A" * 7)
                 process.wait_for_text(
-                    "[highlighted] Persona",
+                    "> 2. Persona",
                     after=idle_pending_mark,
                 )
                 idle_pending = bytes(process.raw_bytes[idle_pending_mark:])
                 self.assertIn(
-                    f"\x1b[33mPending: {expected_language}\x1b[0m".encode(),
+                    f"\x1b[33m     Pending: {expected_language}\x1b[0m".encode(),
                     idle_pending,
                 )
-                self.assertNotIn(b"\x1b[33mCurrent:", idle_pending)
+                self.assertNotIn(b"\x1b[33m     Current:", idle_pending)
                 returned_mark = process.output_mark()
                 process.send_text(("\x1b[B" * 6) + "\n")
                 process.send_text("\n")
                 saved = process.wait_for_text(
                     "[saved and applied]",
                     after=returned_mark,
+                )
+                self.assert_transient_settings_diff_cleared_before(
+                    saved,
+                    "[saved and applied]",
                 )
                 self.assertIn("(Changed)", saved)
                 self.assertIn(
@@ -2620,8 +3006,6 @@ print(
                         ).split()
                     ),
                 )
-                confirmation = saved.rsplit("Settings [open]", 1)[-1]
-                self.assertNotIn("Persona", confirmation)
                 process.wait_for_text("story[lobby]> ", after=returned_mark)
 
                 history_mark = process.output_mark()
@@ -2680,7 +3064,7 @@ print(
             re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", agents_picker).split()
         )
         self.assertIn(
-            "Plot&StructureArchitect—Current:"
+            "Plot&StructureArchitectCurrent:"
             "(Codex/providerdefault/providerdefault)",
             compact_agents,
         )
@@ -2706,11 +3090,11 @@ print(
             "[entered] Pending Model entered: GPT PTY.",
             after=model_commit_mark,
         )
-        self.assertIn("[selected] [highlighted] GPT PTY", model_result)
+        self.assertIn("GPT PTY (selected)", model_result)
         model_parent_mark = process.output_mark()
         process.send_text("\n")
         model_parent = process.wait_for_text(
-            "Agent settings [Plot & Structure Architect]",
+            "Agent settings\nContext: Plot & Structure Architect",
             after=model_parent_mark,
         )
         self.assertIn(
@@ -2729,11 +3113,11 @@ print(
             "[entered] Pending Effort entered: future_2.",
             after=effort_commit_mark,
         )
-        self.assertIn("[selected] [highlighted] future_2", effort_result)
+        self.assertIn("future_2 (selected)", effort_result)
         effort_parent_mark = process.output_mark()
         process.send_text("\n")
         effort_parent = process.wait_for_text(
-            "Agent settings [Plot & Structure Architect]",
+            "Agent settings\nContext: Plot & Structure Architect",
             after=effort_parent_mark,
         )
         compact_effort_parent = "".join(
@@ -2744,11 +3128,11 @@ print(
         agents_parent_mark = process.output_mark()
         process.send_text("\x1b")
         agents_parent = process.wait_for_text(
-            "Agents [focused] [open]",
+            "Select an agent to configure",
             after=agents_parent_mark,
         )
         self.assertIn(
-            "Plot&StructureArchitect—Pending:(Codex/gpt-pty/future_2)",
+            "Plot&StructureArchitectPending:(Codex/gpt-pty/future_2)",
             "".join(
                 re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", agents_parent).split()
             ),
@@ -2756,7 +3140,7 @@ print(
         settings_parent_mark = process.output_mark()
         process.send_text("\x1b")
         process.wait_for_text(
-            "Settings [focused] [open]",
+            "Choices 7/9",
             after=settings_parent_mark,
         )
 
@@ -2790,7 +3174,7 @@ print(
             "or/statusforthreadandsourcedetails.",
             compact_result,
         )
-        completion = result.rsplit("Settings [completed]", 1)[-1]
+        completion = result.rsplit("Settings", 1)[-1]
         self.assertNotIn("Before", completion)
         self.assertNotIn("Active now", completion)
         self.assertNotIn("active roster", completion)
@@ -2848,12 +3232,12 @@ print(
             re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", opened).split()
         )
         ordered_settings = (
-            "Language—Current:KO",
-            "Persona—Current:default_kim_eun_hee",
-            "Maximumdebaterounds—Current:1",
-            "Conversationstorage—Current:filesystem",
-            "ConversationRAG—Current:ProviderDisabled;AutomaticOff",
-            "Messagedetails—Current:Off",
+            "LanguageCurrent:KO",
+            "PersonaCurrent:default_kim_eun_hee",
+            "MaximumdebateroundsCurrent:1",
+            "ConversationstorageCurrent:filesystem",
+            "ConversationRAGCurrent:ProviderDisabled;AutomaticOff",
+            "MessagedetailsCurrent:Off",
             "Agents",
         )
         self.assertEqual(
@@ -2869,18 +3253,18 @@ print(
         details_mark = process.output_mark()
         process.send_text(("\x1b[B" * 5) + "\n")
         details = process.wait_for_text(
-            "Message details [focused] [open]",
+            "Choices 1/2",
             after=details_mark,
         )
-        self.assertIn("Message details [focused] [open]", details)
+        self.assertIn("Message details", details)
         self.assertIn(
             "ChooseOffforcompactmessagesorOnfordetailedmessages.",
             "".join(
                 re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", details).split()
             ),
         )
-        self.assertIn("[selected] [highlighted] Off", details)
-        self.assertIn("[available] On", details)
+        self.assertIn("> 1. Off (selected)", details)
+        self.assertIn("  2. On", details)
 
         entered_mark = process.output_mark()
         process.send_text("\x1b[B\n")
@@ -2898,7 +3282,7 @@ print(
         process.send_text("\n")
         returned = process.wait_for_text("[save required]", after=returned_mark)
         self.assertIn(
-            "Messagedetails—Pending:On",
+            "MessagedetailsPending:On",
             "".join(
                 re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", returned).split()
             ),
@@ -2988,42 +3372,45 @@ print(
 
         provider = open_delayed_picker(
             "\n",
-            "Provider [Plot & Structure Architect]",
+            "Provider\nContext: Plot & Structure Architect",
         )
         self.assertIn("Codex", provider)
         return_mark = process.output_mark()
         process.send_text("\x1b")
         process.wait_for_text(
-            "Agent settings [Plot & Structure Architect]",
+            "Agent settings\nContext: Plot & Structure Architect",
             after=return_mark,
         )
 
         model = open_delayed_picker("\x1b[B\n", "GPT PTY")
-        self.assertIn("Model [Plot & Structure Architect", model)
+        self.assertIn("Model\nContext: Plot & Structure Architect", model)
         return_mark = process.output_mark()
         process.send_text("\x1b")
         process.wait_for_text(
-            "Agent settings [Plot & Structure Architect]",
+            "Agent settings\nContext: Plot & Structure Architect",
             after=return_mark,
         )
 
         effort = open_delayed_picker(
             "\x1b[B\n",
-            "Effort [Plot & Structure Architect",
+            "Effort\nContext: Plot & Structure Architect",
         )
-        self.assertIn("Effort [Plot & Structure Architect", effort)
+        self.assertIn("Effort\nContext: Plot & Structure Architect", effort)
         return_mark = process.output_mark()
         process.send_text("\x1b")
         process.wait_for_text(
-            "Agent settings [Plot & Structure Architect]",
+            "Agent settings\nContext: Plot & Structure Architect",
             after=return_mark,
         )
         return_mark = process.output_mark()
         process.send_text("\x1b")
-        process.wait_for_text("Agents [focused] [open]", after=return_mark)
+        process.wait_for_text("Select an agent to configure", after=return_mark)
         return_mark = process.output_mark()
         process.send_text("\x1b")
-        process.wait_for_text("Settings [focused] [open]", after=return_mark)
+        process.wait_for_text(
+            "Choose a setting to edit.",
+            after=return_mark,
+        )
         return_mark = process.output_mark()
         process.send_text("\x1b")
         process.wait_for_text("story[lobby]> ", after=return_mark)
@@ -3048,20 +3435,25 @@ print(
         before = _durable_tree(self.workspace.root)
         mark = process.output_mark()
         process.send_text("/settings\n\n")
-        process.wait_for_text("[highlighted] Language", after=mark)
+        process.wait_for_text("Choices 1/7", after=mark)
         process.send_text(("\x1b[B" * 6) + "\n")
-        agents = process.wait_for_text("Agents [focused] [open]", after=mark)
+        agents = process.wait_for_text("Select an agent to configure", after=mark)
         self.assertIn(
-            "Plot&StructureArchitect—Current:"
+            "Plot&StructureArchitectCurrent:"
             "(Codex/providerdefault/providerdefault)",
             "".join(agents.split()),
         )
         process.send_text("\x1b[B\n")
         fields = process.wait_for_text("Agent settings", after=mark)
         compact_fields = "".join(fields.split())
-        self.assertIn("Provider—Current:Codex", compact_fields)
-        self.assertIn("Model—Current:providerdefault", compact_fields)
-        self.assertIn("Effort—Current:providerdefault", compact_fields)
+        self.assertIn("ProviderCurrent:Codex", compact_fields)
+        self.assertIn("ModelCurrent:providerdefault", compact_fields)
+        self.assertIn("EffortCurrent:providerdefault", compact_fields)
+        self.assertIn(
+            "> 1. Provider\n     Current: Codex",
+            self.plain_terminal_text(fields),
+        )
+        self.assertNotIn(" — Current:", self.plain_terminal_text(fields))
         process.send_text("\x1b[B\n")
         process.wait_for_text("GPT PTY", after=mark)
         self.assertNotRegex(
@@ -3087,16 +3479,20 @@ print(
             after=returned_mark,
         )
         self.assertIn(
-            "Model—Pending:gpt-pty",
+            "ModelPending:gpt-pty",
             "".join(returned_fields.split()),
+        )
+        self.assertIn(
+            "> 2. Model\n     Pending: gpt-pty",
+            self.plain_terminal_text(returned_fields),
         )
         process.send_text("\x1b")
         returned_agents = process.wait_for_text(
-            "Agents [focused] [open]",
+            "Select an agent to configure",
             after=returned_mark,
         )
         self.assertIn(
-            "Plot&StructureArchitect—Pending:"
+            "Plot&StructureArchitectPending:"
             "(Codex/gpt-pty/providerdefault)",
             "".join(returned_agents.split()),
         )
@@ -3141,6 +3537,10 @@ print(
         )
         process.send_text("\n")
         discarded = process.wait_for_text("story[lobby]> ", after=cancelled_mark)
+        self.assert_transient_settings_diff_cleared_before(
+            discarded,
+            "[cancelled]",
+        )
         compact_discarded = "".join(discarded.split())
         self.assertIn(
             "[cancelled]Pendingchangesdiscarded.",
@@ -3175,7 +3575,7 @@ print(
                     mark = process.output_mark()
                     process.send_text("/settings\n\n")
                     opened = process.wait_for_text(
-                        "[highlighted] Language",
+                        "Choices 1/7",
                         after=mark,
                     )
                     self.assertNotIn("Apply Changes", opened)
@@ -3218,22 +3618,27 @@ print(
         process.wait_for_text("story[lobby]> ")
         mark = process.output_mark()
         process.send_line("/settings")
-        settings = process.wait_for_text("7. [available] Agents", after=mark)
+        settings = process.wait_for_text("  7. Agents", after=mark)
         self.assertIn(
-            "5.[available]ConversationRAG—Current:ProviderDisabled;AutomaticOff",
+            "> 1. Language\n     Current: KO",
+            settings,
+        )
+        self.assertNotIn(" — Current:", settings)
+        self.assertIn(
+            "5.ConversationRAGCurrent:ProviderDisabled;AutomaticOff",
             "".join(settings.split()),
         )
         self.assertIn(
-            "6.[available]Messagedetails—Current:Off",
+            "6.MessagedetailsCurrent:Off",
             "".join(settings.split()),
         )
         process.send_line("7")
-        process.wait_for_text("Agents > ", after=mark)
+        process.wait_for_text("Select an agent to configure", after=mark)
         process.send_line("2")
         process.wait_for_text("Agent settings", after=mark)
         process.send_line("2")
         process.wait_for_text(
-            "Model [Plot & Structure Architect",
+            "Model\nContext: Plot & Structure Architect",
             after=mark,
         )
         model_mark = process.output_mark()
@@ -3251,28 +3656,44 @@ print(
             "".join(entered.split()),
         )
         process.send_text("\x1b\n")
-        process.wait_for_text("Model [Plot & Structure Architect", after=model_mark)
+        process.wait_for_text(
+            "Model\nContext: Plot & Structure Architect",
+            after=model_mark,
+        )
         process.send_line("/cancel")
         process.wait_for_text("Agent settings", after=model_mark)
         process.send_line("/cancel")
-        process.wait_for_text("Agents > ", after=model_mark)
+        process.wait_for_text("Select an agent to configure", after=model_mark)
         process.send_line("/cancel")
         returned_settings = process.wait_for_text(
-            "9. [available] Discard Changes",
+            "  9. Discard Changes",
             after=model_mark,
         )
         self.assertIn("[save required]", returned_settings)
         compact_returned = "".join(returned_settings.split())
         self.assertIn(
-            "8.[available]ApplyChanges(*Required)",
+            "8.ApplyChanges(*Required)",
             compact_returned,
         )
-        self.assertNotIn("8.[available]Save", compact_returned)
+        self.assertNotIn("8.Save", compact_returned)
         self.assertIn(
             "ChooseApplyChangestopersistpendingchanges",
             "".join(returned_settings.split()),
         )
+        confirmation_mark = process.output_mark()
         process.send_line("8")
+        process.wait_for_text("Apply changes?", after=confirmation_mark)
+        process.send_line("0")
+        retry = process.wait_for_text("[validation]", after=confirmation_mark)
+        self.assertEqual(retry.count("[validation]"), 1)
+        for omitted in (
+            "--- Settings [open]",
+            "(Changed)",
+            "[activation]",
+            "Runtime changes apply to this shell",
+        ):
+            with self.subTest(omitted=omitted):
+                self.assertNotIn(omitted, retry)
         process.send_line("1")
         process.wait_for_text("Settings saved", after=mark)
         process.wait_for_text("story[lobby]> ", after=mark)
@@ -3502,9 +3923,9 @@ print(
 
         settings_mark = process.output_mark()
         process.send_line("/settings")
-        process.wait_for_text("7. [available] Agents", after=settings_mark)
+        process.wait_for_text("  7. Agents", after=settings_mark)
         process.send_line("1")
-        process.wait_for_text("Language >", after=settings_mark)
+        process.wait_for_text("Choose the workspace language.", after=settings_mark)
         process.send_line("2")
         process.wait_for_text(
             "Pending Language entered: EN.",
@@ -4397,11 +4818,11 @@ raise SystemExit(cli.main([]))
         help_mark = lobby.output_mark()
         lobby.send_text("/help\n\n")
         lobby.wait_for_text(
-            "Writing artifact references [completed]",
+            "Writing artifact references",
             after=help_mark,
         )
         help_output = lobby.wait_for_text("story[lobby]> ", after=help_mark)
-        self.assertIn("Writing artifact references [completed]", help_output)
+        self.assertIn("Writing artifact references", help_output)
         self.assertIn(
             "".join(guidance.split()),
             "".join(help_output.split()),
@@ -5782,7 +6203,7 @@ print(
             "/run --output part-01/fallback.md fallback consensus body"
         )
         process.wait_for_text(
-            "Consensus [completed] [success]",
+            "Consensus [success]",
             after=consensus_mark,
         )
         process.wait_for_text("story[alpha:lead]> ", after=consensus_mark)
@@ -5801,13 +6222,13 @@ print(
             self.assertIn(f"--- {heading}", consensus)
             self.assertNotIn(f"{heading} [loading]", consensus)
         self.assertIn(
-            "--- Debate phase · Consensus [completed]",
+            "--- Debate phase · Consensus",
             consensus,
         )
         self.assertEqual(consensus.count("deterministic candidate"), 1)
         self.assertLess(
             consensus.rfind("--- Debate phase"),
-            consensus.index("Consensus [completed] [success]"),
+            consensus.index("Consensus [success]"),
         )
 
         process.send_line("/quit")
@@ -6196,15 +6617,15 @@ print(
             advisory_output.encode("utf-8"),
         ).decode("utf-8")
         accepted_message = (
-            "You → Lead Orchestrator [completed]\n"
+            "You → Lead Orchestrator\n"
             "│ harbor beacon beside the vessel"
         )
         self.assertEqual(advisory_plain.count(accepted_message), 1)
         self.assertLess(
             advisory_plain.index(accepted_message),
-            advisory_plain.index("Lead Orchestrator → You · Provider:"),
+            advisory_plain.index("Lead Orchestrator → You\n"),
         )
-        self.assertNotIn("You → Lead Orchestrator · Provider:", advisory_plain)
+        self.assertNotIn("You → Lead Orchestrator\n  Codex /", advisory_plain)
         advisory_raw = bytes(process.raw_bytes[mark:])
         self.assertIn(b"\x1b[1;35m", advisory_raw)
         self.assertIn(b"\x1b[1;36m", advisory_raw)
@@ -6219,11 +6640,11 @@ print(
 
         mark = process.output_mark()
         process.send_line("/history 2")
-        process.wait_for_text("History (1/2) [completed]", after=mark)
+        process.wait_for_text("History (1/2)", after=mark)
         process.wait_for_text("harbor beacon beside the vessel", after=mark)
         history = process.wait_for_text("deterministic advisory reply", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
-        self.assertIn("History (2/2) [completed]", history)
+        self.assertIn("History (2/2)", history)
         self.assertIn("deterministic advisory reply", history)
         first_events = FilesystemConversationEventStore(
             self.workspace,
@@ -6251,27 +6672,27 @@ print(
         mark = process.output_mark()
         process.send_line("/search harbor beacon")
         search_output = process.wait_for_text(
-            "Search results (1/1) [completed]",
+            "Search results (1/1)",
             after=mark,
         )
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         search_output = process.text_after(mark)
         search_context = (
-            "[context] Search request [completed]\n"
+            "[context] Search request\n"
             "  Query: harbor beacon\n"
             "  Scope: active"
         )
         self.assertEqual(search_output.count(search_context), 1)
         self.assertLess(
             search_output.index(search_context),
-            search_output.index("Search results (1/1) [completed]"),
+            search_output.index("Search results (1/1)"),
         )
         self.assertIn("Citation: conversation", search_output)
         self.assertIn(selected.subject, " ".join(search_output.split()))
 
         mark = process.output_mark()
         process.send_line(f"/transcript {selected.conversation_id} 2")
-        process.wait_for_text("Transcript (1/2) [completed]", after=mark)
+        process.wait_for_text("Transcript (1/2)", after=mark)
         process.wait_for_text(
             "harbor beacon beside the vessel",
             after=mark,
@@ -6283,7 +6704,7 @@ print(
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         transcript_output = process.text_after(mark)
         transcript_context = (
-            "[context] Transcript request [completed]\n"
+            "[context] Transcript request\n"
             f"  Conversation: {selected.conversation_id[:12]}\n"
             "  Start: 1\n"
             "  Count: 2"
@@ -6291,7 +6712,7 @@ print(
         self.assertEqual(transcript_output.count(transcript_context), 1)
         self.assertLess(
             transcript_output.index(transcript_context),
-            transcript_output.index("Transcript (1/2) [completed]"),
+            transcript_output.index("Transcript (1/2)"),
         )
         self.assertIn("deterministic advisory reply", transcript_output)
         transcript_plain = _ANSI_SGR_BYTES.sub(
@@ -6339,7 +6760,7 @@ print(
             content="retrieval-assisted answer",
             details=True,
         )
-        process.wait_for_text("[context] Source 1 [completed]", after=mark)
+        process.wait_for_text("[context] Source 1", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         retrieval_output = process.text_after(mark)
         self.assertIn(f"Conversation: {selected.conversation_id}", retrieval_output)
@@ -6351,7 +6772,7 @@ print(
         self.assertIn("\x1b[K", retrieval_output)
         self.assertLess(
             retrieval_output.index("retrieval-assisted answer"),
-            retrieval_output.index("[context] Source 1 [completed]"),
+            retrieval_output.index("[context] Source 1"),
         )
 
         started = [
@@ -6361,7 +6782,7 @@ print(
         ]
         self.assertEqual(len(started), provider_calls_before_reads + 3)
         self.assertEqual(
-            [record["payload"]["retrieval"]["action_index"] for record in started[-3:]],
+            [record["context_action_index"] for record in started[-3:]],
             [1, 2, 3],
         )
         process.send_text("/quit\n\n")
@@ -6469,17 +6890,17 @@ print(
                 successful_compact,
             )
         self.assertIn(
-            "---Debatephase·Consensus[completed]",
+            "---Debatephase·Consensus",
             successful_compact,
         )
         self.assertEqual(successful_compact.count("deterministiccandidate"), 1)
         self.assertLess(
             successful_compact.rfind("---Debatephase"),
-            successful_compact.index("Consensus[completed][success]"),
+            successful_compact.index("Consensus[success]"),
         )
         collapsed = "".join(successful_output.split())
         accepted_prompt = (
-            "You→Consensus[completed]││/send│/cancel│finalliteralline"
+            "You→Consensus││/send│/cancel│finalliteralline"
         )
         self.assertEqual(collapsed.count(accepted_prompt), 1)
         self.assertLess(
@@ -6487,7 +6908,7 @@ print(
             collapsed.index("Startedpromptconsensus."),
         )
         self.assertIn(
-            "[context]Consensusrequest[completed]"
+            "[context]Consensusrequest"
             "Output:part-01/composed.md",
             collapsed,
         )
@@ -6502,7 +6923,7 @@ print(
             "Auditcompletedforr0atround0;conflicts:none.",
             "Artifactscommittedforr0:",
             "Consensusreachedonr0after0revisionrounds.",
-            "Consensus[completed][success]revision:r0",
+            "Consensus[success]revision:r0",
         )
         for fragment in ordered_fragments:
             with self.subTest(fragment=fragment):
@@ -6602,7 +7023,7 @@ print(
         ]
         self.assertEqual(len(started), 5)
         self.assertEqual(
-            started[0]["payload"]["user_payload"],
+            started[0]["context_current"]["command"],
             "\n/send\n/cancel\nfinal literal line",
         )
         self.assertFalse(
@@ -6738,11 +7159,14 @@ asyncio.run(main())
         process.wait_for_text("story[alpha:plot]> ", after=mark)
         manifest_path = f"{_SESSION_DIRECTORY}/alpha.json"
         manifest = self.workspace.read_json(manifest_path)
-        thread_key = "codex:plot_architect"
-        self.assertIs(
-            manifest["provider_threads"][thread_key]["tainted"],
-            False,
+        self.assertEqual(manifest["provider_threads"], {})
+        context_records = self._context_thread_records(
+            "alpha",
+            agent_id="plot_architect",
+            subject_id=selected.conversation_id,
         )
+        self.assertEqual(len(context_records), 1)
+        self.assertIs(context_records[0]["tainted"], False)
 
         self._set_provider_control(mode="block")
         records_before_cancel = len(self._provider_records())
@@ -6758,11 +7182,11 @@ asyncio.run(main())
         def is_cancelled_invocation(record: dict[str, Any]) -> bool:
             """Identify the blocking advisory provider invocation by payload."""
 
-            payload = record.get("payload")
+            payload = record.get("context_current")
             return (
                 record.get("event") == "started"
                 and isinstance(payload, dict)
-                and payload.get("content") == "cancel advisory"
+                and payload.get("command") == "cancel advisory"
             )
 
         blocked = self._wait_for_provider_record(
@@ -6807,10 +7231,14 @@ asyncio.run(main())
             os.kill(blocked_pid, 0)
 
         manifest = self.workspace.read_json(manifest_path)
-        self.assertIs(
-            manifest["provider_threads"][thread_key]["tainted"],
-            True,
+        self.assertEqual(manifest["provider_threads"], {})
+        context_records = self._context_thread_records(
+            "alpha",
+            agent_id="plot_architect",
+            subject_id=selected.conversation_id,
         )
+        self.assertEqual(len(context_records), 1)
+        self.assertIs(context_records[0]["tainted"], True)
         catalog = FilesystemConversationCatalog(self.workspace)
         store = FilesystemConversationEventStore(self.workspace, catalog=catalog)
         events = store.read("alpha", selected.conversation_id)
@@ -6839,10 +7267,14 @@ asyncio.run(main())
         )
         process.wait_for_text("story[alpha:plot]> ", after=mark)
         manifest = self.workspace.read_json(manifest_path)
-        self.assertIs(
-            manifest["provider_threads"][thread_key]["tainted"],
-            False,
+        self.assertEqual(manifest["provider_threads"], {})
+        context_records = self._context_thread_records(
+            "alpha",
+            agent_id="plot_architect",
+            subject_id=selected.conversation_id,
         )
+        self.assertEqual(len(context_records), 1)
+        self.assertIs(context_records[0]["tainted"], False)
         started = [
             record
             for record in self._provider_records()
@@ -6880,7 +7312,7 @@ asyncio.run(main())
         process.send_line(
             "/run --output part-01/seed-consensus.md seed consensus"
         )
-        process.wait_for_text("Consensus [completed] [success]", after=mark)
+        process.wait_for_text("Consensus [success]", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         mark = process.output_mark()
         process.send_line("establish current lead thread")
@@ -6913,12 +7345,12 @@ asyncio.run(main())
         def is_blocked_consensus_draft(record: dict[str, Any]) -> bool:
             """Identify the blocked execution draft for the cancellation run."""
 
-            payload = record.get("payload")
+            payload = record.get("context_current")
             return (
                 record.get("event") == "started"
                 and isinstance(payload, dict)
                 and payload.get("phase") == "draft"
-                and payload.get("user_payload") == "cancel consensus"
+                and payload.get("command") == "cancel consensus"
             )
 
         blocked = self._wait_for_provider_record(
@@ -6926,6 +7358,13 @@ asyncio.run(main())
             is_blocked_consensus_draft,
             after_count=records_before_cancel,
         )
+        live_debates = [
+            item
+            for item in self.workspace.inspect_session("alpha")["debates"]
+            if not item["terminal"]
+        ]
+        self.assertEqual(len(live_debates), 1)
+        cancelled_debate_id = live_debates[0]["debate_id"]
         process.send_interrupt()
         process.wait_for_text(
             "Run interrupted after durable state transition.",
@@ -7004,9 +7443,14 @@ asyncio.run(main())
         self.assertEqual(manuscripts_after_cancel, seed_manuscripts)
         manifest_path = f"{_SESSION_DIRECTORY}/alpha.json"
         manifest = self.workspace.read_json(manifest_path)
-        self.assertIs(
-            manifest["provider_threads"]["codex:execution_specialist"]["tainted"],
-            True,
+        self.assertEqual(manifest["provider_threads"], {})
+        self.assertEqual(
+            self._context_thread_records(
+                "alpha",
+                agent_id="execution_specialist",
+                subject_id=cancelled_debate_id,
+            ),
+            [],
         )
 
         self._set_provider_control(mode="auto")
@@ -7014,26 +7458,37 @@ asyncio.run(main())
         process.send_line(
             "/run --output part-01/recovered-consensus.md recovered consensus"
         )
-        process.wait_for_text("Consensus [completed] [success]", after=mark)
+        process.wait_for_text("Consensus [success]", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         manifest = self.workspace.read_json(manifest_path)
-        self.assertIs(
-            manifest["provider_threads"]["codex:execution_specialist"]["tainted"],
-            False,
-        )
+        self.assertEqual(manifest["provider_threads"], {})
         drafter_invocations = [
             record
             for record in self._provider_records()
             if record.get("event") == "started"
-            and record["payload"].get("agent_id") == "execution_specialist"
+            and record["context_current"]["identity"].get("agent_id")
+            == "execution_specialist"
         ]
         self.assertEqual(
-            [record["payload"]["phase"] for record in drafter_invocations],
+            [record["context_current"]["phase"] for record in drafter_invocations],
             ["draft", "audit", "draft", "draft", "audit"],
         )
         self.assertEqual(
             ["resume" in record["argv"] for record in drafter_invocations],
-            [False, True, True, False, True],
+            [False, True, False, False, True],
+        )
+        context_records = self._context_thread_records(
+            "alpha",
+            agent_id="execution_specialist",
+        )
+        self.assertEqual(len(context_records), 2)
+        self.assertTrue(all(not record["tainted"] for record in context_records))
+        self.assertNotIn(
+            cancelled_debate_id,
+            {
+                record["key"]["scope"]["subject_id"]
+                for record in context_records
+            },
         )
         final_inspection = self.workspace.inspect_session("alpha")
         final_statuses = [item["status"] for item in final_inspection["debates"]]
@@ -7094,7 +7549,7 @@ asyncio.run(main())
         before = _durable_tree_without_access(self.workspace.root)
         mark = process.output_mark()
         process.send_line("/history 24")
-        process.wait_for_text("History (1/24) [completed]", after=mark)
+        process.wait_for_text("History (1/24)", after=mark)
         process.send_interrupt()
         process.wait_for_text(
             "[cancelled] History cancelled; attached state is unchanged.",
@@ -7340,10 +7795,7 @@ asyncio.run(main())
         malformed_events = store.read("alpha", selected.conversation_id)
         self.assertEqual(
             malformed_events[-1].content,
-            (
-                "BackendProtocolError: Codex conversation retrieval response "
-                "is malformed JSON"
-            ),
+            "BackendProtocolError: contextual provider action is malformed",
         )
         self.assertNotIn(
             "MALFORMED_PROVIDER_VALUE_MUST_NOT_APPEAR",
@@ -7352,11 +7804,11 @@ asyncio.run(main())
 
         mark = process.output_mark()
         process.send_line("/history 2")
-        process.wait_for_text("[context] [completed]", after=mark)
+        process.wait_for_text("[context]", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         malformed_history = process.text_after(mark)
         self.assertIn(
-            "malformedJSON",
+            "contextualprovideractionismalformed",
             "".join(malformed_history.split()).replace("│", ""),
         )
         self.assertNotIn(

@@ -52,8 +52,8 @@ and [Conversation search and cited transcript pages](reference/conversation-sear
 For debates, the runtime owns phase ordering and consensus validation. For an
 advisory turn, it owns preflight, event/provider ordering, and reply validation.
 The three specialists audit the same debate revision; the lead cannot vote or
-erase a conflict. Role definitions limit each agent to the core documents
-needed for its responsibility.
+erase a conflict. Context manifests and route-specific source authority limit
+each agent to role-relevant current material and only its own private state.
 
 ## Public and owner-isolated memory
 
@@ -68,13 +68,15 @@ when session and agent definition remain compatible.
 
 ## Core documents and manuscripts
 
-Core documents flow into agent definitions as durable project context. After
-unanimous approval, finalization may update only the allowed core documents and
-create one approved manuscript at a required part-scoped path. Only current
-repository-provenanced core bytes flow into definitions; a manual edit remains
-on disk but becomes ineligible. The story agents author candidate and update
+Core documents are authoritative contextual P2 sources, not permanent mutable
+bytes in built-in provider definitions. Fresh work bootstraps role-relevant
+current material; compatible work receives exact changes and can boundedly
+search/read omitted authorized sources. After unanimous approval, finalization
+may update only the allowed core documents and create one approved manuscript
+at a required part-scoped path. The story agents author candidate and update
 text, while the runtime validates, journals, publishes, and catalogs it. The
 provider never writes workspace files directly. See
+[Bounded agent context](guides/agent-context.md) and
 [Canonical writing artifacts](reference/writing-artifacts.md).
 
 Continue with the [System overview](design/overview.md),

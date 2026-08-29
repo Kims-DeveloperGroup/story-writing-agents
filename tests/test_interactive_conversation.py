@@ -21,6 +21,14 @@ from story_writing_agents import (
     SessionDurableState,
 )
 from story_writing_agents.backend import AgentBackend
+from story_writing_agents.agent_context.manifest import (
+    ContextScope,
+    ContextSubjectKind,
+)
+from story_writing_agents.agent_context.service import (
+    ContextExecutionEvent,
+    ContextExecutionEventKind,
+)
 from story_writing_agents.cli_context import (
     CliContext,
     load_cli_context,
@@ -102,7 +110,7 @@ _REPLY_ACCENTS = {
 
 
 def _reply_header(agent_id: str) -> str:
-    return f"{AGENT_SPECS[agent_id].display_name} → You [completed]\n"
+    return f"{AGENT_SPECS[agent_id].display_name} → You\n"
 
 
 def _expected_reply_message(
@@ -175,15 +183,22 @@ OutcomeFactory = Callable[[str, str, str, str], object]
 class ScriptedRuntime:
     """Retained async runtime double with loop and exact-call observability."""
 
-    def __init__(self, *outcomes: object) -> None:
+    def __init__(
+        self,
+        *outcomes: object,
+        supports_context_progress: bool = False,
+    ) -> None:
         self.outcomes = list(outcomes)
         self.calls: list[tuple[str, str, str, str]] = []
         self.loops: list[asyncio.AbstractEventLoop] = []
         self.tasks: list[asyncio.Task[object] | None] = []
         self.memory_services: list[object] = []
         self.progress_sinks: list[object] = []
+        self.context_event_sinks: list[object] = []
         self.rag_queries: list[str | None] = []
         self.on_call: Callable[[], None] | None = None
+        if supports_context_progress:
+            self.conversation_storage_services = object()
 
     async def converse_with_retrieval(
         self,
@@ -195,6 +210,7 @@ class ScriptedRuntime:
         memory_service: object,
         progress_sink: object = None,
         rag_query: str | None = None,
+        context_event_sink: object = None,
     ) -> object:
         """Return one scripted retrieval outcome and record selected scope."""
 
@@ -203,6 +219,7 @@ class ScriptedRuntime:
         self.tasks.append(asyncio.current_task())
         self.memory_services.append(memory_service)
         self.progress_sinks.append(progress_sink)
+        self.context_event_sinks.append(context_event_sink)
         self.rag_queries.append(rag_query)
         if self.on_call is not None:
             self.on_call()
@@ -925,6 +942,58 @@ class ControllerRagWorkflowTests(InteractiveConversationTestCase):
 class ControllerRoutingTests(InteractiveConversationTestCase):
     """Verify exact routing, sticky state, output, and parse categories."""
 
+    def test_compact_reply_metadata_keeps_only_routine_turn_evidence(self) -> None:
+        source = controller_core_module.ExecutionValueSource.AGENT_CONFIG
+        profile = controller_core_module.AgentExecutionProfile(
+            agent_id=LEAD_ORCHESTRATOR,
+            provider="antigravity",
+            provider_source=source,
+            model="gemini-3.1-pro-high",
+            model_source=source,
+            effort="high",
+            effort_source=source,
+        )
+
+        self.assertEqual(
+            controller_core_module._compact_reply_metadata(
+                profile,
+                confirmation="confirmed",
+                thread_status="reused",
+            ),
+            "Antigravity / gemini-3.1-pro-high / high · reused",
+        )
+
+    def test_compact_reply_metadata_adds_only_exceptional_qualifiers(self) -> None:
+        source = controller_core_module.ExecutionValueSource.LAUNCH_OVERRIDE
+        profile = controller_core_module.AgentExecutionProfile(
+            agent_id=LEAD_ORCHESTRATOR,
+            provider="codex",
+            provider_source=source,
+            model=None,
+            model_source=source,
+            effort=None,
+            effort_source=source,
+        )
+
+        self.assertEqual(
+            controller_core_module._compact_reply_metadata(
+                profile,
+                confirmation="pending",
+                thread_status="fresh_after_provider_switch",
+            ),
+            "Codex / provider default / provider default · "
+            "fresh after provider switch · pending · launch override",
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            "confirmation must be pending or confirmed",
+        ):
+            controller_core_module._compact_reply_metadata(
+                profile,
+                confirmation="unknown",
+                thread_status="reused",
+            )
+
     def test_runtime_input_header_tracks_only_an_exact_leading_one_shot_route(
         self,
     ) -> None:
@@ -1360,10 +1429,8 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             "}"
         )
         expected_metadata = (
-            "Provider: Codex [built in default] · "
-            "Model: provider default [provider default] · "
-            "Effort: provider default [provider default] · "
-            "Confirmation: pending · Thread: not observed"
+            "Codex / provider default / provider default · "
+            "not observed · pending"
         )
         self.assertEqual(
             accepted_components,
@@ -1394,11 +1461,9 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             ],
         )
         self.assertEqual(expected_metadata.split(" · "), [
-            "Provider: Codex [built in default]",
-            "Model: provider default [provider default]",
-            "Effort: provider default [provider default]",
-            "Confirmation: pending",
-            "Thread: not observed",
+            "Codex / provider default / provider default",
+            "not observed",
+            "pending",
         ])
         profile.assert_called_once_with(LEAD_ORCHESTRATOR)
         confirmation.assert_called_once_with(LEAD_ORCHESTRATOR)
@@ -1455,13 +1520,13 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             )
         )
         rendered = "".join(callbacks.records)
-        truncation_index = rendered.index("[context] [completed] [warning]")
+        truncation_index = rendered.index("[context] [warning]")
         reply_index = rendered.index(_reply_header(LEAD_ORCHESTRATOR))
         self.assertLess(truncation_index, reply_index)
         self.assertNotIn("[routing] ", rendered)
         self.assertNotIn("[waiting] ", rendered)
         self.assertIn(
-            "[context] [completed] [warning]\n"
+            "[context] [warning]\n"
             "  Context truncated: 4 events retained across 2 turns; "
             "3 earlier turns omitted.\n",
             rendered,
@@ -1620,20 +1685,20 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
 
         expected_records = (
             "[context] Retrieval search action 1 started.\n",
-            "[context] [completed]\n"
+            "[context]\n"
             "  Retrieval search action 1 completed: 2 hits; "
             "321 observation bytes; truncated: yes.\n",
             "[context] Retrieval read action 2 started.\n",
-            "[context] [completed]\n"
+            "[context]\n"
             "  Retrieval read action 2 completed: 2 turns; 4 events; "
             "654 observation bytes; truncated: no.\n",
             '│   "answer": "界",\n'
             '│   "ok": true\n'
             "│ }\n",
-            "[context] Source 1 [completed]\n"
+            "[context] Source 1\n"
             "  Subject: Conversation source\n"
             "  Conversation: source_conversation\n",
-            "[context] Source 2 [completed]\n"
+            "[context] Source 2\n"
             "  Subject: Event source\n"
             "  Conversation: source_conversation\n"
             "  Sequence: 7\n",
@@ -1704,6 +1769,166 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
         )
         self.assertEqual(runtime.memory_services[0].scope.session_id, "session")
 
+    def test_live_context_wording_and_retrieval_action_deduplication_are_exact(
+        self,
+    ) -> None:
+        runtime = ScriptedRuntime(supports_context_progress=True)
+        private_prompt = "PRIVATE_CONTEXT_UI_PROMPT_한🙂"
+
+        def outcome(
+            session_id: str,
+            conversation_id: str,
+            agent_id: str,
+            _text: str,
+        ) -> ConversationRetrievalResult:
+            context_sink = runtime.context_event_sinks[-1]
+            progress_sink = runtime.progress_sinks[-1]
+            assert callable(context_sink)
+            assert callable(progress_sink)
+            scope = ContextScope(
+                "workspace",
+                session_id,
+                ContextSubjectKind.CONVERSATION,
+                conversation_id,
+                agent_id,
+            )
+            operation_id = "ordinary-operation"
+            plan_facts = {
+                "selected_source_count": 2,
+                "selected_source_utf8_bytes": 1024,
+                "omitted_searchable_source_count": 1,
+                "omitted_searchable_source_utf8_bytes": 64,
+                "mandatory_reference_count": 0,
+                "mandatory_reference_utf8_bytes": 0,
+            }
+
+            def emit(kind: ContextExecutionEventKind, **facts: object) -> None:
+                context_sink(
+                    ContextExecutionEvent(
+                        kind,
+                        scope,
+                        operation_id,
+                        **facts,
+                    )
+                )
+
+            emit(ContextExecutionEventKind.BOOTSTRAP, **plan_facts)
+            emit(
+                ContextExecutionEventKind.OMISSION,
+                omitted_searchable_source_count=1,
+                omitted_searchable_source_utf8_bytes=64,
+            )
+            emit(ContextExecutionEventKind.SEARCH_STARTED, action_index=1)
+            progress_common = {
+                "session_id": session_id,
+                "conversation_id": conversation_id,
+                "turn_id": "turn_1",
+                "agent_id": agent_id,
+                "action_index": 1,
+            }
+            progress_sink(
+                ConversationRetrievalProgressEvent(
+                    **progress_common,
+                    phase=ConversationRetrievalProgressPhase.SEARCH_STARTED,
+                )
+            )
+            emit(
+                ContextExecutionEventKind.SEARCH_COMPLETED,
+                action_index=1,
+                search_hit_count=1,
+                observation_utf8_bytes=40,
+                truncated=False,
+            )
+            progress_sink(
+                ConversationRetrievalProgressEvent(
+                    **progress_common,
+                    phase=ConversationRetrievalProgressPhase.SEARCH_COMPLETED,
+                    search_hit_count=1,
+                    observation_utf8_bytes=40,
+                    truncated=False,
+                )
+            )
+            emit(ContextExecutionEventKind.READ_STARTED, action_index=2)
+            progress_common["action_index"] = 2
+            progress_sink(
+                ConversationRetrievalProgressEvent(
+                    **progress_common,
+                    phase=ConversationRetrievalProgressPhase.READ_STARTED,
+                )
+            )
+            emit(
+                ContextExecutionEventKind.READ_COMPLETED,
+                action_index=2,
+                retrieved_source_count=1,
+                retrieved_source_utf8_bytes=512,
+                transcript_turn_count=1,
+                transcript_event_count=2,
+                observation_utf8_bytes=80,
+            )
+            progress_sink(
+                ConversationRetrievalProgressEvent(
+                    **progress_common,
+                    phase=ConversationRetrievalProgressPhase.READ_COMPLETED,
+                    transcript_turn_count=1,
+                    transcript_event_count=2,
+                    observation_utf8_bytes=80,
+                    truncated=False,
+                )
+            )
+            emit(ContextExecutionEventKind.ANSWER_AUTHORIZED, action_index=3)
+            emit(
+                ContextExecutionEventKind.CHECKPOINT_ADVANCED,
+                provider_input_tokens=55,
+            )
+            return _conversation_result(
+                session_id,
+                conversation_id,
+                agent_id,
+                "safe reply",
+                turn_id="turn_1",
+            )
+
+        runtime.outcomes.append(outcome)
+        (
+            _workspace,
+            _catalog,
+            _entries,
+            controller,
+            _backend,
+            callbacks,
+            _store,
+        ) = self.prepared_selected_controller(
+            private_prompt,
+            "/quit",
+            runtime=runtime,
+        )
+        self.assertEqual(controller.run_session_lobby(), 0)
+        rendered = "".join(callbacks.records)
+        expected_once = (
+            "[context] bootstrap: 2 selected / 1,024 bytes; 1 searchable\n",
+            "[context] Retrieval search action 1 started.\n",
+            "[context]\n"
+            "  Retrieval search action 1 completed: 1 hits; "
+            "40 observation bytes; truncated: no.\n",
+            "[context] Retrieval read action 2 started.\n",
+            "[context]\n"
+            "  Retrieval read action 2 completed: 1 turns; 2 events; "
+            "80 observation bytes; truncated: no.\n",
+            "[context] answer accepted\n",
+            "[context] checkpoint advanced\n",
+        )
+        for record in expected_once:
+            with self.subTest(record=record):
+                self.assertEqual(rendered.count(record), 1)
+        for suppressed in (
+            "[context] search action 1 started\n",
+            "[context] search action 1 completed: 1 hits; truncated: no\n",
+            "[context] read action 2 started\n",
+            "[context] read 1 sources / 512 bytes\n",
+        ):
+            self.assertNotIn(suppressed, rendered)
+        self.assertNotIn(private_prompt, repr(runtime.context_event_sinks))
+
     def test_retrieval_progress_rejects_identity_phase_and_pair_order(self) -> None:
         runtime = ScriptedRuntime()
         (
@@ -1768,6 +1993,63 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
                 events=events,
             )
         self.assertEqual(events, [started])
+
+    def test_context_failure_wording_is_content_free_and_non_durable(self) -> None:
+        runtime = ScriptedRuntime(supports_context_progress=True)
+        (
+            _workspace,
+            _catalog,
+            entries,
+            controller,
+            _backend,
+            callbacks,
+            store,
+        ) = self.prepared_selected_controller(runtime=runtime)
+        conversation_id = entries[0].conversation_id
+        scope = ContextScope(
+            "workspace",
+            "session",
+            ContextSubjectKind.CONVERSATION,
+            conversation_id,
+            LEAD_ORCHESTRATOR,
+        )
+        operations: dict[tuple[str, str, str, str, str, str], object] = {}
+
+        def accept(kind: ContextExecutionEventKind, operation_id: str) -> None:
+            controller._accept_context_progress(
+                ContextExecutionEvent(kind, scope, operation_id),
+                expected_session_id="session",
+                expected_subject_kind="conversation",
+                expected_subject_id=conversation_id,
+                expected_agent_id=LEAD_ORCHESTRATOR,
+                operations=operations,  # type: ignore[arg-type]
+                suppress_retrieval_actions=False,
+            )
+
+        for kind in (
+            ContextExecutionEventKind.INVALIDATED,
+            ContextExecutionEventKind.TAINTED,
+            ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED,
+        ):
+            accept(kind, "source-operation")
+        for marker, operation_id in (
+            (ContextExecutionEventKind.BUDGET_EXHAUSTED, "budget-operation"),
+            (ContextExecutionEventKind.ACTION_EXHAUSTED, "action-operation"),
+        ):
+            accept(marker, operation_id)
+            accept(ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED, operation_id)
+
+        rendered = "".join(callbacks.records)
+        for record in (
+            "[context] source invalidated\n",
+            "[context] provider context tainted\n",
+            "[context] context budget exhausted\n",
+            "[context] context actions exhausted\n",
+        ):
+            self.assertEqual(rendered.count(record), 1)
+        self.assertEqual(rendered.count("[context] checkpoint not advanced\n"), 3)
+        assert store is not None
+        self.assertEqual(store.read("session", conversation_id), ())
 
     def test_parse_error_category_uses_original_shape_not_error_prose(self) -> None:
         workspace = self.make_workspace()

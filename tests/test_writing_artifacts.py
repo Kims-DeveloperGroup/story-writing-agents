@@ -290,6 +290,7 @@ class RepositoryEligibilityTests(WritingArtifactTestCase):
             "core_documents/extra.md",
             "discussion_logs/private.md",
             "agent_states/private.md",
+            "agent_states/orchestrator_state/context_ledger/v1/checkpoint.json",
             "manuscript/part-01/not-markdown.txt",
             "manuscript/part-01/.gitkeep",
             "manuscript/part-01/upper.MD",

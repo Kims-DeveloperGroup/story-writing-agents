@@ -25,8 +25,11 @@ writing approved story text; the runtime never invokes Git.
 `StoryRuntime` owns validated debate/advisory sequencing, consensus, retrieval
 authority, replies, artifacts, and per-agent desired/current/retiring binding
 selection. It leases the exact selected binding across each provider-bound
-operation and builds the bounded `story_session_context` envelope for every
-substantive turn. See the
+operation, captures authoritative sources, and delegates bootstrap/delta and
+bounded SEARCH/READ execution to the agent-context service. The old
+`story_session_context` object remains internal capture/direct compatibility;
+compact wire v5 is the built-in provider payload. See the
+[agent-context design](agent-context.md) and
 [Runtime API](../reference/runtime-api.md#one-conversation-turn).
 
 `session_lifecycle` owns immutable provider-neutral lifecycle facts and pure
@@ -87,9 +90,10 @@ flow.
 Provider switches also advance a durable per-agent route generation, including
 A→B→A, so each switch starts a fresh target-provider thread. Same-provider
 model/effort changes retain that generation and remain eligible for thread
-reuse. Native-thread freshness does not erase story-session continuity: the
-runtime supplies bounded owner outcomes, focused mode, and core path/hash
-identities again on the next substantive call.
+reuse. Native-thread freshness does not erase story-session continuity: a new
+contextual epoch bootstraps from current authoritative role-relevant sources.
+Compatible READY state can then deliver exact record/source changes instead of
+unchanged bodies.
 
 `Workspace` owns generic path-safe persistence, inspection, and atomic
 replacement. Its retained root identity is a narrower internal
@@ -120,9 +124,9 @@ filesystem-source adapter performs catalog-independent source I/O.
 `StoryRuntime` parses and
 captures one ordered explicit-reference batch per operation, allocates a fresh
 coordinator for every addressed agent/phase, and accepts the operation only
-after final revalidation. Prompt assembly consumes only present safe current core
-paths; referenced selections are transient untrusted provider context rather
-than baseline core context.
+after final revalidation. Built-in prompt assembly binds no mutable core files;
+current core documents are contextual P2 sources. Referenced selections are
+transient untrusted mandatory provider context rather than ambient context.
 The interactive controller validates required manuscript output grammar but
 does not own storage or provenance. Exact user-visible states are in
 [Canonical writing artifacts](../reference/writing-artifacts.md).
@@ -234,9 +238,11 @@ the terminal owns only input state and presentation. There is no public theme AP
 The capable main frame also receives a controller-provided active or exact
 leading-`@agent` target header. With Message details Off, that header contains
 only the full target display name and direct replies avoid execution-profile
-lookup and metadata. On adds backend-authoritative provider/model/effort facts,
-sources, confirmation, and thread state to the documented header/reply surfaces.
-`/agents` and `/status` remain fully diagnostic in both modes; model reply prose
+lookup and metadata. On adds backend-authoritative provider/model/effort facts
+and confirmation to the live header, plus a compact Provider / Model / Effort
+and Thread row beneath replies. Exceptional pending and launch-override state
+stays textual. `/agents` and `/status` retain full sources and confirmation in
+both modes; model reply prose
 is never used to infer execution identity.
 
 The generic picker foundation is also implemented entirely inside the terminal

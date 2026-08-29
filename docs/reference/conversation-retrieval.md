@@ -19,10 +19,12 @@ correlated provider request; **observation**—authorized untrusted story data;
 ```python
 await StoryRuntime.converse_with_retrieval(session_id, conversation_id,
     agent_id, text, *, memory_service, progress_sink=None,
-    rag_query=None) -> ConversationRetrievalResult
+    rag_query=None,
+    context_event_sink: ContextExecutionEventSink | None = None) -> ConversationRetrievalResult
 await RuntimeSession.converse_with_retrieval(conversation_id, agent_id, text,
     *, memory_service, progress_sink=None,
-    rag_query=None) -> ConversationRetrievalResult
+    rag_query=None,
+    context_event_sink: ContextExecutionEventSink | None = None) -> ConversationRetrievalResult
 await BoundAgent.converse_with_retrieval(request, handler, *,
     reference_read: ReferenceReadInvocation | None = None) -> ConversationRetrievalReply
 handler.handle_conversation_retrieval_action(action) -> ConversationRetrievalObservation | ConversationRetrievalReply
@@ -51,8 +53,9 @@ Requests/results retain pre-turn context; replies/results carry ordered sources.
 Value objects are frozen, slotted, and keyword-only. See [facade exports](package-api.md).
 The request's trailing optional `story_session_context` and `rag_context`
 fields are package-internal integration seams; their context types are not root
-exports. Runtime-built calls supply the story-session envelope and may supply
-the RAG envelope; direct callers that omit both retain the legacy payload.
+exports. Runtime-built calls translate story-session capture through contextual
+wire v5 and may separately supply the RAG envelope; direct callers that omit
+both retain compatibility.
 
 Every action carries `kind`, three correlated IDs, and sequential `action_index`:
 
@@ -74,17 +77,13 @@ IDs are `s{action}h{ordinal}` and `r{action}e{ordinal}`.
 
 ## Payload, trust, and fixed budgets
 
-The initial runtime-built payload has `operation`, session/conversation/turn/
-agent IDs, `content`, `story_session_context`, optional `rag_context` after an
-attempted RAG preflight, and `retrieval`; it omits the duplicate legacy
-`context`. The story-session envelope carries the receiving agent's bounded
-belonging-session owner outcomes, core-document path/hash identities, and fresh
-or included focused mode. The RAG envelope carries only bounded reauthorized
-excerpts and stable citations. Direct callers that leave
-`story_session_context=None` keep the legacy `context` field and may still
-supply an attempted `rag_context`. Continuations omit content and every context
-envelope and add one `observation`. Retrieval control has index, allowed
-actions, policy, and rules. A request with no attempted RAG omits `rag_context`.
+The initial built-in payload is compact contextual wire v5: correlation/result
+contract, current input, selected source/record changes, and applicable
+separate `rag_context`. `story_session_context` is internal capture/direct
+compatibility rather than the current provider wire. Continuations omit the
+initial material and carry only the new observation. Established retrieval
+control still supplies its index, allowed actions, policy, and rules. A request
+with no attempted RAG omits `rag_context`.
 With an internal reference coordinator, one separate content-free prelude runs
 first and `untrusted_writing_artifact_context` appears only on this initial
 retrieval payload, never on a continuation.
@@ -211,15 +210,15 @@ synchronous sink returns `None`. Later observer failure stores a safe error.
 
 ```text
 [context] Retrieval search action N started.
-[context] [completed]
+[context]
   Retrieval search action N completed: H hits; B observation bytes; truncated: yes|no.
 [context] Retrieval read action N started.
-[context] [completed]
+[context]
   Retrieval read action N completed: T turns; E events; B observation bytes; truncated: yes|no.
-[context] Source N [completed]
+[context] Source N
   Subject: SUBJECT
   Conversation: ID
-[context] Source N [completed]
+[context] Source N
   Subject: SUBJECT
   Conversation: ID
   Sequence: N
@@ -229,7 +228,7 @@ An attempted shell RAG preflight adds one content-free record before the agent
 reply:
 
 ```text
-[context] [completed]
+[context]
   Conversation RAG: complete|partial|literal_fallback
   Reason: none|partial|disabled|unavailable|stale|corrupt|incompatible|failed
 ```

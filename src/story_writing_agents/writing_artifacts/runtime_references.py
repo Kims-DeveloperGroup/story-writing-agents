@@ -13,6 +13,7 @@ import threading
 import uuid
 
 from .authorization import (
+    AuthorizedArtifactReference,
     ReferenceAuthorization,
     ReferenceAuthorizationError,
     ReferenceAuthorizationErrorCode,
@@ -186,6 +187,21 @@ class RuntimeReferenceOperation:
     @property
     def has_references(self) -> bool:
         return self._authorization is not None
+
+    @property
+    def reference_proofs(self) -> tuple[AuthorizedArtifactReference, ...]:
+        """Return the exact ordered content-free capture proofs while open.
+
+        This projection deliberately exposes neither captured bytes nor the
+        repository-owned authorization capability.  Context orchestration can
+        therefore reserve the same captured references without reaching into
+        this operation's private lifecycle state.
+        """
+
+        authorization = self._authorization
+        if authorization is None:
+            return ()
+        return authorization.authorized_references
 
     @property
     def finished(self) -> bool:

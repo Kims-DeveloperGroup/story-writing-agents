@@ -77,10 +77,17 @@
   scope. A default does not prove attachment, focus, or provider readiness.
 
 - **Core documents.** Outlines, character/world facts, and narrative rules at
-  four exact stable paths; each role receives its allowed current safe
-  filesystem subset. Publication provenance separately records agent-authored
-  replacements.
+  four exact stable paths. Built-in contextual execution treats role-relevant
+  current bytes as authoritative P2 sources; it does not permanently bind them
+  as stable provider instructions. Publication provenance separately records
+  agent-authored replacements.
   See [Workspaces](guides/workspaces.md).
+
+- **Context manifest, checkpoint, and action.** The manifest inventories
+  content-free current source facts; a READY checkpoint authorizes a compatible
+  later delta; bounded SEARCH/READ actions add exact authorized evidence. None
+  is a free-form memory or replacement for a mandatory reference. See
+  [Bounded agent context](guides/agent-context.md).
 
 - **Debate.** One immutable attempt to reach consensus; a story session can
   contain many. See [Consensus workflow](design/consensus-workflow.md).

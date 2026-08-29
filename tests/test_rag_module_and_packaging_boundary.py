@@ -198,8 +198,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 77)
-        self.assertEqual(len(edges), 314)
+        self.assertEqual(len(modules), 85)
+        self.assertEqual(len(edges), 349)
         self.assertIsNone(_cycle_witness(modules, edges))
         self.assertEqual(
             _generic_importers(modules),
@@ -231,6 +231,98 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.conversation_literal_search",
                 "story_writing_agents.conversation_rag",
             },
+        )
+        self.assertEqual(
+            {
+                target
+                for source, target in edges
+                if source == "story_writing_agents.agent_context"
+            },
+            {"story_writing_agents.agent_context.accounting"},
+        )
+        self.assertEqual(
+            {
+                target
+                for source, target in edges
+                if source == "story_writing_agents.agent_context.accounting"
+            },
+            set(),
+        )
+        self.assertEqual(
+            {
+                target
+                for source, target in edges
+                if source == "story_writing_agents.agent_context.ledger"
+            },
+            {
+                "story_writing_agents.agent_context.accounting",
+                "story_writing_agents.agent_context.manifest",
+                "story_writing_agents.agent_context.planning",
+                "story_writing_agents.workspace",
+            },
+        )
+        self.assertEqual(
+            {
+                target
+                for source, target in edges
+                if source == "story_writing_agents.agent_context.actions"
+            },
+            {
+                "story_writing_agents.agent_context.manifest",
+                "story_writing_agents.agent_context.planning",
+            },
+        )
+        self.assertEqual(
+            {
+                target
+                for source, target in edges
+                if source == "story_writing_agents.agent_context.sources"
+            },
+            {
+                "story_writing_agents.agent_context.actions",
+                "story_writing_agents.agent_context.manifest",
+                "story_writing_agents.conversations",
+                "story_writing_agents.errors",
+                "story_writing_agents.models",
+                "story_writing_agents.workspace",
+                "story_writing_agents.writing_artifacts.filesystem_sources",
+                "story_writing_agents.writing_artifacts.references",
+                "story_writing_agents.writing_artifacts.repository",
+            },
+        )
+        self.assertEqual(
+            {
+                target
+                for source, target in edges
+                if source == "story_writing_agents.agent_context.service"
+            },
+            {
+                "story_writing_agents.agent_context.accounting",
+                "story_writing_agents.agent_context.actions",
+                "story_writing_agents.agent_context.ledger",
+                "story_writing_agents.agent_context.manifest",
+                "story_writing_agents.agent_context.planning",
+                "story_writing_agents.agent_context.sources",
+                "story_writing_agents.workspace",
+            },
+        )
+        self.assertIn(
+            (
+                "story_writing_agents.backend",
+                "story_writing_agents.agent_context.service",
+            ),
+            edges,
+        )
+        self.assertEqual(
+            {
+                source
+                for source, target in edges
+                if target == "story_writing_agents.agent_context.service"
+                and source.startswith(
+                    "story_writing_agents.interactive_controller."
+                )
+            },
+            {"story_writing_agents.interactive_controller._runtime_policy"},
         )
         self.assertEqual(
             {

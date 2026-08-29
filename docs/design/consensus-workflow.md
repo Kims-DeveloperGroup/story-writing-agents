@@ -7,7 +7,9 @@
 Key terms: **reservation**—the immutable claim on one debate ID; **snapshot**—
 one bounded conversation window; **revision round**—one complete replacement;
 **terminal durability**—result and lifecycle state saved before terminal
-progress; **observer**—the optional synchronous progress sink.
+progress; **observer**—the optional synchronous debate-progress sink. The
+agent-context observer is a separate per-invocation lifecycle; see
+[Agent-context design](agent-context.md#observer-lifecycle-and-shell-projection).
 
 ```mermaid
 flowchart TD
@@ -67,6 +69,13 @@ candidate and the same immutable context snapshot in parallel. Successful
 audit persistence precedes `AUDIT_COMPLETED`, whose typed agent list reports
 conflicts in roster order. Peer prose never enters progress.
 
+Within each logical draft/audit/proposal/synthesis/finalize call, contextual
+execution independently follows `PREPARE → PLAN → INVOKE/ACTION → VERIFY →
+COMMIT|FAIL`. These content-free lines may interleave by agent, round, and
+phase. A context `checkpoint advanced` authorizes a later delta; it does not
+mean debate consensus or artifact publication. Consensus publication remains
+one recoverable catalog-last artifact transaction.
+
 If conflicts remain and another replacement is allowed, only conflicting
 specialists propose repairs. The lead synthesizes a complete next revision;
 after it is durable the runtime emits `SYNTHESIZED` and starts the next audit.
@@ -88,9 +97,9 @@ The interactive shell presents each accepted progress event as one Panel titled
 `Debate phase · DISPLAY_NAME` in one terminal write. Display names are the
 trusted sentence-case phase names, such as `Audit started` and `Artifacts
 committed`; the canonical Phase field still carries the enum value. Active
-headings omit `[loading]`, while Consensus, Deadlock, Failed, and Interrupted
-retain their completed, error, error, and cancelled heading states. The Outcome
-field keeps its existing role/state. Ordered fields are Debate ID, Phase, Round,
+headings omit `[loading]`; Consensus completion is silent, while Deadlock,
+Failed, and Interrupted retain error, error, and cancelled heading states. The
+Outcome field keeps its existing role/state. Ordered fields are Debate ID, Phase, Round,
 Revision, Action, Outcome, and Conflicts. Message details On inserts Handoff
 between Revision and Action; Off omits only that diagnostic field. `STARTED`
 also includes the fixed included/fresh context notice.

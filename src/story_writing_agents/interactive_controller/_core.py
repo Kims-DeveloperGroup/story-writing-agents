@@ -122,6 +122,7 @@ from ..interactive_terminal import (
     InteractiveDebateProgress,
     InteractiveCompositionInput,
     InteractiveMainInput,
+    InputPresentation,
     format_agent_reply_content,
     AttachmentKind,
     Choice,
@@ -209,6 +210,7 @@ from ._conversation_policy import (
     visible_conversation_handle,
 )
 from ._runtime_policy import (
+    ContextProgressProjection,
     DebateContextInspectionFacts,
     DebateInspectionFacts,
     classify_advisory_turn_failure,
@@ -217,6 +219,7 @@ from ._runtime_policy import (
     classify_progress_callback_failure,
     interactive_code_for_debate_failure,
     validate_consensus_result,
+    validate_context_execution_progress,
     validate_conversation_retrieval_progress,
     validate_conversation_retrieval_result,
     validate_debate_context_inspection,
@@ -354,6 +357,36 @@ def _compact_execution_profile(profile: AgentExecutionProfile) -> str:
         f"({_provider_display_name(profile.provider)}/"
         f"{_execution_value(profile.model)}/"
         f"{_execution_value(profile.effort)})"
+    )
+
+
+def _compact_reply_metadata(
+    profile: AgentExecutionProfile,
+    *,
+    confirmation: str,
+    thread_status: str,
+) -> str:
+    """Render compact turn-specific execution evidence beneath a reply header."""
+
+    if confirmation not in {"confirmed", "pending"}:
+        raise ValueError("confirmation must be pending or confirmed")
+    qualifiers = [thread_status.replace("_", " ")]
+    if confirmation == "pending":
+        qualifiers.append("pending")
+    if any(
+        source is ExecutionValueSource.LAUNCH_OVERRIDE
+        for source in (
+            profile.provider_source,
+            profile.model_source,
+            profile.effort_source,
+        )
+    ):
+        qualifiers.append("launch override")
+    return (
+        f"{_provider_display_name(profile.provider)} / "
+        f"{_execution_value(profile.model)} / "
+        f"{_execution_value(profile.effort)} · "
+        + " · ".join(qualifiers)
     )
 
 
@@ -2528,6 +2561,52 @@ class InteractiveController:
             return provider
         return None
 
+    def _read_settings_picker(
+        self,
+        prompt: Prompt,
+        choices: tuple[Choice, ...],
+        *,
+        transient_context: tuple[Panel | Section | Field | Notice, ...] = (),
+        highlighted_id: str | None = None,
+        selected_id: str | None = None,
+        notice: Notice | None = None,
+        state: ViewState = ViewState.OPEN,
+        visible_choice_limit: int = 7,
+        transient: bool = True,
+    ) -> ControlOutcome:
+        """Read one controller-owned Settings picker in form presentation."""
+
+        return self._picker_input.read_picker(
+            prompt,
+            choices,
+            presentation=InputPresentation.FORM,
+            transient_context=transient_context,
+            visible_choice_limit=visible_choice_limit,
+            highlighted_id=highlighted_id,
+            selected_id=selected_id,
+            notice=notice,
+            state=state,
+            transient=transient,
+        )
+
+    def _read_settings_prompt(
+        self,
+        prompt: Prompt,
+        *,
+        context: tuple[Panel | Section | Field | Notice, ...] = (),
+        initial_value: str | None = None,
+        transient: bool = True,
+    ) -> ControlOutcome:
+        """Read one controller-owned Settings value in form presentation."""
+
+        return self._prompt_input.read_prompt(
+            prompt,
+            presentation=InputPresentation.FORM,
+            context=context,
+            initial_value=initial_value,
+            transient=transient,
+        )
+
     def _run_settings(self) -> None:
         """Edit one isolated configuration candidate and save only on request."""
 
@@ -2578,92 +2657,92 @@ class InteractiveController:
                 Choice(
                     "language",
                     "Language",
-                    description=(
+                    form_summary=(
                         f"Pending: {root_values['language'][1]}"
                         if root_changed["language"]
                         else f"Current: {root_values['language'][0]}"
                     ),
-                    description_role=(
+                    form_summary_role=(
                         SemanticRole.WARNING
                         if root_changed["language"]
-                        else SemanticRole.DEFAULT
+                        else SemanticRole.MUTED
                     ),
                 ),
                 Choice(
                     "persona",
                     "Persona",
-                    description=(
+                    form_summary=(
                         f"Pending: {root_values['persona'][1]}"
                         if root_changed["persona"]
                         else f"Current: {root_values['persona'][0]}"
                     ),
-                    description_role=(
+                    form_summary_role=(
                         SemanticRole.WARNING
                         if root_changed["persona"]
-                        else SemanticRole.DEFAULT
+                        else SemanticRole.MUTED
                     ),
                 ),
                 Choice(
                     "max_debate_rounds",
                     "Maximum debate rounds",
-                    description=(
+                    form_summary=(
                         f"Pending: {root_values['max_debate_rounds'][1]}"
                         if root_changed["max_debate_rounds"]
                         else f"Current: {root_values['max_debate_rounds'][0]}"
                     ),
-                    description_role=(
+                    form_summary_role=(
                         SemanticRole.WARNING
                         if root_changed["max_debate_rounds"]
-                        else SemanticRole.DEFAULT
+                        else SemanticRole.MUTED
                     ),
                 ),
                 Choice(
                     "conversation_storage",
                     "Conversation storage",
-                    description=(
+                    form_summary=(
                         f"Pending: {root_values['conversation_storage'][1]}"
                         if root_values["conversation_storage"][0]
                         != root_values["conversation_storage"][1]
                         else f"Current: {root_values['conversation_storage'][0]}"
                     ),
-                    description_role=(
+                    form_summary_role=(
                         SemanticRole.WARNING
                         if root_changed["conversation_storage"]
-                        else SemanticRole.DEFAULT
+                        else SemanticRole.MUTED
                     ),
                 ),
                 Choice(
                     "conversation_rag",
                     "Conversation RAG",
-                    description=(
+                    form_summary=(
                         f"Pending: {pending_rag}"
                         if current_rag != pending_rag
                         else f"Current: {current_rag}"
                     ),
-                    description_role=(
+                    form_summary_role=(
                         SemanticRole.WARNING
                         if current_rag != pending_rag
-                        else SemanticRole.DEFAULT
+                        else SemanticRole.MUTED
                     ),
                 ),
                 Choice(
                     "show_message_details",
                     "Message details",
-                    description=(
+                    form_summary=(
                         f"Pending: {root_values['show_message_details'][1]}"
                         if root_changed["show_message_details"]
                         else f"Current: {root_values['show_message_details'][0]}"
                     ),
-                    description_role=(
+                    form_summary_role=(
                         SemanticRole.WARNING
                         if root_changed["show_message_details"]
-                        else SemanticRole.DEFAULT
+                        else SemanticRole.MUTED
                     ),
                 ),
                 Choice(
                     "providers",
                     "Agents",
-                    description=(
+                    form_summary=(
                         None
                         if agent_change_count == 0
                         else (
@@ -2672,7 +2751,7 @@ class InteractiveController:
                             else f"{agent_change_count} pending changes"
                         )
                     ),
-                    description_role=(
+                    form_summary_role=(
                         SemanticRole.WARNING
                         if agent_change_count
                         else SemanticRole.DEFAULT
@@ -2694,7 +2773,7 @@ class InteractiveController:
                 )
             if top_highlight not in {choice.identity for choice in choices}:
                 top_highlight = None
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Settings",
                     instruction=(
@@ -2706,6 +2785,7 @@ class InteractiveController:
                 choices,
                 highlighted_id=top_highlight,
                 notice=_settings_pending_save_notice(state),
+                visible_choice_limit=len(choices),
                 transient=True,
             )
             if outcome.kind in {
@@ -3295,6 +3375,7 @@ class InteractiveController:
             before = snapshot
             result = coordinator.run(
                 snapshot,
+                presentation=InputPresentation.FORM,
                 selected_provider=provider,
             )
             if result.kind is InteractiveAuthResultKind.CANCEL:
@@ -3327,13 +3408,13 @@ class InteractiveController:
 
         if action not in {"save", "cancel"}:
             raise ValueError("action must be save or cancel")
-        self._semantic_output.write_component(
+        transient_context = (
             self._settings_panel(
                 state,
                 provider_overrides=self._backend.backend_overrides,
-            )
+            ),
         )
-        outcome = self._picker_input.read_picker(
+        outcome = self._read_settings_picker(
             Prompt(
                 ("Apply changes?" if action == "save" else "Discard changes?"),
                 instruction=(
@@ -3343,6 +3424,7 @@ class InteractiveController:
                 ),
             ),
             (Choice("yes", "YES"), Choice("no", "NO")),
+            transient_context=transient_context,
             highlighted_id="yes",
             transient=True,
         )
@@ -3409,7 +3491,7 @@ class InteractiveController:
         armed_value: object = _SETTINGS_UNARMED
         while True:
             pending = state.pending.system_defaults.language
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Language",
                     instruction=_settings_value_instruction(
@@ -3453,7 +3535,7 @@ class InteractiveController:
         armed_value: object = _SETTINGS_UNARMED
         while True:
             pending = state.pending.system_defaults.persona
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Persona",
                     instruction=_settings_value_instruction(
@@ -3487,7 +3569,7 @@ class InteractiveController:
         notice: Notice | None = None
         armed_value: object = _SETTINGS_UNARMED
         while True:
-            outcome = self._prompt_input.read_prompt(
+            outcome = self._read_settings_prompt(
                 Prompt(
                     "Maximum debate rounds",
                     scope="settings",
@@ -3542,7 +3624,7 @@ class InteractiveController:
                 state.pending.system_defaults.conversation_storage_backend
                 or "filesystem"
             )
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Conversation storage",
                     instruction=_settings_value_instruction(
@@ -3603,7 +3685,7 @@ class InteractiveController:
             )
             current_automatic = "On" if current.conversation_rag_automatic else "Off"
             pending_automatic = "On" if pending.conversation_rag_automatic else "Off"
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Conversation RAG",
                     instruction=(
@@ -3616,19 +3698,29 @@ class InteractiveController:
                     Choice(
                         "provider",
                         "Provider",
-                        description=(
+                        form_summary=(
                             f"Pending: {pending_provider}"
                             if current_provider != pending_provider
                             else f"Current: {current_provider}"
+                        ),
+                        form_summary_role=(
+                            SemanticRole.WARNING
+                            if current_provider != pending_provider
+                            else SemanticRole.MUTED
                         ),
                     ),
                     Choice(
                         "automatic",
                         "Automatic",
-                        description=(
+                        form_summary=(
                             f"Pending: {pending_automatic}"
                             if current_automatic != pending_automatic
                             else f"Current: {current_automatic}"
+                        ),
+                        form_summary_role=(
+                            SemanticRole.WARNING
+                            if current_automatic != pending_automatic
+                            else SemanticRole.MUTED
                         ),
                     ),
                 ),
@@ -3663,7 +3755,7 @@ class InteractiveController:
         while True:
             pending = state.pending.system_defaults.conversation_rag_provider
             pending_id = "local" if pending == "local" else "disabled"
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Conversation RAG Provider",
                     instruction=_settings_value_instruction(
@@ -3713,7 +3805,7 @@ class InteractiveController:
         while True:
             automatic = state.pending.system_defaults.conversation_rag_automatic
             pending_id = "on" if automatic else "off"
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Conversation RAG Automatic",
                     instruction=_settings_value_instruction(
@@ -3769,7 +3861,7 @@ class InteractiveController:
             pending = (
                 "on" if state.pending.system_defaults.show_message_details else "off"
             )
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Message details",
                     instruction=_settings_value_instruction(
@@ -3835,7 +3927,7 @@ class InteractiveController:
                 state=ViewState.OPEN,
             )
         )
-        outcome = self._picker_input.read_picker(
+        outcome = self._read_settings_picker(
             Prompt(
                 "Install SQLite prerequisite?",
                 instruction="Choose the exact YES to run the command.",
@@ -3875,16 +3967,16 @@ class InteractiveController:
                     Choice(
                         agent_id,
                         AGENT_SPECS[agent_id].display_name,
-                        description=(
+                        form_summary=(
                             f"{'Current' if is_current else 'Pending'}: "
                             f"{_compact_execution_profile(pending_profile)}"
                         ),
-                        description_role=(
-                            SemanticRole.DEFAULT if is_current else SemanticRole.WARNING
+                        form_summary_role=(
+                            SemanticRole.MUTED if is_current else SemanticRole.WARNING
                         ),
                     )
                 )
-            agent_outcome = self._picker_input.read_picker(
+            agent_outcome = self._read_settings_picker(
                 Prompt(
                     "Agents",
                     instruction=(
@@ -3927,12 +4019,12 @@ class InteractiveController:
                     Choice(
                         "provider",
                         "Provider",
-                        description=(
+                        form_summary=(
                             f"{'Current' if provider_is_current else 'Pending'}: "
                             f"{_provider_display_name(pending_profile.provider)}"
                         ),
-                        description_role=(
-                            SemanticRole.DEFAULT
+                        form_summary_role=(
+                            SemanticRole.MUTED
                             if provider_is_current
                             else SemanticRole.WARNING
                         ),
@@ -3946,12 +4038,12 @@ class InteractiveController:
                     Choice(
                         "model",
                         "Model",
-                        description=(
+                        form_summary=(
                             f"{'Current' if model_is_current else 'Pending'}: "
                             f"{_execution_value(pending_profile.model)}"
                         ),
-                        description_role=(
-                            SemanticRole.DEFAULT
+                        form_summary_role=(
+                            SemanticRole.MUTED
                             if model_is_current
                             else SemanticRole.WARNING
                         ),
@@ -3965,12 +4057,12 @@ class InteractiveController:
                     Choice(
                         "reasoning",
                         "Effort",
-                        description=(
+                        form_summary=(
                             f"{'Current' if effort_is_current else 'Pending'}: "
                             f"{_execution_value(pending_profile.effort)}"
                         ),
-                        description_role=(
-                            SemanticRole.DEFAULT
+                        form_summary_role=(
+                            SemanticRole.MUTED
                             if effort_is_current
                             else SemanticRole.WARNING
                         ),
@@ -3992,7 +4084,7 @@ class InteractiveController:
                     if enabled_fields
                     else None
                 )
-                field_outcome = self._picker_input.read_picker(
+                field_outcome = self._read_settings_picker(
                     Prompt(
                         "Agent settings",
                         scope=AGENT_SPECS[agent_id].display_name,
@@ -4053,7 +4145,7 @@ class InteractiveController:
                 agent_id,
                 provider_overrides=self._backend.backend_overrides,
             )
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Provider",
                     scope=AGENT_SPECS[agent_id].display_name,
@@ -4134,7 +4226,7 @@ class InteractiveController:
                 (choice.identity for choice in choices if choice.enabled),
                 None,
             )
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Provider",
                     scope=AGENT_SPECS[agent_id].display_name,
@@ -4174,6 +4266,7 @@ class InteractiveController:
 
             result = coordinator.run(
                 snapshot,
+                presentation=InputPresentation.FORM,
                 selected_provider=provider,
             )
             if result.kind is InteractiveAuthResultKind.CANCEL:
@@ -4332,7 +4425,7 @@ class InteractiveController:
             choice_ids = {choice.identity for choice in choices}
             if highlighted_id not in choice_ids:
                 highlighted_id = selected_id
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Model",
                     scope=(f"{AGENT_SPECS[agent_id].display_name} · {provider_name}"),
@@ -4426,7 +4519,7 @@ class InteractiveController:
         while True:
             agent = state.pending.agent_configs[agent_id]
             pending = agent.antigravity_model if antigravity else agent.codex_model
-            outcome = self._prompt_input.read_prompt(
+            outcome = self._read_settings_prompt(
                 Prompt(
                     "Custom model",
                     scope=(f"{AGENT_SPECS[agent_id].display_name} · {provider_name}"),
@@ -4610,7 +4703,7 @@ class InteractiveController:
             choice_ids = {choice.identity for choice in choices}
             if highlighted_id not in choice_ids:
                 highlighted_id = selected_id
-            outcome = self._picker_input.read_picker(
+            outcome = self._read_settings_picker(
                 Prompt(
                     "Effort",
                     scope=(f"{AGENT_SPECS[agent_id].display_name} · {provider_name}"),
@@ -5775,7 +5868,23 @@ class InteractiveController:
             )
         )
         progress_events: list[ConversationRetrievalProgressEvent] = []
+        context_operations: dict[
+            tuple[str, str, str, str, str, str],
+            ContextProgressProjection,
+        ] = {}
         progress_callback_failure: BaseException | None = None
+        supports_context_progress = bool(
+            "context_event_sink"
+            in inspect.signature(
+                self._runtime.converse_with_retrieval
+            ).parameters
+            and getattr(
+                self._runtime,
+                "conversation_storage_services",
+                None,
+            )
+            is not None
+        )
 
         def accept_and_render_progress(
             event: ConversationRetrievalProgressEvent,
@@ -5790,6 +5899,24 @@ class InteractiveController:
                     expected_conversation_id=focused.conversation_id,
                     expected_agent_id=agent_id,
                     events=progress_events,
+                )
+            except BaseException as exc:
+                progress_callback_failure = exc
+                raise
+
+        def accept_and_render_context_progress(event: object) -> None:
+            """Validate generic lifecycle facts and retain callback failures."""
+
+            nonlocal progress_callback_failure
+            try:
+                self._accept_context_progress(
+                    event,
+                    expected_session_id=session_id,
+                    expected_subject_kind="conversation",
+                    expected_subject_id=focused.conversation_id,
+                    expected_agent_id=agent_id,
+                    operations=context_operations,
+                    suppress_retrieval_actions=True,
                 )
             except BaseException as exc:
                 progress_callback_failure = exc
@@ -5811,6 +5938,11 @@ class InteractiveController:
                     session_id=session_id,
                     conversation_id=focused.conversation_id,
                 )
+                context_observer = (
+                    {"context_event_sink": accept_and_render_context_progress}
+                    if supports_context_progress
+                    else {}
+                )
                 return await self._runtime.converse_with_retrieval(
                     session_id,
                     focused.conversation_id,
@@ -5819,6 +5951,7 @@ class InteractiveController:
                     memory_service=memory_service,
                     progress_sink=accept_and_render_progress,
                     rag_query=rag_query,
+                    **context_observer,
                 )
             except asyncio.CancelledError:
                 cancellation_reached_operation = True
@@ -5886,6 +6019,16 @@ class InteractiveController:
                 operation_coroutine.close()
                 progress_coroutine.close()
 
+        if supports_context_progress and (
+            len(context_operations) != 1
+            or any(
+                not event.terminal or event.kind != "checkpoint_advanced"
+                for event in context_operations.values()
+            )
+        ):
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
         try:
             result = validate_conversation_retrieval_result(
                 result,
@@ -5930,18 +6073,10 @@ class InteractiveController:
             assert execution_profile is not None
             confirmation = self._backend.execution_profile_confirmation(agent_id)
             thread_status = self._backend.execution_profile_thread_status(agent_id)
-            metadata = (
-                "Provider: "
-                f"{_provider_display_name(execution_profile.provider)} "
-                f"[{_execution_source_label(execution_profile.provider_source)}]"
-                " · Model: "
-                f"{_execution_value(execution_profile.model)} "
-                f"[{_execution_source_label(execution_profile.model_source)}]"
-                " · Effort: "
-                f"{_execution_value(execution_profile.effort)} "
-                f"[{_execution_source_label(execution_profile.effort_source)}]"
-                f" · Confirmation: {confirmation}"
-                f" · Thread: {thread_status.replace('_', ' ')}"
+            metadata = _compact_reply_metadata(
+                execution_profile,
+                confirmation=confirmation,
+                thread_status=thread_status,
             )
         self._semantic_output.write_component(
             Message(
@@ -6008,6 +6143,135 @@ class InteractiveController:
         )
         self._render_conversation_retrieval_progress(canonical)
         events.append(canonical)
+
+    def _accept_context_progress(
+        self,
+        event: object,
+        *,
+        expected_session_id: str,
+        expected_subject_kind: str,
+        expected_subject_id: str | None,
+        expected_agent_id: str | None,
+        operations: dict[
+            tuple[str, str, str, str, str, str],
+            ContextProgressProjection,
+        ],
+        suppress_retrieval_actions: bool,
+    ) -> None:
+        """Validate, render, and retain one generic context lifecycle fact."""
+
+        canonical = validate_context_execution_progress(
+            event,
+            expected_session_id=expected_session_id,
+            expected_subject_kind=expected_subject_kind,
+            expected_subject_id=expected_subject_id,
+            expected_agent_id=expected_agent_id,
+            previous_by_operation=operations,
+        )
+        self._render_context_progress(
+            canonical,
+            suppress_retrieval_actions=suppress_retrieval_actions,
+        )
+        operations[canonical.operation_key] = canonical
+
+    def _render_context_progress(
+        self,
+        event: ContextProgressProjection,
+        *,
+        suppress_retrieval_actions: bool,
+    ) -> None:
+        """Render only fixed wording and validated content-free counters."""
+
+        if event.subject_kind == "debate":
+            assert event.phase is not None and event.round_number is not None
+            prefix = (
+                f"{event.agent_id} · round {event.round_number} · "
+                f"{event.phase}: "
+            )
+        else:
+            prefix = ""
+        kind = event.kind
+        if kind in {"bootstrap", "delta"}:
+            assert event.selected_source_count is not None
+            assert event.selected_source_utf8_bytes is not None
+            assert event.omitted_searchable_source_count is not None
+            text = (
+                f"{prefix}{kind}: {event.selected_source_count} selected / "
+                f"{event.selected_source_utf8_bytes:,} bytes; "
+                f"{event.omitted_searchable_source_count} searchable"
+            )
+            self._write_notice(text, label="context", state=ViewState.LOADING)
+            return
+        if kind == "omission":
+            # The preceding plan line already renders these exact facts.
+            return
+        if suppress_retrieval_actions and kind in {
+            "search_started",
+            "search_completed",
+            "read_started",
+            "read_completed",
+        }:
+            return
+        if kind == "search_started":
+            assert event.action_index is not None
+            text = f"{prefix}search action {event.action_index} started"
+            state = ViewState.LOADING
+            role = SemanticRole.INFO
+        elif kind == "search_completed":
+            assert event.action_index is not None
+            assert event.search_hit_count is not None
+            assert event.truncated is not None
+            text = (
+                f"{prefix}search action {event.action_index} completed: "
+                f"{event.search_hit_count} hits; truncated: "
+                f"{'yes' if event.truncated else 'no'}"
+            )
+            state = ViewState.COMPLETED
+            role = SemanticRole.INFO
+        elif kind == "read_started":
+            assert event.action_index is not None
+            text = f"{prefix}read action {event.action_index} started"
+            state = ViewState.LOADING
+            role = SemanticRole.INFO
+        elif kind == "read_completed":
+            assert event.retrieved_source_count is not None
+            assert event.retrieved_source_utf8_bytes is not None
+            text = (
+                f"{prefix}read {event.retrieved_source_count} sources / "
+                f"{event.retrieved_source_utf8_bytes:,} bytes"
+            )
+            state = ViewState.COMPLETED
+            role = SemanticRole.INFO
+        elif kind == "answer_authorized":
+            text = f"{prefix}answer accepted"
+            state = ViewState.COMPLETED
+            role = SemanticRole.SUCCESS
+        elif kind == "invalidated":
+            text = f"{prefix}source invalidated"
+            state = ViewState.ERROR
+            role = SemanticRole.ERROR
+        elif kind == "budget_exhausted":
+            text = f"{prefix}context budget exhausted"
+            state = ViewState.ERROR
+            role = SemanticRole.ERROR
+        elif kind == "action_exhausted":
+            text = f"{prefix}context actions exhausted"
+            state = ViewState.ERROR
+            role = SemanticRole.ERROR
+        elif kind == "tainted":
+            text = f"{prefix}provider context tainted"
+            state = ViewState.ERROR
+            role = SemanticRole.WARNING
+        elif kind == "checkpoint_advanced":
+            text = f"{prefix}checkpoint advanced"
+            state = ViewState.COMPLETED
+            role = SemanticRole.SUCCESS
+        else:
+            assert kind == "checkpoint_not_advanced"
+            text = f"{prefix}checkpoint not advanced"
+            state = ViewState.ERROR
+            role = SemanticRole.ERROR
+        self._write_notice(text, label="context", role=role, state=state)
 
     def _render_conversation_retrieval_progress(
         self,
@@ -6248,7 +6512,26 @@ class InteractiveController:
             )
         )
         progress_events: list[DebateProgressEvent] = []
+        context_operations: dict[
+            tuple[str, str, str, str, str, str],
+            ContextProgressProjection,
+        ] = {}
         progress_callback_failure: BaseException | None = None
+        context_runtime_method = (
+            self._runtime.run_prompt
+            if input_kind is InputKind.PROMPT
+            else self._runtime.run_draft
+        )
+        supports_context_progress = bool(
+            "context_event_sink"
+            in inspect.signature(context_runtime_method).parameters
+            and getattr(
+                self._runtime,
+                "conversation_storage_services",
+                None,
+            )
+            is not None
+        )
 
         def accept_and_render_progress(event: DebateProgressEvent) -> None:
             """Retain callback failure identity while accepting one event."""
@@ -6266,6 +6549,28 @@ class InteractiveController:
                 progress_callback_failure = exc
                 raise
 
+        def accept_and_render_context_progress(event: object) -> None:
+            """Validate each interleaved debate-agent context operation."""
+
+            nonlocal progress_callback_failure
+            try:
+                if not progress_events:
+                    raise ValueError(
+                        "context progress preceded debate progress identity"
+                    )
+                self._accept_context_progress(
+                    event,
+                    expected_session_id=session_id,
+                    expected_subject_kind="debate",
+                    expected_subject_id=progress_events[0].debate_id,
+                    expected_agent_id=None,
+                    operations=context_operations,
+                    suppress_retrieval_actions=False,
+                )
+            except BaseException as exc:
+                progress_callback_failure = exc
+                raise
+
         operation_entered = False
         cancellation_reached_operation = False
         operation_joined = False
@@ -6278,6 +6583,11 @@ class InteractiveController:
             nonlocal operation_joined
             operation_entered = True
             try:
+                context_observer = (
+                    {"context_event_sink": accept_and_render_context_progress}
+                    if supports_context_progress
+                    else {}
+                )
                 if input_kind is InputKind.PROMPT:
                     return await self._runtime.run_prompt(
                         session_id,
@@ -6285,6 +6595,7 @@ class InteractiveController:
                         output_path=output_path,
                         conversation_context=request,
                         progress_sink=accept_and_render_progress,
+                        **context_observer,
                     )
                 return await self._runtime.run_draft(
                     session_id,
@@ -6292,6 +6603,7 @@ class InteractiveController:
                     output_path=output_path,
                     conversation_context=request,
                     progress_sink=accept_and_render_progress,
+                    **context_observer,
                 )
             except asyncio.CancelledError:
                 cancellation_reached_operation = True
@@ -6365,6 +6677,25 @@ class InteractiveController:
             raise _ControllerAbort(
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
             ) from None
+        if supports_context_progress and (
+            any(not event.terminal for event in context_operations.values())
+            or (
+                result.status in {
+                    DebateStatus.CONSENSUS,
+                    DebateStatus.DEADLOCK,
+                }
+                and (
+                    not context_operations
+                    or any(
+                        event.kind != "checkpoint_advanced"
+                        for event in context_operations.values()
+                    )
+                )
+            )
+        ):
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
         self._present_consensus_result(result, terminal_event, artifact_event)
         return False
 

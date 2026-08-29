@@ -3,7 +3,9 @@
 > **Availability:** prompt and complete-draft debates are available through the
 > noninteractive CLI, focused-conversation TTY shell, and `StoryRuntime`.
 > Inline canonical references are enforced independently for every
-> participating agent and debate phase.
+> participating agent and debate phase. Contextual planning and bounded
+> search/read run for every logical invocation and show live content-free
+> `agent · round · phase` progress.
 
 Key terms: **prompt**—instructions used to create revision `r0`; **draft**—a
 supplied complete `r0`; **context mode**—whether focused transcript events are
@@ -25,6 +27,9 @@ and starts only on `/send`. Omitting `--output` first opens a transient output
 prompt, but an exact part-scoped path is still required before composition or
 provider work. See the
 [focused-discussion guide](story-sessions.md#turn-the-current-focus-into-consensus).
+For concrete outline, character-sheet, narrative-rule/Part, create-only
+manuscript, candidate-delta, and deadlock behavior, see
+[Bounded agent context](agent-context.md#c14-missing-knowledge-outline).
 On capable POSIX live editing, a whole-buffer `/` prefix previews only `/send`
 then `/cancel`; the preview does not complete or run either control. Unsupported
 terminals keep the same line-oriented composer without a panel.
@@ -97,9 +102,10 @@ The noninteractive command prints `DebateResult` JSON and exits `0` for
 consensus, `3` for deadlock, or `4` for failed. A referenced result adds its
 content-free `reference_operation_id`; a no-reference result omits that key.
 The shell instead shows each phase as one `Debate phase · DISPLAY_NAME` panel.
-Active headings name the current phase without `[loading]`; terminal headings
-retain completed, error, or cancelled state as applicable. The canonical Phase
-field and the Outcome field's existing role/state remain visible. Fixed status
+Active headings name the current phase without `[loading]`; successful
+completion is silent, while error or cancelled state remains visible as
+applicable. The canonical Phase field and the Outcome field's existing
+role/state remain visible. Fixed status
 fields are followed by contiguous persisted speech sections, so complete
 non-error agent speech remains readable in terminal scrollback. Message details
 Off is the compact default; On additionally shows phase Handoff and each

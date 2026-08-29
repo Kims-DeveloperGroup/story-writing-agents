@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import json
 import unicodedata
@@ -13,10 +14,45 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from .agents import (
+    AGENT_SPECS,
     EXECUTION_SPECIALIST,
     LEAD_ORCHESTRATOR,
     ROSTER,
     SPECIALIST_IDS,
+)
+from .agent_context.actions import (
+    ContextActionPolicy,
+    ContextAnswerAuthorization,
+    ContextSourceBoundaryKind,
+)
+from .agent_context.manifest import (
+    ContextAuthorityKind,
+    ContextManifestEntry,
+    ContextPriority,
+    ContextProvenance,
+    ContextScope,
+    ContextSemanticChannel,
+    ContextSourceKind,
+    ContextSubjectKind,
+)
+from .agent_context.planning import ContextMaterial, MandatoryReferenceReservation
+from .agent_context.service import (
+    AgentContextService,
+    ContextExecutionError,
+    ContextExecutionErrorCode,
+    ContextExecutionEvent,
+    ContextExecutionEventKind,
+    ContextExecutionEventSink,
+    ContextInvocationRequest,
+    ContextSourceClassification,
+)
+from .agent_context.sources import (
+    CONTEXT_SOURCE_POLICY,
+    ActiveDebateSourceAdapter,
+    FocusedConversationSourceAdapter,
+    OwnAgentStateSourceAdapter,
+    WritingArtifactSourceAdapter,
+    writing_artifact_source_id,
 )
 from .backend import (
     AgentBackend,
@@ -70,6 +106,7 @@ from .conversations import (
     ConversationEventAppend,
     ConversationEventKind,
     ConversationEventStore,
+    ConversationMetadata,
     ConversationStatus,
     validate_conversation_context_window,
 )
@@ -174,6 +211,14 @@ class _ProgressEmitter:
         if outcome is not None:
             cause = TypeError("debate progress sink must return None")
             raise ProgressObserverError() from cause
+
+
+class _ContextEventObserverFailure(Exception):
+    """Carry one generic observer failure through debate aggregation."""
+
+    def __init__(self, cause: BaseException) -> None:
+        self.cause = cause
+        super().__init__("context lifecycle observer failed")
 
 
 class _ConversationRetrievalProgressEmitter:
@@ -1087,7 +1132,13 @@ class _SupersededBindingSelection(Exception):
     """Retry a selection-only request whose bind completed out of order."""
 
 
-_PreparedAgentRequest = tuple[AgentRequest, AgentDefinition]
+@dataclass(frozen=True, slots=True)
+class _PreparedAgentRequest:
+    """One request with its exact binding definition and output destination."""
+
+    request: AgentRequest
+    definition: AgentDefinition
+    destination: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -1195,6 +1246,22 @@ class StoryRuntime:
         self._binding_waiters: dict[tuple[str, str], int] = {}
         self._binding_lock = asyncio.Lock()
         self._conversation_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._agent_context_service = AgentContextService(
+            self.workspace,
+            action_policy=ContextActionPolicy(
+                max_hits_per_search=(
+                    CONVERSATION_RETRIEVAL_POLICY.max_search_hits_per_action
+                ),
+            ),
+        )
+
+    def _contextual_execution_enabled(self) -> bool:
+        """Return whether the current backend owns the contextual capability."""
+
+        return bool(
+            isinstance(self.backend, AgentBackend)
+            and self.conversation_storage_services is not None
+        )
 
     def _trace_debug(
         self,
@@ -1495,9 +1562,12 @@ class StoryRuntime:
         conversation_id: str,
         agent_id: str,
         text: str,
+        *,
+        context_event_sink: ContextExecutionEventSink | None = None,
     ) -> ConversationResult:
         """Run and persist one advisory turn in an explicit conversation."""
 
+        context_events = self._validate_context_event_sink(context_event_sink)
         session = self.workspace.validate_identifier(session_id)
         conversation = self.workspace.validate_identifier(
             conversation_id,
@@ -1539,7 +1609,7 @@ class StoryRuntime:
                 session_id=session,
                 text=content,
             )
-            definition = self.prompts.build_definition(
+            definition = self._build_runtime_definition(
                 session_id=session,
                 agent_id=agent,
             )
@@ -1599,14 +1669,17 @@ class StoryRuntime:
                 raise
             try:
                 bound_converse = getattr(bound_agent, "converse", None)
-                if bound_converse is None or not callable(bound_converse):
-                    raise BackendProtocolError(
-                        f"{agent} binding does not provide converse()"
-                    )
-                if not inspect.iscoroutinefunction(bound_converse):
-                    raise BackendProtocolError(
-                        f"{agent} bound converse() must be async"
-                    )
+                if self._contextual_execution_enabled():
+                    self._validated_context_provider_factory(bound_agent)
+                else:
+                    if bound_converse is None or not callable(bound_converse):
+                        raise BackendProtocolError(
+                            f"{agent} binding does not provide converse()"
+                        )
+                    if not inspect.iscoroutinefunction(bound_converse):
+                        raise BackendProtocolError(
+                            f"{agent} bound converse() must be async"
+                        )
                 self._verify_definition_files(definition)
 
                 user_event = ConversationEventAppend(
@@ -1646,9 +1719,19 @@ class StoryRuntime:
 
             try:
                 try:
-                    if reference_read is None:
+                    if self._contextual_execution_enabled():
+                        raw_reply = await self._invoke_contextual_conversation(
+                            bound_agent,
+                            request,
+                            reference_operation=reference_operation,
+                            reference_read=reference_read,
+                            context_event_sink=context_events,
+                        )
+                    elif reference_read is None:
+                        assert bound_converse is not None
                         raw_reply = await bound_converse(request)
                     else:
+                        assert bound_converse is not None
                         raw_reply = await bound_converse(
                             request,
                             reference_read=reference_read,
@@ -1675,6 +1758,34 @@ class StoryRuntime:
                     reference_operation_id=reference_operation.operation_id,
                 )
                 reference_operation.finish()
+            except _ContextEventObserverFailure as observer_failure:
+                try:
+                    reference_operation.failure(observer_failure)
+                except BaseException:
+                    pass
+                failure = ConversationEventAppend(
+                    session_id=session,
+                    conversation_id=conversation,
+                    turn_id=turn_id,
+                    sender="runtime",
+                    recipient="user",
+                    kind=ConversationEventKind.RUNTIME_ERROR,
+                    content=(
+                        "ContextObserverError: context lifecycle observer failed"
+                    ),
+                )
+                try:
+                    self._append_conversation_event(append, failure)
+                except BaseException:
+                    pass
+                self._record_debug_error(
+                    DebugOperation.ADVISORY_TURN,
+                    observer_failure,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                )
+                raise observer_failure.cause
             except asyncio.CancelledError as cancellation_error:
                 reference_failure = reference_operation.failure(cancellation_error)
                 cancellation = ConversationEventAppend(
@@ -1794,6 +1905,7 @@ class StoryRuntime:
         memory_service: ConversationMemoryService,
         progress_sink: ConversationRetrievalProgressSink | None = None,
         rag_query: str | None = None,
+        context_event_sink: ContextExecutionEventSink | None = None,
     ) -> ConversationRetrievalResult:
         """Run one durable advisory turn with bounded agent-directed retrieval.
 
@@ -1808,6 +1920,7 @@ class StoryRuntime:
         taint or a second outcome append.
         """
 
+        context_events = self._validate_context_event_sink(context_event_sink)
         session = self.workspace.validate_identifier(session_id)
         conversation = self.workspace.validate_identifier(
             conversation_id,
@@ -1864,7 +1977,7 @@ class StoryRuntime:
                 session_id=session,
                 text=content,
             )
-            definition = self.prompts.build_definition(
+            definition = self._build_runtime_definition(
                 session_id=session,
                 agent_id=agent,
             )
@@ -1948,25 +2061,39 @@ class StoryRuntime:
                     "converse_with_retrieval",
                     None,
                 )
-                if bound_converse is None or not callable(bound_converse):
-                    raise BackendProtocolError(
-                        f"{agent} binding does not provide converse_with_retrieval()"
-                    )
-                if not inspect.iscoroutinefunction(bound_converse):
-                    raise BackendProtocolError(
-                        f"{agent} bound converse_with_retrieval() must be async"
-                    )
+                if self._contextual_execution_enabled():
+                    self._validated_context_provider_factory(bound_agent)
+                else:
+                    if bound_converse is None or not callable(bound_converse):
+                        raise BackendProtocolError(
+                            f"{agent} binding does not provide "
+                            "converse_with_retrieval()"
+                        )
+                    if not inspect.iscoroutinefunction(bound_converse):
+                        raise BackendProtocolError(
+                            f"{agent} bound converse_with_retrieval() must be async"
+                        )
                 self._verify_definition_files(definition)
 
                 diagnostic_values: set[str] = set()
-                handler = _RuntimeConversationRetrievalHandler(
-                    request,
-                    scoped_memory,
-                    progress,
-                    diagnostic_values,
-                )
-                if rag_query is not None:
-                    handler._record_text_diagnostics(rag_query)
+                handler: _RuntimeConversationRetrievalHandler | None = None
+                if self._contextual_execution_enabled():
+                    if request.rag_context is not None:
+                        diagnostic_values.update(
+                            excerpt.content
+                            for excerpt in request.rag_context.excerpts
+                        )
+                    if rag_query is not None:
+                        diagnostic_values.add(rag_query)
+                else:
+                    handler = _RuntimeConversationRetrievalHandler(
+                        request,
+                        scoped_memory,
+                        progress,
+                        diagnostic_values,
+                    )
+                    if rag_query is not None:
+                        handler._record_text_diagnostics(rag_query)
                 user_event = ConversationEventAppend(
                     session_id=session,
                     conversation_id=conversation,
@@ -2004,17 +2131,36 @@ class StoryRuntime:
 
             try:
                 try:
-                    if reference_read is None:
+                    if self._contextual_execution_enabled():
+                        reply, rag_sources = (
+                            await self._invoke_contextual_retrieval(
+                                bound_agent,
+                                request,
+                                reference_operation=reference_operation,
+                                reference_read=reference_read,
+                                progress=progress,
+                                context_event_sink=context_events,
+                            )
+                        )
+                    elif reference_read is None:
+                        assert handler is not None
+                        assert bound_converse is not None
                         raw_reply = await bound_converse(request, handler)
                     else:
+                        assert handler is not None
+                        assert bound_converse is not None
                         raw_reply = await bound_converse(
                             request,
                             handler,
                             reference_read=reference_read,
                         )
+                    if not self._contextual_execution_enabled():
+                        assert handler is not None
+                        reply, rag_sources = handler.validate_returned_reply(
+                            raw_reply
+                        )
                 finally:
                     await self._release_bound_agent_use(bound_agent)
-                reply, rag_sources = handler.validate_returned_reply(raw_reply)
                 reply_event = ConversationEventAppend(
                     session_id=session,
                     conversation_id=conversation,
@@ -2041,6 +2187,34 @@ class StoryRuntime:
                     rag_sources=rag_sources,
                 )
                 reference_operation.finish()
+            except _ContextEventObserverFailure as observer_failure:
+                try:
+                    reference_operation.failure(observer_failure)
+                except BaseException:
+                    pass
+                failure = ConversationEventAppend(
+                    session_id=session,
+                    conversation_id=conversation,
+                    turn_id=turn_id,
+                    sender="runtime",
+                    recipient="user",
+                    kind=ConversationEventKind.RUNTIME_ERROR,
+                    content=(
+                        "ContextObserverError: context lifecycle observer failed"
+                    ),
+                )
+                try:
+                    self._append_conversation_event(append, failure)
+                except BaseException:
+                    pass
+                self._record_debug_error(
+                    DebugOperation.RETRIEVAL_TURN,
+                    observer_failure,
+                    session_id=session,
+                    conversation_id=conversation,
+                    agent_id=agent,
+                )
+                raise observer_failure.cause
             except asyncio.CancelledError as cancellation_error:
                 reference_failure = reference_operation.failure(cancellation_error)
                 cancellation = ConversationEventAppend(
@@ -2163,6 +2337,7 @@ class StoryRuntime:
         debate_id: str | None = None,
         conversation_context: DebateContextRequest | None = None,
         progress_sink: DebateProgressSink | None = None,
+        context_event_sink: ContextExecutionEventSink | None = None,
     ) -> DebateResult:
         """Run a prompt debate with optional included context and progress facts.
 
@@ -2182,6 +2357,7 @@ class StoryRuntime:
             debate_id=debate_id,
             conversation_context=conversation_context,
             progress_sink=progress_sink,
+            context_event_sink=context_event_sink,
         )
 
     async def run_draft(
@@ -2194,6 +2370,7 @@ class StoryRuntime:
         debate_id: str | None = None,
         conversation_context: DebateContextRequest | None = None,
         progress_sink: DebateProgressSink | None = None,
+        context_event_sink: ContextExecutionEventSink | None = None,
     ) -> DebateResult:
         """Run a supplied-draft debate with optional context and progress facts.
 
@@ -2213,6 +2390,7 @@ class StoryRuntime:
             debate_id=debate_id,
             conversation_context=conversation_context,
             progress_sink=progress_sink,
+            context_event_sink=context_event_sink,
         )
 
     async def _run(
@@ -2226,6 +2404,7 @@ class StoryRuntime:
         debate_id: str | None,
         conversation_context: DebateContextRequest | None,
         progress_sink: DebateProgressSink | None,
+        context_event_sink: ContextExecutionEventSink | None,
     ) -> DebateResult:
         """Validate, capture requested context, reserve, and run one debate.
 
@@ -2235,6 +2414,7 @@ class StoryRuntime:
         failures preserve their typed control flow with best-effort interruption.
         """
 
+        context_events = self._validate_context_event_sink(context_event_sink)
         if self.backend is None:
             raise BackendProtocolError(
                 "running a debate requires an AgentBackend adapter"
@@ -2408,6 +2588,7 @@ class StoryRuntime:
                 ),
                 progress=progress,
                 reference_operation=reference_operation,
+                context_event_sink=context_events,
             ),
             name=f"debate:{session}:{debate}",
         )
@@ -2466,6 +2647,33 @@ class StoryRuntime:
             if reference_failure is not None:
                 raise cancellation from reference_failure
             raise
+        except _ContextEventObserverFailure as observer_failure:
+            try:
+                reference_operation.failure(observer_failure)
+            except BaseException:
+                pass
+            if not progress.terminal_durable:
+                try:
+                    self.workspace.transition_debate(
+                        session,
+                        debate,
+                        owner_token=reservation_token,
+                        status="interrupted",
+                        terminal=True,
+                        revision_id=None,
+                        rounds_completed=0,
+                        error="ContextObserverError: context observer failed",
+                    )
+                except Exception:
+                    pass
+            self._record_debug_error(
+                DebugOperation.CONSENSUS_RUN,
+                observer_failure,
+                session_id=session,
+                debate_id=debate,
+                outcome=DebugOutcome.INTERRUPTED,
+            )
+            raise observer_failure.cause
         except ProgressObserverError as exc:
             if not progress.terminal_durable:
                 try:
@@ -2535,6 +2743,7 @@ class StoryRuntime:
         focused_conversation_id: str | None,
         progress: _ProgressEmitter,
         reference_operation: RuntimeReferenceOperation,
+        context_event_sink: ContextExecutionEventSink | None,
     ) -> DebateResult:
         """Execute a reserved debate with durable records before progress facts.
 
@@ -2619,6 +2828,7 @@ class StoryRuntime:
                         )
                     ),
                     user_payload=provider_payload,
+                    destination=output_path,
                     messages=self._provider_debate_messages(
                         tuple(messages),
                         source_text=source_payload,
@@ -2629,8 +2839,11 @@ class StoryRuntime:
                     focused_conversation_id=focused_conversation_id,
                 ),
                 reference_operation=reference_operation,
+                context_event_sink=context_event_sink,
             )
             self._validate_candidate_reply(reply, current_revision)
+        except _ContextEventObserverFailure:
+            raise
         except Exception as exc:
             failure_kind = self._classify_debate_failure(exc)
             reference_failure = reference_operation.failure(
@@ -2720,6 +2933,7 @@ class StoryRuntime:
                 session=session,
                 debate=debate,
                 payload=provider_payload,
+                destination=output_path,
                 candidate=candidate,
                 revision_id=current_revision,
                 round_number=revision_cycles,
@@ -2734,6 +2948,7 @@ class StoryRuntime:
                 focused_context_mode=focused_context_mode,
                 focused_conversation_id=focused_conversation_id,
                 reference_operation=reference_operation,
+                context_event_sink=context_event_sink,
             )
             if audit_error is not None:
                 failure_kind = self._classify_debate_failure(audit_error)
@@ -2818,6 +3033,7 @@ class StoryRuntime:
                 session=session,
                 debate=debate,
                 payload=provider_payload,
+                destination=output_path,
                 candidate=candidate,
                 revision_id=current_revision,
                 round_number=revision_cycles + 1,
@@ -2833,6 +3049,7 @@ class StoryRuntime:
                 focused_context_mode=focused_context_mode,
                 focused_conversation_id=focused_conversation_id,
                 reference_operation=reference_operation,
+                context_event_sink=context_event_sink,
             )
             if proposal_error is not None:
                 failure_kind = self._classify_debate_failure(proposal_error)
@@ -2875,6 +3092,7 @@ class StoryRuntime:
                             "proposal. Do not filter out or silently omit a conflict."
                         ),
                         user_payload=provider_payload,
+                        destination=output_path,
                         candidate_payload=candidate,
                         messages=self._provider_debate_messages(
                             tuple(messages),
@@ -2886,8 +3104,11 @@ class StoryRuntime:
                         focused_conversation_id=focused_conversation_id,
                     ),
                     reference_operation=reference_operation,
+                    context_event_sink=context_event_sink,
                 )
                 self._validate_candidate_reply(synthesis, next_revision)
+            except _ContextEventObserverFailure:
+                raise
             except Exception as exc:
                 failure_kind = self._classify_debate_failure(exc)
                 reference_failure = reference_operation.failure(
@@ -2981,6 +3202,7 @@ class StoryRuntime:
                         "that genuinely changed; an empty update map is valid."
                     ),
                     user_payload=provider_payload,
+                    destination=output_path,
                     candidate_payload=candidate,
                     messages=self._provider_debate_messages(
                         tuple(messages),
@@ -2992,6 +3214,7 @@ class StoryRuntime:
                     focused_conversation_id=focused_conversation_id,
                 ),
                 reference_operation=reference_operation,
+                context_event_sink=context_event_sink,
             )
             updates = self._validate_finalization_reply(
                 finalization, current_revision, candidate
@@ -3025,6 +3248,8 @@ class StoryRuntime:
                 revision_id=current_revision,
                 candidate_author_agent_id=candidate_author_agent_id,
             )
+        except _ContextEventObserverFailure:
+            raise
         except Exception as exc:
             failure_kind = self._classify_debate_failure(
                 exc,
@@ -3107,6 +3332,7 @@ class StoryRuntime:
         session: str,
         debate: str,
         payload: str,
+        destination: str,
         candidate: str,
         revision_id: str,
         round_number: int,
@@ -3117,6 +3343,7 @@ class StoryRuntime:
         focused_context_mode: StoryFocusedContextMode,
         focused_conversation_id: str | None,
         reference_operation: RuntimeReferenceOperation,
+        context_event_sink: ContextExecutionEventSink | None,
     ) -> tuple[dict[str, AgentReply], Exception | None]:
         """Run all specialist audits, durably record each, and return first failure.
 
@@ -3142,6 +3369,7 @@ class StoryRuntime:
                         "not rewrite."
                     ),
                     user_payload=payload,
+                    destination=destination,
                     candidate_payload=candidate,
                     messages=visible_messages,
                     conversation_context=conversation_context,
@@ -3157,6 +3385,7 @@ class StoryRuntime:
             self._validate_audit_reply,
             revision_id,
             reference_operation=reference_operation,
+            context_event_sink=context_event_sink,
         )
         replies: dict[str, AgentReply] = {}
         first_error: Exception | None = None
@@ -3212,6 +3441,7 @@ class StoryRuntime:
         session: str,
         debate: str,
         payload: str,
+        destination: str,
         candidate: str,
         revision_id: str,
         round_number: int,
@@ -3223,6 +3453,7 @@ class StoryRuntime:
         focused_context_mode: StoryFocusedContextMode,
         focused_conversation_id: str | None,
         reference_operation: RuntimeReferenceOperation,
+        context_event_sink: ContextExecutionEventSink | None,
     ) -> tuple[dict[str, AgentReply], Exception | None]:
         """Run responsible proposals, durably record them, and return first failure.
 
@@ -3247,6 +3478,7 @@ class StoryRuntime:
                         "orchestrator will synthesize the complete candidate."
                     ),
                     user_payload=payload,
+                    destination=destination,
                     candidate_payload=candidate,
                     messages=visible_messages,
                     conversation_context=conversation_context,
@@ -3262,6 +3494,7 @@ class StoryRuntime:
             self._validate_proposal_reply,
             revision_id,
             reference_operation=reference_operation,
+            context_event_sink=context_event_sink,
         )
         replies: dict[str, AgentReply] = {}
         first_error: Exception | None = None
@@ -3318,6 +3551,7 @@ class StoryRuntime:
         revision_id: str,
         task: str,
         user_payload: str,
+        destination: str,
         candidate_payload: str | None = None,
         messages: tuple[DebateMessage, ...] = (),
         conversation_context: ConversationContextWindow | None = None,
@@ -3333,7 +3567,7 @@ class StoryRuntime:
         """
 
         try:
-            definition = self.prompts.build_definition(
+            definition = self._build_runtime_definition(
                 session_id=session,
                 agent_id=agent_id,
             )
@@ -3353,7 +3587,7 @@ class StoryRuntime:
                 focused_conversation_id=focused_conversation_id,
                 definition=definition,
             )
-            return request, definition
+            return _PreparedAgentRequest(request, definition, destination)
         except (TypeError, ValueError) as exc:
             if conversation_context is not None:
                 raise _DebateContextPropagationError(
@@ -3660,6 +3894,30 @@ class StoryRuntime:
             or inspect.isasyncgenfunction(sink_call)
         ):
             raise TypeError("progress_sink must be synchronous")
+        return sink
+
+    def _validate_context_event_sink(
+        self,
+        sink: ContextExecutionEventSink | None,
+    ) -> ContextExecutionEventSink | None:
+        """Validate one generic observer before any contextual side effect."""
+
+        if sink is None:
+            return None
+        if not callable(sink):
+            raise TypeError("context_event_sink must be callable or None")
+        sink_call = getattr(sink, "__call__", None)
+        if (
+            inspect.iscoroutinefunction(sink)
+            or inspect.isasyncgenfunction(sink)
+            or inspect.iscoroutinefunction(sink_call)
+            or inspect.isasyncgenfunction(sink_call)
+        ):
+            raise TypeError("context_event_sink must be synchronous")
+        if not self._contextual_execution_enabled():
+            raise BackendProtocolError(
+                "context_event_sink requires contextual execution"
+            )
         return sink
 
     @staticmethod
@@ -4043,15 +4301,1077 @@ class StoryRuntime:
 
         return f"t_{uuid.uuid4().hex}"
 
+    def _build_runtime_definition(
+        self,
+        *,
+        session_id: str,
+        agent_id: str,
+    ) -> AgentDefinition:
+        """Select stable contextual bindings only for the built-in runtime path."""
+
+        if self._contextual_execution_enabled():
+            return self.prompts.build_contextual_definition(
+                session_id=session_id,
+                agent_id=agent_id,
+            )
+        return self.prompts.build_definition(
+            session_id=session_id,
+            agent_id=agent_id,
+        )
+
+    @staticmethod
+    def _validated_context_provider_factory(
+        bound_agent: BoundAgent,
+    ) -> Callable[[Any], Any]:
+        """Return the synchronous package seam used by contextual execution."""
+
+        factory = getattr(bound_agent, "context_provider", None)
+        factory_call = getattr(factory, "__call__", None)
+        if factory is None or not callable(factory):
+            raise BackendProtocolError(
+                f"{bound_agent.definition.agent_id} binding does not provide "
+                "context_provider()"
+            )
+        if (
+            inspect.iscoroutinefunction(factory)
+            or inspect.isasyncgenfunction(factory)
+            or inspect.iscoroutinefunction(factory_call)
+            or inspect.isasyncgenfunction(factory_call)
+        ):
+            raise BackendProtocolError(
+                f"{bound_agent.definition.agent_id} bound context_provider() "
+                "must be synchronous"
+            )
+        return factory
+
+    @staticmethod
+    def _context_material(
+        *,
+        source_id: str,
+        semantic_channel: ContextSemanticChannel,
+        ordinal: int,
+        locator: str,
+        value: object,
+    ) -> ContextMaterial:
+        """Build one canonical strict-UTF-8 transient P0 request material."""
+
+        body = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8", errors="strict")
+        digest = f"sha256:{hashlib.sha256(body).hexdigest()}"
+        return ContextMaterial(
+            ContextManifestEntry(
+                source_id=source_id,
+                source_kind=ContextSourceKind.RUNTIME_INPUT,
+                semantic_channel=semantic_channel,
+                priority=ContextPriority.P0_REQUIRED,
+                ordinal=ordinal,
+                revision=digest,
+                content_digest=digest,
+                provenance=ContextProvenance(
+                    ContextAuthorityKind.REQUEST,
+                    locator,
+                ),
+                utf8_bytes=len(body),
+                searchable=False,
+            ),
+            body,
+        )
+
+    @staticmethod
+    def _canonical_context_domain_answer(value: object) -> str:
+        """Encode one reconstructed established domain envelope canonically."""
+
+        try:
+            return json.dumps(
+                value,
+                ensure_ascii=False,
+                allow_nan=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        except (TypeError, ValueError, UnicodeEncodeError):
+            raise BackendProtocolError(
+                "contextual answer cannot be reconstructed"
+            ) from None
+
+    @staticmethod
+    def _decode_compact_context_result(answer: str) -> object:
+        """Strictly decode one compact agent result without duplicate fields."""
+
+        def unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
+            result: dict[str, object] = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError
+                result[key] = value
+            return result
+
+        try:
+            return json.loads(
+                answer,
+                object_pairs_hook=unique,
+                parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
+            )
+        except (json.JSONDecodeError, TypeError, ValueError):
+            raise BackendProtocolError(
+                "contextual compact result is malformed"
+            ) from None
+
+    @staticmethod
+    def _candidate_context_material(
+        candidate: str | None,
+    ) -> tuple[ContextMaterial, ...]:
+        """Return the optional current P0 candidate as its own semantic unit."""
+
+        if candidate is None:
+            return ()
+        return (
+            StoryRuntime._context_material(
+                source_id="runtime_input:candidate",
+                semantic_channel=ContextSemanticChannel.CANDIDATE,
+                ordinal=1,
+                locator="request/candidate",
+                value=candidate,
+            ),
+        )
+
+    @staticmethod
+    def _reference_reservations(
+        operation: RuntimeReferenceOperation | None,
+    ) -> tuple[str | None, tuple[MandatoryReferenceReservation, ...]]:
+        """Convert one runtime operation's immutable proofs into byte reservations."""
+
+        if operation is None or not operation.reference_proofs:
+            return None, ()
+        if operation.operation_id is None:
+            raise BackendProtocolError(
+                "captured reference operation does not have an operation ID"
+            )
+        reservations = tuple(
+            MandatoryReferenceReservation(
+                ordinal=proof.ordinal,
+                reference_id=f"reference_{proof.ordinal}",
+                source_id=writing_artifact_source_id(proof.reference.path),
+                revision=f"sha256:{proof.source.source_sha256}",
+                provenance=ContextProvenance(
+                    ContextAuthorityKind.REFERENCE_AUTHORIZATION,
+                    proof.reference.token,
+                ),
+                content_digest=f"sha256:{proof.selected_sha256}",
+                utf8_bytes=proof.selected_utf8_bytes,
+            )
+            for proof in operation.reference_proofs
+        )
+        return operation.operation_id, reservations
+
+    def _context_source_classifications(
+        self,
+        *,
+        agent_id: str,
+        focused_conversation_id: str | None = None,
+        retrieved_conversation_ids: tuple[str, ...] = (),
+        active_debate_id: str | None = None,
+    ) -> tuple[ContextSourceClassification, ...]:
+        """Classify known role and continuity sources without reading their bodies."""
+
+        classifications: list[ContextSourceClassification] = []
+        ordinal = 0
+        for filename in AGENT_SPECS[agent_id].context_documents:
+            classifications.append(
+                ContextSourceClassification(
+                    writing_artifact_source_id(f"core_documents/{filename}"),
+                    ContextSemanticChannel.HARD_CONSTRAINT,
+                    ContextPriority.P2_WORKING,
+                    ordinal,
+                    allow_absent=True,
+                )
+            )
+            ordinal += 1
+        if focused_conversation_id is not None:
+            classifications.append(
+                ContextSourceClassification(
+                    f"conversation:{focused_conversation_id}",
+                    ContextSemanticChannel.FOCUSED_EVIDENCE,
+                    ContextPriority.P2_WORKING,
+                    ordinal,
+                )
+            )
+            ordinal += 1
+        for conversation_id in retrieved_conversation_ids:
+            if conversation_id == focused_conversation_id:
+                continue
+            classifications.append(
+                ContextSourceClassification(
+                    f"conversation:{conversation_id}",
+                    ContextSemanticChannel.OPTIONAL_BACKGROUND,
+                    ContextPriority.P3_OPTIONAL,
+                    ordinal,
+                )
+            )
+            ordinal += 1
+        if active_debate_id is not None:
+            classifications.append(
+                ContextSourceClassification(
+                    f"active_debate:{active_debate_id}",
+                    ContextSemanticChannel.FOCUSED_EVIDENCE,
+                    ContextPriority.P2_WORKING,
+                    ordinal,
+                )
+            )
+            ordinal += 1
+        classifications.append(
+            ContextSourceClassification(
+                f"own_agent_state:{agent_id}",
+                ContextSemanticChannel.OPTIONAL_BACKGROUND,
+                ContextPriority.P3_OPTIONAL,
+                ordinal,
+            )
+        )
+        return tuple(classifications)
+
+    def _context_authorities(
+        self,
+        scope: ContextScope,
+        *,
+        focused_conversation_id: str | None,
+        excluded_turn_id: str | None = None,
+        include_same_session_active: bool = False,
+        captured_context: ConversationContextWindow | None = None,
+        active_debate_id: str | None = None,
+    ) -> tuple[
+        WritingArtifactSourceAdapter,
+        FocusedConversationSourceAdapter,
+        ActiveDebateSourceAdapter,
+        OwnAgentStateSourceAdapter,
+    ]:
+        """Bind the four fixed source slots to public runtime authorities."""
+
+        services = self.conversation_storage_services
+        if services is None:
+            raise BackendProtocolError(
+                "contextual execution requires conversation storage services"
+            )
+        return (
+            WritingArtifactSourceAdapter(self.artifacts, scope),
+            FocusedConversationSourceAdapter(
+                services.catalog,
+                services.event_store,
+                scope,
+                focused_conversation_id,
+                excluded_turn_id=excluded_turn_id,
+                include_same_session_active=include_same_session_active,
+                captured_context=captured_context,
+            ),
+            ActiveDebateSourceAdapter(
+                self.workspace,
+                scope,
+                active_debate_id,
+            ),
+            OwnAgentStateSourceAdapter(self.workspace, scope),
+        )
+
+    def _context_event_sink(
+        self,
+        *,
+        retrieval_request: ConversationRetrievalRequest | None = None,
+        retrieval_progress: _ConversationRetrievalProgressEmitter | None = None,
+        context_event_sink: ContextExecutionEventSink | None = None,
+    ) -> ContextExecutionEventSink:
+        """Compose debug, established retrieval, then generic observation."""
+
+        outcomes = {
+            ContextExecutionEventKind.BOOTSTRAP: DebugOutcome.CONTEXT_BOOTSTRAP,
+            ContextExecutionEventKind.DELTA: DebugOutcome.CONTEXT_DELTA,
+            ContextExecutionEventKind.OMISSION: DebugOutcome.CONTEXT_OMISSION,
+            ContextExecutionEventKind.SEARCH_STARTED: (
+                DebugOutcome.CONTEXT_SEARCH_STARTED
+            ),
+            ContextExecutionEventKind.SEARCH_COMPLETED: (
+                DebugOutcome.CONTEXT_SEARCH_COMPLETED
+            ),
+            ContextExecutionEventKind.READ_STARTED: DebugOutcome.CONTEXT_READ_STARTED,
+            ContextExecutionEventKind.READ_COMPLETED: (
+                DebugOutcome.CONTEXT_READ_COMPLETED
+            ),
+            ContextExecutionEventKind.ANSWER_AUTHORIZED: (
+                DebugOutcome.CONTEXT_ANSWER_AUTHORIZED
+            ),
+            ContextExecutionEventKind.INVALIDATED: DebugOutcome.CONTEXT_INVALIDATED,
+            ContextExecutionEventKind.BUDGET_EXHAUSTED: (
+                DebugOutcome.CONTEXT_BUDGET_EXHAUSTED
+            ),
+            ContextExecutionEventKind.ACTION_EXHAUSTED: (
+                DebugOutcome.CONTEXT_ACTION_EXHAUSTED
+            ),
+            ContextExecutionEventKind.TAINTED: DebugOutcome.CONTEXT_TAINTED,
+            ContextExecutionEventKind.CHECKPOINT_ADVANCED: (
+                DebugOutcome.CONTEXT_CHECKPOINT_ADVANCED
+            ),
+            ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED: (
+                DebugOutcome.CONTEXT_CHECKPOINT_NOT_ADVANCED
+            ),
+        }
+        failed = {
+            ContextExecutionEventKind.INVALIDATED,
+            ContextExecutionEventKind.BUDGET_EXHAUSTED,
+            ContextExecutionEventKind.ACTION_EXHAUSTED,
+            ContextExecutionEventKind.TAINTED,
+            ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED,
+        }
+        started = {
+            ContextExecutionEventKind.SEARCH_STARTED,
+            ContextExecutionEventKind.READ_STARTED,
+        }
+
+        def emit(event: ContextExecutionEvent) -> None:
+            phase = (
+                DebugPhase.FAILED
+                if event.kind in failed
+                else (
+                    DebugPhase.STARTED
+                    if event.kind in started
+                    else (
+                        DebugPhase.SUCCEEDED
+                        if event.kind
+                        is ContextExecutionEventKind.CHECKPOINT_ADVANCED
+                        else DebugPhase.OBSERVED
+                    )
+                )
+            )
+            self._trace_debug(
+                DebugOperation.AGENT_CONTEXT,
+                phase,
+                session_id=event.scope.session_id,
+                conversation_id=(
+                    event.scope.subject_id
+                    if event.scope.subject_kind is ContextSubjectKind.CONVERSATION
+                    else None
+                ),
+                debate_id=(
+                    event.scope.subject_id
+                    if event.scope.subject_kind is ContextSubjectKind.DEBATE
+                    else None
+                ),
+                agent_id=event.scope.agent_id,
+                outcome=outcomes[event.kind],
+            )
+            if retrieval_request is not None and retrieval_progress is not None:
+                progress_phase = {
+                    ContextExecutionEventKind.SEARCH_STARTED: (
+                        ConversationRetrievalProgressPhase.SEARCH_STARTED
+                    ),
+                    ContextExecutionEventKind.SEARCH_COMPLETED: (
+                        ConversationRetrievalProgressPhase.SEARCH_COMPLETED
+                    ),
+                    ContextExecutionEventKind.READ_STARTED: (
+                        ConversationRetrievalProgressPhase.READ_STARTED
+                    ),
+                    ContextExecutionEventKind.READ_COMPLETED: (
+                        ConversationRetrievalProgressPhase.READ_COMPLETED
+                    ),
+                }.get(event.kind)
+                if progress_phase is not None:
+                    assert event.action_index is not None
+                    retrieval_progress.emit(
+                        ConversationRetrievalProgressEvent(
+                            session_id=retrieval_request.session_id,
+                            conversation_id=retrieval_request.conversation_id,
+                            turn_id=retrieval_request.turn_id,
+                            agent_id=retrieval_request.agent_id,
+                            action_index=event.action_index,
+                            phase=progress_phase,
+                            search_hit_count=event.search_hit_count or 0,
+                            transcript_turn_count=(
+                                event.transcript_turn_count or 0
+                            ),
+                            transcript_event_count=(
+                                event.transcript_event_count or 0
+                            ),
+                            observation_utf8_bytes=(
+                                event.observation_utf8_bytes or 0
+                            ),
+                            truncated=(
+                                False
+                                if event.truncated is None
+                                else event.truncated
+                            ),
+                        )
+                    )
+            if context_event_sink is None:
+                return
+            try:
+                outcome = context_event_sink(event)
+            except BaseException as exc:
+                raise _ContextEventObserverFailure(exc) from exc
+            if inspect.isawaitable(outcome):
+                if inspect.iscoroutine(outcome):
+                    outcome.close()
+                cause = TypeError("context_event_sink must be synchronous")
+                raise _ContextEventObserverFailure(cause) from cause
+            if inspect.isasyncgen(outcome):
+                cause = TypeError("context_event_sink must be synchronous")
+                raise _ContextEventObserverFailure(cause) from cause
+            if outcome is not None:
+                cause = TypeError("context_event_sink must return None")
+                raise _ContextEventObserverFailure(cause) from cause
+
+        return emit
+
+    @staticmethod
+    def _contextual_backend_error(
+        failure: ContextExecutionError,
+    ) -> BackendProtocolError | None:
+        """Translate only an exact malformed provider action at the runtime edge."""
+
+        if (
+            type(failure) is ContextExecutionError
+            and failure.code is ContextExecutionErrorCode.MALFORMED_ACTION
+        ):
+            return BackendProtocolError("contextual provider action is malformed")
+        return None
+
+    async def _invoke_contextual_conversation(
+        self,
+        bound_agent: BoundAgent,
+        request: ConversationRequest,
+        *,
+        reference_operation: RuntimeReferenceOperation,
+        reference_read: Any,
+        context_event_sink: ContextExecutionEventSink | None,
+    ) -> ConversationReply:
+        """Execute one ordinary advisory reply through the generic context loop."""
+
+        scope = self._agent_context_service.scope(
+            request.session_id,
+            ContextSubjectKind.CONVERSATION,
+            request.conversation_id,
+            request.agent_id,
+        )
+        authorities = self._context_authorities(
+            scope,
+            focused_conversation_id=request.conversation_id,
+            excluded_turn_id=request.turn_id,
+        )
+        reference_operation_id, reservations = self._reference_reservations(
+            reference_operation
+        )
+        contextual_request = ContextInvocationRequest(
+            session_id=request.session_id,
+            subject_kind=ContextSubjectKind.CONVERSATION,
+            subject_id=request.conversation_id,
+            agent_id=request.agent_id,
+            operation_id=f"conversation_{request.turn_id}",
+            result_correlation_id=f"reply_{request.turn_id}",
+            materials=(
+                self._context_material(
+                    source_id="runtime_input:current",
+                    semantic_channel=ContextSemanticChannel.CURRENT_INPUT,
+                    ordinal=0,
+                    locator="request/current",
+                    value=request.content,
+                ),
+            ),
+            source_classifications=self._context_source_classifications(
+                agent_id=request.agent_id,
+                focused_conversation_id=request.conversation_id,
+            ),
+            reference_operation_id=reference_operation_id,
+            mandatory_references=reservations,
+            fresh=False,
+            allowed_search_source_kinds=(
+                ContextSourceKind.WRITING_ARTIFACT,
+                ContextSourceKind.CONVERSATION,
+                ContextSourceKind.OWN_AGENT_STATE,
+            ),
+        )
+        def project(answer: str) -> ConversationReply:
+            """Purely decode and correlate one authorized domain answer."""
+
+            domain_answer = self._canonical_context_domain_answer(
+                {
+                    "session_id": request.session_id,
+                    "conversation_id": request.conversation_id,
+                    "turn_id": request.turn_id,
+                    "content": answer,
+                }
+            )
+            reply = bound_agent.decode_context_conversation_answer(
+                request,
+                domain_answer,
+            )
+            return self._validated_conversation_reply(reply, request)
+
+        def validate(
+            answer: str,
+            _authorization: ContextAnswerAuthorization,
+        ) -> None:
+            project(answer)
+
+        provider_factory = self._validated_context_provider_factory(bound_agent)
+        provider = provider_factory(reference_read)
+        self._reject_async_result(provider, operation="bound context_provider")
+        try:
+            result = await self._agent_context_service.invoke(
+                contextual_request,
+                provider,
+                writing_artifacts=authorities[0],
+                focused_conversation=authorities[1],
+                active_debate=authorities[2],
+                own_agent_state=authorities[3],
+                answer_validator=validate,
+                event_sink=self._context_event_sink(
+                    context_event_sink=context_event_sink
+                ),
+            )
+        except ContextExecutionError as exc:
+            translated = self._contextual_backend_error(exc)
+            if translated is None:
+                raise
+            raise translated from exc
+        return project(result.answer)
+
+    @staticmethod
+    def _validated_active_conversation_metadata(
+        value: object,
+        *,
+        session_id: str,
+    ) -> tuple[ConversationMetadata, ...]:
+        """Validate one deterministic active-only catalog inventory."""
+
+        if type(value) is not tuple:
+            raise ConversationRetrievalSemanticError()
+        metadata = tuple(value)
+        if any(
+            type(item) is not ConversationMetadata
+            or item.session_id != session_id
+            or item.status is not ConversationStatus.ACTIVE
+            for item in metadata
+        ) or len({item.conversation_id for item in metadata}) != len(metadata):
+            raise ConversationRetrievalSemanticError()
+        return metadata
+
+    @staticmethod
+    def _retrieval_source_from_receipt(
+        receipt: Any,
+        *,
+        request: ConversationRetrievalRequest,
+        metadata: Mapping[str, ConversationMetadata],
+        descriptor_facts: Mapping[str, tuple[str, str]],
+    ) -> ConversationRetrievalSource:
+        """Purely project one authorized used read into a public citation."""
+
+        if receipt.source_kind is not ContextSourceKind.CONVERSATION:
+            raise ConversationRetrievalSemanticError()
+        prefix = "conversation/"
+        locator = receipt.provenance.locator
+        if (
+            receipt.provenance.authority_kind
+            is not ContextAuthorityKind.CONVERSATION_STORAGE
+            or not locator.startswith(prefix)
+        ):
+            raise ConversationRetrievalSemanticError()
+        conversation_id = locator[len(prefix):]
+        source_id = f"conversation:{conversation_id}"
+        item = metadata.get(conversation_id)
+        expected = descriptor_facts.get(source_id)
+        if (
+            item is None
+            or item.session_id != request.session_id
+            or item.status is not ConversationStatus.ACTIVE
+            or receipt.source_id != source_id
+            or expected != (receipt.revision, receipt.source_digest)
+        ):
+            raise ConversationRetrievalSemanticError()
+        boundary = receipt.boundary
+        if boundary.kind is ContextSourceBoundaryKind.WHOLE:
+            citation = ConversationCitation(
+                request.session_id,
+                conversation_id,
+                None,
+                None,
+                None,
+            )
+        elif boundary.kind is ContextSourceBoundaryKind.CONVERSATION_TURNS:
+            if boundary.start is None or boundary.first_id is None:
+                raise ConversationRetrievalSemanticError()
+            citation = ConversationCitation(
+                request.session_id,
+                conversation_id,
+                boundary.first_id,
+                boundary.start,
+                ConversationEventKind.USER_MESSAGE,
+            )
+        else:
+            raise ConversationRetrievalSemanticError()
+        try:
+            return ConversationRetrievalSource(
+                subject=item.subject,
+                citation=citation,
+            )
+        except (TypeError, ValueError):
+            raise ConversationRetrievalSemanticError() from None
+
+    async def _invoke_contextual_retrieval(
+        self,
+        bound_agent: BoundAgent,
+        request: ConversationRetrievalRequest,
+        *,
+        reference_operation: RuntimeReferenceOperation,
+        reference_read: Any,
+        progress: _ConversationRetrievalProgressEmitter,
+        context_event_sink: ContextExecutionEventSink | None,
+    ) -> tuple[ConversationRetrievalReply, tuple[ConversationRetrievalSource, ...]]:
+        """Run retrieval with generic search/read/answer and public projections."""
+
+        services = self.conversation_storage_services
+        if services is None:
+            raise BackendProtocolError(
+                "contextual retrieval requires conversation storage services"
+            )
+        metadata_values = services.catalog.list(
+            request.session_id,
+            include_archived=False,
+        )
+        self._reject_async_result(
+            metadata_values,
+            operation="conversation catalog list",
+        )
+        active_metadata = self._validated_active_conversation_metadata(
+            metadata_values,
+            session_id=request.session_id,
+        )
+        metadata = {item.conversation_id: item for item in active_metadata}
+        if request.conversation_id not in metadata:
+            raise ConversationRetrievalSemanticError()
+        scope = self._agent_context_service.scope(
+            request.session_id,
+            ContextSubjectKind.CONVERSATION,
+            request.conversation_id,
+            request.agent_id,
+        )
+        authorities = self._context_authorities(
+            scope,
+            focused_conversation_id=request.conversation_id,
+            excluded_turn_id=request.turn_id,
+            include_same_session_active=True,
+        )
+        descriptors = authorities[1].inventory(CONTEXT_SOURCE_POLICY)
+        descriptor_facts = {
+            item.source_id: (item.revision, item.content_digest)
+            for item in descriptors
+        }
+        if set(descriptor_facts) != {
+            f"conversation:{item.conversation_id}" for item in active_metadata
+        }:
+            raise ConversationRetrievalSemanticError()
+        rag_by_id = {
+            excerpt.citation_id: excerpt.source
+            for excerpt in (
+                ()
+                if request.rag_context is None
+                else request.rag_context.excerpts
+            )
+        }
+        for source in rag_by_id.values():
+            item = metadata.get(source.citation.conversation_id)
+            if (
+                item is None
+                or source.citation.session_id != request.session_id
+                or source.subject != item.subject
+            ):
+                raise ConversationRetrievalSemanticError()
+        reference_operation_id, reservations = self._reference_reservations(
+            reference_operation
+        )
+        current_value: object = request.content
+        if request.rag_context is not None:
+            current_value = {
+                "input": request.content,
+                "rag": request.rag_context.to_dict(),
+            }
+        contextual_request = ContextInvocationRequest(
+            session_id=request.session_id,
+            subject_kind=ContextSubjectKind.CONVERSATION,
+            subject_id=request.conversation_id,
+            agent_id=request.agent_id,
+            operation_id=f"retrieval_{request.turn_id}",
+            result_correlation_id=f"retrieval_reply_{request.turn_id}",
+            materials=(
+                self._context_material(
+                    source_id="runtime_input:current",
+                    semantic_channel=ContextSemanticChannel.CURRENT_INPUT,
+                    ordinal=0,
+                    locator="request/current",
+                    value=current_value,
+                ),
+            ),
+            source_classifications=self._context_source_classifications(
+                agent_id=request.agent_id,
+                focused_conversation_id=request.conversation_id,
+                retrieved_conversation_ids=tuple(
+                    item.conversation_id for item in active_metadata
+                ),
+            ),
+            reference_operation_id=reference_operation_id,
+            mandatory_references=reservations,
+            fresh=False,
+            allowed_search_source_kinds=(ContextSourceKind.CONVERSATION,),
+        )
+
+        def project(
+            answer: str,
+            authorization: ContextAnswerAuthorization,
+        ) -> tuple[
+            ConversationRetrievalReply,
+            tuple[ConversationRetrievalSource, ...],
+        ]:
+            """Purely decode, authorize, and project public retrieval sources."""
+
+            compact = self._decode_compact_context_result(answer)
+            if type(compact) is not list or len(compact) != 2:
+                raise ConversationRetrievalSemanticError()
+            content, citation_values = compact
+            if type(content) is not str or not content or type(
+                citation_values
+            ) is not list:
+                raise ConversationRetrievalSemanticError()
+            citation_ids: list[str] = []
+            context_ordinals: list[int] = []
+            for value in citation_values:
+                if type(value) is int and value > 0:
+                    context_ordinals.append(value)
+                    citation_ids.append(f"r{value}")
+                elif type(value) is str and value in rag_by_id:
+                    citation_ids.append(value)
+                else:
+                    raise ConversationRetrievalSemanticError()
+            expected_ordinals = list(
+                range(1, len(authorization.used_evidence) + 1)
+            )
+            if (
+                context_ordinals != expected_ordinals
+                or len(set(citation_ids)) != len(citation_ids)
+            ):
+                raise ConversationRetrievalSemanticError()
+            domain_answer = self._canonical_context_domain_answer(
+                {
+                    "action": {
+                        "kind": ConversationRetrievalActionKind.ANSWER.value,
+                        "session_id": request.session_id,
+                        "conversation_id": request.conversation_id,
+                        "turn_id": request.turn_id,
+                        "action_index": authorization.correlation.action_index,
+                        "content": content,
+                        "citation_ids": citation_ids,
+                    }
+                }
+            )
+            action = bound_agent.decode_context_retrieval_answer(
+                request,
+                domain_answer,
+            )
+            if action.action_index != authorization.correlation.action_index:
+                raise ConversationRetrievalSemanticError()
+            context_citation_ids = tuple(
+                citation_id
+                for citation_id in action.citation_ids
+                if citation_id not in rag_by_id
+            )
+            expected_context_citation_ids = tuple(
+                f"r{ordinal}"
+                for ordinal in range(1, len(authorization.used_evidence) + 1)
+            )
+            if context_citation_ids != expected_context_citation_ids:
+                raise ConversationRetrievalSemanticError()
+            receipts_by_citation_id = dict(
+                zip(
+                    expected_context_citation_ids,
+                    authorization.used_evidence,
+                    strict=True,
+                )
+            )
+            resolved: list[ConversationRetrievalSource] = []
+            resolved_rag: list[ConversationRetrievalSource] = []
+            seen: set[ConversationRetrievalSource] = set()
+            for citation_id in action.citation_ids:
+                if citation_id in rag_by_id:
+                    source = rag_by_id[citation_id]
+                    is_rag = True
+                else:
+                    receipt = receipts_by_citation_id.get(citation_id)
+                    if receipt is None:
+                        raise ConversationRetrievalSemanticError()
+                    source = self._retrieval_source_from_receipt(
+                        receipt,
+                        request=request,
+                        metadata=metadata,
+                        descriptor_facts=descriptor_facts,
+                    )
+                    is_rag = False
+                if source in seen:
+                    continue
+                seen.add(source)
+                resolved.append(source)
+                if is_rag:
+                    resolved_rag.append(source)
+            return (
+                ConversationRetrievalReply(
+                    session_id=request.session_id,
+                    conversation_id=request.conversation_id,
+                    turn_id=request.turn_id,
+                    content=action.content,
+                    sources=tuple(resolved),
+                ),
+                tuple(resolved_rag),
+            )
+
+        def validate(
+            answer: str,
+            authorization: ContextAnswerAuthorization,
+        ) -> None:
+            project(answer, authorization)
+
+        provider_factory = self._validated_context_provider_factory(bound_agent)
+        provider = provider_factory(reference_read)
+        self._reject_async_result(provider, operation="bound context_provider")
+        try:
+            result = await self._agent_context_service.invoke(
+                contextual_request,
+                provider,
+                writing_artifacts=authorities[0],
+                focused_conversation=authorities[1],
+                active_debate=authorities[2],
+                own_agent_state=authorities[3],
+                answer_validator=validate,
+                event_sink=self._context_event_sink(
+                    retrieval_request=request,
+                    retrieval_progress=progress,
+                    context_event_sink=context_event_sink,
+                ),
+            )
+        except ContextExecutionError as exc:
+            translated = self._contextual_backend_error(exc)
+            if translated is None:
+                raise
+            raise translated from exc
+        return project(result.answer, result.authorization)
+
+    async def _invoke_contextual_agent(
+        self,
+        bound_agent: BoundAgent,
+        prepared: _PreparedAgentRequest,
+        *,
+        reference_operation: RuntimeReferenceOperation | None,
+        reference_read: Any,
+        context_event_sink: ContextExecutionEventSink | None,
+    ) -> AgentReply:
+        """Execute any debate phase with scoped contextual composition."""
+
+        request = prepared.request
+        scope = self._agent_context_service.scope(
+            request.session_id,
+            ContextSubjectKind.DEBATE,
+            request.debate_id,
+            request.agent_id,
+        )
+        focused_id = (
+            request.story_session_context.focused_context.conversation_id
+            if request.story_session_context is not None
+            and request.story_session_context.focused_context.mode
+            is StoryFocusedContextMode.INCLUDED
+            else None
+        )
+        captured_context = (
+            request.story_session_context.focused_context.window
+            if focused_id is not None and request.story_session_context is not None
+            else None
+        )
+        authorities = self._context_authorities(
+            scope,
+            focused_conversation_id=focused_id,
+            captured_context=captured_context,
+            active_debate_id=request.debate_id,
+        )
+        reference_operation_id, reservations = self._reference_reservations(
+            reference_operation
+        )
+        current = self._context_material(
+            source_id="runtime_input:current",
+            semantic_channel=ContextSemanticChannel.CURRENT_INPUT,
+            ordinal=0,
+            locator="request/current",
+            value=request.user_payload,
+        )
+        contextual_request = ContextInvocationRequest(
+            session_id=request.session_id,
+            subject_kind=ContextSubjectKind.DEBATE,
+            subject_id=request.debate_id,
+            agent_id=request.agent_id,
+            operation_id=(
+                f"debate_{request.phase.value}_{request.round_number}_"
+                f"{request.agent_id}"
+            ),
+            result_correlation_id=(
+                f"reply_{request.phase.value}_{request.round_number}_"
+                f"{request.agent_id}"
+            ),
+            materials=(
+                current,
+                *self._candidate_context_material(request.candidate_payload),
+            ),
+            source_classifications=self._context_source_classifications(
+                agent_id=request.agent_id,
+                focused_conversation_id=focused_id,
+                active_debate_id=request.debate_id,
+            ),
+            reference_operation_id=reference_operation_id,
+            mandatory_references=reservations,
+            fresh=False,
+            allowed_search_source_kinds=(
+                ContextSourceKind.WRITING_ARTIFACT,
+                ContextSourceKind.CONVERSATION,
+                ContextSourceKind.ACTIVE_DEBATE,
+                ContextSourceKind.OWN_AGENT_STATE,
+            ),
+        )
+
+        def project(answer: str) -> AgentReply:
+            """Purely decode and validate one authorized debate answer."""
+
+            if request.phase in {
+                Phase.DRAFT,
+                Phase.PROPOSE_REVISION,
+                Phase.SYNTHESIZE,
+            }:
+                domain_value: object = {
+                    "revision_id": request.revision_id,
+                    "content": answer,
+                }
+            elif request.phase is Phase.AUDIT:
+                compact = self._decode_compact_context_result(answer)
+                if compact == "a":
+                    verdict = "approve"
+                    content = ""
+                elif (
+                    type(compact) is list
+                    and len(compact) == 2
+                    and compact[0] == "c"
+                    and type(compact[1]) is str
+                    and compact[1]
+                ):
+                    verdict = "conflict"
+                    content = compact[1]
+                else:
+                    raise BackendProtocolError(
+                        "contextual audit result is malformed"
+                    )
+                domain_value = {
+                    "revision_id": request.revision_id,
+                    "verdict": verdict,
+                    "content": content,
+                }
+            elif request.phase is Phase.FINALIZE:
+                compact = self._decode_compact_context_result(answer)
+                if type(compact) is not list:
+                    raise BackendProtocolError(
+                        "contextual finalization result is malformed"
+                    )
+                updates: list[dict[str, str]] = []
+                seen_filenames: set[str] = set()
+                for item in compact:
+                    if (
+                        type(item) is not list
+                        or len(item) != 2
+                        or type(item[0]) is not str
+                        or not item[0]
+                        or type(item[1]) is not str
+                        or item[0] in seen_filenames
+                    ):
+                        raise BackendProtocolError(
+                            "contextual finalization result is malformed"
+                        )
+                    seen_filenames.add(item[0])
+                    updates.append(
+                        {"filename": item[0], "content": item[1]}
+                    )
+                domain_value = {
+                    "revision_id": request.revision_id,
+                    "core_updates": updates,
+                }
+            else:
+                raise BackendProtocolError("contextual debate phase is unsupported")
+            domain_answer = self._canonical_context_domain_answer(domain_value)
+            reply = bound_agent.decode_context_agent_answer(
+                request,
+                domain_answer,
+            )
+            self._validate_reply_fields(reply)
+            if request.phase in {Phase.DRAFT, Phase.SYNTHESIZE}:
+                self._validate_candidate_reply(reply, request.revision_id)
+            elif request.phase is Phase.AUDIT:
+                self._validate_audit_reply(reply, request.revision_id)
+            elif request.phase is Phase.PROPOSE_REVISION:
+                self._validate_proposal_reply(reply, request.revision_id)
+            elif request.phase is Phase.FINALIZE:
+                if request.candidate_payload is None:
+                    raise BackendProtocolError(
+                        "finalization request does not contain its approved candidate"
+                    )
+                self._validate_finalization_reply(
+                    reply,
+                    request.revision_id,
+                    request.candidate_payload,
+                )
+            else:
+                raise BackendProtocolError("contextual debate phase is unsupported")
+            return reply
+
+        def validate(
+            answer: str,
+            _authorization: ContextAnswerAuthorization,
+        ) -> None:
+            project(answer)
+
+        provider_factory = self._validated_context_provider_factory(bound_agent)
+        provider = provider_factory(reference_read)
+        self._reject_async_result(provider, operation="bound context_provider")
+        try:
+            result = await self._agent_context_service.invoke(
+                contextual_request,
+                provider,
+                writing_artifacts=authorities[0],
+                focused_conversation=authorities[1],
+                active_debate=authorities[2],
+                own_agent_state=authorities[3],
+                answer_validator=validate,
+                event_sink=self._context_event_sink(
+                    context_event_sink=context_event_sink
+                ),
+                phase=request.phase.value,
+                round_number=request.round_number,
+            )
+        except ContextExecutionError as exc:
+            translated = self._contextual_backend_error(exc)
+            if translated is None:
+                raise
+            raise translated from exc
+        return project(result.answer)
+
     async def _invoke(
         self,
         prepared: AgentRequest | _PreparedAgentRequest,
         *,
         reference_operation: RuntimeReferenceOperation | None = None,
         reference_read: Any = None,
+        context_event_sink: ContextExecutionEventSink | None = None,
     ) -> AgentReply:
-        if type(prepared) is tuple:
-            request, definition = prepared
+        if type(prepared) is _PreparedAgentRequest:
+            request = prepared.request
+            definition = prepared.definition
         else:
             request = prepared
             definition = self.prompts.build_definition(
@@ -4075,7 +5395,18 @@ class StoryRuntime:
             raise
         try:
             try:
-                if reference_read is None:
+                if (
+                    type(prepared) is _PreparedAgentRequest
+                    and self._contextual_execution_enabled()
+                ):
+                    reply = await self._invoke_contextual_agent(
+                        bound_agent,
+                        prepared,
+                        reference_operation=reference_operation,
+                        reference_read=reference_read,
+                        context_event_sink=context_event_sink,
+                    )
+                elif reference_read is None:
                     reply = await bound_agent.invoke(request)
                 else:
                     reply = await bound_agent.invoke(
@@ -4361,14 +5692,15 @@ class StoryRuntime:
         revision_id: str,
         *,
         reference_operation: RuntimeReferenceOperation,
+        context_event_sink: ContextExecutionEventSink | None,
     ) -> tuple[AgentReply | Exception, ...]:
         """Invoke one phase concurrently and close every peer on first failure."""
 
         reference_reads = [
             reference_operation.begin_invocation(
-                agent_id=prepared[0].agent_id,
-                phase=prepared[0].phase.value,
-                round_number=prepared[0].round_number,
+                agent_id=prepared.request.agent_id,
+                phase=prepared.request.phase.value,
+                round_number=prepared.request.round_number,
             )
             for prepared in requests
         ]
@@ -4381,6 +5713,7 @@ class StoryRuntime:
                 prepared,
                 reference_operation=reference_operation,
                 reference_read=reference_read,
+                context_event_sink=context_event_sink,
             )
             validator(reply, revision_id)
             return reply
@@ -4388,7 +5721,10 @@ class StoryRuntime:
         tasks = [
             asyncio.create_task(
                 invoke_and_validate(prepared, reference_read),
-                name=(f"{prepared[0].phase.value}:{prepared[0].agent_id}"),
+                name=(
+                    f"{prepared.request.phase.value}:"
+                    f"{prepared.request.agent_id}"
+                ),
             )
             for prepared, reference_read in zip(
                 requests,
@@ -4449,11 +5785,15 @@ class StoryRuntime:
                     else "backend call cancelled"
                 )
                 outcomes.append(
-                    BackendProtocolError(f"{prepared[0].agent_id} {detail}")
+                    BackendProtocolError(
+                        f"{prepared.request.agent_id} {detail}"
+                    )
                 )
                 continue
             try:
                 outcomes.append(task.result())
+            except _ContextEventObserverFailure:
+                raise
             except Exception as exc:
                 outcomes.append(exc)
         return tuple(outcomes)
@@ -4767,6 +6107,8 @@ class RuntimeSession:
         conversation_id: str,
         agent_id: str,
         text: str,
+        *,
+        context_event_sink: ContextExecutionEventSink | None = None,
     ) -> ConversationResult:
         """Delegate the supported advisory turn through this bound session.
 
@@ -4781,6 +6123,7 @@ class RuntimeSession:
             conversation_id,
             agent_id,
             text,
+            context_event_sink=context_event_sink,
         )
 
     async def converse_with_retrieval(
@@ -4792,6 +6135,7 @@ class RuntimeSession:
         memory_service: ConversationMemoryService,
         progress_sink: ConversationRetrievalProgressSink | None = None,
         rag_query: str | None = None,
+        context_event_sink: ContextExecutionEventSink | None = None,
     ) -> ConversationRetrievalResult:
         """Delegate one bounded retrieval turn through this bound session.
 
@@ -4809,6 +6153,7 @@ class RuntimeSession:
             memory_service=memory_service,
             progress_sink=progress_sink,
             rag_query=rag_query,
+            context_event_sink=context_event_sink,
         )
 
     async def run_prompt(
@@ -4820,6 +6165,7 @@ class RuntimeSession:
         debate_id: str | None = None,
         conversation_context: DebateContextRequest | None = None,
         progress_sink: DebateProgressSink | None = None,
+        context_event_sink: ContextExecutionEventSink | None = None,
     ) -> DebateResult:
         """Delegate a prompt debate with optional context and progress reporting.
 
@@ -4835,6 +6181,7 @@ class RuntimeSession:
             debate_id=debate_id,
             conversation_context=conversation_context,
             progress_sink=progress_sink,
+            context_event_sink=context_event_sink,
         )
 
     async def run_draft(
@@ -4846,6 +6193,7 @@ class RuntimeSession:
         debate_id: str | None = None,
         conversation_context: DebateContextRequest | None = None,
         progress_sink: DebateProgressSink | None = None,
+        context_event_sink: ContextExecutionEventSink | None = None,
     ) -> DebateResult:
         """Delegate a draft debate with optional context and progress reporting.
 
@@ -4861,6 +6209,7 @@ class RuntimeSession:
             debate_id=debate_id,
             conversation_context=conversation_context,
             progress_sink=progress_sink,
+            context_event_sink=context_event_sink,
         )
 
 

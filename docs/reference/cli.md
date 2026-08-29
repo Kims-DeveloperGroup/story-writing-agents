@@ -824,6 +824,11 @@ Persona, Maximum debate rounds, Conversation storage, Conversation RAG,
 Message details, and Agents. A clean root shows exactly those seven choices in
 that order, with no persistence action or save guidance. Dirty state appends
 `Apply Changes (*Required)` and then `Discard Changes`, for nine choices.
+The clean root's current rendered frame contains all seven rows; the dirty
+root's current frame contains all nine rows regardless of the active choice.
+This describes the complete live redraw or fallback prompt in terminal
+scrollback, not a guarantee that the physical terminal height shows every row
+without scrolling. Nested Settings catalogs retain a seven-row window.
 Conversation storage
 independently offers Filesystem and SQLite for the next shell; it is not an
 agent-provider route. Conversation RAG opens a nested editor with Provider
@@ -831,36 +836,65 @@ Disabled/Local and Automatic Off/On. Disabled forces Automatic Off, selecting
 Local does not enable Automatic, and On requires pending Local. Message details
 offers Off and On. Off is the default compact presentation and does not delete
 stored content. `Agents` opens a nested canonical-agent picker. Each canonical
-agent is followed by `Current:` or `Pending:` and its effective
+agent has a responsive `Current:` or `Pending:` summary with its effective
 `(Provider/model/effort)` profile. Selecting an agent opens a provider-neutral
 Provider/Model/Effort picker; each field independently shows `Current:` or
-`Pending:` followed by its effective value. An omitted effective model or
-effort is displayed as `provider default`. Current/Pending confirmation panels
-retain provider-qualified rows for both providers so inactive stored values
-remain identifiable.
+`Pending:` with its effective value. An omitted effective model or
+effort is displayed as `provider default`. Current/Pending confirmation
+comparisons retain provider-qualified rows for both providers on capable
+streams, so inactive stored values remain identifiable while the transient
+comparison is visible. Ordinary-line fallback omits that comparison.
 
 The inline agent and field comparisons are against the active runtime profile,
 not a flattening of every configuration property. An edit to only an inactive
 provider's stored model or effort can therefore leave the effective agent and
-field descriptions `Current`; the warning-semantic pending-change count beside
+field summaries `Current`; the warning-semantic pending-change count beside
 the top-level Agents choice still records that unsaved configuration change.
 Launch-override fields remain disabled and show the effective override value.
 These summaries use only already validated local Settings and backend state;
 rendering them does not authenticate, discover a provider catalog, persist a
 value, or invoke a story provider.
 
+Every picker and text/number input reached through `/settings`, including a
+Provider editor's subordinate authentication picker, uses the Settings form
+presentation. It separates the current-view title, optional `Context:`,
+guidance, choices, responsive state summaries, stacked descriptions, notices,
+current value, and editable value. With an active row, a picker heading is
+`Choices N/M`, using its absolute ordinal and the complete choice count;
+without one, it is `Choices M`. It contains no shown-range text. `>` marks the
+active row, `(selected)` marks the selected value, and unavailable choices show
+`(disabled)` plus `Disabled: REASON`. The form omits
+`[available]`, `[highlighted]`, `[focused]`, and `[open]`, and does not build a
+breadcrumb title. Global `/auth`, omitted-resume selection, and every other
+generic picker retain the standard presentation and seven-row window. ANSI
+color reinforces these textual facts but never replaces them.
+
+For state summaries, the complete picker—not only its visible seven-row
+window—sets one shared column from its widest fully decorated label. Physical
+cell width includes wide and combining Unicode correctly. If at least 20 cells
+remain from that column to the right edge, eligible rows render
+`LABEL — Current: VALUE` or `LABEL — Pending: VALUE`; wrapped summary text
+continues at the same column without truncation. If only 19 cells remain, or at
+any narrower width, the same summary moves to the established indented row
+below its label. Live and numbered fallback views use this same boundary. A
+resize can switch the layout without changing selection or values.
+
 At the Settings root, each one-level value, including Conversation storage,
-Conversation RAG, and Message details, shows one effective description: neutral
+Conversation RAG, and Message details, shows one effective summary: muted
 `Current` when unchanged or warning-semantic `Pending` when changed. Agents
 similarly warning-marks its explicit nonzero nested pending-change count. In
-Agents and Agent settings, effective `Current` descriptions remain neutral and
-effective `Pending` descriptions use warning semantics. Dirty confirmation
-context keeps Current neutral and Pending warning. These roles reinforce the
-visible words and counts; warning suffix and description spans wrap
-independently, whole-row disabled/selected/highlighted precedence remains
-authoritative, and narrow, plain, fallback, and `NO_COLOR` output retain the
-complete textual values so color is never required to identify state. The
-additive Choice description role remains package-internal.
+Agents and Agent settings, effective `Current` summaries remain muted and
+effective `Pending` summaries use warning semantics. Dirty confirmation
+context on capable streams keeps Current neutral and Pending warning. These
+roles reinforce the visible words and counts. The summary opt-in covers only
+those root facts, a nonzero root Agents count, nested Conversation RAG
+Provider/Automatic, the Agents roster profile, and Agent settings
+Provider/Model/Effort. Clean Agents has no summary. Persona paths, help and
+custom/inherit guidance, Discard guidance, authentication text, and disabled
+reasons remain stacked descriptions. Root and editor views retain complete
+textual values under narrow, plain, fallback, and `NO_COLOR` output, so color
+is never required to identify state; fallback confirmation context is omitted
+as described below.
 
 Every retained Language, Persona, Maximum debate rounds, Conversation storage,
 Conversation RAG Provider, Conversation RAG Automatic, Message details,
@@ -869,6 +903,11 @@ remain pending in memory and are not saved; choose Apply Changes in Settings to
 persist them.` The text is present on initial entry, after a valid Enter reopens
 the editor, and during validation. The established entered-value success result
 remains unchanged and is still the only inline completed result.
+Maximum debate rounds and Custom model render the view name and optional
+`Context:` first, guidance next, validation or completed context when present,
+then `Current value: VALUE` and the final `New value > ` input. The initial
+editable value, exact validation, retained-commit behavior, and fallback input
+semantics are unchanged.
 
 The dirty top-level Settings picker shows `[save required] Choose Apply Changes to persist
 pending changes` if and only if the
@@ -920,13 +959,22 @@ Apply Changes alone opens the dirty transient yes/no persistence confirmation.
 Discard Changes opens the existing dirty discard confirmation. Root Settings
 Escape retains the same cancellation action: clean settings exit immediately
 without confirmation, while dirty settings open the discard confirmation. Each
-dirty confirmation has changed-only Current/Pending
-context: only differing fields appear in both sections, each with a `(Changed)`
-cue. Its activation notice joins only the applicable exact sentences:
+dirty confirmation has changed-only Current/Pending context on capable
+streams: only differing fields appear in both sections, each with a `(Changed)`
+cue. That comparison, the confirmation picker, and its activation notice are
+one live FORM frame rather than separate durable output. The activation notice
+joins only the applicable exact sentences:
 `Runtime changes apply to this shell after Apply Changes.`, `Desired storage
 changes apply to the next shell.`, and `Conversation RAG changes apply to the
 next shell; this running shell retains its current RAG service and automatic
 policy.`
+The driver clears the whole capable frame before YES, NO, confirmation Escape,
+Ctrl-C, or EOF returns, and attempts the same cleanup before an input or render
+failure propagates. The controller does not write a separate Current/Pending
+panel, so returning to Settings or the shell leaves no redundant comparison.
+Ordinary-line fallback, including `TERM=dumb`, omits both the comparison and
+activation notice—even on an invalid-answer retry—because printed fallback
+content cannot be erased. Its YES/NO choices and action outcomes are unchanged.
 The existing `No pending settings changes.` confirmation panel remains a
 defensive internal projection and is not selectable clean-root UX. YES
 commits the requested dirty action; NO or confirmation Escape returns to the
@@ -1270,9 +1318,9 @@ other noninteractive output.
 
 Each accepted progress event is one atomic `Debate phase · DISPLAY_NAME` Panel.
 The trusted sentence-case title names the actual phase. Active headings omit
-`[loading]`; terminal headings retain completed, error, or cancelled state as
-applicable. The canonical Phase field and the Outcome field's existing
-role/state are unchanged. Every panel shows Debate ID, Phase, Round, Revision,
+`[loading]`; successful completion is silent, while error or cancelled state
+remains visible as applicable. The canonical Phase field and the Outcome
+field's existing role/state are unchanged. Every panel shows Debate ID, Phase, Round, Revision,
 Action, Outcome, and Conflicts; Message details On inserts Handoff after
 Revision. Newly readable durable speech is grouped into contiguous persisted
 phase/round/revision sections within that same panel and shown in full except

@@ -135,18 +135,82 @@ selecting Local leaves Automatic Off; On requires pending Local. Message
 details offers Off and On. Off is the default compact presentation; it never
 removes stored message content.
 
+Every view entered through `/settings` uses a structured form layout, including
+the provider-authentication picker opened from Agent settings. The current view
+name stands alone, optional agent/provider scope appears as `Context:`, guidance
+has its own region, and true state summaries are responsive while ordinary
+descriptions remain stacked below their labels. `>` marks the active row,
+`(selected)` marks the selected value, and unavailable rows retain
+`(disabled)` plus a textual `Disabled:` reason. The form omits the generic
+`[available]`, `[highlighted]`, `[focused]`, and `[open]` labels and does not
+print a `Settings/Agents/...` breadcrumb. Global `/auth`, session and
+conversation resume, and other non-Settings pickers keep their established
+presentation.
+
+The clean root renders all seven rows in its current frame. As soon as a value
+is pending, the dirty root renders all nine rows, including Apply and Discard,
+regardless of which row is active. This means the complete live redraw or
+fallback prompt is available in the current terminal frame/scrollback; it does
+not promise that nine rows fit the physical terminal height without terminal
+scrolling. Nested catalogs retain a seven-row window. Their heading stays
+absolute and concise—`Choices 6/10`, for example—with no shown-range text. A
+form with no active row reports only its total, such as `Choices 3`.
+
+At ordinary widths, Settings aligns its state summaries after ` — ` in one
+column derived from every label in the complete picker. It keeps that inline
+layout when at least 20 physical cells remain for summary content. Long values
+wrap without truncation and continue at the shared column. A dirty root can
+look like this without color:
+
+```text
+Settings
+
+Choose a setting to edit, apply changes, or discard changes.
+
+Choices 6/9
+  1. Language                  — Current: KO
+  2. Persona                   — Current: default_kim_eun_hee
+  3. Maximum debate rounds     — Pending: 2
+  4. Conversation storage      — Current: filesystem
+  5. Conversation RAG          — Current: Provider Disabled; Automatic Off
+> 6. Message details           — Current: Off
+  7. Agents
+  8. Apply Changes (*Required)
+  9. Discard Changes
+     Pending changes will be discarded.
+  [save required] Choose Apply Changes to persist pending changes
+```
+
+With only 19 cells available for summary content, or any narrower frame, the
+same facts move below their labels at the established detail indent:
+
+```text
+Choices 3/9
+  1. Language
+     Current: KO
+  2. Persona
+     Current: default_kim_eun_hee
+> 3. Maximum debate rounds
+     Pending: 2
+```
+
 Choose Agents to select an agent in canonical roster order. Each agent shows
-its effective `(Provider/model/effort)` values beside its name. Agent settings
-then shows the effective value beside each Provider, Model, and Effort field:
+its effective `(Provider/model/effort)` values in the same responsive summary.
+Agent settings then gives Provider, Model, and Effort their own summarized rows:
 
 ```text
 Agents
-  Lead Orchestrator — Pending: (Antigravity/agy-pro/high)
 
-Agent settings [Lead Orchestrator]
-  Provider — Current: Antigravity
-  Model — Current: agy-pro
-  Effort — Pending: high
+Choices 1/4
+> 1. Lead Orchestrator           — Pending: (Antigravity/agy-pro/high)
+
+Agent settings
+Context: Lead Orchestrator
+
+Choices 3/3
+  1. Provider — Current: Antigravity
+  2. Model    — Current: agy-pro
+> 3. Effort   — Pending: high
 ```
 
 The displayed profile is labeled `Current` when it matches the active runtime
@@ -160,10 +224,19 @@ disabled and show their effective read-only values. Merely rendering these
 values uses local validated state and does not authenticate, discover catalogs,
 save settings, or invoke an agent.
 
+The responsive summaries are limited to the root Current/Pending values, a
+nonzero root Agents pending count, Conversation RAG Provider/Automatic, the
+Agents roster profiles, and Agent settings Provider/Model/Effort. Clean Agents
+has no summary. Paths, help, custom/inherit guidance, discard guidance,
+authentication text, and disabled reasons remain stacked so they stay distinct
+from current state.
+
 Provider remains the field-level configuration concept; its choices are Codex
 and Antigravity. Changing the route does not erase the inactive provider's
-saved model or effort. Current/Pending confirmation remains provider-qualified
-so both providers' inactive values stay identifiable.
+saved model or effort. On capable terminals, Current/Pending confirmation
+context remains provider-qualified so both providers' inactive values stay
+identifiable while that transient frame is visible. Line fallback omits the
+comparison context.
 
 On a capable terminal, Up/Down moves the current picker highlight. Enter opens
 a selected settings level or applies a pending value. Language, Persona,
@@ -189,7 +262,13 @@ Escape invokes the same action as explicit Discard Changes: clean settings exit
 immediately, while dirty settings open the existing YES/NO discard confirmation.
 NO or Escape there returns to Settings. Ctrl-C or EOF still cancels the whole
 transaction without saving. Plain fallback uses the picker's numbered grammar
-and the same level hierarchy. In the per-agent active-provider Custom model
+and the same level hierarchy. On a capable terminal, the changed-only
+Current/Pending comparison appears above the YES/NO choices in the same live
+confirmation frame. That whole frame clears after YES, NO, Escape, Ctrl-C, or
+EOF, so returning to Settings or the shell does not leave a duplicate diff.
+Line fallback, including `TERM=dumb`, omits the comparison and activation
+notice because it cannot erase them; the confirmation choice behaves the same.
+In the per-agent active-provider Custom model
 prompt, blank means inherit that provider's workspace system model and
 `/cancel` is literal model text rather than a command.
 
@@ -200,6 +279,10 @@ memory and are not saved; choose Apply Changes in Settings to persist them.` Thi
 visible when the editor first opens, after a valid value is entered, and while
 fixing validation. Entering a value changes only the pending in-memory settings;
 the completed result confirms that pending change, not a file save.
+
+Text and numeric inputs similarly separate the header and guidance from
+`Current value: VALUE` and the final `New value > ` line. The current value
+remains prefilled in the editable buffer, so input semantics are unchanged.
 
 When you return to the top-level Settings picker, it shows `[save required]
 Choose Apply Changes to persist pending changes` exactly while the complete
@@ -344,9 +427,10 @@ flag and does not claim to know the vendor's server-side choice.
 
 Message details Off makes the live runtime header show only the target display
 name and leaves direct replies compact. On makes the header show the resolved
-provider/model/effort and confirmation, and adds one compact reply metadata
-line with Provider, Model, and Effort sources plus Confirmation and Thread.
-`/agents` and `/status` remain fully diagnostic in both modes.
+provider/model/effort and confirmation, and adds one subordinate reply metadata
+line containing Provider / Model / Effort and Thread. It adds only exceptional
+`pending` and `launch override` qualifiers. `/agents` and `/status` retain full
+source and confirmation diagnostics in both modes.
 
 With Message details On, a capable input frame follows the active sticky agent, or a valid leading
 `@agent` one-shot route, as the buffer changes:
@@ -356,12 +440,12 @@ With Message details On, a capable input frame follows the active sticky agent, 
 story[novel:lead]> Who is answering?
 ```
 
-With Message details On, the corresponding reply keeps the execution evidence
-in its speaker header and outside the reply body:
+With Message details On, the corresponding reply keeps compact execution
+evidence beneath its speaker header and outside the reply body:
 
 ```text
-Lead Orchestrator → You · Provider: Antigravity [agent config] · Model: agy-model-id [agent config] · Effort: high [agent config] · Confirmation: confirmed · Thread: fresh after provider switch [completed]
-
+Lead Orchestrator → You
+  Antigravity / agy-model-id / high · reused
 │ <agent reply>
 ```
 
@@ -372,11 +456,11 @@ same-provider model or effort change remains eligible to reuse its native
 thread. Every provider switch advances a durable route generation, so switching
 A to B and later back to A starts a fresh target-provider thread each time.
 
-That fresh provider-native thread is not a fresh story session. Every
-substantive turn rehydrates a bounded belonging-session envelope containing
-the receiving agent's newest owner outcomes (at most 24 entries and 32,768
-compact UTF-8 bytes), the current core-document path/hash identities, and one
-focused-context mode:
+That fresh provider-native thread is not a fresh story session. Current
+built-in execution bootstraps role-relevant authoritative sources through
+compact agent-context wire v5. A compatible READY checkpoint permits later
+source/record deltas; provider history alone never authorizes omission. The
+runtime's internal capture still records one focused-context mode:
 
 - `included` carries the bounded complete-turn window for normal focused work;
 - `fresh` carries the conversation identity but no focused transcript, as on
@@ -384,12 +468,12 @@ focused-context mode:
 - `omitted` carries neither a conversation identity nor transcript for a
   context-omitted noninteractive run.
 
-It intentionally does not carry another agent's owner outcomes, omitted
-transcript events, provider-private hidden history, artifact bytes, or core
-document bytes. Reference preludes are content-free; the next substantive call
-carries the envelope. Retrieval call one carries it, while retrieval
-continuations do not repeat it. See the exact
-[provider envelope](../design/prompts-and-provider.md#story-session-continuity-envelope)
+The provider can boundedly search/read omitted authorized focused conversation,
+canonical artifacts, active debate, and only its own state. It cannot receive
+another agent's private state or rely on provider-hidden history. Reference
+preludes remain separate and content-free; the next substantive call alone
+receives current selected reference bytes. See the
+[compact provider wire](../design/agent-context.md#compact-provider-wire-v5)
 and [session storage](../reference/configuration/session-storage.md#provider-route-generations).
 
 Conversation RAG field editing does not probe or install the optional package,
@@ -573,6 +657,17 @@ sender/recipient header, and the full body. On additionally shows canonical IDs,
 Turn, and Kind. Only user and outcome enter the transcript; local reads never
 call a provider or alter defaults/focus.
 
+Context-capable turns also show the agent's live context lifecycle
+automatically; there is no command or setting to enable it. The compact lines
+distinguish bootstrap from delta, show bounded SEARCH/READ work, and end in
+`checkpoint advanced` or `checkpoint not advanced`. Existing retrieval
+SEARCH/READ panels appear once, while each debate line adds its agent, round,
+and phase so interleaved invocations remain readable. These lines are
+content-free terminal progress, not conversation or story records. See
+[Bounded agent context](agent-context.md) for complete scenarios and
+[Agent-context progress](agent-context-progress.md) for exact output, state
+meanings, callback facts, privacy, and observer-failure recovery.
+
 ## Turn the current focus into consensus
 
 ```text
@@ -591,10 +686,11 @@ complete or submit slash controls. Artifact `$` activation is available in the
 composer text and likewise returns without sending. `/say /send` and `/say /cancel` still insert literal
 control lines, and ordinary fallback input shows no panel.
 
-The runtime supplies every debate phase one bounded belonging-session envelope.
+The runtime supplies every debate phase one scoped contextual invocation.
 Normal `/run` includes one bounded focus snapshot. `/run --fresh --output
-PART/PATH.md PROMPT` retains the story-session owner/core facts and focused
-conversation identity but omits the focused transcript; `/draft-file PATH`
+PART/PATH.md PROMPT` retains the focused conversation identity but omits its
+transcript; current role-relevant authoritative sources still bootstrap.
+`/draft-file PATH`
 reads strict UTF-8, includes the snapshot, and prompts for the required output
 path. After validation, inline, fresh, and committed composer prompts appear
 once as a `You → Consensus` chat block with the full prompt body, followed by
@@ -609,9 +705,9 @@ but add no separate storage guarantee. Runs do not change conversations.
 Each accepted progress event then appears as one
 `Debate phase · DISPLAY_NAME` panel with its fixed status fields and any newly
 persisted contiguous speech sections. Active headings name their actual phase
-without `[loading]`; terminal headings retain completed, error, or cancelled
-state. The canonical Phase field and Outcome role/state are unchanged. Full
-non-error speech remains visible. Message details On adds Handoff and speech
+without `[loading]`; successful completion is silent, while error or cancelled
+state remains visible. The canonical Phase field and Outcome role/state are
+unchanged. Full non-error speech remains visible. Message details On adds Handoff and speech
 Kind; Off removes only those diagnostics. Successful consensus receives a
 separate final `Consensus` Record after terminal progress; deadlock and failed
 outcomes instead use typed error presentation.

@@ -40,6 +40,14 @@ from story_writing_agents.cli_context import (
     save_default_session,
 )
 from story_writing_agents.config import ConfigManager
+from story_writing_agents.agent_context.manifest import (
+    ContextScope,
+    ContextSubjectKind,
+)
+from story_writing_agents.agent_context.service import (
+    ContextExecutionEvent,
+    ContextExecutionEventKind,
+)
 from story_writing_agents.conversation_search import (
     ConversationCitation,
     ConversationSearchHit,
@@ -255,6 +263,7 @@ class ScriptedAuthCoordinator:
         self.snapshots = list(snapshots)
         self.results = list(results)
         self.events: list[tuple[str, object | None]] = []
+        self.presentations: list[terminal_module.InputPresentation] = []
 
     def probe_all(self) -> ProviderAuthSnapshot:
         self.events.append(("probe_all", None))
@@ -297,8 +306,12 @@ class ScriptedAuthCoordinator:
         self,
         current: ProviderAuthSnapshot,
         *,
+        presentation: terminal_module.InputPresentation = (
+            terminal_module.InputPresentation.STANDARD
+        ),
         selected_provider: str | None = None,
     ) -> InteractiveAuthResult:
+        self.presentations.append(presentation)
         self.events.append(("run", selected_provider))
         if not self.results:
             raise AssertionError("unexpected controller auth picker")
@@ -1082,6 +1095,309 @@ class ControllerContractTests(ControllerTestCase):
         with self.assertRaises(FrozenInstanceError):
             context.truncated = True  # type: ignore[misc]
 
+    def test_context_progress_projection_validates_interleaved_operations_exactly(
+        self,
+    ) -> None:
+        projection_type = runtime_policy_module.ContextProgressProjection
+        validator = runtime_policy_module.validate_context_execution_progress
+        self.assertEqual(
+            tuple(field.name for field in fields(projection_type)),
+            (
+                "workspace_id",
+                "session_id",
+                "subject_kind",
+                "subject_id",
+                "agent_id",
+                "operation_id",
+                "kind",
+                "stage",
+                "phase",
+                "round_number",
+                "action_index",
+                "selected_source_count",
+                "selected_source_utf8_bytes",
+                "omitted_searchable_source_count",
+                "omitted_searchable_source_utf8_bytes",
+                "search_hit_count",
+                "retrieved_source_count",
+                "retrieved_source_utf8_bytes",
+                "mandatory_reference_count",
+                "mandatory_reference_utf8_bytes",
+                "provider_input_tokens",
+                "truncated",
+            ),
+        )
+        self.assertNotIn("ContextProgressProjection", controller_package.__all__)
+        self.assertNotIn(
+            "validate_context_execution_progress",
+            controller_package.__all__,
+        )
+        scope = ContextScope(
+            "workspace",
+            "session",
+            ContextSubjectKind.CONVERSATION,
+            "conversation",
+            LEAD_ORCHESTRATOR,
+        )
+        plan_facts = {
+            "selected_source_count": 3,
+            "selected_source_utf8_bytes": 2048,
+            "omitted_searchable_source_count": 1,
+            "omitted_searchable_source_utf8_bytes": 64,
+            "mandatory_reference_count": 0,
+            "mandatory_reference_utf8_bytes": 0,
+        }
+        operations: dict[tuple[str, str, str, str, str, str], object] = {}
+
+        def accept(event: ContextExecutionEvent):
+            projection = validator(
+                event,
+                expected_session_id="session",
+                expected_subject_kind="conversation",
+                expected_subject_id="conversation",
+                expected_agent_id=LEAD_ORCHESTRATOR,
+                previous_by_operation=operations,
+            )
+            operations[projection.operation_key] = projection
+            return projection
+
+        first = accept(
+            ContextExecutionEvent(
+                ContextExecutionEventKind.BOOTSTRAP,
+                scope,
+                "operation-a",
+                **plan_facts,
+            )
+        )
+        second = accept(
+            ContextExecutionEvent(
+                ContextExecutionEventKind.DELTA,
+                scope,
+                "operation-b",
+                **plan_facts,
+            )
+        )
+        self.assertEqual((first.stage, second.stage), ("plan", "plan"))
+        self.assertFalse(first.terminal)
+        with self.assertRaises(FrozenInstanceError):
+            first.stage = "private"  # type: ignore[misc]
+
+        interleaved = (
+            ContextExecutionEvent(
+                ContextExecutionEventKind.SEARCH_STARTED,
+                scope,
+                "operation-a",
+                action_index=1,
+            ),
+            ContextExecutionEvent(
+                ContextExecutionEventKind.ANSWER_AUTHORIZED,
+                scope,
+                "operation-b",
+                action_index=1,
+            ),
+            ContextExecutionEvent(
+                ContextExecutionEventKind.SEARCH_COMPLETED,
+                scope,
+                "operation-a",
+                action_index=1,
+                search_hit_count=2,
+                observation_utf8_bytes=90,
+                truncated=False,
+            ),
+            ContextExecutionEvent(
+                ContextExecutionEventKind.CHECKPOINT_ADVANCED,
+                scope,
+                "operation-b",
+                provider_input_tokens=12,
+            ),
+            ContextExecutionEvent(
+                ContextExecutionEventKind.READ_STARTED,
+                scope,
+                "operation-a",
+                action_index=2,
+            ),
+            ContextExecutionEvent(
+                ContextExecutionEventKind.READ_COMPLETED,
+                scope,
+                "operation-a",
+                action_index=2,
+                retrieved_source_count=2,
+                retrieved_source_utf8_bytes=800,
+                transcript_turn_count=0,
+                transcript_event_count=0,
+                observation_utf8_bytes=850,
+            ),
+            ContextExecutionEvent(
+                ContextExecutionEventKind.ANSWER_AUTHORIZED,
+                scope,
+                "operation-a",
+                action_index=3,
+            ),
+            ContextExecutionEvent(
+                ContextExecutionEventKind.CHECKPOINT_ADVANCED,
+                scope,
+                "operation-a",
+                provider_input_tokens=None,
+            ),
+        )
+        stages = tuple(accept(event).stage for event in interleaved)
+        self.assertEqual(
+            stages,
+            ("action", "verify", "action", "commit", "action", "action", "verify", "commit"),
+        )
+        self.assertTrue(operations[first.operation_key].terminal)  # type: ignore[attr-defined]
+        self.assertTrue(operations[second.operation_key].terminal)  # type: ignore[attr-defined]
+
+        failure = accept(
+            ContextExecutionEvent(
+                ContextExecutionEventKind.INVALIDATED,
+                scope,
+                "operation-c",
+            )
+        )
+        self.assertEqual(failure.stage, "fail")
+        accept(
+            ContextExecutionEvent(
+                ContextExecutionEventKind.TAINTED,
+                scope,
+                "operation-c",
+            )
+        )
+        failed_terminal = accept(
+            ContextExecutionEvent(
+                ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED,
+                scope,
+                "operation-c",
+                provider_input_tokens=None,
+            )
+        )
+        self.assertTrue(failed_terminal.terminal)
+
+        invalid_events = (
+            ContextExecutionEvent(
+                ContextExecutionEventKind.ANSWER_AUTHORIZED,
+                scope,
+                "operation-d",
+                action_index=1,
+            ),
+            ContextExecutionEvent(
+                ContextExecutionEventKind.ANSWER_AUTHORIZED,
+                scope,
+                "operation-b",
+                action_index=2,
+            ),
+            ContextExecutionEvent(
+                ContextExecutionEventKind.SEARCH_STARTED,
+                scope,
+                "operation-a",
+                action_index=4,
+            ),
+        )
+        for event in invalid_events:
+            with self.subTest(kind=event.kind, operation=event.operation_id):
+                with self.assertRaises(ValueError):
+                    accept(event)
+
+        for violation in ("pair", "index"):
+            with self.subTest(violation=violation):
+                local: dict[tuple[str, str, str, str, str, str], object] = {}
+
+                def local_accept(event: ContextExecutionEvent):
+                    value = validator(
+                        event,
+                        expected_session_id="session",
+                        expected_subject_kind="conversation",
+                        expected_subject_id="conversation",
+                        expected_agent_id=LEAD_ORCHESTRATOR,
+                        previous_by_operation=local,
+                    )
+                    local[value.operation_key] = value
+
+                operation_id = f"operation-{violation}"
+                local_accept(
+                    ContextExecutionEvent(
+                        ContextExecutionEventKind.BOOTSTRAP,
+                        scope,
+                        operation_id,
+                        **plan_facts,
+                    )
+                )
+                if violation == "pair":
+                    local_accept(
+                        ContextExecutionEvent(
+                            ContextExecutionEventKind.SEARCH_STARTED,
+                            scope,
+                            operation_id,
+                            action_index=1,
+                        )
+                    )
+                    bad = ContextExecutionEvent(
+                        ContextExecutionEventKind.READ_COMPLETED,
+                        scope,
+                        operation_id,
+                        action_index=1,
+                        retrieved_source_count=0,
+                        retrieved_source_utf8_bytes=0,
+                        transcript_turn_count=0,
+                        transcript_event_count=0,
+                        observation_utf8_bytes=0,
+                    )
+                else:
+                    bad = ContextExecutionEvent(
+                        ContextExecutionEventKind.SEARCH_STARTED,
+                        scope,
+                        operation_id,
+                        action_index=2,
+                    )
+                with self.assertRaisesRegex(ValueError, "phase order"):
+                    local_accept(bad)
+
+        omission_operations: dict[tuple[str, str, str, str, str, str], object] = {}
+        omission_plan = ContextExecutionEvent(
+            ContextExecutionEventKind.BOOTSTRAP,
+            scope,
+            "operation-omission",
+            **plan_facts,
+        )
+        projection = validator(
+            omission_plan,
+            expected_session_id="session",
+            expected_subject_kind="conversation",
+            expected_subject_id="conversation",
+            expected_agent_id=LEAD_ORCHESTRATOR,
+            previous_by_operation=omission_operations,
+        )
+        omission_operations[projection.operation_key] = projection
+        with self.assertRaisesRegex(ValueError, "omission facts"):
+            validator(
+                ContextExecutionEvent(
+                    ContextExecutionEventKind.OMISSION,
+                    scope,
+                    "operation-omission",
+                    omitted_searchable_source_count=2,
+                    omitted_searchable_source_utf8_bytes=64,
+                ),
+                expected_session_id="session",
+                expected_subject_kind="conversation",
+                expected_subject_id="conversation",
+                expected_agent_id=LEAD_ORCHESTRATOR,
+                previous_by_operation=omission_operations,
+            )
+        foreign_scope = replace(scope, session_id="foreign")
+        with self.assertRaisesRegex(ValueError, "identity"):
+            validator(
+                ContextExecutionEvent(
+                    ContextExecutionEventKind.INVALIDATED,
+                    foreign_scope,
+                    "operation-foreign",
+                ),
+                expected_session_id="session",
+                expected_subject_kind="conversation",
+                expected_subject_id="conversation",
+                expected_agent_id=LEAD_ORCHESTRATOR,
+                previous_by_operation={},
+            )
+
     def test_agents_and_status_ignore_message_detail_preference(self) -> None:
         workspace = self.make_workspace()
         controller, _backend, callbacks = self.make_controller(workspace)
@@ -1295,6 +1611,7 @@ class ControllerContractTests(ControllerTestCase):
                 "workspace",
             },
             "interactive_controller._runtime_policy": {
+                "agent_context.service",
                 "conversation_retrieval",
                 "conversation_search",
                 "errors",
@@ -1352,6 +1669,7 @@ class ControllerContractTests(ControllerTestCase):
                 "visible_conversation_handle",
             ],
             runtime_policy_module: [
+                "ContextProgressProjection",
                 "DebateContextInspectionFacts",
                 "DebateInspectionFacts",
                 "classify_advisory_turn_failure",
@@ -1360,6 +1678,7 @@ class ControllerContractTests(ControllerTestCase):
                 "classify_progress_callback_failure",
                 "interactive_code_for_debate_failure",
                 "validate_consensus_result",
+                "validate_context_execution_progress",
                 "validate_conversation_retrieval_progress",
                 "validate_conversation_retrieval_result",
                 "validate_debate_context_inspection",
@@ -1397,6 +1716,7 @@ class ControllerContractTests(ControllerTestCase):
                 "ConversationResolutionFailure",
             },
             "interactive_controller._runtime_policy": {
+                "ContextProgressProjection",
                 "DebateContextInspectionFacts",
                 "DebateInspectionFacts",
             },
@@ -1550,8 +1870,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 77)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 314)
+        self.assertEqual(len(modules), 85)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 349)
         self.assertTrue(
             {
                 "story_writing_agents.conversation_storage.archive",
@@ -4457,6 +4777,10 @@ class ControllerAuthTests(ControllerTestCase):
                 ("probe_all", None),
             ],
         )
+        self.assertEqual(
+            coordinator.presentations,
+            [terminal_module.InputPresentation.STANDARD],
+        )
         defaults = ConfigManager(workspace).load_system_defaults()
         self.assertEqual(defaults.default_backend, "antigravity")
         self.assertTrue(backend._closed)
@@ -4650,9 +4974,56 @@ class ControllerSettingsTests(ControllerTestCase):
             for choice in dirty_settings.args[2]
             if choice.identity == "conversation_rag"
         )
+        self.assertEqual(
+            rag_choice.form_summary,
+            "Pending: Provider Local; Automatic On",
+        )
         self.assertIs(
-            rag_choice.description_role,
+            rag_choice.form_summary_role,
             terminal_module.SemanticRole.WARNING,
+        )
+        self.assertIsNone(rag_choice.description)
+        rag_picker_calls = tuple(
+            call
+            for call in picker.call_args_list
+            if call.args[1].name == "Conversation RAG"
+        )
+        rag_summary_states = tuple(
+            tuple(
+                (choice.form_summary, choice.form_summary_role)
+                for choice in call.args[2]
+            )
+            for call in rag_picker_calls
+        )
+        muted = terminal_module.SemanticRole.MUTED
+        warning = terminal_module.SemanticRole.WARNING
+        self.assertIn(
+            (
+                ("Current: Disabled", muted),
+                ("Current: Off", muted),
+            ),
+            rag_summary_states,
+        )
+        self.assertIn(
+            (
+                ("Pending: Local", warning),
+                ("Current: Off", muted),
+            ),
+            rag_summary_states,
+        )
+        self.assertIn(
+            (
+                ("Pending: Local", warning),
+                ("Pending: On", warning),
+            ),
+            rag_summary_states,
+        )
+        self.assertTrue(
+            all(
+                choice.description is None
+                for call in rag_picker_calls
+                for choice in call.args[2]
+            )
         )
         rendered = "".join(callbacks.records)
         exact_notice = (
@@ -4912,6 +5283,10 @@ class ControllerSettingsTests(ControllerTestCase):
                 ("probe_all", None),
             ],
         )
+        self.assertEqual(
+            coordinator.presentations,
+            [terminal_module.InputPresentation.FORM],
+        )
         self.assertIn("Settings saved", "".join(callbacks.records))
         self.assertEqual(
             "".join(callbacks.prompts).count(
@@ -5126,7 +5501,9 @@ class ControllerSettingsTests(ControllerTestCase):
         provider_prompts = [
             prompt
             for prompt in callbacks.prompts
-            if prompt.endswith("Provider [Plot & Structure Architect] > ")
+            if prompt.startswith(
+                "Provider\nContext: Plot & Structure Architect\n"
+            )
         ]
         self.assertEqual(len(provider_prompts), 4)
         configuration = settings_module.load_settings_state(workspace).pending
@@ -5466,7 +5843,7 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         self.assertEqual(
             tuple(
-                tuple(choice.description for choice in call.args[2])
+                tuple(choice.form_summary for choice in call.args[2])
                 for call in top_level_calls
             ),
             (
@@ -5488,7 +5865,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "Current: Off",
                     None,
                     None,
-                    "Pending changes will be discarded.",
+                    None,
                 ),
                 (
                     f"Current: {baseline}",
@@ -5511,27 +5888,40 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
         )
         default = terminal_module.SemanticRole.DEFAULT
+        muted = terminal_module.SemanticRole.MUTED
         warning = terminal_module.SemanticRole.WARNING
         self.assertEqual(
             tuple(
-                tuple(choice.description_role for choice in call.args[2])
+                tuple(choice.form_summary_role for choice in call.args[2])
                 for call in top_level_calls
             ),
             (
-                (default, default, default, default, default, default, default),
+                (muted, muted, muted, muted, muted, muted, default),
                 (
                     warning,
-                    default,
-                    default,
-                    default,
-                    default,
-                    default,
+                    muted,
+                    muted,
+                    muted,
+                    muted,
+                    muted,
                     default,
                     default,
                     default,
                 ),
-                (default, default, default, default, default, default, default),
-                (default, default, default, default, default, default, default),
+                (muted, muted, muted, muted, muted, muted, default),
+                (muted, muted, muted, muted, muted, muted, default),
+            ),
+        )
+        self.assertEqual(
+            tuple(
+                tuple(choice.description for choice in call.args[2])
+                for call in top_level_calls
+            ),
+            (
+                (None,) * 7,
+                (None,) * 8 + ("Pending changes will be discarded.",),
+                (None,) * 7,
+                (None,) * 7,
             ),
         )
         self.assertEqual(
@@ -5565,7 +5955,7 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertNotIn("[saved] Settings saved.", "".join(callbacks.records))
         self.assertIsNone(top_level_calls[-1].kwargs["highlighted_id"])
 
-    def test_agents_root_description_counts_every_ordered_pending_agent_value(
+    def test_agents_root_summary_counts_every_ordered_pending_agent_value(
         self,
     ) -> None:
         workspace = self.make_workspace()
@@ -5613,7 +6003,7 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
         )
 
-        def agents_description(state) -> tuple[str | None, object]:
+        def agents_summary(state) -> tuple[str | None, object, str | None]:
             controller, _backend, _callbacks = self.make_controller(workspace)
             interrupt = terminal_module.ControlOutcome(
                 terminal_module.ControlOutcomeKind.INTERRUPT
@@ -5643,25 +6033,37 @@ class ControllerSettingsTests(ControllerTestCase):
                 for choice in choices
                 if choice.identity == "providers"
             )
-            return choice.description, choice.description_role
+            return (
+                choice.form_summary,
+                choice.form_summary_role,
+                choice.description,
+            )
 
         self.assertEqual(
-            agents_description(baseline),
-            (None, terminal_module.SemanticRole.DEFAULT),
+            agents_summary(baseline),
+            (None, terminal_module.SemanticRole.DEFAULT, None),
         )
         for label, edit in edits:
             with self.subTest(label=label):
                 self.assertEqual(
-                    agents_description(edit(baseline)),
-                    ("1 pending change", terminal_module.SemanticRole.WARNING),
+                    agents_summary(edit(baseline)),
+                    (
+                        "1 pending change",
+                        terminal_module.SemanticRole.WARNING,
+                        None,
+                    ),
                 )
 
         plural = baseline
         for _label, edit in edits:
             plural = edit(plural)
         self.assertEqual(
-            agents_description(plural),
-            ("5 pending changes", terminal_module.SemanticRole.WARNING),
+            agents_summary(plural),
+            (
+                "5 pending changes",
+                terminal_module.SemanticRole.WARNING,
+                None,
+            ),
         )
 
         panel = InteractiveController._settings_panel(edits[0][1](baseline))
@@ -5897,14 +6299,17 @@ class ControllerSettingsTests(ControllerTestCase):
             tuple(AGENT_SPECS[agent_id].display_name for agent_id in ROSTER),
         )
         self.assertEqual(
-            tuple(choice.description for choice in initial_agents),
+            tuple(choice.form_summary for choice in initial_agents),
             ("Current: (Codex/provider default/provider default)",) * len(ROSTER),
         )
         self.assertTrue(
             all(
-                choice.description_role is terminal_module.SemanticRole.DEFAULT
+                choice.form_summary_role is terminal_module.SemanticRole.MUTED
                 for choice in initial_agents
             )
+        )
+        self.assertTrue(
+            all(choice.description is None for choice in initial_agents)
         )
 
         initial_fields = picker.call_args_list[1].args[2]
@@ -5917,17 +6322,24 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
         )
         self.assertEqual(
-            tuple(choice.description for choice in initial_fields),
+            tuple(choice.form_summary for choice in initial_fields),
             (
                 "Current: Codex",
                 "Current: provider default",
                 "Current: provider default",
             ),
         )
+        self.assertEqual(
+            tuple(choice.form_summary_role for choice in initial_fields),
+            (terminal_module.SemanticRole.MUTED,) * 3,
+        )
+        self.assertTrue(
+            all(choice.description is None for choice in initial_fields)
+        )
 
         redrawn_fields = picker.call_args_list[2].args[2]
         self.assertEqual(
-            tuple(choice.description for choice in redrawn_fields),
+            tuple(choice.form_summary for choice in redrawn_fields),
             (
                 "Pending: Antigravity",
                 "Current: provider default",
@@ -5935,12 +6347,15 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
         )
         self.assertEqual(
-            tuple(choice.description_role for choice in redrawn_fields),
+            tuple(choice.form_summary_role for choice in redrawn_fields),
             (
                 terminal_module.SemanticRole.WARNING,
-                terminal_module.SemanticRole.DEFAULT,
-                terminal_module.SemanticRole.DEFAULT,
+                terminal_module.SemanticRole.MUTED,
+                terminal_module.SemanticRole.MUTED,
             ),
+        )
+        self.assertTrue(
+            all(choice.description is None for choice in redrawn_fields)
         )
         redrawn_agents = picker.call_args_list[3].args[2]
         plot_choice = next(
@@ -5949,13 +6364,14 @@ class ControllerSettingsTests(ControllerTestCase):
             if choice.identity == PLOT_ARCHITECT
         )
         self.assertEqual(
-            plot_choice.description,
+            plot_choice.form_summary,
             "Pending: (Antigravity/provider default/provider default)",
         )
         self.assertIs(
-            plot_choice.description_role,
+            plot_choice.form_summary_role,
             terminal_module.SemanticRole.WARNING,
         )
+        self.assertIsNone(plot_choice.description)
 
         model_effort_pending = settings_module.update_agent_codex_model(
             state,
@@ -5982,7 +6398,7 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertEqual(unchanged, model_effort_pending)
         pending_fields = pending_picker.call_args_list[1].args[2]
         self.assertEqual(
-            tuple(choice.description for choice in pending_fields),
+            tuple(choice.form_summary for choice in pending_fields),
             (
                 "Current: Codex",
                 "Pending: gpt-pending",
@@ -5990,12 +6406,15 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
         )
         self.assertEqual(
-            tuple(choice.description_role for choice in pending_fields),
+            tuple(choice.form_summary_role for choice in pending_fields),
             (
-                terminal_module.SemanticRole.DEFAULT,
+                terminal_module.SemanticRole.MUTED,
                 terminal_module.SemanticRole.WARNING,
                 terminal_module.SemanticRole.WARNING,
             ),
+        )
+        self.assertTrue(
+            all(choice.description is None for choice in pending_fields)
         )
 
         inactive_only = settings_module.update_agent_antigravity_model(
@@ -6020,13 +6439,14 @@ class ControllerSettingsTests(ControllerTestCase):
             if choice.identity == PLOT_ARCHITECT
         )
         self.assertEqual(
-            inactive_plot.description,
+            inactive_plot.form_summary,
             "Current: (Codex/provider default/provider default)",
         )
         self.assertIs(
-            inactive_plot.description_role,
-            terminal_module.SemanticRole.DEFAULT,
+            inactive_plot.form_summary_role,
+            terminal_module.SemanticRole.MUTED,
         )
+        self.assertIsNone(inactive_plot.description)
 
     def test_launch_override_fields_stay_disabled_and_show_effective_values(
         self,
@@ -6080,7 +6500,7 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         fields = picker.call_args_list[1].args[2]
         self.assertEqual(
-            tuple(choice.description for choice in fields),
+            tuple(choice.form_summary for choice in fields),
             (
                 "Current: Antigravity",
                 "Current: agy-override",
@@ -6096,9 +6516,10 @@ class ControllerSettingsTests(ControllerTestCase):
             * 3,
         )
         self.assertEqual(
-            tuple(choice.description_role for choice in fields),
-            (terminal_module.SemanticRole.DEFAULT,) * 3,
+            tuple(choice.form_summary_role for choice in fields),
+            (terminal_module.SemanticRole.MUTED,) * 3,
         )
+        self.assertTrue(all(choice.description is None for choice in fields))
         self.assertEqual(auth.events, [])
         self.assertEqual(catalog.events, [])
         popen.assert_not_called()
@@ -6156,17 +6577,21 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertIsNone(settings_call.kwargs["notice"])
         self.assertEqual(
             callbacks.prompts[1],
-            "Choices (highlighted 1/7) [open]\n"
-            "  1. [highlighted] Language — Current: KO\n"
-            "  2. [available] Persona — Current: default_kim_eun_hee\n"
-            "  3. [available] Maximum debate rounds — Current: 1\n"
-            "  4. [available] Conversation storage — Current: filesystem\n"
-            "  5. [available] Conversation RAG — Current: Provider Disabled; Automatic Off\n"
-            "  6. [available] Message details — Current: Off\n"
-            "  7. [available] Agents\n"
-            "[input] Enter a choice number, press Enter for the highlighted choice, or enter /cancel.\n"
+            "Settings\n"
+            "\n"
             "Choose a setting to edit.\n"
-            "Settings > ",
+            "\n"
+            "Choices 1/7\n"
+            "> 1. Language              — Current: KO\n"
+            "  2. Persona               — Current: default_kim_eun_hee\n"
+            "  3. Maximum debate rounds — Current: 1\n"
+            "  4. Conversation storage  — Current: filesystem\n"
+            "  5. Conversation RAG      — Current: Provider Disabled; Automatic Off\n"
+            "  6. Message details       — Current: Off\n"
+            "  7. Agents\n"
+            "\n"
+            "Enter a choice number, press Enter for the active choice, or enter /cancel.\n"
+            "Choice > ",
         )
         self.assertEqual(
             tuple(choice.identity for choice in settings_call.args[2]),
@@ -6193,7 +6618,7 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
         )
         self.assertEqual(
-            tuple(choice.description for choice in settings_call.args[2]),
+            tuple(choice.form_summary for choice in settings_call.args[2]),
             (
                 "Current: KO",
                 "Current: default_kim_eun_hee",
@@ -6204,16 +6629,25 @@ class ControllerSettingsTests(ControllerTestCase):
                 None,
             ),
         )
+        self.assertEqual(
+            tuple(
+                choice.form_summary_role for choice in settings_call.args[2]
+            ),
+            (terminal_module.SemanticRole.MUTED,) * 6
+            + (terminal_module.SemanticRole.DEFAULT,),
+        )
         self.assertTrue(
-            all(
-                choice.description_role is terminal_module.SemanticRole.DEFAULT
-                for choice in settings_call.args[2]
-            )
+            all(choice.description is None for choice in settings_call.args[2])
         )
         self.assertTrue(
             all(choice.warning_suffix is None for choice in settings_call.args[2])
         )
         self.assertEqual(settings_call.args[1].instruction, "Choose a setting to edit.")
+        self.assertIs(
+            settings_call.kwargs["presentation"],
+            terminal_module.InputPresentation.FORM,
+        )
+        self.assertEqual(settings_call.kwargs["visible_choice_limit"], 7)
         self.assertNotIn("Save", callbacks.prompts[1])
         self.assertNotIn("[available] Cancel", callbacks.prompts[1])
         self.assertFalse(
@@ -6488,6 +6922,13 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertFalse(whole_cancel)
         self.assertEqual(updated.pending.system_defaults.max_debate_rounds, 3)
         self.assertEqual(prompt.call_count, 4)
+        self.assertTrue(
+            all(
+                call.kwargs["presentation"]
+                is terminal_module.InputPresentation.FORM
+                for call in prompt.call_args_list
+            )
+        )
         self.assertIn("Enter applies", prompt.call_args_list[0].args[1].instruction)
         self.assertIn("press Esc", prompt.call_args_list[0].args[1].instruction)
         self.assert_value_save_guidance(
@@ -7725,9 +8166,87 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertTrue(
             all(call.kwargs.get("transient") is True for call in picker.call_args_list)
         )
+        self.assertTrue(
+            all(
+                call.kwargs["presentation"]
+                is terminal_module.InputPresentation.FORM
+                for call in picker.call_args_list
+            )
+        )
+        confirmation_calls = [
+            call
+            for call in picker.call_args_list
+            if call.args[1].name in {"Apply changes?", "Discard changes?"}
+        ]
+        self.assertEqual(len(confirmation_calls), 1)
+        self.assertEqual(len(confirmation_calls[0].kwargs["transient_context"]), 1)
+        self.assertIsInstance(
+            confirmation_calls[0].kwargs["transient_context"][0],
+            terminal_module.Panel,
+        )
+        self.assertTrue(
+            all(
+                call.kwargs["transient_context"] == ()
+                for call in picker.call_args_list
+                if call not in confirmation_calls
+            )
+        )
+        root_calls = [
+            call
+            for call in picker.call_args_list
+            if call.args[1].name == "Settings"
+        ]
+        self.assertEqual(
+            tuple(
+                (len(call.args[2]), call.kwargs["visible_choice_limit"])
+                for call in root_calls
+            ),
+            ((7, 7), (9, 9)),
+        )
+        dirty_prompt = next(
+            value
+            for value in _callbacks.prompts
+            if value.startswith("Settings\n") and "Choices 3/9" in value
+        )
+        self.assertEqual(
+            dirty_prompt,
+            "Settings\n"
+            "\n"
+            "Choose a setting to edit, apply changes, or discard changes.\n"
+            "\n"
+            "Choices 3/9\n"
+            "  1. Language                  — Current: KO\n"
+            "  2. Persona                   — Current: default_kim_eun_hee\n"
+            "> 3. Maximum debate rounds     — Pending: 0\n"
+            "  4. Conversation storage      — Current: filesystem\n"
+            "  5. Conversation RAG          — Current: Provider Disabled; Automatic Off\n"
+            "  6. Message details           — Current: Off\n"
+            "  7. Agents\n"
+            "  8. Apply Changes (*Required)\n"
+            "  9. Discard Changes\n"
+            "     Pending changes will be discarded.\n"
+            "  [save required] Choose Apply Changes to persist pending changes\n"
+            "\n"
+            "Enter a choice number, press Enter for the active choice, or enter /cancel.\n"
+            "Choice > ",
+        )
+        self.assertTrue(
+            all(
+                call.kwargs["visible_choice_limit"] == 7
+                for call in picker.call_args_list
+                if call.args[1].name != "Settings"
+            )
+        )
         self.assertEqual(len(prompt.call_args_list), 2)
         self.assertTrue(
             all(call.kwargs.get("transient") is True for call in prompt.call_args_list)
+        )
+        self.assertTrue(
+            all(
+                call.kwargs["presentation"]
+                is terminal_module.InputPresentation.FORM
+                for call in prompt.call_args_list
+            )
         )
         self.assertEqual(
             tuple(call.kwargs.get("initial_value") for call in prompt.call_args_list),
@@ -7794,18 +8313,22 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         self.assertEqual(picker_call.kwargs["highlighted_id"], "yes")
         self.assertTrue(picker_call.kwargs["transient"])
+        self.assertEqual(picker_call.kwargs["transient_context"], (expected,))
         confirmation_prompt = next(
             prompt for prompt in callbacks.prompts if "Apply changes?" in prompt
         )
         self.assertIn("YES", confirmation_prompt)
-        expected_record = f"{render_plain(expected, width=48).text}\n"
+        self.assertIn("NO", confirmation_prompt)
+        for omitted in ("--- Settings", "Current", "Pending", "(Changed)"):
+            with self.subTest(omitted=omitted):
+                self.assertNotIn(omitted, confirmation_prompt)
         self.assertEqual(
             [
                 record
                 for record in callbacks.records
                 if record.startswith("--- Settings [open]")
             ],
-            [expected_record],
+            [],
         )
         self.assertIn(
             "[savedandapplied]Settingssavedandappliedtothisrunningshellnow.",
@@ -7819,6 +8342,128 @@ class ControllerSettingsTests(ControllerTestCase):
             settings_module.load_settings_state(workspace).pending.system_defaults.language,
             "EN",
         )
+
+    def test_settings_confirmation_routes_context_without_semantic_write_for_all_outcomes(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        state = settings_module.update_language(
+            settings_module.load_settings_state(workspace),
+            "EN",
+        )
+        expected_context = (self.expected_panel(state),)
+        controller, _backend, _callbacks = self.make_controller(workspace)
+        outcomes = (
+            (
+                "save-yes",
+                "save",
+                terminal_module.ControlOutcome(
+                    terminal_module.ControlOutcomeKind.COMMIT,
+                    text="yes",
+                ),
+                "save",
+            ),
+            (
+                "save-no",
+                "save",
+                terminal_module.ControlOutcome(
+                    terminal_module.ControlOutcomeKind.COMMIT,
+                    text="no",
+                ),
+                "return",
+            ),
+            (
+                "discard-yes",
+                "cancel",
+                terminal_module.ControlOutcome(
+                    terminal_module.ControlOutcomeKind.COMMIT,
+                    text="yes",
+                ),
+                "cancel",
+            ),
+            (
+                "discard-no",
+                "cancel",
+                terminal_module.ControlOutcome(
+                    terminal_module.ControlOutcomeKind.COMMIT,
+                    text="no",
+                ),
+                "return",
+            ),
+            (
+                "escape",
+                "save",
+                terminal_module.ControlOutcome(
+                    terminal_module.ControlOutcomeKind.CANCEL,
+                ),
+                "return",
+            ),
+            (
+                "interrupt",
+                "cancel",
+                terminal_module.ControlOutcome(
+                    terminal_module.ControlOutcomeKind.INTERRUPT,
+                ),
+                "cancel",
+            ),
+            (
+                "eof",
+                "save",
+                terminal_module.ControlOutcome(
+                    terminal_module.ControlOutcomeKind.EOF,
+                ),
+                "cancel",
+            ),
+        )
+        for label, action, outcome, expected in outcomes:
+            with self.subTest(label=label):
+                with (
+                    mock.patch.object(
+                        InteractiveController,
+                        "_read_settings_picker",
+                        autospec=True,
+                        return_value=outcome,
+                    ) as picker,
+                    mock.patch.object(
+                        type(controller._semantic_output),
+                        "write_component",
+                        autospec=True,
+                    ) as output,
+                ):
+                    self.assertEqual(
+                        controller._settings_save_confirmation(
+                            state,
+                            action=action,
+                        ),
+                        expected,
+                    )
+
+                output.assert_not_called()
+                picker.assert_called_once()
+                called_controller, prompt, choices = picker.call_args.args
+                self.assertIs(called_controller, controller)
+                self.assertEqual(
+                    prompt.name,
+                    "Apply changes?"
+                    if action == "save"
+                    else "Discard changes?",
+                )
+                self.assertEqual(
+                    choices,
+                    (
+                        terminal_module.Choice("yes", "YES"),
+                        terminal_module.Choice("no", "NO"),
+                    ),
+                )
+                self.assertEqual(
+                    picker.call_args.kwargs["transient_context"],
+                    expected_context,
+                )
+                self.assertEqual(
+                    picker.call_args.kwargs["highlighted_id"],
+                    "yes",
+                )
+                self.assertTrue(picker.call_args.kwargs["transient"])
 
     def test_message_details_only_save_is_confirmed_and_transaction_only(
         self,
@@ -8964,11 +9609,16 @@ class ControllerSettingsTests(ControllerTestCase):
         effort_prompt = next(
             prompt
             for prompt in callbacks.prompts
-            if "Effort [Plot & Structure Architect · Antigravity]" in prompt
+            if prompt.startswith(
+                "Effort\n"
+                "Context: Plot & Structure Architect · Antigravity\n"
+            )
         )
-        self.assertIn("[available] low", effort_prompt)
-        self.assertIn("[available] medium", effort_prompt)
-        self.assertIn("[available] high", effort_prompt)
+        self.assertIn(". low", effort_prompt)
+        self.assertIn(". medium", effort_prompt)
+        self.assertIn(". high", effort_prompt)
+        self.assertNotIn("[available]", effort_prompt)
+        self.assertNotIn("[highlighted]", effort_prompt)
         self.assertNotIn("minimal", effort_prompt)
         self.assertNotIn("xhigh", effort_prompt)
         rendered = "".join(callbacks.records)
@@ -10799,7 +11449,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                     self.assertEqual(controller.run_session_lobby(), 0)
                 rendered = "".join(callbacks.records)
                 request_context = (
-                    "[context] Transcript request [completed]\n"
+                    "[context] Transcript request\n"
                     f"  Conversation: {conversation_id[:12]}\n"
                     "  Start: 1\n"
                     "  Count: 24\n"

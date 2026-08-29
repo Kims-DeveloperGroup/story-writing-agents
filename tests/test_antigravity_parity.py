@@ -49,6 +49,17 @@ from story_writing_agents import (
     Verdict,
 )
 from story_writing_agents.config import ConfigManager
+from story_writing_agents.agent_context import (
+    ProviderCallKind,
+    ProviderCallState,
+    ProviderUsage,
+    canonical_provider_json,
+)
+from story_writing_agents.agent_context.manifest import (
+    ContextScope,
+    ContextSubjectKind,
+)
+from story_writing_agents.agent_context.service import ContextProviderCallRequest
 from story_writing_agents.prompts import PromptAssembler
 from story_writing_agents.provider_adapter import ProviderResult
 from story_writing_agents.provider_error_artifacts import (
@@ -130,6 +141,12 @@ def matches_schema(value, specification):
         return specification
     if "anyOf" in specification:
         return any(matches_schema(value, branch) for branch in specification["anyOf"])
+    if "oneOf" in specification:
+        return sum(
+            matches_schema(value, branch) for branch in specification["oneOf"]
+        ) == 1
+    if "const" in specification and value != specification["const"]:
+        return False
     expected_type = specification.get("type")
     if isinstance(expected_type, list):
         return any(
@@ -189,6 +206,71 @@ if set(user_event["message"]) != {"content"}:
 payload = json.loads(user_event["message"]["content"])
 schema = json.loads(option("--json-schema"))
 provider_state = Path(next(value.split("=", 1)[1] for value in argv if value.startswith("--gemini_dir=")))
+
+def compact_context_current(value):
+    query = value.get("q")
+    correlation = value.get("c")
+    if (
+        not isinstance(correlation, str)
+        or not isinstance(query, list)
+        or not query
+        or not isinstance(query[0], str)
+        or "i" not in value
+    ):
+        return None
+    current = value["i"]
+    if isinstance(current, dict):
+        return dict(current)
+    if isinstance(current, str):
+        return {
+            "workflow": (
+                "conversation_retrieval"
+                if query[0] == "retrieval"
+                else "conversation"
+                if query[0] == "conversation"
+                else "debate"
+            ),
+            "command": current,
+        }
+    return None
+
+def compact_contextual_answer(value):
+    phase = value["q"][0]
+    if phase == "audit":
+        result = "a"
+    elif phase == "finalize":
+        result = [["global_outline.md", "bounded outline update"]]
+    elif phase == "retrieval":
+        result = ["retrieval answer", []]
+    elif phase == "conversation":
+        result = "conversation answer"
+    else:
+        result = "reply-" + phase
+    return {"a": "a", "c": value["c"], "d": [result], "u": []}
+
+current = compact_context_current(payload)
+correlation = payload.get("correlation", {})
+scope = correlation.get("scope", {}) if isinstance(correlation, dict) else {}
+identity = current.get("identity", {}) if isinstance(current, dict) else {}
+provider_parts = provider_state.parts
+sessions_index = max(
+    (index for index, part in enumerate(provider_parts) if part == "sessions"),
+    default=-1,
+)
+staged_session_id = (
+    provider_parts[sessions_index + 1]
+    if sessions_index >= 0 and sessions_index + 2 < len(provider_parts)
+    else None
+)
+staged_agent_id = (
+    provider_parts[sessions_index + 2]
+    if sessions_index >= 0 and sessions_index + 2 < len(provider_parts)
+    else None
+)
+logical_session_id = (
+    identity.get("session_id", scope.get("session_id")) or staged_session_id
+)
+logical_agent_id = identity.get("agent_id", scope.get("agent_id")) or staged_agent_id
 resumed_id = option("--conversation")
 known_path = provider_state / ".fake-known-conversations.json"
 known_ids = set(json.loads(known_path.read_text(encoding="utf-8"))) if known_path.exists() else set()
@@ -198,8 +280,8 @@ if resumed_id is None:
     counter_path.write_text(str(counter), encoding="ascii")
     fingerprint = Path.cwd().parent.name[:8]
     conversation_id = (
-        f"agy-{payload.get('session_id', 'session')}-"
-        f"{payload.get('agent_id', 'agent')}-{fingerprint}-{counter}"
+        f"agy-{logical_session_id or payload.get('session_id', 'session')}-"
+        f"{logical_agent_id or payload.get('agent_id', 'agent')}-{fingerprint}-{counter}"
     )
     known_ids.add(conversation_id)
     known_path.write_text(
@@ -226,13 +308,27 @@ record = {
     "provider_state": str(provider_state),
     "stdin_event_count": len(lines),
     "payload_keys": list(payload),
-    "session_id": payload.get("session_id"),
-    "agent_id": payload.get("agent_id"),
-    "phase": payload.get("phase"),
-    "revision_id": payload.get("revision_id"),
-    "conversation_id": payload.get("conversation_id"),
-    "turn_id": payload.get("turn_id"),
-    "retrieval_action_index": payload.get("retrieval", {}).get("action_index"),
+    "session_id": logical_session_id or payload.get("session_id"),
+    "agent_id": logical_agent_id or payload.get("agent_id"),
+    "phase": (
+        current.get("phase")
+        if current is not None and current.get("phase") is not None
+        else payload["q"][0]
+        if isinstance(payload.get("q"), list) and payload["q"]
+        else payload.get("phase")
+    ),
+    "revision_id": (
+        current.get("revision") if current is not None else payload.get("revision_id")
+    ),
+    "conversation_id": (
+        identity.get("conversation_id") or payload.get("conversation_id")
+    ),
+    "turn_id": identity.get("turn_id") or payload.get("turn_id"),
+    "retrieval_action_index": (
+        1
+        if compact_context_current(payload) is not None
+        else payload.get("retrieval", {}).get("action_index")
+    ),
     "resumed_id": resumed_id,
     "resume_known": resume_known,
     "schema": schema,
@@ -263,7 +359,9 @@ if mode == "hang":
 if mode == "ignore_term":
     threading.Event().wait()
 
-if payload.get("operation") == "writing_artifact_reference_read":
+if compact_context_current(payload) is not None:
+    output = compact_contextual_answer(payload)
+elif payload.get("operation") == "writing_artifact_reference_read":
     output = {"action": {
         "kind": "read_writing_artifacts",
         "correlation": payload["correlation"],
@@ -773,6 +871,103 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 return
             await asyncio.sleep(0.01)
         self.fail(f"fake Antigravity did not record {count} invocations")
+
+    async def test_contextual_thread_bootstrap_delta_restart_and_scope_isolation_match_codex(
+        self,
+    ) -> None:
+        session_id = "antigravity-contextual"
+        backend = self.backend()
+        backend.create_session_with_access(session_id)
+        definition = self.definition()
+        provider = (await backend.bind(definition))._context_provider()
+        scope = ContextScope(
+            "workspace-context",
+            session_id,
+            ContextSubjectKind.CONVERSATION,
+            "conversation-context",
+            PLOT_ARCHITECT,
+        )
+        policy = "sha256:" + "6" * 64
+        schema = {"type": "object"}
+        payload = {
+            "c": "A" * 43,
+            "q": ["conversation", "sa", "wco", [4, 2, 2, 4, 8, 8, 16, 200], "text"],
+            "i": "PARITY_한🙂",
+        }
+        invocations = []
+
+        async def invoke(_binding, invocation):
+            invocations.append(invocation)
+            assert invocation.payload_json is not None
+            return ProviderResult(
+                invocation.thread_id or "antigravity-context-thread",
+                "{}",
+                usage=ProviderUsage(input_tokens=1),
+                actual_transport_utf8_bytes=len(invocation.payload_json) + 9,
+            )
+
+        with mock.patch.object(backend._antigravity_adapter, "invoke", new=invoke):
+            async with provider.invocation(scope, policy):
+                first = await provider.invoke_context(
+                    ContextProviderCallRequest(
+                        scope,
+                        policy,
+                        "parity-call-1",
+                        ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL,
+                        schema,
+                        payload,
+                    )
+                )
+                second = await provider.invoke_context(
+                    ContextProviderCallRequest(
+                        scope,
+                        policy,
+                        "parity-call-2",
+                        ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION,
+                        schema,
+                        {
+                            "c": "B" * 43,
+                            "q": [
+                                "conversation",
+                                "sa",
+                                "wco",
+                                [3, 1, 2, 4, 7, 8, 16, 200],
+                                "text",
+                            ],
+                            "o": ["r", [[1, "c", "bounded"]]],
+                        },
+                        expected_thread_id=first.thread_id,
+                    )
+                )
+                self.assertEqual(
+                    provider.inspect_context_thread(scope, policy),
+                    first.thread_id,
+                )
+            other_scope = replace(scope, subject_id="other-conversation")
+            async with provider.invocation(other_scope, policy):
+                self.assertIsNone(
+                    provider.inspect_context_thread(other_scope, policy)
+                )
+
+        self.assertEqual(second.thread_id, first.thread_id)
+        self.assertEqual(invocations[0].payload_json, canonical_provider_json(payload))
+        self.assertIs(first.accounting.state, ProviderCallState.SUBMITTED)
+        self.assertEqual(first.accounting.usage, ProviderUsage(input_tokens=1))
+        self.assertGreater(
+            first.accounting.actual_transport_utf8_bytes,
+            len(invocations[0].payload_json),
+        )
+        self.assertEqual(self.manifest(session_id)["provider_threads"], {})
+        backend.close()
+
+        restarted = self.backend()
+        restarted.acquire_session_access(session_id)
+        restarted_provider = (await restarted.bind(definition))._context_provider()
+        async with restarted_provider.invocation(scope, policy):
+            self.assertEqual(
+                restarted_provider.inspect_context_thread(scope, policy),
+                first.thread_id,
+            )
 
     @staticmethod
     def _process_is_running(pid: int) -> bool:
@@ -1338,7 +1533,11 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             debate_id="runtime-debate",
             output_path="part-01/runtime-result.md",
         )
-        self.assertIs(result.status, DebateStatus.CONSENSUS)
+        self.assertIs(
+            result.status,
+            DebateStatus.CONSENSUS,
+            (result, self.provider_invocations()),
+        )
         self.assertEqual(result.final_candidate, "reply-draft")
         self.assertEqual(
             runtime.artifacts.read_text("manuscript/part-01/runtime-result.md"),
@@ -2028,7 +2227,12 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             tuple(inspect.signature(ProviderResult).parameters),
-            ("thread_id", "response_text"),
+            (
+                "thread_id",
+                "response_text",
+                "usage",
+                "actual_transport_utf8_bytes",
+            ),
         )
         owner = WorkspaceProviderErrorArtifacts(self.workspace)
         self.assertFalse(owner.directory.exists())

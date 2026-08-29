@@ -279,14 +279,14 @@ Generation zero preserves the legacy definition fingerprint.
 | Provider change, including A→B→A | Advances route generation and starts a fresh target-provider thread. |
 | Same-provider model/effort change | Retains route generation and remains eligible for native-thread reuse. |
 
-A fresh Antigravity or Codex thread is not a new story session. The first and
-later substantive turns rehydrate bounded facts from the belonging session:
-the receiving agent's newest owner outcomes, current bound core-document
-path/hash identities, and the included, fresh, or omitted focused-context mode.
-`/run --fresh` retains owner/core facts and the focused conversation identity
-while omitting its transcript. Provider-private hidden history and omitted
-transcript events are not reconstructed. See
-[Story sessions](story-sessions.md#execution-identity-and-fresh-thread-continuity).
+A fresh Antigravity or Codex thread is not a new story session. Contextual
+execution starts a new epoch and bootstraps current role-relevant authoritative
+sources; compatible later calls use exact deltas. `/run --fresh` retains the
+focused conversation identity while omitting its transcript, but current core
+sources can still bootstrap. Provider-private hidden history is optional
+acceleration and never correctness authority. See
+[Story sessions](story-sessions.md#execution-identity-and-fresh-thread-continuity)
+and [Agent-context design](../design/agent-context.md).
 
 There is no user-facing session close or delete command. `AgentBackend.close()`
 ends one local backend instance; it does not pause the durable story session,
