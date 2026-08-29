@@ -36,12 +36,14 @@ in the run prompt or supplied draft. The execution specialist first authors the
 candidate, the specialists audit it, and the lead may return complete changed
 core documents during finalization. Advisory conversation never writes them.
 
-When a file is present and safe, the plot specialist sees both outlines, the
-character specialist sees character sheets, the execution specialist sees
-narrative rules, and the lead sees all four. Earlier manuscripts are not
-automatically added to later context. A manual edit changes the next immutable
-role definition and may be read as current context; it does not fabricate
-agent authorship, commit history, or publication provenance. Generic
+When a file is present and safe, it is an authoritative role-relevant P2
+context source: the plot specialist is eligible for both outlines, the
+character specialist for character sheets, the execution specialist for
+narrative rules, and the lead for all four. Earlier manuscripts are SEARCH-first
+additive sources rather than automatically eager input. A manual edit changes
+the current source revision and can force a delta/bootstrap; it does not change
+the built-in stable role definition or fabricate authorship, commit history, or
+publication provenance. Generic
 `Workspace` writes still reject canonical paths, so external edits must be made
 only after all workspace processes stop.
 
@@ -55,10 +57,11 @@ config/agents/<agent-id>/AGENTS.md
 
 The four IDs are `lead_orchestrator`, `plot_architect`,
 `character_custodian`, and `execution_specialist`. Prompt files have no
-placeholders and are never interpolated into a request. Before each phase, the
-runtime creates content-addressed references for the role prompt, configured
-persona, language, and allowlisted core documents. Changing an effective input
-causes a new binding on the next phase. Finish edits before starting a run.
+placeholders and are never interpolated into a request. Role prompt, configured
+persona, language, and contextual protocol form stable provider binding
+material. Mutable core documents are selected separately as current sources.
+Changing stable material causes a new binding; changing a core document changes
+context revision/delta state. Finish edits before starting a run.
 
 Normal initialization preserves customized prompts. To deliberately replace
 all four with packaged defaults:
@@ -97,3 +100,5 @@ symlink guarantees, use [Filesystem safety](../operations/filesystem-safety.md).
 For the four exact core paths, part-scoped manuscript grammar, current-source
 rules, agent authorship, and publication states, use
 [Canonical writing artifacts](../reference/writing-artifacts.md).
+For source selection, search/read, and limits, see
+[Bounded agent context](agent-context.md).

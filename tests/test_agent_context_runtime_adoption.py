@@ -105,7 +105,10 @@ from story_writing_agents.writing_artifacts.repository import (
 from tests.helpers import ScriptedBackend, initialized_workspace
 
 
-SearchSelection = tuple[tuple[str, ...], str]
+SearchSelection = (
+    tuple[tuple[str, ...], str]
+    | tuple[str, tuple[str, ...], str]
+)
 _SOURCE_KIND_CODES = {
     "writing_artifact": "w",
     "conversation": "c",
@@ -460,6 +463,27 @@ class _ContextAdapterHarness:
     def _json(value: object) -> str:
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
+    @classmethod
+    def _search_action(
+        cls,
+        correlation: str,
+        selection: SearchSelection,
+    ) -> str:
+        if len(selection) == 2:
+            source_kinds, text = selection
+            data: list[object] = [
+                [text, [_SOURCE_KIND_CODES[item] for item in source_kinds]]
+            ]
+        else:
+            artifact_path_prefix, source_kinds, text = selection
+            data = [
+                artifact_path_prefix,
+                [text, [_SOURCE_KIND_CODES[item] for item in source_kinds]],
+            ]
+        return cls._json(
+            {"a": "s", "c": correlation, "d": data, "u": []}
+        )
+
     def _debate_identity(
         self,
         binding: ProviderBinding,
@@ -643,15 +667,7 @@ class _ContextAdapterHarness:
             if search is None:
                 response = self._answer_action(current, correlation)
             else:
-                source_kinds, text = search
-                response = self._json(
-                    {
-                        "a": "s",
-                        "c": correlation,
-                        "d": [[text, [_SOURCE_KIND_CODES[item] for item in source_kinds]]],
-                        "u": [],
-                    }
-                )
+                response = self._search_action(correlation, search)
         else:
             current = self.current_by_thread[thread_id]
             frame = _framed_observation(payload.get("o"))
@@ -669,15 +685,7 @@ class _ContextAdapterHarness:
                     selection = self.search_selector(current)
                     if selection is None:
                         raise AssertionError("search-only script requires a search")
-                    source_kinds, text = selection
-                    response = self._json(
-                        {
-                            "a": "s",
-                            "c": correlation,
-                            "d": [[text, [_SOURCE_KIND_CODES[item] for item in source_kinds]]],
-                            "u": [],
-                        }
-                    )
+                    response = self._search_action(correlation, selection)
                 else:
                     response = self._json(
                         {
@@ -699,15 +707,7 @@ class _ContextAdapterHarness:
                     selection = self.search_selector(current)
                     if selection is None:
                         raise AssertionError("exhaustion script requires a search")
-                    source_kinds, text = selection
-                    response = self._json(
-                        {
-                            "a": "s",
-                            "c": correlation,
-                            "d": [[text, [_SOURCE_KIND_CODES[item] for item in source_kinds]]],
-                            "u": [],
-                        }
-                    )
+                    response = self._search_action(correlation, selection)
                 else:
                     response = self._answer_action(current, correlation, handles)
             else:

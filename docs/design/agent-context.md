@@ -1,0 +1,248 @@
+# Agent-context design
+
+This document is the maintainer model for bounded agent-directed context. It
+describes the current implementation, not the historical #381 baseline or a
+future semantic-retrieval system. The user-facing scenarios are in
+[Bounded agent context](../guides/agent-context.md).
+
+<a id="package-boundary-and-owners"></a>
+## Package boundary and owners
+
+The accepted package has eight importable units with inward dependencies and no
+cycle:
+
+| Unit | Responsibility |
+| --- | --- |
+| `story_writing_agents.agent_context` | Accounting-only compatibility facade. It exports 11 names and deliberately does not export service, manifest, planner, source, action, or ledger contracts. |
+| `agent_context.accounting` | Canonical JSON encoding, byte attribution, physical-call accounting, and exact/unavailable provider usage. |
+| `agent_context.manifest` | Immutable scope, authority, provenance, source identity/kind/priority/channel, and deterministic manifest ordering. |
+| `agent_context.planning` | Pure bootstrap/delta selection, budgets, deduplication, tombstones, compact catalog/record aliases, reference reservation, and checkpoint proposal. |
+| `agent_context.ledger` | Internal v2 READY/incomplete/tainted/stale state, locks, atomic publication, restart/corruption handling, and content-free metrics. |
+| `agent_context.actions` | SEARCH/READ/ANSWER values, policies, correlations, opaque handles, evidence authorization, and provider observations. |
+| `agent_context.sources` | Bounded current capture of canonical artifacts, focused conversation, active debate, and invoking-agent state; lexical search/read and drift checks. |
+| `agent_context.service` | Provider-neutral wire-v5 call loop, reference prelude, lifecycle authority, source/action orchestration, checkpoint commit, usage aggregation, and optional progress observer. |
+
+Public application entry points remain on `StoryRuntime`, `RuntimeSession`, and
+the existing backend/provider interfaces. The progress observer types are
+direct-module-only imports from `agent_context.service`; the root and
+`agent_context` facades do not grow.
+
+<a id="end-to-end-invocation-flow"></a>
+## End-to-end invocation flow
+
+```text
+runtime operation
+  -> PREPARE: validate observer, scope, request, references, authorities
+  -> PLAN: inventory/material -> manifest -> ledger compatibility -> projection
+  -> INVOKE/ACTION: reference prelude; compact provider call; bounded SEARCH/READ loop
+  -> VERIFY: authorize ANSWER; recapture sources; validate domain and references
+  -> COMMIT: atomically publish READY checkpoint, then report checkpoint_advanced
+     or FAIL: fixed failure facts, taint when required, checkpoint_not_advanced
+```
+
+PREPARE has no distinct public progress event. A normal PLAN starts with
+`bootstrap` or `delta`; a duplicate `omission` fact is callback-only in the
+shell. SEARCH and READ have paired increasing action indexes. `answer_authorized`
+means authorization and final revalidation passed, not that the checkpoint or
+artifact committed. Exactly one terminal checkpoint event closes an operation;
+there is no post-terminal event. Debate streams may interleave, so validation is
+per scope and operation ID, with required phase/round identity.
+
+Domain publication remains separate. Consensus first verifies the context
+answer and references, then the writing-artifact repository performs one
+recoverable catalog-last transaction. Context READY authority advances only
+after its own verified service commit; it is not an artifact publication log.
+
+<a id="manifest-priorities-and-planning"></a>
+## Manifest, priorities, and planning
+
+Source adapters capture immutable current snapshots. A manifest retains exact
+scope, source ID/kind, revision, provenance, priority, semantic channel, bytes,
+and record information without loading bodies into a public catalog. Planning
+is deterministic for the same manifest, policy, material, and checkpoint.
+
+| Priority | Current treatment |
+| --- | --- |
+| P0 required | Current input and complete logical candidate; exact inclusion or fixed failure. |
+| P1 stable | Stable behavior identity; suppressed only on a compatible delta. |
+| P2 working | Current role-relevant core documents and focused evidence; eager within its budget, with changes delivered as deltas. |
+| P3 optional | Additive history and invoking-agent state; SEARCH-first by default. |
+
+Default planning bytes are total 131,072; P0 73,728; P1 16,384; P2
+32,768; P3 0; mandatory references 262,144; maximum delta depth 16. Exact-byte
+groups deduplicate only within an eligible semantic channel and only after
+byte equality; digest equality alone is insufficient. Every semantic pointer
+and provenance remains represented.
+
+<a id="bootstrap-delta-and-checkpoint-authority"></a>
+## Bootstrap, delta, and checkpoint authority
+
+Scope binds workspace, story session, subject kind/ID, agent, provider,
+provider thread, definition fingerprint, planning policy, and wire schema.
+Bootstrap sends current required/P2 material and starts a distinct provider
+thread epoch. A compatible READY checkpoint allows unchanged sources to be
+suppressed and changed records/source bodies or tombstones to be delivered.
+
+Catalog aliases are durable within a resumable epoch, never reused after
+removal, and distinct from record aliases. Record cursors retain ordering and
+deletion facts without prose. Missing, corrupt, incompatible, stale, tainted,
+provider-mismatched, or excessive-depth state selects bootstrap. Ambiguous
+provider failure taints the continuation; it never authorizes later omission.
+
+Ledger v2 lives below the internal agent-state area and stores only identities,
+digests, revisions, boundaries, sizes, aliases, numeric usage/accounting, and
+fixed state. V1 remains untouched and is not read or migrated. The authoritative
+sources remain the workspace repositories, not the ledger or provider history.
+
+<a id="authorized-sources-search-and-read"></a>
+## Authorized sources, SEARCH, and READ
+
+The registry has exactly four scoped adapters: canonical writing artifacts,
+focused same-session conversation, active debate, and the invoking agent's own
+state. Operation routing further restricts which kinds may be searched.
+Canonical artifact inventory covers every eligible canonical directory
+descendant and excludes transcripts, discussion logs, agent states, ledgers,
+symlink escapes, and other internal files.
+
+The default action policy permits four nonterminal actions and five provider
+calls: at most two SEARCH, two READ, four queries per SEARCH/eight cumulative,
+eight handles per READ/16 cumulative, ten hits per query, 20 per SEARCH and
+cumulative, and three per source/query. Queries are at most 200 characters;
+snippets 240 characters/1,024 UTF-8 bytes; an excerpt/source-read is at most
+16,384 bytes, a READ 24,576 bytes, and an observation 32,768 bytes.
+
+The source policy caps inventory at 4,096 sources/8,192 traversal entries,
+10,000 records per source, 8 MiB per source/scan, 64 MiB captured bodies, and
+32 MiB cumulative scan. SEARCH normalizes queries, scans each authorized source
+once for a shared prefix, ranks deterministically, and mints fresh opaque
+handles. READ recaptures requested sources, verifies revision/boundary/digest,
+and returns requested order. Handles are invocation-bound, single-lifecycle
+authorities and cannot be guessed, reused, or transferred.
+
+<a id="compact-provider-wire-v5"></a>
+## Compact provider wire v5
+
+Contextual bindings define `agent-context-wire-v5`. The initial compact
+payload uses `c` (correlation), `q` (phase/result contract), and `i` (required
+current input), with applicable compact candidate `n`, selected documents
+`docs`, projection `p`, and tombstone/record `t` data. Mandatory reference
+bodies appear only after the separate prelude as
+`untrusted_writing_artifact_context`. Continuations contain only correlation,
+contract, and the new observation (`c`, `q`, `o`).
+
+Provider results are exact objects `{a,c,d,u}`: action `a` is `s`, `r`, or `a`;
+`c` is full correlation; `d` contains the shared optional artifact prefix plus
+queries, handles, or answer content; and terminal `u` names used READ handles.
+SEARCH/READ observations retain the full authoritative identity, revision,
+boundary, digest, size, provenance, handle, and untrusted content required for
+provider reasoning, even though wire keys are compact.
+
+The built-in runtime uses provider-managed context and empty mutable-core
+bindings. Package-internal `story_session_context` remains an internal capture
+and direct-compatibility input; it is not the current provider wire. Direct
+noncontextual definitions still preserve their exact eager bytes,
+fingerprints, and adapter behavior.
+
+<a id="candidate-pointer-single-splice-and-fallback"></a>
+## Candidate pointer, single splice, and fallback
+
+The ledger retains a content-free logical-candidate identity. If a compatible
+call's candidate bytes are unchanged, the provider receives a pointer to the
+known exact logical candidate. If changed, planning finds the maximal common
+Unicode-code-point prefix and suffix and encodes one insertion/deletion splice.
+The provider must reconstruct the exact target identity/digest/size, and the
+splice is used only when physically smaller than the full candidate.
+
+Full exact candidate fallback is mandatory on bootstrap, thread loss, restart,
+taint, stale target, identity/digest/size mismatch, unsafe reconstruction, or
+non-beneficial encoding. The interpreter applies candidate operations in
+payload order so repeated equal text with distinct identities and successive
+splices remain unambiguous. This replaces the historical illustrative
+`changed_candidate_sections` sketch; there is no LLM sectioning.
+
+<a id="part-prefix-filtering"></a>
+## Part-prefix filtering
+
+One SEARCH may carry one canonical writing-artifact directory prefix such as
+`manuscript/part_01/`. It is authorized and applied before source capture,
+lexical scanning, ranking, global deduplication, and hit truncation. All queries
+share it, so mixed prefixed/unprefixed scopes are unrepresentable and each
+eligible source is scanned once. Nested canonical Markdown files are included;
+out-of-prefix, internal, absolute, traversal, backslash, file-path, and
+incompatible-kind prefixes fail. A prefix grants no path-only or arbitrary
+filesystem discovery.
+
+<a id="mandatory-reference-separation"></a>
+## Mandatory-reference separation
+
+References are parsed from ordered `${path}` or `${path}#Lx-Ly` indicators.
+For every addressed invocation the provider must first echo the exact ordered
+reference action. The runtime securely captures current whole/ranged bytes,
+then attaches them as untrusted mandatory context to the substantive call and
+revalidates completion before acceptance.
+
+Reference accounting and authorization remain independent of the ambient
+manifest, SEARCH/READ handles, P budgets, checkpoint suppression, candidate
+delta, and provider cache. A repeated reference is not satisfied because an
+earlier agent or invocation read it.
+
+<a id="observer-lifecycle-and-shell-projection"></a>
+## Observer lifecycle and shell projection
+
+`ContextExecutionEvent`, `ContextExecutionEventKind`, and
+`ContextExecutionEventSink` are available only from
+`story_writing_agents.agent_context.service`. `StoryRuntime` and
+`RuntimeSession` accept the optional keyword-only `context_event_sink` on
+`converse`, `converse_with_retrieval`, `run_prompt`, and `run_draft`. The
+callback is synchronous, inline, and must return exactly `None`.
+
+Noncallable, declared async/async-generator, asynchronously callable, or
+noncontextual observers fail before contextual effects. A callback exception,
+awaitable result, or non-`None` result aborts before authority and is re-raised.
+If delivery of `checkpoint_advanced` fails, READY is already committed and
+cannot be rolled back, though the outer operation reports observer failure. If
+an independent runtime failure is primary, terminal-observer failure is
+suppressed. No observer preserves calls, results, schemas, and persistence.
+
+The shell validates each correlated event stream and renders compact
+content-free lines. It preserves established retrieval SEARCH/READ wording and
+suppresses matching generic duplicates. It has no lifecycle replay or durable
+observer store.
+
+<a id="provider-usage-cache-and-limits"></a>
+## Provider usage, cache, and limits
+
+Physical-call accounting uses canonical UTF-8 JSON and attributes binding,
+schema, payload, and raw reference bytes without double counting. Provider
+input/output/cache token values are exact only when supplied as validated
+nonnegative integers. A terminal progress event aggregates input tokens only
+when every submitted call—including a reference prelude—reported an exact
+value; otherwise the field is `None`. No estimate is labeled exact.
+
+Provider-native cache, conversation history, and compaction may improve
+performance but are never correctness authority. Thread loss forces a
+bootstrap from local authoritative data. The finite planner, action, source,
+reference, and ledger limits are enforced independently; exhaustion is an
+explicit content-free failure rather than silent omission of required data.
+
+<a id="privacy-recovery-and-compatibility"></a>
+## Privacy, recovery, and compatibility
+
+Public progress, metrics, and the ledger contain no prompt/query, candidate,
+source or reference body, excerpt, provider response, absolute path, private
+state, exception payload, or provider-thread detail. Debug logging records only
+fixed `agent_context` outcome categories and safe scope IDs, not observer
+history. Even content-free IDs, counts, timing, and relative topology are
+sensitive plaintext and require normal workspace protection.
+
+There is no semantic RAG, new dependency, free-form durable memory, provider
+opaque correctness source, arbitrary filesystem discovery, or cross-agent
+state sharing. Exact references and the existing publication contracts remain
+compatible. "Atomic" publication means one recoverable catalog-last artifact
+transaction; it does not mean an unrestricted multi-manuscript batch API.
+Terminal-deadlock resume/extension remains outside this initiative until issue
+#140 is integrated.
+
+See [Recovery and limitations](../operations/recovery-and-limitations.md) and
+[Privacy and provider exposure](../operations/privacy-and-provider.md) for the
+operational boundaries.

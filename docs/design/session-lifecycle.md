@@ -12,6 +12,11 @@
 claimable, held here, blocked locally, or unknown. The axes are independent;
 `absent` means neither manifest nor claim. Conversation and debate states differ.
 
+Agent-context `bootstrap`, `delta`, and checkpoint outcomes are a third,
+operation-scoped state machine. They do not change provider-session durable
+state or process access. A READY context checkpoint only authorizes compatible
+later omission; see [Bounded agent context](../guides/agent-context.md#c19-state-transition).
+
 `SessionLifecycleState` is frozen, slotted, keyword-only, with fields
 `session_id`, `durable_state`, `access_state`, `owner_hostname`, `owner_pid`,
 `created_at`, `updated_at`. Owner fields pair; persisted timestamps are ordered

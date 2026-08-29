@@ -20,7 +20,8 @@ PromptFileReference.read_text() -> str
 AgentDefinition(agent_id: str, backend: str, fingerprint: str,
     system_prompt_file: PromptFileReference,
     persona_file: PromptFileReference, language: str,
-    context_document_files: tuple[PromptFileReference, ...])
+    context_document_files: tuple[PromptFileReference, ...],
+    provider_managed_context: bool = False)
 AgentDefinition.file_references() -> tuple[PromptFileReference, ...]
 ```
 
@@ -32,26 +33,26 @@ not reread the path. A definition's fingerprint covers the agent, backend,
 language, component identities, and hashes. Runtime bindings are cached by
 `(agent_id, fingerprint)`.
 
-| Agent | Bound core documents when present as safe current filesystem sources |
+| Agent | Contextual P2 core sources in the built-in runtime |
 | --- | --- |
 | `lead_orchestrator` | all four |
 | `plot_architect` | global and part outlines |
 | `character_custodian` | character sheets |
 | `execution_specialist` | narrative rules |
 
-Absent or unsafe core documents are omitted. Safe manual, pre-provenance,
-published, and hash-divergent bytes are captured; publication provenance is not
-a binding requirement. Exact source and publication rules are in
+Built-in definitions set `provider_managed_context=True` and
+`context_document_files=()`. The table describes contextual source eligibility,
+not permanent binding bytes. A direct custom definition may leave the flag
+false and eagerly bind explicit content-backed references; that compatibility
+path preserves its prior fingerprint and adapter behavior. Exact source and
+publication rules are in
 [Canonical writing artifacts](writing-artifacts.md).
 
-For core context, prompt assembly asks the artifact repository to read only the
-paths allowlisted for that role. Each descriptor-verified current filesystem
-`ArtifactContentSnapshot` is converted to a `PromptFileReference` backed by the
-same immutable bytes. A manual core change therefore changes a later
-definition fingerprint without creating publication history. Role-prompt and
-persona references are captured from
-their paths at definition construction; all references are content-backed by
-the time the backend receives the definition.
+For current built-in core context, source capture and the manifest/planner—not
+prompt assembly—read the role-authorized current snapshot. A manual core change
+therefore changes the source revision/delta and can force bootstrap; it does not
+change the stable definition fingerprint. Role-prompt and persona references
+remain content-backed at definition construction.
 
 <a id="explicit-reference-read-contracts"></a>
 
@@ -118,13 +119,12 @@ and finalization request. It stays a separate provider field: the runtime does
 not concatenate it into the task, input, candidate, blackboard, agent state, or
 bound prompt.
 
-`story_session_context` is the trailing optional package-internal continuity
-envelope used by runtime-built substantive turns. It must match the request's
-session and agent. When present, the backend serializes it once under
-`story_session_context` and omits duplicate legacy `agent_state` and
-`conversation_context` payload fields. `None` preserves the established direct
-Python payload. The context types are not package-root exports; their exact
-schema and bounds are in [Prompts and provider boundary](../design/prompts-and-provider.md#story-session-continuity-envelope).
+`story_session_context` is a trailing package-internal capture and direct-call
+compatibility value. It must match the request's session and agent. The current
+built-in runtime translates authoritative capture into compact contextual wire
+v5; it does not send this object as the provider envelope. Direct noncontextual
+callers may still use the established request field. The context types are not
+package-root exports; see [Agent-context design](../design/agent-context.md#compact-provider-wire-v5).
 
 ```python
 DebateMessage(sender: str, phase: str, round: int, revision: str,
@@ -161,11 +161,10 @@ bounded, increasing window of complete turns from the same session and
 conversation and exclude the current turn. Retrieval values are keyword-only;
 their two trailing context fields default to `None`, and their reply adds
 ordered validated sources without changing the one-step pair.
-When present, the story-session envelope must match the request session, agent,
-and any focused conversation identity. Backend payloads use it instead of a
-duplicate legacy `context`; omitting it retains compatibility for direct
-package callers. An omitted `rag_context` means there was no attempted RAG
-envelope.
+When present, story-session capture must match the request session, agent, and
+any focused conversation identity. Current built-in execution converts it to
+contextual wire v5; omitting it retains direct-request compatibility. An
+omitted `rag_context` means there was no attempted RAG envelope.
 See [Conversation transcripts](conversation-transcripts.md) for windows and
 [Bounded retrieval](conversation-retrieval.md) for actions and persistence.
 

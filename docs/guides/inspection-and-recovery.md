@@ -87,6 +87,11 @@ story run \
 The original debate ID is consumed. Although its unused output path may still
 be available, a new path makes provenance clearer.
 
+The old deadlock remains inspectable, but this release has no resume-in-place
+or debate-extension command. Issue #140 owns that future behavior. Context
+checkpoints reduce repeated provider input; they do not turn a terminal debate
+into a resumable one.
+
 ## Handle other terminal states
 
 A `failed` result describes a handled backend, reply-protocol, finalization, or

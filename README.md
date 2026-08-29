@@ -17,6 +17,10 @@ and write a manuscript only after all three voting specialists agree.
 > a source and Enter/Tab opens the independent viewer. A completed
 > `$${path}` marker also opens that source directly on Enter/Tab. There is no
 > standalone artifact command or noninteractive picker UI.
+> Context-capable turns and debates automatically show compact content-free
+> bootstrap/delta, search/read, answer, and checkpoint progress. See
+> [Bounded agent context](docs/guides/agent-context.md) for concrete user
+> scenarios, exact reference behavior, limits, and what agents can access.
 
 ## Quick start
 
@@ -137,6 +141,7 @@ story run --output part-01/opening.md --prompt 'Draft the opening.'
 - [Optional conversation RAG](docs/guides/conversation-rag.md) covers the local provider/store, noninteractive lifecycle and cited-search commands, interactive settings and one-turn use, and programmatic runtime integration.
 - [Antigravity guide](docs/guides/antigravity.md) covers `agy` setup, authentication, routing, safety, sessions, and provider-free verification.
 - [Story sessions](docs/guides/story-sessions.md) shows shell management, conversation reads, retrieval, and consensus.
+- [Bounded agent context](docs/guides/agent-context.md) explains selection, search/read, debate deltas, Part-scoped changes, exact references, progress, and recovery.
 - [Session lifecycle](docs/design/session-lifecycle.md) maps internal state to commands, output, errors, and next actions.
 - [Consensus-run guide](docs/guides/consensus-runs.md) covers prompts, drafts, outputs, and round limits.
 - [CLI reference](docs/reference/cli.md) is the exact installed command contract.

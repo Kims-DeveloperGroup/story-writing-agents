@@ -7,6 +7,10 @@
 > `context_event_sink` callback documented in the
 > [runtime API](../reference/runtime-api.md#context-lifecycle-observer).
 
+For the selection, search/read, candidate-delta, modification, and reference
+scenarios surrounding these events, start with
+[Bounded agent context](agent-context.md).
+
 Key terms: **operation**—one logical invocation by one agent; **selected**—a
 logical source accepted by the current bootstrap or delta plan;
 **searchable**—an authorized source not projected by that plan but still

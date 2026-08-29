@@ -408,7 +408,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   pure immutable values only. Validation and serialization use call-local
   memory; importing performs no I/O, entropy, registration, or mutation.
 - **Primary verification/documentation:**
-  `tests/test_agent_context_actions.py`; module-inventory, dependency,
+  `tests/test_agent_context_actions.py`,
+  `docs/design/agent-context.md`; module-inventory, dependency,
   facade, and import-boundary assertions across
   `tests/test_rag_module_and_packaging_boundary.py`,
   `tests/test_session_lifecycle.py`, and
@@ -459,7 +460,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   remain call-local. Importing performs no I/O.
 - **Primary verification/documentation:**
   `tests/test_agent_context_sources.py`,
-  `tests/test_agent_context_runtime_adoption.py`; module-inventory, dependency,
+  `tests/test_agent_context_runtime_adoption.py`,
+  `docs/design/agent-context.md`; module-inventory, dependency,
   facade, and import-boundary assertions across
   `tests/test_rag_module_and_packaging_boundary.py`,
   `tests/test_session_lifecycle.py`, and
@@ -573,8 +575,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_agent_context_service.py`,
   `tests/test_agent_context_execution.py`,
   `tests/test_agent_context_runtime_adoption.py`,
+  `tests/test_agent_context_release_scenarios.py`,
   `tests/test_context_accounting_optimized.py`, `tests/test_codex_backend.py`,
-  `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`, and
+  `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`,
+  `docs/audits/issue-380-agent-context-conformance.md`,
+  `docs/design/agent-context.md`, `docs/guides/agent-context.md`, and
   `docs/guides/agent-context-progress.md`;
   module-inventory, dependency, facade, and import-boundary assertions across
   `tests/test_rag_module_and_packaging_boundary.py`,
@@ -626,8 +631,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   lifecycle and commit authorization, restart and corruption mapping,
   content-free privacy, limits, storage security and durability, lock-free and
   serialized concurrency, scope isolation, facade stability, and dependency
-  graph. `tests/test_rag_module_and_packaging_boundary.py` verifies the exact
-  four internal dependency edges; `tests/test_writing_artifacts.py` and
+  graph. `docs/design/agent-context.md` documents the current checkpoint and
+  ledger authority model.
+  `tests/test_rag_module_and_packaging_boundary.py` verifies the exact four
+  internal dependency edges; `tests/test_writing_artifacts.py` and
   `tests/test_interactive_pty.py` verify that internal ledger records remain
   excluded from canonical artifact discovery and the `$`/`$$` picker.
 
@@ -656,7 +663,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_agent_context_manifest.py` verifies the exact direct-module
   surface, immutable value and identity contracts, exhaustive classification,
   authority and searchability matrices, canonical ordering, privacy,
-  standard-library-only imports, and compilation.
+  standard-library-only imports, and compilation;
+  `docs/design/agent-context.md` documents the content-free manifest boundary.
 
 ### `story_writing_agents.agent_context.planning`
 
@@ -708,7 +716,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   surface, policy, material and checkpoint validation, exhaustive decision and
   accounting invariants, bootstrap/delta precedence, deterministic packing,
   deduplication and collision handling, reference/proposal correlation,
-  privacy, replay, facade/import boundaries, and no-I/O guarantees.
+  privacy, replay, facade/import boundaries, and no-I/O guarantees;
+  `docs/design/agent-context.md` documents the current planning model.
 
 ### `story_writing_agents.backend`
 
@@ -4856,6 +4865,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_context_accounting_baseline.py`,
   `tests/test_context_accounting_optimized.py`,
   `tests/test_agent_context_runtime_adoption.py`,
+  `tests/test_agent_context_release_scenarios.py`,
   `tests/test_conversation_retrieval.py`, `tests/test_interactive_consensus.py`,
   `tests/test_interactive_conversation.py` for retained runtime use through the
   controller-owned persistent Runner and its single lifecycle event loop,
@@ -4864,7 +4874,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_orchestration_workflow.py`,
   `tests/test_orchestration_safety.py`, `tests/test_lifecycle_atomicity.py`,
   `tests/test_prompts.py`, `tests/test_interactive_pty.py`,
-  `tests/test_agent_state.py`, `docs/guides/agent-context-progress.md`,
+  `tests/test_agent_state.py`,
+  `docs/audits/issue-380-agent-context-conformance.md`,
+  `docs/guides/agent-context.md`, `docs/guides/agent-context-progress.md`,
   `docs/guides/artifact-references.md`,
   `docs/reference/runtime-api.md`,
   `docs/reference/writing-artifacts.md`,
