@@ -287,6 +287,9 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
                 "AgentContextService",
                 "ContextExecutionError",
                 "ContextExecutionErrorCode",
+                "ContextExecutionEvent",
+                "ContextExecutionEventKind",
+                "ContextExecutionEventSink",
                 "ContextInvocationBinding",
                 "ContextInvocationRequest",
                 "ContextInvocationResult",
@@ -305,6 +308,47 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
                 "record_context_provider_failure",
             ),
         )
+        self.assertEqual(
+            tuple(field.name for field in fields(service_module.ContextExecutionEvent)),
+            (
+                "kind",
+                "scope",
+                "operation_id",
+                "phase",
+                "round_number",
+                "action_index",
+                "selected_source_count",
+                "selected_source_utf8_bytes",
+                "omitted_searchable_source_count",
+                "omitted_searchable_source_utf8_bytes",
+                "search_hit_count",
+                "retrieved_source_count",
+                "retrieved_source_utf8_bytes",
+                "mandatory_reference_count",
+                "mandatory_reference_utf8_bytes",
+                "provider_input_tokens",
+                "transcript_turn_count",
+                "transcript_event_count",
+                "observation_utf8_bytes",
+                "truncated",
+            ),
+        )
+        progress = service_module.ContextExecutionEvent(
+            service_module.ContextExecutionEventKind.BOOTSTRAP,
+            _SCOPE,
+            "operation",
+            selected_source_count=2,
+            selected_source_utf8_bytes=128,
+            omitted_searchable_source_count=1,
+            omitted_searchable_source_utf8_bytes=64,
+            mandatory_reference_count=0,
+            mandatory_reference_utf8_bytes=0,
+        )
+        self.assertFalse(hasattr(progress, "__dict__"))
+        for private in (_PRIVATE_ANSWER, _PRIVATE_BODY_A, _PRIVATE_BODY_B):
+            self.assertNotIn(private, repr(progress))
+        with self.assertRaises((FrozenInstanceError, TypeError)):
+            progress.operation_id = "changed"  # type: ignore[misc]
         self.assertEqual(
             tuple(item.value for item in ContextInvocationState),
             ("open", "searching", "reading", "answer_authorized", "failed"),

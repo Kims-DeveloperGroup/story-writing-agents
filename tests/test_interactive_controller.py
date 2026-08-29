@@ -40,6 +40,14 @@ from story_writing_agents.cli_context import (
     save_default_session,
 )
 from story_writing_agents.config import ConfigManager
+from story_writing_agents.agent_context.manifest import (
+    ContextScope,
+    ContextSubjectKind,
+)
+from story_writing_agents.agent_context.service import (
+    ContextExecutionEvent,
+    ContextExecutionEventKind,
+)
 from story_writing_agents.conversation_search import (
     ConversationCitation,
     ConversationSearchHit,
@@ -1087,6 +1095,309 @@ class ControllerContractTests(ControllerTestCase):
         with self.assertRaises(FrozenInstanceError):
             context.truncated = True  # type: ignore[misc]
 
+    def test_context_progress_projection_validates_interleaved_operations_exactly(
+        self,
+    ) -> None:
+        projection_type = runtime_policy_module.ContextProgressProjection
+        validator = runtime_policy_module.validate_context_execution_progress
+        self.assertEqual(
+            tuple(field.name for field in fields(projection_type)),
+            (
+                "workspace_id",
+                "session_id",
+                "subject_kind",
+                "subject_id",
+                "agent_id",
+                "operation_id",
+                "kind",
+                "stage",
+                "phase",
+                "round_number",
+                "action_index",
+                "selected_source_count",
+                "selected_source_utf8_bytes",
+                "omitted_searchable_source_count",
+                "omitted_searchable_source_utf8_bytes",
+                "search_hit_count",
+                "retrieved_source_count",
+                "retrieved_source_utf8_bytes",
+                "mandatory_reference_count",
+                "mandatory_reference_utf8_bytes",
+                "provider_input_tokens",
+                "truncated",
+            ),
+        )
+        self.assertNotIn("ContextProgressProjection", controller_package.__all__)
+        self.assertNotIn(
+            "validate_context_execution_progress",
+            controller_package.__all__,
+        )
+        scope = ContextScope(
+            "workspace",
+            "session",
+            ContextSubjectKind.CONVERSATION,
+            "conversation",
+            LEAD_ORCHESTRATOR,
+        )
+        plan_facts = {
+            "selected_source_count": 3,
+            "selected_source_utf8_bytes": 2048,
+            "omitted_searchable_source_count": 1,
+            "omitted_searchable_source_utf8_bytes": 64,
+            "mandatory_reference_count": 0,
+            "mandatory_reference_utf8_bytes": 0,
+        }
+        operations: dict[tuple[str, str, str, str, str, str], object] = {}
+
+        def accept(event: ContextExecutionEvent):
+            projection = validator(
+                event,
+                expected_session_id="session",
+                expected_subject_kind="conversation",
+                expected_subject_id="conversation",
+                expected_agent_id=LEAD_ORCHESTRATOR,
+                previous_by_operation=operations,
+            )
+            operations[projection.operation_key] = projection
+            return projection
+
+        first = accept(
+            ContextExecutionEvent(
+                ContextExecutionEventKind.BOOTSTRAP,
+                scope,
+                "operation-a",
+                **plan_facts,
+            )
+        )
+        second = accept(
+            ContextExecutionEvent(
+                ContextExecutionEventKind.DELTA,
+                scope,
+                "operation-b",
+                **plan_facts,
+            )
+        )
+        self.assertEqual((first.stage, second.stage), ("plan", "plan"))
+        self.assertFalse(first.terminal)
+        with self.assertRaises(FrozenInstanceError):
+            first.stage = "private"  # type: ignore[misc]
+
+        interleaved = (
+            ContextExecutionEvent(
+                ContextExecutionEventKind.SEARCH_STARTED,
+                scope,
+                "operation-a",
+                action_index=1,
+            ),
+            ContextExecutionEvent(
+                ContextExecutionEventKind.ANSWER_AUTHORIZED,
+                scope,
+                "operation-b",
+                action_index=1,
+            ),
+            ContextExecutionEvent(
+                ContextExecutionEventKind.SEARCH_COMPLETED,
+                scope,
+                "operation-a",
+                action_index=1,
+                search_hit_count=2,
+                observation_utf8_bytes=90,
+                truncated=False,
+            ),
+            ContextExecutionEvent(
+                ContextExecutionEventKind.CHECKPOINT_ADVANCED,
+                scope,
+                "operation-b",
+                provider_input_tokens=12,
+            ),
+            ContextExecutionEvent(
+                ContextExecutionEventKind.READ_STARTED,
+                scope,
+                "operation-a",
+                action_index=2,
+            ),
+            ContextExecutionEvent(
+                ContextExecutionEventKind.READ_COMPLETED,
+                scope,
+                "operation-a",
+                action_index=2,
+                retrieved_source_count=2,
+                retrieved_source_utf8_bytes=800,
+                transcript_turn_count=0,
+                transcript_event_count=0,
+                observation_utf8_bytes=850,
+            ),
+            ContextExecutionEvent(
+                ContextExecutionEventKind.ANSWER_AUTHORIZED,
+                scope,
+                "operation-a",
+                action_index=3,
+            ),
+            ContextExecutionEvent(
+                ContextExecutionEventKind.CHECKPOINT_ADVANCED,
+                scope,
+                "operation-a",
+                provider_input_tokens=None,
+            ),
+        )
+        stages = tuple(accept(event).stage for event in interleaved)
+        self.assertEqual(
+            stages,
+            ("action", "verify", "action", "commit", "action", "action", "verify", "commit"),
+        )
+        self.assertTrue(operations[first.operation_key].terminal)  # type: ignore[attr-defined]
+        self.assertTrue(operations[second.operation_key].terminal)  # type: ignore[attr-defined]
+
+        failure = accept(
+            ContextExecutionEvent(
+                ContextExecutionEventKind.INVALIDATED,
+                scope,
+                "operation-c",
+            )
+        )
+        self.assertEqual(failure.stage, "fail")
+        accept(
+            ContextExecutionEvent(
+                ContextExecutionEventKind.TAINTED,
+                scope,
+                "operation-c",
+            )
+        )
+        failed_terminal = accept(
+            ContextExecutionEvent(
+                ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED,
+                scope,
+                "operation-c",
+                provider_input_tokens=None,
+            )
+        )
+        self.assertTrue(failed_terminal.terminal)
+
+        invalid_events = (
+            ContextExecutionEvent(
+                ContextExecutionEventKind.ANSWER_AUTHORIZED,
+                scope,
+                "operation-d",
+                action_index=1,
+            ),
+            ContextExecutionEvent(
+                ContextExecutionEventKind.ANSWER_AUTHORIZED,
+                scope,
+                "operation-b",
+                action_index=2,
+            ),
+            ContextExecutionEvent(
+                ContextExecutionEventKind.SEARCH_STARTED,
+                scope,
+                "operation-a",
+                action_index=4,
+            ),
+        )
+        for event in invalid_events:
+            with self.subTest(kind=event.kind, operation=event.operation_id):
+                with self.assertRaises(ValueError):
+                    accept(event)
+
+        for violation in ("pair", "index"):
+            with self.subTest(violation=violation):
+                local: dict[tuple[str, str, str, str, str, str], object] = {}
+
+                def local_accept(event: ContextExecutionEvent):
+                    value = validator(
+                        event,
+                        expected_session_id="session",
+                        expected_subject_kind="conversation",
+                        expected_subject_id="conversation",
+                        expected_agent_id=LEAD_ORCHESTRATOR,
+                        previous_by_operation=local,
+                    )
+                    local[value.operation_key] = value
+
+                operation_id = f"operation-{violation}"
+                local_accept(
+                    ContextExecutionEvent(
+                        ContextExecutionEventKind.BOOTSTRAP,
+                        scope,
+                        operation_id,
+                        **plan_facts,
+                    )
+                )
+                if violation == "pair":
+                    local_accept(
+                        ContextExecutionEvent(
+                            ContextExecutionEventKind.SEARCH_STARTED,
+                            scope,
+                            operation_id,
+                            action_index=1,
+                        )
+                    )
+                    bad = ContextExecutionEvent(
+                        ContextExecutionEventKind.READ_COMPLETED,
+                        scope,
+                        operation_id,
+                        action_index=1,
+                        retrieved_source_count=0,
+                        retrieved_source_utf8_bytes=0,
+                        transcript_turn_count=0,
+                        transcript_event_count=0,
+                        observation_utf8_bytes=0,
+                    )
+                else:
+                    bad = ContextExecutionEvent(
+                        ContextExecutionEventKind.SEARCH_STARTED,
+                        scope,
+                        operation_id,
+                        action_index=2,
+                    )
+                with self.assertRaisesRegex(ValueError, "phase order"):
+                    local_accept(bad)
+
+        omission_operations: dict[tuple[str, str, str, str, str, str], object] = {}
+        omission_plan = ContextExecutionEvent(
+            ContextExecutionEventKind.BOOTSTRAP,
+            scope,
+            "operation-omission",
+            **plan_facts,
+        )
+        projection = validator(
+            omission_plan,
+            expected_session_id="session",
+            expected_subject_kind="conversation",
+            expected_subject_id="conversation",
+            expected_agent_id=LEAD_ORCHESTRATOR,
+            previous_by_operation=omission_operations,
+        )
+        omission_operations[projection.operation_key] = projection
+        with self.assertRaisesRegex(ValueError, "omission facts"):
+            validator(
+                ContextExecutionEvent(
+                    ContextExecutionEventKind.OMISSION,
+                    scope,
+                    "operation-omission",
+                    omitted_searchable_source_count=2,
+                    omitted_searchable_source_utf8_bytes=64,
+                ),
+                expected_session_id="session",
+                expected_subject_kind="conversation",
+                expected_subject_id="conversation",
+                expected_agent_id=LEAD_ORCHESTRATOR,
+                previous_by_operation=omission_operations,
+            )
+        foreign_scope = replace(scope, session_id="foreign")
+        with self.assertRaisesRegex(ValueError, "identity"):
+            validator(
+                ContextExecutionEvent(
+                    ContextExecutionEventKind.INVALIDATED,
+                    foreign_scope,
+                    "operation-foreign",
+                ),
+                expected_session_id="session",
+                expected_subject_kind="conversation",
+                expected_subject_id="conversation",
+                expected_agent_id=LEAD_ORCHESTRATOR,
+                previous_by_operation={},
+            )
+
     def test_agents_and_status_ignore_message_detail_preference(self) -> None:
         workspace = self.make_workspace()
         controller, _backend, callbacks = self.make_controller(workspace)
@@ -1300,6 +1611,7 @@ class ControllerContractTests(ControllerTestCase):
                 "workspace",
             },
             "interactive_controller._runtime_policy": {
+                "agent_context.service",
                 "conversation_retrieval",
                 "conversation_search",
                 "errors",
@@ -1357,6 +1669,7 @@ class ControllerContractTests(ControllerTestCase):
                 "visible_conversation_handle",
             ],
             runtime_policy_module: [
+                "ContextProgressProjection",
                 "DebateContextInspectionFacts",
                 "DebateInspectionFacts",
                 "classify_advisory_turn_failure",
@@ -1365,6 +1678,7 @@ class ControllerContractTests(ControllerTestCase):
                 "classify_progress_callback_failure",
                 "interactive_code_for_debate_failure",
                 "validate_consensus_result",
+                "validate_context_execution_progress",
                 "validate_conversation_retrieval_progress",
                 "validate_conversation_retrieval_result",
                 "validate_debate_context_inspection",
@@ -1402,6 +1716,7 @@ class ControllerContractTests(ControllerTestCase):
                 "ConversationResolutionFailure",
             },
             "interactive_controller._runtime_policy": {
+                "ContextProgressProjection",
                 "DebateContextInspectionFacts",
                 "DebateInspectionFacts",
             },
@@ -1556,7 +1871,7 @@ class ControllerContractTests(ControllerTestCase):
         for module_name in graph:
             visit(module_name)
         self.assertEqual(len(modules), 84)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 345)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 346)
         self.assertTrue(
             {
                 "story_writing_agents.conversation_storage.archive",

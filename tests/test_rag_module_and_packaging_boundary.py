@@ -199,7 +199,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         modules = _module_inventory()
         edges = _internal_edges(modules)
         self.assertEqual(len(modules), 84)
-        self.assertEqual(len(edges), 345)
+        self.assertEqual(len(edges), 346)
         self.assertIsNone(_cycle_witness(modules, edges))
         self.assertEqual(
             _generic_importers(modules),
@@ -312,6 +312,17 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.agent_context.service",
             ),
             edges,
+        )
+        self.assertEqual(
+            {
+                source
+                for source, target in edges
+                if target == "story_writing_agents.agent_context.service"
+                and source.startswith(
+                    "story_writing_agents.interactive_controller."
+                )
+            },
+            {"story_writing_agents.interactive_controller._runtime_policy"},
         )
         self.assertEqual(
             {
