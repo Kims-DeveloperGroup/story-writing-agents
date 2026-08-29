@@ -9,7 +9,8 @@
 > attachment use the catalog-independent reference-source boundary
 > and add no artifact
 > write path. Bounded fail-open debug logging uses a separate identity-bound
-> storage path. Privileged filesystem conversation archive transfer is
+> storage path. Bounded agent-exchange storage uses another independent
+> descriptor-safe subtree and guard. Privileged filesystem conversation archive transfer is
 > available only through a direct Python adapter under a caller-held mutation
 > lease. Explicit next-shell filesystem/SQLite selection and optional direct
 > Python SQLite conversation storage use one workspace coordinator; SQLite has
@@ -327,6 +328,113 @@ call, however, so a concurrent external leaf change can still race a mutation.
 These checks do not make filesystem changes transactional. Paths and retention
 are listed in
 [Session storage](../reference/configuration/session-storage.md#runtime-debug-log-storage).
+
+<a id="agent-exchange-filesystem-safety"></a>
+
+## Agent-exchange filesystem safety
+
+The exchange store borrows only `Workspace`'s identity-bound root open and
+reverification helpers. It opens and retains descriptors for that root, the
+exact `debug_logs` child, the exact private `agent_exchanges` child, and the
+selected private session directory. It never joins caller input into an
+absolute path or follows a final component. Session, scope, agent, and exchange
+identities are validated before they can influence a managed name; only the
+session and canonical agent identify directories or files.
+
+Safe operation requires `O_DIRECTORY`, `O_NOFOLLOW`, descriptor-relative
+mkdir/open/stat/unlink/rename, no-follow stat, descriptor-based directory
+listing, meaningful positive device/inode identity, and either the POSIX or
+Windows advisory-lock mechanism. The host must provide all of them. If one is
+missing, the operation returns `unsupported_platform`; there is no pathname,
+temporary-directory, unlocked, or other weaker fallback.
+
+The store and each session directory must be exact directories with mode
+`0700`. Every guard, state, pending, active, and backup leaf must be an exact
+regular file with mode `0600`, link count one, a bounded size, and the same
+device/inode identity through its no-follow name and open descriptor. Opens
+request nonblocking and noninheritable behavior where available. The owner
+rejects symlinks, hard links, FIFOs and other special files, wrong modes,
+case-folded or Unicode-normalized aliases, root/debug/store/session replacement,
+unexpected owned names, and a name or identity changed during an operation.
+It does not chmod, relink, reinterpret, or follow unsafe state.
+
+Every operation uses a weak per-workspace process lock plus the independent
+persistent `debug_logs/agent_exchanges/.agent_exchanges.lock`. Both acquisition
+attempts are bounded to 0.1 seconds; cross-process advisory locking serializes
+append, rotation, pruning, inventory, and snapshot with other processes.
+Exchange locking is separate from `.runtime.lock`, the provider-error `.lock`,
+provider-session access claims, conversation-storage coordination, and
+writing-artifact locks.
+
+Under the guard, the owner bounds each directory listing to 4,096 entries and
+validates the complete exchange namespace before trusting any stream. State is
+strict canonical schema-v1 JSON, at most 512 bytes. Segments are complete
+strict-UTF-8 canonical schema-v1 JSONL, at most 2 MiB each, ending at a complete
+newline. The scanner rejects duplicate JSON members, extra/missing fields,
+noncanonical bytes, invalid enums or identities, inconsistent byte/truncation
+facts, inconsistent Unicode-code-point counts, invalid timestamps, missing or
+lower high-water state, duplicate global sequences, and duplicate or decreasing
+per-stream/global order. The retained character count must equal Python
+`len(content)` for the decoded prefix; it cannot exceed the full character
+count. Untruncated records require both count pairs to be equal, while truncated
+records require both retained counts to be lower. Valid sequence gaps remain
+permitted because a durable reservation can outlive a failed append.
+
+`append()` alone recognizes and removes exact verified `.state.pending`,
+`.<agent>.sequence.pending`, and `.<agent>.segment.pending` remnants before its
+full scan. A reader never performs that cleanup: a visible pending state is
+corrupt, and inventory/snapshot fail without mutation. Pending cleanup never
+uses a wildcard and never removes an unrecognized, aliased, linked, oversized,
+or wrong-mode leaf.
+
+An append writes all bytes, synchronizes the open segment, and then reverifies
+identity and expected size. If that body fails, it truncates only the still-open
+same inode to the captured start size and synchronizes the rollback. A newly
+created failed segment is discarded only when its identity still matches.
+Rotation renames only captured managed inodes into verified absent managed
+names. Pruning rewrites a split segment through one exclusive `0600` pending
+leaf, synchronizes it, atomically renames it, synchronizes the directory, and
+rereads the exact published payload. These steps reduce partial data but do not
+form one transaction; durable high-water gaps and earlier completed rotation
+shifts can remain after a reported failure.
+
+Primary body failure has precedence over lock-release or descriptor-close
+failure. If only cleanup fails after the append body completed, the API reports
+`io_failed` even though the complete record remains durable. A process
+control exception such as `KeyboardInterrupt` retains its original identity
+over cleanup failure. Cleanup still attempts all held descriptors and locks, so
+a later operation can proceed when the underlying namespace remains safe.
+
+The public `AgentExchangeStorageError` reveals no path, provider content, raw
+exception, or OS message. Use its fixed class as follows:
+
+| Failure | Safe next action |
+| --- | --- |
+| `unsupported_platform` | Use a host with the required descriptor/no-follow and advisory-lock primitives. Do not redirect storage to a weaker path. |
+| `contention` | Let the current exchange operation finish, then retry; do not remove the guard. |
+| `unsafe_storage` | Stop writers and preserve the workspace. Inspect ownership, type, link count, mode, exact names, and root identity with trusted local tools; do not follow or repair an alias in place. |
+| `corrupt_storage` | Stop writers and restore the complete exchange subtree from a trusted consistent backup. Do not edit one JSON line, state file, sequence, or pending leaf to force acceptance. |
+| `capacity_exceeded` | Check free space/quota and whether a managed leaf or namespace exceeds its fixed bound. A later append can prune a safe interrupted over-cap JSONL state, but it cannot repair oversized or unrecognized state. |
+| `io_failed` | Treat append completion as indeterminate. Inspect content-free inventory and the exact immutable snapshot before retrying because cleanup-only failure can follow a durable append. |
+| `not_found` | Refresh inventory; the selection may be wrong, absent, rotated, or globally pruned. Readers do not create missing state. |
+
+There is no supported in-place repair or delete API. If diagnostics may be
+discarded and a trusted backup is unavailable, stop all Story processes and
+quarantine the entire `debug_logs/agent_exchanges` subtree as one unit before
+allowing a future append to create a fresh store. That intentionally loses all
+exchange history and sequence continuity; moving individual leaves can convert
+one failure into another. Quarantine or ordinary deletion is not secure erase.
+
+The owner lists `debug_logs` names only to verify the exact child and aliases.
+It never opens, parses, validates, imports, double-writes, rotates, prunes,
+modifies, or counts
+the files or bytes in `debug_logs/runtime.jsonl`,
+`debug_logs/provider_error_responses/`, or malformed entries beneath those
+sibling owners toward exchange retention. Their sizes do not consume the
+16-MiB exchange cap. Conversely, those owners have no authority over
+`agent_exchanges`. See [persistence ordering](../design/persistence.md#agent-exchange-persistence),
+the [exact topology](../reference/configuration/session-storage.md#agent-exchange-storage),
+and [privacy](privacy-and-provider.md#agent-exchange-privacy).
 
 ## Conversation transcript safety
 

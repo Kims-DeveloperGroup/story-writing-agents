@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 85.
+Importable production units indexed: 88.
 
-Direct internal dependency edges indexed: 349.
+Direct internal dependency edges indexed: 356.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -186,6 +186,9 @@ agent_context.sources -> agent_context.actions/manifest
                       -> conversations/errors/models/workspace
                       -> writing_artifacts.filesystem_sources
                       -> writing_artifacts.references/repository
+agent_exchanges -> agent_exchanges.contracts/storage
+agent_exchanges.contracts -> agents/errors
+agent_exchanges.storage -> agents/agent_exchanges.contracts/workspace
 provider_adapter -> agent_context/models
 provider_error_artifacts -> agents/workspace
 provider_auth -> (standard library only)
@@ -318,6 +321,102 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** Immutable module metadata only.
 - **Primary verification/documentation:** `tests/test_workspace_and_config.py`,
   `docs/concepts.md`, and `docs/reference/configuration/agent-configuration.md`.
+
+### `story_writing_agents.agent_exchanges`
+
+- **Source:** `src/story_writing_agents/agent_exchanges/__init__.py`
+- **Responsibility:** Provide the supported bounded agent-exchange storage
+  facade.
+- **Supported surface:** No project-root export. The package facade exposes
+  exactly `AGENT_EXCHANGE_SCHEMA_VERSION`,
+  `AGENT_EXCHANGE_CONTENT_MAX_BYTES`, `AGENT_EXCHANGE_TOTAL_MAX_BYTES`,
+  `AgentExchangeProvider`, `AgentExchangeRequestType`,
+  `AgentExchangeScopeKind`, `AgentExchangeFailure`,
+  `AgentExchangeStorageError`, `AgentExchangeRecordInput`,
+  `AgentExchangeAppendReceipt`, `AgentExchangeInventoryItem`,
+  `AgentExchangeSelection`, `AgentExchangeSnapshot`, and
+  `WorkspaceAgentExchangeStore`.
+- **Direct internal dependencies:** `agent_exchanges.contracts` and
+  `agent_exchanges.storage`.
+- **State, resources, and side effects:** Re-exports immutable contracts and
+  the I/O-free store constructor only. Importing creates no filesystem state,
+  lock, descriptor, thread, subprocess, or provider interaction.
+- **Primary verification/documentation:**
+  `tests/test_agent_exchange_contracts.py`,
+  `tests/test_agent_exchange_storage.py`,
+  `docs/design/persistence.md#agent-exchange-persistence`,
+  `docs/operations/filesystem-safety.md#agent-exchange-filesystem-safety`,
+  `docs/reference/configuration/session-storage.md`, and
+  `docs/operations/privacy-and-provider.md`.
+
+### `story_writing_agents.agent_exchanges.contracts`
+
+- **Source:** `src/story_writing_agents/agent_exchanges/contracts.py`
+- **Responsibility:** Define the immutable durable agent-exchange schema and
+  classifiable failure language.
+- **Supported surface:** The package facade supports schema version 1, the
+  262,144-byte per-content bound, the 16,777,216-byte managed-JSONL bound, the
+  exact provider/request/scope/failure enums, fixed safe
+  `AgentExchangeStorageError`, and frozen slotted input, append-receipt,
+  inventory, selection, and snapshot values. Input accepts only session,
+  scope, canonical agent, provider, exchange, request-type, and strict-UTF-8
+  content fields; it has no arbitrary metadata seam. Append receipts expose
+  content-free full and retained UTF-8 byte and Python Unicode code-point
+  counts, truncation state, and the full-content SHA-256. Content-bearing input
+  and snapshot bytes are excluded from representations.
+- **Direct internal dependencies:** `agents` and `errors`.
+- **State, resources, and side effects:** Owns no mutable state or external
+  resource. Importing compiles bounded validation patterns and creates enum and
+  immutable-contract definitions without I/O.
+- **Primary verification/documentation:**
+  `tests/test_agent_exchange_contracts.py`,
+  `tests/test_agent_exchange_storage.py`,
+  `docs/design/persistence.md#agent-exchange-persistence`,
+  `docs/reference/configuration/session-storage.md`, and
+  `docs/operations/privacy-and-provider.md`.
+
+### `story_writing_agents.agent_exchanges.storage`
+
+- **Source:** `src/story_writing_agents/agent_exchanges/storage.py`
+- **Responsibility:** Own secure bounded append and snapshot lifecycles for
+  workspace agent-exchange JSONL.
+- **Supported surface:** The package facade exposes only
+  `WorkspaceAgentExchangeStore`. Construction performs no I/O;
+  `append(record)` durably assigns global and per-agent sequences plus a UTC
+  millisecond timestamp, `inventory(session_id)` returns content-free exact
+  scope selections, and `snapshot(selection)` returns immutable canonical
+  strict-UTF-8 JSONL bytes without a writable path or handle. Storage failures
+  cross the boundary only as fixed `AgentExchangeFailure` codes and prose; the
+  future capture caller owns fail-open policy.
+- **Direct internal dependencies:** `agents`, `agent_exchanges.contracts`, and
+  `workspace`.
+- **State, resources, and side effects:** Import and construction perform no
+  filesystem work. Mutations exclusively own
+  `debug_logs/agent_exchanges/`, its independent
+  `.agent_exchanges.lock`, canonical global and per-session/per-agent durable
+  high-water state, private session directories, and active plus seven rotated
+  two-MiB agent JSONL segments. Each content value retains the longest complete
+  UTF-8 prefix through 262,144 bytes, full and retained UTF-8 byte and Python
+  Unicode code-point counts, truncation state, and the full SHA-256. A weak
+  per-workspace process lock and bounded
+  cross-process advisory lock serialize append, rotation, newest-record global
+  pruning, inventory, and snapshot reads. The owner borrows only `Workspace`'s
+  identity-bound root open/reverification seam; all owned traversal and
+  mutation is descriptor-relative, no-follow, exact-name, mode-, identity-,
+  type-, link-, size-, schema-, and canonical-serialization checked. Durable
+  global and stream high-water reservation precedes append, so failed calls may
+  leave gaps but cannot reuse a sequence. Partial record suffixes are rolled
+  back, complete records rotate before overflow, and only validated managed
+  JSONL records are pruned by global workspace sequence to the 16-MiB cap.
+  Absent readers create nothing. The module never imports, scans, validates,
+  prunes, migrates, or counts sibling `provider_error_responses` or
+  `runtime.jsonl` state and owns no provider, viewer, terminal, or CLI behavior.
+- **Primary verification/documentation:**
+  `tests/test_agent_exchange_storage.py`,
+  `docs/design/persistence.md#agent-exchange-persistence`,
+  `docs/operations/filesystem-safety.md#agent-exchange-filesystem-safety`,
+  `docs/reference/configuration/session-storage.md`, and
+  `docs/operations/privacy-and-provider.md`.
 
 ### `story_writing_agents.agent_context`
 
@@ -5109,7 +5208,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `FilesystemConversationEventStore`, `Workspace`, and
   `initialize_workspace`. Package-internal `open_workspace_root_directory` and
   `verify_workspace_root_directory` provide the identity-bound internal-storage
-  boundary used by diagnostic and disposable-generation owners and are
+  boundary used by diagnostic, agent-exchange, and disposable-generation
+  owners and are
   deliberately absent from the project-root facade.
   `Workspace.inspect_debate_context` is the strict, separate context-sidecar
   inspection operation. `Workspace.read_agent_session_state` returns one

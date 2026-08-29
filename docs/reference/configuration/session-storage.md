@@ -3,8 +3,8 @@
 > **Availability:** V2 defaults, provider sessions, debates, conversations,
 > current writing-artifact reference sources, provenance-backed publication records,
 > part-scoped manuscripts, explicit-reference evidence, provider-native state,
-> bounded runtime debug logs, and bounded rejected-provider-response artifacts
-> persist as plaintext workspace files.
+> bounded runtime debug logs, bounded agent-exchange JSONL, and bounded
+> rejected-provider-response artifacts persist as plaintext workspace files.
 > Runtime-managed documents and records are strict UTF-8.
 
 Key terms: **default**—a persisted command or conversation fallback;
@@ -58,6 +58,16 @@ workspace/
 │   ├── .runtime.lock                                           [lazy guard]
 │   ├── runtime.jsonl                                           [lazy active log]
 │   ├── runtime.jsonl.{1..5}                                    [lazy backups]
+│   ├── agent_exchanges/                                        [lazy independent exchange store]
+│   │   ├── .agent_exchanges.lock                               [lazy persistent guard]
+│   │   ├── .state.json                                         [lazy workspace sequence high-water]
+│   │   ├── .state.pending                                      [temporary state replacement]
+│   │   └── <session_id>/                                       [lazy private session directory]
+│   │       ├── <agent_id>.sequence.json                        [per-session/agent high-water]
+│   │       ├── .<agent_id>.sequence.pending                    [temporary state replacement]
+│   │       ├── .<agent_id>.segment.pending                     [temporary retained-suffix replacement]
+│   │       ├── <agent_id>.jsonl                                [active exchange segment]
+│   │       └── <agent_id>.jsonl.{1..7}                         [rotated segments; .1 newest]
 │   └── provider_error_responses/                               [lazy bounded rejected responses]
 │       ├── .lock                                               [lazy persistent guard]
 │       ├── .pending                                            [temporary reusable staging leaf]
@@ -293,6 +303,128 @@ JSONL stream. Their schemas are documented in
 [Persistence](../../design/persistence.md#workspace-runtime-debug-log),
 their containment and failure behavior in [Filesystem safety](../../operations/filesystem-safety.md#debug-log-filesystem-safety),
 and their content boundary in [Privacy](../../operations/privacy-and-provider.md#workspace-debug-log-privacy).
+
+<a id="agent-exchange-storage"></a>
+
+## Agent-exchange storage
+
+`story_writing_agents.agent_exchanges` now provides the direct
+`WorkspaceAgentExchangeStore` API and its immutable contracts. Importing the
+subpackage and constructing a store perform no I/O. The first `append()` can
+create `debug_logs/agent_exchanges/`; `inventory()` on an absent store returns
+an empty tuple without creating it, and `snapshot()` on an absent or unmatched
+selection returns the fixed `not_found` storage failure without creating it.
+
+This leaf implements storage only. No installed runtime path records provider
+calls into it yet, and there is no `/exchanges` command or viewer in this
+version. Later capture code will map physical calls into these contracts; later
+viewer integration will resolve conversation/debate subjects outside this
+store and consume immutable snapshots.
+
+Every stored line is one compact, key-sorted, strict-UTF-8 JSON object followed
+by exactly one newline. The expanded schema-v1 shape is:
+
+```json
+{
+  "schema_version": 1,
+  "workspace_sequence": 42,
+  "sequence": 9,
+  "timestamp": "2026-08-30T01:02:03.456+00:00",
+  "request_type": "no_response",
+  "session_id": "novel",
+  "scope_kind": "debate",
+  "scope_id": "d20260830T010203_abcd1234",
+  "agent_id": "plot_architect",
+  "provider": "codex",
+  "exchange_id": "provider_call_9",
+  "content": "",
+  "content_full_utf8_bytes": 0,
+  "content_retained_utf8_bytes": 0,
+  "content_full_characters": 0,
+  "content_retained_characters": 0,
+  "content_truncated": false,
+  "content_sha256": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}
+```
+
+The field set is closed: an extra, missing, duplicate, noncanonical, or
+wrong-typed field is corrupt. Exact enums are `codex`/`antigravity` for
+`provider`, `request`/`response`/`no_response` for `request_type`, and
+`conversation`/`debate` for `scope_kind`. `session_id` and `scope_id` match
+`[A-Za-z0-9][A-Za-z0-9_-]{0,63}`. `agent_id` is exactly
+`lead_orchestrator`, `plot_architect`, `character_custodian`, or
+`execution_specialist`. `exchange_id` matches
+`[A-Za-z0-9][A-Za-z0-9_-]{0,127}` and is the caller-supplied physical-call
+correlation identity. The store preserves correlation values but does not infer
+or enforce request/response pairs, outcomes, provider behavior, or a required
+`no_response` body.
+
+The store assigns both sequence values and the timestamp. `workspace_sequence`
+is one workspace-wide high-water sequence. `sequence` is independent for each
+`(session_id, agent_id)` stream, not for each conversation/debate scope. The
+timestamp is a valid UTC RFC 3339 instant with milliseconds and `+00:00`.
+High-water state is reserved durably before a record append, so a failed call
+can leave a gap. Gaps are valid and never reused; duplicate or decreasing
+retained workspace or stream sequences are corrupt. The corresponding
+canonical state documents are:
+
+```json
+{"schema_version":1,"workspace_sequence":42}
+{"schema_version":1,"sequence":9}
+```
+
+`content` retains the longest complete strict-UTF-8 prefix at or below 262,144
+bytes. `content_full_utf8_bytes` describes the caller's complete value;
+`content_retained_utf8_bytes` describes the stored prefix.
+`content_full_characters` and `content_retained_characters` are the corresponding
+Python string lengths: counts of Unicode code points in the complete input and
+decoded retained prefix. They are not UTF-8 byte counts, UTF-16 code units,
+grapheme clusters, or terminal display columns. `content_truncated` is true
+exactly when both retained counts differ from their full counts, and
+`content_sha256` remains lowercase SHA-256 over the complete UTF-8 value,
+prefixed by `sha256:`. A split multibyte code point is omitted, so a truncated
+prefix can be up to three bytes shorter than the limit. These facts identify
+truncation and permit comparison with a complete value; they do not encrypt,
+authenticate, intrinsically verify an omitted suffix, or recover it.
+
+Each active or backup segment is at most 2,097,152 bytes. Rotation occurs
+before an append would overflow the active segment and retains one active plus
+seven backups per session/agent stream, with `.1` newest and `.7` oldest.
+After a successful append or reader validation, at most 16,777,216 bytes of
+managed exchange JSONL are retained across the complete `agent_exchanges`
+subtree. An interrupted post-append prune can temporarily leave up to one
+two-MiB segment beyond that bound; readers report `capacity_exceeded`, and the
+next safe append prunes before reserving a new sequence. Locks, high-water
+state, pending files, directories, and every sibling under `debug_logs/` are
+outside that data count.
+Global pruning removes the oldest currently retained complete records by
+`workspace_sequence`; per-stream rotation may already have expired older
+records. Ordinary rotation or pruning is not secure erasure.
+
+`inventory(session_id)` validates the complete store, then returns content-free
+groups ordered by first workspace sequence for each exact
+`(scope_kind, scope_id, agent_id)` selection. `snapshot(selection)` returns a
+new immutable `bytes` value containing only that exact session/scope/agent's
+retained canonical lines in stream-sequence order. Neither result exposes a
+path, descriptor, or writable handle. Readers serialize with writers, never
+repair storage, and create nothing when the store is absent.
+
+`append()` returns a frozen content-free receipt with `session_id`, `agent_id`,
+`exchange_id`, both assigned sequences, the assigned timestamp, both content
+byte counts, both character counts, the truncation boolean, and the full
+digest. It does not return content, a path, or a writable storage object.
+
+All store files are verified owner-only regular single-link leaves with mode
+`0600`; the exchange and session directories are mode `0700`. The independent
+guard has a 0.1-second acquisition bound. Public storage failures contain only
+one of `unsupported_platform`, `contention`, `unsafe_storage`,
+`corrupt_storage`, `capacity_exceeded`, `io_failed`, or `not_found`, with no
+path or content detail. Filesystem enforcement and recovery are documented in
+[Filesystem safety](../../operations/filesystem-safety.md#agent-exchange-filesystem-safety),
+persistence ordering in
+[Persistence](../../design/persistence.md#agent-exchange-persistence), and the
+plaintext boundary in
+[Privacy](../../operations/privacy-and-provider.md#agent-exchange-privacy).
 
 <a id="rejected-provider-response-storage"></a>
 
