@@ -125,7 +125,7 @@ __all__ = [
     "record_context_provider_failure",
 ]
 
-_CONTEXT_WIRE_VERSION = "agent-context-wire-v4"
+_CONTEXT_WIRE_VERSION = "agent-context-wire-v5"
 _ACTION_WIRE_CODES = {
     "search": "s",
     "read": "r",
@@ -1175,7 +1175,7 @@ class ContextInvocationSession:
             raise _action_error(ContextActionErrorCode.INVALID_TRANSITION)
         digest = hmac.new(
             self._secret,
-            b"context-wire-handle-alias-v4\x00"
+            b"context-wire-handle-alias-v5\x00"
             + handle.value.encode("ascii", errors="strict"),
             hashlib.sha256,
         ).digest()[:12]
@@ -1431,11 +1431,13 @@ class ContextInvocationSession:
             raise _action_error(ContextActionErrorCode.HANDLE_INVALID) from None
         return f"{locator}/{debate_id}"
 
-    def _search_manifest(self, query: ContextSearchQuery) -> ContextManifest:
-        """Filter one path-prefixed artifact query before any source scan."""
+    def _search_manifest(
+        self,
+        artifact_path_prefix: str | None,
+    ) -> ContextManifest:
+        """Filter one shared artifact-prefix scope before any source scan."""
 
-        prefix = query.artifact_path_prefix
-        if prefix is None:
+        if artifact_path_prefix is None:
             return self.binding.manifest
         return ContextManifest(
             self.binding.scope,
@@ -1443,7 +1445,7 @@ class ContextInvocationSession:
                 entry
                 for entry in self.binding.manifest.entries
                 if entry.source_kind is ContextSourceKind.WRITING_ARTIFACT
-                and entry.provenance.locator.startswith(prefix)
+                and entry.provenance.locator.startswith(artifact_path_prefix)
             ),
         )
 
@@ -1483,52 +1485,15 @@ class ContextInvocationSession:
                     self._source_policy.max_cumulative_scan_utf8_bytes
                     - self._scan_utf8_bytes
                 )
-                if any(
-                    query.artifact_path_prefix is not None
-                    for query in action.queries
-                ):
-                    matches_list = []
-                    emitted: set[tuple[str, str, ContextSourceBoundary]] = set()
-                    truncated = False
-                    scanned = 0
-                    for query_index, query in enumerate(action.queries, start=1):
-                        query_matches, query_truncated, query_scanned = (
-                            self._sources.search(
-                                self._search_manifest(query),
-                                (query,),
-                                source_policy=self._source_policy,
-                                action_policy=self._action_policy,
-                                remaining_scan_utf8_bytes=remaining_scan - scanned,
-                            )
-                        )
-                        scanned += query_scanned
-                        truncated = truncated or query_truncated
-                        for match in query_matches:
-                            identity = (
-                                match.descriptor.source_id,
-                                match.descriptor.revision,
-                                match.record.boundary,
-                            )
-                            if identity in emitted:
-                                continue
-                            if len(matches_list) >= (
-                                self._action_policy.max_hits_per_search
-                            ):
-                                truncated = True
-                                continue
-                            emitted.add(identity)
-                            matches_list.append(
-                                replace(match, query_index=query_index)
-                            )
-                    matches = tuple(matches_list)
-                else:
-                    matches, truncated, scanned = self._sources.search(
-                        self.binding.manifest,
-                        action.queries,
-                        source_policy=self._source_policy,
-                        action_policy=self._action_policy,
-                        remaining_scan_utf8_bytes=remaining_scan,
-                    )
+                matches, truncated, scanned = self._sources.search(
+                    self._search_manifest(
+                        action.queries[0].artifact_path_prefix
+                    ),
+                    action.queries,
+                    source_policy=self._source_policy,
+                    action_policy=self._action_policy,
+                    remaining_scan_utf8_bytes=remaining_scan,
+                )
                 if self._state is not ContextInvocationState.SEARCHING:
                     raise _action_error(ContextActionErrorCode.INVALID_TRANSITION)
                 if self._hits + len(matches) > self._action_policy.max_cumulative_hits:
@@ -2137,7 +2102,7 @@ def _decode_context_action(
     ),
     resolve_handle: Callable[[object], ContextSourceHandle] = ContextSourceHandle,
 ) -> ContextSearchAction | ContextReadAction | ContextAnswerAction:
-    """Strictly decode compact wire v4 and restore the full internal action."""
+    """Strictly decode compact wire v5 and restore the full internal action."""
 
     try:
         value = json.loads(
@@ -2160,11 +2125,18 @@ def _decode_context_action(
         if type(data) is not list or type(used_handles) is not list:
             raise ValueError
         if action_kind == "search":
-            if used_handles:
+            if used_handles or not data:
+                raise ValueError
+            artifact_path_prefix: str | None = None
+            query_values = data
+            if type(data[0]) is str:
+                artifact_path_prefix = data[0]
+                query_values = data[1:]
+            if not query_values:
                 raise ValueError
             queries: list[ContextSearchQuery] = []
-            for query in data:
-                if type(query) is not list or len(query) not in {2, 3}:
+            for query in query_values:
+                if type(query) is not list or len(query) != 2:
                     raise ValueError
                 kinds = query[1]
                 if type(kinds) is not list:
@@ -2184,7 +2156,7 @@ def _decode_context_action(
                     ContextSearchQuery(
                         query[0],
                         decoded_kinds,
-                        query[2] if len(query) == 3 else None,
+                        artifact_path_prefix,
                     )
                 )
             return ContextSearchAction(
@@ -2394,8 +2366,6 @@ def _latest_debate_candidate_record(
     sources: tuple[ContextCheckpointSource, ...],
     catalog_sources: tuple[ContextCatalogCursor, ...],
     materials: tuple[ContextMaterial, ...],
-    *,
-    expected_content: str | None = None,
 ) -> _WireCandidateRecord | None:
     """Resolve the latest provable candidate from content-free checkpoint facts."""
 
@@ -2434,9 +2404,7 @@ def _latest_debate_candidate_record(
         if record is None or record.cursor != accepted.cursor:
             continue
         content = _debate_candidate_text(record)
-        if content is None or (
-            expected_content is not None and content != expected_content
-        ):
+        if content is None:
             continue
         encoded = content.encode("utf-8", errors="strict")
         candidate = _WireCandidateRecord(
@@ -2472,6 +2440,17 @@ def _candidate_single_splice(
     return prefix, suffix, target[prefix:replacement_end]
 
 
+def _wire_candidate_facts(record: _WireCandidateRecord) -> dict[str, object]:
+    """Project one self-describing candidate record identity and byte facts."""
+
+    return {
+        "source_alias": _source_number(record.source_alias),
+        "record_alias": record.record_alias,
+        "digest": record.content_digest,
+        "utf8_bytes": record.utf8_bytes,
+    }
+
+
 def _wire_candidate_value(
     candidate: str,
     projection: ContextProjection,
@@ -2495,48 +2474,44 @@ def _wire_candidate_value(
         projection.checkpoint_proposal.sources,
         projection.checkpoint_proposal.catalog_sources,
         materials,
-        expected_content=candidate,
     )
-    if base is None or target is None:
+    if base is None or target is None or target.content != candidate:
         return candidate
-    base_identity = [_source_number(base.source_alias), base.record_alias]
-    if base.content == candidate:
-        return {
-            "candidate_pointer": [
-                base_identity,
-                base.content_digest,
-                base.utf8_bytes,
-            ]
+    base_facts = _wire_candidate_facts(base)
+    target_facts = _wire_candidate_facts(target)
+    candidate_bytes = candidate.encode("utf-8", errors="strict")
+    if base.content == target.content == candidate:
+        pointer: object = {
+            "op": "candidate_pointer",
+            "base": base_facts,
+            "target": target_facts,
+            "result": "candidate_text",
+            "resolve_record_candidate": "logical_n",
         }
+        if len(_canonical_bytes(pointer)) >= len(_canonical_bytes(candidate)):
+            return candidate
+        return pointer
     prefix, suffix, replacement = _candidate_single_splice(
         base.content,
         candidate,
     )
     retained_suffix = base.content[len(base.content) - suffix :] if suffix else ""
     reconstructed = base.content[:prefix] + replacement + retained_suffix
-    target_bytes = candidate.encode("utf-8", errors="strict")
     if (
-        reconstructed.encode("utf-8", errors="strict") != target_bytes
-        or _digest(target_bytes) != target.content_digest
-        or len(target_bytes) != target.utf8_bytes
+        reconstructed.encode("utf-8", errors="strict") != candidate_bytes
+        or _digest(candidate_bytes) != target.content_digest
+        or len(candidate_bytes) != target.utf8_bytes
     ):
         return candidate
     patch: object = {
-        "candidate_single_splice": {
-            "base": [
-                base_identity,
-                base.content_digest,
-                base.utf8_bytes,
-            ],
-            "prefix_codepoints": prefix,
-            "replacement": replacement,
-            "suffix_codepoints": suffix,
-            "target": [
-                [_source_number(target.source_alias), target.record_alias],
-                target.content_digest,
-                target.utf8_bytes,
-            ],
-        }
+        "op": "candidate_single_splice",
+        "base": base_facts,
+        "prefix_codepoints": prefix,
+        "replacement": replacement,
+        "suffix_codepoints": suffix,
+        "target": target_facts,
+        "result": "candidate_text",
+        "resolve_record_candidate": "logical_n",
     }
     if len(_canonical_bytes(patch)) >= len(_canonical_bytes(candidate)):
         return candidate

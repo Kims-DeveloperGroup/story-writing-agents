@@ -242,8 +242,14 @@ def _strict_text(value: object, *, allow_empty: bool = False) -> str:
 def _artifact_directory_prefix(value: object) -> str:
     """Validate one canonical writing-artifact directory prefix."""
 
-    prefix = _strict_text(value)
-    encoded = prefix.encode("utf-8", errors="strict")
+    if type(value) is not str or not value:
+        raise _invalid()
+    assert isinstance(value, str)
+    prefix = value
+    try:
+        encoded = prefix.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
+        raise _invalid() from None
     if (
         len(encoded) > _MAX_ARTIFACT_PREFIX_UTF8_BYTES
         or not prefix.endswith("/")
@@ -258,12 +264,12 @@ def _artifact_directory_prefix(value: object) -> str:
         not body
         or any(part in {"", ".", ".."} for part in parts)
         or any(
-            unicodedata.category(character).startswith("C")
+            character in {"}", "\u2028", "\u2029"}
+            or unicodedata.category(character) in {"Cc", "Cf", "Cs"}
             for character in prefix
         )
         or parts[0] not in {"core_documents", "manuscript"}
         or (parts[0] == "core_documents" and len(parts) != 1)
-        or (parts[0] == "manuscript" and parts[-1].endswith(".md"))
     ):
         raise _invalid()
     return prefix
@@ -512,6 +518,9 @@ class ContextSearchAction:
             or len(self.queries) > CONTEXT_ACTION_POLICY.max_queries_per_search
             or any(type(query) is not ContextSearchQuery for query in self.queries)
         ):
+            raise _invalid()
+        prefixes = {query.artifact_path_prefix for query in self.queries}
+        if len(prefixes) != 1:
             raise _invalid()
         normalized = tuple(
             (
