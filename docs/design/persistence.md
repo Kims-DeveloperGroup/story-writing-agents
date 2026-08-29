@@ -3,7 +3,8 @@
 > **Availability:** filesystem persistence covers configuration, sessions,
 > conversations, debates, optional debate-context sidecars, canonical writing
 > artifacts, content-free explicit-reference authorization evidence, and
-> bounded runtime debug-log infrastructure. Direct Python callers can also
+> bounded runtime debug-log infrastructure, and bounded agent-exchange storage.
+> Direct Python callers can also
 > construct canonical conversation-only archive bytes and use the privileged
 > filesystem transfer adapter. A separate optional SQLite conversation store is
 > available through direct Python modules and as an explicitly selected
@@ -42,6 +43,7 @@ provisioning nor migration alone selects runtime authority.
 | Conversation RAG opt-in defaults and CLI reports | Configuration owns nullable provider/exact automatic values; `conversation_rag_cli` owns complete noninteractive CAS workflows and ephemeral schema-v1 reports; interactive Settings reuses its guarded configuration transaction |
 | Pending one-turn RAG query | Controller memory only; exact session/conversation scope, never configuration or transcript persistence |
 | Bounded runtime diagnostics | Internal `debug_log` writer |
+| Bounded agent request/response/no-response records | `agent_exchanges`; independent direct-package storage, not yet wired to provider calls |
 | Retrieval actions, observations, progress, sources | Process/terminal only |
 | Current conversation and agent focus | Controller memory only |
 | Canonical writing artifacts and provenance | `WritingArtifactRepository` |
@@ -427,6 +429,96 @@ verification, not activation or source deletion. See the
 [CLI report and exit contract](../reference/cli.md#conversation-storage-migration),
 [checkpoint layout](../reference/configuration/session-storage.md#conversation-migration-checkpoints),
 and [recovery procedure](../operations/recovery-and-limitations.md#conversation-storage-migration-recovery).
+
+<a id="agent-exchange-persistence"></a>
+
+## Agent-exchange persistence
+
+The `story_writing_agents.agent_exchanges` package owns one bounded diagnostic
+store independently of conversations, debate blackboards, agent state, runtime
+debug records, and rejected-provider-response artifacts. Its direct store
+constructor is I/O-free. This issue establishes durable contracts and storage;
+no backend or runtime path calls `append()` yet, and no shell command reads the
+store.
+
+The caller supplies one immutable strict-UTF-8 `AgentExchangeRecordInput` with
+session, conversation/debate scope, canonical agent, provider, physical-call
+`exchange_id`, `request`/`response`/`no_response` type, and content. The store
+does not call a provider, choose a provider outcome, synthesize a response pair,
+or decide whether a missing response occurred. It also does not require an
+exchange ID to be unique: a later capture owner will use the same ID to
+correlate the physical request and its response or no-response outcome.
+
+One append holds both the weakly retained process lock and the store's
+cross-process advisory guard. Beneath that guard it performs this ordered
+lifecycle:
+
+1. Reverify the workspace and exchange namespace, remove only recognized safe
+   pending remnants from an interrupted prior mutation, and validate the
+   complete bounded store.
+2. If a prior failed post-append prune left managed JSONL over the global cap,
+   prune it back to the cap before reserving another identity.
+3. Atomically replace the workspace high-water state with the next
+   `workspace_sequence`, then atomically replace the selected
+   `(session_id, agent_id)` stream high-water state with its next `sequence`.
+4. Assign the UTC millisecond timestamp; compute complete and retained UTF-8
+   byte counts plus Python Unicode-code-point counts; take the complete UTF-8
+   digest; retain the complete-code-point prefix; and serialize one canonical
+   schema-v1 line. Character counts are not grapheme or display-width metrics.
+5. Rotate before the active two-MiB segment would overflow, append and `fsync`
+   the complete line, and roll the file back to its exact prior length if a
+   write, sync, identity, or size check fails.
+6. Prune the oldest currently retained complete records by global workspace
+   sequence until managed exchange JSONL is at most 16 MiB, then rescan and
+   require the just-appended record before returning its content-free receipt.
+
+Global and stream high-water reservations deliberately precede the record.
+They survive a new store instance or process, so a failed operation can consume
+one or both numbers but a later append cannot reuse them. Such gaps are valid.
+Every retained stream must still be strictly increasing in both stream and
+workspace sequence, and workspace sequences must be unique across streams.
+Duplicate or decreasing values, state below retained logs, missing required
+state, or a pending file visible to a reader fail closed as corruption.
+
+Rotation keeps complete records only. `.1` is the newest backup and `.7` the
+oldest; the next rotation removes the verified `.7`, shifts verified identities,
+and moves the active segment to `.1`. This per-stream window can expire records
+before the global cap does. Global pruning considers all currently retained
+streams and removes oldest workspace sequences first; when only a prefix of a
+segment expires, it atomically replaces that segment with the exact canonical
+retained suffix. Neither mechanism rewrites high-water state, so inventory and
+snapshots can legitimately show noncontiguous ranges.
+
+Readers acquire the same bounded guards and validate the complete owned store.
+`inventory(session_id)` is content-free and groups retained records by exact
+scope kind, scope ID, and agent, ordered by each group's first workspace
+sequence. `snapshot(selection)` copies the exact retained canonical lines for
+one session/scope/agent into immutable strict-UTF-8 `bytes`, ordered by stream
+sequence and ending at a complete newline. It returns no storage path or handle
+and does not retain a live view. An absent store remains absent; inventory is
+empty and snapshot reports `not_found`.
+
+State replacement, rotation, append, pruning, pending cleanup, advisory-lock
+release, and descriptor close are not one filesystem transaction. A primary
+body failure takes precedence over a cleanup failure. If the body succeeds but
+cleanup alone fails, the caller receives fixed `io_failed` even though the
+record can already be durable. Callers must therefore treat an I/O failure as
+an indeterminate append and inspect inventory/snapshot before retrying; blind
+retry can add another record because `exchange_id` is correlation, not an
+idempotency key. `KeyboardInterrupt` and other control exceptions retain
+priority over cleanup failure, while all acquired resources are still released.
+
+The future capture integration owns fail-open wrapping so a diagnostic-storage
+failure cannot replace provider behavior; that tradeoff means a physical call
+may have no stored exchange record. The future `/exchanges` integration owns
+session/scope/agent pickers, subject resolution, and viewer lifecycle. The
+storage package intentionally has no subject field, viewer dependency,
+terminal ownership, provider import, or capture policy. It neither imports nor
+double-writes sibling runtime/provider-error records into exchange JSONL. See
+the exact
+[layout and schema](../reference/configuration/session-storage.md#agent-exchange-storage),
+[filesystem guarantees](../operations/filesystem-safety.md#agent-exchange-filesystem-safety),
+and [privacy boundary](../operations/privacy-and-provider.md#agent-exchange-privacy).
 
 <a id="workspace-runtime-debug-log"></a>
 

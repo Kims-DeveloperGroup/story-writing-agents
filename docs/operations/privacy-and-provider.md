@@ -9,8 +9,10 @@
 > conversation-RAG store and noninteractive lifecycle/authorized-search
 > commands, plus interactive settings, startup composition, automatic
 > preflight, and private one-turn `/rag` arming.
-> They also cover the content-safe runtime debug log and the separate bounded
-> store for eligible rejected provider responses.
+> They also cover the content-safe runtime debug log, the direct bounded
+> agent-exchange store, and the separate bounded store for eligible rejected
+> provider responses. Provider-call capture into the exchange store is not yet
+> wired.
 > They do not make either provider, its executable, the workspace, or the
 > terminal trusted.
 > Inline canonical references in provider-bound prompt text are active.
@@ -30,10 +32,11 @@ Documents, debate/context records, provider metadata, subjects, transcripts,
 scrollback, manuscripts, artifact catalogs, commit provenance, transaction
 journals, migration checkpoints, reference-operation evidence, and recovery
 markers have no application-managed retention policy and rely on
-OS/terminal-service protection. The workspace debug log and rejected-provider-
-response store are the bounded-retention channels described below; both remain
-plaintext, but only the latter intentionally contains provider-controlled
-response content.
+OS/terminal-service protection. The workspace debug log, agent-exchange store,
+and rejected-provider-response store are bounded-retention channels described
+below. All remain plaintext. The runtime log is content-safe; the other two
+deliberately admit provider-call content within different schemas and lifecycle
+boundaries.
 
 Blackboards can contain input, drafts, reviews, and errors. Provider output is
 not generally scrubbed; catalog archive status neither deletes nor conceals
@@ -528,6 +531,88 @@ other pre-workspace errors add no debug-log path. See
 schema, [CLI](../reference/cli.md#runtime-debug-logs) for exact output, and
 [Filesystem safety](filesystem-safety.md#debug-log-filesystem-safety) for
 fail-open storage behavior.
+
+<a id="agent-exchange-privacy"></a>
+
+## Agent-exchange privacy
+
+`debug_logs/agent_exchanges/` is intentionally content-bearing. Its schema-v1
+records can persist the caller-supplied body of a provider `request`,
+`response`, or `no_response` event, correlated by session, conversation/debate
+scope, canonical story agent, provider, and physical-call exchange ID. This
+storage API exists now, but no installed backend/runtime capture path calls it
+yet. The presence of the directory therefore currently reflects direct API use,
+not automatic provider-call coverage.
+
+Each content value is plaintext strict UTF-8. The retained value is the longest
+complete prefix at or below 262,144 bytes; its retained/full UTF-8 byte counts
+and retained/full character counts distinguish a complete value from a prefix.
+Character counts are Python Unicode-code-point counts for the full input and
+decoded retained prefix. They do not measure grapheme clusters, user-perceived
+characters, terminal columns, UTF-16 code units, or rendered width. The stored
+`sha256:` digest still covers the complete UTF-8 caller value, including an
+omitted suffix. It is a comparison fact, not encryption, redaction, a signature,
+origin authentication, or a way to reconstruct truncated text.
+
+The closed schema has no fields for provider stderr, raw stdout or NDJSON
+transport streams, authentication or catalog output, browser/OAuth facts,
+environment values, tokens, or credentials. That structural exclusion is not
+semantic filtering: if a caller places a secret, raw stream, or credential
+inside `content`, the store preserves it like any other content. The future
+capture owner must map only the intended physical provider request and
+response/no-response values and must not copy excluded process channels into
+`content`.
+
+Sequence values, millisecond timestamps, provider/agent/scope identities,
+exchange correlation, byte counts, truncation, and digests remain sensitive
+operational metadata even when retained content is empty. Character counts are
+sensitive operational metadata too: they can reveal length even when byte
+counts differ because of Unicode encoding. The content-bearing input and
+snapshot bytes are omitted from their Python `repr`, and inventory is
+content-free, but those conveniences do not scrub process memory, caller logs,
+debuggers, tracebacks created outside this API, terminal output, or copies made
+by a consumer.
+
+The exchange and session directories use mode `0700`, and managed files use
+`0600`; these owner permissions are not application authentication or
+encryption. Protect the complete workspace, local backups, filesystem
+snapshots, process memory, and any copied `AgentExchangeSnapshot.jsonl_bytes`.
+Do not publish the store or attach it to an issue without reviewing every
+retained line. Provider text is untrusted even when it resembles JSON,
+Markdown, shell code, or instructions.
+
+There is no `/exchanges` command or bundled viewer in this storage issue. A
+direct Python consumer can first use content-free `inventory(session_id)` and
+then request the immutable snapshot for one exact scope and agent. If raw JSONL
+must be inspected before viewer integration lands, use a trusted local
+read-only tool that visibly neutralizes terminal and bidirectional controls; do
+not execute content, interpolate it into a shell command, or treat it as
+instructions. `snapshot()` creates a separate in-memory copy and does not grant
+a writable path or retain navigation state.
+
+Retention is bounded but not secure erasure. Per-stream rotation and global
+oldest-record pruning use ordinary unlink or replacement. User deletion,
+quarantine, backup expiry, and filesystem free-space reuse likewise make no
+secure-erasure promise; provider-native or remote copies and process/terminal
+copies remain independent. There is no retention setting, redaction hook,
+selective delete command, or secure-delete API.
+
+Future capture is required to wrap storage fail-open so a write failure cannot
+replace the provider result or exception. Consequently, a missing store,
+sequence gap, absent exchange ID, or storage failure never proves that no
+provider call occurred. Conversely, `io_failed` does not prove the record is
+absent: cleanup can fail after a complete append became durable. Inspect the
+exact selection before retrying or drawing an audit conclusion.
+
+This store is independent of `debug_logs/runtime.jsonl` and
+`debug_logs/provider_error_responses/`. It never imports, validates, counts,
+prunes, or repairs either sibling. The runtime log remains content-safe. The
+provider-error store remains the already-wired best-effort channel for only a
+completed response rejected by decoding; agent-exchange storage is the future
+request/response/no-response sequence channel and does not replace that
+artifact. See the exact [schema and bounds](../reference/configuration/session-storage.md#agent-exchange-storage),
+[persistence lifecycle](../design/persistence.md#agent-exchange-persistence),
+and [filesystem controls](filesystem-safety.md#agent-exchange-filesystem-safety).
 
 <a id="rejected-provider-response-artifacts"></a>
 
