@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from types import MappingProxyType
-from typing import AsyncContextManager, Protocol, runtime_checkable
+from typing import AsyncContextManager, Protocol, cast, runtime_checkable
 
 from ..workspace import Workspace
 from .accounting import (
@@ -115,9 +115,11 @@ __all__ = [
     "ContextInvocationSession",
     "ContextInvocationState",
     "ContextProvider",
+    "ContextProviderCallFinalizer",
     "ContextProviderCallRequest",
     "ContextProviderCallResult",
     "ContextProviderFailureFacts",
+    "ContextProviderTerminalCode",
     "ContextReferencePreludeRequest",
     "ContextReferencePreludeResult",
     "ContextReadReceipt",
@@ -678,6 +680,62 @@ def _emit_context_event_without_replacing(
         pass
 
 
+def _accept_provider_call_without_replacing(
+    finalizer: ContextProviderCallFinalizer,
+) -> None:
+    """Best-effort accept one response without changing runtime behavior."""
+
+    try:
+        callback = cast(Callable[[], object], finalizer.accepted)
+        _require_sync_none(callback())
+    except BaseException:
+        pass
+
+
+def _reject_provider_call_without_replacing(
+    finalizer: ContextProviderCallFinalizer,
+    code: ContextProviderTerminalCode,
+) -> None:
+    """Best-effort reject one response with a closed semantic code."""
+
+    try:
+        callback = cast(
+            Callable[[ContextProviderTerminalCode], object],
+            finalizer.rejected,
+        )
+        _require_sync_none(callback(code))
+    except BaseException:
+        pass
+
+
+def _cancel_provider_call_without_replacing(
+    finalizer: ContextProviderCallFinalizer,
+) -> None:
+    """Best-effort record cancellation after one response."""
+
+    try:
+        callback = cast(Callable[[], object], finalizer.cancelled)
+        _require_sync_none(callback())
+    except BaseException:
+        pass
+
+
+def _fail_provider_call_without_replacing(
+    finalizer: ContextProviderCallFinalizer,
+    code: ContextProviderTerminalCode,
+) -> None:
+    """Best-effort record one post-response runtime failure."""
+
+    try:
+        callback = cast(
+            Callable[[ContextProviderTerminalCode], object],
+            finalizer.post_response_runtime_failure,
+        )
+        _require_sync_none(callback(code))
+    except BaseException:
+        pass
+
+
 def _provider_input_token_total(
     accountings: list[ProviderCallAccounting],
 ) -> int | None:
@@ -885,6 +943,59 @@ def context_provider_failure_facts(
     return facts
 
 
+class ContextProviderTerminalCode(StrEnum):
+    """Closed provider-neutral classifications for a completed response."""
+
+    MALFORMED_STRUCTURED_RESPONSE = "malformed_structured_response"
+    RESPONSE_CORRELATION_MISMATCH = "response_correlation_mismatch"
+    RESPONSE_SEMANTIC_REJECTED = "response_semantic_rejected"
+    ACTION_EXHAUSTED = "action_exhausted"
+    ANSWER_VALIDATION_FAILED = "answer_validation_failed"
+    REFERENCE_RUNTIME_FAILED = "reference_runtime_failed"
+    CONTEXT_RUNTIME_FAILED = "context_runtime_failed"
+
+
+@runtime_checkable
+class ContextProviderCallFinalizer(Protocol):
+    """Provider-neutral exactly-once terminal callback for one raw response."""
+
+    def accepted(self) -> None:
+        """Record that the response completed its contextual operation."""
+
+    def rejected(self, code: ContextProviderTerminalCode) -> None:
+        """Record a closed semantic rejection of the response."""
+
+    def cancelled(self) -> None:
+        """Record cancellation after the response was received."""
+
+    def post_response_runtime_failure(
+        self,
+        code: ContextProviderTerminalCode,
+    ) -> None:
+        """Record a closed runtime failure after the response was received."""
+
+
+def _validate_context_provider_finalizer(value: object) -> None:
+    """Require one synchronous provider-neutral finalizer implementation."""
+
+    for name in (
+        "accepted",
+        "rejected",
+        "cancelled",
+        "post_response_runtime_failure",
+    ):
+        method = getattr(value, name, None)
+        call = getattr(method, "__call__", None)
+        if (
+            not callable(method)
+            or inspect.iscoroutinefunction(method)
+            or inspect.isasyncgenfunction(method)
+            or inspect.iscoroutinefunction(call)
+            or inspect.isasyncgenfunction(call)
+        ):
+            raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+
+
 @dataclass(frozen=True, slots=True)
 class ContextProviderCallRequest:
     """One exact service-built substantive physical provider call."""
@@ -939,6 +1050,7 @@ class ContextProviderCallResult:
     response_text: str = field(repr=False)
     thread_id: str
     accounting: ProviderCallAccounting
+    finalizer: ContextProviderCallFinalizer = field(repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if type(self.response_text) is not str:
@@ -949,6 +1061,7 @@ class ContextProviderCallResult:
             or self.accounting.state is not ProviderCallState.SUBMITTED
         ):
             raise _execution_error(ContextExecutionErrorCode.PROVIDER_CONTRACT)
+        _validate_context_provider_finalizer(self.finalizer)
 
 
 @dataclass(frozen=True, slots=True)
@@ -3481,6 +3594,7 @@ class AgentContextService:
         provider_failure = False
         retired_thread_id: str | None = None
         checkpoint_committed = False
+        call_finalizer: ContextProviderCallFinalizer | None = None
 
         def execution_event(
             kind: ContextExecutionEventKind,
@@ -3878,6 +3992,7 @@ class AgentContextService:
                             accounting,
                         )
                     raise failure
+                call_finalizer = result.finalizer
                 submitted_accountings.append(result.accounting)
                 generation = self._append_call(
                     self._ledger,
@@ -3889,6 +4004,13 @@ class AgentContextService:
                     result.accounting,
                 )
                 if result.accounting.payload.call_kind is not call_kind:
+                    finalizer = call_finalizer
+                    call_finalizer = None
+                    if finalizer is not None:
+                        _reject_provider_call_without_replacing(
+                            finalizer,
+                            ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH,
+                        )
                     failure = _execution_error(
                         ContextExecutionErrorCode.PROVIDER_CONTRACT
                     )
@@ -3904,6 +4026,13 @@ class AgentContextService:
                     current_thread_id is not None
                     and result.thread_id != current_thread_id
                 ):
+                    finalizer = call_finalizer
+                    call_finalizer = None
+                    if finalizer is not None:
+                        _reject_provider_call_without_replacing(
+                            finalizer,
+                            ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH,
+                        )
                     failure = _execution_error(
                         ContextExecutionErrorCode.CONTINUATION_MISMATCH
                     )
@@ -3919,6 +4048,13 @@ class AgentContextService:
                     retired_thread_id is not None
                     and result.thread_id == retired_thread_id
                 ):
+                    finalizer = call_finalizer
+                    call_finalizer = None
+                    if finalizer is not None:
+                        _reject_provider_call_without_replacing(
+                            finalizer,
+                            ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH,
+                        )
                     failure = _execution_error(
                         ContextExecutionErrorCode.CONTINUATION_MISMATCH
                     )
@@ -3969,20 +4105,41 @@ class AgentContextService:
                                 ),
                             )
                         except ContextExecutionError:
+                            finalizer = call_finalizer
+                            call_finalizer = None
+                            if finalizer is not None:
+                                _reject_provider_call_without_replacing(
+                                    finalizer,
+                                    ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+                                )
                             raise decode_failure
                         if type(exhausted_action) in {
                             ContextSearchAction,
                             ContextReadAction,
                         }:
                             stage = "exhausted"
+                            finalizer = call_finalizer
+                            call_finalizer = None
+                            if finalizer is not None:
+                                _reject_provider_call_without_replacing(
+                                    finalizer,
+                                    ContextProviderTerminalCode.ACTION_EXHAUSTED,
+                                )
                             raise _execution_error(
                                 ContextExecutionErrorCode.ACTION_EXHAUSTED
                             )
+                    finalizer = call_finalizer
+                    call_finalizer = None
+                    if finalizer is not None:
+                        _reject_provider_call_without_replacing(
+                            finalizer,
+                            ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+                        )
                     raise
                 terminal_provider_succeeded = False
                 if type(action) is ContextSearchAction:
-                    stage = "action"
                     history_advanced = True
+                    stage = "action_observer"
                     _emit_context_event(
                         event_sink,
                         execution_event(
@@ -3990,12 +4147,14 @@ class AgentContextService:
                             action_index=action_index,
                         ),
                     )
+                    stage = "action"
                     search_observation = action_session.search(action)
                     observation = action_session.serialize_observation(
                         search_observation
                     )
                     previous_action = "search"
                     previous_search_had_hits = bool(search_observation.hits)
+                    stage = "action_observer"
                     _emit_context_event(
                         event_sink,
                         execution_event(
@@ -4008,10 +4167,14 @@ class AgentContextService:
                             truncated=search_observation.truncated,
                         ),
                     )
+                    finalizer = call_finalizer
+                    call_finalizer = None
+                    if finalizer is not None:
+                        _accept_provider_call_without_replacing(finalizer)
                     continue
                 if type(action) is ContextReadAction:
-                    stage = "action"
                     history_advanced = True
+                    stage = "action_observer"
                     _emit_context_event(
                         event_sink,
                         execution_event(
@@ -4019,6 +4182,7 @@ class AgentContextService:
                             action_index=action_index,
                         ),
                     )
+                    stage = "action"
                     read_observation, pending_read = action_session.read(action)
                     observation = action_session.serialize_observation(
                         read_observation
@@ -4028,6 +4192,7 @@ class AgentContextService:
                     turn_count, event_count = _conversation_read_counts(
                         read_observation
                     )
+                    stage = "action_observer"
                     _emit_context_event(
                         event_sink,
                         execution_event(
@@ -4045,6 +4210,10 @@ class AgentContextService:
                             ),
                         ),
                     )
+                    finalizer = call_finalizer
+                    call_finalizer = None
+                    if finalizer is not None:
+                        _accept_provider_call_without_replacing(finalizer)
                     continue
 
                 terminal_provider_succeeded = True
@@ -4062,6 +4231,7 @@ class AgentContextService:
                 stage = "answer_validation"
                 if answer_validator is not None:
                     _require_sync_none(answer_validator(action.answer, authorization))
+                stage = "answer_observer"
                 _emit_context_event(
                     event_sink,
                     execution_event(
@@ -4096,6 +4266,10 @@ class AgentContextService:
                 )
                 terminal_provider_succeeded = False
                 checkpoint_committed = True
+                finalizer = call_finalizer
+                call_finalizer = None
+                if finalizer is not None:
+                    _accept_provider_call_without_replacing(finalizer)
                 _emit_context_event(
                     event_sink,
                     execution_event(
@@ -4118,6 +4292,44 @@ class AgentContextService:
         except BaseException as failure:
             if checkpoint_committed:
                 raise
+            if call_finalizer is not None:
+                finalizer = call_finalizer
+                call_finalizer = None
+                if isinstance(failure, asyncio.CancelledError):
+                    _cancel_provider_call_without_replacing(finalizer)
+                elif stage in {"decode", "exhausted"} and isinstance(
+                    failure,
+                    ContextExecutionError,
+                ):
+                    code = (
+                        ContextProviderTerminalCode.ACTION_EXHAUSTED
+                        if stage == "exhausted"
+                        else ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE
+                    )
+                    _reject_provider_call_without_replacing(finalizer, code)
+                elif stage in {"action", "answer"} and isinstance(
+                    failure,
+                    ContextActionError,
+                ):
+                    _reject_provider_call_without_replacing(
+                        finalizer,
+                        ContextProviderTerminalCode.RESPONSE_SEMANTIC_REJECTED,
+                    )
+                elif stage == "answer_validation":
+                    _reject_provider_call_without_replacing(
+                        finalizer,
+                        ContextProviderTerminalCode.ANSWER_VALIDATION_FAILED,
+                    )
+                elif stage == "reference_complete":
+                    _fail_provider_call_without_replacing(
+                        finalizer,
+                        ContextProviderTerminalCode.REFERENCE_RUNTIME_FAILED,
+                    )
+                else:
+                    _fail_provider_call_without_replacing(
+                        finalizer,
+                        ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED,
+                    )
             if isinstance(failure, ContextSourceError) or stage in {
                 "source",
                 "source_revalidation",

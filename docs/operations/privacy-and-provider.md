@@ -9,10 +9,9 @@
 > conversation-RAG store and noninteractive lifecycle/authorized-search
 > commands, plus interactive settings, startup composition, automatic
 > preflight, and private one-turn `/rag` arming.
-> They also cover the content-safe runtime debug log, the direct bounded
+> They also cover the content-safe runtime debug log, automatic bounded
 > agent-exchange store, and the separate bounded store for eligible rejected
-> provider responses. Provider-call capture into the exchange store is not yet
-> wired.
+> provider responses.
 > They do not make either provider, its executable, the workspace, or the
 > terminal trusted.
 > Inline canonical references in provider-bound prompt text are active.
@@ -537,12 +536,13 @@ fail-open storage behavior.
 ## Agent-exchange privacy
 
 `debug_logs/agent_exchanges/` is intentionally content-bearing. Its schema-v1
-records can persist the caller-supplied body of a provider `request`,
-`response`, or `no_response` event, correlated by session, conversation/debate
-scope, canonical story agent, provider, and physical-call exchange ID. This
-storage API exists now, but no installed backend/runtime capture path calls it
-yet. The presence of the directory therefore currently reflects direct API use,
-not automatic provider-call coverage.
+records can persist a provider `request`, `response`, `no_response`, or
+`outcome` event, correlated by session, conversation/debate scope, canonical
+story agent, provider, and physical-call exchange ID. `AgentBackend` now
+automatically offers every established or contextual physical structured call
+to this channel: request before invocation, valid `ProviderResult` before
+accounting/decode/thread persistence, then one closed terminal attempt. Direct
+store use remains possible.
 
 Each content value is plaintext strict UTF-8. The retained value is the longest
 complete prefix at or below 262,144 bytes; its retained/full UTF-8 byte counts
@@ -554,14 +554,21 @@ characters, terminal columns, UTF-16 code units, or rendered width. The stored
 omitted suffix. It is a comparison fact, not encryption, redaction, a signature,
 origin authentication, or a way to reconstruct truncated text.
 
-The closed schema has no fields for provider stderr, raw stdout or NDJSON
-transport streams, authentication or catalog output, browser/OAuth facts,
-environment values, tokens, or credentials. That structural exclusion is not
-semantic filtering: if a caller places a secret, raw stream, or credential
-inside `content`, the store preserves it like any other content. The future
-capture owner must map only the intended physical provider request and
-response/no-response values and must not copy excluded process channels into
-`content`.
+Automatic request content is canonical JSON of only `call_kind`, `payload`,
+`prior_thread_id`, and `schema`. Response content contains only
+`actual_transport_utf8_bytes`, `response_text`, `thread_id`, and nullable
+validated usage. Terminal content contains only a closed `outcome` and fixed
+`code`, never arbitrary exception text. “Exact” means this exact
+provider-neutral capture input/evidence subject to the prefix bound, not an
+unbounded raw process transcript; inspect the outer full/retained counts,
+truncation flag, and full-input digest before treating nested JSON as complete.
+
+Automatic capture never reads or copies provider stderr, raw stdout or NDJSON,
+native tool/reasoning streams, authentication/catalog output, browser/OAuth
+facts, environment values, tokens, credentials, or arbitrary exception text.
+That exclusion is not semantic redaction: payload/schema or provider
+`response_text` may contain secrets, and a direct caller can place excluded
+material inside `content`.
 
 Sequence values, millisecond timestamps, provider/agent/scope identities,
 exchange correlation, byte counts, truncation, and digests remain sensitive
@@ -581,7 +588,7 @@ Do not publish the store or attach it to an issue without reviewing every
 retained line. Provider text is untrusted even when it resembles JSON,
 Markdown, shell code, or instructions.
 
-There is no `/exchanges` command or bundled viewer in this storage issue. A
+There is no `/exchanges` command or bundled viewer yet. A
 direct Python consumer can first use content-free `inventory(session_id)` and
 then request the immutable snapshot for one exact scope and agent. If raw JSONL
 must be inspected before viewer integration lands, use a trusted local
@@ -597,20 +604,27 @@ secure-erasure promise; provider-native or remote copies and process/terminal
 copies remain independent. There is no retention setting, redaction hook,
 selective delete command, or secure-delete API.
 
-Future capture is required to wrap storage fail-open so a write failure cannot
-replace the provider result or exception. Consequently, a missing store,
-sequence gap, absent exchange ID, or storage failure never proves that no
-provider call occurred. Conversely, `io_failed` does not prove the record is
-absent: cleanup can fail after a complete append became durable. Inspect the
-exact selection before retrying or drawing an audit conclusion.
+Capture advances call-local state before each append, suppresses every capture
+or storage failure, and never retries. A request failure disables the exchange;
+a later failure can leave request-only or response-without-outcome history.
+Consequently, a missing store, gap, exchange, response, or outcome never proves
+that no provider call or result occurred. Conversely, `io_failed` does not
+prove a record is absent. Do not retry provider work merely to fill diagnostics.
+
+The historical malformed Antigravity no-result pattern would retain only a
+request plus a fixed `provider_failure` outcome when both appends succeed. It
+would contain no response and would not import native tool/reasoning or NDJSON
+streams.
 
 This store is independent of `debug_logs/runtime.jsonl` and
 `debug_logs/provider_error_responses/`. It never imports, validates, counts,
 prunes, or repairs either sibling. The runtime log remains content-safe. The
-provider-error store remains the already-wired best-effort channel for only a
-completed response rejected by decoding; agent-exchange storage is the future
-request/response/no-response sequence channel and does not replace that
-artifact. See the exact [schema and bounds](../reference/configuration/session-storage.md#agent-exchange-storage),
+provider-error store remains the separate best-effort channel for an eligible
+completed response rejected by decoding. Ordering is unchanged: the exchange
+response is attempted first, decode may submit the #375 artifact, then exchange
+capture attempts its rejected outcome. The stores do not import or double-write
+one another. See the exact
+[schema and bounds](../reference/configuration/session-storage.md#agent-exchange-storage),
 [persistence lifecycle](../design/persistence.md#agent-exchange-persistence),
 and [filesystem controls](filesystem-safety.md#agent-exchange-filesystem-safety).
 

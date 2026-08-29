@@ -37,6 +37,17 @@ class AgentExchangeRequestType(StrEnum):
     REQUEST = "request"
     RESPONSE = "response"
     NO_RESPONSE = "no_response"
+    OUTCOME = "outcome"
+
+
+class AgentExchangeOutcome(StrEnum):
+    """Closed terminal outcomes for one physical provider call."""
+
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    PROVIDER_FAILURE = "provider_failure"
+    CANCELLED = "cancelled"
+    POST_RESPONSE_RUNTIME_FAILURE = "post_response_runtime_failure"
 
 
 class AgentExchangeScopeKind(StrEnum):
@@ -304,6 +315,7 @@ __all__ = [
     "AgentExchangeAppendReceipt",
     "AgentExchangeFailure",
     "AgentExchangeInventoryItem",
+    "AgentExchangeOutcome",
     "AgentExchangeProvider",
     "AgentExchangeRecordInput",
     "AgentExchangeRequestType",

@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 88.
+Importable production units indexed: 89.
 
-Direct internal dependency edges indexed: 356.
+Direct internal dependency edges indexed: 362.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -56,6 +56,7 @@ __main__ -> cli -> conversation_rag_cli
                  |               -> writing_artifacts/writing_artifacts.repository
                  |               -> writing_artifacts.runtime_references
                  -> backend -> agent_context/agent_context.service
+                 |          -> agent_exchanges/agent_exchanges.capture
                  |          -> antigravity_adapter -> agent_context/models
                  |          |                        -> provider_adapter
                  |          |                        -> provider_process
@@ -187,6 +188,8 @@ agent_context.sources -> agent_context.actions/manifest
                       -> writing_artifacts.filesystem_sources
                       -> writing_artifacts.references/repository
 agent_exchanges -> agent_exchanges.contracts/storage
+agent_exchanges.capture -> agent_exchanges.contracts/storage
+                        -> provider_adapter/workspace
 agent_exchanges.contracts -> agents/errors
 agent_exchanges.storage -> agents/agent_exchanges.contracts/workspace
 provider_adapter -> agent_context/models
@@ -330,7 +333,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** No project-root export. The package facade exposes
   exactly `AGENT_EXCHANGE_SCHEMA_VERSION`,
   `AGENT_EXCHANGE_CONTENT_MAX_BYTES`, `AGENT_EXCHANGE_TOTAL_MAX_BYTES`,
-  `AgentExchangeProvider`, `AgentExchangeRequestType`,
+  `AgentExchangeProvider`, `AgentExchangeRequestType`, `AgentExchangeOutcome`,
   `AgentExchangeScopeKind`, `AgentExchangeFailure`,
   `AgentExchangeStorageError`, `AgentExchangeRecordInput`,
   `AgentExchangeAppendReceipt`, `AgentExchangeInventoryItem`,
@@ -340,9 +343,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `agent_exchanges.storage`.
 - **State, resources, and side effects:** Re-exports immutable contracts and
   the I/O-free store constructor only. Importing creates no filesystem state,
-  lock, descriptor, thread, subprocess, or provider interaction.
+  lock, descriptor, thread, subprocess, or provider interaction. The separate
+  direct-module capture lifecycle is intentionally not imported or re-exported.
 - **Primary verification/documentation:**
   `tests/test_agent_exchange_contracts.py`,
+  `tests/test_agent_exchange_capture.py`,
   `tests/test_agent_exchange_storage.py`,
   `docs/design/persistence.md#agent-exchange-persistence`,
   `docs/operations/filesystem-safety.md#agent-exchange-filesystem-safety`,
@@ -356,7 +361,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   classifiable failure language.
 - **Supported surface:** The package facade supports schema version 1, the
   262,144-byte per-content bound, the 16,777,216-byte managed-JSONL bound, the
-  exact provider/request/scope/failure enums, fixed safe
+  exact provider/request/outcome/scope/failure enums, fixed safe
   `AgentExchangeStorageError`, and frozen slotted input, append-receipt,
   inventory, selection, and snapshot values. Input accepts only session,
   scope, canonical agent, provider, exchange, request-type, and strict-UTF-8
@@ -370,10 +375,49 @@ every intermediate arrow. The current runtime graph is acyclic.
   immutable-contract definitions without I/O.
 - **Primary verification/documentation:**
   `tests/test_agent_exchange_contracts.py`,
+  `tests/test_agent_exchange_capture.py`,
   `tests/test_agent_exchange_storage.py`,
   `docs/design/persistence.md#agent-exchange-persistence`,
   `docs/reference/configuration/session-storage.md`, and
   `docs/operations/privacy-and-provider.md`.
+
+### `story_writing_agents.agent_exchanges.capture`
+
+- **Source:** `src/story_writing_agents/agent_exchanges/capture.py`
+- **Responsibility:** Coordinate fail-open recording for one physical provider
+  exchange.
+- **Supported surface:** No project-root or `agent_exchanges`-facade-supported
+  API. The direct-module package-internal `__all__` exposes exactly
+  `WorkspaceAgentExchangeCapture`, `AgentExchangeCaptureLifecycle`, and
+  `AgentExchangeTerminalCode`. The workspace capture's I/O-free constructor
+  binds the durable store; `begin(...)` requires exact session, conversation or
+  debate scope, canonical agent, provider, and `ProviderInvocation` values and
+  records the request before returning a shared `exchange_<uuidhex>` lifecycle.
+  That lifecycle admits at most one exact `ProviderResult` response and one
+  closed accepted, rejected, provider-failure, cancelled, or post-response
+  runtime-failure terminal attempt. The 13 terminal codes are fixed enums; no
+  arbitrary exception, diagnostic, metadata, or provider-native stream enters
+  the contract.
+- **Direct internal dependencies:** `agent_exchanges.contracts`,
+  `agent_exchanges.storage`, `provider_adapter`, and `workspace`.
+- **State, resources, and side effects:** Import and construction perform no
+  filesystem work. A successful begin assigns one transient UUID correlation,
+  appends canonical compact JSON for the exact invocation schema, payload,
+  prior thread, and call kind, and returns a lifecycle retaining that exact
+  identity plus a private thread lock and state. A completed response projects
+  only response text, result thread, exact-or-null usage, and exact-or-null
+  transport bytes; a terminal projects only outcome and fixed code. Response
+  and terminal state advances before append, so duplicate or failed attempts
+  are never retried. Every begin, response, or terminal serialization,
+  validation, or storage `BaseException` is fail-open; a failed begin returns a
+  disabled lifecycle. The retained
+  `WorkspaceAgentExchangeStore` remains the sole filesystem, locking, rotation,
+  pruning, sequence, timestamp, truncation, and snapshot owner.
+- **Primary verification/documentation:**
+  `tests/test_agent_exchange_capture.py`,
+  `tests/test_agent_exchange_contracts.py`,
+  `tests/test_agent_context_execution.py`, `tests/test_codex_backend.py`, and
+  `tests/test_antigravity_parity.py`.
 
 ### `story_writing_agents.agent_exchanges.storage`
 
@@ -386,8 +430,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   millisecond timestamp, `inventory(session_id)` returns content-free exact
   scope selections, and `snapshot(selection)` returns immutable canonical
   strict-UTF-8 JSONL bytes without a writable path or handle. Storage failures
-  cross the boundary only as fixed `AgentExchangeFailure` codes and prose; the
-  future capture caller owns fail-open policy.
+  cross the boundary only as fixed `AgentExchangeFailure` codes and prose;
+  `agent_exchanges.capture` owns fail-open submission policy.
 - **Direct internal dependencies:** `agents`, `agent_exchanges.contracts`, and
   `workspace`.
 - **State, resources, and side effects:** Import and construction perform no
@@ -582,8 +626,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ContextInvocationBinding`,
   `ContextInvocationRequest`, `ContextInvocationResult`,
   `ContextInvocationSession`, `ContextInvocationState`, `ContextProvider`,
-  `ContextProviderCallRequest`, `ContextProviderCallResult`,
-  `ContextProviderFailureFacts`, `ContextReferencePreludeRequest`,
+  `ContextProviderCallFinalizer`, `ContextProviderCallRequest`,
+  `ContextProviderCallResult`, `ContextProviderFailureFacts`,
+  `ContextProviderTerminalCode`, `ContextReferencePreludeRequest`,
   `ContextReferencePreludeResult`, `ContextReadReceipt`, `ContextScope`,
   `ContextSourceClassification`, `context_provider_failure_facts`, and
   `record_context_provider_failure`. `AgentContextService` derives the exact
@@ -631,6 +676,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   the substantive action budget, and must complete before verified ledger
   commit. The two failure-fact helpers attach and recover only validated
   content-free physical call facts without replacing the original exception.
+  Each substantive raw result carries one required, synchronous, repr-hidden,
+  comparison-excluded `ContextProviderCallFinalizer`; the service invokes it
+  exactly once after semantic acceptance or rejection, cancellation, or a
+  closed post-response runtime failure. Search/read acceptance follows complete
+  observation construction and lifecycle-event delivery; terminal-answer
+  acceptance precedes post-commit observer delivery, and finalizer
+  `BaseException` never replaces contextual state or control flow. The
+  service-owned protocol keeps capture adaptation in `backend`; this module
+  imports no exchange contract or store.
   Its supported direct-module-only `ContextExecutionEventKind`, frozen
   `ContextExecutionEvent`, and synchronous `ContextExecutionEventSink` expose
   fixed lifecycle outcomes with exact scope and operation identity, required
@@ -657,8 +711,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   content-free workspace digest, and process-local async locks keyed by exact
   scope/provider/definition/policy identity. Each invocation creates bounded
   transient manifests, source materials, provider payload mappings, call
-  accounting, and an invocation session whose 32-byte HMAC secret, handle
-  table, counters, and receipts are cleared on answer or failure. Source I/O is
+  accounting, one current borrowed call finalizer, and an invocation session
+  whose 32-byte HMAC secret, handle table, counters, and receipts are cleared
+  on answer or failure. Source I/O is
   delegated to the injected registry adapters, ledger persistence remains
   ledger-owned, and provider transport/native-thread storage remains delegated
   through `ContextProvider`. Every physical call is appended in order; only a
@@ -676,6 +731,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:**
   `tests/test_agent_context_service.py`,
   `tests/test_agent_context_execution.py`,
+  `tests/test_agent_exchange_capture.py`,
   `tests/test_agent_context_runtime_adoption.py`,
   `tests/test_agent_context_release_scenarios.py`,
   `tests/test_context_accounting_optimized.py`, `tests/test_codex_backend.py`,
@@ -857,7 +913,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   decoders and enforce exact request correlation before orchestration can
   authorize a contextual checkpoint.
 - **Direct internal dependencies:** `agent_context`, `agent_context.service`,
-  `agents`, `antigravity_adapter`, `codex_adapter`, `config`,
+  the supported `agent_exchanges` facade, the internal
+  `agent_exchanges.capture` module, `agents`, `antigravity_adapter`,
+  `codex_adapter`, `config`,
   `conversation_retrieval`, `debug_log`, `errors`, `interactive_settings`,
   `models`, `provider_adapter`, `provider_error_artifacts`, `provider_process`,
   `session_lifecycle`, and
@@ -915,7 +973,28 @@ every intermediate arrow. The current runtime graph is acyclic.
   failures, requests, prompts, accepted replies, stderr or raw provider streams,
   credentials, authentication output, and provider-native history remain
   ineligible; response bodies are neither rendered nor sent through
-  `debug_log`. For a referenced logical invocation, the
+  `debug_log`. Independently, the backend retains one construction-time,
+  I/O-free `WorkspaceAgentExchangeCapture` and invokes it only at the two
+  physical structured-call seams. Each exactly correlated conversation or
+  debate call records its canonical schema, payload, prior thread, and call
+  kind before adapter invocation; a valid completed `ProviderResult` is
+  submitted immediately after adapter return and before accounting observation,
+  decoding, rejected-response artifact submission, or thread persistence. The
+  same successfully begun exchange identity then receives exactly one closed
+  accepted, rejected, provider-failure, cancelled, or post-response
+  runtime-failure terminal attempt. Legacy outcomes finalize locally;
+  substantive context results carry
+  a service-owned finalizer adapter until the contextual action lifecycle knows
+  its outcome, while mandatory-reference preludes finalize in the backend after
+  decode, authorization, handling, and context construction. Missing or
+  ambiguous legacy correlation disables capture, and every capture call catches
+  `BaseException` without changing provider execution, accounting, thread,
+  taint, decoding, artifact, reference, cancellation, or exception semantics.
+  The capture sees only provider-neutral invocation/result fields and fixed
+  terminal codes, never stderr, stdout, native NDJSON, authentication,
+  credentials, environment values, or arbitrary exception text; its package
+  remains the sole exchange schema, state, and storage owner. For a referenced
+  logical invocation, the
   same thread lock first runs one strict content-free read-action prelude. The
   provider must echo the exact correlation and complete ordered path/range
   batch under a request-specific output schema before the synchronous
@@ -1016,6 +1095,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   locks, schema, and rotation.
 - **Primary verification/documentation:**
   `tests/test_agent_context_execution.py`,
+  `tests/test_agent_exchange_capture.py`,
   `tests/test_agent_context_runtime_adoption.py`, `tests/test_codex_backend.py`,
   `tests/test_context_accounting_baseline.py`,
   `tests/test_context_accounting_optimized.py`, `tests/test_prompts.py`,
@@ -5839,6 +5919,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/operations/recovery-and-limitations.md`.
 
 ## Consistency Notes
+
+- Agent-exchange capture remains one-way and isolated from provider-native
+  transport. `backend` alone composes the feature and depends explicitly on
+  the supported `agent_exchanges` facade for durable provider/scope enums and
+  on the direct-only `agent_exchanges.capture` module for its internal
+  lifecycle; capture depends inward on
+  `agent_exchanges.contracts`, `agent_exchanges.storage`, `provider_adapter`,
+  and `workspace`. The service-owned contextual finalizer protocol keeps
+  `agent_context.service` independent from exchange contracts and storage, so
+  the feature adds exactly one module and six internal edges without a cycle.
+  The root and `agent_context` facades remain 120 and 11 names;
+  `agent_exchanges`, its contracts module, its direct-only capture module, and
+  `agent_context.service` expose exactly 15, 14, 3, and 24 names respectively.
+  Capture exclusively submits request, completed-response, and closed-outcome
+  records through the #412 store. It does not import, scan, prune, or alter
+  `provider_error_artifacts`, whose separate #375 eligibility and
+  `provider_error_responses` ownership remain unchanged.
 
 - Live agent-context lifecycle progress remains one-way and content-free:
   `agent_context.service` owns the direct-module event contract and

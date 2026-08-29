@@ -188,6 +188,11 @@ class AgentExchangeStorageBehaviorTests(unittest.TestCase):
                 "",
                 AgentExchangeProvider.ANTIGRAVITY,
             ),
+            (
+                AgentExchangeRequestType.OUTCOME,
+                '{"code":"accepted","outcome":"accepted"}',
+                AgentExchangeProvider.ANTIGRAVITY,
+            ),
         ):
             receipts.append(
                 self.store.append(
@@ -201,17 +206,17 @@ class AgentExchangeStorageBehaviorTests(unittest.TestCase):
             )
         snapshot = self.store.snapshot(_selection())
         records = [json.loads(line) for line in snapshot.jsonl_bytes.splitlines()]
-        self.assertEqual([item.workspace_sequence for item in receipts], [1, 2, 3])
-        self.assertEqual([item.sequence for item in receipts], [1, 2, 3])
-        self.assertEqual(snapshot.record_count, 3)
-        self.assertEqual((snapshot.first_sequence, snapshot.last_sequence), (1, 3))
+        self.assertEqual([item.workspace_sequence for item in receipts], [1, 2, 3, 4])
+        self.assertEqual([item.sequence for item in receipts], [1, 2, 3, 4])
+        self.assertEqual(snapshot.record_count, 4)
+        self.assertEqual((snapshot.first_sequence, snapshot.last_sequence), (1, 4))
         self.assertEqual(
             [record["request_type"] for record in records],
-            ["request", "response", "no_response"],
+            ["request", "response", "no_response", "outcome"],
         )
         self.assertEqual(
             [record["provider"] for record in records],
-            ["codex", "antigravity", "antigravity"],
+            ["codex", "antigravity", "antigravity", "antigravity"],
         )
         self.assertEqual(
             {record["exchange_id"] for record in records}, {"shared_exchange"}

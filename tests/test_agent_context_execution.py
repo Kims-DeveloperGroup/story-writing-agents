@@ -8,7 +8,7 @@ import inspect
 import json
 import tempfile
 import unittest
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import FrozenInstanceError, fields, replace
 from types import SimpleNamespace
@@ -66,6 +66,7 @@ from story_writing_agents.agent_context.service import (
     ContextProviderCallRequest,
     ContextProviderCallResult,
     ContextProviderFailureFacts,
+    ContextProviderTerminalCode,
     ContextReferencePreludeRequest,
     ContextReferencePreludeResult,
     ContextSourceClassification,
@@ -224,6 +225,28 @@ _Response = str | BaseException | Callable[
 ]
 
 
+class _RecordingFinalizer:
+    """Synchronous provider-call terminal recorder used by the service seam."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, ContextProviderTerminalCode | None]] = []
+
+    def accepted(self) -> None:
+        self.calls.append(("accepted", None))
+
+    def rejected(self, code: ContextProviderTerminalCode) -> None:
+        self.calls.append(("rejected", code))
+
+    def cancelled(self) -> None:
+        self.calls.append(("cancelled", None))
+
+    def post_response_runtime_failure(
+        self,
+        code: ContextProviderTerminalCode,
+    ) -> None:
+        self.calls.append(("post_response_runtime_failure", code))
+
+
 class _ScriptedProvider:
     """Deterministic provider seam retaining scoped native continuations."""
 
@@ -254,6 +277,7 @@ class _ScriptedProvider:
         self.invocation_entries = 0
         self.second_invocation_entered = asyncio.Event()
         self.inspections: list[tuple[object, str, str | None]] = []
+        self.finalizers: list[_RecordingFinalizer] = []
         self._next_thread = 1
 
     @asynccontextmanager
@@ -319,7 +343,9 @@ class _ScriptedProvider:
             thread_id = f"thread-{self._next_thread}"
             self._next_thread += 1
         self.threads[key] = thread_id
-        return ContextProviderCallResult(response, thread_id, accounting)
+        finalizer = _RecordingFinalizer()
+        self.finalizers.append(finalizer)
+        return ContextProviderCallResult(response, thread_id, accounting, finalizer)
 
     async def prepare_references(
         self,
@@ -690,6 +716,7 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertEqual(result.answer, _PRIVATE_ANSWER)
         self.assertEqual(len(provider.calls), 1)
         self.assertEqual(hook_calls, 1)
+        self.assertEqual(provider.finalizers[0].calls, [("accepted", None)])
         self.assertEqual(set(provider.calls[0].payload), {"c", "q", "i"})
         self.assertEqual(provider.calls[0].payload["q"][0], "conversation")
         self.assertIsNone(provider.calls[0].expected_thread_id)
@@ -766,6 +793,10 @@ class ContextExecutionLifecycleTests(ContextExecutionTestCase):
         self.assertEqual(result.authorization.used_evidence, result.authorization.completed_evidence)
         self.assertTrue(
             all(call.accounting.state is ProviderCallState.SUBMITTED for call in result.provider_calls)
+        )
+        self.assertEqual(
+            [finalizer.calls for finalizer in provider.finalizers],
+            [[("accepted", None)]] * 3,
         )
 
     async def test_compatible_ready_is_delta_and_provider_history_loss_bootstraps(self) -> None:
@@ -1008,6 +1039,21 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
             ContextExecutionErrorCode.ACTION_EXHAUSTED,
         )
         self.assertEqual(len(provider.calls), 5)
+        self.assertEqual(
+            [finalizer.calls for finalizer in provider.finalizers],
+            [
+                [("accepted", None)],
+                [("accepted", None)],
+                [("accepted", None)],
+                [("accepted", None)],
+                [
+                    (
+                        "rejected",
+                        ContextProviderTerminalCode.ACTION_EXHAUSTED,
+                    )
+                ],
+            ],
+        )
         self.assertEqual(len(provider.responses), 1)
         self.assertEqual(
             tuple(call.payload["q"][1] for call in provider.calls[:-1]),
@@ -1047,6 +1093,16 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
                 self.assertIs(inspection.record.state, ContextLedgerRecordState.TAINTED)
                 self.assertIs(inspection.record.attempt.outcome, expected)
                 self.assertEqual(bool(provider.tainted), tainted)
+                if label == "malformed":
+                    self.assertEqual(
+                        provider.finalizers[0].calls,
+                        [
+                            (
+                                "rejected",
+                                ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+                            )
+                        ],
+                    )
 
         for label, failure, expected in (
             ("timeout", RuntimeError("PRIVATE_TIMEOUT"), ContextLedgerAttemptOutcome.TIMED_OUT),
@@ -1091,6 +1147,15 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
         inspection = self.inspect(provider, request)
         self.assertIs(inspection.record.attempt.outcome, ContextLedgerAttemptOutcome.MALFORMED)
         self.assertIsNone(inspection.record.ready_checkpoint)
+        self.assertEqual(
+            provider.finalizers[0].calls,
+            [
+                (
+                    "rejected",
+                    ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+                )
+            ],
+        )
 
         self.publish()
         source_request = self.request(
@@ -1110,6 +1175,15 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
         inspection = self.inspect(source_provider, source_request)
         self.assertIs(inspection.record.attempt.outcome, ContextLedgerAttemptOutcome.SOURCE_INVALID)
         self.assertIsNone(inspection.record.ready_checkpoint)
+        self.assertEqual(
+            source_provider.finalizers[0].calls,
+            [
+                (
+                    "post_response_runtime_failure",
+                    ContextProviderTerminalCode.CONTEXT_RUNTIME_FAILED,
+                )
+            ],
+        )
 
     def test_frozen_failure_mapping_covers_all_service_boundaries(self) -> None:
         cases = (

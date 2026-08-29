@@ -7,7 +7,8 @@
 > repository operation and supplies a fresh authorized coordinator to every
 > addressed provider invocation. In provider-bound shell prompt spans,
 > `$`/`$$` discovery and viewer-driven attachment construct those same
-> indicators before normal submission.
+> indicators before normal submission. Every backend physical structured call
+> is also offered to the bounded agent-exchange diagnostic channel.
 
 Key terms: **definition**—stable context for one role; **fingerprint**—its
 hash-derived identity; **binding**—the provider object for a definition;
@@ -75,8 +76,11 @@ state. Every canonically accountable physical call is offered exactly once on
 success, failure, or cancellation to an optional internal observation sink. An
 absent sink or any sink failure cannot change the domain result. An input that
 cannot be canonically encoded has no accounting record. Current contextual
-execution separately persists a content-free ledger v2; it does not persist
-prompt, source, candidate, reference, or response prose.
+execution separately persists a content-free ledger v2; that ledger does not
+persist prompt, source, candidate, reference, or response prose. The independent
+agent-exchange diagnostic store does persist bounded provider-neutral request
+and response projections as described below; it is not part of accounting or
+checkpoint authority.
 
 Provider token usage is evidence reported by the provider, not an estimate.
 Only recognized counters whose values are exact nonnegative integers (and not
@@ -238,6 +242,41 @@ authorized facts remain searchable. Included conversation capture itself
 performs no search, but the subsequent debate invocation may search its
 authorized focused conversation, writing artifacts, active debate, or own
 state.
+
+<a id="agent-exchange-capture-boundary"></a>
+
+## Agent-exchange capture boundary
+
+`AgentBackend` owns two automatic best-effort capture seams: the established
+structured-call path and the provider-managed contextual physical-call path.
+Each seam records the request immediately before `adapter.invoke()`. When the
+adapter returns an exact `ProviderResult`, it records that completed result
+immediately, before accounting observation, structured/domain decoding, the
+separate rejected-response artifact, or provider-thread persistence. One
+closed terminal attempt then classifies the physical call as `accepted`,
+`rejected`, `provider_failure`, `cancelled`, or
+`post_response_runtime_failure` without changing the provider result or
+exception.
+
+The request diagnostic is canonical JSON containing only `call_kind`,
+`payload`, `prior_thread_id`, and `schema`. The completed-response diagnostic
+contains only `actual_transport_utf8_bytes`, `response_text`, `thread_id`, and
+nullable validated `usage`. The terminal diagnostic contains only `outcome`
+and one fixed code. These are exact provider-neutral inputs and evidence, not
+Codex standard streams or Antigravity NDJSON/tool/reasoning events. Storage may
+retain only the longest complete UTF-8 prefix at or below 262,144 bytes; its
+full byte/code-point counts and SHA-256 still describe the complete capture
+input.
+
+All records for a captured call share a fresh `exchange_<32 lowercase hex>`
+identity plus the exact supplied session, conversation/debate scope, agent, and
+provider. A mandatory-reference prelude is a separate physical call but
+inherits the same outer logical scope as its substantive call. Capture has no
+retry or replay path, and any capture/storage failure is suppressed after its
+state transition. Missing records or sequence gaps therefore do not prove that
+no provider call occurred. See the exact
+[schema and nested shapes](../reference/configuration/session-storage.md#agent-exchange-storage)
+and [privacy boundary](../operations/privacy-and-provider.md#agent-exchange-privacy).
 
 ## Provider process boundaries
 

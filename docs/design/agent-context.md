@@ -53,6 +53,40 @@ answer and references, then the writing-artifact repository performs one
 recoverable catalog-last transaction. Context READY authority advances only
 after its own verified service commit; it is not an artifact publication log.
 
+<a id="physical-call-exchange-finalization"></a>
+
+## Physical-call exchange finalization
+
+The backend begins one best-effort agent-exchange lifecycle immediately before
+each contextual physical provider invocation, including a separate
+mandatory-reference prelude. The request, any valid raw `ProviderResult`, and
+one closed terminal attempt share the exact `ContextScope` session,
+conversation/debate kind and ID, agent, provider, and generated exchange ID.
+The prelude therefore inherits the outer conversation/debate scope; storage
+does not invent a separate reference scope or resolve a subject label.
+
+Response capture happens before accounting observation and before the context
+service receives the result. Terminal finalization stays with the component
+that can prove the contextual outcome:
+
+- a SEARCH or READ call becomes `accepted` only after its observation has been
+  produced and the completion observer has received it;
+- an ANSWER call becomes `accepted` immediately after the READY checkpoint
+  commit and before the later `checkpoint_advanced` observer delivery;
+- a successful mandatory-reference prelude becomes `accepted` in the backend
+  before its result is returned to the contextual service; and
+- semantic/decode rejection, cancellation, or a post-response runtime failure
+  closes the still-open physical call with a fixed terminal code.
+
+Finalization is append-only. A later observer, artifact-publication, or outer
+workflow failure does not retroactively replace an already recorded
+`accepted` outcome. Conversely, a storage failure is swallowed after the
+capture state advances, so a response or outcome record can be missing even
+though the contextual call proceeded. There is no diagnostic retry, replay,
+or inference from sequence gaps. The ledger and progress channels remain
+content-free and authoritative for their own responsibilities; exchange JSONL
+is bounded plaintext diagnostic evidence only.
+
 <a id="manifest-priorities-and-planning"></a>
 ## Manifest, priorities, and planning
 
@@ -232,8 +266,11 @@ Public progress, metrics, and the ledger contain no prompt/query, candidate,
 source or reference body, excerpt, provider response, absolute path, private
 state, exception payload, or provider-thread detail. Debug logging records only
 fixed `agent_context` outcome categories and safe scope IDs, not observer
-history. Even content-free IDs, counts, timing, and relative topology are
-sensitive plaintext and require normal workspace protection.
+history. The separate agent-exchange store does contain bounded canonical
+request and completed-response projections for these same physical calls; it
+is not a progress or ledger field. Even content-free IDs, counts, timing, and
+relative topology are sensitive plaintext and require normal workspace
+protection.
 
 There is no semantic RAG, new dependency, free-form durable memory, provider
 opaque correctness source, arbitrary filesystem discovery, or cross-agent
