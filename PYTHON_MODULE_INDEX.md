@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 76.
+Importable production units indexed: 84.
 
-Direct internal dependency edges indexed: 311.
+Direct internal dependency edges indexed: 346.
 
 ## Current Dependency Direction
 
@@ -36,7 +36,8 @@ __main__ -> cli -> conversation_rag_cli
                  -> provider_catalog -> (standard library only)
                  -> run_inputs -> errors
                  -> debug_log -> agents/provider_adapter/workspace
-                 -> orchestrator -> conversation_rag_runtime
+                 -> orchestrator -> agent_context.actions/manifest/planning/service/sources
+                 |               -> conversation_rag_runtime
                  |               |  -> conversation_literal_search/conversation_rag
                  |               |  -> conversation_retrieval/conversation_search
                  |               |  -> conversation_storage.contracts/conversations
@@ -52,8 +53,12 @@ __main__ -> cli -> conversation_rag_cli
                  |               -> errors/models/session_lifecycle/workspace
                  |               -> writing_artifacts/writing_artifacts.repository
                  |               -> writing_artifacts.runtime_references
-                 -> backend -> antigravity_adapter -> models/provider_adapter/provider_process
-                 |          -> codex_adapter -> agents/config/errors/models
+                 -> backend -> agent_context/agent_context.service
+                 |          -> antigravity_adapter -> agent_context/models
+                 |          |                        -> provider_adapter
+                 |          |                        -> provider_process
+                 |          -> codex_adapter -> agent_context/agents/config
+                 |          |                 -> errors/models
                  |          |                 -> provider_adapter/provider_process
                  |          -> config/conversation_retrieval/debug_log
                  |          -> interactive_settings
@@ -77,7 +82,8 @@ interactive_controller._core -> interactive_controller._session_policy
 interactive_controller._session_policy -> errors/interactive_terminal/session_lifecycle
 interactive_controller._conversation_policy -> conversation_search/conversations
                                             -> errors/interactive_terminal/workspace
-interactive_controller._runtime_policy -> conversation_retrieval/conversation_search
+interactive_controller._runtime_policy -> agent_context.service
+                                       -> conversation_retrieval/conversation_search
                                        -> errors/interactive_terminal/models/workspace
 
 smoke -> agents/conversation_retrieval/conversation_search/conversations/debug_log
@@ -160,10 +166,25 @@ conversation_storage.sqlite -> conversation_literal_search/conversation_search
                             -> conversation_storage.sqlite_database
                             -> conversation_storage.sqlite_search_index
                             -> conversation_storage.composition/contracts
-orchestrator -> conversation_rag_runtime
+orchestrator -> agent_context.actions/manifest/planning/service/sources
+             -> conversation_rag_runtime
              -> conversation_storage.composition/contracts
 models -> conversations/agents/errors
-provider_adapter -> models
+agent_context -> agent_context.accounting
+agent_context.accounting -> (standard library only)
+agent_context.actions -> agent_context.manifest/planning
+agent_context.ledger -> agent_context.accounting/manifest/planning
+                     -> workspace
+agent_context.manifest -> (standard library only)
+agent_context.planning -> agent_context.manifest
+agent_context.service -> agent_context.accounting/actions/ledger
+                      -> agent_context.manifest/planning/sources
+                      -> workspace
+agent_context.sources -> agent_context.actions/manifest
+                      -> conversations/errors/models/workspace
+                      -> writing_artifacts.filesystem_sources
+                      -> writing_artifacts.references/repository
+provider_adapter -> agent_context/models
 provider_auth -> (standard library only)
 provider_catalog -> (standard library only)
 provider_process -> (standard library only)
@@ -295,6 +316,409 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:** `tests/test_workspace_and_config.py`,
   `docs/concepts.md`, and `docs/reference/configuration/agent-configuration.md`.
 
+### `story_writing_agents.agent_context`
+
+- **Source:** `src/story_writing_agents/agent_context/__init__.py`
+- **Responsibility:** Provide the internal provider-neutral agent-context
+  facade.
+- **Supported surface:** No project-root-supported API. The package facade
+  exposes exactly 11 package-internal accounting contracts:
+  `ContextComponentBytes`, `ContextComponentKind`, `JsonPath`,
+  `ProviderCallAccounting`, `ProviderCallKind`, `ProviderCallState`,
+  `ProviderJsonEncodingError`, `ProviderPayloadAccounting`, `ProviderUsage`,
+  `account_provider_payload`, and `canonical_provider_json`. This is the
+  facade's complete exposed surface. The package-internal `actions`, `ledger`,
+  `manifest`, `planning`, `service`, and `sources` modules intentionally remain
+  direct-module contracts and are not re-exported here.
+- **Direct internal dependencies:** `agent_context.accounting`.
+- **State, resources, and side effects:** Re-exports immutable values and pure
+  functions only. Importing performs no I/O and creates no mutable state or
+  external resource.
+- **Primary verification/documentation:**
+  `tests/test_agent_context_accounting.py`, `tests/test_codex_backend.py`,
+  `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`, and
+  `docs/design/prompts-and-provider.md`.
+
+### `story_writing_agents.agent_context.accounting`
+
+- **Source:** `src/story_writing_agents/agent_context/accounting.py`
+- **Responsibility:** Canonically encode and account for exact provider model
+  input without retaining its content.
+- **Supported surface:** No project-root-supported API. The owning package
+  exposes immutable component, payload, physical-call, state, and exact-usage
+  values; the stable call/component vocabularies; content-free
+  `ProviderJsonEncodingError`; and pure `canonical_provider_json` and
+  `account_provider_payload`. The compact insertion-ordered encoder emits
+  strict UTF-8 JSON with `ensure_ascii=False`; schema and payload component
+  counts partition every emitted byte exactly. Binding components permit
+  distinct content-free core-document path identities. Raw mandatory-reference
+  bytes are a validated non-additive subset, and missing or malformed provider
+  token metadata is never estimated.
+- **Direct internal dependencies:** None.
+- **State, resources, and side effects:** Owns no mutable module state or
+  external resource. Encoding and accounting use call-local memory only;
+  returned payload bytes remain content-bearing caller-owned transport input,
+  while every retained accounting value contains only kinds, safe identities,
+  counts, state, and exact optional usage. Importing performs no I/O.
+- **Primary verification/documentation:**
+  `tests/test_agent_context_accounting.py` and
+  `tests/test_context_accounting_baseline.py`, supported by
+  `tests/context_accounting_baseline_fixture.py` and
+  `tests/fixtures/agent_context/provider_context_baseline_v1.json`;
+  `tests/test_context_accounting_optimized.py`;
+  `tests/test_codex_backend.py`, `tests/test_antigravity_adapter.py`,
+  `tests/test_antigravity_parity.py`, and
+  `docs/design/prompts-and-provider.md`.
+
+### `story_writing_agents.agent_context.actions`
+
+- **Source:** `src/story_writing_agents/agent_context/actions.py`
+- **Responsibility:** Define the immutable agent-directed context action and
+  observation language.
+- **Supported surface:** No project-root or `agent_context`-facade-supported
+  API. The direct-module package-internal `__all__` exposes
+  `CONTEXT_ACTION_POLICY`, `ContextAction`, `ContextActionCorrelation`,
+  `ContextActionError`, `ContextActionErrorCode`, `ContextActionKind`,
+  `ContextActionObservation`, `ContextActionPolicy`, `ContextAnswerAction`,
+  `ContextAnswerAuthorization`, `ContextEvidenceReceipt`, `ContextReadAction`,
+  `ContextReadObservation`, `ContextSearchAction`, `ContextSearchHit`,
+  `ContextSearchObservation`, `ContextSearchQuery`, `ContextSourceBoundary`,
+  `ContextSourceBoundaryKind`, `ContextSourceEvidence`, `ContextSourceHandle`,
+  and `serialize_context_action_observation`. It owns exact invocation
+  correlation, canonical source-kind-constrained literal queries whose optional
+  writing-artifact directory prefix uses the reference-source path namespace
+  and must be shared by every query in one SEARCH action, tagged
+  whole/line/turn/record boundaries, ordered actions and observations,
+  content-free evidence receipts, repr-hidden excerpts, fixed limits and error
+  codes, exact source/authority/boundary evidence matrices, repr-hidden answer
+  payloads, and terminal answer authorizations bound to the manifest, ordered
+  completed evidence, used subset, answer/result digest, and unchanged pending
+  reference facts. Established direct observation serialization retains its
+  complete delimited object frames. Contextual serialization projects complete
+  tagged provider evidence into compact positional JSON frames: query order;
+  numeric alias and canonical source identity, kind, revision, digest, and
+  UTF-8 size; exact boundary identity, digest, and size; safe authority and
+  locator provenance; a fresh invocation handle; and snippet/truncation or
+  exact read content. It collapses only an explicit revision/source-digest
+  equality, while complete correlation and receipt facts remain on the
+  validated in-process values.
+- **Direct internal dependencies:** `agent_context.manifest` and
+  `agent_context.planning`.
+- **State, resources, and side effects:** Owns one frozen default policy and
+  pure immutable values only. Validation and serialization use call-local
+  memory; importing performs no I/O, entropy, registration, or mutation.
+- **Primary verification/documentation:**
+  `tests/test_agent_context_actions.py`,
+  `docs/design/agent-context.md`; module-inventory, dependency,
+  facade, and import-boundary assertions across
+  `tests/test_rag_module_and_packaging_boundary.py`,
+  `tests/test_session_lifecycle.py`, and
+  `tests/test_interactive_controller.py`.
+
+### `story_writing_agents.agent_context.sources`
+
+- **Source:** `src/story_writing_agents/agent_context/sources.py`
+- **Responsibility:** Adapt the fixed authorized owner domains into bounded
+  canonical context-source snapshots.
+- **Supported surface:** No project-root or `agent_context`-facade-supported
+  API. The direct-module package-internal `__all__` exposes
+  `CONTEXT_SOURCE_POLICY`, `ActiveDebateSourceAdapter`,
+  `ContextSourceDescriptor`, `ContextSourceError`, `ContextSourceErrorCode`,
+  `ContextSourcePolicy`, `ContextSourceRecord`, `ContextSourceRegistry`,
+  `ContextSourceSearchMatch`, `ContextSourceSnapshot`,
+  `FocusedConversationSourceAdapter`, `OwnAgentStateSourceAdapter`, and
+  `WritingArtifactSourceAdapter`. The non-facade package-internal
+  `writing_artifact_source_id(path)` helper is the single canonical source-ID
+  projection consumed by runtime composition. The exact four-slot registry
+  binds canonical writing artifacts, focused same-session conversation
+  authority, one active public debate, and the invoking agent's own session
+  state. The conversation adapter defaults to one focused conversation; its
+  explicit retrieval mode inventories all active conversations in the same
+  session through the borrowed public catalog/event-store ports, while its
+  captured-window mode projects one already-validated immutable focused
+  context without widening authority. It owns content-free
+  identities and revisions, exact physical artifact lines, canonical structured
+  conversation/debate/owner-state bodies, and repr-hidden strict-UTF-8 captures.
+  Active-debate records expose canonical public state first and durable messages
+  afterward, keeping state independently searchable/readable even when the
+  whole source exceeds the whole-handle cap. The module also owns record
+  boundaries, deterministic NFKC/casefold literal search, bounded artifact
+  context expansion, scan accounting, capture/re-read drift detection, and
+  fixed source limits and failures.
+- **Direct internal dependencies:** `agent_context.actions`,
+  `agent_context.manifest`, `conversations`, `errors`, `models`, `workspace`,
+  `writing_artifacts.filesystem_sources`, `writing_artifacts.references`, and
+  `writing_artifacts.repository`.
+- **State, resources, and side effects:** Adapters retain only borrowed public
+  owner collaborators and immutable scope identities. The registry owns no
+  cache, descriptor, lock, or file handle. Inventory performs stable
+  list/capture/re-list validation; capture double-reads mutable owners, while
+  captured immutable conversation windows are identity-validated once; search
+  prechecks manifest byte facts, acquires sources in canonical manifest order,
+  omits over-limit records without minting handles, and revalidates every
+  touched source after selection. All source bodies and normalization buffers
+  remain call-local. Importing performs no I/O.
+- **Primary verification/documentation:**
+  `tests/test_agent_context_sources.py`,
+  `tests/test_agent_context_runtime_adoption.py`,
+  `docs/design/agent-context.md`; module-inventory, dependency,
+  facade, and import-boundary assertions across
+  `tests/test_rag_module_and_packaging_boundary.py`,
+  `tests/test_session_lifecycle.py`, and
+  `tests/test_interactive_controller.py`.
+
+### `story_writing_agents.agent_context.service`
+
+- **Source:** `src/story_writing_agents/agent_context/service.py`
+- **Responsibility:** Coordinate workspace-scoped provider-neutral contextual
+  invocation lifecycles.
+- **Supported surface:** No project-root or `agent_context`-facade-supported
+  API. The direct-module package-internal `__all__` exposes
+  `AgentContextService`, `ContextExecutionError`,
+  `ContextExecutionErrorCode`, `ContextExecutionEvent`,
+  `ContextExecutionEventKind`, `ContextExecutionEventSink`,
+  `ContextInvocationBinding`,
+  `ContextInvocationRequest`, `ContextInvocationResult`,
+  `ContextInvocationSession`, `ContextInvocationState`, `ContextProvider`,
+  `ContextProviderCallRequest`, `ContextProviderCallResult`,
+  `ContextProviderFailureFacts`, `ContextReferencePreludeRequest`,
+  `ContextReferencePreludeResult`, `ContextReadReceipt`, `ContextScope`,
+  `ContextSourceClassification`, `context_provider_failure_facts`, and
+  `record_context_provider_failure`. `AgentContextService` derives the exact
+  workspace identity from the public canonical Workspace root, composes a
+  manifest and transient material from the four authorized source adapters,
+  plans against the scoped ledger checkpoint, reserves INCOMPLETE before any
+  physical provider call, and drives the finite SEARCH/READ/ANSWER loop through
+  the service-owned `ContextProvider` inversion. Every substantive call uses
+  one provider-neutral compact wire-v5 schema and a full-correlation-derived
+  URL-safe token in the fixed four-field response envelope. Initial payloads
+  carry compact current input plus only applicable candidate, named P2 document,
+  record-patch, tombstone, and mandatory-reference sections; continuations carry
+  only the exact untrusted observation. A later-round debate candidate remains
+  full text unless a named base/target record pointer or maximal Unicode-code-
+  point single splice reconstructs the exact latest P0 candidate from retained,
+  resolved provider state and its complete digest/size facts; the service emits
+  an operation only when its canonical JSON is strictly smaller than the full
+  candidate. Candidate duplicate resolution precedes alias-keyed record-patch
+  upsert and typed tombstone removal, while the durable ledger remains
+  content-free. The per-call `q` tuple is the
+  authoritative phase, dynamically available action, route-specific searchable
+  kind, remaining-limit, and result-shape contract, and the strict decoder and
+  session enforce that same tuple and canonicalize accepted structured results
+  into the existing internal answer string before domain validation. SEARCH
+  decodes one optional action-scoped artifact prefix, projects it across every
+  internal query, filters the authorized manifest, and performs one shared
+  bounded registry scan. Numeric source/record aliases and compact structured
+  records avoid eager universal-catalog replay, while SEARCH/READ observations
+  carry complete tagged source identity, kind, revision, digest, size,
+  boundary, safe provenance, handle, and snippet/content evidence. No universal
+  catalog or action-index-zero read handle is exposed:
+  READ becomes available only for a fresh live handle returned by SEARCH in the
+  current invocation, including zero-hit and consumed-handle suppression. A
+  composite execution fingerprint binds the wire version and every planning,
+  action, and source policy value to ledger and native-thread compatibility.
+  Every bootstrap explicitly taints any prior contextual thread and starts a
+  new native thread; incompatible checkpoints are stale and never resumed,
+  while the pure planner still receives its planning-policy fingerprint. The
+  synchronized call-local session retains exact reconstructed action
+  correlation, route authorization, fresh HMAC search handles and safe
+  locators, bounded counters, atomic one-use reads, delivery receipts, final
+  source revalidation, and answer authorization. Mandatory-reference
+  reservations stay
+  separate from source search/read, use the unchanged provider prelude before
+  the substantive action budget, and must complete before verified ledger
+  commit. The two failure-fact helpers attach and recover only validated
+  content-free physical call facts without replacing the original exception.
+  Its supported direct-module-only `ContextExecutionEventKind`, frozen
+  `ContextExecutionEvent`, and synchronous `ContextExecutionEventSink` expose
+  fixed lifecycle outcomes with exact scope and operation identity, required
+  phase/round correlation for debate events, and kind-specific optional
+  content-free planning, action, mandatory-reference, provider-token,
+  transcript, observation, and truncation facts. Nonapplicable facts are
+  `None`; terminal provider input tokens are summed only when every submitted
+  physical call supplies exact usage, and otherwise remain unavailable.
+  Neither the `agent_context` facade nor the project-root facade re-exports
+  these contracts. The
+  optional synchronous answer validator receives the exact authorized answer
+  and authorization after final source revalidation but before reference
+  completion and READY commit, so invalid domain output cannot advance the
+  checkpoint. `ContextSourceClassification` is strict-presence by default; its
+  additive exact-bool `allow_absent` field is valid only for P2 hard
+  constraints. The service still treats source inventory as authoritative,
+  rejects every unmatched strict classification, and omits only an unmatched
+  classification carrying that explicit conditional-presence fact.
+- **Direct internal dependencies:** `agent_context.accounting`,
+  `agent_context.actions`, `agent_context.ledger`, `agent_context.manifest`,
+  `agent_context.planning`, `agent_context.sources`, and `workspace`.
+- **State, resources, and side effects:** A workspace-scoped service retains
+  immutable planning/action/source policies, one ledger collaborator, the
+  content-free workspace digest, and process-local async locks keyed by exact
+  scope/provider/definition/policy identity. Each invocation creates bounded
+  transient manifests, source materials, provider payload mappings, call
+  accounting, and an invocation session whose 32-byte HMAC secret, handle
+  table, counters, and receipts are cleared on answer or failure. Source I/O is
+  delegated to the injected registry adapters, ledger persistence remains
+  ledger-owned, and provider transport/native-thread storage remains delegated
+  through `ContextProvider`. Every physical call is appended in order; only a
+  revalidated and synchronously domain-validated terminal answer commits READY.
+  Typed lifecycle delivery is synchronous and inline. Observer failure before
+  authority aborts and remains the primary invocation failure; failure while
+  receiving `CHECKPOINT_ADVANCED` propagates after READY commit without
+  rollback or a false not-advanced event; terminal delivery failure during an
+  independent runtime failure is suppressed. Cancellation, timeout, malformed
+  action,
+  source/reference or answer-validation failure, exhaustion, or ambiguous
+  submitted continuation taints the attempt and, where required, the native
+  continuation. Importing performs no I/O, entropy acquisition, registration,
+  or mutation; service construction performs no filesystem mutation.
+- **Primary verification/documentation:**
+  `tests/test_agent_context_service.py`,
+  `tests/test_agent_context_execution.py`,
+  `tests/test_agent_context_runtime_adoption.py`,
+  `tests/test_agent_context_release_scenarios.py`,
+  `tests/test_context_accounting_optimized.py`, `tests/test_codex_backend.py`,
+  `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`,
+  `docs/audits/issue-380-agent-context-conformance.md`,
+  `docs/design/agent-context.md`, `docs/guides/agent-context.md`, and
+  `docs/guides/agent-context-progress.md`;
+  module-inventory, dependency, facade, and import-boundary assertions across
+  `tests/test_rag_module_and_packaging_boundary.py`,
+  `tests/test_session_lifecycle.py`, and
+  `tests/test_interactive_controller.py`.
+
+### `story_writing_agents.agent_context.ledger`
+
+- **Source:** `src/story_writing_agents/agent_context/ledger.py`
+- **Responsibility:** Persist and reconstruct one scoped, content-free
+  agent-context checkpoint together with its exact planning and physical-call
+  accounting.
+- **Supported surface:** No project-root or `agent_context`-facade-supported
+  API. The direct-module package-internal `__all__` exposes
+  `CONTEXT_LEDGER_SCHEMA_VERSION`,
+  `MAX_CONTEXT_LEDGER_RECORD_UTF8_BYTES`, `MAX_CONTEXT_LEDGER_SOURCES`,
+  `MAX_CONTEXT_LEDGER_PROVIDER_CALLS`,
+  `CONTEXT_LEDGER_LOCK_TIMEOUT_SECONDS`, `ContextLedger`, `ContextLedgerKey`,
+  `ContextLedgerRecordState`, `ContextLedgerAttemptOutcome`,
+  `ContextLedgerAttemptPlan`, `ContextLedgerProviderCall`,
+  `ContextLedgerAttempt`, `ContextLedgerReadyCheckpoint`,
+  `ContextLedgerRecord`, `ContextLedgerInspection`,
+  `ContextLedgerCommitAuthorization`, `ContextLedgerError`,
+  `ContextLedgerErrorCode`, `context_checkpoint_proposal_digest`, and
+  `context_ledger_scope_key`. `ContextLedger` owns `inspect`,
+  `reserve_attempt`, `append_provider_call`, `taint_attempt`, `commit_attempt`,
+  and `invalidate` transitions with optimistic generation checks and exact
+  idempotent replay. Its schema-v2 READY checkpoint durably retains the
+  content-free universal source catalog, stable source aliases, per-source
+  record aliases and high-water marks, canonical record cursors, exact proposal
+  digest, and physical-call accounting. Codec validation, size/count limits,
+  and digest reconstruction map malformed, duplicate, non-reusable, or
+  inconsistent alias/cursor state to corruption without loading source bodies.
+- **Direct internal dependencies:** `agent_context.accounting`,
+  `agent_context.manifest`, `agent_context.planning`, and `workspace`.
+- **State, resources, and side effects:** Sole owner of lazy schema-v2 records
+  under `agent_states/orchestrator_state/context_ledger/v2/`, hash-only record
+  names, a weak in-process writer registry, descriptor-relative traversal,
+  `0600` POSIX advisory lock files, and same-directory atomic replacement with
+  file and directory synchronization. Importing, construction, and a missing
+  inspection perform no I/O mutation. Readers remain lock-free and use bounded
+  verification and retry to return one complete predecessor or successor
+  across atomic replacement. Prior schema-v1 records are intentionally neither
+  read nor migrated. Stored values contain no prompts, bodies,
+  excerpts, outputs, transcripts, exception text, reference descriptors, or
+  projected units.
+- **Primary verification/documentation:** `tests/test_agent_context_ledger.py`
+  verifies the exact direct-module surface, immutable values and codecs,
+  lifecycle and commit authorization, restart and corruption mapping,
+  content-free privacy, limits, storage security and durability, lock-free and
+  serialized concurrency, scope isolation, facade stability, and dependency
+  graph. `docs/design/agent-context.md` documents the current checkpoint and
+  ledger authority model.
+  `tests/test_rag_module_and_packaging_boundary.py` verifies the exact four
+  internal dependency edges; `tests/test_writing_artifacts.py` and
+  `tests/test_interactive_pty.py` verify that internal ledger records remain
+  excluded from canonical artifact discovery and the `$`/`$$` picker.
+
+### `story_writing_agents.agent_context.manifest`
+
+- **Source:** `src/story_writing_agents/agent_context/manifest.py`
+- **Responsibility:** Define immutable content-free context-source manifests
+  and their canonical classification and ordering rules.
+- **Supported surface:** No project-root or `agent_context`-facade-supported
+  API. The direct-module package-internal `__all__` exposes
+  `ContextAuthorityKind`, `ContextManifest`, `ContextManifestEntry`,
+  `ContextManifestError`, `ContextManifestErrorCode`, `ContextPriority`,
+  `ContextProvenance`, `ContextScope`, `ContextSemanticChannel`,
+  `ContextSourceKind`, `ContextSubjectKind`,
+  `context_manifest_entry_key`, `validate_context_digest`, and
+  `validate_context_identity`. These contracts validate bounded content-free
+  identities, strict source/channel/priority/authority/searchability mappings,
+  subject scope, provenance, lowercase SHA-256 identities, exact byte counts,
+  unique source IDs, and locale-independent canonical order. Mutable writing
+  artifacts remain P2/P3 sources rather than stable P1 definitions.
+- **Direct internal dependencies:** None.
+- **State, resources, and side effects:** Owns frozen metadata values only.
+  Validation and normalization use call-local memory; importing performs no
+  I/O and creates no mutable state or external resource.
+- **Primary verification/documentation:**
+  `tests/test_agent_context_manifest.py` verifies the exact direct-module
+  surface, immutable value and identity contracts, exhaustive classification,
+  authority and searchability matrices, canonical ordering, privacy,
+  standard-library-only imports, and compilation;
+  `docs/design/agent-context.md` documents the content-free manifest boundary.
+
+### `story_writing_agents.agent_context.planning`
+
+- **Source:** `src/story_writing_agents/agent_context/planning.py`
+- **Responsibility:** Produce deterministic budgeted bootstrap or delta
+  projections from validated context manifests.
+- **Supported surface:** No project-root or `agent_context`-facade-supported
+  API. The direct-module package-internal `__all__` exposes
+  `CONTEXT_CHECKPOINT_SCHEMA_VERSION`,
+  `DEFAULT_CONTEXT_PLANNING_POLICY`,
+  `MAX_MANDATORY_REFERENCE_RESERVATION_UTF8_BYTES`,
+  `ContextBootstrapReason`, `ContextBudgetAccounting`,
+  `ContextCheckpointProposal`,
+  `ContextCheckpointSource`, `ContextCheckpointState`,
+  `ContextCheckpointView`, `ContextDecisionAccounting`,
+  `ContextDecisionKind`, `ContextDeliveryMode`, `ContextMaterial`,
+  `ContextPlanningConditions`, `ContextPlanningError`,
+  `ContextPlanningErrorCode`, `ContextPlanningPolicy`,
+  `ContextProjectedUnit`, `ContextProjection`,
+  `ContextProjectionAccounting`, `ContextReferenceBudgetUsage`,
+  `ContextSearchableAccounting`, `ContextSourceBudgetUsage`,
+  `ContextSourceDecision`, `MandatoryReferenceReservation`, and
+  `plan_context_projection`. The planner preserves exact P0 and mandatory
+  reference treatment, bootstraps stable-context changes, suppresses only
+  compatible unchanged non-P0 sources, deduplicates eligible same-channel
+  P2/P3 material only after byte equality, atomically requires hard
+  constraints, and applies deterministic class-budget first-fit-with-skip to
+  other searchable sources. The default P3 budget is zero, making optional
+  artifacts and own-agent history SEARCH-first while P2 working constraints
+  remain eager. Unlisted package-internal record contracts keep pre-planning
+  canonical cursors alias-free, pair accepted delivery records with positive
+  stable aliases, and retain independent source and per-source record alias
+  epochs/high-water marks. Pure planning preserves aliases for retained record
+  identities, never reuses removed aliases, emits exact record patches and
+  record/source/delivery tombstones, and resets alias epochs only for a new
+  bootstrap thread. Content-free accounting partitions every source decision,
+  exact unique/logical bytes, cap usage, reference reservations, and checkpoint
+  proposal metadata.
+- **Direct internal dependencies:** `agent_context.manifest`.
+- **State, resources, and side effects:** Owns a frozen default policy and pure
+  planning contracts only. Transient strict-UTF-8 bodies are caller-owned,
+  immutable, hidden from representation, and retained only in returned
+  projected units and record patches; no body enters errors, accounting,
+  manifests, references, or checkpoint proposals. Planning performs no I/O,
+  persistence, provider work, source authorization, clock/environment access,
+  caching, or mutation.
+- **Primary verification/documentation:**
+  `tests/test_agent_context_planning.py` verifies the exact direct-module
+  surface, policy, material and checkpoint validation, exhaustive decision and
+  accounting invariants, bootstrap/delta precedence, deterministic packing,
+  deduplication and collision handling, reference/proposal correlation,
+  privacy, replay, facade/import boundaries, and no-I/O guarantees;
+  `docs/design/agent-context.md` documents the current planning model.
+
 ### `story_writing_agents.backend`
 
 - **Source:** `src/story_writing_agents/backend.py`
@@ -323,20 +747,28 @@ every intermediate arrow. The current runtime graph is acyclic.
   the same immutable construction-time configuration to the bound runtime
   without exposing the backend's private storage; unexported package-internal
   `release_bound_agent(bound_agent)` requests exact binding retirement without
-  exposing or mutating backend collections.
-- **Direct internal dependencies:** `agents`, `antigravity_adapter`,
-  `codex_adapter`, `config`, `conversation_retrieval`, `debug_log`, `errors`,
-  `interactive_settings`, `models`, `provider_adapter`, `provider_process`,
-  `session_lifecycle`, and `workspace`, plus the provider-neutral
-  `writing_artifacts.read_actions` boundary.
+  exposing or mutating backend collections. `BoundAgent.context_provider()` is
+  the synchronous package-internal contextual transport capability, with the
+  original private spelling retained as a compatibility delegate. Its pure
+  `decode_context_conversation_answer`, `decode_context_retrieval_answer`, and
+  `decode_context_agent_answer` helpers reuse the backend's canonical domain
+  decoders and enforce exact request correlation before orchestration can
+  authorize a contextual checkpoint.
+- **Direct internal dependencies:** `agent_context`, `agent_context.service`,
+  `agents`, `antigravity_adapter`, `codex_adapter`, `config`,
+  `conversation_retrieval`, `debug_log`, `errors`, `interactive_settings`,
+  `models`, `provider_adapter`, `provider_process`, `session_lifecycle`, and
+  `workspace`, plus the provider-neutral `writing_artifacts.read_actions`
+  boundary.
 - **State, resources, and side effects:** Owns exact V2 provider-session
   manifests at
   `agent_states/orchestrator_state/provider_sessions/<session_id>.json`, exact
   V2 process-access claims at sibling `<session_id>.access.json` paths, the
   lazily created workspace-global `.access-claims.lock` OS advisory guard,
   in-memory claim tokens, persisted `provider_threads`, shared
-  debate/conversation/retrieval per-thread locks, adapter routing, and
-  structured domain-response validation. Manifests contain only `schema_version`,
+  debate/conversation/retrieval per-thread locks, distinct contextual-thread
+  locks, adapter routing, and structured domain-response validation. Manifests
+  contain only `schema_version`,
   `session_id`, `durable_state`, `created_at`, `updated_at`, and
   `provider_threads`; claims contain only `schema_version`, `session_id`,
   `owner_hostname`, `owner_pid`, `claim_token`, and `claimed_at`. The guard
@@ -360,11 +792,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   immediately, then defers access-claim release, in-memory thread-lock cleanup,
   and remaining adapter cleanup until no active binding can use them. One
   retrieval thread lock covers the complete repeated-call action loop and
-  synchronous handler invocations. The backend owns the exact provider-neutral
-  action schemas, initial and continuation payloads, canonical observation
-  framing handoff, provider timeout/cancellation behavior, incomplete-history
-  taint, and fixed provider-labelled,
-  provider-value-free process/response-validation diagnostics. It drains both
+  synchronous handler invocations. For the legacy conversation-retrieval path,
+  the backend owns the exact provider-neutral action schemas, initial and
+  continuation payloads, canonical observation framing handoff, provider
+  timeout/cancellation behavior, incomplete-history taint, and fixed
+  provider-labelled, provider-value-free process/response-validation
+  diagnostics. It drains both
   subprocess output streams through its adapters but discards and never decodes
   stderr after a nonzero provider exit; it receives no memory service and
   performs no retrieval search or transcript-storage call. For a referenced
@@ -393,7 +826,34 @@ every intermediate arrow. The current runtime graph is acyclic.
   payloads serialize that exact bounded envelope and omit their legacy owner-
   state/focused-context projections; omission preserves the established payload
   for compatibility construction. Operation-specific input, candidates,
-  messages, and retrieval controls remain separate payload fields. At
+  messages, and retrieval controls remain separate payload fields. For every
+  physical provider-call boundary, the backend classifies the existing
+  schema and payload values without changing their shape, identifies raw
+  mandatory-reference bodies separately from their descriptors, and combines
+  the adapter-owned binding snapshot with canonical schema/payload accounting.
+  Its optional private, call-local accounting sink receives content-free
+  prepared or submitted records for successful, failed, and cancelled calls;
+  sink absence or failure cannot change provider, decoding, thread, retrieval,
+  or reference behavior, and no accounting record is persisted. Adapter-owned
+  exact transport-byte and recognized usage facts complete a submitted record;
+  unavailable usage remains absent and is never estimated. At the contextual
+  boundary, a binding-scoped adapter implements the service-owned
+  `ContextProvider` protocol without giving the backend planner, ledger, or
+  source authority. It retains the bound provider for the complete lifecycle,
+  runs the existing exact reference prelude when requested, builds one
+  `ProviderInvocation` from each service-supplied schema/payload/component
+  mapping, passes its single canonical `payload_json` to the selected adapter,
+  and returns raw response, thread identity, and exact content-free accounting
+  for service-owned action decoding and ledger transitions. Contextual native
+  continuations are isolated from legacy `provider_threads` beneath
+  `agent_states/orchestrator_state/provider_sessions/.contextual/v1/<session-id>/<scope-hash>.json`;
+  their key binds the complete scope, provider, definition fingerprint, and
+  policy fingerprint, and their content-free schema stores only that key,
+  thread identity, taint, and update facts. Missing, malformed, mismatched, or
+  tainted records yield bootstrap rather than implicit reuse. Submitted
+  cancellation, timeout, malformed result, continuation mismatch, and failed
+  reference completion preserve fixed failure facts and taint the exact
+  contextual continuation without mutating the legacy thread slot. At
   construction it validates and snapshots the complete workspace system and
   per-agent configuration, reconciles the settings-owned durable provider-route
   generations, and solely resolves the roster's authoritative immutable
@@ -440,8 +900,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   access-claim owner/token facts and never replace the established result,
   exception, or cancellation flow; `debug_log` retains ownership of its files,
   locks, schema, and rotation.
-- **Primary verification/documentation:** `tests/test_codex_backend.py`,
-  `tests/test_prompts.py`, `tests/test_conversation_retrieval.py`,
+- **Primary verification/documentation:**
+  `tests/test_agent_context_execution.py`,
+  `tests/test_agent_context_runtime_adoption.py`, `tests/test_codex_backend.py`,
+  `tests/test_context_accounting_baseline.py`,
+  `tests/test_context_accounting_optimized.py`, `tests/test_prompts.py`,
+  `tests/test_conversation_retrieval.py`,
   `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`,
   `tests/test_session_lifecycle.py`, `docs/reference/backend-and-sessions.md`,
   `docs/guides/antigravity.md`,
@@ -458,8 +922,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   Antigravity CLI protocol.
 - **Supported surface:** No package-supported API. Package-internal
   `AntigravityAdapter` implements the private provider-adapter contract.
-- **Direct internal dependencies:** `models`, `provider_adapter`, and
-  `provider_process`.
+- **Direct internal dependencies:** `agent_context`, `models`,
+  `provider_adapter`, and `provider_process`.
 - **State, resources, and side effects:** Owns the Antigravity executable,
   defensive immutable copies of explicit/system/per-agent model and effort
   primitives, bound-agent selection, exact explicit-over-agent-over-system-
@@ -471,7 +935,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   a compatibility fallback for direct adapter construction. Per-binding release
   deliberately retains provider-native definition and conversation state for
   later backend instances.
-  Binding writes deterministic rules beneath
+  Direct binding constructs the established deterministic rules bytes and exact
+  same-snapshot content-free component partition for binding structure, role,
+  persona, language, each canonical core-document path, and provider
+  constraints. A definition's internal `provider_managed_context` marker instead
+  selects the compact contextual rules: the same role/persona/language facts
+  plus the symmetric wire-v5 grammar for untrusted evidence, action-scoped
+  prefix search, the per-call `q` contract, retained-state candidate
+  reconstruction, alias-keyed patch upsert, and typed tombstone removal, with
+  no bound core-document bytes. `agent_context.service` and
+  `agent_context.actions` retain the inner protocol semantics; Codex and
+  Antigravity stage equivalent contextual instructions while their direct
+  definitions remain byte-exact. Antigravity retains those rules beneath
   `agent_states/orchestrator_state/provider_sessions/.antigravity/definitions/<agent>/<fingerprint>/AGENTS.md`.
   Before definition writes or provider launch, the adapter sequentially
   prepares its owned `state_root`, definitions chain, sessions/runtime chain,
@@ -495,9 +970,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   history. Parent traversal remains pathname-based rather than descriptor-
   anchored, so these rules-file protections likewise do not claim application
   access control or race-proof containment.
-  Invocation serializes its output schema, payload, and NDJSON stdin event
+  Invocation uses the shared canonical encoder for its output schema and
+  payload, then accounts for the exact provider-specific NDJSON stdin bytes
   before creating any new per-session runtime tree; encoding failure therefore
-  creates no new provider or workspace directory. After serialization, it
+  creates no new provider or workspace directory. Process creation distinguishes
+  prepared from submitted failures without replacing established diagnostics,
+  and only recognized nonnegative terminal usage counters become exact usage;
+  missing or malformed counters remain unavailable. After serialization, it
   retains provider-native state and isolated cwd beneath
   `agent_states/orchestrator_state/provider_sessions/.antigravity/sessions/<session>/<agent>/<fingerprint>/provider`
   and sibling `workspace`, copies only the bound rules into that workspace,
@@ -522,13 +1001,31 @@ every intermediate arrow. The current runtime graph is acyclic.
   Codex CLI protocol.
 - **Supported surface:** No package-supported API. Package-internal
   `CodexAdapter` implements the private provider-adapter contract.
-- **Direct internal dependencies:** `agents`, `config`, `errors`, `models`,
-  `provider_adapter`, and `provider_process`.
+- **Direct internal dependencies:** `agent_context`, `agents`, `config`,
+  `errors`, `models`, `provider_adapter`, and `provider_process`.
 - **State, resources, and side effects:** Owns construction-time Codex
   executable/model/reasoning settings, isolated binding directories and their
-  generated `AGENTS.md` files, invocation-scoped schema/final-response
-  directories, exact Codex argv construction, JSONL event and thread parsing,
-  and provider-specific safe process diagnostics. When supplied by the backend,
+  generated `AGENTS.md` files plus exact same-snapshot content-free component
+  partitions, invocation-scoped schema/final-response directories, exact Codex
+  argv construction, JSONL event and thread parsing, and provider-specific safe
+  process diagnostics. Direct binding partitions distinguish structure, role,
+  persona, language, every canonical core-document path, and provider
+  constraints without changing their established bytes. A definition's
+  internal `provider_managed_context` marker instead selects the compact
+  contextual binding shared semantically with Antigravity: role, persona,
+  language, and the symmetric wire-v5 grammar for untrusted evidence,
+  action-scoped prefix search, the authoritative per-call `q` contract,
+  retained-state candidate reconstruction, alias-keyed patch upsert, and typed
+  tombstone removal, with no bound core-document bytes.
+  `agent_context.service` and `agent_context.actions` retain the inner protocol
+  semantics, and direct-definition bytes remain unchanged.
+  Partitions are retained only with their corresponding ephemeral staging
+  directory.
+  Invocation uses shared canonical schema and payload bytes, distinguishes
+  prepared from submitted failures, reports exact stdin bytes, and accepts
+  usage only from one recognized `turn.completed` event with nonnegative exact
+  counters. Missing or malformed usage remains unavailable. When supplied by
+  the backend,
   the roster-filtered immutable execution profiles are the exact model/effort
   source for command flags; the older private resolution path remains a
   compatibility fallback for direct adapter construction. Exact per-binding
@@ -551,15 +1048,26 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** No package-supported API. Package-internal frozen
   `ExecutionValueSource` and `AgentExecutionProfile` define the immutable
   provider/model/effort identity and authoritative source of every effective
-  value. Frozen `ProviderBinding`, `ProviderInvocation`, and `ProviderResult`
-  values, `ProviderInvocationError`, and `ProviderAdapter` protocol are consumed
-  by the coordinator and concrete adapters. The protocol's private
-  `release(binding)` operation gives the binding owner an exact, idempotent
-  retirement seam.
-- **Direct internal dependencies:** `models`.
-- **State, resources, and side effects:** Owns no mutable state or external
-  resource; importing and constructing its values perform no I/O.
-- **Primary verification/documentation:** `tests/test_codex_backend.py` and
+  value. Frozen `ProviderBinding` carries an exact binding-component snapshot;
+  `ProviderInvocation` retains compatibility mappings while hiding those
+  content-bearing mappings and canonical payload bytes from representation and
+  exposes prepared content-free accounting;
+  `ProviderResult` additively carries optional exact usage and transport-byte
+  facts without changing value equality. `ProviderFailureAccounting`,
+  `record_provider_failure_accounting`, and `provider_failure_accounting`
+  provide the coordinator and concrete adapters one validated package-internal
+  prepared/submitted failure seam. `ProviderInvocationError` and the
+  `ProviderAdapter` protocol retain their existing substitution and taint
+  contracts, including exact idempotent `release(binding)` retirement.
+- **Direct internal dependencies:** `agent_context` and `models`.
+- **State, resources, and side effects:** Owns no mutable module state or
+  external resource. Construction creates only immutable mappings, canonical
+  call-local bytes, and content-free accounting; failure helpers attach only
+  validated content-free facts to the current exception. Importing performs no
+  I/O.
+- **Primary verification/documentation:**
+  `tests/test_agent_context_accounting.py`, `tests/test_codex_backend.py`,
+  `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`, and
   `docs/design/overview.md`.
 
 ### `story_writing_agents.provider_process`
@@ -2188,7 +2696,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   or caller-supplied timestamp, message, path, traceback field, or serialized
   value is accepted. The separate exact `execution_profile_event` seam accepts
   only validated profile transition, active-snapshot, and confirmation fields
-  for the four dedicated execution-profile operations.
+  for the four dedicated execution-profile operations. The fixed internal
+  taxonomy includes one `agent_context` operation and content-free
+  bootstrap/delta, omission, search/read, answer, invalidation, exhaustion,
+  taint, and checkpoint outcomes; it adds vocabulary without changing the
+  diagnostic record schema.
 - **Direct internal dependencies:** `agents`, `provider_adapter`, and
   `workspace`.
 - **State, resources, and side effects:** Import and construction perform no
@@ -2254,6 +2766,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   cleanup attempts with its original object and traceback so each consumer can
   apply its boundary-specific fail-safe policy.
 - **Primary verification/documentation:** `tests/test_debug_log.py`,
+  `tests/test_agent_context_runtime_adoption.py`,
   `tests/test_workspace_and_config.py`, `docs/design/overview.md`,
   `docs/design/persistence.md`, `docs/operations/filesystem-safety.md`,
   `docs/operations/privacy-and-provider.md`, and
@@ -2471,9 +2984,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   confirmation projection for every canonical agent. Both diagnostic commands
   remain fully detailed regardless of the message-details preference.
   All transition, identity-resolution, routing,
-  directive-result, inspection, trusted debate/retrieval progress and result,
-  retrieval-source, and other presentation validation helpers are package
-  internal, and the project-root facade does not re-export this class or module.
+  directive-result, inspection, trusted context/debate/retrieval progress and
+  result, retrieval-source, and other presentation validation helpers are
+  package internal, and the project-root facade does not re-export this class
+  or module.
   The controller constructs closed semantic components for the migrated
   high-frequency and information-dense scope, status, inspection, management,
   directive, routing, advisory, retrieval, consensus, focused-history, list,
@@ -2872,9 +3386,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   `StoryRuntime.converse_with_retrieval` operation per accepted advisory content
   turn through the retained Runner and terminal-owned progress adapter. It
   passes the exact attachment-scoped
-  service plus a synchronous sink, validates trusted progress/results, and
-  constructs fixed progress and ordered source components through the retained
-  semantic-output adapter. Before advisory coroutine entry, the established
+  service plus the established retrieval sink and, when the runtime advertises
+  contextual capability, one generic context sink. A call-local
+  operation-keyed projection map validates every lifecycle event and requires
+  the successful advisory operation to end in one advanced checkpoint. The
+  controller renders fixed content-free planning, answer, failure, and
+  checkpoint copy, while generic search/read rendering is suppressed after
+  validation because the established retrieval sink already presents those
+  actions. It constructs fixed progress and ordered source components through
+  the retained semantic-output adapter. Before advisory coroutine entry, the
+  established
   fixed cancelled/hint copy returns attached only when public Runner task
   inspection proves quiescence; that path calls no provider and mutates no
   controller or persistent state. `/rag` arms or replaces one process-local
@@ -2890,7 +3411,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   and focused-history interruption stops further rendering and returns to the
   same prompt without persistence mutation. The controller also delegates
   draft reads to `run_inputs` and submits each accepted consensus action
-  through the same Runner. When a consensus action omits `output_path`, it
+  through the same Runner. Context-capable consensus calls use the same
+  controller-safe validator with call-local state per interleaved debate-agent
+  operation, render agent/phase/round-qualified lifecycle facts, and verify
+  terminal context outcomes before presenting the debate result. When a
+  consensus action omits `output_path`, it
   prompts for and validates a create-only `PART/PATH.md` after attachment and
   focus checks and before composition or draft-file access. `RUN` and
   `RUN_FRESH` dispatch to `StoryRuntime.run_prompt`; `DRAFT_FILE` alone loads
@@ -2920,6 +3445,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   transcript-read integration, and `tests/test_interactive_pty.py` for primary
   process-level POSIX PTY lifecycle verification;
   `docs/design/session-lifecycle.md`,
+  `docs/guides/agent-context-progress.md`,
   `docs/guides/story-sessions.md`, `docs/guides/artifact-references.md`,
   `docs/reference/cli.md`,
   `docs/reference/interactive-terminal.md`, and
@@ -2980,17 +3506,25 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/interactive_controller/_runtime_policy.py`
 - **Responsibility:** Interpret runtime progress, result, and inspection facts.
 - **Supported surface:** No project-public import. Its exact package-internal
-  `__all__` contains the frozen, slotted `DebateContextInspectionFacts` and
-  `DebateInspectionFacts` contracts plus `classify_advisory_turn_failure`,
+  `__all__` contains the frozen, slotted `ContextProgressProjection`,
+  `DebateContextInspectionFacts`, and `DebateInspectionFacts` contracts plus
+  `classify_advisory_turn_failure`,
   `classify_consensus_execution_failure`, `classify_inspection_failure`,
   `classify_progress_callback_failure`,
   `interactive_code_for_debate_failure`, `validate_consensus_result`,
   `validate_conversation_retrieval_progress`,
   `validate_conversation_retrieval_result`,
+  `validate_context_execution_progress`,
   `validate_debate_context_inspection`, `validate_debate_inspection`,
   `validate_debate_progress`, and `validate_session_inspection`. Validators
-  reconstruct exact immutable contracts, consume only a previous event or
-  immutable progress tuple, and return canonical typed facts. Debate and
+  reconstruct exact immutable contracts, consume only a previous event,
+  operation-keyed immutable projection map, or immutable progress tuple, and
+  return canonical typed facts. Context execution validation reconstructs the
+  direct service event, correlates its complete scope and operation identity,
+  enforces operation-local bootstrap/delta, omission, paired sequential
+  search/read, answer-before-commit, failure, and terminal ordering, rejects
+  post-terminal events, and projects only controller-safe content-free facts.
+  Debate and
   context inspection validators return the whitelisted fact contracts without
   flattening presentation text. Debate inspection and retrieval-result
   validation accept an additive optional reference-operation identity only
@@ -3004,9 +3538,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   search/read progress correlated to the result turn, including mixed-source
   replies. The
   module never renders, appends, retains, or calls the runtime.
-- **Direct internal dependencies:** `conversation_retrieval`,
-  `conversation_search`, `errors`, `interactive_terminal`, `models`, and
-  `workspace`.
+- **Direct internal dependencies:** `agent_context.service`,
+  `conversation_retrieval`, `conversation_search`, `errors`,
+  `interactive_terminal`, `models`, and `workspace`.
 - **State, resources, and side effects:** Export metadata only; owns no runtime,
   progress collection, controller state, cache, or external resource and
   performs no terminal, filesystem, provider, lifecycle, or import-time
@@ -3016,6 +3550,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_cancellation.py`,
   `tests/test_interactive_search.py`,
   `tests/test_runtime_reference_integration.py`,
+  `docs/guides/agent-context-progress.md`,
   `docs/reference/conversation-retrieval.md`, and `docs/design/overview.md`.
 
 ### `story_writing_agents.interactive_line_editor`
@@ -4102,7 +4637,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   the bounded provider-neutral continuity envelope without a project-root
   export. `AgentRequest` carries optional canonical `conversation_context` and
   `story_session_context` fields, and `ConversationRequest` carries the latter,
-  without changing context-free construction.
+  without changing context-free construction. `AgentDefinition` carries an
+  additive default-false, repr-hidden `provider_managed_context` execution-
+  strategy marker; the true form rejects bound context documents and lets
+  prompt assembly and both adapters distinguish contextual binding without a
+  provider-specific sentinel.
   `ConversationResult` and `DebateResult` each carry an additive optional,
   validated, content-free `reference_operation_id`; its default is `None`, and
   `DebateResult.to_dict()` omits the key in that default no-reference case.
@@ -4130,10 +4669,12 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Package-supported `StoryRuntime` and `RuntimeSession`,
   exposing provider-free directive application, runtime-override saving, and
   session/debate/context inspection,
-  including unchanged one-step `converse()`, additive bounded
+  including one-step `converse()`, additive bounded
   `converse_with_retrieval()` with required scoped memory service and optional
-  synchronous progress sink, context-aware `run_prompt()` and `run_draft()`
-  with required `output_path=PART/PATH.md`,
+  synchronous retrieval progress sink, and context-aware `run_prompt()` and
+  `run_draft()` with required `output_path=PART/PATH.md`. All four operations
+  on both runtime forms accept an additive keyword-only direct-module
+  `ContextExecutionEventSink` as `context_event_sink`,
   and the separate strict `inspect_debate_context()` accessor on both forms,
   plus `inspect_reference_operation()` on both forms and compatibility aliases
   `Runtime` and `Session`. The session-bound accessor rejects operation
@@ -4154,8 +4695,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   attempt, while an absent query follows the injected service's
   default-disabled automatic policy. Supplying no service and no query
   preserves no-attempt behavior; forcing without a service yields an explicit
-  disabled fallback.
-- **Direct internal dependencies:** `agents`, `backend`, `config`,
+  disabled fallback. A supplied context sink is validated as declared
+  synchronous and requires contextual capability before session access,
+  context, provider, storage, persistence, or transcript work; omitting it
+  preserves the established contextual and legacy fallback behavior.
+- **Direct internal dependencies:** `agent_context.actions`,
+  `agent_context.manifest`, `agent_context.planning`, `agent_context.service`,
+  `agent_context.sources`, `agents`, `backend`, `config`,
   `conversation_rag_runtime`, `conversation_retrieval`, `conversation_search`,
   `conversation_storage.composition`, `conversation_storage.contracts`,
   `debug_log`, `directives`, `conversations`, `errors`, `models`, `prompts`,
@@ -4202,7 +4748,53 @@ every intermediate arrow. The current runtime graph is acyclic.
   runtime configuration and prompt assembler. The same runtime, workspace,
   event store, transcript, memory collaborator, session access, focus, and
   workflow locks survive activation. Backend-free construction retains the
-  established on-demand configuration path. For an included consensus request
+  established on-demand configuration path. A runtime with both the concrete
+  backend and complete conversation-storage bundle retains one workspace-bound
+  `AgentContextService` and routes every built-in advisory, retrieval, and
+  debate-agent provider invocation through it. Those routes bind stable
+  definitions without mutable core-document bytes and construct compact
+  canonical P0 current/candidate material. Named role core documents are eager
+  P2 hard constraints; focused conversation and active debate are eager P2
+  evidence; nonfocused conversations, other artifacts, and own-agent state are
+  P3 SEARCH-first sources under the zero default P3 budget. Only role-core
+  classifications explicitly allow absence, matching the workspace rule that a
+  missing core document is omitted and a later appearance becomes a new P2
+  constraint; all conversation, debate, owner-state, and retrieved-source
+  classifications remain strict. Ordinary conversation authorizes writing-
+  artifact/conversation/owner-state search, retrieval authorizes conversation
+  search only, and debate phases additionally authorize active-debate search.
+  Orchestrator-owned semantic projection preserves named document paths,
+  bounded conversation completeness plus user/replying-agent/reply records,
+  debate state and sender/phase/round/base-revision/kind/content records, and
+  phase-specific compact result contracts; it reconstructs and validates the
+  unchanged public domain replies after service authorization. The four
+  concrete source adapters remain the only read authorities. Runtime-reference
+  proofs become
+  the same ordered
+  content-free reservations while each addressed call receives its matching
+  read invocation, so the mandatory prelude remains outside the substantive
+  action budget and retains the existing operation completion rules.
+  Orchestrator-owned pure validator closures reuse backend domain decoders
+  after service authorization and before reference completion or ledger commit;
+  invalid advisory, retrieval, debate, citation, or publication-shaped output
+  therefore cannot advance READY. At this runtime edge, only the exact
+  service-owned `MALFORMED_ACTION` failure is translated to the established
+  `BackendProtocolError`; other context execution failures retain their exact
+  classification. Retrieval uses the conversation adapter's
+  explicit active same-session mode, maps only completed used read evidence to
+  public sources, preserves supplied RAG source order, existing progress and
+  transcript persistence, and never runs the legacy provider retrieval loop in
+  parallel. Content-free service events compose deterministically through the
+  existing private debug guard, then the established retrieval progress sink
+  for search/read, then the generic context sink. The runtime forwards that
+  sink to ordinary conversation, retrieval, and every logical debate-agent
+  invocation with explicit phase/round correlation. A private observer-failure
+  carrier preserves the original generic callback failure across debate task
+  aggregation and unwraps it at the public operation boundary; post-commit
+  delivery cannot roll authority back. When the
+  contextual capability is unavailable, the established eager-definition and
+  direct backend paths remain the compatibility fallback. For an included
+  consensus request
   it captures one canonical immutable context window before reservation, reuses
   that exact snapshot for every agent phase, and delegates create-only sidecar
   persistence to `Workspace`; fresh mode persists identity with no focused
@@ -4283,6 +4875,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   synthesized candidates and final core updates. Only unanimous results enter
   the repository's recoverable, part-scoped publication operation.
 - **Primary verification/documentation:** `tests/test_conversation_runtime.py`,
+  `tests/test_context_accounting_baseline.py`,
+  `tests/test_context_accounting_optimized.py`,
+  `tests/test_agent_context_runtime_adoption.py`,
+  `tests/test_agent_context_release_scenarios.py`,
   `tests/test_conversation_retrieval.py`, `tests/test_interactive_consensus.py`,
   `tests/test_interactive_conversation.py` for retained runtime use through the
   controller-owned persistent Runner and its single lifecycle event loop,
@@ -4290,8 +4886,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_antigravity_parity.py`,
   `tests/test_orchestration_workflow.py`,
   `tests/test_orchestration_safety.py`, `tests/test_lifecycle_atomicity.py`,
-  `tests/test_prompts.py`,
-  `tests/test_agent_state.py`, `docs/guides/artifact-references.md`,
+  `tests/test_prompts.py`, `tests/test_interactive_pty.py`,
+  `tests/test_agent_state.py`,
+  `docs/audits/issue-380-agent-context-conformance.md`,
+  `docs/guides/agent-context.md`, `docs/guides/agent-context-progress.md`,
+  `docs/guides/artifact-references.md`,
   `docs/reference/runtime-api.md`,
   `docs/reference/writing-artifacts.md`,
   `docs/reference/conversation-retrieval.md`, and
@@ -4310,16 +4909,26 @@ every intermediate arrow. The current runtime graph is acyclic.
   Its optional provider-route-generation map and package-internal
   `build_story_session_context` seam bind durable route identity and bounded
   provider-neutral continuity to the exact definition used by a turn.
+  `build_contextual_definition()` uses the same stable system prompt, persona,
+  language, and provider route generation while deliberately returning an
+  empty `context_document_files` tuple and setting the internal provider-managed
+  context marker. That marker participates in the contextual definition
+  fingerprint, so a direct binding cannot be resumed as a contextual binding;
+  the established `build_definition()` keeps its exact eager core-document
+  binding and fingerprint behavior for direct and explicitly custom callers.
 - **Direct internal dependencies:** `agents`, `config`, `conversations`,
   `models`, `workspace`, `writing_artifacts`, and
   `writing_artifacts.repository`.
 - **State, resources, and side effects:** Reads verified prompt references and
   owner-isolated agent history. With no injected snapshot it resolves persisted
   configuration on demand; with a snapshot it reuses those persisted values but
-  still loads session runtime overrides for every definition. It requests only
-  the agent's core context paths and binds stable, strict-UTF-8, NUL-free
-  immutable byte snapshots into prompt references; no later provider step
-  reopens an artifact path. Present safe empty, initialized, manual,
+  still loads session runtime overrides for every definition. The legacy path
+  requests only the agent's core context paths and binds stable, strict-UTF-8,
+  NUL-free immutable byte snapshots into prompt references; no later provider
+  step reopens an artifact path. The contextual path performs no core-document
+  read and leaves mutable role artifacts outside the provider-binding
+  fingerprint for source-owned runtime selection. Present safe empty,
+  initialized, manual,
   pre-provenance, published, and hash-divergent files are included; absent or
   unsafe files are omitted, while invalid UTF-8 or NUL content fails closed.
   A nonzero provider-route generation participates in the definition
@@ -4336,6 +4945,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   projection delegates lazy internal-state and lease setup to the injected
   artifact repository without catalog loading or transaction recovery.
 - **Primary verification/documentation:** `tests/test_prompts.py`,
+  `tests/test_agent_context_runtime_adoption.py`,
   `tests/test_codex_backend.py`, `docs/reference/writing-artifacts.md`,
   `docs/reference/agent-contracts.md`, and `docs/design/prompts-and-provider.md`.
 
@@ -4767,6 +5377,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   and provider-text projections and uses a no-operation-ID fast path when no
   references exist. Each referenced provider attempt receives a fresh
   contiguous ordinal, UUID-backed invocation identity, and attempt value 1.
+  While open, `reference_proofs` projects the exact ordered immutable
+  content-free authorized-reference facts without exposing captured bytes or
+  the repository-owned authorization capability, allowing context composition
+  to reserve the same reference batch without private-state access.
   Successful completion requires no pending invocation before repository
   finalization; failures terminate unfinished invocations and return one safe,
   structured `ReferenceOperationFailure`.
@@ -4780,7 +5394,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   resource; repository calls remain the only operational effects. Importing
   the module performs no I/O.
 - **Primary verification/documentation:**
-  `tests/test_runtime_reference_integration.py`; production inventory and
+  `tests/test_runtime_reference_integration.py`,
+  `tests/test_agent_context_runtime_adoption.py`; production inventory and
   clean-import checks in `tests/test_interactive_controller.py` and
   `tests/test_session_lifecycle.py`; the user workflow and lifecycle are in
   `docs/guides/artifact-references.md`, while orchestration consumers are
@@ -4834,7 +5449,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/writing_artifacts/_storage.py`
 - **Responsibility:** Enforce descriptor-relative no-follow filesystem access
   for the writing-artifact repository.
-- **Supported surface:** Private `SecureWorkspaceStorage`, consumed only by
+- **Supported surface:** Private `SecureWorkspaceStorage` and
+  `ArtifactTraversalLimitError`, consumed only by
   `writing_artifacts.repository` and its package-private
   `writing_artifacts._reference_evidence` and
   `writing_artifacts.filesystem_sources` adapters. The repository remains the
@@ -4853,13 +5469,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   pre-stat/name/descriptor checks, unique-regular-file checks, and exact stored
   entry spelling. Final file names are alias-checked before their first stat and
   reverified around descriptor reads. Metadata-only recursive discovery reads
-  no file bodies, skips unsafe or alias-colliding entries, and retains and
-  revalidates descriptor ancestry. Stable reads return exact bytes plus device,
-  inode, size, modification, and change stamps. Descriptor-relative directory
-  listings reject case-folded or NFKC-normalized aliases before access; traversal fsyncs
-  each parent directory entry after successful child creation and before
-  descending. Publication also fsyncs its target/staging directories and uses a
-  lazily required Darwin/Linux native atomic no-replace rename. Publication,
+  no file bodies, uses descriptor-relative streaming scans, counts every raw
+  descendant entry against one call-local budget before filtering, fails the
+  complete traversal on overflow, skips unsafe or alias-colliding entries, and
+  retains and revalidates descriptor ancestry. Stable reads return exact bytes
+  plus device, inode, size, modification, and change stamps. Descriptor-relative
+  directory listings reject case-folded or NFKC-normalized aliases before
+  access; traversal fsyncs each parent directory entry after successful child
+  creation and before descending. Publication also fsyncs its target/staging
+  directories and uses a lazily required Darwin/Linux native atomic no-replace
+  rename. Publication,
   replacement holding, rollback, temporary cleanup, and completed-journal
   removal never overwrite or unlink a name: prior, failed, and completed bytes
   move exclusively into ignored non-authoritative staging and remain retained.
@@ -4893,7 +5512,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Authorize referenceable writing-artifact sources from the
   current filesystem.
 - **Supported surface:** Package-internal `CanonicalArtifactFilesystem`, plus
-  its package-private strict-UTF-8 and NUL format errors. The adapter lists the
+  its package-private strict-UTF-8, NUL, and inventory-limit format errors and
+  hard traversal/inventory constants. `list_paths_bounded` lists the
   four exact core paths and every safely representable regular lowercase-
   Markdown file recursively below `manuscript/`, including direct children,
   arbitrary nesting, ordinary spaces, and Unicode. It selectively captures
@@ -4904,7 +5524,10 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** Retains one borrowed
   `SecureWorkspaceStorage` and owns no descriptor or lock. Listing performs
   metadata-only safe-file inspection, includes empty files, filters through
-  reference-source eligibility, and orders complete workspace-relative paths.
+  reference-source eligibility, applies caller-selected bounds no greater than
+  8,192 raw manuscript entries and 4,096 total eligible sources, and orders
+  complete workspace-relative paths. The no-argument listing delegates to
+  those hard bounds; neither overflow returns a partial first-N inventory.
   Capture validates complete strict UTF-8 and NUL-free bytes and mints one
   immutable content snapshot carrying its full hash, size, and physical stamp.
   All descriptors remain call-local to `_storage`; import performs no I/O.
@@ -4922,7 +5545,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   operations.
 - **Supported surface:** Module-supported internal
   `WritingArtifactRepository`, with provenance-audited `catalog`,
-  filesystem-authoritative sorted `list_paths`, ordered selective immutable
+  filesystem-authoritative sorted `list_paths`, complete bounded
+  `list_paths_bounded`, ordered selective immutable
   `read_current`, verified `read_text`, and
   unanimous `commit_consensus` operations; plus capture, invocation
   authorization, one-use delivery, result receipt, invocation acceptance or
@@ -5056,6 +5680,16 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
+- Live agent-context lifecycle progress remains one-way and content-free:
+  `agent_context.service` owns the direct-module event contract and
+  authoritative delivery, `orchestrator` composes runtime observers,
+  `interactive_controller._runtime_policy` is the controller's sole direct
+  event-contract consumer, and `_core` consumes only that policy's safe
+  projection. The sole new edge is
+  `interactive_controller._runtime_policy -> agent_context.service`; the root,
+  `agent_context`, and `writing_artifacts` facades remain exactly 120, 11, and
+  31 names.
+
 - Optional conversation RAG has three one-way direct-module boundaries.
   `conversation_rag` is the standard-library-only story contract and policy
   leaf. `generic_rag_adapter` is the sole production dual-project importer and
@@ -5138,6 +5772,37 @@ every intermediate arrow. The current runtime graph is acyclic.
   carries artifact bytes. Parsing performs no repository read or runtime,
   provider, controller, terminal, picker, viewer, or composer integration;
   those workflows cannot treat a parsed directive as authorized content.
+
+- Agent-directed context operations retain three one-way internal boundaries.
+  `agent_context.actions` owns only immutable actions, correlations, evidence
+  values, fixed policies and errors, and canonical untrusted frames;
+  `agent_context.sources` owns the exact four concrete authority adapters and
+  deterministic bounded capture/search; and `agent_context.service` alone owns
+  workspace-scoped manifest/planner/ledger composition plus each invocation's
+  HMAC handles, provider-neutral action loop, accounting handoff, counters,
+  receipts, transitions, and final source revalidation. Source adapters call
+  only public owner operations on the writing-artifact repository, conversation
+  catalog/event store, and Workspace.
+  They never import orchestration, providers, prompts, runtime, or ledger, and
+  backend imports only the service-owned provider protocol rather than its
+  planner, ledger, or source collaborators. Orchestrator is the sole production
+  composition consumer: it imports the five direct context contracts, builds
+  runtime manifests and classifications, supplies the fixed authorities,
+  validates domain answers, and projects typed context events into existing
+  debug/progress owners without reversing any context dependency. Prompts owns
+  the stable no-core-byte runtime definition while retaining its eager legacy
+  definition. Service-owned classification joining remains strict unless the
+  orchestrator explicitly marks a P2 hard constraint as conditional; only
+  role-core IDs use that path, so missing workspace cores are omitted without
+  weakening conversation, debate, owner-state, or retrieved-source authority.
+  Mandatory references pass through answer authorization unchanged,
+  remain outside source search/read authority, and execute as a separately
+  accounted backend prelude before the substantive context-action budget; the
+  runtime-reference coordinator exposes only ordered content-free proof facts
+  for reservation construction. Native contextual continuation storage stays
+  backend-owned and is keyed independently from legacy session threads. None
+  of the three modules is re-exported by the accounting-only `agent_context`
+  facade.
 
 - Explicit artifact reads retain split, one-way ownership.
   `writing_artifacts.authorization` owns pure content-free evidence contracts

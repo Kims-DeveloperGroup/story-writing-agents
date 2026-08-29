@@ -18,6 +18,10 @@ Use this index to find one canonical answer instead of searching a long manual.
 > `/settings` persists Disabled/Local and Off/On policy for the next shell;
 > eligible focused turns can use automatic preflight or one private armed
 > `/rag QUERY` preflight.
+> Context-capable ordinary, retrieval, prompt-debate, and draft-debate work
+> automatically shows live content-free bootstrap/delta, action, answer, and
+> checkpoint progress; Python callers can supply the same optional synchronous
+> observer directly.
 > Inline `${path}` and `${path}#Lx-Ly` references are active in provider-bound
 > prompts. In those shell spans, `$` discovers current safe reference sources.
 > Exact `$$` immediately shows ranged-source choices; Enter/Tab opens the
@@ -48,6 +52,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Append/read transcripts; derive bounded complete-turn context | Shell turns append/consume context and `/transcript` reads fresh bounded pages; Python API |
 | Search one session and cite hits | Attached shell `/search` for active records; Python API can explicitly include archived records |
 | Ask an agent to retrieve cited conversation history | Focused shell conversation; additive Python runtime API; active records in the current session only |
+| Observe bounded agent-context execution | Automatic live shell progress for contextual ordinary/retrieval/debate work; optional synchronous `context_event_sink` on all `StoryRuntime` and `RuntimeSession` provider-bound entry forms. [States, output, privacy, and recovery](guides/agent-context-progress.md) |
 | Inspect or operate optional local conversation RAG | Provider-free `story rag status`; explicit `enable`, `rebuild`, cited `search`, `disable`, and derived-only `purge`; shell `/settings` provider/automatic policy; private one-turn `/rag QUERY`; or supported direct Python modules. Local use requires the exact-pinned `rag` extra before opt-in. [Commands, interactive use, and boundary](guides/conversation-rag.md) |
 | Persist and send one explicitly addressed one-step turn | Existing `StoryRuntime.converse()` Python API |
 | Run consensus with included, fresh, or draft-file input | Focused active shell conversation; noninteractive CLI and Python API remain available |
@@ -68,9 +73,11 @@ Use this index to find one canonical answer instead of searching a long manual.
 
 ## Guides
 
+- [Bounded agent context: canonical scenarios, selection, search/read, references, progress, and limits](guides/agent-context.md)
 - [Canonical artifact references](guides/artifact-references.md)
 - [Workspaces](guides/workspaces.md)
 - [Story sessions and subject conversations](guides/story-sessions.md)
+- [Live agent-context progress, states, privacy, and observer recovery](guides/agent-context-progress.md)
 - [Glasswater interactive end-to-end journey](guides/glasswater-scenario.md)
 - [Provider-free smoke test](guides/smoke-test.md)
 - [Optional conversation RAG setup, commands, runtime boundary, and interactive use](guides/conversation-rag.md)
@@ -105,9 +112,10 @@ Use this index to find one canonical answer instead of searching a long manual.
 ## System design
 
 - [Overview](design/overview.md)
+- [Agent-context ownership, wire v5, checkpoints, candidate deltas, and recovery](design/agent-context.md)
 - [Interactive CLI design system contract](design/interactive-cli-design-system.md)
-- [Canonical Python module inventory (76 production units)](../PYTHON_MODULE_INDEX.md)
-- [Prompts and provider boundary](design/prompts-and-provider.md)
+- [Canonical Python module inventory (84 production units)](../PYTHON_MODULE_INDEX.md)
+- [Prompts, provider boundary, and exact context accounting](design/prompts-and-provider.md)
 - [Session lifecycle](design/session-lifecycle.md)
 - [Consensus workflow](design/consensus-workflow.md)
 - [Persistence](design/persistence.md)
@@ -119,3 +127,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 - [Terminal display safety](operations/terminal-safety.md)
 - [Recovery and limitations](operations/recovery-and-limitations.md)
 - [Provider authentication recovery](operations/recovery-and-limitations.md#authentication-recovery)
+
+## Audits
+
+- [Final issue #380 agent-context conformance matrix (188 criteria)](audits/issue-380-agent-context-conformance.md)

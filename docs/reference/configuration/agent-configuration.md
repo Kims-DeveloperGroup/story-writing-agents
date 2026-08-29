@@ -275,10 +275,12 @@ current-shell hot-activation path for live-capable runtime settings described
 above; desired conversation storage and Conversation RAG remain next-shell
 selections. Session
 language and persona overrides remain live, and explicit applicable
-CLI/constructor provider settings remain higher precedence. Role, persona, and
-core-document content continues to follow its separate definition-snapshot and
-binding lifecycle; the settings hot-activation contract does not turn those
-files into watched live inputs.
+CLI/constructor provider settings remain higher precedence. Role and persona
+continue to follow the definition-snapshot/binding lifecycle. Built-in mutable
+core documents instead remain contextual P2 authoritative sources whose current
+revision participates in bootstrap/delta planning; they are not watched live
+settings. Direct custom eager `AgentDefinition.context_document_files` binding
+retains its compatibility lifecycle.
 
 Exact route and model/effort precedence is in
 [Runtime overrides](runtime-overrides.md#resolution-precedence). Installation

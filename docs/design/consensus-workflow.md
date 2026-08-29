@@ -7,7 +7,9 @@
 Key terms: **reservation**—the immutable claim on one debate ID; **snapshot**—
 one bounded conversation window; **revision round**—one complete replacement;
 **terminal durability**—result and lifecycle state saved before terminal
-progress; **observer**—the optional synchronous progress sink.
+progress; **observer**—the optional synchronous debate-progress sink. The
+agent-context observer is a separate per-invocation lifecycle; see
+[Agent-context design](agent-context.md#observer-lifecycle-and-shell-projection).
 
 ```mermaid
 flowchart TD
@@ -66,6 +68,13 @@ Each revision emits `AUDIT_STARTED`, then the three specialists audit the same
 candidate and the same immutable context snapshot in parallel. Successful
 audit persistence precedes `AUDIT_COMPLETED`, whose typed agent list reports
 conflicts in roster order. Peer prose never enters progress.
+
+Within each logical draft/audit/proposal/synthesis/finalize call, contextual
+execution independently follows `PREPARE → PLAN → INVOKE/ACTION → VERIFY →
+COMMIT|FAIL`. These content-free lines may interleave by agent, round, and
+phase. A context `checkpoint advanced` authorizes a later delta; it does not
+mean debate consensus or artifact publication. Consensus publication remains
+one recoverable catalog-last artifact transaction.
 
 If conflicts remain and another replacement is allowed, only conflicting
 specialists propose repairs. The lead synthesizes a complete next revision;

@@ -378,50 +378,86 @@ from inline `${...}` indicators. The interactive controller can now construct
 those same indicators through `$`/`$$` discovery and viewer selection without
 copying selected content into the prompt or work history.
 
+<a id="agent-context-progress-privacy"></a>
+
+## Agent-context progress privacy
+
+The optional context lifecycle observer and installed-shell progress contain
+only validated scope and operation identities, fixed lifecycle kinds,
+nonnegative counters, and an optional truncation boolean. They have no field
+for prompts, search queries, candidates, excerpts, mandatory-reference bodies,
+provider responses, source or reference paths, source digests, private agent
+state, exception details, or provider-thread identities. Debate events add only
+the canonical agent, phase, and round needed to distinguish logical
+invocations.
+
+Observer delivery adds no provider call, result field, story content,
+conversation event, debate record, or second context ledger. The runtime has no
+supported post-hoc observer inspection. The installed shell renders compact
+facts into terminal output only; a terminal emulator, multiplexer, or remote
+terminal may retain them in scrollback. A Python caller may deliberately retain
+callback values, in which case that caller owns access control, retention, and
+cleanup for the new copy.
+
+The context ledger and runtime debug log remain separate owners. The ledger
+retains its existing content-free checkpoint/accounting authority; progress
+does not duplicate it. Independently of whether a generic observer is supplied,
+the debug log can best-effort record `agent_context` with a fixed
+`context_*` outcome and safe session, conversation-or-debate, and agent IDs. It
+does not retain the observer's operation ID, detailed counters, provider-token
+facts, paths, or story/provider text and is not a replayable event stream.
+
+These boundaries make progress content-free, not anonymous. Workspace,
+session, subject, operation, agent, phase, and round identities; counts; token
+usage; timing; and terminal scrollback can still reveal sensitive operational
+patterns. Treat caller-retained events, debug records, and captured terminal
+output as plaintext workspace/session metadata.
+
+Mandatory references remain a separate exact-read authorization path. Their
+ordered paths/ranges and durable content-free evidence retain the exposure
+described above, while their selected bodies never enter context lifecycle
+events. Optional conversation RAG is also independent: its query, excerpts,
+citations, and derived state do not widen the observer schema. See
+[Agent-context progress](../guides/agent-context-progress.md#privacy-references-and-limits)
+for the user-visible lifecycle and limits.
+
 ## Provider disclosure
 
-A runtime-built substantive call sends current text where applicable plus one
-schema-v1 `story_session_context` envelope. That envelope exposes the receiving
-agent's newest owner outcomes (at most 24 entries and 32,768 compact UTF-8
-bytes), the focused context in included/fresh/omitted mode, and canonical bound
-core-document path/hash identities. It does not copy core bytes; those are
-already separately bound into the definition. A direct Python request whose
-optional envelope is `None` keeps the legacy focused-context/owner-state
-payload.
+A built-in substantive call uses compact agent-context wire v5. Stable binding
+material contains role/persona/language/behavior/protocol, not mutable core
+bytes. Initial contextual input can expose the current command, complete
+logical candidate or exact pointer/splice operation, selected role-relevant P2
+source bodies, focused record changes, content-free catalog facts, and
+applicable mandatory-reference bodies. Continuations expose only the newly
+authorized SEARCH/READ observation.
 
-Retrieval starts with that bounded envelope, then may add authorized active-
-conversation hits and complete user/reply pairs from the current session. It
-cannot request archives, another session/workspace, arbitrary IDs, runtime
-errors, private state, tools, or native data. Observations are framed as
-untrusted story data.
-Continuations do not repeat the question or envelope.
+SEARCH/READ is route-restricted to canonical writing artifacts, focused
+same-session conversation, active debate, and the invoking agent's own state.
+Provider-visible evidence deliberately contains relative source identity,
+revision, boundary, digests, UTF-8 sizes, provenance, fresh handle, and
+untrusted content so the agent can reason from exact evidence. It excludes
+absolute paths, internal files, another agent's state, and incompatible scopes.
+These evidence facts are provider input; public progress and the ledger remain
+content-free.
 
-Agent definitions separately supply present safe current allowlisted core
-documents. A manual, pre-provenance, published, or hash-divergent safe file may
-therefore reach the provider in a later definition; this does not create
-publication provenance. The runtime does not delete those bytes. Retrieval
-actions do not search debates, manuscripts, core updates, or owner state;
-bounded owner outcomes reach the provider only through the continuity envelope.
-Direct routing selects a shared-transcript responder, not a private channel.
-
-Included consensus sends one focused-transcript snapshot through every phase.
-Fresh mode keeps the conversation identity but omits its transcript;
-context-omitted mode keeps neither. Both still carry bounded owner outcomes and
-core identities, so a fresh provider-native thread is not a fresh story
-session. The envelope intentionally omits another agent's owner outcomes,
-events outside the bounded window, provider-hidden history, and artifact bytes.
+`StorySessionContext` remains an internal capture and direct-request
+compatibility value, not the current built-in provider envelope. Direct eager
+`context_document_files` also remains compatible, but the four built-in roles
+use provider-managed context with empty mutable-core bindings. Optional
+conversation RAG stays separate from deterministic lexical context actions.
 
 Provider threads are keyed by session/backend/agent and can span conversations
-and debates. Changed visible context does not erase private history. Session
-switch, pause, quit, and close preserve compatible thread references;
-fresh/omitted context cannot make that provider forget. A provider-route switch
-instead advances generation and starts a fresh target-provider thread without
+and debates. Cache/history/compaction may retain previously disclosed content
+under provider policy, but never authorize correctness or omission. Missing or
+tainted native history causes a new bootstrap epoch from local authoritative
+sources; switching provider routes also starts a fresh target thread without
 deleting older native data.
 
 The backend-selected provider/model/effort profile and provider argv are the
 execution evidence shown by the terminal. Provider reply prose, including a
 self-identification such as “I am Codex,” is untrusted content and cannot prove
-which provider or model executed the turn.
+which provider or model executed the turn. See
+[Agent-context design](../design/agent-context.md#privacy-recovery-and-compatibility).
 
 <a id="workspace-debug-log-privacy"></a>
 

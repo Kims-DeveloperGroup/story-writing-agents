@@ -1326,10 +1326,19 @@ conversation-migration, provisioning, selection, and conversation-RAG modules
 are also supported direct-module surfaces and match their own `__all__` values.
 None is re-exported by the package-root or conversation-storage facade.
 
+`story_writing_agents.agent_context` is an 11-name accounting-only facade. It
+is absent from the 120-name package-root facade and does not export manifest,
+planning, source, action, ledger, service, or observer contracts. The additive
+observer types are supported only from
+`story_writing_agents.agent_context.service`; see
+[Runtime API](runtime-api.md#context-lifecycle-observer) and
+[Agent-context design](../design/agent-context.md#package-boundary-and-owners).
+
 The exact current inventories are package root `120`, conversation storage
 `64`, conversation search `13`, SQLite database owner `12`, SQLite adapter
 `14`, literal-search mechanics `6`, SQLite companion owner `5`, conversation
 migration `7`, provisioning `4`, selection `8`, conversation RAG contracts
 `35`, generic RAG adapter `3`, local RAG provider `5`, RAG generation store `8`,
 RAG composition `10`, RAG runtime `10`, and RAG CLI `7`. The production module
-inventory is `76`.
+inventory is `84`, with 346 dependency edges, zero cycles, and facade counts
+120/11/31 (root / agent-context accounting / writing artifacts).

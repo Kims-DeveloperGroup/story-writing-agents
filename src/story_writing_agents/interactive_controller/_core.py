@@ -210,6 +210,7 @@ from ._conversation_policy import (
     visible_conversation_handle,
 )
 from ._runtime_policy import (
+    ContextProgressProjection,
     DebateContextInspectionFacts,
     DebateInspectionFacts,
     classify_advisory_turn_failure,
@@ -218,6 +219,7 @@ from ._runtime_policy import (
     classify_progress_callback_failure,
     interactive_code_for_debate_failure,
     validate_consensus_result,
+    validate_context_execution_progress,
     validate_conversation_retrieval_progress,
     validate_conversation_retrieval_result,
     validate_debate_context_inspection,
@@ -5866,7 +5868,23 @@ class InteractiveController:
             )
         )
         progress_events: list[ConversationRetrievalProgressEvent] = []
+        context_operations: dict[
+            tuple[str, str, str, str, str, str],
+            ContextProgressProjection,
+        ] = {}
         progress_callback_failure: BaseException | None = None
+        supports_context_progress = bool(
+            "context_event_sink"
+            in inspect.signature(
+                self._runtime.converse_with_retrieval
+            ).parameters
+            and getattr(
+                self._runtime,
+                "conversation_storage_services",
+                None,
+            )
+            is not None
+        )
 
         def accept_and_render_progress(
             event: ConversationRetrievalProgressEvent,
@@ -5881,6 +5899,24 @@ class InteractiveController:
                     expected_conversation_id=focused.conversation_id,
                     expected_agent_id=agent_id,
                     events=progress_events,
+                )
+            except BaseException as exc:
+                progress_callback_failure = exc
+                raise
+
+        def accept_and_render_context_progress(event: object) -> None:
+            """Validate generic lifecycle facts and retain callback failures."""
+
+            nonlocal progress_callback_failure
+            try:
+                self._accept_context_progress(
+                    event,
+                    expected_session_id=session_id,
+                    expected_subject_kind="conversation",
+                    expected_subject_id=focused.conversation_id,
+                    expected_agent_id=agent_id,
+                    operations=context_operations,
+                    suppress_retrieval_actions=True,
                 )
             except BaseException as exc:
                 progress_callback_failure = exc
@@ -5902,6 +5938,11 @@ class InteractiveController:
                     session_id=session_id,
                     conversation_id=focused.conversation_id,
                 )
+                context_observer = (
+                    {"context_event_sink": accept_and_render_context_progress}
+                    if supports_context_progress
+                    else {}
+                )
                 return await self._runtime.converse_with_retrieval(
                     session_id,
                     focused.conversation_id,
@@ -5910,6 +5951,7 @@ class InteractiveController:
                     memory_service=memory_service,
                     progress_sink=accept_and_render_progress,
                     rag_query=rag_query,
+                    **context_observer,
                 )
             except asyncio.CancelledError:
                 cancellation_reached_operation = True
@@ -5977,6 +6019,16 @@ class InteractiveController:
                 operation_coroutine.close()
                 progress_coroutine.close()
 
+        if supports_context_progress and (
+            len(context_operations) != 1
+            or any(
+                not event.terminal or event.kind != "checkpoint_advanced"
+                for event in context_operations.values()
+            )
+        ):
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
         try:
             result = validate_conversation_retrieval_result(
                 result,
@@ -6091,6 +6143,135 @@ class InteractiveController:
         )
         self._render_conversation_retrieval_progress(canonical)
         events.append(canonical)
+
+    def _accept_context_progress(
+        self,
+        event: object,
+        *,
+        expected_session_id: str,
+        expected_subject_kind: str,
+        expected_subject_id: str | None,
+        expected_agent_id: str | None,
+        operations: dict[
+            tuple[str, str, str, str, str, str],
+            ContextProgressProjection,
+        ],
+        suppress_retrieval_actions: bool,
+    ) -> None:
+        """Validate, render, and retain one generic context lifecycle fact."""
+
+        canonical = validate_context_execution_progress(
+            event,
+            expected_session_id=expected_session_id,
+            expected_subject_kind=expected_subject_kind,
+            expected_subject_id=expected_subject_id,
+            expected_agent_id=expected_agent_id,
+            previous_by_operation=operations,
+        )
+        self._render_context_progress(
+            canonical,
+            suppress_retrieval_actions=suppress_retrieval_actions,
+        )
+        operations[canonical.operation_key] = canonical
+
+    def _render_context_progress(
+        self,
+        event: ContextProgressProjection,
+        *,
+        suppress_retrieval_actions: bool,
+    ) -> None:
+        """Render only fixed wording and validated content-free counters."""
+
+        if event.subject_kind == "debate":
+            assert event.phase is not None and event.round_number is not None
+            prefix = (
+                f"{event.agent_id} · round {event.round_number} · "
+                f"{event.phase}: "
+            )
+        else:
+            prefix = ""
+        kind = event.kind
+        if kind in {"bootstrap", "delta"}:
+            assert event.selected_source_count is not None
+            assert event.selected_source_utf8_bytes is not None
+            assert event.omitted_searchable_source_count is not None
+            text = (
+                f"{prefix}{kind}: {event.selected_source_count} selected / "
+                f"{event.selected_source_utf8_bytes:,} bytes; "
+                f"{event.omitted_searchable_source_count} searchable"
+            )
+            self._write_notice(text, label="context", state=ViewState.LOADING)
+            return
+        if kind == "omission":
+            # The preceding plan line already renders these exact facts.
+            return
+        if suppress_retrieval_actions and kind in {
+            "search_started",
+            "search_completed",
+            "read_started",
+            "read_completed",
+        }:
+            return
+        if kind == "search_started":
+            assert event.action_index is not None
+            text = f"{prefix}search action {event.action_index} started"
+            state = ViewState.LOADING
+            role = SemanticRole.INFO
+        elif kind == "search_completed":
+            assert event.action_index is not None
+            assert event.search_hit_count is not None
+            assert event.truncated is not None
+            text = (
+                f"{prefix}search action {event.action_index} completed: "
+                f"{event.search_hit_count} hits; truncated: "
+                f"{'yes' if event.truncated else 'no'}"
+            )
+            state = ViewState.COMPLETED
+            role = SemanticRole.INFO
+        elif kind == "read_started":
+            assert event.action_index is not None
+            text = f"{prefix}read action {event.action_index} started"
+            state = ViewState.LOADING
+            role = SemanticRole.INFO
+        elif kind == "read_completed":
+            assert event.retrieved_source_count is not None
+            assert event.retrieved_source_utf8_bytes is not None
+            text = (
+                f"{prefix}read {event.retrieved_source_count} sources / "
+                f"{event.retrieved_source_utf8_bytes:,} bytes"
+            )
+            state = ViewState.COMPLETED
+            role = SemanticRole.INFO
+        elif kind == "answer_authorized":
+            text = f"{prefix}answer accepted"
+            state = ViewState.COMPLETED
+            role = SemanticRole.SUCCESS
+        elif kind == "invalidated":
+            text = f"{prefix}source invalidated"
+            state = ViewState.ERROR
+            role = SemanticRole.ERROR
+        elif kind == "budget_exhausted":
+            text = f"{prefix}context budget exhausted"
+            state = ViewState.ERROR
+            role = SemanticRole.ERROR
+        elif kind == "action_exhausted":
+            text = f"{prefix}context actions exhausted"
+            state = ViewState.ERROR
+            role = SemanticRole.ERROR
+        elif kind == "tainted":
+            text = f"{prefix}provider context tainted"
+            state = ViewState.ERROR
+            role = SemanticRole.WARNING
+        elif kind == "checkpoint_advanced":
+            text = f"{prefix}checkpoint advanced"
+            state = ViewState.COMPLETED
+            role = SemanticRole.SUCCESS
+        else:
+            assert kind == "checkpoint_not_advanced"
+            text = f"{prefix}checkpoint not advanced"
+            state = ViewState.ERROR
+            role = SemanticRole.ERROR
+        self._write_notice(text, label="context", role=role, state=state)
 
     def _render_conversation_retrieval_progress(
         self,
@@ -6331,7 +6512,26 @@ class InteractiveController:
             )
         )
         progress_events: list[DebateProgressEvent] = []
+        context_operations: dict[
+            tuple[str, str, str, str, str, str],
+            ContextProgressProjection,
+        ] = {}
         progress_callback_failure: BaseException | None = None
+        context_runtime_method = (
+            self._runtime.run_prompt
+            if input_kind is InputKind.PROMPT
+            else self._runtime.run_draft
+        )
+        supports_context_progress = bool(
+            "context_event_sink"
+            in inspect.signature(context_runtime_method).parameters
+            and getattr(
+                self._runtime,
+                "conversation_storage_services",
+                None,
+            )
+            is not None
+        )
 
         def accept_and_render_progress(event: DebateProgressEvent) -> None:
             """Retain callback failure identity while accepting one event."""
@@ -6349,6 +6549,28 @@ class InteractiveController:
                 progress_callback_failure = exc
                 raise
 
+        def accept_and_render_context_progress(event: object) -> None:
+            """Validate each interleaved debate-agent context operation."""
+
+            nonlocal progress_callback_failure
+            try:
+                if not progress_events:
+                    raise ValueError(
+                        "context progress preceded debate progress identity"
+                    )
+                self._accept_context_progress(
+                    event,
+                    expected_session_id=session_id,
+                    expected_subject_kind="debate",
+                    expected_subject_id=progress_events[0].debate_id,
+                    expected_agent_id=None,
+                    operations=context_operations,
+                    suppress_retrieval_actions=False,
+                )
+            except BaseException as exc:
+                progress_callback_failure = exc
+                raise
+
         operation_entered = False
         cancellation_reached_operation = False
         operation_joined = False
@@ -6361,6 +6583,11 @@ class InteractiveController:
             nonlocal operation_joined
             operation_entered = True
             try:
+                context_observer = (
+                    {"context_event_sink": accept_and_render_context_progress}
+                    if supports_context_progress
+                    else {}
+                )
                 if input_kind is InputKind.PROMPT:
                     return await self._runtime.run_prompt(
                         session_id,
@@ -6368,6 +6595,7 @@ class InteractiveController:
                         output_path=output_path,
                         conversation_context=request,
                         progress_sink=accept_and_render_progress,
+                        **context_observer,
                     )
                 return await self._runtime.run_draft(
                     session_id,
@@ -6375,6 +6603,7 @@ class InteractiveController:
                     output_path=output_path,
                     conversation_context=request,
                     progress_sink=accept_and_render_progress,
+                    **context_observer,
                 )
             except asyncio.CancelledError:
                 cancellation_reached_operation = True
@@ -6448,6 +6677,25 @@ class InteractiveController:
             raise _ControllerAbort(
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
             ) from None
+        if supports_context_progress and (
+            any(not event.terminal for event in context_operations.values())
+            or (
+                result.status in {
+                    DebateStatus.CONSENSUS,
+                    DebateStatus.DEADLOCK,
+                }
+                and (
+                    not context_operations
+                    or any(
+                        event.kind != "checkpoint_advanced"
+                        for event in context_operations.values()
+                    )
+                )
+            )
+        ):
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
         self._present_consensus_result(result, terminal_event, artifact_event)
         return False
 

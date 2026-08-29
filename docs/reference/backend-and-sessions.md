@@ -54,13 +54,12 @@ means the adapter omits that flag; it does not identify or attest a vendor's
 server-side default. Provider reply prose and self-identification are never
 execution evidence.
 
-Every substantive runtime-built request can also carry the package-internal
-schema-v1 `story_session_context` envelope. When present, backend payloads use
-that field instead of duplicating legacy `agent_state`, `conversation_context`,
-or `context` fields. Direct package callers that leave the trailing optional
-field as `None` keep the legacy payload. The content-free explicit-reference
-prelude never carries the envelope, and retrieval continuations do not repeat
-it. See [Prompts and provider boundary](../design/prompts-and-provider.md#story-session-continuity-envelope).
+Runtime-built provider-managed definitions use the agent-context service and
+compact wire v5. Package-internal `story_session_context` remains capture and
+direct-request compatibility input; it is not the current built-in provider
+envelope. A content-free explicit-reference prelude remains separate, and
+context continuations carry only the new authorized observation. See
+[Agent-context design](../design/agent-context.md#compact-provider-wire-v5).
 
 <a id="referenced-invocation-boundary"></a>
 

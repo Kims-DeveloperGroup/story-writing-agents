@@ -212,13 +212,158 @@ if argv in (["login", "status"], ["login"]):
 
 payload = json.loads(sys.stdin.read())
 control = json.loads(CONTROL_PATH.read_text(encoding="utf-8"))
+
+
+def compact_agent_id(arguments):
+    """Recover the bound agent id from Codex's isolated staging path."""
+
+    if "--cd" not in arguments:
+        return "agent"
+    name = Path(arguments[arguments.index("--cd") + 1]).name
+    prefix = "story-codex-"
+    if not name.startswith(prefix):
+        return "agent"
+    body = name[len(prefix):]
+    parts = body.rsplit("-", 2)
+    if len(parts) != 3 or len(parts[1]) != 12:
+        return "agent"
+    return parts[0]
+
+
+def compact_context_current(value, agent_id):
+    """Extract authoritative current material from compact wire v5."""
+
+    query = value.get("q")
+    correlation = value.get("c")
+    if (
+        not isinstance(correlation, str)
+        or len(correlation) != 43
+        or not isinstance(query, list)
+        or len(query) != 5
+        or not isinstance(query[0], str)
+        or "i" not in value
+    ):
+        return None
+    phase = query[0]
+    material = value["i"]
+    if isinstance(material, str):
+        command = material
+    elif (
+        isinstance(material, dict)
+        and isinstance(material.get("input"), str)
+    ):
+        command = material["input"]
+    else:
+        raise SystemExit(83)
+    return {
+        "workflow": (
+            "conversation_retrieval"
+            if phase == "retrieval"
+            else "conversation"
+            if phase == "conversation"
+            else "debate"
+        ),
+        "command": command,
+        "phase": phase,
+        "identity": {"agent_id": agent_id},
+    }
+
+
+def compact_observation_handles(value):
+    """Return the wire-v5 observation kind and its authorized handle aliases."""
+
+    observation = value.get("o")
+    if not isinstance(observation, list) or not observation:
+        return None, ()
+    if (
+        observation[0] == "s"
+        and len(observation) == 3
+        and isinstance(observation[2], list)
+    ):
+        return "search", tuple(
+            item[5]
+            for item in observation[2]
+            if isinstance(item, list)
+            and len(item) == 7
+            and isinstance(item[5], str)
+        )
+    if (
+        observation[0] == "r"
+        and len(observation) == 2
+        and isinstance(observation[1], list)
+    ):
+        return "read", tuple(
+            item[4]
+            for item in observation[1]
+            if isinstance(item, list)
+            and len(item) == 6
+            and isinstance(item[4], str)
+        )
+    raise SystemExit(84)
+
+
+def compact_answer(value, used_handles=(), *, after_retrieval=False):
+    """Encode one strict natural-result ANSWER for the live phase contract."""
+
+    phase = value["q"][0]
+    current = compact_context_current(value, compact_agent_id(argv))
+    command = current["command"] if current is not None else ""
+    if phase == "retrieval":
+        content = (
+            "retrieval-assisted answer"
+            if command.startswith("retrieve ") or after_retrieval
+            else "visible \x1b[31mred\x1b[0m and bell \x07"
+            if command == "show visible controls"
+            else "deterministic advisory reply"
+        )
+        result = [content, list(range(1, len(used_handles) + 1))]
+    elif phase == "conversation":
+        result = (
+            "visible \x1b[31mred\x1b[0m and bell \x07"
+            if command == "show visible controls"
+            else "deterministic advisory reply"
+        )
+    elif phase == "audit":
+        result = "a"
+    elif phase == "finalize":
+        result = [["global_outline.md", "updated outline"]]
+    else:
+        result = "deterministic candidate"
+    return {
+        "a": "a",
+        "c": value["c"],
+        "d": [result],
+        "u": list(used_handles),
+    }
+
+
+agent_id = compact_agent_id(argv)
+current = compact_context_current(payload, agent_id)
+query = payload.get("q")
+observation_kind, observation_handles = compact_observation_handles(payload)
+context_action_index = (
+    1
+    if current is not None
+    else 2
+    if observation_kind == "search"
+    else 3
+    if observation_kind == "read"
+    else None
+)
+correlation = payload.get("correlation", {})
 append_record(
     {
         "event": "started",
         "pid": os.getpid(),
         "argv": argv,
-        "operation": payload.get("operation"),
-        "phase": payload.get("phase"),
+        "operation": (
+            "agent_context_v5"
+            if isinstance(query, list)
+            else payload.get("operation")
+        ),
+        "phase": query[0] if isinstance(query, list) and query else payload.get("phase"),
+        "context_current": current,
+        "context_action_index": context_action_index,
         "payload": payload,
     }
 )
@@ -237,6 +382,46 @@ if control.get("mode") == "malformed":
         control.get("response", "not-json"),
         encoding="utf-8",
     )
+elif isinstance(query, list):
+    if (
+        len(query) != 5
+        or not isinstance(payload.get("c"), str)
+        or len(payload["c"]) != 43
+        or not isinstance(query[1], str)
+    ):
+        raise SystemExit(85)
+    if (
+        current is not None
+        and current["workflow"] == "conversation_retrieval"
+        and current["command"].startswith("retrieve ")
+        and "s" in query[1]
+    ):
+        response = {
+            "a": "s",
+            "c": payload["c"],
+            "d": [[current["command"].removeprefix("retrieve "), ["c"]]],
+            "u": [],
+        }
+    elif (
+        observation_kind == "search"
+        and observation_handles
+        and "r" in query[1]
+    ):
+        response = {
+            "a": "r",
+            "c": payload["c"],
+            "d": list(observation_handles),
+            "u": [],
+        }
+    else:
+        if "a" not in query[1]:
+            raise SystemExit(86)
+        response = compact_answer(
+            payload,
+            observation_handles if observation_kind == "read" else (),
+            after_retrieval=observation_kind in {"search", "read"},
+        )
+    output_path.write_text(json.dumps(response), encoding="utf-8")
 elif payload.get("operation") == "conversation_retrieval":
     action_index = payload["retrieval"]["action_index"]
     correlation = {
@@ -309,13 +494,27 @@ else:
     output_path.write_text(json.dumps(response), encoding="utf-8")
 
 if "resume" not in argv:
+    scope = correlation.get("scope", {}) if isinstance(correlation, dict) else {}
+    thread_session = payload.get("session_id", scope.get("session_id", "session"))
+    thread_agent = payload.get("agent_id", scope.get("agent_id", agent_id))
+    thread_subject = scope.get("subject_id", "direct")
+    thread_id = (
+        "thread-" + agent_id + "-" + payload["c"][:16]
+        if isinstance(query, list) and isinstance(payload.get("c"), str)
+        else (
+            "thread-"
+            + thread_session
+            + "-"
+            + thread_subject
+            + "-"
+            + thread_agent
+        )
+    )
     print(
         json.dumps(
             {
                 "type": "thread.started",
-                "thread_id": (
-                    "thread-" + payload["session_id"] + "-" + payload["agent_id"]
-                ),
+                "thread_id": thread_id,
             }
         )
     )
@@ -922,6 +1121,37 @@ class InteractiveCliPtyTests(unittest.TestCase):
                 if line
             ]
 
+    def _context_thread_records(
+        self,
+        session_id: str,
+        *,
+        agent_id: str | None = None,
+        subject_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Read exact content-free contextual continuation records."""
+
+        directory = self.workspace.path(
+            f"{_SESSION_DIRECTORY}/.contextual/v1/{session_id}"
+        )
+        if not directory.exists():
+            return []
+        records = [
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in sorted(directory.glob("*.json"))
+        ]
+        return [
+            record
+            for record in records
+            if (
+                agent_id is None
+                or record["key"]["scope"]["agent_id"] == agent_id
+            )
+            and (
+                subject_id is None
+                or record["key"]["scope"]["subject_id"] == subject_id
+            )
+        ]
+
     def _wait_for_provider_record(
         self,
         process: PtyCliProcess,
@@ -985,7 +1215,10 @@ class InteractiveCliPtyTests(unittest.TestCase):
             )
             self.assertRegex(
                 compact_plain,
-                r"(?:resumed|reused|fresh(?: after provider switch)?)",
+                (
+                    r"(?:resumed|reused|fresh(?: after provider switch)?|"
+                    r"not observed)"
+                ),
             )
             self.assertNotIn("Confirmation:", compact_plain)
         else:
@@ -1151,6 +1384,9 @@ class InteractiveCliPtyTests(unittest.TestCase):
         }
         excluded = {
             "agent_states/file-picker/internal.md": "internal\n",
+            "agent_states/orchestrator_state/context_ledger/v1/checkpoint.json": (
+                "content-free internal ledger\n"
+            ),
             "core_documents/extra.md": "extra\n",
             "manuscript/bad}.md": "unsafe delimiter\n",
             "manuscript/chapter.MD": "unsupported suffix\n",
@@ -6546,7 +6782,7 @@ print(
         ]
         self.assertEqual(len(started), provider_calls_before_reads + 3)
         self.assertEqual(
-            [record["payload"]["retrieval"]["action_index"] for record in started[-3:]],
+            [record["context_action_index"] for record in started[-3:]],
             [1, 2, 3],
         )
         process.send_text("/quit\n\n")
@@ -6787,7 +7023,7 @@ print(
         ]
         self.assertEqual(len(started), 5)
         self.assertEqual(
-            started[0]["payload"]["user_payload"],
+            started[0]["context_current"]["command"],
             "\n/send\n/cancel\nfinal literal line",
         )
         self.assertFalse(
@@ -6923,11 +7159,14 @@ asyncio.run(main())
         process.wait_for_text("story[alpha:plot]> ", after=mark)
         manifest_path = f"{_SESSION_DIRECTORY}/alpha.json"
         manifest = self.workspace.read_json(manifest_path)
-        thread_key = "codex:plot_architect"
-        self.assertIs(
-            manifest["provider_threads"][thread_key]["tainted"],
-            False,
+        self.assertEqual(manifest["provider_threads"], {})
+        context_records = self._context_thread_records(
+            "alpha",
+            agent_id="plot_architect",
+            subject_id=selected.conversation_id,
         )
+        self.assertEqual(len(context_records), 1)
+        self.assertIs(context_records[0]["tainted"], False)
 
         self._set_provider_control(mode="block")
         records_before_cancel = len(self._provider_records())
@@ -6943,11 +7182,11 @@ asyncio.run(main())
         def is_cancelled_invocation(record: dict[str, Any]) -> bool:
             """Identify the blocking advisory provider invocation by payload."""
 
-            payload = record.get("payload")
+            payload = record.get("context_current")
             return (
                 record.get("event") == "started"
                 and isinstance(payload, dict)
-                and payload.get("content") == "cancel advisory"
+                and payload.get("command") == "cancel advisory"
             )
 
         blocked = self._wait_for_provider_record(
@@ -6992,10 +7231,14 @@ asyncio.run(main())
             os.kill(blocked_pid, 0)
 
         manifest = self.workspace.read_json(manifest_path)
-        self.assertIs(
-            manifest["provider_threads"][thread_key]["tainted"],
-            True,
+        self.assertEqual(manifest["provider_threads"], {})
+        context_records = self._context_thread_records(
+            "alpha",
+            agent_id="plot_architect",
+            subject_id=selected.conversation_id,
         )
+        self.assertEqual(len(context_records), 1)
+        self.assertIs(context_records[0]["tainted"], True)
         catalog = FilesystemConversationCatalog(self.workspace)
         store = FilesystemConversationEventStore(self.workspace, catalog=catalog)
         events = store.read("alpha", selected.conversation_id)
@@ -7024,10 +7267,14 @@ asyncio.run(main())
         )
         process.wait_for_text("story[alpha:plot]> ", after=mark)
         manifest = self.workspace.read_json(manifest_path)
-        self.assertIs(
-            manifest["provider_threads"][thread_key]["tainted"],
-            False,
+        self.assertEqual(manifest["provider_threads"], {})
+        context_records = self._context_thread_records(
+            "alpha",
+            agent_id="plot_architect",
+            subject_id=selected.conversation_id,
         )
+        self.assertEqual(len(context_records), 1)
+        self.assertIs(context_records[0]["tainted"], False)
         started = [
             record
             for record in self._provider_records()
@@ -7098,12 +7345,12 @@ asyncio.run(main())
         def is_blocked_consensus_draft(record: dict[str, Any]) -> bool:
             """Identify the blocked execution draft for the cancellation run."""
 
-            payload = record.get("payload")
+            payload = record.get("context_current")
             return (
                 record.get("event") == "started"
                 and isinstance(payload, dict)
                 and payload.get("phase") == "draft"
-                and payload.get("user_payload") == "cancel consensus"
+                and payload.get("command") == "cancel consensus"
             )
 
         blocked = self._wait_for_provider_record(
@@ -7111,6 +7358,13 @@ asyncio.run(main())
             is_blocked_consensus_draft,
             after_count=records_before_cancel,
         )
+        live_debates = [
+            item
+            for item in self.workspace.inspect_session("alpha")["debates"]
+            if not item["terminal"]
+        ]
+        self.assertEqual(len(live_debates), 1)
+        cancelled_debate_id = live_debates[0]["debate_id"]
         process.send_interrupt()
         process.wait_for_text(
             "Run interrupted after durable state transition.",
@@ -7189,9 +7443,14 @@ asyncio.run(main())
         self.assertEqual(manuscripts_after_cancel, seed_manuscripts)
         manifest_path = f"{_SESSION_DIRECTORY}/alpha.json"
         manifest = self.workspace.read_json(manifest_path)
-        self.assertIs(
-            manifest["provider_threads"]["codex:execution_specialist"]["tainted"],
-            True,
+        self.assertEqual(manifest["provider_threads"], {})
+        self.assertEqual(
+            self._context_thread_records(
+                "alpha",
+                agent_id="execution_specialist",
+                subject_id=cancelled_debate_id,
+            ),
+            [],
         )
 
         self._set_provider_control(mode="auto")
@@ -7202,23 +7461,34 @@ asyncio.run(main())
         process.wait_for_text("Consensus [success]", after=mark)
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         manifest = self.workspace.read_json(manifest_path)
-        self.assertIs(
-            manifest["provider_threads"]["codex:execution_specialist"]["tainted"],
-            False,
-        )
+        self.assertEqual(manifest["provider_threads"], {})
         drafter_invocations = [
             record
             for record in self._provider_records()
             if record.get("event") == "started"
-            and record["payload"].get("agent_id") == "execution_specialist"
+            and record["context_current"]["identity"].get("agent_id")
+            == "execution_specialist"
         ]
         self.assertEqual(
-            [record["payload"]["phase"] for record in drafter_invocations],
+            [record["context_current"]["phase"] for record in drafter_invocations],
             ["draft", "audit", "draft", "draft", "audit"],
         )
         self.assertEqual(
             ["resume" in record["argv"] for record in drafter_invocations],
-            [False, True, True, False, True],
+            [False, True, False, False, True],
+        )
+        context_records = self._context_thread_records(
+            "alpha",
+            agent_id="execution_specialist",
+        )
+        self.assertEqual(len(context_records), 2)
+        self.assertTrue(all(not record["tainted"] for record in context_records))
+        self.assertNotIn(
+            cancelled_debate_id,
+            {
+                record["key"]["scope"]["subject_id"]
+                for record in context_records
+            },
         )
         final_inspection = self.workspace.inspect_session("alpha")
         final_statuses = [item["status"] for item in final_inspection["debates"]]
@@ -7525,10 +7795,7 @@ asyncio.run(main())
         malformed_events = store.read("alpha", selected.conversation_id)
         self.assertEqual(
             malformed_events[-1].content,
-            (
-                "BackendProtocolError: Codex conversation retrieval response "
-                "is malformed JSON"
-            ),
+            "BackendProtocolError: contextual provider action is malformed",
         )
         self.assertNotIn(
             "MALFORMED_PROVIDER_VALUE_MUST_NOT_APPEAR",
@@ -7541,7 +7808,7 @@ asyncio.run(main())
         process.wait_for_text("story[alpha:lead]> ", after=mark)
         malformed_history = process.text_after(mark)
         self.assertIn(
-            "malformedJSON",
+            "contextualprovideractionismalformed",
             "".join(malformed_history.split()).replace("│", ""),
         )
         self.assertNotIn(

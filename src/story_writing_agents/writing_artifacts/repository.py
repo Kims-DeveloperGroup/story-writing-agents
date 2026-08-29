@@ -113,6 +113,20 @@ class WritingArtifactRepository:
         with self._locked_sources():
             return self._sources.list_paths()
 
+    def list_paths_bounded(
+        self,
+        *,
+        max_visited_entries: int,
+        max_eligible_sources: int,
+    ) -> tuple[str, ...]:
+        """Return one complete bounded canonical source inventory."""
+
+        with self._locked_sources():
+            return self._sources.list_paths_bounded(
+                max_visited_entries=max_visited_entries,
+                max_eligible_sources=max_eligible_sources,
+            )
+
     def read_current(
         self,
         paths: tuple[str, ...],

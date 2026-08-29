@@ -3,7 +3,9 @@
 > **Availability:** prompt and complete-draft debates are available through the
 > noninteractive CLI, focused-conversation TTY shell, and `StoryRuntime`.
 > Inline canonical references are enforced independently for every
-> participating agent and debate phase.
+> participating agent and debate phase. Contextual planning and bounded
+> search/read run for every logical invocation and show live content-free
+> `agent · round · phase` progress.
 
 Key terms: **prompt**—instructions used to create revision `r0`; **draft**—a
 supplied complete `r0`; **context mode**—whether focused transcript events are
@@ -25,6 +27,9 @@ and starts only on `/send`. Omitting `--output` first opens a transient output
 prompt, but an exact part-scoped path is still required before composition or
 provider work. See the
 [focused-discussion guide](story-sessions.md#turn-the-current-focus-into-consensus).
+For concrete outline, character-sheet, narrative-rule/Part, create-only
+manuscript, candidate-delta, and deadlock behavior, see
+[Bounded agent context](agent-context.md#c14-missing-knowledge-outline).
 On capable POSIX live editing, a whole-buffer `/` prefix previews only `/send`
 then `/cancel`; the preview does not complete or run either control. Unsupported
 terminals keep the same line-oriented composer without a panel.
