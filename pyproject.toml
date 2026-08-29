@@ -10,6 +10,9 @@ dependencies = []
 rag = [
     "generic-rag @ git+https://github.com/Kims-DeveloperGroup/generic-rag.git@c77456321c614518e420e45c033e3f71dc5363b8",
 ]
+viewer = [
+    "jsonl-viewer @ git+https://github.com/Kims-DeveloperGroup/jsonl-viewer.git@5d3047aa86212810d867d5b40cb1df3262f1810f",
+]
 
 [project.scripts]
 story-writing-agents = "story_writing_agents.cli:main"
