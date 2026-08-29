@@ -364,6 +364,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_context_accounting_baseline.py`, supported by
   `tests/context_accounting_baseline_fixture.py` and
   `tests/fixtures/agent_context/provider_context_baseline_v1.json`;
+  `tests/test_context_accounting_optimized.py`;
   `tests/test_codex_backend.py`, `tests/test_antigravity_adapter.py`,
   `tests/test_antigravity_parity.py`, and
   `docs/design/prompts-and-provider.md`.
@@ -559,7 +560,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:**
   `tests/test_agent_context_service.py`,
   `tests/test_agent_context_execution.py`,
-  `tests/test_agent_context_runtime_adoption.py`, `tests/test_codex_backend.py`,
+  `tests/test_agent_context_runtime_adoption.py`,
+  `tests/test_context_accounting_optimized.py`, `tests/test_codex_backend.py`,
   `tests/test_antigravity_adapter.py`, and `tests/test_antigravity_parity.py`;
   module-inventory, dependency, facade, and import-boundary assertions across
   `tests/test_rag_module_and_packaging_boundary.py`,
@@ -879,7 +881,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:**
   `tests/test_agent_context_execution.py`,
   `tests/test_agent_context_runtime_adoption.py`, `tests/test_codex_backend.py`,
-  `tests/test_context_accounting_baseline.py`, `tests/test_prompts.py`,
+  `tests/test_context_accounting_baseline.py`,
+  `tests/test_context_accounting_optimized.py`, `tests/test_prompts.py`,
   `tests/test_conversation_retrieval.py`,
   `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`,
   `tests/test_session_lifecycle.py`, `docs/reference/backend-and-sessions.md`,
@@ -4805,6 +4808,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   the repository's recoverable, part-scoped publication operation.
 - **Primary verification/documentation:** `tests/test_conversation_runtime.py`,
   `tests/test_context_accounting_baseline.py`,
+  `tests/test_context_accounting_optimized.py`,
   `tests/test_agent_context_runtime_adoption.py`,
   `tests/test_conversation_retrieval.py`, `tests/test_interactive_consensus.py`,
   `tests/test_interactive_conversation.py` for retained runtime use through the
