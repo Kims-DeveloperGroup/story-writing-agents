@@ -442,11 +442,11 @@ same-provider model or effort change remains eligible to reuse its native
 thread. Every provider switch advances a durable route generation, so switching
 A to B and later back to A starts a fresh target-provider thread each time.
 
-That fresh provider-native thread is not a fresh story session. Every
-substantive turn rehydrates a bounded belonging-session envelope containing
-the receiving agent's newest owner outcomes (at most 24 entries and 32,768
-compact UTF-8 bytes), the current core-document path/hash identities, and one
-focused-context mode:
+That fresh provider-native thread is not a fresh story session. Current
+built-in execution bootstraps role-relevant authoritative sources through
+compact agent-context wire v5. A compatible READY checkpoint permits later
+source/record deltas; provider history alone never authorizes omission. The
+runtime's internal capture still records one focused-context mode:
 
 - `included` carries the bounded complete-turn window for normal focused work;
 - `fresh` carries the conversation identity but no focused transcript, as on
@@ -454,12 +454,12 @@ focused-context mode:
 - `omitted` carries neither a conversation identity nor transcript for a
   context-omitted noninteractive run.
 
-It intentionally does not carry another agent's owner outcomes, omitted
-transcript events, provider-private hidden history, artifact bytes, or core
-document bytes. Reference preludes are content-free; the next substantive call
-carries the envelope. Retrieval call one carries it, while retrieval
-continuations do not repeat it. See the exact
-[provider envelope](../design/prompts-and-provider.md#story-session-continuity-envelope)
+The provider can boundedly search/read omitted authorized focused conversation,
+canonical artifacts, active debate, and only its own state. It cannot receive
+another agent's private state or rely on provider-hidden history. Reference
+preludes remain separate and content-free; the next substantive call alone
+receives current selected reference bytes. See the
+[compact provider wire](../design/agent-context.md#compact-provider-wire-v5)
 and [session storage](../reference/configuration/session-storage.md#provider-route-generations).
 
 Conversation RAG field editing does not probe or install the optional package,
@@ -650,7 +650,8 @@ distinguish bootstrap from delta, show bounded SEARCH/READ work, and end in
 SEARCH/READ panels appear once, while each debate line adds its agent, round,
 and phase so interleaved invocations remain readable. These lines are
 content-free terminal progress, not conversation or story records. See
-[Agent-context progress](agent-context-progress.md) for exact examples, state
+[Bounded agent context](agent-context.md) for complete scenarios and
+[Agent-context progress](agent-context-progress.md) for exact output, state
 meanings, callback facts, privacy, and observer-failure recovery.
 
 ## Turn the current focus into consensus
@@ -671,10 +672,11 @@ complete or submit slash controls. Artifact `$` activation is available in the
 composer text and likewise returns without sending. `/say /send` and `/say /cancel` still insert literal
 control lines, and ordinary fallback input shows no panel.
 
-The runtime supplies every debate phase one bounded belonging-session envelope.
+The runtime supplies every debate phase one scoped contextual invocation.
 Normal `/run` includes one bounded focus snapshot. `/run --fresh --output
-PART/PATH.md PROMPT` retains the story-session owner/core facts and focused
-conversation identity but omits the focused transcript; `/draft-file PATH`
+PART/PATH.md PROMPT` retains the focused conversation identity but omits its
+transcript; current role-relevant authoritative sources still bootstrap.
+`/draft-file PATH`
 reads strict UTF-8, includes the snapshot, and prompts for the required output
 path. After validation, inline, fresh, and committed composer prompts appear
 once as a `You → Consensus` chat block with the full prompt body, followed by

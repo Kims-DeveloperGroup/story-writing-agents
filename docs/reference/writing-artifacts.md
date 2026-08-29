@@ -361,7 +361,7 @@ can be replaced by a later unanimous publication.
 ## Filesystem-source and publication states users observe
 
 Source availability and publication provenance are separate. `$`, the viewer,
-explicit references, and role-bound core context use the current safe
+explicit references, and contextual core-source selection use the current safe
 filesystem. `catalog()` and consensus publication use the catalog, immutable
 commit ledger, journals, and recovery state.
 
@@ -379,9 +379,9 @@ identity in [Exact output paths](#exact-output-paths).
 
 | State | Source behavior | Publication behavior |
 | --- | --- | --- |
-| Absent | The path is not listed, bound, viewable, or referenceable. | A unanimous run may create it if the output identity is otherwise unreserved. |
-| Present and safe | The path is listed. Opening captures current bytes with strict UTF-8/NUL and 8 MiB checks; allowlisted core files can enter role definitions. Empty whole-file references are valid. | If catalog/ledger metadata matches, it may also be a current agent publication. Source use alone does not establish that fact. |
-| Manual, pre-provenance, or hash-divergent | It has the same source behavior as any other present safe file. A changed core file affects the next role-definition fingerprint. | No provenance is fabricated or adopted. A manual manuscript still occupies its create-only path; a cataloged identity remains reserved even after deletion. |
+| Absent | The path is not listed, viewable, referenceable, or available to contextual source capture. | A unanimous run may create it if the output identity is otherwise unreserved. |
+| Present and safe | The path is listed. Opening captures current bytes with strict UTF-8/NUL and 8 MiB checks; role-allowlisted core files can enter contextual P2 selection. Empty whole-file references are valid. | If catalog/ledger metadata matches, it may also be a current agent publication. Source use alone does not establish that fact. |
+| Manual, pre-provenance, or hash-divergent | It has the same source behavior as any other present safe file. A changed core file changes its context revision and can force delta/bootstrap. | No provenance is fabricated or adopted. A manual manuscript still occupies its create-only path; a cataloged identity remains reserved even after deletion. |
 | Unsafe or unsupported | It is excluded during metadata discovery when the failure is entry-local; an exact open fails closed. A listed file whose bytes later prove oversized, invalid UTF-8, or NUL-containing fails when opened. | It cannot be published through the unsafe identity. |
 | Source drift after capture | Deletion, replacement, physical-identity change, unsafe topology, oversize, or hash change terminates the invocation or operation before acceptance. | The captured bytes are not refreshed and no publication is accepted from that referenced operation. |
 | Recovery pending or blocked; catalog/ledger absent or invalid | Safe listing, viewing, prompt-context reads, and new reference operations do not load the catalog or run transaction recovery, so publication metadata cannot blank the source set. | `catalog()` and publication recover or audit under the stricter repository boundary and fail closed when authority cannot be trusted. |

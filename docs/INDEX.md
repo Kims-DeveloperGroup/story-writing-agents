@@ -73,6 +73,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 
 ## Guides
 
+- [Bounded agent context: canonical scenarios, selection, search/read, references, progress, and limits](guides/agent-context.md)
 - [Canonical artifact references](guides/artifact-references.md)
 - [Workspaces](guides/workspaces.md)
 - [Story sessions and subject conversations](guides/story-sessions.md)
@@ -111,6 +112,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 ## System design
 
 - [Overview](design/overview.md)
+- [Agent-context ownership, wire v5, checkpoints, candidate deltas, and recovery](design/agent-context.md)
 - [Interactive CLI design system contract](design/interactive-cli-design-system.md)
 - [Canonical Python module inventory (84 production units)](../PYTHON_MODULE_INDEX.md)
 - [Prompts, provider boundary, and exact context accounting](design/prompts-and-provider.md)
@@ -125,3 +127,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 - [Terminal display safety](operations/terminal-safety.md)
 - [Recovery and limitations](operations/recovery-and-limitations.md)
 - [Provider authentication recovery](operations/recovery-and-limitations.md#authentication-recovery)
+
+## Audits
+
+- [Pre-final issue #380 agent-context conformance matrix (188 criteria)](audits/issue-380-agent-context-conformance.md)
