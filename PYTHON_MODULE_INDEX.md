@@ -18,7 +18,7 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 77.
 
-Direct internal dependency edges indexed: 313.
+Direct internal dependency edges indexed: 314.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -60,8 +60,8 @@ __main__ -> cli -> conversation_rag_cli
                  |          -> config/conversation_retrieval/debug_log
                  |          -> interactive_settings
                  |          -> workspace/models/errors/agents
-                 |          -> provider_adapter/provider_process/session_lifecycle
-                 |          -> writing_artifacts.read_actions
+                 |          -> provider_adapter/provider_error_artifacts/provider_process
+                 |          -> session_lifecycle/writing_artifacts.read_actions
                  -> cli_context -> workspace/errors/agents
 
 interactive_controller._core -> interactive_controller._session_policy
@@ -329,9 +329,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   exposing or mutating backend collections.
 - **Direct internal dependencies:** `agents`, `antigravity_adapter`,
   `codex_adapter`, `config`, `conversation_retrieval`, `debug_log`, `errors`,
-  `interactive_settings`, `models`, `provider_adapter`, `provider_process`,
-  `session_lifecycle`, and `workspace`, plus the provider-neutral
-  `writing_artifacts.read_actions` boundary.
+  `interactive_settings`, `models`, `provider_adapter`,
+  `provider_error_artifacts`, `provider_process`, `session_lifecycle`, and
+  `workspace`, plus the provider-neutral `writing_artifacts.read_actions`
+  boundary.
 - **State, resources, and side effects:** Owns exact V2 provider-session
   manifests at
   `agent_states/orchestrator_state/provider_sessions/<session_id>.json`, exact
@@ -370,8 +371,19 @@ every intermediate arrow. The current runtime graph is acyclic.
   provider-value-free process/response-validation diagnostics. It drains both
   subprocess output streams through its adapters but discards and never decodes
   stderr after a nonzero provider exit; it receives no memory service and
-  performs no retrieval search or transcript-storage call. For a referenced
-  logical invocation, the
+  performs no retrieval search or transcript-storage call. Only after an
+  adapter returns a completed `ProviderResult`, rejection of its exact
+  `response_text` by the shared structured decoder with `BackendProtocolError`,
+  `JSONDecodeError`, or `UnicodeError` submits that text, provider, canonical
+  agent, session, and the applicable debate or conversation correlation to the
+  private `provider_error_artifacts` owner. The submission catches
+  `BaseException`, so artifact-storage failure cannot replace the original
+  decoding exception or change established thread taint, restart, cleanup,
+  cancellation, output, exit, or retry behavior. Pre-result/provider-invocation
+  failures, requests, prompts, accepted replies, stderr or raw provider streams,
+  credentials, authentication output, and provider-native history remain
+  ineligible; response bodies are neither rendered nor sent through
+  `debug_log`. For a referenced logical invocation, the
   same thread lock first runs one strict content-free read-action prelude. The
   provider must echo the exact correlation and complete ordered path/range
   batch under a request-specific output schema before the synchronous
@@ -575,7 +587,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   I/O-free `directory` projection, the exact keyword-only
   `record_rejected_response(...)` seam, and the fixed path, schema-category,
   body/file/retention bounds, and lock-timeout constants listed in the module's
-  `__all__`. No production module currently consumes this internal surface.
+  `__all__`. `backend` is the sole production consumer of the recording seam.
 - **Direct internal dependencies:** `agents` and `workspace`.
 - **State, resources, and side effects:** Import and construction perform no
   filesystem work. One storage call validates an exact `codex` or
@@ -606,7 +618,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   exceptions propagate to the caller, no redaction or terminal rendering occurs,
   and ordinary deletion is not secure erasure.
 - **Primary verification/documentation:**
-  `tests/test_provider_error_artifacts.py`.
+  `tests/test_provider_error_artifacts.py`,
+  `docs/operations/privacy-and-provider.md#rejected-provider-response-artifacts`, and
+  `docs/reference/configuration/session-storage.md#rejected-provider-response-storage`.
 
 ### `story_writing_agents.provider_process`
 

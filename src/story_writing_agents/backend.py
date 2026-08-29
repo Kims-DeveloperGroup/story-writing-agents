@@ -108,6 +108,10 @@ from .provider_adapter import (
     ProviderInvocation,
     ProviderInvocationError,
 )
+from .provider_error_artifacts import (
+    PROVIDER_ERROR_ARTIFACT_FAILURE_CATEGORY,
+    WorkspaceProviderErrorArtifacts,
+)
 from .provider_process import stop_process
 from .session_lifecycle import (
     SessionAccessState,
@@ -2196,6 +2200,8 @@ class AgentBackend:
         bound_agent: BoundAgent,
         *,
         session_id: str,
+        debate_id: str | None = None,
+        conversation_id: str | None = None,
         reference_read: ReferenceReadInvocation,
         schema: Mapping[str, Any],
         payload: Mapping[str, Any],
@@ -2207,6 +2213,8 @@ class AgentBackend:
         context = await self._perform_reference_read_prelude(
             bound_agent,
             session_id=session_id,
+            debate_id=debate_id,
+            conversation_id=conversation_id,
             reference_read=reference_read,
             provider_name=provider_name,
         )
@@ -2216,6 +2224,8 @@ class AgentBackend:
             reply = await self._invoke_provider_structured(
                 bound_agent,
                 session_id=session_id,
+                debate_id=debate_id,
+                conversation_id=conversation_id,
                 schema=schema,
                 payload=framed_payload,
                 decode=decode,
@@ -2242,6 +2252,8 @@ class AgentBackend:
         bound_agent: BoundAgent,
         *,
         session_id: str,
+        debate_id: str | None = None,
+        conversation_id: str | None = None,
         reference_read: ReferenceReadInvocation,
         provider_name: str,
     ) -> list[dict[str, object]]:
@@ -2252,6 +2264,8 @@ class AgentBackend:
             action = await self._invoke_provider_structured(
                 bound_agent,
                 session_id=session_id,
+                debate_id=debate_id,
+                conversation_id=conversation_id,
                 schema=self._reference_read_action_schema(request),
                 payload=self._reference_read_prelude_payload(request),
                 decode=lambda text: self._decode_reference_read_action(
@@ -2797,6 +2811,7 @@ class AgentBackend:
             return await self._invoke_provider_structured(
                 bound_agent,
                 session_id=request.session_id,
+                debate_id=request.debate_id,
                 schema=schema,
                 payload=payload,
                 decode=decode,
@@ -2804,6 +2819,7 @@ class AgentBackend:
         return await self._invoke_codex_after_reference_read(
             bound_agent,
             session_id=request.session_id,
+            debate_id=request.debate_id,
             reference_read=reference_read,
             schema=schema,
             payload=payload,
@@ -2887,6 +2903,7 @@ class AgentBackend:
             return await self._invoke_provider_structured(
                 bound_agent,
                 session_id=request.session_id,
+                conversation_id=request.conversation_id,
                 schema=schema,
                 payload=payload,
                 decode=decode,
@@ -2894,6 +2911,7 @@ class AgentBackend:
         return await self._invoke_codex_after_reference_read(
             bound_agent,
             session_id=request.session_id,
+            conversation_id=request.conversation_id,
             reference_read=reference_read,
             schema=schema,
             payload=payload,
@@ -2990,6 +3008,7 @@ class AgentBackend:
             reference_context = await self._perform_reference_read_prelude(
                 bound_agent,
                 session_id=request.session_id,
+                conversation_id=request.conversation_id,
                 reference_read=reference_read,
                 provider_name=_provider_name,
             )
@@ -3028,6 +3047,7 @@ class AgentBackend:
                 action = await self._invoke_provider_structured(
                     bound_agent,
                     session_id=request.session_id,
+                    conversation_id=request.conversation_id,
                     schema=self._conversation_retrieval_action_schema(),
                     payload=payload,
                     decode=lambda response_text: (
@@ -3250,11 +3270,37 @@ class AgentBackend:
         except BaseException:
             pass
 
+    def _record_rejected_provider_response_without_replacing_failure(
+        self,
+        bound_agent: BoundAgent,
+        *,
+        session_id: str,
+        response_text: str,
+        debate_id: str | None,
+        conversation_id: str | None,
+    ) -> None:
+        """Best-effort retain one completed response rejected by decoding."""
+
+        try:
+            WorkspaceProviderErrorArtifacts(self.workspace).record_rejected_response(
+                provider=bound_agent.vendor,
+                agent_id=bound_agent.definition.agent_id,
+                session_id=session_id,
+                debate_id=debate_id,
+                conversation_id=conversation_id,
+                response_text=response_text,
+                failure_category=PROVIDER_ERROR_ARTIFACT_FAILURE_CATEGORY,
+            )
+        except BaseException:
+            pass
+
     async def _invoke_provider_structured(
         self,
         bound_agent: BoundAgent,
         *,
         session_id: str,
+        debate_id: str | None = None,
+        conversation_id: str | None = None,
         schema: Mapping[str, Any],
         payload: Mapping[str, Any],
         decode: Callable[[str], _StructuredReply],
@@ -3319,8 +3365,24 @@ class AgentBackend:
             try:
                 reply = decode(result.response_text)
             except BackendProtocolError:
+                self._record_rejected_provider_response_without_replacing_failure(
+                    bound_agent,
+                    session_id=session,
+                    debate_id=debate_id,
+                    conversation_id=conversation_id,
+                    response_text=result.response_text,
+                )
                 if stored is not None:
                     taint_thread()
+                raise
+            except (json.JSONDecodeError, UnicodeError):
+                self._record_rejected_provider_response_without_replacing_failure(
+                    bound_agent,
+                    session_id=session,
+                    debate_id=debate_id,
+                    conversation_id=conversation_id,
+                    response_text=result.response_text,
+                )
                 raise
             self._store_thread(
                 session,

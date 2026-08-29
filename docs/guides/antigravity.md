@@ -205,8 +205,18 @@ For each turn, the runtime launches `agy` directly without shell evaluation. It:
 - enables the CLI sandbox, selects plan mode, and disables slash commands;
 - does not pass an approval-bypass or unrestricted-execution option; and
 - drains stdout and stderr, validates the event stream and correlation fields,
-  and reports fixed provider error categories instead of provider response or
-  stderr content.
+  and reports fixed provider error categories instead of rendering provider
+  response or stderr content.
+
+Antigravity and Codex use the same rejected-response capture boundary. Only
+after either adapter returns a completed response can structured JSON, Unicode,
+domain, or identity rejection best-effort retain the response text beneath
+`debug_logs/provider_error_responses/`. Raw stream events, stderr, nonzero exits,
+transport failures, timeouts, cancellations, and accepted replies remain
+excluded. The terminal and `debug_logs/runtime.jsonl` stay content-safe, and an
+absent artifact does not change or narrow the original failure. Treat any saved
+body as hostile plaintext and follow the inspection workflow in
+[Privacy](../operations/privacy-and-provider.md#rejected-provider-response-artifacts).
 
 The command line still contains the runtime-owned output schema, isolated state
 path, and any configured model, effort, or provider conversation ID. Treat

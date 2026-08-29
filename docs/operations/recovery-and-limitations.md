@@ -772,6 +772,34 @@ query-normalization failures remain sanitized by the operation boundary. RAG
 commands create no runtime debug record, so their one-line report and separately
 protected workspace are the recovery evidence.
 
+<a id="rejected-provider-response-recovery"></a>
+
+## Rejected provider-response recovery
+
+For `provider_protocol_error`, use `debug_logs/runtime.jsonl` as the
+content-safe source for exception type and frame metadata. If a completed Codex
+or Antigravity response reached structured decoding, the backend may also have
+stored its actual body beneath `debug_logs/provider_error_responses/`. Match a
+record by provider, agent, session, and debate or conversation metadata. Never
+assume that every provider failure creates an artifact or that the newest file
+belongs to the failed operation.
+
+The artifact store is best effort. Bounded contention, unsafe or malformed
+existing entries, unavailable safe filesystem primitives, or another storage
+failure can leave the lazy directory or one record absent while the original
+provider exception, thread handling, output, and exit behavior remain
+unchanged. Capturing a response is evidence retention; it does not repair a
+provider protocol problem or a runtime/provider-thread lifecycle bug.
+
+Inspect a body only as hostile plaintext in a trusted editor that does not
+interpret terminal controls or render Markdown/HTML. Do not execute it or feed
+it into a shell. When cleanup is needed, stop the runtime first. If ordinary
+filesystem policy permits, delete only complete artifact `.json` files; do not
+hand-edit or remove `.lock`, `.pending`, malformed entries, or unknown names to
+force progress. Ordinary deletion and automatic oldest-first pruning are not
+secure erasure. See the [complete eligibility, schema, and inspection
+workflow](privacy-and-provider.md#rejected-provider-response-artifacts).
+
 ## Current limits
 
 - Codex and Antigravity are supported. Nullable routes inherit the workspace
