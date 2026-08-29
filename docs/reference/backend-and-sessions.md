@@ -197,6 +197,16 @@ values and sources, route generation, activation state, and optional thread or
 context state. They still contain no request or response payload, story prose,
 provider stderr, credential, access owner, or claim token. Concrete adapters
 continue to drain provider stderr without exposing it to diagnostics.
+When a completed Codex or Antigravity response instead reaches structured
+decoding and is rejected by a protocol, JSON, or Unicode error, the backend
+best-effort submits that exact response text to the separate internal
+`debug_logs/provider_error_responses/` store. It does not render the body or
+place it in runtime JSONL. Capture failure cannot replace the original decoding
+exception or change thread taint, restart, cleanup, cancellation, output, exit,
+or retry behavior. Direct `AgentBackend` callers retain the same exceptions;
+there is no configuration switch or new public API. See the inspection and
+privacy boundary in
+[Privacy](../operations/privacy-and-provider.md#rejected-provider-response-artifacts).
 `get_session_lifecycle()` and `list_session_lifecycles()` remain provider-free
 and read-only for provider-session state, though they may append a bounded
 operational record. See

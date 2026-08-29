@@ -9,6 +9,8 @@
 > conversation-RAG store and noninteractive lifecycle/authorized-search
 > commands, plus interactive settings, startup composition, automatic
 > preflight, and private one-turn `/rag` arming.
+> They also cover the content-safe runtime debug log and the separate bounded
+> store for eligible rejected provider responses.
 > They do not make either provider, its executable, the workspace, or the
 > terminal trusted.
 > Inline canonical references in provider-bound prompt text are active.
@@ -28,8 +30,10 @@ Documents, debate/context records, provider metadata, subjects, transcripts,
 scrollback, manuscripts, artifact catalogs, commit provenance, transaction
 journals, migration checkpoints, reference-operation evidence, and recovery
 markers have no application-managed retention policy and rely on
-OS/terminal-service protection. The workspace debug log is the one
-bounded-retention channel described below; it is still plaintext.
+OS/terminal-service protection. The workspace debug log and rejected-provider-
+response store are the bounded-retention channels described below; both remain
+plaintext, but only the latter intentionally contains provider-controlled
+response content.
 
 Blackboards can contain input, drafts, reviews, and errors. Provider output is
 not generally scrubbed; catalog archive status neither deletes nor conceals
@@ -489,6 +493,69 @@ schema, [CLI](../reference/cli.md#runtime-debug-logs) for exact output, and
 [Filesystem safety](filesystem-safety.md#debug-log-filesystem-safety) for
 fail-open storage behavior.
 
+<a id="rejected-provider-response-artifacts"></a>
+
+## Rejected provider-response artifacts
+
+When a completed Codex or Antigravity response is rejected during structured
+or domain decoding with `BackendProtocolError`, `JSONDecodeError`, or
+`UnicodeError`, the backend best-effort stores the exact
+`ProviderResult.response_text` beneath the fixed workspace-relative directory
+`debug_logs/provider_error_responses/`. This preserves evidence such as
+malformed JSON, invalid Unicode decoding, or a domain/identity mismatch such as
+an unexpected `revision_id`; it does not fix or retry the provider or runtime
+failure.
+
+This content-bearing channel is deliberately separate from
+`debug_logs/runtime.jsonl`. The runtime log remains the content-safe source for
+the sanitized exception type and frame metadata. The terminal and runtime log
+do not render or contain the rejected body, and the user-facing category
+remains the sanitized `provider_protocol_error`. No artifact path is printed.
+
+Each complete schema-v1 JSON record contains its UTC timestamp, provider,
+canonical agent and session, exactly one `debate_id` or `conversation_id`, the
+fixed `structured_response_rejected` category, full response UTF-8 byte count
+and SHA-256, retained UTF-8 byte count, truncation flag, and `body`. The body is
+exact valid plaintext up to 262,144 UTF-8 bytes, truncated only at a complete
+code-point boundary. Each serialized file is at most 2,097,152 bytes. The store
+keeps at most 32 complete files and 16,777,216 serialized bytes, pruning the
+oldest complete records first.
+
+Not every provider failure creates a record. Eligible input begins only after
+an adapter has returned a completed response that the shared decoder then
+rejects. Successful replies, prompts and requests, stderr, raw stdout or NDJSON,
+authentication or model-catalog output, credentials and environment values,
+provider-native history, and pre-result nonzero exits, transport failures,
+timeouts, or cancellations are excluded. Capture is best effort: contention,
+an unsafe or malformed artifact namespace, unavailable safe filesystem
+primitives, or another storage failure can leave the lazy directory or one
+record absent without changing the original provider exception.
+
+To inspect a possible record safely:
+
+1. Resolve `debug_logs/provider_error_responses/` beneath the affected
+   workspace. Its absence means no artifact is available; it does not narrow
+   the underlying error.
+2. Open the raw candidate `.json` files with a trusted plain-text editor that
+   does not interpret terminal control sequences or render the content as
+   Markdown or HTML. Do not execute the file, feed it to a shell, or copy its
+   body into a command.
+3. Match `provider`, `agent_id`, `session_id`, and the relevant `debate_id` or
+   `conversation_id` to the failed operation. Do not assume the newest file or
+   every provider error belongs to that operation.
+4. Check `truncated`, the byte counts, and `response_sha256` before interpreting
+   `body`. A truncated body is only a prefix; its digest describes the full
+   response and cannot reconstruct the omitted suffix.
+
+Treat `body` as hostile, untrusted provider-controlled plaintext even when it
+looks like JSON, Markdown, HTML, instructions, or terminal output. Workspace
+protection and backup decisions must include these artifacts. With the runtime
+stopped and ordinary filesystem policy permitting, users may delete complete
+artifact `.json` files; ordinary deletion and retention pruning are not secure
+erasure. Do not hand-edit the store's `.lock` or `.pending` leaves. There is no
+configuration switch, deletion command, or new public backend API for this
+internal compatibility-preserving capture.
+
 <a id="runtime-error-diagnostics"></a>
 
 ## Transcript and backend diagnostic redaction
@@ -500,6 +567,12 @@ Antigravity uses fixed provider-specific diagnostics for capability, transport,
 protocol, and timeout failures. Python callers retain
 the exception category, but lose stderr detail; reproduce the provider failure
 outside this runtime if that detail is required.
+
+If a completed response instead reaches and fails the shared decoder, its body
+may be available through the separate
+[rejected provider-response artifact](#rejected-provider-response-artifacts).
+That best-effort write does not change the exception seen by direct
+`AgentBackend` callers or add response content to runtime JSONL.
 
 Provider-controlled revision IDs, duplicate JSON keys, and disallowed/duplicate
 core-update filenames produce fixed protocol copy without echoing values. Other
