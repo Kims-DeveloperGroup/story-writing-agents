@@ -130,4 +130,4 @@ Use this index to find one canonical answer instead of searching a long manual.
 
 ## Audits
 
-- [Pre-final issue #380 agent-context conformance matrix (188 criteria)](audits/issue-380-agent-context-conformance.md)
+- [Final issue #380 agent-context conformance matrix (188 criteria)](audits/issue-380-agent-context-conformance.md)

@@ -1,11 +1,11 @@
 # Issue #380 agent-context conformance audit
 
-> **PRE-FINAL audit.** This matrix audits implemented behavior at production
+> **FINAL audit.** This matrix audits implemented behavior at production
 > head `d9b7721b61af68165e16b8f1ff35682a726e34f1` and the deterministic release-scenario evidence added at
 > `56f253ec2cb8f618ce646b693b1aed1cb08a5b91`. A checked or closed issue is
-> never treated as proof. Three finalization-dependent rows remain open:
-> `P18`, `387-AC23`, and `387-AC24`. The parent cannot close until a
-> follow-up exact-head pass closes those rows and rechecks this file.
+> never treated as proof. Exact integrated validation at
+> `3a6ed7d42c46557d6ca6e9a3b3a7581d3514c896` resolves every required row;
+> only the two justified not-applicable rows described below remain.
 
 The matrix contains exactly 188 stable criteria: canonical `C01–C20`, parent
 `P01–P18`, and every acceptance item from #381–#387, #402, and #405. The
@@ -37,10 +37,10 @@ python -m compileall -q src tests
 git diff --check
 ```
 
-The final evidence pass must additionally run warning-strict full discovery,
-provider-free smoke, the standard-library link/fragment and audit validators,
-module inventory/edge/cycle/facade checks, two clean immutable benchmark runs,
-and exact-head self-review.
+The final evidence pass recorded warning-strict full discovery, provider-free
+smoke, standard-library link/fragment and audit validation, module
+inventory/edge/cycle/facade checks, two clean immutable benchmark runs, and
+exact-head specialist and root review at the integrated validation head.
 
 ## Reusable evidence bundles
 
@@ -202,7 +202,7 @@ new unrestricted multi-manuscript API.
 | P15 | Public commands, imports, event/result schemas, and artifact publication ownership remain compatible. | `d9b7721b61af68165e16b8f1ff35682a726e34f1` | EB02, EB11; implementation and documentation paths are enumerated in those bundles | EB02, EB11 focused tests and matrices below pass at scenario evidence head 56f253ec2cb8f618ce646b693b1aed1cb08a5b91. | proven | None. |
 | P16 | Live content-free progress covers ordinary, retrieval, and every logical debate-agent invocation with valid `PREPARE → PLAN → INVOKE/ACTION → VERIFY → COMMIT\|FAIL` ordering and no content leakage or duplicate retrieval rendering. | `d9b7721b61af68165e16b8f1ff35682a726e34f1` | EB10; implementation and documentation paths are enumerated in those bundles | EB10 focused tests and matrices below pass at scenario evidence head 56f253ec2cb8f618ce646b693b1aed1cb08a5b91. | proven | None. |
 | P17 | User and maintainer documentation explains selection, search/read, provider evidence, candidate deltas, prefix constraints, checkpoints, references, state transitions, limits, observer failures, observability, and privacy. | `d9b7721b61af68165e16b8f1ff35682a726e34f1` | EB12; implementation and documentation paths are enumerated in those bundles | EB12 focused tests and matrices below pass at scenario evidence head 56f253ec2cb8f618ce646b693b1aed1cb08a5b91. | proven | None. |
-| P18 | No semantic RAG, new dependency, free-form durable memory, or provider-opaque correctness source is introduced. | `d9b7721b61af68165e16b8f1ff35682a726e34f1` | EB11, EB12; implementation and documentation paths are enumerated in those bundles | EB12 final exact-head evidence is intentionally pending. | open | #387 exact-head final evidence pass, then parent review. |
+| P18 | No semantic RAG, new dependency, free-form durable memory, or provider-opaque correctness source is introduced. | `d9b7721b61af68165e16b8f1ff35682a726e34f1` | EB11, EB12; implementation and documentation paths are enumerated in those bundles | Prohibited-feature scans, dependency and production diffs, and final modularity review at `3a6ed7d42c46557d6ca6e9a3b3a7581d3514c896` prove that production, configuration, fixtures, packaging, and dependencies are unchanged and no semantic RAG, free-form durable memory, or provider-opaque correctness authority was introduced. | proven | None. |
 | 381-AC01 | One documented canonical encoder measures the exact UTF-8 JSON bytes submitted at the application/provider boundary. | `d9b7721b61af68165e16b8f1ff35682a726e34f1` | EB01, EB02; implementation and documentation paths are enumerated in those bundles | EB01, EB02 focused tests and matrices below pass at scenario evidence head 56f253ec2cb8f618ce646b693b1aed1cb08a5b91. | proven | None. |
 | 381-AC02 | Component byte counts sum exactly to their owning serialized payload accounting without double-counting. | `d9b7721b61af68165e16b8f1ff35682a726e34f1` | EB01, EB02; implementation and documentation paths are enumerated in those bundles | EB01, EB02 focused tests and matrices below pass at scenario evidence head 56f253ec2cb8f618ce646b693b1aed1cb08a5b91. | proven | None. |
 | 381-AC03 | Mandatory referenced-content bytes are separately identified while all envelopes and control bytes remain counted. | `d9b7721b61af68165e16b8f1ff35682a726e34f1` | EB01, EB02; implementation and documentation paths are enumerated in those bundles | EB01, EB02 focused tests and matrices below pass at scenario evidence head 56f253ec2cb8f618ce646b693b1aed1cb08a5b91. | proven | None. |
@@ -351,20 +351,16 @@ new unrestricted multi-manuscript API.
 | 387-AC20 | Privacy documentation confirms prompts, candidates, source bodies, excerpts, provider responses, absolute paths, private state, and exception payloads do not enter public progress, metrics, or ledger. | `d9b7721b61af68165e16b8f1ff35682a726e34f1` | EB11, EB12; implementation and documentation paths are enumerated in those bundles | EB11, EB12 focused tests and matrices below pass at scenario evidence head 56f253ec2cb8f618ce646b693b1aed1cb08a5b91. | proven | None. |
 | 387-AC21 | `PYTHON_MODULE_INDEX.md` matches the complete implementation, names all eight accepted `agent_context` units, and records the exact dependency direction and topology. | `d9b7721b61af68165e16b8f1ff35682a726e34f1` | EB02, EB10; implementation and documentation paths are enumerated in those bundles | EB02, EB10 focused tests and matrices below pass at scenario evidence head 56f253ec2cb8f618ce646b693b1aed1cb08a5b91. | proven | None. |
 | 387-AC22 | Root/writing-artifact facade counts and existing public commands/results/schemas remain compatible; documented additive direct-module observer APIs are exact. | `d9b7721b61af68165e16b8f1ff35682a726e34f1` | EB02, EB10; implementation and documentation paths are enumerated in those bundles | EB02, EB10 focused tests and matrices below pass at scenario evidence head 56f253ec2cb8f618ce646b693b1aed1cb08a5b91. | proven | None. |
-| 387-AC23 | The complete canonical/parent/child conformance matrix contains no open required row at the exact reviewed head. | `d9b7721b61af68165e16b8f1ff35682a726e34f1` | EB12; implementation and documentation paths are enumerated in those bundles | EB12 final exact-head evidence is intentionally pending. | open | #387 exact-head final evidence pass, then parent review. |
-| 387-AC24 | Full warning-strict tests, compile/import, module inventory/edge/cycle, docs link/fragment, provider-free smoke, benchmark repeatability, reference/privacy/recovery suites, diff check, and exact-head self-review are recorded and pass. | `d9b7721b61af68165e16b8f1ff35682a726e34f1` | EB12; implementation and documentation paths are enumerated in those bundles | EB12 final exact-head evidence is intentionally pending. | open | #387 exact-head final evidence pass, then parent review. |
+| 387-AC23 | The complete canonical/parent/child conformance matrix contains no open required row at the exact reviewed head. | `d9b7721b61af68165e16b8f1ff35682a726e34f1` | EB12; implementation and documentation paths are enumerated in those bundles | The exact 188-row live-Issue comparison has zero mismatches and the executable validator passes all 6 checks in FINAL mode with 186 proven, 2 justified not-applicable, and 0 open rows. | proven | None. |
+| 387-AC24 | Full warning-strict tests, compile/import, module inventory/edge/cycle, docs link/fragment, provider-free smoke, benchmark repeatability, reference/privacy/recovery suites, diff check, and exact-head self-review are recorded and pass. | `d9b7721b61af68165e16b8f1ff35682a726e34f1` | EB12; implementation and documentation paths are enumerated in those bundles | At `3a6ed7d42c46557d6ca6e9a3b3a7581d3514c896`: 2,158 warning-strict tests pass with one established optional-packaging skip; provider-free smoke passes; all 84 production files compile and 83 non-entrypoint modules import warning-strict with CLI help; topology is 84/346/0 with facades 120/11/31; links/fragments, benchmark repeatability, reference/privacy/recovery suites, diff checks, and specialist/root reviews pass. The resulting exact documentation-only final head is rerun and recorded externally before merge. | proven | None. |
 
-## Pre-final disposition
+## Final disposition
 
-Current outcomes are 183 `proven`, 2 `not applicable — reason`, and 3
+Final outcomes are 186 `proven`, 2 `not applicable — reason`, and 0
 `open`. The not-applicable rows are `P01` (the parent closure gate belongs
 after #387 integration) and `402-AC34` (its literal 345-edge topology was
 superseded by authorized #405 behavior at 84 modules / 346 edges / zero cycles,
-with facades 120/11/31). The open rows are exactly `P18`, `387-AC23`, and
-`387-AC24`.
-
-The follow-up must replace this pre-final disposition only after the exact
-reviewed head proves the prohibited-feature gate, zero-open-row matrix, full
-warning-strict suite, compile/import, topology/facades, docs links/fragments,
-provider-free smoke, repeated benchmark, reference/privacy/recovery suites,
-diff check, and exact-head self-review.
+with facades 120/11/31). Every required canonical, parent, and child criterion
+is resolved. The resulting exact documentation-only final head receives the
+recorded no-code verification rerun before merge without changing criterion
+text, production evidence, or benchmark identity.
