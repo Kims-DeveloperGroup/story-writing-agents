@@ -18,7 +18,7 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 84.
 
-Direct internal dependency edges indexed: 345.
+Direct internal dependency edges indexed: 346.
 
 ## Current Dependency Direction
 
@@ -82,7 +82,8 @@ interactive_controller._core -> interactive_controller._session_policy
 interactive_controller._session_policy -> errors/interactive_terminal/session_lifecycle
 interactive_controller._conversation_policy -> conversation_search/conversations
                                             -> errors/interactive_terminal/workspace
-interactive_controller._runtime_policy -> conversation_retrieval/conversation_search
+interactive_controller._runtime_policy -> agent_context.service
+                                       -> conversation_retrieval/conversation_search
                                        -> errors/interactive_terminal/models/workspace
 
 smoke -> agents/conversation_retrieval/conversation_search/conversations/debug_log
@@ -472,7 +473,9 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** No project-root or `agent_context`-facade-supported
   API. The direct-module package-internal `__all__` exposes
   `AgentContextService`, `ContextExecutionError`,
-  `ContextExecutionErrorCode`, `ContextInvocationBinding`,
+  `ContextExecutionErrorCode`, `ContextExecutionEvent`,
+  `ContextExecutionEventKind`, `ContextExecutionEventSink`,
+  `ContextInvocationBinding`,
   `ContextInvocationRequest`, `ContextInvocationResult`,
   `ContextInvocationSession`, `ContextInvocationState`, `ContextProvider`,
   `ContextProviderCallRequest`, `ContextProviderCallResult`,
@@ -524,10 +527,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   the substantive action budget, and must complete before verified ledger
   commit. The two failure-fact helpers attach and recover only validated
   content-free physical call facts without replacing the original exception.
-  Its package-internal, intentionally non-`__all__`
-  `ContextExecutionEventKind`,
-  `ContextExecutionEvent`, and synchronous event-sink type expose only scoped
-  identities, counts, sizes, truncation, and fixed lifecycle outcomes. The
+  Its supported direct-module-only `ContextExecutionEventKind`, frozen
+  `ContextExecutionEvent`, and synchronous `ContextExecutionEventSink` expose
+  fixed lifecycle outcomes with exact scope and operation identity, required
+  phase/round correlation for debate events, and kind-specific optional
+  content-free planning, action, mandatory-reference, provider-token,
+  transcript, observation, and truncation facts. Nonapplicable facts are
+  `None`; terminal provider input tokens are summed only when every submitted
+  physical call supplies exact usage, and otherwise remain unavailable.
+  Neither the `agent_context` facade nor the project-root facade re-exports
+  these contracts. The
   optional synchronous answer validator receives the exact authorized answer
   and authorization after final source revalidation but before reference
   completion and READY commit, so invalid domain output cannot advance the
@@ -550,9 +559,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   ledger-owned, and provider transport/native-thread storage remains delegated
   through `ContextProvider`. Every physical call is appended in order; only a
   revalidated and synchronously domain-validated terminal answer commits READY.
-  Typed lifecycle delivery is synchronous; diagnostic consumers can isolate
-  their own failures, while an intentional public progress-observer failure
-  remains an invocation failure. Cancellation, timeout, malformed action,
+  Typed lifecycle delivery is synchronous and inline. Observer failure before
+  authority aborts and remains the primary invocation failure; failure while
+  receiving `CHECKPOINT_ADVANCED` propagates after READY commit without
+  rollback or a false not-advanced event; terminal delivery failure during an
+  independent runtime failure is suppressed. Cancellation, timeout, malformed
+  action,
   source/reference or answer-validation failure, exhaustion, or ambiguous
   submitted continuation taints the attempt and, where required, the native
   continuation. Importing performs no I/O, entropy acquisition, registration,
@@ -562,7 +574,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_agent_context_execution.py`,
   `tests/test_agent_context_runtime_adoption.py`,
   `tests/test_context_accounting_optimized.py`, `tests/test_codex_backend.py`,
-  `tests/test_antigravity_adapter.py`, and `tests/test_antigravity_parity.py`;
+  `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`, and
+  `docs/guides/agent-context-progress.md`;
   module-inventory, dependency, facade, and import-boundary assertions across
   `tests/test_rag_module_and_packaging_boundary.py`,
   `tests/test_session_lifecycle.py`, and
@@ -2962,9 +2975,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   confirmation projection for every canonical agent. Both diagnostic commands
   remain fully detailed regardless of the message-details preference.
   All transition, identity-resolution, routing,
-  directive-result, inspection, trusted debate/retrieval progress and result,
-  retrieval-source, and other presentation validation helpers are package
-  internal, and the project-root facade does not re-export this class or module.
+  directive-result, inspection, trusted context/debate/retrieval progress and
+  result, retrieval-source, and other presentation validation helpers are
+  package internal, and the project-root facade does not re-export this class
+  or module.
   The controller constructs closed semantic components for the migrated
   high-frequency and information-dense scope, status, inspection, management,
   directive, routing, advisory, retrieval, consensus, focused-history, list,
@@ -3359,9 +3373,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   `StoryRuntime.converse_with_retrieval` operation per accepted advisory content
   turn through the retained Runner and terminal-owned progress adapter. It
   passes the exact attachment-scoped
-  service plus a synchronous sink, validates trusted progress/results, and
-  constructs fixed progress and ordered source components through the retained
-  semantic-output adapter. Before advisory coroutine entry, the established
+  service plus the established retrieval sink and, when the runtime advertises
+  contextual capability, one generic context sink. A call-local
+  operation-keyed projection map validates every lifecycle event and requires
+  the successful advisory operation to end in one advanced checkpoint. The
+  controller renders fixed content-free planning, answer, failure, and
+  checkpoint copy, while generic search/read rendering is suppressed after
+  validation because the established retrieval sink already presents those
+  actions. It constructs fixed progress and ordered source components through
+  the retained semantic-output adapter. Before advisory coroutine entry, the
+  established
   fixed cancelled/hint copy returns attached only when public Runner task
   inspection proves quiescence; that path calls no provider and mutates no
   controller or persistent state. `/rag` arms or replaces one process-local
@@ -3377,7 +3398,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   and focused-history interruption stops further rendering and returns to the
   same prompt without persistence mutation. The controller also delegates
   draft reads to `run_inputs` and submits each accepted consensus action
-  through the same Runner. When a consensus action omits `output_path`, it
+  through the same Runner. Context-capable consensus calls use the same
+  controller-safe validator with call-local state per interleaved debate-agent
+  operation, render agent/phase/round-qualified lifecycle facts, and verify
+  terminal context outcomes before presenting the debate result. When a
+  consensus action omits `output_path`, it
   prompts for and validates a create-only `PART/PATH.md` after attachment and
   focus checks and before composition or draft-file access. `RUN` and
   `RUN_FRESH` dispatch to `StoryRuntime.run_prompt`; `DRAFT_FILE` alone loads
@@ -3407,6 +3432,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   transcript-read integration, and `tests/test_interactive_pty.py` for primary
   process-level POSIX PTY lifecycle verification;
   `docs/design/session-lifecycle.md`,
+  `docs/guides/agent-context-progress.md`,
   `docs/guides/story-sessions.md`, `docs/guides/artifact-references.md`,
   `docs/reference/cli.md`,
   `docs/reference/interactive-terminal.md`, and
@@ -3467,17 +3493,25 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/interactive_controller/_runtime_policy.py`
 - **Responsibility:** Interpret runtime progress, result, and inspection facts.
 - **Supported surface:** No project-public import. Its exact package-internal
-  `__all__` contains the frozen, slotted `DebateContextInspectionFacts` and
-  `DebateInspectionFacts` contracts plus `classify_advisory_turn_failure`,
+  `__all__` contains the frozen, slotted `ContextProgressProjection`,
+  `DebateContextInspectionFacts`, and `DebateInspectionFacts` contracts plus
+  `classify_advisory_turn_failure`,
   `classify_consensus_execution_failure`, `classify_inspection_failure`,
   `classify_progress_callback_failure`,
   `interactive_code_for_debate_failure`, `validate_consensus_result`,
   `validate_conversation_retrieval_progress`,
   `validate_conversation_retrieval_result`,
+  `validate_context_execution_progress`,
   `validate_debate_context_inspection`, `validate_debate_inspection`,
   `validate_debate_progress`, and `validate_session_inspection`. Validators
-  reconstruct exact immutable contracts, consume only a previous event or
-  immutable progress tuple, and return canonical typed facts. Debate and
+  reconstruct exact immutable contracts, consume only a previous event,
+  operation-keyed immutable projection map, or immutable progress tuple, and
+  return canonical typed facts. Context execution validation reconstructs the
+  direct service event, correlates its complete scope and operation identity,
+  enforces operation-local bootstrap/delta, omission, paired sequential
+  search/read, answer-before-commit, failure, and terminal ordering, rejects
+  post-terminal events, and projects only controller-safe content-free facts.
+  Debate and
   context inspection validators return the whitelisted fact contracts without
   flattening presentation text. Debate inspection and retrieval-result
   validation accept an additive optional reference-operation identity only
@@ -3491,9 +3525,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   search/read progress correlated to the result turn, including mixed-source
   replies. The
   module never renders, appends, retains, or calls the runtime.
-- **Direct internal dependencies:** `conversation_retrieval`,
-  `conversation_search`, `errors`, `interactive_terminal`, `models`, and
-  `workspace`.
+- **Direct internal dependencies:** `agent_context.service`,
+  `conversation_retrieval`, `conversation_search`, `errors`,
+  `interactive_terminal`, `models`, and `workspace`.
 - **State, resources, and side effects:** Export metadata only; owns no runtime,
   progress collection, controller state, cache, or external resource and
   performs no terminal, filesystem, provider, lifecycle, or import-time
@@ -3503,6 +3537,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_cancellation.py`,
   `tests/test_interactive_search.py`,
   `tests/test_runtime_reference_integration.py`,
+  `docs/guides/agent-context-progress.md`,
   `docs/reference/conversation-retrieval.md`, and `docs/design/overview.md`.
 
 ### `story_writing_agents.interactive_line_editor`
@@ -4612,10 +4647,12 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Supported surface:** Package-supported `StoryRuntime` and `RuntimeSession`,
   exposing provider-free directive application, runtime-override saving, and
   session/debate/context inspection,
-  including unchanged one-step `converse()`, additive bounded
+  including one-step `converse()`, additive bounded
   `converse_with_retrieval()` with required scoped memory service and optional
-  synchronous progress sink, context-aware `run_prompt()` and `run_draft()`
-  with required `output_path=PART/PATH.md`,
+  synchronous retrieval progress sink, and context-aware `run_prompt()` and
+  `run_draft()` with required `output_path=PART/PATH.md`. All four operations
+  on both runtime forms accept an additive keyword-only direct-module
+  `ContextExecutionEventSink` as `context_event_sink`,
   and the separate strict `inspect_debate_context()` accessor on both forms,
   plus `inspect_reference_operation()` on both forms and compatibility aliases
   `Runtime` and `Session`. The session-bound accessor rejects operation
@@ -4636,7 +4673,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   attempt, while an absent query follows the injected service's
   default-disabled automatic policy. Supplying no service and no query
   preserves no-attempt behavior; forcing without a service yields an explicit
-  disabled fallback.
+  disabled fallback. A supplied context sink is validated as declared
+  synchronous and requires contextual capability before session access,
+  context, provider, storage, persistence, or transcript work; omitting it
+  preserves the established contextual and legacy fallback behavior.
 - **Direct internal dependencies:** `agent_context.actions`,
   `agent_context.manifest`, `agent_context.planning`, `agent_context.service`,
   `agent_context.sources`, `agents`, `backend`, `config`,
@@ -4722,8 +4762,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   explicit active same-session mode, maps only completed used read evidence to
   public sources, preserves supplied RAG source order, existing progress and
   transcript persistence, and never runs the legacy provider retrieval loop in
-  parallel. Content-free service events map through the existing private debug
-  guard and, for search/read, the existing retrieval progress sink. When the
+  parallel. Content-free service events compose deterministically through the
+  existing private debug guard, then the established retrieval progress sink
+  for search/read, then the generic context sink. The runtime forwards that
+  sink to ordinary conversation, retrieval, and every logical debate-agent
+  invocation with explicit phase/round correlation. A private observer-failure
+  carrier preserves the original generic callback failure across debate task
+  aggregation and unwraps it at the public operation boundary; post-commit
+  delivery cannot roll authority back. When the
   contextual capability is unavailable, the established eager-definition and
   direct backend paths remain the compatibility fallback. For an included
   consensus request
@@ -4818,7 +4864,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_orchestration_workflow.py`,
   `tests/test_orchestration_safety.py`, `tests/test_lifecycle_atomicity.py`,
   `tests/test_prompts.py`, `tests/test_interactive_pty.py`,
-  `tests/test_agent_state.py`, `docs/guides/artifact-references.md`,
+  `tests/test_agent_state.py`, `docs/guides/agent-context-progress.md`,
+  `docs/guides/artifact-references.md`,
   `docs/reference/runtime-api.md`,
   `docs/reference/writing-artifacts.md`,
   `docs/reference/conversation-retrieval.md`, and
@@ -5607,6 +5654,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/operations/recovery-and-limitations.md`.
 
 ## Consistency Notes
+
+- Live agent-context lifecycle progress remains one-way and content-free:
+  `agent_context.service` owns the direct-module event contract and
+  authoritative delivery, `orchestrator` composes runtime observers,
+  `interactive_controller._runtime_policy` is the controller's sole direct
+  event-contract consumer, and `_core` consumes only that policy's safe
+  projection. The sole new edge is
+  `interactive_controller._runtime_policy -> agent_context.service`; the root,
+  `agent_context`, and `writing_artifacts` facades remain exactly 120, 11, and
+  31 names.
 
 - Optional conversation RAG has three one-way direct-module boundaries.
   `conversation_rag` is the standard-library-only story contract and policy

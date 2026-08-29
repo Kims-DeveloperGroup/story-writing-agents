@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
+from ..agent_context.service import (
+    ContextExecutionEvent,
+    ContextExecutionEventKind,
+    ContextScope,
+)
 from ..conversation_retrieval import (
     ConversationRagAttemptOutcome,
     ConversationRetrievalProgressEvent,
@@ -68,6 +74,297 @@ class DebateContextInspectionFacts:
     omitted_turns: int
     retained_utf8_bytes: int
     truncated: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ContextProgressProjection:
+    """Controller-safe content-free facts for one contextual operation event."""
+
+    workspace_id: str
+    session_id: str
+    subject_kind: str
+    subject_id: str
+    agent_id: str
+    operation_id: str
+    kind: str
+    stage: str
+    phase: str | None
+    round_number: int | None
+    action_index: int | None
+    selected_source_count: int | None
+    selected_source_utf8_bytes: int | None
+    omitted_searchable_source_count: int | None
+    omitted_searchable_source_utf8_bytes: int | None
+    search_hit_count: int | None
+    retrieved_source_count: int | None
+    retrieved_source_utf8_bytes: int | None
+    mandatory_reference_count: int | None
+    mandatory_reference_utf8_bytes: int | None
+    provider_input_tokens: int | None
+    truncated: bool | None
+
+    @property
+    def operation_key(self) -> tuple[str, str, str, str, str, str]:
+        """Return the exact scope-plus-operation correlation key."""
+
+        return (
+            self.workspace_id,
+            self.session_id,
+            self.subject_kind,
+            self.subject_id,
+            self.agent_id,
+            self.operation_id,
+        )
+
+    @property
+    def terminal(self) -> bool:
+        """Return whether this projection is an immutable terminal outcome."""
+
+        return self.kind in {
+            ContextExecutionEventKind.CHECKPOINT_ADVANCED.value,
+            ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED.value,
+        }
+
+
+def _context_progress_stage(kind: ContextExecutionEventKind) -> str:
+    """Map one internal event to the canonical external lifecycle stage."""
+
+    if kind in {
+        ContextExecutionEventKind.BOOTSTRAP,
+        ContextExecutionEventKind.DELTA,
+        ContextExecutionEventKind.OMISSION,
+    }:
+        return "plan"
+    if kind in {
+        ContextExecutionEventKind.SEARCH_STARTED,
+        ContextExecutionEventKind.SEARCH_COMPLETED,
+        ContextExecutionEventKind.READ_STARTED,
+        ContextExecutionEventKind.READ_COMPLETED,
+    }:
+        return "action"
+    if kind is ContextExecutionEventKind.ANSWER_AUTHORIZED:
+        return "verify"
+    if kind is ContextExecutionEventKind.CHECKPOINT_ADVANCED:
+        return "commit"
+    return "fail"
+
+
+def _context_progress_transition_is_valid(
+    previous: ContextProgressProjection,
+    current: ContextExecutionEvent,
+) -> bool:
+    """Return whether one operation-local event transition is canonical."""
+
+    previous_kind = ContextExecutionEventKind(previous.kind)
+    current_kind = current.kind
+    if previous.terminal:
+        return False
+    failure_facts = {
+        ContextExecutionEventKind.INVALIDATED,
+        ContextExecutionEventKind.BUDGET_EXHAUSTED,
+        ContextExecutionEventKind.ACTION_EXHAUSTED,
+        ContextExecutionEventKind.TAINTED,
+    }
+    if previous_kind in failure_facts:
+        return current_kind in (
+            failure_facts
+            | {ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED}
+        )
+    if current_kind in failure_facts:
+        return True
+    if current_kind is ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED:
+        return True
+    if current_kind is ContextExecutionEventKind.CHECKPOINT_ADVANCED:
+        return previous_kind is ContextExecutionEventKind.ANSWER_AUTHORIZED
+    if current_kind in {
+        ContextExecutionEventKind.BOOTSTRAP,
+        ContextExecutionEventKind.DELTA,
+    }:
+        return False
+    if current_kind is ContextExecutionEventKind.OMISSION:
+        return previous_kind in {
+            ContextExecutionEventKind.BOOTSTRAP,
+            ContextExecutionEventKind.DELTA,
+        }
+    if current_kind is ContextExecutionEventKind.SEARCH_COMPLETED:
+        return (
+            previous_kind is ContextExecutionEventKind.SEARCH_STARTED
+            and current.action_index == previous.action_index
+        )
+    if current_kind is ContextExecutionEventKind.READ_COMPLETED:
+        return (
+            previous_kind is ContextExecutionEventKind.READ_STARTED
+            and current.action_index == previous.action_index
+        )
+    if current_kind in {
+        ContextExecutionEventKind.SEARCH_STARTED,
+        ContextExecutionEventKind.READ_STARTED,
+        ContextExecutionEventKind.ANSWER_AUTHORIZED,
+    }:
+        if previous_kind in {
+            ContextExecutionEventKind.BOOTSTRAP,
+            ContextExecutionEventKind.DELTA,
+            ContextExecutionEventKind.OMISSION,
+        }:
+            expected_index = 1
+        elif previous_kind in {
+            ContextExecutionEventKind.SEARCH_COMPLETED,
+            ContextExecutionEventKind.READ_COMPLETED,
+        }:
+            assert previous.action_index is not None
+            expected_index = previous.action_index + 1
+        else:
+            return False
+        if current.action_index != expected_index:
+            return False
+        if current_kind is ContextExecutionEventKind.SEARCH_STARTED:
+            return True
+        if current_kind is ContextExecutionEventKind.READ_STARTED:
+            return bool(
+                previous_kind is ContextExecutionEventKind.READ_COMPLETED
+                or (
+                    previous_kind is ContextExecutionEventKind.SEARCH_COMPLETED
+                    and previous.search_hit_count
+                )
+            )
+        return True
+    return False
+
+
+def validate_context_execution_progress(
+    event: object,
+    *,
+    expected_session_id: str,
+    expected_subject_kind: str,
+    expected_subject_id: str | None,
+    expected_agent_id: str | None,
+    previous_by_operation: Mapping[
+        tuple[str, str, str, str, str, str],
+        ContextProgressProjection,
+    ],
+) -> ContextProgressProjection:
+    """Reconstruct, correlate, and validate one operation-local context event."""
+
+    if type(event) is not ContextExecutionEvent:
+        raise TypeError("context progress requires a ContextExecutionEvent")
+    try:
+        scope = ContextScope(
+            event.scope.workspace_id,
+            event.scope.session_id,
+            event.scope.subject_kind,
+            event.scope.subject_id,
+            event.scope.agent_id,
+        )
+        canonical = ContextExecutionEvent(
+            kind=event.kind,
+            scope=scope,
+            operation_id=event.operation_id,
+            phase=event.phase,
+            round_number=event.round_number,
+            action_index=event.action_index,
+            selected_source_count=event.selected_source_count,
+            selected_source_utf8_bytes=event.selected_source_utf8_bytes,
+            omitted_searchable_source_count=(
+                event.omitted_searchable_source_count
+            ),
+            omitted_searchable_source_utf8_bytes=(
+                event.omitted_searchable_source_utf8_bytes
+            ),
+            search_hit_count=event.search_hit_count,
+            retrieved_source_count=event.retrieved_source_count,
+            retrieved_source_utf8_bytes=event.retrieved_source_utf8_bytes,
+            mandatory_reference_count=event.mandatory_reference_count,
+            mandatory_reference_utf8_bytes=(
+                event.mandatory_reference_utf8_bytes
+            ),
+            provider_input_tokens=event.provider_input_tokens,
+            transcript_turn_count=event.transcript_turn_count,
+            transcript_event_count=event.transcript_event_count,
+            observation_utf8_bytes=event.observation_utf8_bytes,
+            truncated=event.truncated,
+        )
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise TypeError("context progress event is invalid") from exc
+    subject_kind = canonical.scope.subject_kind.value
+    if (
+        canonical.scope.session_id != expected_session_id
+        or subject_kind != expected_subject_kind
+        or (
+            expected_subject_id is not None
+            and canonical.scope.subject_id != expected_subject_id
+        )
+        or (
+            expected_agent_id is not None
+            and canonical.scope.agent_id != expected_agent_id
+        )
+    ):
+        raise ValueError("context progress identity does not match its operation")
+    key = (
+        canonical.scope.workspace_id,
+        canonical.scope.session_id,
+        subject_kind,
+        canonical.scope.subject_id,
+        canonical.scope.agent_id,
+        canonical.operation_id,
+    )
+    previous = previous_by_operation.get(key)
+    planning = {
+        ContextExecutionEventKind.BOOTSTRAP,
+        ContextExecutionEventKind.DELTA,
+    }
+    failure_only = {
+        ContextExecutionEventKind.INVALIDATED,
+        ContextExecutionEventKind.BUDGET_EXHAUSTED,
+        ContextExecutionEventKind.ACTION_EXHAUSTED,
+        ContextExecutionEventKind.TAINTED,
+        ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED,
+    }
+    if previous is None:
+        if canonical.kind not in planning | failure_only:
+            raise ValueError("context progress has an invalid first event")
+    elif not _context_progress_transition_is_valid(previous, canonical):
+        raise ValueError("context progress phase order is invalid")
+    if (
+        canonical.kind is ContextExecutionEventKind.OMISSION
+        and previous is not None
+        and (
+            canonical.omitted_searchable_source_count
+            != previous.omitted_searchable_source_count
+            or canonical.omitted_searchable_source_utf8_bytes
+            != previous.omitted_searchable_source_utf8_bytes
+        )
+    ):
+        raise ValueError("context omission facts changed after planning")
+    return ContextProgressProjection(
+        workspace_id=canonical.scope.workspace_id,
+        session_id=canonical.scope.session_id,
+        subject_kind=subject_kind,
+        subject_id=canonical.scope.subject_id,
+        agent_id=canonical.scope.agent_id,
+        operation_id=canonical.operation_id,
+        kind=canonical.kind.value,
+        stage=_context_progress_stage(canonical.kind),
+        phase=canonical.phase,
+        round_number=canonical.round_number,
+        action_index=canonical.action_index,
+        selected_source_count=canonical.selected_source_count,
+        selected_source_utf8_bytes=canonical.selected_source_utf8_bytes,
+        omitted_searchable_source_count=(
+            canonical.omitted_searchable_source_count
+        ),
+        omitted_searchable_source_utf8_bytes=(
+            canonical.omitted_searchable_source_utf8_bytes
+        ),
+        search_hit_count=canonical.search_hit_count,
+        retrieved_source_count=canonical.retrieved_source_count,
+        retrieved_source_utf8_bytes=canonical.retrieved_source_utf8_bytes,
+        mandatory_reference_count=canonical.mandatory_reference_count,
+        mandatory_reference_utf8_bytes=(
+            canonical.mandatory_reference_utf8_bytes
+        ),
+        provider_input_tokens=canonical.provider_input_tokens,
+        truncated=canonical.truncated,
+    )
 
 
 def validate_debate_inspection(
@@ -986,6 +1283,7 @@ def classify_advisory_turn_failure(
 
 
 __all__ = [
+    "ContextProgressProjection",
     "DebateContextInspectionFacts",
     "DebateInspectionFacts",
     "classify_advisory_turn_failure",
@@ -994,6 +1292,7 @@ __all__ = [
     "classify_progress_callback_failure",
     "interactive_code_for_debate_failure",
     "validate_consensus_result",
+    "validate_context_execution_progress",
     "validate_conversation_retrieval_progress",
     "validate_conversation_retrieval_result",
     "validate_debate_context_inspection",

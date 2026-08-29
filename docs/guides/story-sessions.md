@@ -643,6 +643,16 @@ sender/recipient header, and the full body. On additionally shows canonical IDs,
 Turn, and Kind. Only user and outcome enter the transcript; local reads never
 call a provider or alter defaults/focus.
 
+Context-capable turns also show the agent's live context lifecycle
+automatically; there is no command or setting to enable it. The compact lines
+distinguish bootstrap from delta, show bounded SEARCH/READ work, and end in
+`checkpoint advanced` or `checkpoint not advanced`. Existing retrieval
+SEARCH/READ panels appear once, while each debate line adds its agent, round,
+and phase so interleaved invocations remain readable. These lines are
+content-free terminal progress, not conversation or story records. See
+[Agent-context progress](agent-context-progress.md) for exact examples, state
+meanings, callback facts, privacy, and observer-failure recovery.
+
 ## Turn the current focus into consensus
 
 ```text

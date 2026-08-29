@@ -17,8 +17,10 @@ from unittest import mock
 from story_writing_agents import (
     AGENT_SPECS,
     AgentBackend,
+    BackendProtocolError,
     BoundAgent,
     CHARACTER_CUSTODIAN,
+    ConversationReply,
     DebateStatus,
     EXECUTION_SPECIALIST,
     LEAD_ORCHESTRATOR,
@@ -31,6 +33,7 @@ from story_writing_agents import (
 from story_writing_agents.agent_context import (
     ProviderCallKind,
     ProviderCallState,
+    ProviderUsage,
     canonical_provider_json,
 )
 from story_writing_agents.agent_context.ledger import (
@@ -44,7 +47,11 @@ from story_writing_agents.agent_context.planning import (
     ContextCheckpointState,
     ContextDeliveryMode,
 )
-from story_writing_agents.agent_context.service import AgentContextService
+from story_writing_agents.agent_context.service import (
+    AgentContextService,
+    ContextExecutionEvent,
+    ContextExecutionEventKind,
+)
 from story_writing_agents.agent_context.sources import writing_artifact_source_id
 from story_writing_agents.conversation_retrieval import (
     ConversationRagAttemptOutcome,
@@ -95,7 +102,7 @@ from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
 
-from tests.helpers import initialized_workspace
+from tests.helpers import ScriptedBackend, initialized_workspace
 
 
 SearchSelection = tuple[tuple[str, ...], str]
@@ -422,6 +429,7 @@ class _ContextAdapterHarness:
             lambda _current: False
         )
         self.reference_failure = False
+        self.input_tokens: int | None = None
         self.mutate_before_answer: Callable[[dict[str, Any]], None] | None = None
         self.conflicts: set[tuple[str, str, str]] = set()
         self.final_updates: dict[str, dict[str, str]] = {}
@@ -575,6 +583,11 @@ class _ContextAdapterHarness:
             return ProviderResult(
                 self._thread_id(invocation),
                 response,
+                usage=(
+                    None
+                    if self.input_tokens is None
+                    else ProviderUsage(input_tokens=self.input_tokens)
+                ),
                 actual_transport_utf8_bytes=len(invocation.payload_json or b""),
             )
 
@@ -702,6 +715,11 @@ class _ContextAdapterHarness:
         return ProviderResult(
             thread_id,
             response,
+            usage=(
+                None
+                if self.input_tokens is None
+                else ProviderUsage(input_tokens=self.input_tokens)
+            ),
             actual_transport_utf8_bytes=len(invocation.payload_json or b""),
         )
 
@@ -2362,3 +2380,271 @@ class ContextualRuntimeAdoptionTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertIn("context_checkpoint_not_advanced", citation_outcomes)
         self.assertNotIn("context_checkpoint_advanced", citation_outcomes)
+
+    async def test_live_ordinary_bootstrap_delta_search_and_privacy_are_transient(
+        self,
+    ) -> None:
+        session_id = "live_context_ordinary"
+        self.ready(session_id)
+        conversation_id = self.conversation(session_id, "Live context")
+        self.provider.input_tokens = 17
+        private_prompt = "PRIVATE_LIVE_CONTEXT_PROMPT_한🙂"
+
+        bootstrap: list[ContextExecutionEvent] = []
+        calls_before = len(self.provider.invocations)
+        first = await self.runtime.converse(
+            session_id,
+            conversation_id,
+            PLOT_ARCHITECT,
+            private_prompt,
+            context_event_sink=bootstrap.append,
+        )
+        self.assertEqual(len(self.provider.invocations) - calls_before, 1)
+        self.assertIs(bootstrap[0].kind, ContextExecutionEventKind.BOOTSTRAP)
+        self.assertEqual(
+            tuple(event.kind for event in bootstrap[-2:]),
+            (
+                ContextExecutionEventKind.ANSWER_AUTHORIZED,
+                ContextExecutionEventKind.CHECKPOINT_ADVANCED,
+            ),
+        )
+        self.assertEqual(bootstrap[-1].provider_input_tokens, 17)
+
+        delta: list[ContextExecutionEvent] = []
+        calls_before = len(self.provider.invocations)
+        second = await self.runtime.converse(
+            session_id,
+            conversation_id,
+            PLOT_ARCHITECT,
+            "follow-up without search",
+            context_event_sink=delta.append,
+        )
+        self.assertEqual(len(self.provider.invocations) - calls_before, 1)
+        self.assertIs(delta[0].kind, ContextExecutionEventKind.DELTA)
+        self.assertEqual(delta[-1].provider_input_tokens, 17)
+        self.assertEqual(first.agent_id, second.agent_id)
+        self.assertEqual(
+            tuple(event.kind for event in self.services.event_store.read(session_id, conversation_id)),
+            (
+                ConversationEventKind.USER_MESSAGE,
+                ConversationEventKind.AGENT_REPLY,
+                ConversationEventKind.USER_MESSAGE,
+                ConversationEventKind.AGENT_REPLY,
+            ),
+        )
+        stored = self.services.event_store.read(session_id, conversation_id)
+        self.assertEqual(sum(event.content == private_prompt for event in stored), 1)
+        self.assertTrue(all(private_prompt not in repr(event) for event in bootstrap + delta))
+        debug_text = self.workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(encoding="utf-8")
+        self.assertNotIn(private_prompt, debug_text)
+
+        searchable = self.workspace.path("core_documents/narrative_rules.md")
+        searchable.write_text("LIVE_ARTIFACT_SEARCH_NEEDLE\n", encoding="utf-8")
+        self.provider.search_selector = lambda current: (
+            (("writing_artifact",), "LIVE_ARTIFACT_SEARCH_NEEDLE")
+            if current.get("workflow") == "conversation"
+            and current.get("command") == "search the canonical artifacts"
+            else None
+        )
+        search_conversation = self.conversation(session_id, "Live search")
+        search_events: list[ContextExecutionEvent] = []
+        await self.runtime.converse(
+            session_id,
+            search_conversation,
+            PLOT_ARCHITECT,
+            "search the canonical artifacts",
+            context_event_sink=search_events.append,
+        )
+        search_kinds = [event.kind for event in search_events]
+        self.assertEqual(search_kinds.count(ContextExecutionEventKind.SEARCH_STARTED), 1)
+        self.assertEqual(search_kinds.count(ContextExecutionEventKind.SEARCH_COMPLETED), 1)
+        self.assertEqual(search_kinds.count(ContextExecutionEventKind.READ_STARTED), 1)
+        self.assertEqual(search_kinds.count(ContextExecutionEventKind.READ_COMPLETED), 1)
+        self.assertEqual(search_events[-1].provider_input_tokens, 51)
+
+    async def test_retrieval_emits_generic_and_established_progress_once_each(
+        self,
+    ) -> None:
+        session_id = "live_context_retrieval"
+        self.ready(session_id)
+        selected = self.conversation(session_id, "Selected")
+        source = self.conversation(session_id, "Source")
+        self.append_turn(
+            session_id,
+            source,
+            "source-turn",
+            "LIVE_RETRIEVAL_NEEDLE question",
+            "LIVE_RETRIEVAL_NEEDLE answer",
+        )
+        self.provider.search_selector = lambda current: (
+            (("conversation",), "LIVE_RETRIEVAL_NEEDLE")
+            if current.get("workflow") == "conversation_retrieval"
+            else None
+        )
+        memory = ConversationMemoryService(
+            ConversationSearchScope(session_id),
+            self.services.catalog,
+            self.services.event_store,
+        )
+        established: list[object] = []
+        generic: list[ContextExecutionEvent] = []
+        result = await self.runtime.converse_with_retrieval(
+            session_id,
+            selected,
+            PLOT_ARCHITECT,
+            "retrieve live evidence",
+            memory_service=memory,
+            progress_sink=established.append,
+            context_event_sink=generic.append,
+        )
+        self.assertTrue(result.sources)
+        self.assertEqual(
+            [event.phase for event in established],
+            [
+                ConversationRetrievalProgressPhase.SEARCH_STARTED,
+                ConversationRetrievalProgressPhase.SEARCH_COMPLETED,
+                ConversationRetrievalProgressPhase.READ_STARTED,
+                ConversationRetrievalProgressPhase.READ_COMPLETED,
+            ],
+        )
+        generic_kinds = [event.kind for event in generic]
+        for kind in (
+            ContextExecutionEventKind.SEARCH_STARTED,
+            ContextExecutionEventKind.SEARCH_COMPLETED,
+            ContextExecutionEventKind.READ_STARTED,
+            ContextExecutionEventKind.READ_COMPLETED,
+        ):
+            self.assertEqual(generic_kinds.count(kind), 1)
+        self.assertIs(generic[0].kind, ContextExecutionEventKind.BOOTSTRAP)
+        self.assertIs(generic[-1].kind, ContextExecutionEventKind.CHECKPOINT_ADVANCED)
+        self.assertEqual(
+            tuple(event.kind for event in self.services.event_store.read(session_id, selected)),
+            (ConversationEventKind.USER_MESSAGE, ConversationEventKind.AGENT_REPLY),
+        )
+
+    async def test_prompt_and_draft_report_every_logical_agent_invocation(self) -> None:
+        session_id = "live_context_debates"
+        self.ready(session_id)
+
+        for input_kind in ("prompt", "draft"):
+            with self.subTest(input_kind=input_kind):
+                debate_id = f"live_{input_kind}_debate"
+                self.provider.active_debate_id = debate_id
+                events: list[ContextExecutionEvent] = []
+                initial_calls_before = len(self.provider.context_payloads)
+                if input_kind == "prompt":
+                    result = await self.runtime.run_prompt(
+                        session_id,
+                        "build one candidate",
+                        debate_id=debate_id,
+                        output_path=f"part-01/{debate_id}.md",
+                        max_debate_rounds=1,
+                        context_event_sink=events.append,
+                    )
+                else:
+                    result = await self.runtime.run_draft(
+                        session_id,
+                        "revise this supplied draft",
+                        debate_id=debate_id,
+                        output_path=f"part-01/{debate_id}.md",
+                        max_debate_rounds=1,
+                        context_event_sink=events.append,
+                    )
+                self.assertIs(result.status, DebateStatus.CONSENSUS)
+                initial_calls = len(self.provider.context_payloads) - initial_calls_before
+                groups: dict[str, list[ContextExecutionEvent]] = {}
+                for event in events:
+                    groups.setdefault(event.operation_id, []).append(event)
+                self.assertEqual(len(groups), initial_calls)
+                self.assertGreater(len(groups), len(ROSTER))
+                self.assertEqual({event.scope.agent_id for event in events}, set(ROSTER))
+                self.assertTrue(all(event.phase is not None for event in events))
+                self.assertTrue(all(event.round_number is not None for event in events))
+                for operation_events in groups.values():
+                    self.assertIn(
+                        operation_events[0].kind,
+                        {ContextExecutionEventKind.BOOTSTRAP, ContextExecutionEventKind.DELTA},
+                    )
+                    self.assertIs(
+                        operation_events[-1].kind,
+                        ContextExecutionEventKind.CHECKPOINT_ADVANCED,
+                    )
+                    self.assertEqual(
+                        len(
+                            [
+                                event
+                                for event in operation_events
+                                if event.kind
+                                in {
+                                    ContextExecutionEventKind.CHECKPOINT_ADVANCED,
+                                    ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED,
+                                }
+                            ]
+                        ),
+                        1,
+                    )
+                self.assertIn(ContextExecutionEventKind.BOOTSTRAP, {event.kind for event in events})
+                self.assertIn(ContextExecutionEventKind.DELTA, {event.kind for event in events})
+
+    async def test_noncontextual_runtime_rejects_observer_before_any_effect(
+        self,
+    ) -> None:
+        workspace = initialized_workspace(self)
+        services = compose_filesystem_conversation_storage(workspace)
+
+        class LegacyBoundAgent:
+            def __init__(self, requests: list[object]) -> None:
+                self.requests = requests
+
+            async def converse(self, request: object) -> ConversationReply:
+                self.requests.append(request)
+                return ConversationReply(
+                    request.session_id,  # type: ignore[attr-defined]
+                    request.conversation_id,  # type: ignore[attr-defined]
+                    request.turn_id,  # type: ignore[attr-defined]
+                    "legacy reply",
+                )
+
+            async def invoke(self, request: object) -> object:
+                raise AssertionError(request)
+
+        class LegacyBackend(ScriptedBackend):
+            def __init__(self) -> None:
+                super().__init__(lambda request: AssertionError(request))
+                self.conversation_requests: list[object] = []
+
+            async def bind(self, definition: object) -> LegacyBoundAgent:
+                self.definitions.append(definition)  # type: ignore[arg-type]
+                return LegacyBoundAgent(self.conversation_requests)
+
+        backend = LegacyBackend()
+        runtime = StoryRuntime(
+            workspace,
+            backend,  # type: ignore[arg-type]
+            conversation_storage_services=services,
+        )
+        session_id = "noncontextual"
+        conversation_id = services.catalog.create(session_id, "Compatibility").conversation_id
+        with self.assertRaises(BackendProtocolError):
+            await runtime.converse(
+                session_id,
+                conversation_id,
+                PLOT_ARCHITECT,
+                "must not persist",
+                context_event_sink=lambda _event: None,
+            )
+        self.assertEqual(backend.conversation_requests, [])
+        self.assertEqual(services.event_store.read(session_id, conversation_id), ())
+
+        result = await runtime.converse(
+            session_id,
+            conversation_id,
+            PLOT_ARCHITECT,
+            "legacy behavior",
+        )
+        self.assertEqual(result.content, "legacy reply")
+        self.assertEqual(len(backend.conversation_requests), 1)
+        self.assertEqual(
+            tuple(event.kind for event in services.event_store.read(session_id, conversation_id)),
+            (ConversationEventKind.USER_MESSAGE, ConversationEventKind.AGENT_REPLY),
+        )

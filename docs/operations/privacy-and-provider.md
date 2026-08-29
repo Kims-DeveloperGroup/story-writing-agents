@@ -378,6 +378,49 @@ from inline `${...}` indicators. The interactive controller can now construct
 those same indicators through `$`/`$$` discovery and viewer selection without
 copying selected content into the prompt or work history.
 
+<a id="agent-context-progress-privacy"></a>
+
+## Agent-context progress privacy
+
+The optional context lifecycle observer and installed-shell progress contain
+only validated scope and operation identities, fixed lifecycle kinds,
+nonnegative counters, and an optional truncation boolean. They have no field
+for prompts, search queries, candidates, excerpts, mandatory-reference bodies,
+provider responses, source or reference paths, source digests, private agent
+state, exception details, or provider-thread identities. Debate events add only
+the canonical agent, phase, and round needed to distinguish logical
+invocations.
+
+Observer delivery adds no provider call, result field, story content,
+conversation event, debate record, or second context ledger. The runtime has no
+supported post-hoc observer inspection. The installed shell renders compact
+facts into terminal output only; a terminal emulator, multiplexer, or remote
+terminal may retain them in scrollback. A Python caller may deliberately retain
+callback values, in which case that caller owns access control, retention, and
+cleanup for the new copy.
+
+The context ledger and runtime debug log remain separate owners. The ledger
+retains its existing content-free checkpoint/accounting authority; progress
+does not duplicate it. Independently of whether a generic observer is supplied,
+the debug log can best-effort record `agent_context` with a fixed
+`context_*` outcome and safe session, conversation-or-debate, and agent IDs. It
+does not retain the observer's operation ID, detailed counters, provider-token
+facts, paths, or story/provider text and is not a replayable event stream.
+
+These boundaries make progress content-free, not anonymous. Workspace,
+session, subject, operation, agent, phase, and round identities; counts; token
+usage; timing; and terminal scrollback can still reveal sensitive operational
+patterns. Treat caller-retained events, debug records, and captured terminal
+output as plaintext workspace/session metadata.
+
+Mandatory references remain a separate exact-read authorization path. Their
+ordered paths/ranges and durable content-free evidence retain the exposure
+described above, while their selected bodies never enter context lifecycle
+events. Optional conversation RAG is also independent: its query, excerpts,
+citations, and derived state do not widen the observer schema. See
+[Agent-context progress](../guides/agent-context-progress.md#privacy-references-and-limits)
+for the user-visible lifecycle and limits.
+
 ## Provider disclosure
 
 A runtime-built substantive call sends current text where applicable plus one

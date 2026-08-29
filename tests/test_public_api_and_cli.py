@@ -16,10 +16,12 @@ import unittest
 from collections.abc import Awaitable, Callable
 from dataclasses import MISSING, FrozenInstanceError, fields
 from pathlib import Path
+from types import SimpleNamespace
 from typing import get_type_hints
 from unittest import mock
 
 import story_writing_agents
+from story_writing_agents import agent_context as agent_context_module
 from story_writing_agents import cli as cli_module
 from story_writing_agents import workspace as workspace_module
 from story_writing_agents.conversation_storage import (
@@ -63,6 +65,8 @@ from story_writing_agents.conversation_storage import (
 from story_writing_agents.conversation_storage.selection import (
     ConversationStorageStartup,
 )
+from story_writing_agents.agent_context import service as context_service_module
+from story_writing_agents.agent_context.service import ContextExecutionEventSink
 from story_writing_agents.conversation_rag_runtime import (
     ConversationRagRuntimeService,
 )
@@ -722,6 +726,7 @@ class PublicApiTests(unittest.TestCase):
                     "debate_id",
                     "conversation_context",
                     "progress_sink",
+                    "context_event_sink",
                 ),
                 3,
             ),
@@ -736,6 +741,7 @@ class PublicApiTests(unittest.TestCase):
                     "debate_id",
                     "conversation_context",
                     "progress_sink",
+                    "context_event_sink",
                 ),
                 3,
             ),
@@ -749,6 +755,7 @@ class PublicApiTests(unittest.TestCase):
                     "debate_id",
                     "conversation_context",
                     "progress_sink",
+                    "context_event_sink",
                 ),
                 2,
             ),
@@ -762,6 +769,7 @@ class PublicApiTests(unittest.TestCase):
                     "debate_id",
                     "conversation_context",
                     "progress_sink",
+                    "context_event_sink",
                 ),
                 2,
             ),
@@ -791,6 +799,10 @@ class PublicApiTests(unittest.TestCase):
                 )
                 self.assertTrue(
                     all(parameter.default is None for parameter in keyword_only[1:])
+                )
+                self.assertEqual(
+                    get_type_hints(method)["context_event_sink"],
+                    ContextExecutionEventSink | None,
                 )
         for method, names in (
             (
@@ -920,28 +932,50 @@ class PublicApiTests(unittest.TestCase):
         cases = (
             (
                 StoryRuntime.converse,
-                ("self", "session_id", "conversation_id", "agent_id", "text"),
+                (
+                    "self",
+                    "session_id",
+                    "conversation_id",
+                    "agent_id",
+                    "text",
+                    "context_event_sink",
+                ),
+                5,
             ),
             (
                 RuntimeSession.converse,
-                ("self", "conversation_id", "agent_id", "text"),
+                (
+                    "self",
+                    "conversation_id",
+                    "agent_id",
+                    "text",
+                    "context_event_sink",
+                ),
+                4,
             ),
         )
-        for method, names in cases:
+        for method, names, positional_count in cases:
             with self.subTest(method=method.__qualname__):
                 signature = inspect.signature(method)
                 self.assertEqual(tuple(signature.parameters), names)
-                self.assertTrue(
-                    all(
-                        parameter.kind
-                        is inspect.Parameter.POSITIONAL_OR_KEYWORD
-                        and parameter.default is inspect.Parameter.empty
-                        for parameter in signature.parameters.values()
-                    )
+                parameters = tuple(signature.parameters.values())
+                self.assertTrue(all(
+                    parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+                    and parameter.default is inspect.Parameter.empty
+                    for parameter in parameters[:positional_count]
+                ))
+                self.assertIs(
+                    parameters[-1].kind,
+                    inspect.Parameter.KEYWORD_ONLY,
                 )
+                self.assertIsNone(parameters[-1].default)
                 self.assertIs(
                     get_type_hints(method)["return"],
                     ConversationResult,
+                )
+                self.assertEqual(
+                    get_type_hints(method)["context_event_sink"],
+                    ContextExecutionEventSink | None,
                 )
 
     def test_retrieval_runtime_signatures_exports_and_legacy_compatibility_are_exact(
@@ -959,6 +993,7 @@ class PublicApiTests(unittest.TestCase):
                     "memory_service",
                     "progress_sink",
                     "rag_query",
+                    "context_event_sink",
                 ),
                 5,
             ),
@@ -972,6 +1007,7 @@ class PublicApiTests(unittest.TestCase):
                     "memory_service",
                     "progress_sink",
                     "rag_query",
+                    "context_event_sink",
                 ),
                 4,
             ),
@@ -1004,6 +1040,10 @@ class PublicApiTests(unittest.TestCase):
                     ConversationRetrievalProgressSink | None,
                 )
                 self.assertEqual(hints["rag_query"], str | None)
+                self.assertEqual(
+                    hints["context_event_sink"],
+                    ContextExecutionEventSink | None,
+                )
                 self.assertIs(hints["return"], ConversationRetrievalResult)
 
         required = {
@@ -1051,6 +1091,16 @@ class PublicApiTests(unittest.TestCase):
         ):
             self.assertNotIn(direct_only, story_writing_agents.__all__)
             self.assertFalse(hasattr(story_writing_agents, direct_only))
+        for direct_observer_type in (
+            "ContextExecutionEvent",
+            "ContextExecutionEventKind",
+            "ContextExecutionEventSink",
+        ):
+            self.assertIn(direct_observer_type, context_service_module.__all__)
+            self.assertFalse(hasattr(story_writing_agents, direct_observer_type))
+            self.assertFalse(hasattr(agent_context_module, direct_observer_type))
+            self.assertNotIn(direct_observer_type, story_writing_agents.__all__)
+            self.assertNotIn(direct_observer_type, agent_context_module.__all__)
 
     def test_interactive_parser_exports_use_the_supported_package_facade(
         self,
@@ -1084,6 +1134,86 @@ class PublicApiTests(unittest.TestCase):
                 self.assertIs(
                     getattr(story_writing_agents, name),
                     getattr(conversation_search, name),
+                )
+
+
+class RuntimeSessionContextObserverTests(unittest.IsolatedAsyncioTestCase):
+    async def test_all_bound_runtime_forms_forward_the_same_sink_unchanged(self) -> None:
+        runtime = SimpleNamespace(
+            converse=mock.AsyncMock(return_value=mock.sentinel.conversation_result),
+            converse_with_retrieval=mock.AsyncMock(
+                return_value=mock.sentinel.retrieval_result
+            ),
+            run_prompt=mock.AsyncMock(return_value=mock.sentinel.prompt_result),
+            run_draft=mock.AsyncMock(return_value=mock.sentinel.draft_result),
+        )
+        session = RuntimeSession(runtime, "session")  # type: ignore[arg-type]
+        sink = mock.sentinel.context_event_sink
+
+        self.assertIs(
+            await session.converse(
+                "conversation",
+                PLOT_ARCHITECT,
+                "text",
+                context_event_sink=sink,  # type: ignore[arg-type]
+            ),
+            mock.sentinel.conversation_result,
+        )
+        runtime.converse.assert_awaited_once_with(
+            "session",
+            "conversation",
+            PLOT_ARCHITECT,
+            "text",
+            context_event_sink=sink,
+        )
+
+        self.assertIs(
+            await session.converse_with_retrieval(
+                "conversation",
+                PLOT_ARCHITECT,
+                "retrieve",
+                memory_service=mock.sentinel.memory,  # type: ignore[arg-type]
+                progress_sink=mock.sentinel.progress,  # type: ignore[arg-type]
+                rag_query="needle",
+                context_event_sink=sink,  # type: ignore[arg-type]
+            ),
+            mock.sentinel.retrieval_result,
+        )
+        runtime.converse_with_retrieval.assert_awaited_once_with(
+            "session",
+            "conversation",
+            PLOT_ARCHITECT,
+            "retrieve",
+            memory_service=mock.sentinel.memory,
+            progress_sink=mock.sentinel.progress,
+            rag_query="needle",
+            context_event_sink=sink,
+        )
+
+        for method_name, payload, result in (
+            ("run_prompt", "prompt", mock.sentinel.prompt_result),
+            ("run_draft", "draft", mock.sentinel.draft_result),
+        ):
+            with self.subTest(method=method_name):
+                actual = await getattr(session, method_name)(
+                    payload,
+                    output_path="part-01/output.md",
+                    max_debate_rounds=2,
+                    debate_id="debate",
+                    conversation_context=mock.sentinel.context,
+                    progress_sink=mock.sentinel.debate_progress,
+                    context_event_sink=sink,
+                )
+                self.assertIs(actual, result)
+                getattr(runtime, method_name).assert_awaited_once_with(
+                    "session",
+                    payload,
+                    output_path="part-01/output.md",
+                    max_debate_rounds=2,
+                    debate_id="debate",
+                    conversation_context=mock.sentinel.context,
+                    progress_sink=mock.sentinel.debate_progress,
+                    context_event_sink=sink,
                 )
 
 
