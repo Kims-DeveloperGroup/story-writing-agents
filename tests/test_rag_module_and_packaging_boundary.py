@@ -33,6 +33,11 @@ _GENERIC_RAG_REPOSITORY = "https://github.com/Kims-DeveloperGroup/generic-rag.gi
 _GENERIC_RAG_REQUIREMENT = (
     f"generic-rag @ git+{_GENERIC_RAG_REPOSITORY}@{_GENERIC_RAG_PIN}"
 )
+_JSONL_VIEWER_PIN = "5d3047aa86212810d867d5b40cb1df3262f1810f"
+_JSONL_VIEWER_REPOSITORY = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git"
+_JSONL_VIEWER_REQUIREMENT = (
+    f"jsonl-viewer @ git+{_JSONL_VIEWER_REPOSITORY}@{_JSONL_VIEWER_PIN}"
+)
 
 
 def _module_inventory() -> dict[str, Path]:
@@ -198,8 +203,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 89)
-        self.assertEqual(len(edges), 362)
+        self.assertEqual(len(modules), 92)
+        self.assertEqual(len(edges), 372)
         self.assertIsNone(_cycle_witness(modules, edges))
         self.assertEqual(
             _generic_importers(modules),
@@ -448,22 +453,34 @@ class RagPackagingBoundaryTests(unittest.TestCase):
         self.assertEqual(project["dependencies"], [])
         self.assertEqual(
             project["optional-dependencies"],
-            {"rag": [_GENERIC_RAG_REQUIREMENT]},
+            {
+                "rag": [_GENERIC_RAG_REQUIREMENT],
+                "viewer": [_JSONL_VIEWER_REQUIREMENT],
+            },
         )
 
         with (_REPOSITORY_ROOT / "uv.lock").open("rb") as handle:
             lock = tomllib.load(handle)
         packages = {package["name"]: package for package in lock["package"]}
         generic = packages["generic-rag"]
+        viewer = packages["jsonl-viewer"]
         self.assertEqual(generic["version"], "0.1.0")
         self.assertEqual(
             generic["source"]["git"],
             f"{_GENERIC_RAG_REPOSITORY}?rev={_GENERIC_RAG_PIN}#{_GENERIC_RAG_PIN}",
         )
+        self.assertEqual(viewer["version"], "0.1.0")
+        self.assertEqual(
+            viewer["source"]["git"],
+            f"{_JSONL_VIEWER_REPOSITORY}?rev={_JSONL_VIEWER_PIN}#{_JSONL_VIEWER_PIN}",
+        )
         story = packages["story-writing-agents"]
         self.assertEqual(
             story["optional-dependencies"],
-            {"rag": [{"name": "generic-rag"}]},
+            {
+                "rag": [{"name": "generic-rag"}],
+                "viewer": [{"name": "jsonl-viewer"}],
+            },
         )
         self.assertEqual(
             story["metadata"]["requires-dist"],
@@ -472,17 +489,37 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     "name": "generic-rag",
                     "marker": "extra == 'rag'",
                     "git": f"{_GENERIC_RAG_REPOSITORY}?rev={_GENERIC_RAG_PIN}",
-                }
+                },
+                {
+                    "name": "jsonl-viewer",
+                    "marker": "extra == 'viewer'",
+                    "git": f"{_JSONL_VIEWER_REPOSITORY}?rev={_JSONL_VIEWER_PIN}",
+                },
             ],
         )
-        self.assertEqual(story["metadata"]["provides-extras"], ["rag"])
+        self.assertEqual(story["metadata"]["provides-extras"], ["rag", "viewer"])
 
         submodules = configparser.ConfigParser()
         submodules.read(_REPOSITORY_ROOT / ".gitmodules", encoding="utf-8")
-        section = 'submodule "vendor/generic-rag"'
-        self.assertEqual(submodules.sections(), [section])
-        self.assertEqual(submodules[section]["path"], "vendor/generic-rag")
-        self.assertEqual(submodules[section]["url"], _GENERIC_RAG_REPOSITORY)
+        generic_section = 'submodule "vendor/generic-rag"'
+        viewer_section = 'submodule "vendor/jsonl-viewer"'
+        self.assertEqual(submodules.sections(), [generic_section, viewer_section])
+        self.assertEqual(
+            submodules[generic_section]["path"],
+            "vendor/generic-rag",
+        )
+        self.assertEqual(
+            submodules[generic_section]["url"],
+            _GENERIC_RAG_REPOSITORY,
+        )
+        self.assertEqual(
+            submodules[viewer_section]["path"],
+            "vendor/jsonl-viewer",
+        )
+        self.assertEqual(
+            submodules[viewer_section]["url"],
+            _JSONL_VIEWER_REPOSITORY,
+        )
 
         gitlink = subprocess.run(
             ["git", "ls-files", "--stage", "--", "vendor/generic-rag"],
@@ -519,6 +556,41 @@ class RagPackagingBoundaryTests(unittest.TestCase):
         ).stdout
         self.assertEqual(submodule_status, "")
 
+        viewer_gitlink = subprocess.run(
+            ["git", "ls-files", "--stage", "--", "vendor/jsonl-viewer"],
+            cwd=_REPOSITORY_ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+        self.assertEqual(
+            viewer_gitlink,
+            f"160000 {_JSONL_VIEWER_PIN} 0\tvendor/jsonl-viewer",
+        )
+        viewer_head = subprocess.run(
+            ["git", "-C", "vendor/jsonl-viewer", "rev-parse", "HEAD"],
+            cwd=_REPOSITORY_ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+        self.assertEqual(viewer_head, _JSONL_VIEWER_PIN)
+        viewer_status = subprocess.run(
+            [
+                "git",
+                "-C",
+                "vendor/jsonl-viewer",
+                "status",
+                "--porcelain",
+                "--untracked-files=no",
+            ],
+            cwd=_REPOSITORY_ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout
+        self.assertEqual(viewer_status, "")
+
     @unittest.skipUnless(
         importlib.util.find_spec("setuptools") is not None,
         "local artifact verification requires setuptools",
@@ -530,16 +602,24 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             root = Path(temporary)
             story_project = root / "story-project"
             generic_project = root / "generic-project"
+            viewer_project = root / "viewer-project"
             _copy_build_input(_REPOSITORY_ROOT, story_project, vendor=True)
             _copy_build_input(
                 _REPOSITORY_ROOT / "vendor" / "generic-rag",
                 generic_project,
                 vendor=False,
             )
+            _copy_build_input(
+                _REPOSITORY_ROOT / "vendor" / "jsonl-viewer",
+                viewer_project,
+                vendor=False,
+            )
             story_distribution = root / "story-dist"
             generic_distribution = root / "generic-dist"
+            viewer_distribution = root / "viewer-dist"
             story_distribution.mkdir()
             generic_distribution.mkdir()
+            viewer_distribution.mkdir()
             story_wheel, story_sdist = _build_local_artifacts(
                 story_project,
                 story_distribution,
@@ -547,6 +627,10 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             generic_wheel, _generic_sdist = _build_local_artifacts(
                 generic_project,
                 generic_distribution,
+            )
+            viewer_wheel, _viewer_sdist = _build_local_artifacts(
+                viewer_project,
+                viewer_distribution,
             )
 
             with zipfile.ZipFile(story_wheel) as archive:
@@ -594,6 +678,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 )
                 self.assertFalse(any("/vendor/" in f"/{name}/" for name in names))
                 self.assertFalse(any("/generic_rag/" in f"/{name}/" for name in names))
+                self.assertFalse(any("/jsonl_viewer/" in f"/{name}/" for name in names))
 
             base_target = root / "base-install"
             base_target.mkdir()
@@ -609,6 +694,10 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.conversation_rag_local as local
                 import story_writing_agents.conversation_rag_runtime as runtime
                 import story_writing_agents.conversation_rag_store as store
+                import story_writing_agents.interactive_controller._exchange_policy as exchange_policy
+                import story_writing_agents.interactive_controller._exchange_viewer as exchange_viewer
+                import story_writing_agents.interactive_terminal._external_view as external_view
+                from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
                 assert len(story_writing_agents.__all__) == 120
                 assert len(rag_cli.__all__) == 7
                 assert len(composition.__all__) == 10
@@ -622,6 +711,26 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     name == "generic_rag" or name.startswith("generic_rag.")
                     for name in sys.modules
                 )
+                assert not any(
+                    name == "jsonl_viewer" or name.startswith("jsonl_viewer.")
+                    for name in sys.modules
+                )
+                assert len(exchange_policy.__all__) == 7
+                assert exchange_viewer.__all__ == ["AgentExchangeViewerError", "prepare_agent_exchange_view"]
+                assert external_view.__all__ == ["ExternalViewOperation", "ExternalViewerHost"]
+                try:
+                    exchange_viewer.prepare_agent_exchange_view(
+                        b"",
+                        session_id="session_1",
+                        scope_kind=AgentExchangeScopeKind.CONVERSATION,
+                        scope_id="conversation_1",
+                        scope_subject="Subject",
+                        agent_id="lead_orchestrator",
+                    )
+                except exchange_viewer.AgentExchangeViewerError as failure:
+                    assert failure.code == "installation_required"
+                else:
+                    raise AssertionError("base install unexpectedly loaded jsonl_viewer")
                 """
             )
             base = subprocess.run(
@@ -671,6 +780,56 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 optional.returncode,
                 0,
                 f"stdout:\n{optional.stdout}\nstderr:\n{optional.stderr}",
+            )
+
+            viewer_target = root / "viewer-install"
+            viewer_target.mkdir()
+            for wheel in (story_wheel, viewer_wheel):
+                with zipfile.ZipFile(wheel) as archive:
+                    archive.extractall(viewer_target)
+            viewer_script = textwrap.dedent(
+                f"""
+                import sys
+                sys.path.insert(0, {str(viewer_target)!r})
+                from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
+                from story_writing_agents.interactive_controller._exchange_viewer import prepare_agent_exchange_view
+                import jsonl_viewer
+                assert jsonl_viewer.__all__ == ["ViewerHost", "ViewerSpec", "view_jsonl"]
+                assert not any(
+                    name == "generic_rag" or name.startswith("generic_rag.")
+                    for name in sys.modules
+                )
+                class Host:
+                    def __init__(self): self.frames = []; self.closed = 0
+                    def terminal_size(self): return (80, 24)
+                    def color_enabled(self): return False
+                    def present(self, frame): self.frames.append(frame)
+                    def read_event(self): return "close"
+                    def close_view(self): self.closed += 1
+                host = Host()
+                operation = prepare_agent_exchange_view(
+                    b"",
+                    session_id="session_1",
+                    scope_kind=AgentExchangeScopeKind.CONVERSATION,
+                    scope_id="conversation_1",
+                    scope_subject="Subject",
+                    agent_id="lead_orchestrator",
+                )
+                operation(host)
+                assert host.closed == 1
+                assert host.frames and "READ ONLY" in host.frames[0]
+                """
+            )
+            viewer = subprocess.run(
+                [sys.executable, "-I", "-W", "error", "-c", viewer_script],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(
+                viewer.returncode,
+                0,
+                f"stdout:\n{viewer.stdout}\nstderr:\n{viewer.stderr}",
             )
 
 

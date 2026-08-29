@@ -1596,6 +1596,61 @@ for attempt in range(2):
         self.assertEqual(_durable_tree(self.workspace.root), before)
         self.assertFalse(self.provider_log.exists())
 
+    def test_external_view_returns_terminal_to_the_interactive_shell(self) -> None:
+        """Borrow and restore one real PTY before ordinary shell input resumes."""
+
+        source = r'''
+import sys
+
+from story_writing_agents.interactive_terminal import (
+    InteractiveExternalViewer,
+    build_stream_terminal,
+)
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+viewer = InteractiveExternalViewer(terminal)
+events = []
+
+def operation(host):
+    host.present("external read-only frame")
+    events.append(host.read_event())
+
+viewer.open(operation)
+print(f"VIEW_EVENT={events[0]}")
+print(f"SHELL_VALUE={input('shell> ')}")
+'''
+        before = _durable_tree(self.workspace.root)
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=52,
+            decorative_color=True,
+        )
+        process.wait_for_text("external read-only frame")
+        assert termios is not None
+        active = termios.tcgetattr(process.master_fd)
+        self.assertFalse(active[3] & termios.ICANON)
+        self.assertFalse(active[3] & termios.ECHO)
+
+        process.send_text("q")
+        process.wait_for_text("shell> ")
+        restored = termios.tcgetattr(process.master_fd)
+        self.assertTrue(restored[3] & termios.ICANON)
+        self.assertTrue(restored[3] & termios.ECHO)
+        process.send_line("after-view")
+
+        output = process.wait_for_text("SHELL_VALUE=after-view")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertIn("VIEW_EVENT=close", output)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 1)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 1)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+
     def test_viewer_discards_overlong_csi_and_ss3_before_real_shift_down(
         self,
     ) -> None:
