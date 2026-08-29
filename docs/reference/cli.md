@@ -736,7 +736,7 @@ completion-only Enter, Escape dismissal, cancel, interrupt, EOF, and input
 failure add nothing.
 
 Main matching is exact and case-sensitive at the cursor, with ASCII space/tab
-token boundaries. Root offers 23 main-available registry tokens, help offers 26
+token boundaries. Root offers 24 main-available registry tokens, help offers 27
 including the composition-only commands, and agent-valued positions offer the
 four preferred prompt aliases—`lead`, `plot`, `character`, and `execution`—in
 route order. The parser still accepts all ten declared route aliases; runtime
@@ -1220,6 +1220,50 @@ existing explicit-ID path, `/conversation list` active-only default and
 `--all`, startup restoration, agent routing, noninteractive behavior, schemas,
 and package/public terminal APIs are unchanged.
 
+<a id="agent-exchange-inspection"></a>
+
+### Agent-exchange inspection
+
+`/exchanges` is alias-free, accepts no argument, and requires the currently
+attached session but no conversation focus. It invokes no provider, creates or
+resumes no session, and does not change session, conversation, debate, or agent
+focus.
+
+The command reads the attached session's bounded authoritative exchange
+inventory. An empty inventory reports
+`No agent exchanges are recorded for session SESSION.` without opening a
+picker. Otherwise it opens two history-free transient pickers:
+
+1. one separately correlated Conversation or Debate scope, ordered by its
+   newest retained workspace sequence and labeled with exact kind, full ID,
+   subject, and aggregate record count; then
+2. one of all four canonical agents in roster order, labeled with full display
+   name, canonical ID, and a retained count or `No recorded exchanges`.
+
+Conversation subjects include archived catalog entries. Debate display subjects
+come only from the first exact canonical initiation and use the fixed
+`[subject unavailable]` fallback when it cannot be proven. Cancel, interrupt,
+or EOF at either picker selects nothing and opens no view. An agent without
+retained records opens an immutable empty snapshot with the selected header.
+
+For a nonempty selection, the controller copies one exact session/scope/agent
+snapshot into immutable bytes, validates the optional package's exact
+`ViewerSpec`, `ViewerHost`, and `view_jsonl` API before terminal acquisition,
+then opens it through Story's sole raw-terminal driver. The header contains
+session, exact Conversation or Debate ID and subject, and agent ID. The external
+viewer supplies read-only Simple/Verbose JSON, source-line gutters, exact
+go-to-line, structured color, bounded string previews, enumerated-field search,
+`n`/`N`, transient result position, help, and complete state disposal on close.
+
+If `jsonl-viewer` is absent, the command reports `configuration_invalid` and
+guides installation of `story-writing-agents[viewer]`. A mismatched public API
+reports the same category with reinstall guidance. Fixed content-free errors
+cover busy, unsupported, unsafe/corrupt, uncorrelatable, disappeared, or failed
+views; eligible failures add only the normal sanitized runtime-debug hint.
+There is no replay, retry, live tail, edit, export, raw path, or external error
+prose. See [Inspect agent exchanges](../guides/agent-exchanges.md) for the exact
+install, picker, viewer, privacy, and recovery workflow.
+
 Full help is one grouped semantic `Panel` in command-registry order; contextual
 help is one command record with its group, syntax, aliases, provider/artifact
 effects, and example. `/agents` is one canonical roster list. Every agent row
@@ -1277,10 +1321,11 @@ not necessarily current focus. Readiness requires valid configuration, `ready`,
 and `held_here`.
 
 Conversation management, local reads, directives, and inspection need current
-attachment. Advisory turns, `/history`, `/run`, and `/draft-file` also need
-current focus on an active conversation. Search is active-only; transcript
-reads can include archives. See [grammar](interactive-command-parser.md) and
-[lifecycle mapping](../design/session-lifecycle.md).
+attachment. `/exchanges` is one such inspection but needs no current focus.
+Advisory turns, `/history`, `/run`, and `/draft-file` also need current focus on
+an active conversation. Search is active-only; transcript reads can include
+archives. See [grammar](interactive-command-parser.md) and [lifecycle
+mapping](../design/session-lifecycle.md).
 
 `/rag QUERY` is alias-free and requires attachment plus an active current
 focus. Its query is nonblank, control/format-free, and at most 200 codepoints.

@@ -220,8 +220,10 @@ Each backend owns an I/O-free `WorkspaceAgentExchangeCapture`. The established
 structured provider path and the provider-managed contextual path both begin a
 best-effort lifecycle immediately before every physical `adapter.invoke()`.
 There is no constructor option, retry switch, or new root public API. Direct
-storage inspection remains available through the `agent_exchanges` package;
-the `/exchanges` picker and isolated viewer are future integration work.
+storage inspection remains available through the `agent_exchanges` package.
+The installed bare `/exchanges` command is a later controller/terminal
+integration over immutable snapshots; the backend still imports no controller,
+terminal, picker, viewer, or optional external package.
 
 One successful capture lifecycle uses a fresh
 `exchange_<32 lowercase hexadecimal characters>` identity and preserves the
@@ -266,6 +268,10 @@ backend/context owner knows the outcome. Capture state advances before append;
 all capture failures are suppressed and never retried. Missing files, records,
 outcomes, or sequence values therefore do not prove that no physical provider
 call or result existed.
+
+The user-facing correlation, header, preview, search, and privacy behavior is
+documented in [Inspect agent exchanges](../guides/agent-exchanges.md). The
+viewer cannot retry or replay this backend lifecycle.
 
 ## Lifecycle value contracts
 

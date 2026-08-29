@@ -8,6 +8,8 @@
 > discover or select them without submitting. Accepted advisory and consensus
 > prompt content remains readable in terminal scrollback, with live capable
 > input reprojected after cleanup and ordinary-line fallback left unduplicated.
+> Bare `/exchanges` needs only the attachment and uses separate transient scope
+> and agent pickers before opening an optional read-only diagnostic viewer.
 
 Key terms: **defaults** are persisted fallbacks; **current attachment** is the
 session held by this shell; **current focus** and **agent focus** select the
@@ -711,6 +713,30 @@ unchanged. Full non-error speech remains visible. Message details On adds Handof
 Kind; Off removes only those diagnostics. Successful consensus receives a
 separate final `Consensus` Record after terminal progress; deadlock and failed
 outcomes instead use typed error presentation.
+
+## Inspect recorded provider exchanges
+
+After any session is attached, run bare `/exchanges`; do not enter IDs after the
+command. Current conversation focus is not required or changed. The first
+transient picker shows separately correlated Conversation and Debate full IDs,
+subjects, and retained counts with the newest scope first. The second shows all
+four canonical agents in roster order, including disabled agents and an
+explicit no-record state.
+
+The selected immutable snapshot opens in the optional isolated viewer with the
+session, exact scope kind/full ID/subject, and agent ID in its header. Use
+Simple mode to orient by timestamp, request type, and content; use Verbose for
+the remaining outer fields and truncation evidence. Search one enumerated
+field, use `n`/`N` to wrap through matches, and use `g` for an exact JSONL
+source line. `q` closes. Picker selection, mode, cursor, search, match position,
+footer result, and help are discarded; session, conversation, debate, and
+agent focus remain unchanged.
+
+Selecting an agent without records opens a bounded empty view. Canceling either
+picker opens nothing. The command never invokes, retries, or replays a provider.
+Install and exact pin guidance, a preview, colors, request/response/outcome
+interpretation, privacy, and failure recovery are in
+[Inspect agent exchanges](agent-exchanges.md).
 
 ## Inspect outcomes and recover
 

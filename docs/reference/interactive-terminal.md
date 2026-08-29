@@ -38,6 +38,10 @@
 > does not wait for Enter, Tab, or newline. The viewer remains an
 > unlisted supplied-text component rather than a public command or selection
 > API; downstream agent-read enforcement remains runtime-owned.
+> Bare `/exchanges` uses a different unlisted `InteractiveExternalViewer`
+> adapter. It hosts the pinned independent JSONL renderer without transferring
+> raw-mode, signal, geometry, input, output, or cleanup ownership from Story's
+> existing driver.
 > The Settings editor exposes provider-neutral Provider, Model, and Effort
 > fields; entering Model or Effort performs one fresh bounded discovery for the
 > pending effective provider. Within `/settings` only, valid value commits keep
@@ -157,6 +161,11 @@ The facade additionally binds the unlisted `InteractiveTextViewer`,
 package-internal, storage-free supplied-text capability without changing the
 exact public `__all__` or root facade.
 
+It also binds unlisted `InteractiveExternalViewer`. That resource-free adapter
+retains only one terminal-bound callable capability. Its private
+`ExternalViewerHost` and `ExternalViewOperation` contracts are not facade or
+root exports and do not change the exact 12-name public `__all__`.
+
 The narrow internal adapters have these signatures:
 
 ```python
@@ -197,6 +206,9 @@ run(operation: Awaitable[object]) -> object  # async, package-internal
 InteractiveTextViewer(terminal: InteractiveTerminal) -> None
 read_range(text: str, *, display_name: str,
            initial_line: int | None = None) -> TextViewerResult
+
+InteractiveExternalViewer(terminal: InteractiveTerminal) -> None
+open(operation: Callable[[ExternalViewerHost], None]) -> None
 ```
 
 The viewer result contains only an exit kind and, for `selected`, a one-based
@@ -1052,7 +1064,7 @@ registry order (not output layout):
 
 ```text
 /say /rag /to /agent /agents /auth /language /persona /reset /settings /run /draft-file /session
-/conversation /search /transcript /inspect /history /status /help /? /quit /exit
+/conversation /search /transcript /inspect /exchanges /history /status /help /? /quit /exit
 ```
 
 A leading routed-message token opens with these full candidates, in route
@@ -1062,8 +1074,8 @@ order derived from each `AGENT_ROUTES` entry's `prompt_alias`:
 @lead @plot @character @execution
 ```
 
-Exact case-sensitive prefixes filter in stable order. Root provides the 23
-tokens above; help provides 26 including `/compose`, `/send`, and `/cancel`;
+Exact case-sensitive prefixes filter in stable order. Root provides the 24
+tokens above; help provides 27 including `/compose`, `/send`, and `/cancel`;
 agent-valued slash positions provide the four preferred prompt aliases `lead`,
 `plot`, `character`, and `execution` in the same route order. The parser still
 accepts all ten declared route aliases for slash and routed-message input;
@@ -1263,9 +1275,9 @@ None of those terminal results adds a final confirmation notice.
 
 ## Generic internal picker foundation
 
-This foundation is package-internal. Provider authentication, `/settings`, and
-the post-submit controller path for omitted `/session resume` or
-`/conversation resume` consume it through
+This foundation is package-internal. Provider authentication, `/settings`, the
+two `/exchanges` choices, and the post-submit controller path for omitted
+`/session resume` or `/conversation resume` consume it through
 the unlisted terminal facade adapter. Capable pre-Enter resume choices reuse the
 main palette described above; only their dynamic Enter commit becomes explicit
 and bypasses the picker. Submitting the omitted buffer instead performs a fresh
@@ -1604,6 +1616,81 @@ accepted content remains fully visible in fallback and safely bounded per
 redraw in live mode. Over-limit pathological documents do not open, fallback
 content is never silently truncated, and an incompatible configured control
 byte is never guessed into a live key role.
+
+<a id="hosted-external-jsonl-viewer"></a>
+
+## Hosted external JSONL viewer
+
+This is a generic package-internal terminal host, not Story's supplied-text
+range renderer and not a supported public terminal API. `/exchanges` is its
+first installed consumer. The controller validates the pinned external package
+and constructs one operation over immutable bytes before calling
+`InteractiveExternalViewer.open()`.
+
+`interactive_terminal._external_view.__all__` is exactly
+`ExternalViewOperation` and `ExternalViewerHost`. The runtime-checkable host
+protocol has five methods:
+
+```python
+terminal_size() -> tuple[int, int]
+color_enabled() -> bool
+present(frame: str) -> None
+read_event() -> str | None
+close_view() -> None
+```
+
+The host borrows resources from the terminal owner. It cannot expose a path,
+descriptor, stream, signal, driver, source snapshot, renderer, or application
+focus. `present()` accepts only exact printable text and LF plus semantic ANSI
+SGR when color is enabled. It rejects other escape sequences, carriage return,
+C0/C1/DEL controls, Unicode format/surrogate controls, and line/paragraph
+separators before terminal output. With color disabled, any SGR is rejected.
+
+The closed host event vocabulary is:
+
+```text
+up | down | page_up | page_down | next_match | previous_match
+toggle_mode | help | cancel | clear_search | close
+goto<TAB>ONE_LINE_VALUE
+search<TAB>ONE_LINE_FIELD<TAB>ONE_LINE_QUERY
+```
+
+`None` is EOF. The external viewer, not Story, validates positive line numbers,
+enumerated fields, nonempty search queries, and JSON/view transitions. Unknown
+keys become `unknown`, producing only the external viewer's bounded transient
+hint.
+
+On a capable stream, the sole driver maps arrows or `j`/`k`, Page Up/Page Down
+or `b`/Space, `n`, `N`, `m`, `h`/`?`, `c`, and `q`. `g` temporarily restores
+ordinary input for `Go to source line: `; `/` similarly reads `Search field: `
+then `Search query: `. It reacquires raw mode before returning the bounded
+event. A standalone Escape maps to `cancel`; configured VINTR maps to cancel,
+and configured VEOF or physical EOF maps to `None`.
+
+Ordinary-line fallback supplies `(width, 24)`, disables color, writes each
+complete frame followed by LF, and prompts `viewer> `. It maps `j`/`down`,
+`k`/`up`, `pgdn`, `pgup`, `n`, `N`, `m`, `h`/`?`, `esc`, `c`/`clear`,
+`q`/`quit`, `g LINE`, and `/ FIELD QUERY`. Inputs over 8,192 characters or
+other grammar become `unknown`; Ctrl-C maps to cancel and EOF closes. Borrowed
+callbacks and streams are never closed.
+
+`RawTerminalDriver.open_external_view()` acquires the universal input latch and
+rejects nested input or overlap with terminal progress. A live operation
+activates raw mode, enters one alternate screen, runs the host operation,
+attempts idempotent host close, exits the screen, and restores terminal state.
+Active operation failure wins over host-close failure; terminal restoration
+retains its established outer precedence. The latch releases after success or
+failure, so a later independent view can open. Fallback acquires no raw or ANSI
+resource.
+
+The external operation receives complete-frame geometry and current Story
+color eligibility but owns all JSONL parsing, Simple/Verbose state, line gutter,
+navigation, search, match position, truncation preview, responsive rendering,
+semantic color roles, footer, and help. Those behaviors and seven byte-tested
+frames are authoritative in the pinned external [design
+system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/5d3047aa86212810d867d5b40cb1df3262f1810f/docs/design-system.md)
+and [samples](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/5d3047aa86212810d867d5b40cb1df3262f1810f/docs/samples).
+Story retains no view state or returned content after `open()` completes.
 
 <a id="exact-search-and-transcript-records"></a>
 

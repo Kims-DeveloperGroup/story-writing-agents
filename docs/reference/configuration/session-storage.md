@@ -319,9 +319,11 @@ selection returns the fixed `not_found` storage failure without creating it.
 at its established and contextual seams into this store on a best-effort
 basis. It records the request before invocation, any exact valid
 `ProviderResult` immediately on return, and one closed outcome attempt. There
-is still no `/exchanges` command or viewer in this version. Future viewer
-integration will resolve conversation/debate subjects outside this store and
-consume immutable snapshots.
+is now a separate bare `/exchanges` integration. The controller resolves
+conversation/debate subjects outside this store, selects exact inventory
+identities, and passes one immutable session/scope/agent snapshot to the
+optional isolated viewer. The store still has no subject, terminal, viewer,
+picker, command, or optional-package dependency.
 
 Every stored line is one compact, key-sorted, strict-UTF-8 JSON object followed
 by exactly one newline. The expanded schema-v1 shape is:
@@ -484,6 +486,8 @@ persistence ordering in
 [Persistence](../../design/persistence.md#agent-exchange-persistence), and the
 plaintext boundary in
 [Privacy](../../operations/privacy-and-provider.md#agent-exchange-privacy).
+The installed inspection workflow is in
+[Inspect agent exchanges](../../guides/agent-exchanges.md).
 
 <a id="rejected-provider-response-storage"></a>
 

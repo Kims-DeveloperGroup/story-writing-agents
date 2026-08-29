@@ -440,7 +440,8 @@ store independently of conversations, debate blackboards, agent state, runtime
 debug records, and rejected-provider-response artifacts. Its direct store
 constructor is I/O-free. `AgentBackend` now composes one workspace capture and
 offers every physical structured call at both the established and contextual
-provider seams. There is still no shell command or viewer for this store.
+provider seams. Bare `/exchanges` is a separate controller/terminal consumer of
+the store's immutable inventory and snapshot contracts.
 
 The caller supplies one immutable strict-UTF-8 `AgentExchangeRecordInput` with
 session, conversation/debate scope, canonical agent, provider, physical-call
@@ -535,15 +536,18 @@ recorded request can lack its response or outcome; durable sequence gaps and a
 cleanup-only `io_failed` remain inconclusive. Blind diagnostic retry is not an
 idempotent recovery mechanism.
 
-The future `/exchanges` integration owns session/scope/agent pickers, subject
-resolution, and isolated viewer lifecycle. The storage package intentionally
-has no subject field, viewer dependency, terminal ownership, provider import,
-or capture policy. Capture does not import raw provider streams and neither
-imports nor double-writes sibling runtime/provider-error records into exchange
-JSONL. See the exact
+The `/exchanges` integration owns session/scope/agent pickers, subject
+resolution, optional-package validation, and isolated viewer lifecycle. It
+derives scope rows from authoritative inventory, passes only one immutable
+exact snapshot, and discards all picker/view state on return. The storage
+package intentionally has no subject field, viewer dependency, terminal
+ownership, provider import, or capture policy. Capture does not import raw
+provider streams and neither imports nor double-writes sibling
+runtime/provider-error records into exchange JSONL. See the exact
 [layout and schema](../reference/configuration/session-storage.md#agent-exchange-storage),
 [filesystem guarantees](../operations/filesystem-safety.md#agent-exchange-filesystem-safety),
-and [privacy boundary](../operations/privacy-and-provider.md#agent-exchange-privacy).
+the [privacy boundary](../operations/privacy-and-provider.md#agent-exchange-privacy),
+and the [installed inspection workflow](../guides/agent-exchanges.md).
 
 <a id="workspace-runtime-debug-log"></a>
 

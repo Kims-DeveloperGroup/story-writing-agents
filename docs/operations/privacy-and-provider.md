@@ -10,8 +10,8 @@
 > commands, plus interactive settings, startup composition, automatic
 > preflight, and private one-turn `/rag` arming.
 > They also cover the content-safe runtime debug log, automatic bounded
-> agent-exchange store, and the separate bounded store for eligible rejected
-> provider responses.
+> agent-exchange store, optional isolated `/exchanges` viewer, and the separate
+> bounded store for eligible rejected provider responses.
 > They do not make either provider, its executable, the workspace, or the
 > terminal trusted.
 > Inline canonical references in provider-bound prompt text are active.
@@ -588,14 +588,36 @@ Do not publish the store or attach it to an issue without reviewing every
 retained line. Provider text is untrusted even when it resembles JSON,
 Markdown, shell code, or instructions.
 
-There is no `/exchanges` command or bundled viewer yet. A
-direct Python consumer can first use content-free `inventory(session_id)` and
-then request the immutable snapshot for one exact scope and agent. If raw JSONL
-must be inspected before viewer integration lands, use a trusted local
-read-only tool that visibly neutralizes terminal and bidirectional controls; do
-not execute content, interpolate it into a shell command, or treat it as
-instructions. `snapshot()` creates a separate in-memory copy and does not grant
-a writable path or retain navigation state.
+Bare `/exchanges` is the installed read-only inspection route after a session
+is attached. Its transient first picker is derived only from that session's
+content-free inventory; its second picker contains the complete canonical
+roster. The controller then requests one exact immutable
+session/scope/agent snapshot, or supplies immutable empty bytes for an agent
+without retained records. It never passes a path, descriptor, or writable
+handle to the optional viewer and never invokes, retries, replays, edits, or
+deletes provider work.
+
+The viewer header deliberately exposes the attached session, exact
+Conversation or Debate full ID and subject, and exact agent ID. Simple mode
+shows timestamp, request type, and content, so it is an orientation view rather
+than redaction, authorization, or access control. Verbose may display every
+outer field. Search enumeration constrains which top-level fields can be
+queried, not which retained values can be seen. Preview limits and responsive
+clipping constrain rendering but do not redact the immutable snapshot; the
+outer full/retained counts, truncation flag, and full-input digest must be
+checked separately.
+
+The isolated package neutralizes terminal and bidirectional controls and emits
+only printable text, newlines, and optionally semantic SGR. Story remains sole
+owner of input, output, raw mode, alternate screen, signals, geometry, and
+restoration. Capable close restores the prior shell surface; ordinary-line
+fallback necessarily leaves its plain frames and input in scrollback. Either
+path can be retained by terminal, remote-session, accessibility, recording, or
+operating-system infrastructure. Picker, cursor, mode, search, match position,
+footer result/index, and help state are process-local and discarded on close;
+that does not erase exchange files, process memory, scrollback, screenshots, or
+copied frames. See [Inspect agent exchanges](../guides/agent-exchanges.md) and
+the pinned external [design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/5d3047aa86212810d867d5b40cb1df3262f1810f/docs/design-system.md).
 
 Retention is bounded but not secure erasure. Per-stream rotation and global
 oldest-record pruning use ordinary unlink or replacement. User deletion,
