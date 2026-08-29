@@ -138,11 +138,12 @@ removes stored message content.
 Every view entered through `/settings` uses a structured form layout, including
 the provider-authentication picker opened from Agent settings. The current view
 name stands alone, optional agent/provider scope appears as `Context:`, guidance
-has its own region, and choice descriptions are stacked below their labels.
-`>` marks the active row, `(selected)` marks the selected value, and unavailable
-rows retain `(disabled)` plus a textual `Disabled:` reason. The form omits the
-generic `[available]`, `[highlighted]`, `[focused]`, and `[open]` labels and
-does not print a `Settings/Agents/...` breadcrumb. Global `/auth`, session and
+has its own region, and true state summaries are responsive while ordinary
+descriptions remain stacked below their labels. `>` marks the active row,
+`(selected)` marks the selected value, and unavailable rows retain
+`(disabled)` plus a textual `Disabled:` reason. The form omits the generic
+`[available]`, `[highlighted]`, `[focused]`, and `[open]` labels and does not
+print a `Settings/Agents/...` breadcrumb. Global `/auth`, session and
 conversation resume, and other non-Settings pickers keep their established
 presentation.
 
@@ -155,7 +156,11 @@ scrolling. Nested catalogs retain a seven-row window. Their heading stays
 absolute and concise—`Choices 6/10`, for example—with no shown-range text. A
 form with no active row reports only its total, such as `Choices 3`.
 
-A dirty root can look like this without color:
+At ordinary widths, Settings aligns its state summaries after ` — ` in one
+column derived from every label in the complete picker. It keeps that inline
+layout when at least 20 physical cells remain for summary content. Long values
+wrap without truncation and continue at the shared column. A dirty root can
+look like this without color:
 
 ```text
 Settings
@@ -163,18 +168,12 @@ Settings
 Choose a setting to edit, apply changes, or discard changes.
 
 Choices 6/9
-  1. Language
-     Current: KO
-  2. Persona
-     Current: default_kim_eun_hee
-  3. Maximum debate rounds
-     Pending: 2
-  4. Conversation storage
-     Current: filesystem
-  5. Conversation RAG
-     Current: Provider Disabled; Automatic Off
-> 6. Message details
-     Current: Off
+  1. Language                  — Current: KO
+  2. Persona                   — Current: default_kim_eun_hee
+  3. Maximum debate rounds     — Pending: 2
+  4. Conversation storage      — Current: filesystem
+  5. Conversation RAG          — Current: Provider Disabled; Automatic Off
+> 6. Message details           — Current: Off
   7. Agents
   8. Apply Changes (*Required)
   9. Discard Changes
@@ -182,28 +181,36 @@ Choices 6/9
   [save required] Choose Apply Changes to persist pending changes
 ```
 
+With only 19 cells available for summary content, or any narrower frame, the
+same facts move below their labels at the established detail indent:
+
+```text
+Choices 3/9
+  1. Language
+     Current: KO
+  2. Persona
+     Current: default_kim_eun_hee
+> 3. Maximum debate rounds
+     Pending: 2
+```
+
 Choose Agents to select an agent in canonical roster order. Each agent shows
-its effective `(Provider/model/effort)` values in the description directly
-below its name. Agent settings then gives Provider, Model, and Effort their own
-rows and shows the effective value below each field:
+its effective `(Provider/model/effort)` values in the same responsive summary.
+Agent settings then gives Provider, Model, and Effort their own summarized rows:
 
 ```text
 Agents
 
 Choices 1/4
-> 1. Lead Orchestrator
-     Pending: (Antigravity/agy-pro/high)
+> 1. Lead Orchestrator           — Pending: (Antigravity/agy-pro/high)
 
 Agent settings
 Context: Lead Orchestrator
 
 Choices 3/3
-  1. Provider
-     Current: Antigravity
-  2. Model
-     Current: agy-pro
-> 3. Effort
-     Pending: high
+  1. Provider — Current: Antigravity
+  2. Model    — Current: agy-pro
+> 3. Effort   — Pending: high
 ```
 
 The displayed profile is labeled `Current` when it matches the active runtime
@@ -216,6 +223,13 @@ records the unsaved configuration change. Launch-overridden fields stay
 disabled and show their effective read-only values. Merely rendering these
 values uses local validated state and does not authenticate, discover catalogs,
 save settings, or invoke an agent.
+
+The responsive summaries are limited to the root Current/Pending values, a
+nonzero root Agents pending count, Conversation RAG Provider/Automatic, the
+Agents roster profiles, and Agent settings Provider/Model/Effort. Clean Agents
+has no summary. Paths, help, custom/inherit guidance, discard guidance,
+authentication text, and disabled reasons remain stacked so they stay distinct
+from current state.
 
 Provider remains the field-level configuration concept; its choices are Codex
 and Antigravity. Changing the route does not erase the inactive provider's
