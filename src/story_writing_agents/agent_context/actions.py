@@ -51,6 +51,7 @@ _BEGIN_UNTRUSTED_STORY_DATA = "<<<BEGIN_UNTRUSTED_STORY_DATA>>>"
 _END_UNTRUSTED_STORY_DATA = "<<<END_UNTRUSTED_STORY_DATA>>>"
 _HANDLE_PATTERN = re.compile(r"ctxh_v1_[0-9a-f]{64}\Z")
 _AUTHORIZATION_PATTERN = re.compile(r"ctxa_v1_[0-9a-f]{64}\Z")
+_MAX_ARTIFACT_PREFIX_UTF8_BYTES = 1_024
 _SEARCHABLE_SOURCE_KIND_ORDER = (
     ContextSourceKind.WRITING_ARTIFACT,
     ContextSourceKind.CONVERSATION,
@@ -238,6 +239,36 @@ def _strict_text(value: object, *, allow_empty: bool = False) -> str:
     return value
 
 
+def _artifact_directory_prefix(value: object) -> str:
+    """Validate one canonical writing-artifact directory prefix."""
+
+    prefix = _strict_text(value)
+    encoded = prefix.encode("utf-8", errors="strict")
+    if (
+        len(encoded) > _MAX_ARTIFACT_PREFIX_UTF8_BYTES
+        or not prefix.endswith("/")
+        or prefix.startswith("/")
+        or "\\" in prefix
+        or "//" in prefix
+    ):
+        raise _invalid()
+    body = prefix[:-1]
+    parts = body.split("/")
+    if (
+        not body
+        or any(part in {"", ".", ".."} for part in parts)
+        or any(
+            unicodedata.category(character).startswith("C")
+            for character in prefix
+        )
+        or parts[0] not in {"core_documents", "manuscript"}
+        or (parts[0] == "core_documents" and len(parts) != 1)
+        or (parts[0] == "manuscript" and parts[-1].endswith(".md"))
+    ):
+        raise _invalid()
+    return prefix
+
+
 def _validate_source_facts(
     source_kind: object,
     provenance: object,
@@ -347,6 +378,7 @@ class ContextSearchQuery:
 
     text: str = field(repr=False)
     source_kinds: tuple[ContextSourceKind, ...]
+    artifact_path_prefix: str | None = None
 
     def __post_init__(self) -> None:
         text = _strict_text(self.text)
@@ -371,6 +403,10 @@ class ContextSearchQuery:
             self.source_kinds
         ):
             raise _invalid()
+        if self.artifact_path_prefix is not None:
+            if self.source_kinds != (ContextSourceKind.WRITING_ARTIFACT,):
+                raise _invalid()
+            _artifact_directory_prefix(self.artifact_path_prefix)
 
     @property
     def normalized_text(self) -> str:
@@ -478,7 +514,12 @@ class ContextSearchAction:
         ):
             raise _invalid()
         normalized = tuple(
-            (query.normalized_text, query.source_kinds) for query in self.queries
+            (
+                query.normalized_text,
+                query.source_kinds,
+                query.artifact_path_prefix,
+            )
+            for query in self.queries
         )
         if len(set(normalized)) != len(normalized):
             raise _invalid()
@@ -853,7 +894,7 @@ def _completed_evidence_digest(
 
 
 def _wire_boundary_value(boundary: ContextSourceBoundary) -> list[object]:
-    """Project one exact boundary without internal authority or digest facts."""
+    """Project one exact boundary identity."""
 
     return [
         boundary.kind.value,
@@ -864,6 +905,56 @@ def _wire_boundary_value(boundary: ContextSourceBoundary) -> list[object]:
     ]
 
 
+def _wire_source_facts(
+    *,
+    source_alias: int,
+    source_id: str,
+    source_kind: ContextSourceKind,
+    revision: str,
+    source_digest: str,
+    source_utf8_bytes: int,
+) -> list[object]:
+    """Project complete source facts, collapsing only an explicit digest equality."""
+
+    digest_facts: list[object]
+    if revision == source_digest:
+        digest_facts = ["revision=source_digest", revision]
+    else:
+        digest_facts = ["revision", revision, "source_digest", source_digest]
+    return [
+        "source",
+        source_alias,
+        source_id,
+        source_kind.value,
+        digest_facts,
+        source_utf8_bytes,
+    ]
+
+
+def _wire_boundary_facts(
+    boundary: ContextSourceBoundary,
+    boundary_digest: str,
+    boundary_utf8_bytes: int,
+) -> list[object]:
+    """Project complete exact boundary identity, digest, and size facts."""
+
+    return [
+        "boundary",
+        *_wire_boundary_value(boundary),
+        boundary_digest,
+        boundary_utf8_bytes,
+    ]
+
+
+def _wire_provenance_facts(
+    authority_kind: ContextAuthorityKind,
+    locator: str,
+) -> list[object]:
+    """Project complete safe provenance facts."""
+
+    return ["provenance", authority_kind.value, locator]
+
+
 def serialize_context_action_observation(
     observation: ContextActionObservation,
     *,
@@ -871,12 +962,7 @@ def serialize_context_action_observation(
     handle_aliases: Mapping[str, str] | None = None,
     safe_locators: Mapping[str, str] | None = None,
 ) -> str:
-    """Serialize one compact observation inside the established trust markers.
-
-    Complete revisions, provenance, digests, sizes, and read receipts remain on
-    the validated in-process values.  The provider sees only the facts needed
-    to choose its next bounded action.
-    """
+    """Serialize one complete observation inside the established trust markers."""
 
     compact = source_aliases is not None
     if compact is not (handle_aliases is not None) or compact is not (
@@ -936,12 +1022,26 @@ def serialize_context_action_observation(
             [
                 [
                     hit.query_index,
-                    locator_value(hit.handle, hit.provenance.locator),
+                    _wire_source_facts(
+                        source_alias=source_value(hit.source_id),
+                        source_id=hit.source_id,
+                        source_kind=hit.source_kind,
+                        revision=hit.revision,
+                        source_digest=hit.source_digest,
+                        source_utf8_bytes=hit.source_utf8_bytes,
+                    ),
+                    _wire_boundary_facts(
+                        hit.boundary,
+                        hit.boundary_digest,
+                        hit.boundary_utf8_bytes,
+                    ),
+                    _wire_provenance_facts(
+                        hit.provenance.authority_kind,
+                        locator_value(hit.handle, hit.provenance.locator),
+                    ),
                     _SOURCE_KIND_WIRE_CODE[hit.source_kind],
-                    _wire_boundary_value(hit.boundary),
-                    source_value(hit.source_id),
                     handle_value(hit.handle),
-                    hit.snippet,
+                    ["snippet", hit.snippet, hit.snippet_utf8_bytes],
                 ]
                 for hit in observation.hits
             ],
@@ -951,13 +1051,27 @@ def serialize_context_action_observation(
             "r",
             [
                 [
-                    locator_value(
-                        item.receipt.handle,
-                        item.receipt.provenance.locator,
+                    _wire_source_facts(
+                        source_alias=source_value(item.receipt.source_id),
+                        source_id=item.receipt.source_id,
+                        source_kind=item.receipt.source_kind,
+                        revision=item.receipt.revision,
+                        source_digest=item.receipt.source_digest,
+                        source_utf8_bytes=item.receipt.source_utf8_bytes,
+                    ),
+                    _wire_boundary_facts(
+                        item.receipt.boundary,
+                        item.receipt.boundary_digest,
+                        item.receipt.boundary_utf8_bytes,
+                    ),
+                    _wire_provenance_facts(
+                        item.receipt.provenance.authority_kind,
+                        locator_value(
+                            item.receipt.handle,
+                            item.receipt.provenance.locator,
+                        ),
                     ),
                     _SOURCE_KIND_WIRE_CODE[item.receipt.source_kind],
-                    _wire_boundary_value(item.receipt.boundary),
-                    source_value(item.receipt.source_id),
                     handle_value(item.receipt.handle),
                     item.content,
                 ]
