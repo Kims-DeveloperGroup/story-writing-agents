@@ -3365,6 +3365,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
         terminal_root = package_root / "interactive_terminal"
         expected_dependencies = {
             "__init__.py": {"._core"},
+            "_external_view.py": set(),
             "_input_lifecycle.py": set(),
             "_model.py": set(),
             "_controls.py": {"._model"},
@@ -3378,6 +3379,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
             },
             "_driver.py": {
                 "._input_lifecycle",
+                "._external_view",
                 "._model",
                 "._reference_activation",
                 "._viewer_model",
@@ -3387,6 +3389,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
                 "..interactive_commands",
                 "._controls",
                 "._driver",
+                "._external_view",
                 "._model",
                 "._reference_activation",
                 "._render",
@@ -3415,6 +3418,7 @@ class PackageBoundaryFoundationTests(unittest.TestCase):
         environment["PYTHONPATH"] = str(package_root.parent)
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
         modules = (
+            "story_writing_agents.interactive_terminal._external_view",
             "story_writing_agents.interactive_terminal._input_lifecycle",
             "story_writing_agents.interactive_terminal._model",
             "story_writing_agents.interactive_terminal._controls",
