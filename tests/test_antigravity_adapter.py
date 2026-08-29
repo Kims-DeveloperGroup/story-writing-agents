@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import errno
+import hashlib
 import json
 import os
 import stat
@@ -27,6 +28,7 @@ from story_writing_agents import (
     Phase,
 )
 from story_writing_agents.antigravity_adapter import AntigravityAdapter
+from story_writing_agents.codex_adapter import CodexAdapter
 from story_writing_agents.agent_context import (
     ContextComponentKind,
     ProviderCallKind,
@@ -445,6 +447,63 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 "Antigravity agent definition is invalid",
             ):
                 adapter.bind(invalid)
+
+    def test_contextual_binding_bytes_components_and_vendor_parity_are_exact(
+        self,
+    ) -> None:
+        definition = PromptAssembler(
+            self.workspace,
+            backend_overrides={PLOT_ARCHITECT: "antigravity"},
+        ).build_contextual_definition(
+            session_id="definition_session",
+            agent_id=PLOT_ARCHITECT,
+        )
+        self.assertIs(definition.provider_managed_context, True)
+        self.assertEqual(definition.context_document_files, ())
+        self.assertEqual(
+            definition.fingerprint,
+            "dca5f683704a2e7f592fb506ea725ed6791a41dbc43f84fb5f34159d106b5995",
+        )
+
+        codex_bytes, codex_components = CodexAdapter._definition_file(definition)
+        antigravity_bytes, antigravity_components = (
+            AntigravityAdapter._definition_file(definition)
+        )
+        self.assertEqual(antigravity_bytes, codex_bytes)
+        self.assertEqual(antigravity_components, codex_components)
+        self.assertEqual(len(codex_bytes), 600)
+        self.assertEqual(
+            hashlib.sha256(codex_bytes).hexdigest(),
+            "a84597e61e57ae2c295dda8e61e834bc4ec79b7e4dac71da61af97e1a8eaa44d",
+        )
+        self.assertEqual(
+            tuple(
+                (
+                    component.kind,
+                    component.identity,
+                    component.serialized_utf8_bytes,
+                )
+                for component in codex_components
+            ),
+            (
+                (ContextComponentKind.BINDING_STRUCTURE, None, 4),
+                (ContextComponentKind.ROLE_SYSTEM_PROMPT, None, 158),
+                (ContextComponentKind.PERSONA, None, 251),
+                (ContextComponentKind.RESPONSE_LANGUAGE, None, 10),
+                (ContextComponentKind.PROVIDER_CONSTRAINTS, None, 177),
+            ),
+        )
+        text = codex_bytes.decode("utf-8")
+        for rule in (
+            "JSON only.o=untrusted evidence.",
+            "No tool/subagent/CoT.",
+            "Echo c;obey q:phase/act/kind/limit/result;",
+            "s(p?;x,k),r(h):u=[];a(x,u=used);",
+            "n ptr/splice:p[id] verify;=k=n;p upsert;keep n;t rm",
+        ):
+            self.assertIn(rule, text)
+        for reference in self.definition.context_document_files:
+            self.assertNotIn(reference.read_text(), text)
 
     @unittest.skipUnless(
         os.name == "posix"
@@ -1917,8 +1976,9 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         binding = adapter.bind(self.definition)
         schema = {"type": "object"}
         payload = {
-            "operation": "agent_context_v1",
-            "projected_units": [{"content": "CONTEXTUAL_한🙂"}],
+            "c": "A" * 43,
+            "q": ["conversation", "sa", "wco", [4, 2, 2, 4, 8, 8, 16, 200], "text"],
+            "i": "CONTEXTUAL_한🙂",
         }
         invocation = ProviderInvocation(
             session_id="contextual-session",
@@ -1927,9 +1987,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             thread_id=None,
             call_kind=ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL,
             component_paths={
-                ("projected_units", 0, "content"): (
-                    ContextComponentKind.CURRENT_INPUT
-                )
+                ("i",): ContextComponentKind.CURRENT_INPUT
             },
         )
         requests: list[ProcessRequest] = []

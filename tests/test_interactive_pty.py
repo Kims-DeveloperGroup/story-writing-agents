@@ -214,118 +214,156 @@ payload = json.loads(sys.stdin.read())
 control = json.loads(CONTROL_PATH.read_text(encoding="utf-8"))
 
 
-def context_current(value):
-    """Extract the real runtime's current material without importing it."""
+def compact_agent_id(arguments):
+    """Recover the bound agent id from Codex's isolated staging path."""
 
-    if value.get("operation") != "agent_context_v1":
+    if "--cd" not in arguments:
+        return "agent"
+    name = Path(arguments[arguments.index("--cd") + 1]).name
+    prefix = "story-codex-"
+    if not name.startswith(prefix):
+        return "agent"
+    body = name[len(prefix):]
+    parts = body.rsplit("-", 2)
+    if len(parts) != 3 or len(parts[1]) != 12:
+        return "agent"
+    return parts[0]
+
+
+def compact_context_current(value, agent_id):
+    """Extract authoritative current material from compact wire v5."""
+
+    query = value.get("q")
+    correlation = value.get("c")
+    if (
+        not isinstance(correlation, str)
+        or len(correlation) != 43
+        or not isinstance(query, list)
+        or len(query) != 5
+        or not isinstance(query[0], str)
+        or "i" not in value
+    ):
         return None
-    for unit in value.get("projected_units", []):
-        if not isinstance(unit, dict):
-            continue
-        if any(
-            isinstance(source, dict)
-            and source.get("source_id") == "runtime_input:current"
-            for source in unit.get("sources", [])
-        ):
-            current = json.loads(unit["content"])
-            return current if isinstance(current, dict) else None
-    return None
-
-
-def context_observation(value):
-    """Return the final machine-readable frame in a bounded observation."""
-
-    frames = []
-    for line in value.get("observation", "").splitlines():
-        try:
-            frame = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(frame, dict):
-            frames.append(frame)
-    return frames[-1] if frames else {}
-
-
-def contextual_domain(current, correlation, used_handles):
-    """Build the legacy domain answer carried by one contextual ANSWER."""
-
-    workflow = current["workflow"]
-    identity = current["identity"]
-    if workflow == "conversation":
-        content = (
-            "visible \x1b[31mred\x1b[0m and bell \x07"
-            if current["command"] == "show visible controls"
-            else "deterministic advisory reply"
-        )
-        return {
-            "session_id": identity["session_id"],
-            "conversation_id": identity["conversation_id"],
-            "turn_id": identity["turn_id"],
-            "content": content,
-        }
-    if workflow == "conversation_retrieval":
-        content = (
-            "retrieval-assisted answer"
-            if current.get("command", "").startswith("retrieve ")
-            else "visible \x1b[31mred\x1b[0m and bell \x07"
-            if current.get("command") == "show visible controls"
-            else "deterministic advisory reply"
-        )
-        return {"action": {
-            "kind": "answer",
-            "session_id": identity["session_id"],
-            "conversation_id": identity["conversation_id"],
-            "turn_id": identity["turn_id"],
-            "action_index": correlation["action_index"],
-            "content": content,
-            "citation_ids": [
-                f"r{index}" for index in range(1, len(used_handles) + 1)
-            ],
-        }}
-    phase = current["phase"]
-    revision = current["revision"]
-    if phase == "audit":
-        return {"revision_id": revision, "verdict": "approve", "content": ""}
-    if phase == "finalize":
-        return {
-            "revision_id": revision,
-            "core_updates": [
-                {"filename": "global_outline.md", "content": "updated outline"}
-            ],
-        }
-    return {"revision_id": revision, "content": "deterministic candidate"}
-
-
-def contextual_answer(current, correlation, used_handles=()):
-    """Encode one strict generic ANSWER with a correlated domain payload."""
-
+    phase = query[0]
+    material = value["i"]
+    if isinstance(material, str):
+        command = material
+    elif (
+        isinstance(material, dict)
+        and isinstance(material.get("input"), str)
+    ):
+        command = material["input"]
+    else:
+        raise SystemExit(83)
     return {
-        "action": "answer",
-        "content": json.dumps(
-            contextual_domain(current, correlation, used_handles),
-            ensure_ascii=False,
-            separators=(",", ":"),
+        "workflow": (
+            "conversation_retrieval"
+            if phase == "retrieval"
+            else "conversation"
+            if phase == "conversation"
+            else "debate"
         ),
-        "correlation": correlation,
-        "used_handles": list(used_handles),
+        "command": command,
+        "phase": phase,
+        "identity": {"agent_id": agent_id},
     }
 
 
-current = context_current(payload)
+def compact_observation_handles(value):
+    """Return the wire-v5 observation kind and its authorized handle aliases."""
+
+    observation = value.get("o")
+    if not isinstance(observation, list) or not observation:
+        return None, ()
+    if (
+        observation[0] == "s"
+        and len(observation) == 3
+        and isinstance(observation[2], list)
+    ):
+        return "search", tuple(
+            item[5]
+            for item in observation[2]
+            if isinstance(item, list)
+            and len(item) == 7
+            and isinstance(item[5], str)
+        )
+    if (
+        observation[0] == "r"
+        and len(observation) == 2
+        and isinstance(observation[1], list)
+    ):
+        return "read", tuple(
+            item[4]
+            for item in observation[1]
+            if isinstance(item, list)
+            and len(item) == 6
+            and isinstance(item[4], str)
+        )
+    raise SystemExit(84)
+
+
+def compact_answer(value, used_handles=(), *, after_retrieval=False):
+    """Encode one strict natural-result ANSWER for the live phase contract."""
+
+    phase = value["q"][0]
+    current = compact_context_current(value, compact_agent_id(argv))
+    command = current["command"] if current is not None else ""
+    if phase == "retrieval":
+        content = (
+            "retrieval-assisted answer"
+            if command.startswith("retrieve ") or after_retrieval
+            else "visible \x1b[31mred\x1b[0m and bell \x07"
+            if command == "show visible controls"
+            else "deterministic advisory reply"
+        )
+        result = [content, list(range(1, len(used_handles) + 1))]
+    elif phase == "conversation":
+        result = (
+            "visible \x1b[31mred\x1b[0m and bell \x07"
+            if command == "show visible controls"
+            else "deterministic advisory reply"
+        )
+    elif phase == "audit":
+        result = "a"
+    elif phase == "finalize":
+        result = [["global_outline.md", "updated outline"]]
+    else:
+        result = "deterministic candidate"
+    return {
+        "a": "a",
+        "c": value["c"],
+        "d": [result],
+        "u": list(used_handles),
+    }
+
+
+agent_id = compact_agent_id(argv)
+current = compact_context_current(payload, agent_id)
+query = payload.get("q")
+observation_kind, observation_handles = compact_observation_handles(payload)
+context_action_index = (
+    1
+    if current is not None
+    else 2
+    if observation_kind == "search"
+    else 3
+    if observation_kind == "read"
+    else None
+)
 correlation = payload.get("correlation", {})
 append_record(
     {
         "event": "started",
         "pid": os.getpid(),
         "argv": argv,
-        "operation": payload.get("operation"),
-        "phase": current.get("phase") if current is not None else payload.get("phase"),
-        "context_current": current,
-        "context_action_index": (
-            correlation.get("action_index")
-            if isinstance(correlation, dict)
-            else None
+        "operation": (
+            "agent_context_v5"
+            if isinstance(query, list)
+            else payload.get("operation")
         ),
+        "phase": query[0] if isinstance(query, list) and query else payload.get("phase"),
+        "context_current": current,
+        "context_action_index": context_action_index,
         "payload": payload,
     }
 )
@@ -344,57 +382,45 @@ if control.get("mode") == "malformed":
         control.get("response", "not-json"),
         encoding="utf-8",
     )
-elif payload.get("operation") == "agent_context_v1":
+elif isinstance(query, list):
     if (
-        current["workflow"] == "conversation_retrieval"
-        and current["command"].startswith("retrieve ")
+        len(query) != 5
+        or not isinstance(payload.get("c"), str)
+        or len(payload["c"]) != 43
+        or not isinstance(query[1], str)
     ):
-        query = current["command"]
-        if query.startswith("retrieve "):
-            query = query.removeprefix("retrieve ")
+        raise SystemExit(85)
+    if (
+        current is not None
+        and current["workflow"] == "conversation_retrieval"
+        and current["command"].startswith("retrieve ")
+        and "s" in query[1]
+    ):
         response = {
-            "action": "search",
-            "correlation": correlation,
-            "queries": [{"source_kinds": ["conversation"], "text": query}],
+            "a": "s",
+            "c": payload["c"],
+            "d": [[current["command"].removeprefix("retrieve "), ["c"]]],
+            "u": [],
+        }
+    elif (
+        observation_kind == "search"
+        and observation_handles
+        and "r" in query[1]
+    ):
+        response = {
+            "a": "r",
+            "c": payload["c"],
+            "d": list(observation_handles),
+            "u": [],
         }
     else:
-        response = contextual_answer(current, correlation)
-    output_path.write_text(json.dumps(response), encoding="utf-8")
-elif payload.get("operation") == "agent_context_v1_continuation":
-    observation = context_observation(payload)
-    scope = correlation["scope"]
-    current = {
-        "workflow": "conversation_retrieval",
-        "command": "retrieve contextual evidence",
-        "identity": {
-            "session_id": scope["session_id"],
-            "conversation_id": scope["subject_id"],
-            "turn_id": correlation["result_correlation_id"].removeprefix(
-                "retrieval_reply_"
-            ),
-        },
-    }
-    if "hits" in observation:
-        handles = [
-            item["handle"]
-            for item in observation["hits"]
-            if isinstance(item, dict) and isinstance(item.get("handle"), str)
-        ]
-        if handles:
-            response = {
-                "action": "read",
-                "correlation": correlation,
-                "handles": handles,
-            }
-        else:
-            response = contextual_answer(current, correlation)
-    else:
-        handles = [
-            item["handle"]
-            for item in observation.get("evidence", [])
-            if isinstance(item, dict) and isinstance(item.get("handle"), str)
-        ]
-        response = contextual_answer(current, correlation, handles)
+        if "a" not in query[1]:
+            raise SystemExit(86)
+        response = compact_answer(
+            payload,
+            observation_handles if observation_kind == "read" else (),
+            after_retrieval=observation_kind in {"search", "read"},
+        )
     output_path.write_text(json.dumps(response), encoding="utf-8")
 elif payload.get("operation") == "conversation_retrieval":
     action_index = payload["retrieval"]["action_index"]
@@ -470,15 +496,25 @@ else:
 if "resume" not in argv:
     scope = correlation.get("scope", {}) if isinstance(correlation, dict) else {}
     thread_session = payload.get("session_id", scope.get("session_id", "session"))
-    thread_agent = payload.get("agent_id", scope.get("agent_id", "agent"))
+    thread_agent = payload.get("agent_id", scope.get("agent_id", agent_id))
     thread_subject = scope.get("subject_id", "direct")
+    thread_id = (
+        "thread-" + agent_id + "-" + payload["c"][:16]
+        if isinstance(query, list) and isinstance(payload.get("c"), str)
+        else (
+            "thread-"
+            + thread_session
+            + "-"
+            + thread_subject
+            + "-"
+            + thread_agent
+        )
+    )
     print(
         json.dumps(
             {
                 "type": "thread.started",
-                "thread_id": (
-                    "thread-" + thread_session + "-" + thread_subject + "-" + thread_agent
-                ),
+                "thread_id": thread_id,
             }
         )
     )
@@ -7221,7 +7257,13 @@ asyncio.run(main())
             is_blocked_consensus_draft,
             after_count=records_before_cancel,
         )
-        cancelled_debate_id = blocked["context_current"]["identity"]["debate_id"]
+        live_debates = [
+            item
+            for item in self.workspace.inspect_session("alpha")["debates"]
+            if not item["terminal"]
+        ]
+        self.assertEqual(len(live_debates), 1)
+        cancelled_debate_id = live_debates[0]["debate_id"]
         process.send_interrupt()
         process.wait_for_text(
             "Run interrupted after durable state transition.",

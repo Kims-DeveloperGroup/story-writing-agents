@@ -336,7 +336,7 @@ class LedgerTestCase(unittest.TestCase):
     def record_path(self, key: ContextLedgerKey | None = None) -> Path:
         selected = key or self.key
         return self.workspace.root.joinpath(
-            "agent_states/orchestrator_state/context_ledger/v1",
+            "agent_states/orchestrator_state/context_ledger/v2",
             f"{context_ledger_scope_key(selected)[len('sha256:'): ]}.json",
         )
 
@@ -446,7 +446,7 @@ class LedgerSurfaceTests(LedgerTestCase):
                 MAX_CONTEXT_LEDGER_PROVIDER_CALLS,
                 CONTEXT_LEDGER_LOCK_TIMEOUT_SECONDS,
             ),
-            (1, 8 * 1024 * 1024, 4096, 32, 5.0),
+            (2, 8 * 1024 * 1024, 4096, 32, 5.0),
         )
         self.assertEqual(
             tuple(item.value for item in ContextLedgerRecordState),
@@ -584,10 +584,9 @@ class LedgerSurfaceTests(LedgerTestCase):
         for private in ("workspace", "session", "agent", "provider", "/", "한"):
             self.assertNotIn(private, scope_key)
         proposal = self.projection.checkpoint_proposal
-        reversed_proposal = ContextCheckpointProposal(
-            proposal.conditions,
-            tuple(reversed(proposal.sources)),
-            proposal.delta_depth,
+        reversed_proposal = replace(
+            proposal,
+            sources=tuple(reversed(proposal.sources)),
         )
         self.assertEqual(
             context_checkpoint_proposal_digest(proposal),
@@ -595,7 +594,7 @@ class LedgerSurfaceTests(LedgerTestCase):
         )
         self.assertEqual(
             context_checkpoint_proposal_digest(proposal),
-            "sha256:a072a18119b9b4230d5eafa5dc78d2c4c2b38e000bca05b0064f47b2f130acbb",
+            "sha256:365231f25892819500b6bc4507ccd03a83bf0bc4ef2320034bb4006c117a133c",
         )
         self.assertRegex(
             context_checkpoint_proposal_digest(proposal),
@@ -648,6 +647,48 @@ class LedgerSurfaceTests(LedgerTestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(list(Path(cwd).iterdir()), [])
 
+    def test_unpublished_v1_directory_is_never_read_rewritten_or_migrated(self) -> None:
+        old_root = self.workspace.root / (
+            "agent_states/orchestrator_state/context_ledger/v1"
+        )
+        old_root.mkdir(parents=True)
+        os.chmod(old_root.parent, 0o700)
+        os.chmod(old_root, 0o700)
+        old_record = old_root / "PRIVATE_OLD_RECORD.json"
+        old_bytes = b'{"schema_version":1,"private":"PRIVATE_V1_CANARY"}'
+        old_record.write_bytes(old_bytes)
+        os.chmod(old_record, 0o600)
+        before = {
+            path.relative_to(self.workspace.root).as_posix(): path.read_bytes()
+            for path in old_root.rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(
+            ledger_module._LEDGER_PATH,
+            ("agent_states", "orchestrator_state", "context_ledger", "v2"),
+        )
+        self.assertNotIn("v1", ledger_module._LEDGER_PATH)
+        inspection = self.ledger.inspect(self.key)
+
+        self.assertIs(
+            inspection.checkpoint_view.state,
+            ContextCheckpointState.MISSING,
+        )
+        self.assertEqual(inspection.generation, 0)
+        self.assertIsNone(inspection.record)
+        self.assertFalse(
+            self.workspace.root.joinpath(
+                "agent_states/orchestrator_state/context_ledger/v2"
+            ).exists()
+        )
+        after = {
+            path.relative_to(self.workspace.root).as_posix(): path.read_bytes()
+            for path in old_root.rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(after, before)
+        self.assertEqual(old_record.read_bytes(), old_bytes)
+
 
 class LedgerLifecycleTests(LedgerTestCase):
     def test_persisted_values_have_exact_fields_are_frozen_and_self_validate(self) -> None:
@@ -687,6 +728,8 @@ class LedgerLifecycleTests(LedgerTestCase):
                 "delta_depth",
                 "proposal_digest",
                 "committed_at",
+                "catalog_sources",
+                "source_alias_high_watermark",
             ),
             ContextLedgerRecord: (
                 "key",
@@ -1021,28 +1064,25 @@ class LedgerAuthorizationTests(LedgerTestCase):
             self.projection.checkpoint_proposal.conditions,
             definition_fingerprint=_digest(b"changed-definition"),
         )
-        changed_proposal = ContextCheckpointProposal(
-            changed_conditions,
-            self.projection.checkpoint_proposal.sources,
-            self.projection.checkpoint_proposal.delta_depth,
+        changed_proposal = replace(
+            self.projection.checkpoint_proposal,
+            conditions=changed_conditions,
         )
         changed_scope_conditions = replace(
             self.projection.checkpoint_proposal.conditions,
             scope=_scope(session_id="other-session"),
         )
-        changed_scope_proposal = ContextCheckpointProposal(
-            changed_scope_conditions,
-            self.projection.checkpoint_proposal.sources,
-            self.projection.checkpoint_proposal.delta_depth,
+        changed_scope_proposal = replace(
+            self.projection.checkpoint_proposal,
+            conditions=changed_scope_conditions,
         )
         changed_provider_conditions = replace(
             self.projection.checkpoint_proposal.conditions,
             provider_id="other-provider",
         )
-        changed_provider_proposal = ContextCheckpointProposal(
-            changed_provider_conditions,
-            self.projection.checkpoint_proposal.sources,
-            self.projection.checkpoint_proposal.delta_depth,
+        changed_provider_proposal = replace(
+            self.projection.checkpoint_proposal,
+            conditions=changed_provider_conditions,
         )
         cases = (
             (
@@ -1395,6 +1435,8 @@ class LedgerScopeAndBootstrapTests(LedgerTestCase):
             "thread-depth",
             self.projection.checkpoint_proposal.sources,
             15,
+            self.projection.checkpoint_proposal.catalog_sources,
+            self.projection.checkpoint_proposal.source_alias_high_watermark,
         )
         delta = _projection(
             self.scope,
@@ -1485,7 +1527,7 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
                 "updated_at",
             },
         )
-        self.assertEqual(decoded["schema_version"], 1)
+        self.assertEqual(decoded["schema_version"], 2)
         persisted_accounting = decoded["attempt"]["plan"]["projection_accounting"]
         self.assertEqual(
             (
@@ -1620,7 +1662,7 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
             ),
             (
                 "unknown_schema",
-                changed(lambda item: item.__setitem__("schema_version", 2)),
+                changed(lambda item: item.__setitem__("schema_version", 3)),
             ),
             (
                 "bool_integer",
@@ -1628,7 +1670,7 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
             ),
             (
                 "invalid_state",
-                changed(lambda item: item.__setitem__("state", "legacy_ready")),
+                changed(lambda item: item.__setitem__("state", "retired_ready")),
             ),
             (
                 "bad_scope_digest",
@@ -1740,11 +1782,11 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
                 f"artifact:{ordinal}",
                 "x",
                 ordinal=ordinal,
-                source_kind=ContextSourceKind.WRITING_ARTIFACT,
-                channel=ContextSemanticChannel.FOCUSED_EVIDENCE,
-                priority=ContextPriority.P2_WORKING,
-                authority=ContextAuthorityKind.WRITING_ARTIFACT_REPOSITORY,
-                searchable=True,
+                source_kind=ContextSourceKind.AGENT_DEFINITION,
+                channel=ContextSemanticChannel.STABLE_BEHAVIOR,
+                priority=ContextPriority.P1_STABLE,
+                authority=ContextAuthorityKind.AGENT_DEFINITION,
+                searchable=False,
             )
             sources.append(ContextCheckpointSource(entry))
         oversized_proposal = ContextCheckpointProposal(
@@ -1845,7 +1887,7 @@ class LedgerStorageSecurityAndAtomicityTests(LedgerTestCase):
                 key = ContextLedgerKey(self.scope, "provider")
                 ledger.invalidate(key, expected_generation=0)
                 digest = context_ledger_scope_key(key)[len("sha256:") :]
-                directory = workspace.root / "agent_states/orchestrator_state/context_ledger/v1"
+                directory = workspace.root / "agent_states/orchestrator_state/context_ledger/v2"
                 record = directory / f"{digest}.json"
                 lock = directory / f"{digest}.lock"
                 outside = Path(temporary) / "outside"
