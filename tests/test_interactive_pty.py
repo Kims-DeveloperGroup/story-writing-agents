@@ -996,6 +996,12 @@ class InteractiveCliPtyTests(unittest.TestCase):
         self.assertLess(diff_offset, clear_offset)
         self.assertLess(clear_offset, boundary_offset)
 
+    @staticmethod
+    def plain_terminal_text(rendered: str) -> str:
+        """Remove only fixed decorative SGR from one normalized capture."""
+
+        return re.sub(r"\x1b\[[0-9;]*m", "", rendered)
+
     def setUp(self) -> None:
         """Create one isolated workspace root and local fake provider command."""
 
@@ -2636,6 +2642,87 @@ print(
             line.original_terminal_attributes,
         )
 
+    def test_settings_summaries_inline_then_stack_after_resize_on_pty(
+        self,
+    ) -> None:
+        """Align wide state summaries, stack them after resize, and clean up."""
+
+        process = self._spawn_cli(
+            (),
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=100,
+            decorative_color=True,
+        )
+        process.wait_for_text("story[lobby]> ")
+        before = _durable_tree(self.workspace.root)
+        mark = process.output_mark()
+        process.send_text("/settings\n\n")
+        opened = process.wait_for_text("Choices 1/7", after=mark)
+        plain_opened = self.plain_terminal_text(opened)
+        expected_rows = (
+            "> 1. Language              — Current: KO",
+            "  2. Persona               — Current: default_kim_eun_hee",
+            "  3. Maximum debate rounds — Current: 1",
+            "  4. Conversation storage  — Current: filesystem",
+            "  5. Conversation RAG      — Current: Provider Disabled; Automatic Off",
+            "  6. Message details       — Current: Off",
+            "  7. Agents",
+        )
+        opened_lines = plain_opened.splitlines()
+        self.assertTrue(all(row in opened_lines for row in expected_rows))
+        summary_lines = tuple(
+            line for line in opened_lines if " — Current:" in line
+        )
+        self.assertEqual(len(summary_lines), 6)
+        self.assertEqual(
+            {line.index("Current:") for line in summary_lines},
+            {29},
+        )
+        self.assertIn(
+            "\x1b[36m> 1. Language              — \x1b[0m"
+            "\x1b[37mCurrent: KO\x1b[0m",
+            opened,
+        )
+
+        process.resize(40)
+        resize_mark = process.output_mark()
+        process.send_text("\x1b[B")
+        resized = process.wait_for_text("Choices 2/7", after=resize_mark)
+        plain_resized = self.plain_terminal_text(resized)
+        self.assertNotIn(" — Current:", plain_resized)
+        self.assertIn(
+            "> 2. Persona\n     Current: default_kim_eun_hee",
+            plain_resized,
+        )
+        compact_resized = "".join(plain_resized.split())
+        for fact in (
+            "LanguageCurrent:KO",
+            "PersonaCurrent:default_kim_eun_hee",
+            "MaximumdebateroundsCurrent:1",
+            "ConversationstorageCurrent:filesystem",
+            "ConversationRAGCurrent:ProviderDisabled;AutomaticOff",
+            "MessagedetailsCurrent:Off",
+            "Agents",
+        ):
+            with self.subTest(fact=fact):
+                self.assertIn(fact, compact_resized)
+
+        exit_mark = process.output_mark()
+        process.send_text("\x1b")
+        returned = process.wait_for_text("story[lobby]> ", after=exit_mark)
+        plain_returned = self.plain_terminal_text(returned)
+        boundary = plain_returned.index("story[lobby]> ")
+        clear = plain_returned.rfind("\x1b[J", 0, boundary)
+        self.assertNotEqual(clear, -1, plain_returned)
+        process.send_text("/quit\n\n")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+
     def test_settings_rounds_prefill_double_enter_edit_and_discard_on_pty(
         self,
     ) -> None:
@@ -2989,9 +3076,9 @@ print(
         compact_fields = "".join(
             re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", initial_fields).split()
         )
-        self.assertIn("ProviderCurrent:Codex", compact_fields)
-        self.assertIn("ModelCurrent:providerdefault", compact_fields)
-        self.assertIn("EffortCurrent:providerdefault", compact_fields)
+        self.assertIn("Provider—Current:Codex", compact_fields)
+        self.assertIn("Model—Current:providerdefault", compact_fields)
+        self.assertIn("Effort—Current:providerdefault", compact_fields)
         model_picker_mark = process.output_mark()
         process.send_text("\x1b[B\n")
         model_picker = process.wait_for_text("GPT PTY", after=model_picker_mark)
@@ -3011,7 +3098,7 @@ print(
             after=model_parent_mark,
         )
         self.assertIn(
-            "ModelPending:gpt-pty",
+            "Model—Pending:gpt-pty",
             "".join(
                 re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", model_parent).split()
             ),
@@ -3036,8 +3123,8 @@ print(
         compact_effort_parent = "".join(
             re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", effort_parent).split()
         )
-        self.assertIn("ModelPending:gpt-pty", compact_effort_parent)
-        self.assertIn("EffortPending:future_2", compact_effort_parent)
+        self.assertIn("Model—Pending:gpt-pty", compact_effort_parent)
+        self.assertIn("Effort—Pending:future_2", compact_effort_parent)
         agents_parent_mark = process.output_mark()
         process.send_text("\x1b")
         agents_parent = process.wait_for_text(
@@ -3362,6 +3449,11 @@ print(
         self.assertIn("ProviderCurrent:Codex", compact_fields)
         self.assertIn("ModelCurrent:providerdefault", compact_fields)
         self.assertIn("EffortCurrent:providerdefault", compact_fields)
+        self.assertIn(
+            "> 1. Provider\n     Current: Codex",
+            self.plain_terminal_text(fields),
+        )
+        self.assertNotIn(" — Current:", self.plain_terminal_text(fields))
         process.send_text("\x1b[B\n")
         process.wait_for_text("GPT PTY", after=mark)
         self.assertNotRegex(
@@ -3389,6 +3481,10 @@ print(
         self.assertIn(
             "ModelPending:gpt-pty",
             "".join(returned_fields.split()),
+        )
+        self.assertIn(
+            "> 2. Model\n     Pending: gpt-pty",
+            self.plain_terminal_text(returned_fields),
         )
         process.send_text("\x1b")
         returned_agents = process.wait_for_text(
@@ -3523,6 +3619,11 @@ print(
         mark = process.output_mark()
         process.send_line("/settings")
         settings = process.wait_for_text("  7. Agents", after=mark)
+        self.assertIn(
+            "> 1. Language\n     Current: KO",
+            settings,
+        )
+        self.assertNotIn(" — Current:", settings)
         self.assertIn(
             "5.ConversationRAGCurrent:ProviderDisabled;AutomaticOff",
             "".join(settings.split()),

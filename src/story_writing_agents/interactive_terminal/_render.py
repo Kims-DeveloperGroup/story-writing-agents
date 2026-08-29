@@ -58,6 +58,7 @@ _SPEAKER_HEADER_SGR = {
     SpeakerAccent.BLUE: "\x1b[1;34m",
 }
 _DECORATIVE_SGR = re.compile(r"\x1b\[(?:0|1|3[1-7]|1;3[1-7])m")
+_FORM_SUMMARY_MIN_CONTENT_CELLS = 20
 _ADVISORY_PROGRESS_FRAMES = (
     "[█▓▒░░░░░░░░░░░░░]",
     "[▓█▓▒░░░░░░░░░░░░]",
@@ -692,6 +693,7 @@ def _form_picker_viewport_lines(
     lines.extend(_form_picker_heading_lines(picker, width))
     lines.append(("", SemanticRole.DEFAULT))
     lines.extend(_form_picker_header_lines(picker, width))
+    summary_start = _form_picker_summary_start(picker, width)
     for index in range(viewport.start, viewport.stop):
         choice = picker.choices[index]
         lines.extend(
@@ -701,6 +703,7 @@ def _form_picker_viewport_lines(
                 width,
                 highlighted=choice.identity == picker.highlighted_id,
                 selected=choice.identity == picker.selected_id,
+                summary_start=summary_start,
             )
         )
     lines.extend(_picker_empty_or_notice_lines(picker, width, indent=2))
@@ -732,6 +735,7 @@ def _form_picker_fallback_lines(
     lines = _form_picker_heading_lines(picker, width)
     lines.append(("", SemanticRole.DEFAULT))
     lines.extend(_form_picker_header_lines(picker, width))
+    summary_start = _form_picker_summary_start(picker, width)
     for index, choice in enumerate(picker.choices):
         lines.extend(
             _form_picker_choice_lines(
@@ -740,6 +744,7 @@ def _form_picker_fallback_lines(
                 width,
                 highlighted=choice.identity == picker.highlighted_id,
                 selected=choice.identity == picker.selected_id,
+                summary_start=summary_start,
             )
         )
     lines.extend(_picker_empty_or_notice_lines(picker, width, indent=2))
@@ -824,32 +829,28 @@ def _form_picker_choice_lines(
     *,
     highlighted: bool,
     selected: bool,
+    summary_start: int | None,
 ) -> list[_SemanticLine]:
-    """Render one form choice with its label and description on distinct rows."""
+    """Render one form choice with responsive state and stacked detail rows."""
 
-    pointer = ">" if highlighted else " "
-    prefix = f"{pointer} {ordinal}. "
-    label = _inline(choice.label)
-    spans: list[_InlineRoleSpan] = []
-    if choice.warning_suffix is not None:
-        label += " "
-        start = len(label)
-        label += _inline(choice.warning_suffix)
-        spans.append(_InlineRoleSpan(start, len(label), SemanticRole.WARNING))
-    if selected:
-        label += " (selected)"
-    if not choice.enabled:
-        label += " (disabled)"
-
-    role = (
-        SemanticRole.MUTED
-        if not choice.enabled
-        else SemanticRole.INFO
-        if highlighted
-        else SemanticRole.SUCCESS
-        if selected
-        else SemanticRole.DEFAULT
+    prefix, label, label_spans, role = _form_picker_choice_label(
+        choice,
+        ordinal,
+        highlighted=highlighted,
+        selected=selected,
     )
+    spans = list(label_spans)
+    continuation_prefix = " " * len(prefix)
+    if choice.form_summary is not None and summary_start is not None:
+        separator = " — "
+        label_stop = summary_start - _cell_width(separator)
+        padding = max(0, label_stop - _cell_width(f"{prefix}{label}"))
+        label += f"{' ' * padding}{separator}"
+        start = len(label)
+        label += _inline(choice.form_summary)
+        spans.append(_InlineRoleSpan(start, len(label), choice.form_summary_role))
+        continuation_prefix = " " * summary_start
+
     if spans:
         lines = _wrap_inline_roles(
             label,
@@ -857,7 +858,7 @@ def _form_picker_choice_lines(
             width,
             indent=0,
             initial_prefix=prefix,
-            continuation_prefix=" " * len(prefix),
+            continuation_prefix=continuation_prefix,
             base_role=role,
         )
     else:
@@ -868,10 +869,15 @@ def _form_picker_choice_lines(
                 width,
                 indent=0,
                 initial_prefix=prefix,
-                continuation_prefix=" " * len(prefix),
+                continuation_prefix=continuation_prefix,
             )
         ]
     detail_indent = min(max(len(prefix), 4), max(width - 1, 0))
+    if choice.form_summary is not None and summary_start is None:
+        lines.extend(
+            (line, choice.form_summary_role)
+            for line in _wrap(choice.form_summary, width, indent=detail_indent)
+        )
     if choice.description is not None:
         lines.extend(
             (line, choice.description_role)
@@ -887,6 +893,60 @@ def _form_picker_choice_lines(
             )
         )
     return lines
+
+
+def _form_picker_summary_start(picker: Picker, width: int) -> int | None:
+    """Return one complete-picker summary column when it retains useful room."""
+
+    if not any(choice.form_summary is not None for choice in picker.choices):
+        return None
+    widest_label = 0
+    for index, choice in enumerate(picker.choices):
+        prefix, label, _spans, _role = _form_picker_choice_label(
+            choice,
+            index + 1,
+            highlighted=choice.identity == picker.highlighted_id,
+            selected=choice.identity == picker.selected_id,
+        )
+        widest_label = max(widest_label, _cell_width(f"{prefix}{label}"))
+    summary_start = widest_label + _cell_width(" — ")
+    if width - summary_start < _FORM_SUMMARY_MIN_CONTENT_CELLS:
+        return None
+    return summary_start
+
+
+def _form_picker_choice_label(
+    choice: Choice,
+    ordinal: int,
+    *,
+    highlighted: bool,
+    selected: bool,
+) -> tuple[str, str, tuple[_InlineRoleSpan, ...], SemanticRole]:
+    """Build one safe absolute form label and its independent warning span."""
+
+    pointer = ">" if highlighted else " "
+    prefix = f"{pointer} {ordinal}. "
+    label = _inline(choice.label)
+    spans: list[_InlineRoleSpan] = []
+    if choice.warning_suffix is not None:
+        label += " "
+        start = len(label)
+        label += _inline(choice.warning_suffix)
+        spans.append(_InlineRoleSpan(start, len(label), SemanticRole.WARNING))
+    if selected:
+        label += " (selected)"
+    if not choice.enabled:
+        label += " (disabled)"
+    role = (
+        SemanticRole.MUTED
+        if not choice.enabled
+        else SemanticRole.INFO
+        if highlighted
+        else SemanticRole.SUCCESS
+        if selected
+        else SemanticRole.DEFAULT
+    )
+    return prefix, label, tuple(spans), role
 
 
 def _picker_fallback_lines(
