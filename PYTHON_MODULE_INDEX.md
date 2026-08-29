@@ -383,19 +383,23 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ContextSearchObservation`, `ContextSearchQuery`, `ContextSourceBoundary`,
   `ContextSourceBoundaryKind`, `ContextSourceEvidence`, `ContextSourceHandle`,
   and `serialize_context_action_observation`. It owns exact invocation
-  correlation, canonical source-kind-constrained literal queries, tagged
+  correlation, canonical source-kind-constrained literal queries whose optional
+  writing-artifact directory prefix uses the reference-source path namespace
+  and must be shared by every query in one SEARCH action, tagged
   whole/line/turn/record boundaries, ordered actions and observations,
   content-free evidence receipts, repr-hidden excerpts, fixed limits and error
   codes, exact source/authority/boundary evidence matrices, repr-hidden answer
   payloads, and terminal answer authorizations bound to the manifest, ordered
   completed evidence, used subset, answer/result digest, and unchanged pending
   reference facts. Established direct observation serialization retains its
-  complete delimited object frames. Contextual serialization instead projects
-  only the agent-needed query order, safe locator, source kind, exact boundary,
-  numeric source alias, fresh invocation handle, snippet/truncation, or exact
-  read content into compact positional JSON frames. Complete correlation,
-  provenance, revision, digest, size, and receipt facts remain on the validated
-  in-process values and are not duplicated in those provider-facing frames.
+  complete delimited object frames. Contextual serialization projects complete
+  tagged provider evidence into compact positional JSON frames: query order;
+  numeric alias and canonical source identity, kind, revision, digest, and
+  UTF-8 size; exact boundary identity, digest, and size; safe authority and
+  locator provenance; a fresh invocation handle; and snippet/truncation or
+  exact read content. It collapses only an explicit revision/source-digest
+  equality, while complete correlation and receipt facts remain on the
+  validated in-process values.
 - **Direct internal dependencies:** `agent_context.manifest` and
   `agent_context.planning`.
 - **State, resources, and side effects:** Owns one frozen default policy and
@@ -480,17 +484,29 @@ every intermediate arrow. The current runtime graph is acyclic.
   plans against the scoped ledger checkpoint, reserves INCOMPLETE before any
   physical provider call, and drives the finite SEARCH/READ/ANSWER loop through
   the service-owned `ContextProvider` inversion. Every substantive call uses
-  one byte-identical compact wire-v3 schema and a full-correlation-derived
+  one provider-neutral compact wire-v5 schema and a full-correlation-derived
   URL-safe token in the fixed four-field response envelope. Initial payloads
   carry compact current input plus only applicable candidate, named P2 document,
   record-patch, tombstone, and mandatory-reference sections; continuations carry
-  only the exact untrusted observation. The per-call `q` tuple is the
+  only the exact untrusted observation. A later-round debate candidate remains
+  full text unless a named base/target record pointer or maximal Unicode-code-
+  point single splice reconstructs the exact latest P0 candidate from retained,
+  resolved provider state and its complete digest/size facts; the service emits
+  an operation only when its canonical JSON is strictly smaller than the full
+  candidate. Candidate duplicate resolution precedes alias-keyed record-patch
+  upsert and typed tombstone removal, while the durable ledger remains
+  content-free. The per-call `q` tuple is the
   authoritative phase, dynamically available action, route-specific searchable
   kind, remaining-limit, and result-shape contract, and the strict decoder and
-  session enforce that same tuple. Numeric source/record aliases and compact
-  structured records avoid repeating manifest proof metadata, while the
-  authoritative catalog, canonical cursors, digests, and provenance remain
-  internal. No universal catalog or action-index-zero read handle is exposed:
+  session enforce that same tuple and canonicalize accepted structured results
+  into the existing internal answer string before domain validation. SEARCH
+  decodes one optional action-scoped artifact prefix, projects it across every
+  internal query, filters the authorized manifest, and performs one shared
+  bounded registry scan. Numeric source/record aliases and compact structured
+  records avoid eager universal-catalog replay, while SEARCH/READ observations
+  carry complete tagged source identity, kind, revision, digest, size,
+  boundary, safe provenance, handle, and snippet/content evidence. No universal
+  catalog or action-index-zero read handle is exposed:
   READ becomes available only for a fresh live handle returned by SEARCH in the
   current invocation, including zero-hit and consumed-handle suppression. A
   composite execution fingerprint binds the wire version and every planning,
@@ -899,10 +915,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   persona, language, each canonical core-document path, and provider
   constraints. A definition's internal `provider_managed_context` marker instead
   selects the compact contextual rules: the same role/persona/language facts
-  plus the static untrusted-data, action-grammar, per-call-`q`, patch, and
-  tombstone protocol, with no bound core-document bytes. Codex and Antigravity
-  use symmetric contextual instructions while their direct definitions remain
-  byte-exact. Antigravity retains those rules beneath
+  plus the symmetric wire-v5 grammar for untrusted evidence, action-scoped
+  prefix search, the per-call `q` contract, retained-state candidate
+  reconstruction, alias-keyed patch upsert, and typed tombstone removal, with
+  no bound core-document bytes. `agent_context.service` and
+  `agent_context.actions` retain the inner protocol semantics; Codex and
+  Antigravity stage equivalent contextual instructions while their direct
+  definitions remain byte-exact. Antigravity retains those rules beneath
   `agent_states/orchestrator_state/provider_sessions/.antigravity/definitions/<agent>/<fingerprint>/AGENTS.md`.
   Before definition writes or provider launch, the adapter sequentially
   prepares its owned `state_root`, definitions chain, sessions/runtime chain,
@@ -969,8 +988,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   constraints without changing their established bytes. A definition's
   internal `provider_managed_context` marker instead selects the compact
   contextual binding shared semantically with Antigravity: role, persona,
-  language, static untrusted-data/action grammar, the authoritative per-call
-  `q` contract, patches, and tombstones, with no bound core-document bytes.
+  language, and the symmetric wire-v5 grammar for untrusted evidence,
+  action-scoped prefix search, the authoritative per-call `q` contract,
+  retained-state candidate reconstruction, alias-keyed patch upsert, and typed
+  tombstone removal, with no bound core-document bytes.
+  `agent_context.service` and `agent_context.actions` retain the inner protocol
+  semantics, and direct-definition bytes remain unchanged.
   Partitions are retained only with their corresponding ephemeral staging
   directory.
   Invocation uses shared canonical schema and payload bytes, distinguishes
