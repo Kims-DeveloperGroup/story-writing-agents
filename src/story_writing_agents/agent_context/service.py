@@ -2024,11 +2024,57 @@ def _correlation_token_matches(
     return hmac.compare_digest(candidate, expected)
 
 
+def _answer_text_for_contract(value: object, contract: object) -> str:
+    """Validate one advertised result shape and restore internal answer text."""
+
+    if contract == "text":
+        if type(value) is not str or not value:
+            raise ValueError
+        return value
+    if contract == ["retrieval", "text", "citations"]:
+        if (
+            type(value) is not list
+            or len(value) != 2
+            or type(value[0]) is not str
+            or not value[0]
+            or type(value[1]) is not list
+        ):
+            raise ValueError
+    elif contract == ["audit", "approve-or-conflict"]:
+        if value != "a" and not (
+            type(value) is list
+            and len(value) == 2
+            and value[0] == "c"
+            and type(value[1]) is str
+            and bool(value[1])
+        ):
+            raise ValueError
+    elif contract == ["finalize", "path-and-replacement-list"]:
+        if type(value) is not list:
+            raise ValueError
+        paths: set[str] = set()
+        for item in value:
+            if (
+                type(item) is not list
+                or len(item) != 2
+                or type(item[0]) is not str
+                or not item[0]
+                or type(item[1]) is not str
+                or item[0] in paths
+            ):
+                raise ValueError
+            paths.add(item[0])
+    else:
+        raise ValueError
+    return _canonical_bytes(value).decode("utf-8", errors="strict")
+
+
 def _decode_context_action(
     response_text: str,
     *,
     correlation: ContextActionCorrelation,
     allowed_actions: tuple[str, ...],
+    result_contract: object,
     allowed_search_source_kinds: tuple[ContextSourceKind, ...] = (
         _SEARCH_SOURCE_KIND_ORDER
     ),
@@ -2098,7 +2144,7 @@ def _decode_context_action(
             raise ValueError
         return ContextAnswerAction(
             correlation,
-            data[0],
+            _answer_text_for_contract(data[0], result_contract),
             tuple(resolve_handle(item) for item in used_handles),
         )
     except ContextExecutionError:
@@ -2295,13 +2341,14 @@ def _invocation_phase_contract(
 
 
 def _action_query(
-    request: ContextInvocationRequest,
+    phase_contract: tuple[str, object],
     session: ContextInvocationSession,
     allowed_actions: tuple[str, ...],
 ) -> list[object]:
     """Build the authoritative phase, action, kind, limit, and result tuple."""
 
-    phase, contract = _invocation_phase_contract(request)
+    phase, contract = phase_contract
+    wire_contract = list(contract) if type(contract) is list else contract
     return [
         phase,
         "".join(_ACTION_WIRE_CODES[action] for action in allowed_actions),
@@ -2314,17 +2361,17 @@ def _action_query(
             else ""
         ),
         session.action_limits(),
-        contract,
+        wire_contract,
     ]
 
 
 def _initial_payload(
-    request: ContextInvocationRequest,
     binding: ContextInvocationBinding,
     projection: ContextProjection,
     session: ContextInvocationSession,
     materials: tuple[ContextMaterial, ...],
     *,
+    phase_contract: tuple[str, object],
     action_index: int,
     allowed_actions: tuple[str, ...],
     reference_context: tuple[Mapping[str, object], ...],
@@ -2481,7 +2528,7 @@ def _initial_payload(
     }
     payload: dict[str, object] = {
         "c": _correlation_token(correlation),
-        "q": _action_query(request, session, allowed_actions),
+        "q": _action_query(phase_contract, session, allowed_actions),
         "i": current,
     }
     if candidate is not None:
@@ -2547,10 +2594,10 @@ def _initial_payload(
 
 
 def _continuation_payload(
-    request: ContextInvocationRequest,
     binding: ContextInvocationBinding,
     session: ContextInvocationSession,
     *,
+    phase_contract: tuple[str, object],
     action_index: int,
     allowed_actions: tuple[str, ...],
     observation: str,
@@ -2567,7 +2614,7 @@ def _continuation_payload(
     return (
         {
             "c": _correlation_token(correlation),
-            "q": _action_query(request, session, allowed_actions),
+            "q": _action_query(phase_contract, session, allowed_actions),
             "o": observation_value,
         },
         {("o",): ContextComponentKind.RETRIEVED_OBSERVATION},
@@ -3256,6 +3303,7 @@ class AgentContextService:
             terminal_call_id: str | None = None
             previous_action: str | None = None
             previous_search_had_hits = False
+            phase_contract = _invocation_phase_contract(request)
             for _round in range(self._action_policy.max_provider_calls):
                 action_index = action_session.next_action_index
                 allowed_actions = action_session.allowed_actions(
@@ -3267,11 +3315,11 @@ class AgentContextService:
                 schema = _context_action_schema()
                 if observation is None:
                     payload, component_paths, reference_paths = _initial_payload(
-                        request,
                         binding,
                         projection,
                         action_session,
                         materials,
+                        phase_contract=phase_contract,
                         action_index=action_index,
                         allowed_actions=allowed_actions,
                         reference_context=reference_context,
@@ -3284,9 +3332,9 @@ class AgentContextService:
                     reference_context = ()
                 else:
                     payload, component_paths = _continuation_payload(
-                        request,
                         binding,
                         action_session,
+                        phase_contract=phase_contract,
                         action_index=action_index,
                         allowed_actions=allowed_actions,
                         observation=observation,
@@ -3414,6 +3462,7 @@ class AgentContextService:
                     result.response_text,
                     correlation=correlation,
                     allowed_actions=allowed_actions,
+                    result_contract=phase_contract[1],
                     allowed_search_source_kinds=(
                         request.allowed_search_source_kinds
                     ),
