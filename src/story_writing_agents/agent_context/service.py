@@ -2168,9 +2168,9 @@ def _context_action_schema() -> dict[str, object]:
     return {
         "additionalProperties": False,
         "properties": {
-            "a": {"enum": ["a", "r", "s"], "type": "string"},
+            "a": {"enum": ["a", "r", "s"]},
             "c": {"type": "string"},
-            "d": {"type": "array"},
+            "d": {"items": {}, "type": "array"},
             "u": {"items": {"type": "string"}, "type": "array"},
         },
         "required": ["a", "c", "d", "u"],
