@@ -913,6 +913,235 @@ class HandleAndReadLifecycleTests(unittest.TestCase):
             fourth.read(ContextReadAction(_correlation(self.binding, 3), (handle,)))
         self.assertEqual(reused.exception.code, ContextActionErrorCode.HANDLE_INVALID)
 
+    def test_release_handle_matrix_preserves_failure_order_and_privacy(self) -> None:
+        private_values = (
+            _PRIVATE_BODY_A,
+            _PRIVATE_BODY_B,
+            "core_documents/global_outline.md",
+        )
+
+        def assert_failure(
+            session: ContextInvocationSession,
+            action: ContextReadAction,
+            expected: ContextActionErrorCode,
+            *,
+            next_action_index: int,
+            extra_private: tuple[str, ...] = (),
+        ) -> ContextActionError:
+            with self.assertRaises(ContextActionError) as caught:
+                session.read(action)
+            self.assertEqual(caught.exception.code, expected)
+            self.assertEqual(session.state, ContextInvocationState.FAILED)
+            self.assertEqual(session.next_action_index, next_action_index)
+            encoded = repr(caught.exception)
+            for value in (*private_values, *extra_private):
+                self.assertNotIn(value, encoded)
+            return caught.exception
+
+        fresh_registry = _registry(_SCOPE, self.snapshots)
+        fresh = _session(self.binding, fresh_registry)
+        fresh_handle = _mint_handles(
+            fresh,
+            fresh_registry,
+            self.snapshots,
+        )[0][1]
+        _observation, receipt = fresh.read(
+            ContextReadAction(
+                _correlation(self.binding, 2),
+                (fresh_handle,),
+            )
+        )
+        fresh.complete_read(receipt)
+        authorization = fresh.authorize_answer(
+            ContextAnswerAction(
+                _correlation(self.binding, 3),
+                _PRIVATE_ANSWER,
+                (fresh_handle,),
+            )
+        )
+        self.assertEqual(
+            tuple(item.handle for item in authorization.used_evidence),
+            (fresh_handle,),
+        )
+        self.assertEqual(fresh.state, ContextInvocationState.ANSWER_AUTHORIZED)
+
+        guessed = ContextSourceHandle("ctxh_v1_" + "0" * 64)
+        guessed_session = _session(
+            self.binding,
+            _registry(_SCOPE, self.snapshots),
+        )
+        assert_failure(
+            guessed_session,
+            ContextReadAction(
+                _correlation(self.binding, 1),
+                (guessed,),
+            ),
+            ContextActionErrorCode.HANDLE_INVALID,
+            next_action_index=1,
+            extra_private=(guessed.value,),
+        )
+
+        foreign_scopes = (
+            ("stale_operation", _SCOPE, "stale_operation", "stale_result"),
+            (
+                "cross_scope",
+                replace(_SCOPE, session_id="other_session"),
+                "operation",
+                "result",
+            ),
+            (
+                "cross_agent",
+                replace(_SCOPE, agent_id="plot_architect"),
+                "operation",
+                "result",
+            ),
+        )
+        for label, foreign_scope, operation_id, result_id in foreign_scopes:
+            with self.subTest(handle_origin=label):
+                foreign_manifest, foreign_snapshots = _manifest_fixture(
+                    foreign_scope
+                )
+                foreign_binding = _binding(
+                    foreign_manifest,
+                    operation_id=operation_id,
+                    result_id=result_id,
+                )
+                foreign_registry = _registry(
+                    foreign_scope,
+                    foreign_snapshots,
+                )
+                foreign = _session(
+                    foreign_binding,
+                    foreign_registry,
+                    secret=b"z" * 32,
+                )
+                foreign_handle = _mint_handles(
+                    foreign,
+                    foreign_registry,
+                    foreign_snapshots,
+                )[0][1]
+                current = _session(
+                    self.binding,
+                    _registry(_SCOPE, self.snapshots),
+                    secret=b"z" * 32,
+                )
+                assert_failure(
+                    current,
+                    ContextReadAction(
+                        _correlation(self.binding, 1),
+                        (foreign_handle,),
+                    ),
+                    ContextActionErrorCode.HANDLE_INVALID,
+                    next_action_index=1,
+                    extra_private=(foreign_handle.value,),
+                )
+
+        for label, correlation in (
+            (
+                "cross_scope_correlation",
+                replace(
+                    _correlation(self.binding, 2),
+                    scope=replace(_SCOPE, session_id="other_session"),
+                ),
+            ),
+            (
+                "cross_agent_correlation",
+                replace(
+                    _correlation(self.binding, 2),
+                    scope=replace(_SCOPE, agent_id="plot_architect"),
+                ),
+            ),
+        ):
+            with self.subTest(failure_order=label):
+                registry = _registry(_SCOPE, self.snapshots)
+                current = _session(self.binding, registry)
+                valid_handle = _mint_handles(
+                    current,
+                    registry,
+                    self.snapshots,
+                )[0][1]
+                assert_failure(
+                    current,
+                    ContextReadAction(correlation, (valid_handle, guessed)),
+                    ContextActionErrorCode.CORRELATION_MISMATCH,
+                    next_action_index=2,
+                    extra_private=(valid_handle.value, guessed.value),
+                )
+                registry.capture.assert_not_called()
+
+        consumed_registry = _registry(_SCOPE, self.snapshots)
+        consumed = _session(self.binding, consumed_registry)
+        consumed_handle = _mint_handles(
+            consumed,
+            consumed_registry,
+            self.snapshots,
+        )[0][1]
+        _observation, receipt = consumed.read(
+            ContextReadAction(
+                _correlation(self.binding, 2),
+                (consumed_handle,),
+            )
+        )
+        consumed.complete_read(receipt)
+        assert_failure(
+            consumed,
+            ContextReadAction(
+                _correlation(self.binding, 3),
+                (consumed_handle,),
+            ),
+            ContextActionErrorCode.HANDLE_INVALID,
+            next_action_index=3,
+            extra_private=(consumed_handle.value,),
+        )
+
+        drift_entry = self.manifest.entries[0]
+        stable = self.snapshots[drift_entry.source_id]
+        drifted = _snapshot(
+            _SCOPE,
+            drift_entry.provenance.locator,
+            "changed private body needle\n",
+            revision_seed=b"changed-release-revision",
+        )
+        drift_registry = _registry(_SCOPE, self.snapshots)
+        drift = _session(self.binding, drift_registry)
+        drift_handle = _mint_handles(
+            drift,
+            drift_registry,
+            self.snapshots,
+        )[0][1]
+        drift_registry.capture = mock.Mock(side_effect=(stable, drifted))
+        assert_failure(
+            drift,
+            ContextReadAction(
+                _correlation(self.binding, 2),
+                (drift_handle,),
+            ),
+            ContextActionErrorCode.HANDLE_INVALID,
+            next_action_index=3,
+            extra_private=(drift_handle.value, "changed private body"),
+        )
+
+        terminal = _session(
+            self.binding,
+            _registry(_SCOPE, self.snapshots),
+        )
+        terminal.authorize_answer(
+            ContextAnswerAction(
+                _correlation(self.binding, 1),
+                _PRIVATE_ANSWER,
+            )
+        )
+        assert_failure(
+            terminal,
+            ContextReadAction(
+                _correlation(self.binding, 2),
+                (guessed,),
+            ),
+            ContextActionErrorCode.INVALID_TRANSITION,
+            next_action_index=2,
+            extra_private=(guessed.value,),
+        )
+
     def test_read_captures_canonical_sources_twice_but_returns_requested_order(self) -> None:
         registry = _registry(_SCOPE, self.snapshots)
         seen: list[str] = []
@@ -1161,6 +1390,167 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
             986,
         )
         self.assertEqual(session._scan_utf8_bytes, 986)
+
+    def test_part_prefix_matrix_scans_nested_before_hit_limits_and_excludes_decoys(
+        self,
+    ) -> None:
+        prefix = "manuscript/part_01/"
+        eligible_paths = (
+            "manuscript/part_01/chapter_01.md",
+            "manuscript/part_01/scenes/chapter_02.md",
+            "manuscript/part_01/scenes/memories/chapter_03.md",
+        )
+        decoy_paths = (
+            "manuscript/part_02/chapter_07.md",
+            "manuscript/part_010/chapter_99.md",
+            "core_documents/narrative_rules.md",
+        )
+        internal_path = "discussion_logs/private_context.md"
+        snapshots_tuple = tuple(
+            _snapshot(
+                _SCOPE,
+                path,
+                (
+                    "part one release needle\n"
+                    if path in eligible_paths
+                    else "part one release needle " * 20 + "decoy\n"
+                ),
+            )
+            for path in (*eligible_paths, *decoy_paths)
+        )
+        manifest = ContextManifest(
+            _SCOPE,
+            tuple(
+                _entry(snapshot, index)
+                for index, snapshot in enumerate(snapshots_tuple)
+            ),
+        )
+        snapshots = {
+            snapshot.descriptor.source_id: snapshot
+            for snapshot in snapshots_tuple
+        }
+        registry = _registry(_SCOPE, snapshots)
+        registry.search = ContextSourceRegistry.search.__get__(registry)
+        policy = replace(
+            CONTEXT_ACTION_POLICY,
+            max_hits_per_search=1,
+            max_hits_per_query=1,
+            max_hits_per_source_query=1,
+        )
+        session = _session(
+            _binding(manifest),
+            registry,
+            action_policy=policy,
+        )
+        query = ContextSearchQuery(
+            "part one release needle",
+            (ContextSourceKind.WRITING_ARTIFACT,),
+            prefix,
+        )
+
+        observation = session.search(
+            ContextSearchAction(
+                _correlation(session.binding, 1),
+                (query,),
+            )
+        )
+
+        self.assertEqual(len(observation.hits), 1)
+        self.assertTrue(observation.truncated)
+        captured_entries = tuple(
+            call.args[1] for call in registry.capture.call_args_list
+        )
+        captured_paths = tuple(
+            entry.provenance.locator for entry in captured_entries
+        )
+        self.assertEqual(
+            set(captured_paths),
+            set(eligible_paths),
+        )
+        self.assertEqual(
+            {path: captured_paths.count(path) for path in eligible_paths},
+            {path: 2 for path in eligible_paths},
+        )
+        self.assertTrue(
+            all(
+                call.args[0].entries
+                == tuple(
+                    entry
+                    for entry in manifest.entries
+                    if entry.provenance.locator in eligible_paths
+                )
+                for call in registry.capture.call_args_list
+            )
+        )
+        self.assertEqual(
+            session._scan_utf8_bytes,
+            sum(
+                snapshots[_artifact_id(path)].descriptor.utf8_bytes
+                for path in eligible_paths
+            ),
+        )
+        self.assertTrue(
+            all(path not in captured_paths for path in decoy_paths)
+        )
+        self.assertNotIn(
+            internal_path,
+            tuple(entry.provenance.locator for entry in manifest.entries),
+        )
+        self.assertNotIn(internal_path, captured_paths)
+        self.assertIn(
+            observation.hits[0].source_id,
+            {_artifact_id(path) for path in eligible_paths},
+        )
+
+        invalid_matrix = (
+            (
+                "unsafe_parent",
+                lambda: ContextSearchQuery(
+                    "needle",
+                    (ContextSourceKind.WRITING_ARTIFACT,),
+                    "manuscript/part_01/../",
+                ),
+            ),
+            (
+                "lookalike_without_separator",
+                lambda: ContextSearchQuery(
+                    "needle",
+                    (ContextSourceKind.WRITING_ARTIFACT,),
+                    "manuscript/part_01",
+                ),
+            ),
+            (
+                "incompatible_source",
+                lambda: ContextSearchQuery(
+                    "needle",
+                    (ContextSourceKind.CONVERSATION,),
+                    prefix,
+                ),
+            ),
+            (
+                "mixed_prefixes",
+                lambda: ContextSearchAction(
+                    _correlation(self.binding, 1),
+                    (
+                        ContextSearchQuery(
+                            "one",
+                            (ContextSourceKind.WRITING_ARTIFACT,),
+                            prefix,
+                        ),
+                        ContextSearchQuery(
+                            "two",
+                            (ContextSourceKind.WRITING_ARTIFACT,),
+                            "manuscript/part_02/",
+                        ),
+                    ),
+                ),
+            ),
+        )
+        for label, construct in invalid_matrix:
+            with self.subTest(rejected=label), self.assertRaises(
+                ContextActionError
+            ):
+                construct()
 
     def test_compact_search_read_evidence_retains_all_authoritative_facts(self) -> None:
         scope = replace(
