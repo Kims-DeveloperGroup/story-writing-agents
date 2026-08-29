@@ -53,6 +53,10 @@ from ._driver import (
     RawTerminalDriver,
     ReferenceInputBindings,
 )
+from ._external_view import (
+    _BorrowedLineViewerHost,
+    ExternalViewOperation,
+)
 from ._model import (
     CapabilityProfile,
     Choice,
@@ -529,6 +533,7 @@ class InteractiveTerminal:
         "_text_viewer_read",
         "_advisory_progress",
         "_debate_progress",
+        "_external_view_open",
         "_read_line",
         "_width",
         "_write_text",
@@ -596,6 +601,11 @@ class InteractiveTerminal:
             lambda notice, _sleeper: self._write_startup_result_notice(notice)
         )
         self._text_viewer_read = _plain_text_viewer_reader(read_line, width)
+        self._external_view_open = _plain_external_view_opener(
+            read_line,
+            write_text,
+            width,
+        )
         self._advisory_progress = _plain_advisory_progress
         self._debate_progress = _plain_debate_progress
         self._write_text = write_text
@@ -1773,6 +1783,28 @@ class InteractiveTextViewer:
             dispose_text_viewer(state)
 
 
+class InteractiveExternalViewer:
+    """Bind one generic external view without exposing terminal resources."""
+
+    __slots__ = ("_open",)
+
+    def __init__(self, terminal: InteractiveTerminal) -> None:
+        """Retain only the terminal's package-internal view capability."""
+
+        if not isinstance(terminal, InteractiveTerminal):
+            raise TypeError("terminal must be an InteractiveTerminal")
+        self._open: Callable[[ExternalViewOperation], None] = (
+            terminal._external_view_open
+        )
+
+    def open(self, operation: ExternalViewOperation) -> None:
+        """Run one injected view while its host owns no terminal resource."""
+
+        if not callable(operation):
+            raise TypeError("operation must be callable")
+        self._open(operation)
+
+
 class InteractiveAdvisoryProgress:
     """Retain one terminal's package-internal advisory progress session."""
 
@@ -2004,6 +2036,33 @@ def _plain_text_viewer_reader(
                 return outcome
 
     return read_text_viewer
+
+
+def _plain_external_view_opener(
+    read_line: Callable[[str], str],
+    write_text: Callable[[str], None],
+    width: int,
+) -> Callable[[ExternalViewOperation], None]:
+    """Adapt borrowed callbacks for a line-only transient external view."""
+
+    def open_view(operation: ExternalViewOperation) -> None:
+        if not callable(operation):
+            raise TypeError("operation must be callable")
+        host = _BorrowedLineViewerHost(read_line, write_text, width)
+        active_failure: BaseException | None = None
+        try:
+            operation(host)
+        except BaseException as failure:
+            active_failure = failure
+        try:
+            host.close_view()
+        except BaseException:
+            if active_failure is None:
+                raise
+        if active_failure is not None:
+            raise active_failure
+
+    return open_view
 
 
 def _empty_slash_suggestions(
@@ -2469,6 +2528,7 @@ def build_stream_terminal(
         render_text_viewer,
         render_text_viewer_fallback,
     )
+    terminal._external_view_open = driver.open_external_view
 
     async def run_advisory_progress(operation):
         return await driver.run_advisory_progress(

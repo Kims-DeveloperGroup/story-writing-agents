@@ -15,6 +15,12 @@ from ._input_lifecycle import (
     TerminalInputMode,
     inspect_live_decoder_spec,
 )
+from ._external_view import (
+    _BorrowedLineViewerHost,
+    _require_external_view_frame,
+    ExternalViewerHost,
+    ExternalViewOperation,
+)
 from ._model import (
     CapabilityProfile,
     CommandCompletionProjection,
@@ -144,6 +150,51 @@ class _TerminalConfiguration:
     interrupt_character: str | None
     disabled_control_byte: int
     termios_module: object
+
+
+class _RawExternalViewerHost:
+    """Implement one borrowed viewer host inside the raw driver's lifecycle."""
+
+    __slots__ = ("_capabilities", "_closed", "_configuration", "_driver")
+
+    def __init__(
+        self,
+        driver: RawTerminalDriver,
+        capabilities: TerminalCapabilities,
+        configuration: _TerminalConfiguration,
+    ) -> None:
+        self._driver = driver
+        self._capabilities = capabilities
+        self._configuration = configuration
+        self._closed = False
+
+    def terminal_size(self) -> tuple[int, int]:
+        if self._closed:
+            raise RuntimeError("external viewer host is closed")
+        return self._driver._text_viewer_geometry(self._capabilities.width)
+
+    def color_enabled(self) -> bool:
+        return self._capabilities.decorative_sgr
+
+    def present(self, frame: str) -> None:
+        if self._closed:
+            raise RuntimeError("external viewer host is closed")
+        validated = _require_external_view_frame(
+            frame,
+            color_enabled=self._capabilities.decorative_sgr,
+        )
+        self._driver._write_live_text(f"{_VIEWER_SCREEN_REDRAW}{validated}")
+
+    def read_event(self) -> str | None:
+        if self._closed:
+            return None
+        return self._driver._read_live_external_view_event(self._configuration)
+
+    def close_view(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._driver._write_live_text(_VIEWER_SCREEN_REDRAW)
 
 
 class _PromptCancelled(Exception):
@@ -1910,6 +1961,229 @@ class RawTerminalDriver:
                 viewport_projector,
                 viewport_renderer,
             )
+
+    def open_external_view(self, operation: ExternalViewOperation) -> None:
+        """Run one injected viewer while retaining sole terminal ownership."""
+
+        if not callable(operation):
+            raise TypeError("operation must be callable")
+        if self._progress_active:
+            raise RuntimeError("external viewer cannot overlap terminal progress")
+        with self._input_latch.input_operation():
+            if self._progress_active:
+                raise RuntimeError("external viewer cannot overlap terminal progress")
+            observed_capabilities = self._observe_input_capabilities()
+            capabilities, configuration = self._prepare_input(observed_capabilities)
+            if configuration is None:
+                host = _BorrowedLineViewerHost(
+                    lambda prompt: self._read_fallback_line(prompt, capabilities),
+                    self._write_raw_text,
+                    capabilities.width,
+                )
+                self._run_external_view_operation(operation, host)
+                return
+            self._run_live_external_view_lifecycle(
+                operation,
+                configuration,
+                capabilities,
+            )
+
+    def _run_external_view_operation(
+        self,
+        operation: ExternalViewOperation,
+        host: ExternalViewerHost,
+    ) -> None:
+        """Attempt the operation and idempotent host close exactly once each."""
+
+        active_failure: BaseException | None = None
+        cleanup_failure: BaseException | None = None
+        try:
+            operation(host)
+        except BaseException as failure:
+            active_failure = failure
+        try:
+            host.close_view()
+        except BaseException as failure:
+            cleanup_failure = failure
+        if active_failure is not None:
+            raise active_failure
+        if cleanup_failure is not None:
+            raise cleanup_failure
+
+    def _run_live_external_view_lifecycle(
+        self,
+        operation: ExternalViewOperation,
+        configuration: _TerminalConfiguration,
+        capabilities: TerminalCapabilities,
+    ) -> None:
+        """Own raw mode and alternate screen around one external operation."""
+
+        active_failure: BaseException | None = None
+        screen_failure: BaseException | None = None
+        lifecycle_failure: BaseException | None = None
+        screen_cleanup_required = False
+        try:
+            try:
+                _activate_terminal(configuration)
+            except BaseException as failure:
+                lifecycle_failure = failure
+            else:
+                try:
+                    screen_cleanup_required = True
+                    try:
+                        self._write_live_text(_VIEWER_SCREEN_ENTER)
+                        host = _RawExternalViewerHost(
+                            self,
+                            capabilities,
+                            configuration,
+                        )
+                        self._run_external_view_operation(operation, host)
+                    except BaseException as failure:
+                        active_failure = failure
+                finally:
+                    if screen_cleanup_required:
+                        try:
+                            self._write_live_text(_VIEWER_SCREEN_EXIT)
+                        except BaseException as failure:
+                            screen_failure = failure
+        except BaseException as failure:
+            lifecycle_failure = failure
+        finally:
+            restoration_context = screen_failure or lifecycle_failure or active_failure
+            _restore_terminal_or_raise(configuration, restoration_context)
+        if active_failure is not None:
+            raise active_failure
+        if screen_failure is not None:
+            raise screen_failure
+        if lifecycle_failure is not None:
+            raise lifecycle_failure
+
+    def _read_live_external_view_event(
+        self,
+        configuration: _TerminalConfiguration,
+    ) -> str | None:
+        """Decode one raw key into the external viewer's closed vocabulary."""
+
+        try:
+            character = self._read_character()
+        except KeyboardInterrupt:
+            return "cancel"
+        except EOFError:
+            return None
+        if (
+            configuration.interrupt_character is not None
+            and character == configuration.interrupt_character
+        ):
+            return "cancel"
+        if (
+            configuration.eof_character is not None
+            and character == configuration.eof_character
+        ):
+            return None
+        if character == "\x1b":
+            return self._read_external_view_escape(configuration)
+        mapping = {
+            "q": "close",
+            "j": "down",
+            "k": "up",
+            " ": "page_down",
+            "b": "page_up",
+            "n": "next_match",
+            "N": "previous_match",
+            "m": "toggle_mode",
+            "h": "help",
+            "?": "help",
+            "c": "clear_search",
+        }
+        if character in mapping:
+            return mapping[character]
+        if character == "g":
+            line = self._read_live_external_view_prompt(
+                configuration,
+                "Go to source line: ",
+            )
+            return None if line is None else f"goto\t{line}"
+        if character == "/":
+            field = self._read_live_external_view_prompt(
+                configuration,
+                "Search field: ",
+            )
+            if field is None:
+                return None
+            query = self._read_live_external_view_prompt(
+                configuration,
+                "Search query: ",
+            )
+            if query is None:
+                return None
+            if not field or not query or "\t" in field or "\t" in query:
+                return "unknown"
+            return f"search\t{field}\t{query}"
+        return "unknown"
+
+    def _read_external_view_escape(
+        self,
+        configuration: _TerminalConfiguration,
+    ) -> str:
+        """Read one bounded CSI/SS3 navigation sequence after Escape."""
+
+        try:
+            if not self._escape_continuation_is_ready(configuration):
+                return "cancel"
+            sequence = "\x1b"
+            while len(sequence) < _MAX_ESCAPE_SEQUENCE_LENGTH:
+                character = self._read_character()
+                sequence += character
+                if len(sequence) == 2 and character not in {"[", "O"}:
+                    return "cancel"
+                if len(sequence) > 2 and "@" <= character <= "~":
+                    break
+        except (EOFError, KeyboardInterrupt):
+            return "cancel"
+        return {
+            "\x1b[A": "up",
+            "\x1bOA": "up",
+            "\x1b[B": "down",
+            "\x1bOB": "down",
+            "\x1b[5~": "page_up",
+            "\x1b[6~": "page_down",
+        }.get(sequence, "unknown")
+
+    def _read_live_external_view_prompt(
+        self,
+        configuration: _TerminalConfiguration,
+        prompt: str,
+    ) -> str | None:
+        """Borrow one canonical line prompt, then reacquire raw view input."""
+
+        _restore_terminal_or_raise(configuration, None)
+        value: object = None
+        active_failure: BaseException | None = None
+        try:
+            value = self._fallback_read_line(prompt)
+        except BaseException as failure:
+            active_failure = failure
+        try:
+            _activate_terminal(configuration)
+        except BaseException as failure:
+            fatal = RuntimeError("external viewer input reactivation failed")
+            if active_failure is not None:
+                fatal.add_note(
+                    "Reactivation failed while a viewer prompt failure was active."
+                )
+            raise fatal from failure
+        if active_failure is not None:
+            if isinstance(active_failure, (EOFError, KeyboardInterrupt)):
+                return None
+            raise active_failure
+        if not isinstance(value, str):
+            raise TypeError("external viewer prompt must return text")
+        line = str.__str__(value)
+        if "\r" in line or "\n" in line:
+            raise ValueError("external viewer prompt must return one line")
+        if len(line) > 8_192:
+            return ""
+        return line.strip()
 
     def _read_live_text_viewer_lifecycle(
         self,
