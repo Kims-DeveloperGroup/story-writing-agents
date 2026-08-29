@@ -574,7 +574,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_agent_context_execution.py`,
   `tests/test_agent_context_runtime_adoption.py`,
   `tests/test_context_accounting_optimized.py`, `tests/test_codex_backend.py`,
-  `tests/test_antigravity_adapter.py`, and `tests/test_antigravity_parity.py`;
+  `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`, and
+  `docs/guides/agent-context-progress.md`;
   module-inventory, dependency, facade, and import-boundary assertions across
   `tests/test_rag_module_and_packaging_boundary.py`,
   `tests/test_session_lifecycle.py`, and
@@ -3431,6 +3432,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   transcript-read integration, and `tests/test_interactive_pty.py` for primary
   process-level POSIX PTY lifecycle verification;
   `docs/design/session-lifecycle.md`,
+  `docs/guides/agent-context-progress.md`,
   `docs/guides/story-sessions.md`, `docs/guides/artifact-references.md`,
   `docs/reference/cli.md`,
   `docs/reference/interactive-terminal.md`, and
@@ -3535,6 +3537,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_cancellation.py`,
   `tests/test_interactive_search.py`,
   `tests/test_runtime_reference_integration.py`,
+  `docs/guides/agent-context-progress.md`,
   `docs/reference/conversation-retrieval.md`, and `docs/design/overview.md`.
 
 ### `story_writing_agents.interactive_line_editor`
@@ -4861,7 +4864,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_orchestration_workflow.py`,
   `tests/test_orchestration_safety.py`, `tests/test_lifecycle_atomicity.py`,
   `tests/test_prompts.py`, `tests/test_interactive_pty.py`,
-  `tests/test_agent_state.py`, `docs/guides/artifact-references.md`,
+  `tests/test_agent_state.py`, `docs/guides/agent-context-progress.md`,
+  `docs/guides/artifact-references.md`,
   `docs/reference/runtime-api.md`,
   `docs/reference/writing-artifacts.md`,
   `docs/reference/conversation-retrieval.md`, and
