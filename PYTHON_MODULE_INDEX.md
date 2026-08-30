@@ -2479,6 +2479,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_conversation_storage_migration_cli.py`,
   `tests/test_filesystem_conversation_archive.py`, and
   `tests/test_sqlite_conversation_storage.py`;
+  `docs/guides/sqlite-conversation-storage.md`,
   `docs/reference/package-api.md`, `docs/reference/cli.md`,
   `docs/reference/conversation-archives.md`, `docs/design/persistence.md`,
   `docs/reference/configuration/session-storage.md`,
@@ -2532,6 +2533,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_sqlite_database.py`,
   `tests/test_sqlite_conversation_storage.py`, and
   `tests/test_conversation_storage.py`; operational context is documented in
+  `docs/guides/sqlite-conversation-storage.md`,
   `docs/reference/configuration/session-storage.md`,
   `docs/operations/filesystem-safety.md`, and
   `docs/operations/privacy-and-provider.md`.
@@ -2614,6 +2616,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_sqlite_conversation_storage.py`,
   `tests/test_workspace_and_config.py`, and
   `tests/test_public_api_and_cli.py`; relevant current references are
+  `docs/guides/sqlite-conversation-storage.md`,
   `docs/reference/cli.md`, `docs/reference/package-api.md`,
   `docs/reference/configuration/session-storage.md`, and
   `docs/reference/conversation-archives.md`.
@@ -2719,6 +2722,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/conversation_catalog_contract.py`,
   `tests/conversation_event_store_contract.py`,
   `tests/conversation_search_contract.py`,
+  `docs/guides/sqlite-conversation-storage.md`,
   `docs/design/persistence.md`,
   `docs/reference/configuration/session-storage.md`,
   `docs/reference/conversation-catalog.md`,
@@ -2831,6 +2835,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/conversation_search_contract.py`,
   `README.md`,
   `docs/INDEX.md`,
+  `docs/guides/sqlite-conversation-storage.md`,
   `docs/design/persistence.md`,
   `docs/reference/package-api.md`,
   `docs/reference/conversation-archives.md`,
@@ -2887,6 +2892,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   diagnostic lifecycle.
 - **Primary verification/documentation:**
   `tests/test_sqlite_conversation_storage.py`,
+  `docs/guides/sqlite-conversation-storage.md`,
   `docs/reference/package-api.md`,
   `docs/reference/conversation-search.md`,
   `docs/design/persistence.md`,

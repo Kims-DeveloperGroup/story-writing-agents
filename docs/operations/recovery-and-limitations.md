@@ -86,6 +86,11 @@ outer coordinator lease then covers planning through fresh final parity. The
 workflow never provisions, activates, dual-writes, deletes, or retries
 automatically.
 
+Use the guide for the
+[forward migration](../guides/sqlite-conversation-storage.md#sqlite-storage-migration)
+and
+[create-or-identical reverse workflow](../guides/sqlite-conversation-storage.md#sqlite-storage-reverse-migration).
+
 | Report or exit | Meaning | Safe response |
 | --- | --- | --- |
 | Dry-run `work_required` or `completed`, exit `0` | The fresh plan is valid. `work_required` has at least one `create`; `completed` needs no creation and reports verified parity. No destination or checkpoint was written, although the empty coordinator guard may have been created. | Review all five counts, keep both stores quiescent, then run the same non-dry command if copying is intended. A later run exports and plans again. |
@@ -126,6 +131,10 @@ and generation; a missing marker means filesystem generation zero. A completed
 hand-edit either
 file or delete one store to manufacture agreement.
 
+The newcomer-oriented
+[SQLite selection and activation scenarios](../guides/sqlite-conversation-storage.md#sqlite-storage-readiness)
+show the normal path before the failure matrix below.
+
 | Report, startup result, or exit | Meaning | Safe response |
 | --- | --- | --- |
 | `completed`, exit `0`, `activation: next_shell` | Readiness/parity and the final configuration CAS succeeded. The current shell was not switched, even when `configuration` is `unchanged`. | Exit the old shell normally and start a new one. Do not delete the old store; startup performs another fresh check before marker CAS. |
@@ -162,6 +171,10 @@ probe the host `sqlite3` runtime and open an existing database read-only, but it
 does not create, repair, migrate, rewrite, or remove storage. Readiness applies
 to the authoritative main database; the derived FTS companion is not required
 for preflight, provisioning, composition, reads, or exact search.
+
+See the guide's
+[data lifecycle](../guides/sqlite-conversation-storage.md#sqlite-storage-data-lifecycle)
+for the plain-language authority, backup, and exposure model.
 
 | Result or failure | Meaning | Safe response |
 | --- | --- | --- |

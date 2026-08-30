@@ -13,7 +13,79 @@ Key terms: **authoritative source**—the current conversation store whose bytes
 must be reread before use; **derived projection**—disposable fragments and
 vectors; **stable source reference**—session/conversation/turn identities,
 revision, fragment, and range without trusted provider text; **preflight**—one
-bounded retrieval attempt before an eligible agent turn.
+bounded retrieval attempt before an eligible agent turn; **local RAG
+provider**—the network-free process-local embedder/ranker that proposes
+candidates; **story agent**—the separately configured Codex or Antigravity
+agent that can receive only the bounded excerpts Story reauthorizes and
+rereads.
+
+<a id="rag-mental-model"></a>
+
+## Start with the mental model
+
+Conversation RAG is optional semantic discovery over conversations the current
+session is already allowed to read. It is not transcript authority, durable
+agent memory, a conversation-storage backend, or permission to search another
+session. Filesystem or SQLite remains the one active authoritative store.
+
+The derived generation can help find a candidate, but it can never make that
+candidate true. Before an excerpt can reach a story agent, the runtime uses its
+stable reference to authorize the current session again and reread the exact
+range from the active conversation store. Changed, missing, out-of-scope, or
+otherwise invalid references are rejected and derived state is marked stale
+best-effort.
+
+The local RAG provider and the story agent are different components. Local RAG
+embeds and ranks inside this process without a runtime network call or
+credential flow. A later Codex or Antigravity story-agent request can be
+external and can contain the bounded authoritative excerpts selected by the
+preflight. The private RAG query itself is not added to that request.
+
+<a id="rag-lifecycle"></a>
+
+### One eligible turn from query to projection
+
+```mermaid
+flowchart TD
+    user["User: Automatic turn or /rag query<br/>/rag waits for the later eligible turn"] --> controller["Shell/controller<br/>fixed session + focused conversation"]
+    controller --> preflight["At most one bounded preflight"]
+    preflight --> derived["Disposable generation<br/>local network-free embedding/ranking"]
+    preflight --> authority["Active authoritative conversations<br/>filesystem or SQLite"]
+    derived --> refs["Stable candidate references"]
+    authority --> literal["Authorized literal candidates"]
+    refs --> reread["Reauthorize + reread exact ranges"]
+    literal --> reread
+    reread --> request["Initial story-agent request<br/>bounded g1 ... g20 excerpts"]
+    request --> agent["Codex or Antigravity story agent"]
+    agent --> answer["Reply + cited sources"]
+    answer --> commit["Commit visible user/reply turn"]
+    commit --> render["Render reply, content-free outcome, and sources"]
+    commit -. "best-effort after successful commit" .-> derived
+```
+
+Solid arrows show the attempted turn and its authority checks. The dotted
+arrow is the isolated post-commit projection update: failure can leave derived
+state stale, but it does not roll back the visible conversation turn. When RAG
+is disabled or an automatic turn has no usable query, the preflight branch is
+absent and the ordinary turn keeps its established behavior. For `/rag`, the
+first arrow spans arming plus the later eligible turn; the command itself stops
+before preflight. SQLite and RAG remain independent: SQLite can supply the
+active service bundle, while RAG owns only a separate disposable per-session
+generation.
+
+<a id="rag-roles"></a>
+
+### Who does what
+
+| Participant | Responsibility | Explicit limit |
+| --- | --- | --- |
+| User | Installs the optional boundary when approved, opts the workspace in, chooses Automatic or arms `/rag`, and decides whether content may reach a story provider. | A query cannot widen the attached session, focused conversation, artifact authorization, or fixed budgets. |
+| Shell/controller | Enforces attachment, active focus, eligible turn type, exact `/rag` scope, one-turn consumption, and content-free terminal status. | `/rag` performs no retrieval, saves no query, and never changes automatic policy. |
+| Story runtime | Runs at most one preflight, merges literal-first candidates, reauthorizes stable references, rereads exact ranges, validates final citations, commits the visible turn, then attempts projection. | It does not trust derived text/scores, recurse into retrieval, or expand debate/consensus scope. |
+| Active conversation storage | Supplies the complete catalog, visible events, literal search, and coordination authority from filesystem or SQLite. | Only one backend is authoritative; RAG does not select, migrate, provision, or validate it. |
+| Local RAG service | Builds disposable projections and proposes bounded semantic candidates through the fixed local embedder/ranker. | It has no runtime network, credentials, story-provider lifecycle, transcript authority, or raw-score output. |
+| Codex or Antigravity story agent | Receives the visible story message plus only the bounded, freshly reread excerpts and stable `g1` through `g20` labels on the initial request. | It receives no vector handle, RAG query, credential, or permission to retrieve another scope. |
+| Renderer | Shows the story reply, content-free outcome/reason, and proven sources. | It does not print excerpt bodies as interactive diagnostics; direct `story rag search` is the separate content-bearing output. |
 
 ## Install the base or optional boundary
 
@@ -346,10 +418,10 @@ forced bounded search without consulting automatic policy.
 `inspect_authorized_conversation_rag()` performs an optimistic double read of
 the authoritative target and indexed state and reports their relationship
 without acquiring the mutation coordinator or creating storage/RAG paths.
-A configured `StoryRuntime` automatically calls it after each successfully
-committed ordinary or retrieval reply, even when that turn did not run a
-preflight. Ordinary projection failure is isolated from the committed reply and
-marks state stale best-effort;
+A configured `StoryRuntime` automatically calls `project_authorized()` after
+each successfully committed ordinary or retrieval reply, even when that turn
+did not run a preflight. Ordinary projection failure is isolated from the
+committed reply and marks state stale best-effort;
 `KeyboardInterrupt`, `SystemExit`, and cancellation controls propagate after
 the reply commit.
 
@@ -408,12 +480,12 @@ disable are workspace-scoped and accept no session.
 
 | Command | Current behavior |
 | --- | --- |
-| `story rag status [--session ID] [--workspace PATH]` | Compare one session's authoritative active-store target with its derived generation. This is a genuinely no-write optimistic inspection: it does not create the storage-coordinator lock, RAG directories, or configuration bytes. Disabled, unavailable, missing, stale, failed, corrupt, and incompatible observations are successful status results, not command failures. |
-| `story rag enable --provider local [--workspace PATH]` | Check the exact installed package version and capability manifest before atomically saving the allowlisted provider. A missing or incompatible dependency leaves configuration bytes unchanged. Enabling does not build data, enable automatic shell use, authenticate an agent provider, or make a network call. |
-| `story rag rebuild --yes [--session ID] [--workspace PATH]` | Require explicit confirmation, run the established desired-storage activation check, then rebuild the complete authorized active target into an inactive generation and publish only after verification. It restarts rather than resumes partial work. |
-| `story rag search QUERY [--session ID] [--workspace PATH]` | Run one forced bounded literal-first/local-vector search through the freshly activated configured authority, reauthorize and reread every retained range, and return citations plus authoritative excerpt text without invoking a story agent. Quote a query containing spaces; empty or whitespace-only text is invalid. |
-| `story rag disable [--workspace PATH]` | Atomically clear the provider and force the persisted automatic flag to `false`. It does not delete derived generations or authoritative conversations. |
-| `story rag purge --yes [--session ID] [--workspace PATH]` | Require explicit confirmation and remove only the addressed session's validated derived active/status/generation contents. It works independently of provider enablement and authoritative-storage activation. |
+| `story rag status [--session ID] [--workspace PATH]` | Compare one session's authoritative active-store target with its derived generation. This is a genuinely no-write optimistic inspection: it does not create the storage-coordinator lock, RAG directories, or configuration bytes. Disabled, unavailable, missing, stale, failed, corrupt, and incompatible observations are successful status results, not command failures. See [fresh status](#scenario-1-inspect-a-fresh-disabled-workspace). |
+| `story rag enable --provider local [--workspace PATH]` | Check the exact installed package version and capability manifest before atomically saving the allowlisted provider. A missing or incompatible dependency leaves configuration bytes unchanged. Enabling does not build data, enable automatic shell use, authenticate an agent provider, or make a network call. See [enable and rebuild](#scenario-2-install-enable-and-rebuild). |
+| `story rag rebuild --yes [--session ID] [--workspace PATH]` | Require explicit confirmation, run the established desired-storage activation check, then rebuild the complete authorized active target into an inactive generation and publish only after verification. It restarts rather than resumes partial work. See [enable and rebuild](#scenario-2-install-enable-and-rebuild). |
+| `story rag search QUERY [--session ID] [--workspace PATH]` | Run one forced bounded literal-first/local-vector search through the freshly activated configured authority, reauthorize and reread every retained range, and return citations plus authoritative excerpt text without invoking a story agent. Quote a query containing spaces; empty or whitespace-only text is invalid. See [direct search](#scenario-3-search-without-calling-a-story-agent). |
+| `story rag disable [--workspace PATH]` | Atomically clear the provider and force the persisted automatic flag to `false`. It does not delete derived generations or authoritative conversations. See [disable versus purge](#scenario-9-disable-or-purge-derived-state). |
+| `story rag purge --yes [--session ID] [--workspace PATH]` | Require explicit confirmation and remove only the addressed session's validated derived active/status/generation contents. It works independently of provider enablement and authoritative-storage activation. See [disable versus purge](#scenario-9-disable-or-purge-derived-state). |
 
 A typical explicit local workflow is:
 
@@ -460,11 +532,90 @@ can itself require network/repository access as described above; running the
 installed local provider does not. Generic algorithm changes remain owned by
 the independent `generic-rag` repository rather than this integration.
 
+The following report blocks are representative `ConversationRagCliReport`
+schema-v1 output. Each is the exact compact, key-sorted serializer shape with
+18 top-level keys. Hashes, IDs, counts, byte sizes, and excerpt content are
+illustrative and vary with the workspace; the field names, nullability, enum
+vocabulary, ordering, and omission-free shape are stable.
+
+<a id="scenario-1-inspect-a-fresh-disabled-workspace"></a>
+
+### Scenario 1: inspect a fresh disabled workspace
+
+Input:
+
+```bash
+story rag status --session novel
+```
+
+| Stage | What happens |
+| --- | --- |
+| Participating components | The CLI reads the persisted active storage choice, performs an optimistic authoritative snapshot, inspects optional-package compatibility, and observes any existing RAG state. No story agent runs. |
+| Stored or transient data | Reads existing configuration and conversations only. It creates no storage-coordinator lock, configuration write, RAG directory, generation, or runtime debug record. |
+| Output and next action | Exit `0` with a content-free status. Here RAG is disabled and the optional package is missing; install the reviewed extra only if local RAG is wanted. |
+
+```json
+{"authoritative_checkpoint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","automatic":false,"compatibility":"dependency_missing","configuration":"not_applicable","counts":{"authoritative":{"conversations":0,"documents":0,"events":0,"source_utf8_bytes":0},"indexed":{"conversations":0,"documents":0,"events":0,"fragments":0,"generation_bytes":0,"generations":0,"orphan_generations":0,"payload_bytes":0,"source_utf8_bytes":0}},"excerpts":[],"failure":null,"indexed_checkpoint":null,"operation":"status","outcome":"completed","provider":null,"purged":{"generations":0,"orphan_generations":0},"rebuild_required":true,"retrieval_outcome":null,"retrieval_reason":null,"schema_version":1,"state":"disabled","truncated":null}
+```
+
+<a id="scenario-2-install-enable-and-rebuild"></a>
+
+### Scenario 2: install, enable, and rebuild
+
+Install the reviewed optional boundary, persist Local, then confirm a complete
+restart-from-the-beginning projection:
+
+```bash
+python -m pip install --editable '.[rag]'
+story rag enable --provider local
+story rag rebuild --session novel --yes
+```
+
+| Stage | What happens |
+| --- | --- |
+| Participating components | Pip resolves the pinned extra; enable validates the installed version/capabilities and saves configuration; rebuild verifies the selected storage backend, reads its active conversations, builds through the local provider, verifies an inactive generation, and atomically publishes it. No story agent runs. |
+| Stored or transient data | Installation changes the Python environment and may use network/cache data. Enable changes only `config/system_defaults.json`. Rebuild writes a new disposable generation and pointers; it does not alter authoritative conversations. |
+| Output and next action | Enable reports `configuration:"saved"`. Rebuild reports `state:"ready"`; future automatic or forced preflights may use the generation after the applicable shell composition. Interrupted or failed builds are not resumed—repeat rebuild from the start. |
+
+Representative enable output:
+
+```json
+{"authoritative_checkpoint":null,"automatic":false,"compatibility":"compatible","configuration":"saved","counts":{"authoritative":{"conversations":0,"documents":0,"events":0,"source_utf8_bytes":0},"indexed":{"conversations":0,"documents":0,"events":0,"fragments":0,"generation_bytes":0,"generations":0,"orphan_generations":0,"payload_bytes":0,"source_utf8_bytes":0}},"excerpts":[],"failure":null,"indexed_checkpoint":null,"operation":"enable","outcome":"completed","provider":"local","purged":{"generations":0,"orphan_generations":0},"rebuild_required":null,"retrieval_outcome":null,"retrieval_reason":null,"schema_version":1,"state":null,"truncated":null}
+```
+
+Representative ready rebuild output:
+
+```json
+{"authoritative_checkpoint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","automatic":false,"compatibility":"compatible","configuration":"not_applicable","counts":{"authoritative":{"conversations":1,"documents":1,"events":2,"source_utf8_bytes":35},"indexed":{"conversations":1,"documents":1,"events":2,"fragments":1,"generation_bytes":1024,"generations":1,"orphan_generations":0,"payload_bytes":512,"source_utf8_bytes":35}},"excerpts":[],"failure":null,"indexed_checkpoint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","operation":"rebuild","outcome":"completed","provider":"local","purged":{"generations":0,"orphan_generations":0},"rebuild_required":false,"retrieval_outcome":null,"retrieval_reason":null,"schema_version":1,"state":"ready","truncated":null}
+```
+
+<a id="scenario-3-search-without-calling-a-story-agent"></a>
+
+### Scenario 3: search without calling a story agent
+
+Input:
+
+```bash
+story rag search 'council vessel' --session novel
+```
+
+| Stage | What happens |
+| --- | --- |
+| Participating components | The CLI activates the already-selected storage services, the local RAG service proposes bounded candidates, and the runtime reauthorizes and rereads exact ranges from the active filesystem or SQLite conversations. Codex and Antigravity are not called. |
+| Stored or transient data | The query is transient and is absent from configuration, transcripts, RAG state, and debug records. The returned excerpt is authoritative conversation plaintext. |
+| Output and next action | Exit `0` with citations, coordinates, and bounded excerpt bodies. The query itself is not echoed. Standard output, redirected files, pipes, terminal scrollback, and caller logs can retain the content-bearing result, so protect them as conversation data. |
+
+```json
+{"authoritative_checkpoint":null,"automatic":false,"compatibility":"compatible","configuration":"not_applicable","counts":{"authoritative":{"conversations":0,"documents":0,"events":0,"source_utf8_bytes":0},"indexed":{"conversations":0,"documents":0,"events":0,"fragments":0,"generation_bytes":0,"generations":0,"orphan_generations":0,"payload_bytes":0,"source_utf8_bytes":0}},"excerpts":[{"citation_id":"g1","content":"The council vessel arrives at dawn.","reference":{"document_id":"document_arrival","end_codepoint":35,"fragment_id":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","revision_id":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","start_codepoint":0},"source":{"conversation_id":"c_0123456789abcdef0123456789abcdef","event_kind":"user_message","sequence":1,"session_id":"novel","turn_id":"turn_arrival"}}],"failure":null,"indexed_checkpoint":null,"operation":"search","outcome":"completed","provider":"local","purged":{"generations":0,"orphan_generations":0},"rebuild_required":null,"retrieval_outcome":"complete","retrieval_reason":"none","schema_version":1,"state":"ready","truncated":false}
+```
+
 <a id="interactive-conversation-rag"></a>
 
 ## Use RAG in the interactive shell
 
-### Persist the next-shell policy in `/settings`
+<a id="scenario-4-save-the-next-shell-policy"></a>
+
+### Scenario 4: save the next-shell policy in `/settings`
 
 `config/system_defaults.json`, edited through the existing guarded `/settings`
 workflow, is the shell's storage-backed source of truth. Choose **Conversation
@@ -474,6 +625,22 @@ RAG**, then edit these independent Current/Pending values:
 | --- | --- |
 | Provider | **Disabled** persists `null` and forces Automatic **Off**. **Local** persists `"local"` but does not turn Automatic on. |
 | Automatic | **Off** is the default. **On** is accepted only while the pending provider is **Local**. |
+
+Input sequence:
+
+```text
+/settings
+Conversation RAG
+Provider → Local
+Automatic → On
+Apply Changes → YES
+```
+
+| Stage | What happens |
+| --- | --- |
+| Participating components | The Settings editor validates pending values and the configuration manager performs exact-byte compare-and-set plus atomic replacement. The current RAG service, storage runtime, and story agents do not participate. |
+| Stored or transient data | Pending values are transient until confirmation. Apply persists provider `"local"` and automatic `true` in `config/system_defaults.json`; it creates no RAG generation, conversation-storage lock, agent-provider credential, or debug record. |
+| Output and next action | The current shell remains unchanged. Restart Story to compose Local with Automatic On from the new construction snapshot. |
 
 Values remain pending until top-level **Apply Changes** is confirmed. Reverting
 both values returns to clean state; dirty **Discard Changes**, root Escape,
@@ -490,9 +657,12 @@ conversation-storage readiness gates. A RAG-only Apply does not enter that
 path: it prepares, verifies, and commits only the system configuration, with no
 authentication, storage selection/readiness, backend/runtime prepare, commit,
 discard, or activation, route/thread work, composition, optional-package probe
-or installation, provider catalog, subprocess, socket, or network work. It
-reports `Conversation RAG settings were saved for the next shell. This running
-shell retains its current Conversation RAG service and automatic policy.`
+or installation, provider catalog, subprocess, socket, or network work. A
+RAG-only Apply emits exactly:
+
+```text
+[saved for next shell] Conversation RAG settings were saved for the next shell. This running shell retains its current Conversation RAG service and automatic policy.
+```
 
 ### What happens at the next shell startup
 
@@ -510,12 +680,20 @@ snapshot once:
   `rag` extra and restart. Reinstall the reviewed pin with
   `python -m pip install --editable '.[rag]'`; startup never installs it.
 
+Exact missing-extra startup output:
+
+```text
+[conversation RAG] Conversation RAG is unavailable for this shell. Verify the pinned rag extra and restart; settings remain available and configuration was not changed.
+```
+
 The legacy Python controller path that supplies only a raw conversation catalog
 has no complete catalog/search/provenance/coordinator authority and therefore
 does not compose RAG. Normal installed-shell construction supplies the complete
 bundle.
 
-### Choose automatic or one-turn preflight
+<a id="scenario-5-use-automatic-preflight"></a>
+
+### Scenario 5: use automatic preflight on eligible turns
 
 With Automatic **Off**, ordinary focused turns keep their established behavior.
 With Automatic **On**, each eligible ordinary, `/say`, or routed `@agent` turn
@@ -523,12 +701,55 @@ may run the existing bounded authorized preflight once before the addressed
 story agent. This does not add retrieval to `/run`, debate, consensus, local
 management commands, or any other scope.
 
+For example:
+
+```text
+@plot Which earlier harbor decision constrains this scene?
+```
+
+| Stage | What happens |
+| --- | --- |
+| Participating components | The controller supplies the persisted Automatic policy; the runtime derives one normalized query from this eligible story message, tries at most one bounded preflight, rereads retained ranges, and sends the initial request to `plot`. |
+| Stored or transient data | The derived query and raw candidates/scores remain transient. The ordinary user message and reply persist normally; bounded reread excerpts can also appear in the persistent diagnostic agent-exchange request and in the external story provider's own retention domain. |
+| Output and next action | The user receives the story reply, a content-free outcome/reason, and proven sources. A failed preflight degrades explicitly rather than expanding scope or preventing the ordinary turn solely because semantic state is unavailable. |
+
+<a id="scenario-6-arm-one-private-query"></a>
+
+### Scenario 6: arm one private `/rag` query
+
 To override automatic policy for one turn, first arm a private query:
 
 ```text
 /rag council vessel
-@plot Which earlier decision constrains ${core_documents/global_outline.md} and ${manuscript/part-01/opening.md}#L20-L32?
+@plot Which earlier decision constrains the harbor scene?
 ```
+
+The control emits exactly this fixed acknowledgment without repeating the
+query:
+
+```text
+[conversation RAG] Conversation RAG is armed for the next ordinary, /say, or routed story turn in this conversation.
+```
+
+For a representative complete attempt, the later turn adds this content-free
+record before the reply and renders proven sources after it. Subject,
+conversation ID, and sequence are dynamic; excerpt bodies are absent:
+
+```text
+[context] [success]
+  Conversation RAG: complete
+  Reason: none
+[context] Source 1
+  Subject: Harbor timing
+  Conversation: c_0123456789
+  Sequence: 1
+```
+
+| Stage | What happens |
+| --- | --- |
+| Participating components | `/rag` only asks the controller to hold a normalized private query. On the next eligible routed turn, the controller passes it once to the runtime, which performs the same bounded preflight before `plot` receives the initial request. |
+| Stored or transient data | The pending query is process-local and never enters configuration, transcript events, runtime debug, semantic result output, or the story-agent request. Bounded reread excerpts can enter the diagnostic initial request and external provider request; the later user message/reply persist normally. |
+| Output and next action | The acknowledgment confirms arming, not retrieval. The later result exposes only fixed outcome/reason and source identities in addition to the ordinary reply. |
 
 `/rag QUERY` is alias-free. `QUERY` must be nonblank, free of Unicode control or
 format characters, and no longer than 200 codepoints before and after the
@@ -548,12 +769,43 @@ The pending query is process-local and bound to the exact session/conversation:
   eligible turn; once that coroutine enters, the query is consumed even if the
   turn later fails or is cancelled.
 
+Automatic and `/rag` use the same authorized preflight but different query
+lifecycles:
+
+| Question | Automatic | `/rag QUERY` |
+| --- | --- | --- |
+| Default | Off | No pending query |
+| Persistence | Boolean in system configuration | Never persisted; process-local only |
+| Query | Current story text is normalized and capped at 200 codepoints | Command text must be nonblank/control-free and no more than 200 codepoints before and after normalization |
+| Trigger | Each eligible ordinary, `/say`, or routed turn while enabled | Only the next eligible turn in the exact armed session/conversation |
+| Precedence | Suppressed for a turn carrying a forced query | Forced query replaces automatic derivation for that turn |
+| Consumption | No pending one-turn state | Retained across ineligible commands; consumed when the eligible runtime coroutine enters |
+| Echo or exposure | The ordinary story message is already visible and persisted; no separate query field is emitted | The query is not echoed or sent to the story agent, but the active line editor necessarily shows what the user types |
+
+<a id="scenario-7-combine-rag-with-artifact-references"></a>
+
+### Scenario 7: combine forced RAG with distinct artifact references
+
 Artifact references belong in the subsequent eligible story message, never in
-the `/rag` control. A whole-file reference and a line-range reference to
-distinct paths can coexist with the forced preflight; their artifact
-authorization identities and the RAG citation identities remain independent.
-The existing parser still rejects a whole-file and ranged reference to the same
-path, exact duplicates, and overlapping same-path ranges.
+the `/rag` control:
+
+```text
+/rag council vessel
+@plot Reconcile ${core_documents/global_outline.md} with ${manuscript/part-01/opening.md}#L20-L32 while answering the earlier harbor question.
+```
+
+| Stage | What happens |
+| --- | --- |
+| Participating components | The controller consumes one forced query; artifact-reference authorization independently reads the two named paths; the RAG runtime independently reauthorizes conversation ranges; the initial `plot` request can carry both bounded artifact and RAG context. |
+| Stored or transient data | The `/rag` query remains transient. The later story message, including its literal artifact references, and the reply persist normally. Merely referencing writing artifacts does not project their contents into Conversation RAG. |
+| Output and next action | One forced RAG attempt can coexist with the whole-file outline and ranged opening excerpt because they name distinct paths. Artifact citations retain their own authorization identities; RAG excerpts retain independent `g1` through `g20` identities. |
+
+This combination does not relax artifact validation. The parser still rejects
+a whole-file and ranged reference to the same path, exact duplicates, and
+overlapping same-path ranges. If such an invalid same-path combination raises a
+`ReferenceOperationFailure`, moving one reference into `/rag` is not a fix:
+`/rag` accepts query text, not an artifact reference. Use distinct authorized
+paths or a single nonoverlapping reference form as shown above.
 
 ### What agents and users receive
 
@@ -569,11 +821,17 @@ The `/rag` query, excerpt/source text bodies, credentials, and raw provider or
 composition diagnostics are absent from configuration, conversation
 transcripts, runtime debug records, and semantic result output. The subsequent
 ordinary story message and agent reply retain their established transcript
-persistence. While entering `/rag`, the terminal editor necessarily displays
-the typed line; its process-local command history may recall it, and ordinary
-line fallback or terminal infrastructure may retain visible input in
-scrollback. Those local terminal surfaces are not durable story storage or a
-secrecy boundary.
+persistence. The separate bounded agent-exchange diagnostic store can persist
+the exact initial story-provider request, including authorized excerpt bodies,
+but not the private RAG query. The external story provider receives that same
+initial request under its own exposure and retention terms. Direct
+`story rag search` also prints excerpt bodies. Protect all three content-bearing
+surfaces as conversation data.
+
+While entering `/rag`, the terminal editor necessarily displays the typed line;
+its process-local command history may recall it, and ordinary line fallback or
+terminal infrastructure may retain visible input in scrollback. Those local
+terminal surfaces are not durable story storage or a secrecy boundary.
 
 The fixed local provider makes no runtime network call and has no credential
 flow. Existing commands, `/search`, provider/model overrides, storage adapters,
@@ -582,6 +840,102 @@ repository source remain unchanged. This interactive slice adds no SQLite or
 MySQL behavior. `generic-rag` remains an independently packaged pinned submodule
 with zero imports from this story project; story-specific composition and
 authorization stay in this repository.
+
+<a id="scenario-8-use-safe-literal-fallback"></a>
+
+### Scenario 8: use safe literal fallback when semantic state is stale
+
+Input:
+
+```bash
+story rag search 'council vessel' --session novel
+```
+
+| Stage | What happens |
+| --- | --- |
+| Participating components | Inspection detects that the active conversations no longer match the derived checkpoint. Semantic candidates are not trusted; the runtime can still run bounded authorized literal retrieval and reread its current ranges. No story agent runs for this direct search. |
+| Stored or transient data | The old generation remains disposable and is marked stale best-effort. The query stays transient. Only current authoritative literal text can enter the result. |
+| Output and next action | This safe fallback is a completed command, not a failed command. The report says `literal_fallback` with reason `stale`; rebuild when semantic discovery is needed again. |
+
+```json
+{"authoritative_checkpoint":null,"automatic":false,"compatibility":"compatible","configuration":"not_applicable","counts":{"authoritative":{"conversations":0,"documents":0,"events":0,"source_utf8_bytes":0},"indexed":{"conversations":0,"documents":0,"events":0,"fragments":0,"generation_bytes":0,"generations":0,"orphan_generations":0,"payload_bytes":0,"source_utf8_bytes":0}},"excerpts":[{"citation_id":"g1","content":"The council vessel arrives at dawn.","reference":{"document_id":"document_arrival","end_codepoint":35,"fragment_id":"literal-dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","revision_id":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","start_codepoint":0},"source":{"conversation_id":"c_0123456789abcdef0123456789abcdef","event_kind":"user_message","sequence":1,"session_id":"novel","turn_id":"turn_arrival"}}],"failure":null,"indexed_checkpoint":null,"operation":"search","outcome":"completed","provider":"local","purged":{"generations":0,"orphan_generations":0},"rebuild_required":null,"retrieval_outcome":"literal_fallback","retrieval_reason":"stale","schema_version":1,"state":"stale","truncated":false}
+```
+
+An interactive turn presents the same fact without excerpt bodies:
+
+```text
+[context] [warning]
+  Conversation RAG: literal_fallback
+  Reason: stale
+```
+
+<a id="scenario-9-disable-or-purge-derived-state"></a>
+
+### Scenario 9: disable or purge derived state
+
+Choose the operation that matches the goal:
+
+```bash
+# Stop future configured composition and force Automatic Off.
+story rag disable
+
+# Separately delete the validated derived contents for one session.
+story rag purge --session novel --yes
+```
+
+| Goal | Participating components | Stored data and result |
+| --- | --- | --- |
+| Disable | The configuration manager atomically saves provider `null` and automatic `false`. | Authoritative conversations and every derived generation remain. A new shell is RAG-free; disabling is retention, not deletion. |
+| Purge | The generation store requires confirmation, validates the addressed session subtree, and deletes its active/status/generation contents independently of provider enablement. | Authoritative filesystem/SQLite conversations, configuration, manuscripts, and writing artifacts remain. Session lock files/directories remain, and filesystem snapshots, backups, caches, or previously copied output may retain data. Purge is not secure erase. |
+
+Representative disable output:
+
+```json
+{"authoritative_checkpoint":null,"automatic":false,"compatibility":null,"configuration":"saved","counts":{"authoritative":{"conversations":0,"documents":0,"events":0,"source_utf8_bytes":0},"indexed":{"conversations":0,"documents":0,"events":0,"fragments":0,"generation_bytes":0,"generations":0,"orphan_generations":0,"payload_bytes":0,"source_utf8_bytes":0}},"excerpts":[],"failure":null,"indexed_checkpoint":null,"operation":"disable","outcome":"completed","provider":null,"purged":{"generations":0,"orphan_generations":0},"rebuild_required":null,"retrieval_outcome":null,"retrieval_reason":null,"schema_version":1,"state":"disabled","truncated":null}
+```
+
+Representative output after purging one active generation and no orphan:
+
+```json
+{"authoritative_checkpoint":null,"automatic":null,"compatibility":null,"configuration":"not_applicable","counts":{"authoritative":{"conversations":0,"documents":0,"events":0,"source_utf8_bytes":0},"indexed":{"conversations":0,"documents":0,"events":0,"fragments":0,"generation_bytes":0,"generations":0,"orphan_generations":0,"payload_bytes":0,"source_utf8_bytes":0}},"excerpts":[],"failure":null,"indexed_checkpoint":null,"operation":"purge","outcome":"completed","provider":null,"purged":{"generations":1,"orphan_generations":0},"rebuild_required":true,"retrieval_outcome":null,"retrieval_reason":null,"schema_version":1,"state":"missing","truncated":null}
+```
+
+<a id="rag-data-lifecycle"></a>
+
+## Know what is authoritative, derived, transient, and exposed
+
+| Data | Location or lifetime | Meaning and exposure |
+| --- | --- | --- |
+| Active conversations | The selected filesystem or SQLite backend | Sole transcript authority. RAG never replaces it, and current ranges are reread here before use. |
+| Provider and Automatic policy | `config/system_defaults.json` | Durable next-shell construction inputs: provider `null`/`"local"` and automatic `false`/`true`. No query, credential, excerpt, vector, or provider diagnostic belongs here. |
+| Active and status pointers | `active.json` and `status.json` under the session RAG subtree | Disposable generation selection and advisory state. They contain identities, digests, counts, and fixed diagnostics, not query/source bodies. |
+| Generation metadata | `generation.json` and `generic-manifest.json` | Disposable schema/provider/model identities, digests, bounds, and counts. It is derived, not evidence that source text is still current. |
+| Derived source map | `source-map.jsonl` | Plaintext conversation fragments plus stable source identities and ranges. It is disposable but is still sensitive conversation data. |
+| Derived vectors | `vectors.jsonl` | Local numeric coordinates tied to fragment identities. Treat the entire generation subtree as sensitive even though vector rows are not transcript authority. |
+| Pending `/rag` query | One process-local controller value | Scoped to the attached session and focused conversation; replaced, retained, consumed, or cleared by the documented lifecycle. Never written to Story configuration, transcripts, RAG files, debug records, agent exchange, or semantic output. |
+| Retrieval result and terminal | One runtime result and its rendered view | Interactive output contains the reply, content-free outcome/reason, and sources; direct CLI search additionally contains excerpt bodies. Pipes, redirects, scrollback, and caller logs can retain displayed data. |
+| Visible story turn | Authoritative conversation transcript after successful commit | The later ordinary user message and agent reply persist normally. They can naturally restate material even though the private query itself is absent. |
+| Diagnostic provider exchange | `debug_logs/agent_exchanges/`, subject to its bounded independent retention | The exact initial story-provider request can contain bounded reread excerpts; continuation requests omit RAG context. The private query is absent. Capture is fail-open, so absence is not proof no provider call occurred. |
+| External story-provider request | Codex or Antigravity provider boundary | The initial request can expose bounded reread excerpts to the configured provider and its retention policy. Local embedding/ranking remains network-free; these are separate flows. |
+| Status/rebuild diagnostics | One compact CLI report on standard output | Content-free checkpoints, counts, compatibility, state, and fixed failure vocabulary; no query/source body/raw provider diagnostic. Terminal or redirected output can still persist these facts. |
+| Purge residue | Remaining lock/directories and any copies outside the validated subtree | Purge removes validated derived contents only. Backups, snapshots, caches, diagnostic exchanges, provider retention, terminal output, and authoritative conversations are independent and may remain. |
+
+The fixed projection admits only active conversations with complete visible
+`user_message`/`agent_reply` pairs. It deliberately does **not** project:
+
+- archived conversations, unmatched user turns, or `runtime_error` events;
+- hidden provider state, credentials/authentication, provider-private memory,
+  RAG queries, or raw candidates/scores;
+- writing artifacts merely referenced by a later message, debates, consensus
+  drafts, manuscripts, or core documents.
+
+RAG participates only in its six lifecycle/search commands, next-shell Local
+composition, eligible automatic or forced preflight, and best-effort
+post-commit projection. It is not involved in `/run`, debate, consensus,
+literal `/search`, `init`, artifact indexing, conversation-storage migration,
+SQLite readiness/provisioning, hidden provider history or credentials, or
+MySQL. The active storage adapter supplies authority through the same complete
+bundle; neither backend-specific FTS hints nor RAG candidates decide truth.
 
 ## Redistribution restriction
 
