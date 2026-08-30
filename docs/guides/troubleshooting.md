@@ -171,11 +171,24 @@ Run bare `/exchanges` only after attaching the affected session. The command
 accepts no IDs: select the exact Conversation or Debate full ID and subject,
 then the canonical agent. It does not require or change conversation focus.
 
-The viewer is part of every normal Story installation. If Story reports that
-the required viewer is unavailable or incompatible, the active environment is
-missing or has damaged/mismatched standard-install files. Repair or reinstall
-Story itself; do not treat the `viewer` extra as a separate fix. For example,
-use the first form for an installed distribution or the second from a checkout:
+The viewer is part of every normal Story installation. First distinguish an
+ordinary version upgrade from damaged same-version files. Pulling updated Story
+source does not update installed dependencies. If the active environment still
+has viewer 0.1.0 after the checkout is updated, rerun the normal editable
+installation:
+
+```bash
+python -m pip install --editable .
+```
+
+That ordinary reinstall upgrades viewer 0.1.0 to required 0.1.1. It needs no
+uninstall, `--force-reinstall`, or `--ignore-installed`. A missing required
+viewer should likewise be repaired by rerunning the normal Story installation
+first; the `viewer` extra is not a separate fix.
+
+Use a forced reinstall only when viewer 0.1.1 is already selected at the exact
+required pin but its installed files or three-name API are genuinely damaged.
+Use the applicable Story form so dependency parity is restored together:
 
 ```bash
 python -m pip install --force-reinstall story-writing-agents
@@ -186,7 +199,7 @@ The historical `story-writing-agents[viewer]` and editable `'.[viewer]'` forms
 remain accepted empty compatibility aliases but add no capability. An
 incompatible-viewer result means the installed three-name API does not match
 the exact required pin; verify the project requirement and lock identify
-`93c3823a17c965f1e3449a9ce3d98636ebf441d6`. Checkout maintainers can also
+`1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec`. Checkout maintainers can also
 initialize the matching submodule for audit or testing; runtime imports never
 come from `vendor/jsonl-viewer`.
 

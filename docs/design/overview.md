@@ -174,7 +174,7 @@ separate rejected-response artifact channel:
 | `agent_exchanges.capture` | Fail-open request, exact valid `ProviderResult`, and terminal-outcome sequencing around each physical provider call |
 | `interactive_controller._exchange_policy` | Pure inventory deduplication, newest-scope ordering, Conversation/Debate subject projection, and complete roster-agent choices |
 | `interactive_controller._exchange_viewer` | Sole lazy required-package boundary; validates the exact external three-name API and Story field/header projection before terminal acquisition |
-| `jsonl-viewer` at required base pin `93c3823a17c965f1e3449a9ce3d98636ebf441d6` | Independent Story-free immutable JSONL parsing, recursive bounded nested-JSON display, leaf-only previews, Simple/Verbose projection, line gutter/navigation, search, rendering, help, and transient view state |
+| `jsonl-viewer` 0.1.1 at required base pin `1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec` | Independent Story-free immutable JSONL parsing, recursive bounded nested-JSON display, leaf-only previews, Simple/Verbose projection, line gutter/navigation, search, rendering, help, and transient view state |
 | `interactive_terminal._external_view` | Generic borrowed-host protocol, printable/SGR frame validation, and ordinary-line event adaptation without renderer or Story-domain knowledge |
 | `interactive_terminal._driver` | Sole raw-mode, input, signal, geometry, output, alternate-screen, and restoration lifecycle for the hosted view |
 
@@ -188,7 +188,7 @@ adapter remains the only lazy runtime import boundary. The external package
 imports no Story module. See the
 [persistence contract](persistence.md#agent-exchange-persistence), [inspection
 guide](../guides/agent-exchanges.md), and pinned external [design
-system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/93c3823a17c965f1e3449a9ce3d98636ebf441d6/docs/design-system.md).
+system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec/docs/design-system.md).
 
 ## Fixed collaboration model
 

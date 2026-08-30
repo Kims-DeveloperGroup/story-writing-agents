@@ -36,7 +36,9 @@ _GENERIC_RAG_REPOSITORY = "https://github.com/Kims-DeveloperGroup/generic-rag.gi
 _GENERIC_RAG_REQUIREMENT = (
     f"generic-rag @ git+{_GENERIC_RAG_REPOSITORY}@{_GENERIC_RAG_PIN}"
 )
-_JSONL_VIEWER_PIN = "93c3823a17c965f1e3449a9ce3d98636ebf441d6"
+_OLD_JSONL_VIEWER_PIN = "5d3047aa86212810d867d5b40cb1df3262f1810f"
+_JSONL_VIEWER_PIN = "1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec"
+_JSONL_VIEWER_VERSION = "0.1.1"
 _JSONL_VIEWER_REPOSITORY = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git"
 _JSONL_VIEWER_REQUIREMENT = (
     f"jsonl-viewer @ git+{_JSONL_VIEWER_REPOSITORY}@{_JSONL_VIEWER_PIN}"
@@ -176,6 +178,29 @@ def _copy_build_input(source: Path, destination: Path, *, vendor: bool) -> None:
         )
 
 
+def _copy_setuptools_build_support(destination: Path) -> None:
+    specification = importlib.util.find_spec("setuptools")
+    if specification is None or specification.origin is None:
+        raise AssertionError("setuptools build support is unavailable")
+    source = Path(specification.origin).parent
+    site_packages = source.parent
+    destination.mkdir()
+    for package_name in ("setuptools", "_distutils_hack"):
+        package = site_packages / package_name
+        if package.is_dir():
+            shutil.copytree(
+                package,
+                destination / package_name,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            )
+    for metadata in (
+        *site_packages.glob("setuptools-*.dist-info"),
+        *site_packages.glob("setuptools-*.egg-info"),
+    ):
+        if metadata.is_dir():
+            shutil.copytree(metadata, destination / metadata.name)
+
+
 def _gitlink_git_directory(relative: str) -> Path:
     if relative not in _GITLINK_PATHS:
         raise ValueError("unsupported gitlink path")
@@ -189,6 +214,18 @@ def _gitlink_git_directory(relative: str) -> Path:
     directory = Path(resolved)
     if not directory.is_absolute():
         directory = _REPOSITORY_ROOT / directory
+    if not directory.is_dir():
+        common = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            cwd=_REPOSITORY_ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+        common_directory = Path(common)
+        if not common_directory.is_absolute():
+            common_directory = _REPOSITORY_ROOT / common_directory
+        directory = common_directory / "modules" / relative
     if not directory.is_dir():
         raise AssertionError(f"gitlink object store is unavailable: {relative}")
     return directory.resolve()
@@ -540,6 +577,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
     def test_required_metadata_lock_and_gitlinks_share_exact_pins(self) -> None:
         with (_REPOSITORY_ROOT / "pyproject.toml").open("rb") as handle:
             project = tomllib.load(handle)["project"]
+        self.assertEqual(project["version"], "0.1.0")
         self.assertEqual(project["dependencies"], [_JSONL_VIEWER_REQUIREMENT])
         self.assertEqual(
             project["optional-dependencies"],
@@ -559,12 +597,13 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             generic["source"]["git"],
             f"{_GENERIC_RAG_REPOSITORY}?rev={_GENERIC_RAG_PIN}#{_GENERIC_RAG_PIN}",
         )
-        self.assertEqual(viewer["version"], "0.1.0")
+        self.assertEqual(viewer["version"], _JSONL_VIEWER_VERSION)
         self.assertEqual(
             viewer["source"]["git"],
             f"{_JSONL_VIEWER_REPOSITORY}?rev={_JSONL_VIEWER_PIN}#{_JSONL_VIEWER_PIN}",
         )
         story = packages["story-writing-agents"]
+        self.assertEqual(story["version"], "0.1.0")
         self.assertEqual(story["dependencies"], [{"name": "jsonl-viewer"}])
         self.assertEqual(
             story["optional-dependencies"],
@@ -656,6 +695,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
 
             with (viewer_project / "pyproject.toml").open("rb") as handle:
                 viewer_project_metadata = tomllib.load(handle)["project"]
+            self.assertEqual(viewer_project_metadata["version"], _JSONL_VIEWER_VERSION)
             self.assertEqual(viewer_project_metadata["license"], "MIT")
             self.assertEqual(viewer_project_metadata["requires-python"], ">=3.11")
             self.assertEqual(viewer_project_metadata["dependencies"], [])
@@ -691,6 +731,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     archive.read(viewer_metadata_name)
                 )
             self.assertEqual(viewer_metadata["License-Expression"], "MIT")
+            self.assertEqual(viewer_metadata["Version"], _JSONL_VIEWER_VERSION)
             self.assertEqual(viewer_metadata["Requires-Python"], ">=3.11")
             self.assertIsNone(viewer_metadata["Requires-Dist"])
 
@@ -831,7 +872,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 """
             )
             damaged = subprocess.run(
-                [sys.executable, "-I", "-W", "error", "-c", damaged_script],
+                [sys.executable, "-I", "-S", "-W", "error", "-c", damaged_script],
                 text=True,
                 capture_output=True,
                 check=False,
@@ -868,7 +909,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 """
             )
             optional = subprocess.run(
-                [sys.executable, "-I", "-W", "error", "-c", optional_script],
+                [sys.executable, "-I", "-S", "-W", "error", "-c", optional_script],
                 text=True,
                 capture_output=True,
                 check=False,
@@ -918,7 +959,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 """
             )
             viewer = subprocess.run(
-                [sys.executable, "-I", "-W", "error", "-c", viewer_script],
+                [sys.executable, "-I", "-S", "-W", "error", "-c", viewer_script],
                 text=True,
                 capture_output=True,
                 check=False,
@@ -947,6 +988,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 distribution,
             )
             viewer_git_directory = _gitlink_git_directory("vendor/jsonl-viewer")
+            build_support = root / "build-support"
+            _copy_setuptools_build_support(build_support)
             install_environment = os.environ.copy()
             for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"):
                 install_environment.pop(name, None)
@@ -960,6 +1003,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     "GIT_CONFIG_VALUE_0": _JSONL_VIEWER_REPOSITORY,
                     "PIP_DISABLE_PIP_VERSION_CHECK": "1",
                     "PIP_NO_INDEX": "1",
+                    "PYTHONPATH": str(build_support),
                     "PYTHONNOUSERSITE": "1",
                 }
             )
@@ -993,7 +1037,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                         "vcs": "git",
                     }},
                 }}, direct_url
-                assert viewer_distribution.version == "0.1.0"
+                assert viewer_distribution.version == {_JSONL_VIEWER_VERSION!r}
                 assert viewer_distribution.requires in (None, [])
                 assert sum(
                     distribution.metadata["Name"].lower() == "jsonl-viewer"
@@ -1069,7 +1113,6 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                             sys.executable,
                             "-m",
                             "venv",
-                            "--system-site-packages",
                             str(environment),
                         ],
                         text=True,
@@ -1126,6 +1169,269 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                         0,
                         f"stdout:\n{verified.stdout}\nstderr:\n{verified.stderr}",
                     )
+
+    @unittest.skipUnless(
+        importlib.util.find_spec("setuptools") is not None,
+        "isolated upgrade verification requires setuptools",
+    )
+    def test_normal_story_install_upgrades_exact_old_viewer_and_renders_nested_json(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            story_project = root / "story-project"
+            _copy_build_input(_REPOSITORY_ROOT, story_project, vendor=True)
+            environment = root / "venv-upgrade"
+            created = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "venv",
+                    str(environment),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(
+                created.returncode,
+                0,
+                f"stdout:\n{created.stdout}\nstderr:\n{created.stderr}",
+            )
+            python = environment / "bin" / "python"
+            build_support = root / "build-support"
+            _copy_setuptools_build_support(build_support)
+            viewer_git_directory = _gitlink_git_directory("vendor/jsonl-viewer")
+            install_environment = os.environ.copy()
+            for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"):
+                install_environment.pop(name, None)
+            install_environment.update(
+                {
+                    "GIT_ALLOW_PROTOCOL": "file",
+                    "GIT_CONFIG_COUNT": "1",
+                    "GIT_CONFIG_KEY_0": (
+                        f"url.file://{viewer_git_directory.as_posix()}/.insteadOf"
+                    ),
+                    "GIT_CONFIG_VALUE_0": _JSONL_VIEWER_REPOSITORY,
+                    "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+                    "PIP_NO_INDEX": "1",
+                    "PYTHONPATH": str(build_support),
+                    "PYTHONNOUSERSITE": "1",
+                }
+            )
+            old_requirement = (
+                f"jsonl-viewer @ git+{_JSONL_VIEWER_REPOSITORY}@{_OLD_JSONL_VIEWER_PIN}"
+            )
+            seed_command = [
+                str(python),
+                "-m",
+                "pip",
+                "install",
+                "--no-build-isolation",
+                old_requirement,
+            ]
+            seeded = subprocess.run(
+                seed_command,
+                env=install_environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(
+                seeded.returncode,
+                0,
+                f"stdout:\n{seeded.stdout}\nstderr:\n{seeded.stderr}",
+            )
+            old_probe = textwrap.dedent(
+                f"""
+                import importlib.metadata
+                import json
+                viewer = importlib.metadata.distribution("jsonl-viewer")
+                assert viewer.version == "0.1.0"
+                direct_url = json.loads(viewer.read_text("direct_url.json"))
+                assert direct_url == {{
+                    "url": {_JSONL_VIEWER_REPOSITORY!r},
+                    "vcs_info": {{
+                        "commit_id": {_OLD_JSONL_VIEWER_PIN!r},
+                        "requested_revision": {_OLD_JSONL_VIEWER_PIN!r},
+                        "vcs": "git",
+                    }},
+                }}, direct_url
+                """
+            )
+            old_verified = subprocess.run(
+                [str(python), "-I", "-W", "error", "-c", old_probe],
+                env=install_environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(
+                old_verified.returncode,
+                0,
+                f"stdout:\n{old_verified.stdout}\nstderr:\n{old_verified.stderr}",
+            )
+
+            upgrade_command = [
+                str(python),
+                "-m",
+                "pip",
+                "install",
+                "--no-build-isolation",
+                "-e",
+                str(story_project),
+            ]
+            self.assertNotIn("--ignore-installed", upgrade_command)
+            self.assertNotIn("--force-reinstall", upgrade_command)
+            self.assertNotIn("uninstall", upgrade_command)
+            upgraded = subprocess.run(
+                upgrade_command,
+                env=install_environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(
+                upgraded.returncode,
+                0,
+                f"stdout:\n{upgraded.stdout}\nstderr:\n{upgraded.stderr}",
+            )
+            checked = subprocess.run(
+                [str(python), "-m", "pip", "check"],
+                env=install_environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(
+                checked.returncode,
+                0,
+                f"stdout:\n{checked.stdout}\nstderr:\n{checked.stderr}",
+            )
+            upgraded_probe = textwrap.dedent(
+                f"""
+                import importlib.metadata
+                import json
+
+                viewer_distribution = importlib.metadata.distribution("jsonl-viewer")
+                assert viewer_distribution.version == {_JSONL_VIEWER_VERSION!r}
+                assert json.loads(viewer_distribution.read_text("direct_url.json")) == {{
+                    "url": {_JSONL_VIEWER_REPOSITORY!r},
+                    "vcs_info": {{
+                        "commit_id": {_JSONL_VIEWER_PIN!r},
+                        "requested_revision": {_JSONL_VIEWER_PIN!r},
+                        "vcs": "git",
+                    }},
+                }}
+                assert sum(
+                    distribution.metadata["Name"].lower() == "jsonl-viewer"
+                    for distribution in importlib.metadata.distributions()
+                ) == 1
+
+                from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
+                from story_writing_agents.interactive_controller._exchange_viewer import prepare_agent_exchange_view
+                nested = {{
+                    "payload": {{
+                        "complete_key": "complete value",
+                        "long_leaf": "x" * 5_000,
+                    }},
+                    "items": [{{"item_key": "item value"}}],
+                }}
+                content = json.dumps(
+                    {{
+                        "kind": "provider_response",
+                        "response_text": json.dumps(
+                            nested,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                    }},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                source = (
+                    json.dumps(
+                        {{
+                            "timestamp": "2026-08-30T00:00:00Z",
+                            "request_type": "response",
+                            "content": content,
+                        }},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    + "\\n"
+                ).encode("utf-8")
+                original = bytes(source)
+                class Host:
+                    def __init__(self): self.frames = []; self.closed = 0
+                    def terminal_size(self): return (240, 40)
+                    def color_enabled(self): return False
+                    def present(self, frame): self.frames.append(frame)
+                    def read_event(self): return "close"
+                    def close_view(self): self.closed += 1
+                host = Host()
+                operation = prepare_agent_exchange_view(
+                    source,
+                    session_id="session_1",
+                    scope_kind=AgentExchangeScopeKind.CONVERSATION,
+                    scope_id="conversation_1",
+                    scope_subject="Upgrade subject",
+                    agent_id="character_custodian",
+                )
+                operation(host)
+                assert host.closed == 1
+                assert source == original
+                assert host.frames
+                frame = host.frames[-1]
+                assert "\\x1b" not in frame
+                assert '"content": [expanded JSON string ×1] {{' in frame
+                assert '"response_text": [expanded JSON string ×1] {{' in frame
+                assert '"payload": {{' in frame
+                assert '"complete_key": "complete value"' in frame
+                assert '"items": [' in frame
+                assert '"item_key": "item value"' in frame
+                assert r'\\"response_text\\"' not in frame
+                assert r'\\"payload\\"' not in frame
+                truncated_lines = [
+                    line for line in frame.splitlines() if "[truncated" in line
+                ]
+                assert len(truncated_lines) == 1, truncated_lines
+                assert (
+                    '"long_leaf": [truncated 4096/5000 UTF-8 bytes] "'
+                    in truncated_lines[0]
+                )
+                assert "JSON display 2 expanded, 0 skipped, 1 truncated" in frame
+                key_lines = [
+                    next(
+                        index
+                        for index, line in enumerate(frame.splitlines())
+                        if key in line
+                    )
+                    for key in (
+                        '"content"',
+                        '"response_text"',
+                        '"payload"',
+                        '"complete_key"',
+                        '"long_leaf"',
+                        '"items"',
+                        '"item_key"',
+                    )
+                ]
+                assert len(set(key_lines)) == len(key_lines)
+                """
+            )
+            verified = subprocess.run(
+                [str(python), "-I", "-W", "error", "-c", upgraded_probe],
+                env=install_environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(
+                verified.returncode,
+                0,
+                f"stdout:\n{verified.stdout}\nstderr:\n{verified.stderr}",
+            )
 
 
 if __name__ == "__main__":

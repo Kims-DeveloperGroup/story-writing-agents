@@ -1708,8 +1708,8 @@ strings expand recursively as a bounded derived display, removing only their
 extra outer quote/backslash encoding; preview limits apply to string leaves and
 never truncate containers or structure. Those behaviors and nine byte-tested
 frames are authoritative in the pinned external [design
-system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/93c3823a17c965f1e3449a9ce3d98636ebf441d6/docs/design-system.md)
-and [samples](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/93c3823a17c965f1e3449a9ce3d98636ebf441d6/docs/samples).
+system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec/docs/design-system.md)
+and [samples](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec/docs/samples).
 Story retains no view state or returned content after `open()` completes.
 
 <a id="exact-search-and-transcript-records"></a>

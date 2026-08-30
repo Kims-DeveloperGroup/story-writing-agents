@@ -1278,7 +1278,11 @@ disappeared, or failed views; eligible failures add only the normal sanitized
 runtime-debug hint. There is no replay, retry, live tail, edit, export, raw
 path, or external error prose. See
 [Inspect agent exchanges](../guides/agent-exchanges.md) for the exact
-availability, picker, viewer, privacy, and recovery workflow.
+availability, upgrade, picker, viewer, privacy, and recovery workflow. In
+particular, an updated checkout with viewer 0.1.0 uses the ordinary
+`python -m pip install --editable .` path to reach required 0.1.1. Forced
+reinstallation is repair for damaged exact-version files, not the normal
+upgrade path.
 
 Full help is one grouped semantic `Panel` in command-registry order; contextual
 help is one command record with its group, syntax, aliases, provider/artifact

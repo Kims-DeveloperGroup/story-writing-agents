@@ -6106,7 +6106,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   internal edges produce 92 modules and 372 edges without a cycle. Root,
   `agent_exchanges`, and `interactive_terminal` facades remain exactly 120, 15,
   and 12 names. `jsonl-viewer` is installed from the unconditional exact VCS
-  requirement at `93c3823a17c965f1e3449a9ce3d98636ebf441d6`, but is loaded
+  requirement at `1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec`, but is loaded
   only by `_exchange_viewer` after an explicit command and is validated before
   terminal acquisition. The empty `viewer` extra is a compatibility alias;
   the lock source and matching gitlink are external audit/package facts, not
