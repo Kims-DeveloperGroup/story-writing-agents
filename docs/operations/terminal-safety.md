@@ -820,10 +820,16 @@ file and owns no Story scope, storage, provider, retry, replay, or focus policy.
 The capable lifecycle acquires the universal input latch, rejects reentry or
 progress overlap, validates the current terminal configuration, activates raw
 mode, enters one alternate screen, runs the operation, closes the host, exits
-the screen, restores termios, and releases the latch. Goto and search prompts
-temporarily restore ordinary input, then must reactivate the same configuration
-before another view event. Restoration failure remains fatal; an active
-operation failure takes precedence over host-close failure.
+the screen, restores termios, and releases the latch. Goto temporarily restores
+ordinary input. Search field and query instead use the sole driver's transient,
+history-free line editor and reactivate the same outer viewer configuration
+before another view event. Escape at either Search prompt discards its draft,
+redraws the exact last validated successfully presented frame, and emits no
+external-view event. Supported prompt navigation remains editing-local;
+unsupported, truncated, and over-limit escape sequences are bounded, drained,
+and treated as prompt cancellation so suffix bytes cannot become viewer
+commands. Restoration failure remains fatal; an active operation failure takes
+precedence over host-close failure.
 
 Fallback uses the existing borrowed line callbacks, forces plain frames, and
 never enters raw mode or an alternate screen. Its complete frames, `viewer> `

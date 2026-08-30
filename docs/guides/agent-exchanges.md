@@ -148,6 +148,15 @@ content_full_characters, content_retained_characters, content_truncated,
 content_sha256
 ```
 
+On a capable terminal, both `Search field: ` and `Search query: ` are
+history-free transient editors. Pressing Escape at either prompt discards only
+that unfinished draft and redraws the exact last successfully presented viewer
+frame. Story sends no viewer event, so the selected source record, mode, active
+search, current match, and `current/total` footer position stay unchanged; the
+next key is read as a viewer command. Prompt navigation keys edit locally.
+Unsupported, truncated, or over-limit escape sequences cancel after bounded
+consumption instead of leaking their remaining bytes into viewer commands.
+
 The footer reports transient `current/total` position. `n` moves to the next
 match and `N` to the previous match, wrapping in both directions. Searching a
 field hidden by Simple mode automatically promotes the first hit to Verbose and
@@ -155,7 +164,9 @@ prevents Simple mode while that hidden-field search remains active. `c` clears
 search, and `h` or `?` opens transient help.
 
 Escape dismisses help, then search, then a transient status; with nothing left
-to dismiss it closes. `q` or EOF closes immediately. In ordinary-line fallback,
+to dismiss it closes. This main-view behavior begins after a prompt has
+finished or been cancelled; prompt-local Escape does not clear or close the
+view. `q` or EOF closes immediately. In ordinary-line fallback,
 use `g LINE`, `/ FIELD QUERY`, `j`/`down`, `k`/`up`, `pgdn`, `pgup`, `n`, `N`,
 `m`, `h`, `c`, and `q`/`quit` at `viewer> `.
 
@@ -249,6 +260,16 @@ malformed`.
    or retry merely to fill the diagnostic.
 6. Close with `q`. Reopening starts in fresh Simple mode with no prior cursor,
    search, match position, footer result, or help state.
+
+### Cancel an accidental search without losing your place
+
+1. While inspecting a match, press `/` and begin entering a field or query.
+2. Press Escape before Enter. The unfinished text disappears and the exact
+   prior read-only frame returns, including its source line, mode, active
+   search, selected match, result position, and footer.
+3. Press `n` or `N` to continue from that retained match, or `/` to start a new
+   search. Nothing from the cancelled draft is searched, recorded, or added to
+   command history.
 
 The separate `debug_logs/provider_error_responses/` channel may retain an
 eligible completed response rejected during decoding. It has different
