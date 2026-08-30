@@ -70,6 +70,17 @@ SEARCHABLE_FIELDS = (
     "content_truncated",
     "content_sha256",
 )
+VIEWER_ERROR_MESSAGES = {
+    "installation_required": (
+        "Required agent exchange viewer is unavailable. Repair or reinstall "
+        "Story and retry /exchanges."
+    ),
+    "incompatible": (
+        "Required agent exchange viewer is incompatible with Story. Repair or "
+        "reinstall Story and retry /exchanges."
+    ),
+    "view_failed": "Agent exchange viewer failed.",
+}
 
 
 def _selection(
@@ -527,7 +538,17 @@ class LazyViewerAdapterTests(unittest.TestCase):
                         agent_id=ROSTER[0],
                     )
                 self.assertEqual(raised.exception.code, expected_code)
+                self.assertEqual(
+                    str(raised.exception),
+                    VIEWER_ERROR_MESSAGES[expected_code],
+                )
+                self.assertLessEqual(len(str(raised.exception).encode("utf-8")), 160)
                 self.assertNotIn("PRIVATE", str(raised.exception))
+                self.assertNotIn("[viewer]", str(raised.exception))
+                self.assertNotIn("optional", str(raised.exception).lower())
+                self.assertFalse(
+                    any(ord(character) < 32 for character in str(raised.exception))
+                )
 
     def test_every_repaired_api_shape_mismatch_fails_before_operation_creation(
         self,
@@ -585,6 +606,10 @@ class LazyViewerAdapterTests(unittest.TestCase):
                     agent_id=ROSTER[0],
                 )
             self.assertEqual(raised.exception.code, "incompatible")
+            self.assertEqual(
+                str(raised.exception),
+                VIEWER_ERROR_MESSAGES["incompatible"],
+            )
 
     def test_invalid_source_and_runtime_view_failure_preserve_fixed_boundary(
         self,
@@ -624,7 +649,7 @@ class LazyViewerAdapterTests(unittest.TestCase):
         with self.assertRaises(AgentExchangeViewerError) as raised:
             operation(_RecordingHost())
         self.assertEqual(raised.exception.code, "view_failed")
-        self.assertEqual(str(raised.exception), "Agent exchange viewer failed.")
+        self.assertEqual(str(raised.exception), VIEWER_ERROR_MESSAGES["view_failed"])
         self.assertIs(raised.exception.__cause__, private)
 
     @unittest.skipUnless(VIEWER_SOURCE.is_dir(), "pinned jsonl-viewer is unavailable")
@@ -1063,20 +1088,59 @@ class AgentExchangeControllerIntegrationTests(ControllerTestCase):
         failures = (
             AgentExchangeStorageError(AgentExchangeFailure.CORRUPT_STORAGE),
             AgentExchangeProjectionError(private),
-            AgentExchangeViewerError("view_failed"),
         )
         controller._present_agent_exchange_storage_failure(failures[0])  # type: ignore[arg-type]
         controller._present_agent_exchange_projection_failure(failures[1])  # type: ignore[arg-type]
-        controller._present_agent_exchange_viewer_failure(failures[2])  # type: ignore[arg-type]
         rendered = "".join(callbacks.records)
         self.assertNotIn(private, rendered)
         self.assertIn("could not be read safely", rendered)
         compact_rendered = " ".join(rendered.split())
         self.assertIn("could not be correlated", compact_rendered)
-        self.assertIn("agent exchange viewer failed", rendered.lower())
         debug = workspace.path("debug_logs/runtime.jsonl").read_text(encoding="utf-8")
         self.assertNotIn(private, debug)
         self.assertNotIn(str(workspace.root), debug)
+
+    def test_all_viewer_failures_have_fixed_required_installation_guidance(
+        self,
+    ) -> None:
+        cases = {
+            "installation_required": (
+                "The required agent exchange viewer is unavailable.",
+                "Repair or reinstall the standard story-writing-agents "
+                "installation and retry /exchanges.",
+            ),
+            "incompatible": (
+                "The required agent exchange viewer is incompatible with Story.",
+                "Repair or reinstall the standard story-writing-agents "
+                "installation and retry /exchanges.",
+            ),
+            "view_failed": (
+                "The agent exchange viewer failed.",
+                "Inspect the sanitized diagnostic before retrying /exchanges.",
+            ),
+        }
+        for code, (summary, hint) in cases.items():
+            with self.subTest(code=code):
+                workspace = self.make_workspace()
+                controller, _backend, callbacks = self.make_controller(workspace)
+                controller._attached_session_id = "session_1"
+                controller._present_agent_exchange_viewer_failure(
+                    AgentExchangeViewerError(code)
+                )
+                rendered = "".join(callbacks.records)
+                compact = "".join(rendered.split())
+                self.assertIn("".join(summary.split()), compact)
+                self.assertIn("".join(hint.split()), compact)
+                self.assertNotIn("optional", rendered.lower())
+                self.assertNotIn("[viewer]", rendered)
+                self.assertNotIn("PRIVATE", rendered)
+                self.assertNotIn("/tmp/", rendered)
+                self.assertLessEqual(len(rendered.encode("utf-8")), 512)
+                debug = workspace.path("debug_logs/runtime.jsonl").read_text(
+                    encoding="utf-8"
+                )
+                self.assertNotIn("PRIVATE", debug)
+                self.assertNotIn(str(workspace.root), debug)
 
 
 if __name__ == "__main__":

@@ -24,7 +24,7 @@ and write a manuscript only after all three voting specialists agree.
 > Every physical provider call also attempts a bounded request, optional raw
 > valid `ProviderResult`, and terminal-outcome record. After a session is
 > attached, bare `/exchanges` opens scope and agent pickers followed by an
-> optional isolated read-only JSONL viewer. See
+> installed isolated read-only JSONL viewer. See
 > [Inspect agent exchanges](docs/guides/agent-exchanges.md).
 
 ## Quick start
@@ -64,11 +64,12 @@ python -m pip install --editable .
 rehash
 ```
 
-That is the dependency-free base installation. It records bounded agent
-exchanges but does not install their structured viewer. Install the optional
-viewer from a checkout with `python -m pip install --editable '.[viewer]'`; it
-uses an exact VCS pin and does not invoke a provider. See
-[Inspect agent exchanges](docs/guides/agent-exchanges.md#install-the-optional-viewer).
+That is the normal RAG-free installation. It installs the independent
+`jsonl-viewer` at the exact required VCS pin, so bare `/exchanges` needs no
+setting, enablement step, or extra. The historical `viewer` extra remains an
+accepted empty compatibility alias—`'.[viewer]'` installs no distinct
+capability. Installing either form does not invoke a provider. See
+[Inspect agent exchanges](docs/guides/agent-exchanges.md#availability-and-installation).
 Approved internal, non-redistributing
 evaluation can use the optional direct Python boundary, deterministic local
 provider, disposable generation store, and programmatic runtime/agent
@@ -153,7 +154,7 @@ story run --output part-01/opening.md --prompt 'Draft the opening.'
 - [Antigravity guide](docs/guides/antigravity.md) covers `agy` setup, authentication, routing, safety, sessions, and provider-free verification.
 - [Story sessions](docs/guides/story-sessions.md) shows shell management, conversation reads, retrieval, and consensus.
 - [Bounded agent context](docs/guides/agent-context.md) explains selection, search/read, debate deltas, Part-scoped changes, exact references, progress, and recovery.
-- [Inspect agent exchanges](docs/guides/agent-exchanges.md) explains optional viewer installation, picker-first request/response/outcome inspection, colors, privacy, and recovery.
+- [Inspect agent exchanges](docs/guides/agent-exchanges.md) explains standard-install availability, picker-first request/response/outcome inspection, nested JSON, colors, privacy, and recovery.
 - [Session lifecycle](docs/design/session-lifecycle.md) maps internal state to commands, output, errors, and next actions.
 - [Consensus-run guide](docs/guides/consensus-runs.md) covers prompts, drafts, outputs, and round limits.
 - [CLI reference](docs/reference/cli.md) is the exact installed command contract.
@@ -316,4 +317,10 @@ Contributors should read [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md), [AGENT_TASK_R
 
 <a id="project-structure"></a>
 
-The Python package is under `src/story_writing_agents/`; tests are under `tests/`; role prompts are under `config/agents/`; and [PYTHON_MODULE_INDEX.md](PYTHON_MODULE_INDEX.md) is the module navigation map.
+The Python package is under `src/story_writing_agents/`; tests are under
+`tests/`; role prompts are under `config/agents/`; and
+[PYTHON_MODULE_INDEX.md](PYTHON_MODULE_INDEX.md) is the module navigation map.
+Contributors who need to audit or test the independently maintained viewer
+source can optionally initialize `vendor/jsonl-viewer`; normal Story
+installation resolves the required package directly and does not import from
+that submodule.

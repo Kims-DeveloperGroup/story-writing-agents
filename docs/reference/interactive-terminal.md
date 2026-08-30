@@ -1627,9 +1627,10 @@ byte is never guessed into a live key role.
 
 This is a generic package-internal terminal host, not Story's supplied-text
 range renderer and not a supported public terminal API. `/exchanges` is its
-first installed consumer. The controller validates the pinned external package
-and constructs one operation over immutable bytes before calling
-`InteractiveExternalViewer.open()`.
+first installed consumer. Every normal Story installation contains the exact
+pinned external package; the controller still imports and validates its public
+API lazily only while preparing `/exchanges`, then constructs one operation
+over immutable bytes before calling `InteractiveExternalViewer.open()`.
 
 `interactive_terminal._external_view.__all__` is exactly
 `ExternalViewOperation` and `ExternalViewerHost`. The runtime-checkable host
@@ -1702,10 +1703,13 @@ failure.
 The external operation receives complete-frame geometry and current Story
 color eligibility but owns all JSONL parsing, Simple/Verbose state, line gutter,
 navigation, search, match position, truncation preview, responsive rendering,
-semantic color roles, footer, and help. Those behaviors and seven byte-tested
+semantic color roles, footer, and help. Complete strict object/array JSON
+strings expand recursively as a bounded derived display, removing only their
+extra outer quote/backslash encoding; preview limits apply to string leaves and
+never truncate containers or structure. Those behaviors and nine byte-tested
 frames are authoritative in the pinned external [design
-system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/5d3047aa86212810d867d5b40cb1df3262f1810f/docs/design-system.md)
-and [samples](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/5d3047aa86212810d867d5b40cb1df3262f1810f/docs/samples).
+system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/93c3823a17c965f1e3449a9ce3d98636ebf441d6/docs/design-system.md)
+and [samples](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/93c3823a17c965f1e3449a9ce3d98636ebf441d6/docs/samples).
 Story retains no view state or returned content after `open()` completes.
 
 <a id="exact-search-and-transcript-records"></a>

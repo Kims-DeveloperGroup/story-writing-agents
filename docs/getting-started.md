@@ -62,18 +62,17 @@ submodule setup, `.[rag]` installation, commands, offline pin checks,
 interactive use, persistence/trust limits, and the current redistribution
 restriction.
 
-The base also records bounded plaintext agent requests, exact valid
-`ProviderResult` projections, and terminal outcomes without an added
-dependency. To inspect them through bare `/exchanges`, install the independent
-read-only viewer from this checkout:
-
-```bash
-python -m pip install --editable '.[viewer]'
-```
-
-The `viewer` extra uses an exact VCS commit and does not invoke a provider or
-enable a service. Its matching submodule, pin checks, picker-first workflow,
-preview, colors, privacy limits, and recovery are in
+The normal installation also installs the independent read-only
+`jsonl-viewer` at the required exact VCS commit. It records bounded plaintext
+agent requests, exact valid `ProviderResult` projections, and terminal
+outcomes; after a session is attached, bare `/exchanges` works without a
+setting, enablement step, or extra. The historical `viewer` extra is still
+accepted as an empty compatibility alias. A checkout can retain
+`python -m pip install --editable '.[viewer]'`, but it installs the same
+capability as the editable command above. Neither form invokes a provider or
+enables a service. The matching optional development submodule, pin checks,
+picker-first workflow, preview, nested JSON, colors, privacy limits, and
+recovery are in
 [Inspect agent exchanges](guides/agent-exchanges.md).
 
 ## 2. Check the runtime without a provider

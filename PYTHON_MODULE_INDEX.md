@@ -90,7 +90,7 @@ interactive_controller._conversation_policy -> conversation_search/conversations
 interactive_controller._exchange_policy -> agent_exchanges/agents/models
 interactive_controller._exchange_viewer -> agent_exchanges
                                         -> interactive_terminal._external_view
-                                        -> jsonl-viewer (optional exact-pinned external package, lazy)
+                                        -> jsonl-viewer (required exact-pinned base package, lazy import)
 interactive_controller._runtime_policy -> agent_context.service
                                        -> conversation_retrieval/conversation_search
                                        -> errors/interactive_terminal/models/workspace
@@ -3148,7 +3148,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   Additive alias-free bare `/exchanges` is represented by the exact
   no-payload `EXCHANGES` action, accepts no argument or trailing field, and is
   classified as a provider-free read-only inspection command. Parsing neither
-  imports the optional viewer nor reads exchange storage.
+  imports the required external viewer package nor reads exchange storage.
   Story-session parsing recognizes exactly
   `/session create NAME`, `/session resume [NAME]`, `/session pause`, and
   `/session list`, with no old lifecycle verbs or aliases. Conversation
@@ -3762,7 +3762,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.interactive_controller._exchange_viewer`
 
 - **Source:** `src/story_writing_agents/interactive_controller/_exchange_viewer.py`
-- **Responsibility:** Adapt one Story exchange snapshot to the optional generic
+- **Responsibility:** Adapt one Story exchange snapshot to the required generic
   JSONL viewer.
 - **Supported surface:** No project-public import. Its exact package-internal
   `__all__` contains fixed-prose `AgentExchangeViewerError` and
@@ -3780,15 +3780,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   calls the viewer exactly once; runtime viewer exceptions become fixed
   viewer-failed errors without exposing external prose.
 - **Direct internal dependencies:** `agent_exchanges` and
-  `interactive_terminal._external_view`. The separately installed
-  `jsonl-viewer` exact pin is an optional lazy external boundary, not an
-  internal module edge; the vendored gitlink is audit provenance and never a
+  `interactive_terminal._external_view`. The base-installed `jsonl-viewer`
+  exact pin is reached only through this validated lazy external boundary, not
+  an internal module edge. The empty `viewer` extra remains an installation
+  compatibility alias; the vendored gitlink is audit provenance and never a
   runtime import source.
-- **State, resources, and side effects:** Import is optional-package-free and
-  I/O-free. Preparation retains one immutable source/spec closure only for the
-  returned operation; it acquires no terminal, stream, filesystem handle,
-  provider, storage writer, or persistent state. All viewer state remains
-  external and transient.
+- **State, resources, and side effects:** Import is I/O-free and does not import
+  `jsonl_viewer`. Preparation performs the lazy facade check; a missing or
+  incompatible required distribution produces fixed standard-install repair
+  guidance before terminal acquisition. It retains one immutable source/spec
+  closure only for the returned operation and acquires no terminal, stream,
+  filesystem handle, provider, storage writer, or persistent state. All viewer
+  state remains external and transient.
 - **Primary verification/documentation:** `tests/test_agent_exchange_viewer.py`,
   `tests/test_rag_module_and_packaging_boundary.py`,
   `docs/guides/agent-exchanges.md`, `docs/design/overview.md`,
@@ -4969,9 +4972,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   Resource-free `InteractiveExternalViewer` retains only the terminal's
   package-internal generic operation opener. Callback construction binds a
   borrowed plain-line host; stream construction binds the sole driver's
-  external-view lifecycle. Neither route imports the optional viewer, exposes
-  terminal resources, nor retains operation, frame, input, search, or
-  navigation state after return or failure.
+  external-view lifecycle. Neither route imports the required external viewer
+  package, exposes terminal resources, nor retains operation, frame, input,
+  search, or navigation state after return or failure.
 - **Direct internal dependencies:** `agents`, `interactive_commands`,
   `interactive_terminal._controls`, `interactive_terminal._driver`,
   `interactive_terminal._external_view`,
@@ -6087,7 +6090,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- Agent-exchange inspection remains one-way and optional. Controller `_core`
+- Agent-exchange inspection remains one-way and isolated. Controller `_core`
   depends on the supported `agent_exchanges` facade plus pure
   `_exchange_policy` and lazy `_exchange_viewer`; the latter depends inward on
   the generic `interactive_terminal._external_view` host contract. Terminal
@@ -6096,10 +6099,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   signal, presentation, and restoration owner. These three new modules and ten
   internal edges produce 92 modules and 372 edges without a cycle. Root,
   `agent_exchanges`, and `interactive_terminal` facades remain exactly 120, 15,
-  and 12 names. `jsonl-viewer` is loaded only by `_exchange_viewer` after an
-  explicit command and is validated before terminal acquisition; its exact VCS
-  extra and gitlink pin are external audit/package facts, not production units
-  or internal edges. No production import uses `vendor/jsonl-viewer`.
+  and 12 names. `jsonl-viewer` is installed from the unconditional exact VCS
+  requirement at `93c3823a17c965f1e3449a9ce3d98636ebf441d6`, but is loaded
+  only by `_exchange_viewer` after an explicit command and is validated before
+  terminal acquisition. The empty `viewer` extra is a compatibility alias;
+  the lock source and matching gitlink are external audit/package facts, not
+  production units or internal edges. No production import uses
+  `vendor/jsonl-viewer`.
 
 - Agent-exchange capture remains one-way and isolated from provider-native
   transport. `backend` alone composes the feature and depends explicitly on
@@ -6136,8 +6142,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   stays safe in the base installation, depends on the story leaf, and exposes
   its adapter edge only through a statically named deferred import after an
   exact `generic-rag` 0.1.0 distribution check. The package-root facade remains
-  120 names and exports none of these surfaces. Base dependencies remain empty;
-  the `rag` extra, lock, and `vendor/generic-rag` gitlink share the exact
+  120 names and exports none of these surfaces. The only base dependency is the
+  separately isolated, exact-pinned `jsonl-viewer`; `generic-rag` remains absent
+  from the base installation, and the `rag` extra, lock, and
+  `vendor/generic-rag` gitlink share the exact
   `c77456321c614518e420e45c033e3f71dc5363b8` pin. That separate seven-module
   generic project is governed by its own index, imports no story module, and is
   not a production unit beneath this index's `src/story_writing_agents/` root.
