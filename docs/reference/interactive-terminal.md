@@ -1667,9 +1667,18 @@ hint.
 On a capable stream, the sole driver maps arrows or `j`/`k`, Page Up/Page Down
 or `b`/Space, `n`, `N`, `m`, `h`/`?`, `c`, and `q`. `g` temporarily restores
 ordinary input for `Go to source line: `; `/` similarly reads `Search field: `
-then `Search query: `. It reacquires raw mode before returning the bounded
-event. A standalone Escape maps to `cancel`; configured VINTR maps to cancel,
-and configured VEOF or physical EOF maps to `None`.
+then `Search query: ` through history-free transient live editors. Enter on a
+valid field and query returns one bounded `search` event. Escape at either
+Search prompt discards the draft, reacquires raw viewer input, redraws the exact
+last validated successfully presented frame, and returns no host event;
+selection, source, mode, active search, current match, result position, footer,
+and help state remain external-engine values and therefore stay unchanged.
+Supported prompt navigation sequences edit locally. Unsupported, truncated, or
+over-limit escape sequences are consumed within the fixed bound and cancel the
+prompt rather than leaking suffix bytes into later viewer commands. After the
+prompt finishes, a standalone main-view Escape retains its `cancel` mapping;
+configured VINTR maps to cancel, and configured VEOF or physical EOF maps to
+`None`.
 
 Ordinary-line fallback supplies `(width, 24)`, disables color, writes each
 complete frame followed by LF, and prompts `viewer> `. It maps `j`/`down`,
@@ -1685,7 +1694,10 @@ attempts idempotent host close, exits the screen, and restores terminal state.
 Active operation failure wins over host-close failure; terminal restoration
 retains its established outer precedence. The latch releases after success or
 failure, so a later independent view can open. Fallback acquires no raw or ANSI
-resource.
+resource. The last presented frame and each Search draft are host-call-local:
+only a frame that passes validation and completes presentation becomes the
+prompt-cancellation redraw source, and all such state is discarded on close or
+failure.
 
 The external operation receives complete-frame geometry and current Story
 color eligibility but owns all JSONL parsing, Simple/Verbose state, line gutter,

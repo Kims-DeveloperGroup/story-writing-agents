@@ -4665,7 +4665,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   supplies either a borrowed ordinary-line host or one raw-driver-owned host.
   The capable path alone owns raw activation, alternate-screen entry/exit,
   complete-frame redraw, geometry, closed key/event decoding, canonical
-  restored line prompts for goto/search, and exact terminal restoration.
+  restored line prompts for goto, history-free live Search field/query prompts,
+  prompt-local Escape and unrecognized-sequence cancellation, reactivation,
+  retained-frame redraw, and exact terminal restoration. A cancelled Search
+  prompt resumes viewer input without emitting an event or changing the
+  viewer's existing search state.
   Operation failures outrank host and alternate-screen cleanup failures, while
   uncertain terminal restoration remains fatal; close and all cleanup are
   attempted exactly once. The driver never imports or interprets Story exchange
@@ -4733,6 +4737,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   retains or amends the draft, and requires a separate blank confirmation
   before an amended canonical token can return;
   unresolved markers cannot bypass activation through that confirmation.
+  During a capable external-view call, the raw host retains only its last
+  validated, successfully written complete frame. Search prompt buffers,
+  cancellation state, and that frame are call-local: the shared transient line
+  lifecycle clears the prompt display, the driver reactivates the same raw
+  configuration before redrawing after cancellation, and host close discards
+  the frame. No prompt draft enters command history, viewer events, or durable
+  state.
   Semantic input resolves capability and
   width once per read, uses the plain projection for fallback and cursor
   measurement, and emits the trusted styled projection only on its live path.
