@@ -385,8 +385,13 @@ copies conversations. If Apply Changes says migration is required, leave the cur
 shell, run the provider-free migration and verification commands in the active
 direction, reopen `/settings`, select SQLite again, choose Apply Changes, and
 start a new shell.
-The same sequence applies in reverse when returning to filesystem. See the
-[exact selection workflow](../reference/cli.md#conversation-storage-selection).
+When returning to filesystem, verify from active SQLite first. Select
+filesystem directly if the stores already match; migrate only source identities
+that are absent from an otherwise compatible filesystem target. A same-identity
+conflict or destination-only filesystem identity blocks migration instead of
+being overwritten or deleted. See the
+[guided SQLite workflow](sqlite-conversation-storage.md#sqlite-storage-reverse-migration)
+and [exact selection contract](../reference/cli.md#conversation-storage-selection).
 
 Apply Changes fails closed if either configuration file, the provider-route generation
 record, or the persona catalog changed after opening. It also freshly checks
