@@ -65,10 +65,14 @@ rehash
 ```
 
 That is the normal RAG-free installation. It installs the independent
-`jsonl-viewer` at the exact required VCS pin, so bare `/exchanges` needs no
-setting, enablement step, or extra. The historical `viewer` extra remains an
+`jsonl-viewer` 0.1.1 at the exact required VCS pin, so bare `/exchanges` needs
+no setting, enablement step, or extra. The historical `viewer` extra remains an
 accepted empty compatibility alias—`'.[viewer]'` installs no distinct
-capability. Installing either form does not invoke a provider. See
+capability. Installing either form does not invoke a provider. After updating
+a Story checkout, rerun `python -m pip install --editable .` in the active
+environment: pulling source alone does not update installed dependencies. That
+ordinary reinstall upgrades viewer 0.1.0 to 0.1.1 without uninstalling it or
+using `--force-reinstall` or `--ignore-installed`. See
 [Inspect agent exchanges](docs/guides/agent-exchanges.md#availability-and-installation).
 Approved internal, non-redistributing
 evaluation can use the optional direct Python boundary, deterministic local

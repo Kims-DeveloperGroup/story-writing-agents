@@ -25,14 +25,26 @@ Or install the distribution normally:
 python -m pip install story-writing-agents
 ```
 
-Both forms install the required independent `jsonl-viewer` from its exact HTTPS
-VCS requirement at
-`93c3823a17c965f1e3449a9ce3d98636ebf441d6`. A first install normally needs
+Both forms install the required independent `jsonl-viewer` 0.1.1 from its exact
+HTTPS VCS requirement at
+`1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec`. A first install normally needs
 Git, network access, and repository access. Installation does not invoke a
 story provider, open an exchange, or enable a service. The historical
 `story-writing-agents[viewer]` and editable `'.[viewer]'` forms remain accepted
 empty compatibility aliases; they install the same normal dependency set and
 add no separate viewer capability.
+
+Updating the checkout does not update the active environment by itself. After
+pulling updated Story source, rerun the normal editable installation:
+
+```bash
+python -m pip install --editable .
+```
+
+That ordinary reinstall upgrades viewer 0.1.0 to required 0.1.1 without an
+uninstall, `--force-reinstall`, or `--ignore-installed`. Reserve a forced
+reinstall for a genuinely damaged same-version installation, as described in
+[Troubleshooting](troubleshooting.md#exchanges-does-not-open-the-expected-response).
 
 The matching `vendor/jsonl-viewer` git submodule is optional review and
 development evidence; pip resolves the base VCS requirement rather than
@@ -120,8 +132,8 @@ Record 1/3 • source line 1 • JSON display 2 expanded, 0 skipped, 0 truncated
 This preview shows the renderer's topology, not a retained Story screenshot.
 The external repository owns the byte-tested renderer contract:
 
-- [Terminal design system and Story-hosted scenario](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/93c3823a17c965f1e3449a9ce3d98636ebf441d6/docs/design-system.md)
-- [Nine deterministic complete sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/93c3823a17c965f1e3449a9ce3d98636ebf441d6/docs/samples)
+- [Terminal design system and Story-hosted scenario](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec/docs/design-system.md)
+- [Nine deterministic complete sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec/docs/samples)
 
 Every body record is well-formatted multiline JSON. The left gutter repeats
 the physical JSONL source-record line on continuation rows, so `g` can move to
@@ -334,8 +346,9 @@ Common bounded failures are:
 | --- | --- |
 | No attached session | Attach the intended session, then retry bare `/exchanges`. |
 | No records for the session | Run the intended provider work; do not invoke it merely to manufacture diagnostics. |
-| Required viewer unavailable | Repair or reinstall the normal Story installation, then retry. The compatibility extra is not a separate repair path. |
-| Required viewer incompatible | Repair or reinstall normal Story and verify the approved exact pin. |
+| Viewer 0.1.0 remains after updating a checkout | Rerun the normal editable Story install to upgrade it to required 0.1.1; do not force or uninstall. |
+| Required viewer unavailable | Rerun the normal Story installation, then retry. The compatibility extra is not a separate repair path. |
+| Viewer 0.1.1 is installed but incompatible or damaged | Verify the approved exact pin, then use the bounded forced-repair path in Troubleshooting. |
 | Store busy | Retry after the concurrent exchange write completes. |
 | Unsafe, corrupt, or uncorrelatable records | Preserve the workspace and inspect the content-safe runtime diagnostic before retrying. |
 | Selected stream disappeared | Rerun `/exchanges` to refresh retained inventory. |
