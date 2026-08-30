@@ -94,9 +94,10 @@ shell exits through `cleanup_failed` and the new default remains.
 paused default. Resume choices do not change `/session list` or standalone
 session-command behavior.
 
-`/quit`, `/exit`, and EOF release access without pausing; ready state and
-defaults remain. Restarting establishes a new attachment and restores an active
-default conversation. `/status` separates defaults from process scope.
+`/quit` is the sole termination command; it and EOF release access without
+pausing, so ready state and defaults remain. Restarting establishes a new
+attachment and restores an active default conversation. `/status` separates
+defaults from process scope.
 
 On capable POSIX main prompts, `/` opens a selectable command palette. Exact,
 case-sensitive prefixes narrow canonical root, subcommand, and finite-option
@@ -148,6 +149,13 @@ descriptions remain stacked below their labels. `>` marks the active row,
 print a `Settings/Agents/...` breadcrumb. Global `/auth`, session and
 conversation resume, and other non-Settings pickers keep their established
 presentation.
+
+Session language and persona changes are a separate command surface:
+`/override language LANG`, `/override persona AGENT NAME`, and
+`/override reset` affect only the attached story session. `/settings` edits
+persistent workspace configuration. Compatibility spellings `/language`,
+`/persona`, and `/reset` remain parseable but are omitted from full help and
+root completion.
 
 The clean root renders all seven rows in its current frame. As soon as a value
 is pending, the dirty root renders all nine rows, including Apply and Discard,

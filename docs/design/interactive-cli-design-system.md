@@ -864,21 +864,24 @@ instead use typed error presentation.
 
 ### Main-command palette and fixed choices
 
-> **Implemented by #79 and #127:** capable main reads provide deterministic
+> **Implemented by #79, #127, and #420:** capable main reads provide deterministic
 > selectable root, subcommand, finite fixed-option, and leading routed-agent
 > completion without changing parser, runtime, history, fallback, or public API
 > contracts.
 
 A leading slash automatically opens `SuggestionPalette` at a recognized
-grammar position. Root candidates are the 24 main-available command tokens in
-registry order. Help offers those 24 plus `/compose`, `/send`, and `/cancel`;
+grammar position. Root candidates are the 21 main-available command tokens in
+registry order. Help offers those 21 plus `/compose`, `/send`, and `/cancel`;
 agent-valued slash positions expose the four preferred prompt aliases `lead`,
-`plot`, `character`, and `execution` in route order. Other implemented finite
-positions expose their static subcommands or options. Runtime values such as
-session, conversation, debate, query, prompt, subject, and file-path text are
-never candidates. Fixed-only positions retain an open empty palette when a
-prefix has no match; mixed fixed/free positions close the palette for a
-free-value slot.
+`plot`, `character`, and `execution` in route order. `/override` exposes the
+fixed `language`, `persona`, and `reset` subcommands, and `/override persona`
+exposes the preferred agent aliases. The legacy `/language`, `/persona`, and
+`/reset` spellings remain parser-compatible but are not advertised; `/quit` is
+the sole termination command. Other implemented finite positions expose their
+static subcommands or options. Runtime values such as session, conversation,
+debate, query, prompt, subject, and file-path text are never candidates.
+Fixed-only positions retain an open empty palette when a prefix has no match;
+mixed fixed/free positions close the palette for a free-value slot.
 
 A first token beginning with `@` projects the full candidates `@lead`, `@plot`,
 `@character`, and `@execution`. Their order and preferred values derive from

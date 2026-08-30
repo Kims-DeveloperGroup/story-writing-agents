@@ -48,9 +48,14 @@ With a current attachment, no conversation focus is needed:
 
 | Enter | Runtime receives |
 | --- | --- |
-| `/language EN` | `[SYS: LANG=EN]` |
-| `/persona plot strict_plot_reviewer` | `[OVERRIDE: plot_architect Persona=strict_plot_reviewer]` |
-| `/reset` | `[RESET: ALL]` |
+| `/override language EN` | `[SYS: LANG=EN]` |
+| `/override persona plot strict_plot_reviewer` | `[OVERRIDE: plot_architect Persona=strict_plot_reviewer]` |
+| `/override reset` | `[RESET: ALL]` |
+
+These `/override` commands change only the attached story session. Use
+`/settings` for persistent workspace configuration. The older `/language`,
+`/persona`, and `/reset` spellings remain accepted for compatibility but are
+not advertised in full help or root completion.
 
 Persona aliases normalize to canonical agents. The shell calls
 `StoryRuntime.apply_directive`; an unknown agent is `agent_invalid`, while a

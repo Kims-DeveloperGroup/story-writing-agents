@@ -736,10 +736,14 @@ completion-only Enter, Escape dismissal, cancel, interrupt, EOF, and input
 failure add nothing.
 
 Main matching is exact and case-sensitive at the cursor, with ASCII space/tab
-token boundaries. Root offers 24 main-available registry tokens, help offers 27
+token boundaries. Root offers 21 main-available registry tokens, help offers 24
 including the composition-only commands, and agent-valued positions offer the
 four preferred prompt aliases—`lead`, `plot`, `character`, and `execution`—in
-route order. The parser still accepts all ten declared route aliases; runtime
+route order. `/override` offers `language`, `persona`, and `reset`; its persona
+position offers those same four preferred agents. The older `/language`,
+`/persona`, and `/reset` spellings remain parser-compatible but are not
+advertised in full help or root completion. `/quit` is the sole termination
+command. The parser still accepts all ten declared route aliases; runtime
 values are not synthesized by the static grammar projection. Fixed-only
 no-match positions show an empty open
 palette, while mixed free-value slots close it. Filtering retains an eligible

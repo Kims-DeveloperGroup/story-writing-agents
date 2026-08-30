@@ -2220,6 +2220,16 @@ class HelpAndErrorTests(unittest.TestCase):
             [f"{render_plain(expected, width=200).text}\n"],
         )
         self.assertNotIn("Example:", callbacks.records[0])
+        self.assertEqual(callbacks.records[0].count("Session overrides"), 1)
+        self.assertEqual(
+            callbacks.records[0].count(
+                "/override language LANG | persona AGENT NAME | reset"
+            ),
+            1,
+        )
+        for hidden in ("/language LANG", "/persona AGENT NAME", "/exit"):
+            with self.subTest(hidden=hidden):
+                self.assertNotIn(hidden, callbacks.records[0])
 
     def test_context_help_accepts_alias_and_includes_the_registry_example(
         self,

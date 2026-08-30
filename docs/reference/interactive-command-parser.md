@@ -62,15 +62,17 @@ only the four preferred prompt aliases—`lead`, `plot`, `character`, and
 | Group | Canonical registry rows |
 | --- | --- |
 | Conversation | `/compose`; `/send`; `/cancel`; `/say TEXT`; `/rag QUERY` |
-| Agents | `/to NAME`; `/agents`; `/auth`; `/language LANG`; `/persona AGENT NAME`; `/reset`; `/settings` |
+| Agents | `/to NAME`; `/agents`; `/auth`; `/settings` |
+| Session overrides | `/override language LANG \| persona AGENT NAME \| reset` |
 | Consensus | `/run [--fresh] [--output PART/PATH.md] [PROMPT]`; `/draft-file PATH` |
 | Sessions | `/session list \| create NAME \| resume [NAME] \| pause` |
 | Conversations | `/conversation new [SUBJECT] \| list [--all] [QUERY] \| resume [ID] \| subject SUBJECT \| archive [ID]` |
 | Inspection | `/search QUERY`; `/transcript ID [COUNT] [--from SEQUENCE]`; `/inspect [DEBATE\|last]`; `/exchanges`; `/history [COUNT]`; `/status`; `/help [COMMAND]` |
 | Exit | `/quit` |
 
-`/agent`, `/?`, and `/exit` alias `/to`, `/help`, and `/quit`. Flags describe
-possible provider/artifact use, not shell gates. Parsing performs no I/O.
+`/agent` and `/?` alias `/to` and `/help`. `/quit` is the sole command that
+returns the `quit` action. Flags describe possible provider/artifact use, not
+shell gates. Parsing performs no I/O.
 `/auth` has `may_call_provider=True` because it invokes native authentication
 commands, and `may_write_artifacts=True` because fresh authentication may fill
 a missing workspace default immediately under the established global `/auth`
@@ -129,13 +131,15 @@ positions are:
 
 | Position | Ordered replacements |
 | --- | --- |
-| Root command | The 24 main-available canonical commands and aliases in registry order; standalone `/compose`, `/send`, and `/cancel` are excluded. |
+| Root command | The 21 main-available canonical commands and aliases in registry order; standalone `/compose`, `/send`, and `/cancel` are excluded. |
 | `/session` | `list`, `create`, `resume`, `pause` |
 | `/conversation` | `new`, `list`, `resume`, `subject`, `archive` |
-| `/to`, `/agent`, `/persona` agent | The four preferred prompt aliases—`lead`, `plot`, `character`, and `execution`—in route order. Other accepted aliases remain parser-compatible but are not duplicated as completion candidates. |
+| `/to`, `/agent` agent | The four preferred prompt aliases—`lead`, `plot`, `character`, and `execution`—in route order. Other accepted aliases remain parser-compatible but are not duplicated as completion candidates. |
+| `/override` | `language`, `persona`, `reset` |
+| `/override persona` | The four preferred prompt aliases in route order. The hidden compatibility form `/persona` provides the same agent candidates. |
 | `/run` option | `--fresh` |
 | `/conversation list` option | `--all` |
-| `/help`, `/?` command | The 24 root replacements plus `/compose`, `/send`, and `/cancel` in registry order. |
+| `/help`, `/?` command | The 21 root replacements plus `/compose`, `/send`, and `/cancel` in registry order. |
 | `/inspect` argument | `last` |
 | `/transcript ID [COUNT]` option | `--from` |
 
@@ -199,14 +203,19 @@ Identity resolution, archive status, and storage are not parser concerns.
 optional leading slash. Omission requests full grouped help; otherwise the
 action carries the canonical command.
 
-`/status`, `/reset`, alias-free `/auth`, and alias-free `/settings` take no
-argument. `/auth` returns the `auth` action and is global; native status,
+`/status`, alias-free `/auth`, and alias-free `/settings` take no argument.
+`/auth` returns the `auth` action and is global; native status,
 sign-in, default persistence, and cancellation are controller/auth concerns.
 `/settings` returns the `settings` action and is global; its interactive
 editing, authentication, validation, and persistence are controller/settings
-concerns. `/language ARG`
-takes one control-free token; `/persona AGENT ARG` takes a route alias and
-token, returning the canonical ID. `/history [COUNT]` takes an optional positive
+concerns. `/override` requires `language`, `persona`, or `reset`.
+`/override language ARG` takes one control-free token;
+`/override persona AGENT ARG` takes a route alias and token, returning the
+canonical ID; `/override reset` takes no argument. These actions are
+session-scoped and do not edit the persistent workspace configuration managed
+by `/settings`. Legacy `/language`, `/persona`, and `/reset` input remains
+parser-compatible but is absent from registry help and root completion; help
+requests for those names normalize to `/override`. `/history [COUNT]` takes an optional positive
 ASCII integer; omission means all. `/inspect [ID|last]` takes at most one
 control-free token. `/exchanges` is alias-free and accepts no argument; it
 returns the `exchanges` action without reading inventory or loading the optional

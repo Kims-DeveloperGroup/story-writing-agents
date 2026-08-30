@@ -1063,8 +1063,8 @@ described below. A root `/` opens with its first candidate highlighted. Compact
 registry order (not output layout):
 
 ```text
-/say /rag /to /agent /agents /auth /language /persona /reset /settings /run /draft-file /session
-/conversation /search /transcript /inspect /exchanges /history /status /help /? /quit /exit
+/say /rag /to /agent /agents /auth /settings /override /run /draft-file /session /conversation
+/search /transcript /inspect /exchanges /history /status /help /? /quit
 ```
 
 A leading routed-message token opens with these full candidates, in route
@@ -1074,15 +1074,19 @@ order derived from each `AGENT_ROUTES` entry's `prompt_alias`:
 @lead @plot @character @execution
 ```
 
-Exact case-sensitive prefixes filter in stable order. Root provides the 24
-tokens above; help provides 27 including `/compose`, `/send`, and `/cancel`;
+Exact case-sensitive prefixes filter in stable order. Root provides the 21
+tokens above; help provides 24 including `/compose`, `/send`, and `/cancel`;
 agent-valued slash positions provide the four preferred prompt aliases `lead`,
 `plot`, `character`, and `execution` in the same route order. The parser still
 accepts all ten declared route aliases for slash and routed-message input;
 completion does not duplicate those aliases. Static finite positions also
-provide session and conversation subcommands, `--fresh`, `--all`, `last`, and
-`--from`. Static projection does not synthesize session, conversation, debate,
-count, sequence, query, prompt, subject, or path values. Fixed-only positions
+provide session and conversation subcommands, the `/override` subcommands
+`language`, `persona`, and `reset`, preferred agents after `/override persona`,
+`--fresh`, `--all`, `last`, and `--from`. The legacy `/language`, `/persona`,
+and `/reset` commands remain parser-compatible but are not advertised. `/quit`
+is the sole termination command. Static projection does not synthesize session,
+conversation, debate, count, sequence, query, prompt, subject, or path values.
+Fixed-only positions
 remain open with an explicit empty palette on no match; mixed fixed/free
 positions close when the active slot is free text. Tokens do not reflect
 runtime scope gates; `/help` remains authoritative.
