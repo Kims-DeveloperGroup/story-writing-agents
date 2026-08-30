@@ -2058,6 +2058,10 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             "@opaque",
             "/to",
             "/agent\tbad",
+            "/persona missing persona-name",
+            "/override persona missing persona-name",
+            "/persona plot",
+            "/override persona plot",
             "/to\u00a0bad",
             "/To bad",
             "/unknown",
@@ -2085,9 +2089,9 @@ class ControllerRoutingTests(InteractiveConversationTestCase):
             self.assertEqual(controller.run_session_lobby(), 0)
 
         rendered = "".join(callbacks.records)
-        self.assertEqual(rendered.count("[error agent_invalid]"), 3)
-        self.assertEqual(rendered.count("[error command_invalid]"), 3)
-        self.assertEqual(rendered.count("identical opaque parser copy"), 6)
+        self.assertEqual(rendered.count("[error agent_invalid]"), 5)
+        self.assertEqual(rendered.count("[error command_invalid]"), 5)
+        self.assertEqual(rendered.count("identical opaque parser copy"), 10)
         self.assertEqual(runtime.calls, [])
 
     def test_conversation_changes_preserve_sticky_and_session_switch_resets_it(

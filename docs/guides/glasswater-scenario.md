@@ -22,7 +22,7 @@ manufacture provenance.
 ```text
 /session create glasswater_novel
 /status
-/language EN
+/override language EN
 /conversation new Bell continuity
 /run --output part-01/planning/story-baseline.md Establish these durable project facts in the appropriate core documents: Mara finds a bell communicating through salt and vibration; Tovin understands harbor acoustics but avoids deep water; prose stays close-third past; each chapter ends with one physical discovery. Produce the approved planning baseline.
 ```

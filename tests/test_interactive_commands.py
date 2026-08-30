@@ -82,9 +82,10 @@ COMMAND_NAMES = {
     "agent": "/to",
     "agents": "/agents",
     "auth": "/auth",
-    "language": "/language",
-    "persona": "/persona",
-    "reset": "/reset",
+    "override": "/override",
+    "language": "/override",
+    "persona": "/override",
+    "reset": "/override",
     "settings": "/settings",
     "run": "/run",
     "draft-file": "/draft-file",
@@ -99,7 +100,6 @@ COMMAND_NAMES = {
     "help": "/help",
     "?": "/help",
     "quit": "/quit",
-    "exit": "/quit",
 }
 
 ACTION_FIELDS = (
@@ -444,7 +444,7 @@ class ActionContractTests(unittest.TestCase):
 
 
 class CommandRegistryTests(unittest.TestCase):
-    def test_registry_is_the_exact_ordered_twenty_four_row_contract(self) -> None:
+    def test_registry_is_the_exact_ordered_twenty_two_row_contract(self) -> None:
         expected = (
             CommandSpec("Conversation", "/compose", (), False, False, "/compose"),
             CommandSpec("Conversation", "/send", (), False, False, "/send"),
@@ -477,28 +477,19 @@ class CommandRegistryTests(unittest.TestCase):
             CommandSpec("Agents", "/auth", (), True, True, "/auth"),
             CommandSpec(
                 "Agents",
-                "/language LANG",
-                (),
-                False,
-                False,
-                "/language ko",
-            ),
-            CommandSpec(
-                "Agents",
-                "/persona AGENT NAME",
-                (),
-                False,
-                False,
-                "/persona plot meticulous",
-            ),
-            CommandSpec("Agents", "/reset", (), False, False, "/reset"),
-            CommandSpec(
-                "Agents",
                 "/settings",
                 (),
                 True,
                 True,
                 "/settings",
+            ),
+            CommandSpec(
+                "Session overrides",
+                "/override language LANG | persona AGENT NAME | reset",
+                (),
+                False,
+                False,
+                "/override persona plot meticulous",
             ),
             CommandSpec(
                 "Consensus",
@@ -584,13 +575,16 @@ class CommandRegistryTests(unittest.TestCase):
                 False,
                 "/help run",
             ),
-            CommandSpec("Exit", "/quit", ("/exit",), False, False, "/quit"),
+            CommandSpec("Exit", "/quit", (), False, False, "/quit"),
         )
         self.assertIsInstance(COMMANDS, tuple)
         self.assertEqual(COMMANDS, expected)
         advertised = "\n".join(spec.syntax for spec in COMMANDS)
         self.assertNotIn("/session open", advertised)
         self.assertNotIn("/conversation use", advertised)
+        for hidden in ("/language", "/persona", "/reset", "/exit"):
+            with self.subTest(hidden=hidden):
+                self.assertNotIn(hidden, advertised)
 
     def test_registry_names_aliases_and_capability_flags_are_consistent(
         self,
@@ -731,18 +725,18 @@ class SuccessfulParsingTests(unittest.TestCase):
             ("/auth", InteractiveAction(ActionKind.AUTH)),
             ("/settings", InteractiveAction(ActionKind.SETTINGS)),
             (
-                "/language ko-KR",
+                "/override language ko-KR",
                 InteractiveAction(ActionKind.SET_LANGUAGE, argument="ko-KR"),
             ),
             (
-                "/persona plot meticulous.v2",
+                "/override persona plot meticulous.v2",
                 InteractiveAction(
                     ActionKind.SET_PERSONA,
                     agent_id=PLOT_ARCHITECT,
                     argument="meticulous.v2",
                 ),
             ),
-            ("/reset", InteractiveAction(ActionKind.RESET)),
+            ("/override reset", InteractiveAction(ActionKind.RESET)),
             ("/session list", InteractiveAction(ActionKind.SESSION_LIST)),
             (
                 "/session create chapter-01",
@@ -812,6 +806,22 @@ class SuccessfulParsingTests(unittest.TestCase):
             with self.subTest(line=line):
                 self.assertEqual(parse_interactive_line(line), expected)
 
+    def test_legacy_override_forms_return_the_canonical_typed_actions(self) -> None:
+        pairs = (
+            ("/language ko-KR", "/override language ko-KR"),
+            (
+                "/persona plot meticulous.v2",
+                "/override persona plot meticulous.v2",
+            ),
+            ("/reset", "/override reset"),
+        )
+        for legacy, canonical in pairs:
+            with self.subTest(legacy=legacy):
+                self.assertEqual(
+                    parse_interactive_line(legacy),
+                    parse_interactive_line(canonical),
+                )
+
     def test_all_agent_aliases_normalize_in_each_agent_command(self) -> None:
         for alias, agent_id in AGENT_ALIASES.items():
             cases = (
@@ -841,6 +851,14 @@ class SuccessfulParsingTests(unittest.TestCase):
                 ),
                 (
                     f"/persona {alias} persona-name",
+                    InteractiveAction(
+                        ActionKind.SET_PERSONA,
+                        agent_id=agent_id,
+                        argument="persona-name",
+                    ),
+                ),
+                (
+                    f"/override persona {alias} persona-name",
                     InteractiveAction(
                         ActionKind.SET_PERSONA,
                         agent_id=agent_id,
@@ -885,10 +903,6 @@ class SuccessfulParsingTests(unittest.TestCase):
             InteractiveAction(ActionKind.SET_TARGET, agent_id=PLOT_ARCHITECT),
         )
         self.assertEqual(
-            parse_interactive_line("/exit"),
-            InteractiveAction(ActionKind.QUIT),
-        )
-        self.assertEqual(
             parse_interactive_line("/?"),
             InteractiveAction(ActionKind.HELP),
         )
@@ -902,6 +916,14 @@ class SuccessfulParsingTests(unittest.TestCase):
                             parse_interactive_line(line),
                             InteractiveAction(ActionKind.HELP, argument=canonical),
                         )
+
+        exit_action = parse_interactive_line("/exit")
+        self.assertEqual(exit_action.kind, ActionKind.PARSE_ERROR)
+        self.assertEqual(exit_action.error, "unknown command: /exit")
+        self.assertEqual(exit_action.suggestion, "/quit")
+        help_exit = parse_interactive_line("/help exit")
+        self.assertEqual(help_exit.kind, ActionKind.PARSE_ERROR)
+        self.assertEqual(help_exit.suggestion, "/quit")
 
     def test_optional_arguments_treat_ascii_blank_remainders_as_omitted(
         self,
@@ -1044,11 +1066,11 @@ class SuccessfulParsingTests(unittest.TestCase):
     def test_token_arguments_accept_printable_non_whitespace_values(self) -> None:
         cases = (
             (
-                "/language 한국어.v2",
+                "/override language 한국어.v2",
                 InteractiveAction(ActionKind.SET_LANGUAGE, argument="한국어.v2"),
             ),
             (
-                "/persona plot meticulous.v2",
+                "/override persona plot meticulous.v2",
                 InteractiveAction(
                     ActionKind.SET_PERSONA,
                     agent_id=PLOT_ARCHITECT,
@@ -1300,7 +1322,6 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
             "/session list",
             "/session pause",
             "/quit",
-            "/exit",
         ):
             line = f"{command} extra"
             with self.subTest(line=line):
@@ -1316,6 +1337,10 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
             "/language ko extra",
             "/persona plot",
             "/persona plot name extra",
+            "/override language ko extra",
+            "/override persona plot",
+            "/override persona plot name extra",
+            "/override reset extra",
             "/session unknown",
             "/session open",
             "/session open chapter-01",
@@ -1331,6 +1356,45 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
         for line in cases:
             with self.subTest(line=line):
                 self.assert_parse_error(line)
+
+    def test_canonical_override_errors_name_the_canonical_syntax(self) -> None:
+        cases = (
+            ("/override", "/override requires a subcommand", None),
+            (
+                "/override language",
+                "/override language requires exactly one language",
+                None,
+            ),
+            (
+                "/override language ko extra",
+                "/override language requires exactly one language",
+                None,
+            ),
+            (
+                "/override persona plot",
+                "/override persona requires an agent and one persona name",
+                None,
+            ),
+            (
+                "/override persona plot bad\x7f",
+                "/override persona arguments must be control-free tokens",
+                None,
+            ),
+            (
+                "/override reset extra",
+                "/override reset does not accept arguments",
+                None,
+            ),
+            (
+                "/override persna plot meticulous",
+                "unknown /override subcommand: persna",
+                "/override persona",
+            ),
+        )
+        for line, error, suggestion in cases:
+            with self.subTest(line=repr(line)):
+                action = self.assert_parse_error(line, suggestion=suggestion)
+                self.assertEqual(action.error, error)
 
     def test_unknown_or_incomplete_run_flags_fail(self) -> None:
         for line in (
@@ -1376,6 +1440,9 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
             "/language ko\u00a0KR",
             "/language ko\x00KR",
             "/persona plot meticulous\x7f",
+            "/override language ko\u00a0KR",
+            "/override language ko\x00KR",
+            "/override persona plot meticulous\x7f",
             "/session create chapter\vone",
             "/session resume chapter\u2003one",
             "/inspect debate\x00one",
@@ -1481,7 +1548,7 @@ class SuggestionTests(ParserAssertions, unittest.TestCase):
             ("/ruunx", "/run"),
             ("/rxxxx", None),
             ("/agens", None),
-            ("/euit", None),
+            ("/euit", "/quit"),
             ("/Run", "/run"),
             ("/RUN", None),
             ("@plto text", "@plot"),
@@ -1575,7 +1642,12 @@ class DeterministicPropertyTests(ParserAssertions, unittest.TestCase):
     def test_line_break_insertion_always_fails_except_one_terminal_ending(
         self,
     ) -> None:
-        bases = ("message", "/run prompt", "@plot routed", "/language ko")
+        bases = (
+            "message",
+            "/run prompt",
+            "@plot routed",
+            "/override language ko",
+        )
         for base in bases:
             for index in range(len(base) + 1):
                 for line_break in ("\n", "\r", "\r\n"):
@@ -1721,10 +1793,8 @@ class CommandCompletionProjectionTests(unittest.TestCase):
         "/agent",
         "/agents",
         "/auth",
-        "/language",
-        "/persona",
-        "/reset",
         "/settings",
+        "/override",
         "/run",
         "/draft-file",
         "/session",
@@ -1738,7 +1808,6 @@ class CommandCompletionProjectionTests(unittest.TestCase):
         "/help",
         "/?",
         "/quit",
-        "/exit",
     )
     HELP = ("/compose", "/send", "/cancel", *ROOT)
     AGENTS = (
@@ -1791,6 +1860,22 @@ class CommandCompletionProjectionTests(unittest.TestCase):
             ),
             ("/to ", 4, "target.agent", 4, 4, self.AGENTS),
             ("/agent ", 7, "target.agent", 7, 7, self.AGENTS),
+            (
+                "/override ",
+                10,
+                "override.subcommand",
+                10,
+                10,
+                ("language", "persona", "reset"),
+            ),
+            (
+                "/override persona ",
+                18,
+                "override.persona.agent",
+                18,
+                18,
+                self.AGENTS,
+            ),
             ("/persona ", 9, "persona.agent", 9, 9, self.AGENTS),
             ("/run ", 5, "run.flag", 5, 5, ("--fresh", "--output")),
             ("/conversation list ", 19, "conversation.list.flag", 19, 19, ("--all",)),
@@ -1821,6 +1906,13 @@ class CommandCompletionProjectionTests(unittest.TestCase):
             ("@plot\tmessage", 5, "routed.agent", 0, 5),
             ("/help run", 6, "help.command", 6, 9),
             ("/to plot_architect", 6, "target.agent", 4, 18),
+            (
+                "/override persona character_custodian",
+                21,
+                "override.persona.agent",
+                18,
+                37,
+            ),
             ("/persona character_custodian", 12, "persona.agent", 9, 28),
             ("/run --fresh", 5, "run.flag", 5, 12),
             ("/session create tail", 11, "session.subcommand", 9, 15),
@@ -1904,6 +1996,9 @@ class CommandCompletionProjectionTests(unittest.TestCase):
             ("@plot message", 13), ("message @pl", 11),
             ("@plot @pl", 9), ("/say @pl", 8),
             ("/to plot ", 9), ("/persona plot ", 14),
+            ("/override language ko ", 22),
+            ("/override persona plot ", 23),
+            ("/override reset ", 16),
             ("/conversation resume ", 21), ("/transcript --from ", 19),
             ("/transcript c nope ", 19), ("/transcript c 0 ", 16),
             ("/session list ", 14), ("/HELP ", 6),
@@ -1938,6 +2033,18 @@ class CommandCompletionProjectionTests(unittest.TestCase):
                 ("list", "create", "resume", "pause"),
             ),
             ("/to pl", 6, "target.agent", self.AGENTS),
+            (
+                "/override pe",
+                12,
+                "override.subcommand",
+                ("language", "persona", "reset"),
+            ),
+            (
+                "/override persona pl",
+                20,
+                "override.persona.agent",
+                self.AGENTS,
+            ),
             ("/help ru", 8, "help.command", self.HELP),
             ("/inspect la", 11, "inspect.argument", ("last",)),
             ("/run --f", 8, "run.flag", ("--fresh", "--output")),

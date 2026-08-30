@@ -8774,10 +8774,11 @@ class InteractiveController:
     def _parse_error_targets_agent(original_line: str) -> bool:
         """Return whether a parse failure identifies an invalid agent route.
 
-        Direct routing forms are always agent-scoped. For ``/persona``, only an
-        explicitly supplied unknown first argument is agent-scoped; missing or
-        malformed persona syntax remains ``command_invalid``. The pure check
-        uses exact ASCII delimiters and never inspects parser failure prose.
+        Direct routing forms are always agent-scoped. For legacy ``/persona``
+        and canonical ``/override persona``, only an explicitly supplied
+        unknown agent argument is agent-scoped; missing or malformed persona
+        syntax remains ``command_invalid``. The pure check uses exact ASCII
+        delimiters and never inspects parser failure prose.
         """
 
         if original_line.startswith("@"):
@@ -8793,14 +8794,22 @@ class InteractiveController:
         command = original_line[:first_delimiter]
         if command in {"/to", "/agent"}:
             return True
-        if command != "/persona" or first_delimiter == len(original_line):
+        if first_delimiter == len(original_line):
             return False
         arguments = tuple(
             token
             for token in original_line[first_delimiter:].replace("\t", " ").split(" ")
             if token
         )
-        return bool(arguments) and arguments[0] not in _AGENT_ROUTE_ALIASES
+        if command == "/persona":
+            agent_arguments = arguments
+        elif command == "/override" and arguments[:1] == ("persona",):
+            agent_arguments = arguments[1:]
+        else:
+            return False
+        return bool(agent_arguments) and (
+            agent_arguments[0] not in _AGENT_ROUTE_ALIASES
+        )
 
     def _present_session_failure(
         self,

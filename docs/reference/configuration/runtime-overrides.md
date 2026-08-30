@@ -158,15 +158,19 @@ With a current attachment, no conversation focus is needed:
 
 | Shell syntax | Exact `StoryRuntime.apply_directive` text |
 | --- | --- |
-| `/language ARG` | `[SYS: LANG=ARG]` |
-| `/persona AGENT ARG` | `[OVERRIDE: CANONICAL_AGENT Persona=ARG]` |
-| `/reset` | `[RESET: ALL]` |
+| `/override language ARG` | `[SYS: LANG=ARG]` |
+| `/override persona AGENT ARG` | `[OVERRIDE: CANONICAL_AGENT Persona=ARG]` |
+| `/override reset` | `[RESET: ALL]` |
 
 Persona route aliases normalize to a canonical ID before application. An
 unknown agent reports `agent_invalid`; directive/configuration application
 failure reports `configuration_invalid`. Candidate validation and atomic
 replacement remain runtime-owned, so only validated success changes overrides.
 These commands call no provider and change no defaults or focus state.
+They are session-scoped and separate from persistent workspace configuration
+edited through `/settings`. The legacy `/language`, `/persona`, and `/reset`
+forms remain parser-compatible but are omitted from full help and root
+completion; command-specific help for those names resolves to `/override`.
 
 ## Debate round limit
 

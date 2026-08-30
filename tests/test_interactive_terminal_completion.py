@@ -79,10 +79,9 @@ ROOT_REPLACEMENTS = (
     "/to",
     "/agent",
     "/agents",
-    "/language",
-    "/persona",
-    "/reset",
+    "/auth",
     "/settings",
+    "/override",
     "/run",
     "/draft-file",
     "/session",
@@ -95,7 +94,6 @@ ROOT_REPLACEMENTS = (
     "/help",
     "/?",
     "/quit",
-    "/exit",
 )
 
 
@@ -975,6 +973,8 @@ class CompletionControlTests(unittest.TestCase):
             ("@pl", "@plot "),
             ("/status", "/status "),
             ("/session li", "/session list "),
+            ("/override la", "/override language "),
+            ("/override persona pl", "/override persona plot "),
         )
         for kind in (KeyKind.ENTER, KeyKind.TAB):
             for buffer, expected in cases:
@@ -1115,6 +1115,30 @@ class CompletionControlTests(unittest.TestCase):
         self.assertEqual(
             selected.main_input.line_state,
             LineInputState("/to plot ", 9),
+        )
+
+        canonical = self.type_text("/override persona pl")
+        self.assertIsNotNone(canonical.palette)
+        assert canonical.palette is not None
+        self.assertEqual(
+            (
+                canonical.palette.projection.start,
+                canonical.palette.projection.end,
+            ),
+            (18, 20),
+        )
+        self.assertEqual(
+            tuple(
+                item.replacement
+                for item in canonical.palette.projection.candidates
+            ),
+            ("plot",),
+        )
+        canonical, outcome = self.apply(canonical, KeyEvent(KeyKind.TAB))
+        self.assertIsNone(outcome)
+        self.assertEqual(
+            canonical.main_input.line_state,
+            LineInputState("/override persona plot ", 23),
         )
 
     def test_provider_validation_is_eager_and_has_no_hidden_retry(self) -> None:

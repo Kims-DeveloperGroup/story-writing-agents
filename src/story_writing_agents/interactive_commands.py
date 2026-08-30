@@ -447,28 +447,19 @@ COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec("Agents", "/auth", (), True, True, "/auth"),
     CommandSpec(
         "Agents",
-        "/language LANG",
-        (),
-        False,
-        False,
-        "/language ko",
-    ),
-    CommandSpec(
-        "Agents",
-        "/persona AGENT NAME",
-        (),
-        False,
-        False,
-        "/persona plot meticulous",
-    ),
-    CommandSpec("Agents", "/reset", (), False, False, "/reset"),
-    CommandSpec(
-        "Agents",
         "/settings",
         (),
         True,
         True,
         "/settings",
+    ),
+    CommandSpec(
+        "Session overrides",
+        "/override language LANG | persona AGENT NAME | reset",
+        (),
+        False,
+        False,
+        "/override persona plot meticulous",
     ),
     CommandSpec(
         "Consensus",
@@ -554,7 +545,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
         False,
         "/help run",
     ),
-    CommandSpec("Exit", "/quit", ("/exit",), False, False, "/quit"),
+    CommandSpec("Exit", "/quit", (), False, False, "/quit"),
 )
 
 
@@ -574,9 +565,10 @@ _COMMAND_ALIASES: dict[str, str] = {
     "agent": "/to",
     "agents": "/agents",
     "auth": "/auth",
-    "language": "/language",
-    "persona": "/persona",
-    "reset": "/reset",
+    "override": "/override",
+    "language": "/override",
+    "persona": "/override",
+    "reset": "/override",
     "settings": "/settings",
     "run": "/run",
     "draft-file": "/draft-file",
@@ -591,7 +583,6 @@ _COMMAND_ALIASES: dict[str, str] = {
     "help": "/help",
     "?": "/help",
     "quit": "/quit",
-    "exit": "/quit",
 }
 
 _SESSION_COMMANDS: dict[str, str] = {
@@ -607,6 +598,12 @@ _CONVERSATION_COMMANDS: dict[str, str] = {
     "resume": "/conversation resume",
     "subject": "/conversation subject",
     "archive": "/conversation archive",
+}
+
+_OVERRIDE_COMMANDS: dict[str, str] = {
+    "language": "/override language",
+    "persona": "/override persona",
+    "reset": "/override reset",
 }
 
 _MAIN_COMPLETION_EXCLUSIONS = frozenset({"/compose", "/send", "/cancel"})
@@ -676,6 +673,20 @@ def project_command_completion(
     if preceding in {("/to",), ("/agent",)}:
         return _completion_context(
             "target.agent",
+            start,
+            end,
+            _agent_completion_replacements(),
+        )
+    if preceding == ("/override",):
+        return _completion_context(
+            "override.subcommand",
+            start,
+            end,
+            tuple(_OVERRIDE_COMMANDS),
+        )
+    if preceding == ("/override", "persona"):
+        return _completion_context(
+            "override.persona.agent",
             start,
             end,
             _agent_completion_replacements(),
@@ -981,10 +992,12 @@ def _parse_slash_command(line: str) -> InteractiveAction:
         return _no_argument_action(tail, ActionKind.LIST_AGENTS, "/agents")
     if command == "auth":
         return _no_argument_action(tail, ActionKind.AUTH, "/auth")
+    if command == "override":
+        return _parse_override(tail)
     if command == "language":
-        return _parse_language(tail)
+        return _parse_language(tail, command="/language")
     if command == "persona":
-        return _parse_persona(tail)
+        return _parse_persona(tail, command="/persona")
     if command == "reset":
         return _no_argument_action(tail, ActionKind.RESET, "/reset")
     if command == "settings":
@@ -1014,8 +1027,8 @@ def _parse_slash_command(line: str) -> InteractiveAction:
         return _no_argument_action(tail, ActionKind.STATUS, "/status")
     if command in {"help", "?"}:
         return _parse_help(tail, command)
-    if command in {"quit", "exit"}:
-        return _no_argument_action(tail, ActionKind.QUIT, f"/{command}")
+    if command == "quit":
+        return _no_argument_action(tail, ActionKind.QUIT, "/quit")
 
     return _parse_error(f"unsupported command: {head}")
 
@@ -1067,19 +1080,59 @@ def _parse_target(tail: str | None, command: str) -> InteractiveAction:
     return InteractiveAction(ActionKind.SET_TARGET, agent_id=agent_id)
 
 
-def _parse_language(tail: str | None) -> InteractiveAction:
+def _parse_override(tail: str | None) -> InteractiveAction:
+    """Parse the canonical session-override grammar without external state."""
+
+    remainder = _remainder_after_ascii_delimiters(tail)
+    if remainder is None:
+        return _parse_error("/override requires a subcommand")
+
+    subcommand, subcommand_tail = _split_head(remainder)
+    if subcommand not in _OVERRIDE_COMMANDS:
+        return _parse_error(
+            f"unknown /override subcommand: {subcommand}",
+            _suggest(subcommand, _OVERRIDE_COMMANDS),
+        )
+    if subcommand == "language":
+        return _parse_language(
+            subcommand_tail,
+            command="/override language",
+        )
+    if subcommand == "persona":
+        return _parse_persona(
+            subcommand_tail,
+            command="/override persona",
+        )
+    return _no_argument_action(
+        subcommand_tail,
+        ActionKind.RESET,
+        "/override reset",
+    )
+
+
+def _parse_language(
+    tail: str | None,
+    *,
+    command: str,
+) -> InteractiveAction:
     """Parse exactly one control-free language token without external state."""
 
     tokens = _tokens(tail)
     if len(tokens) != 1:
-        return _parse_error("/language requires exactly one language")
+        return _parse_error(f"{command} requires exactly one language")
     language = tokens[0]
     if not _is_valid_token(language):
-        return _parse_error("/language argument must be a control-free token")
+        return _parse_error(
+            f"{command} argument must be a control-free token"
+        )
     return InteractiveAction(ActionKind.SET_LANGUAGE, argument=language)
 
 
-def _parse_persona(tail: str | None) -> InteractiveAction:
+def _parse_persona(
+    tail: str | None,
+    *,
+    command: str,
+) -> InteractiveAction:
     """Parse a known agent and one control-free persona token.
 
     Valid input returns a persona action; all grammar failures return typed
@@ -1088,10 +1141,14 @@ def _parse_persona(tail: str | None) -> InteractiveAction:
 
     tokens = _tokens(tail)
     if len(tokens) != 2:
-        return _parse_error("/persona requires an agent and one persona name")
+        return _parse_error(
+            f"{command} requires an agent and one persona name"
+        )
     alias, persona = tokens
     if not _is_valid_token(alias) or not _is_valid_token(persona):
-        return _parse_error("/persona arguments must be control-free tokens")
+        return _parse_error(
+            f"{command} arguments must be control-free tokens"
+        )
     agent_id = _AGENT_ALIASES.get(alias)
     if agent_id is None:
         return _parse_error(

@@ -3139,7 +3139,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   help/completion grammar. Their registry metadata truthfully allows native
   provider calls and artifact writes: authentication may persist provider-owned
   native auth state, while settings may additionally persist workspace
-  configuration.
+  configuration. Canonical session-only language and persona changes are
+  grouped under `/override language LANG`, `/override persona AGENT NAME`, and
+  `/override reset`; the older `/language`, `/persona`, and `/reset` spellings
+  remain parser-compatible but are absent from root completion and full help.
+  `/quit` is the sole parsed and advertised termination command; `/exit` is an
+  ordinary unsupported command that receives the bounded `/quit` suggestion.
   Additive alias-free bare `/exchanges` is represented by the exact
   no-payload `EXCHANGES` action, accepts no argument or trailing field, and is
   classified as a provider-free read-only inspection command. Parsing neither

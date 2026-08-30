@@ -38,10 +38,8 @@ EXPECTED_SUGGESTIONS = (
     "/agent",
     "/agents",
     "/auth",
-    "/language",
-    "/persona",
-    "/reset",
     "/settings",
+    "/override",
     "/run",
     "/draft-file",
     "/session",
@@ -55,7 +53,6 @@ EXPECTED_SUGGESTIONS = (
     "/help",
     "/?",
     "/quit",
-    "/exit",
 )
 
 
@@ -370,7 +367,6 @@ class SuggestionContractTests(unittest.TestCase):
         expected_identities = {
             "/agent": "/to",
             "/?": "/help",
-            "/exit": "/quit",
         }
         for suggestion in suggestions:
             with self.subTest(token=suggestion.token):
@@ -381,6 +377,11 @@ class SuggestionContractTests(unittest.TestCase):
         self.assertTrue(
             {"/compose", "/send", "/cancel"}.isdisjoint(EXPECTED_SUGGESTIONS)
         )
+        self.assertTrue(
+            {"/language", "/persona", "/reset", "/exit"}.isdisjoint(
+                EXPECTED_SUGGESTIONS
+            )
+        )
 
     def test_matching_uses_the_exact_case_sensitive_whole_buffer_prefix(self) -> None:
         cases = {
@@ -390,7 +391,7 @@ class SuggestionContractTests(unittest.TestCase):
             "/he": ("/help",),
             "/set": ("/settings",),
             "/?": ("/?",),
-            "/exit": ("/exit",),
+            "/exit": (),
             "": (),
             "run": (),
             " /run": (),

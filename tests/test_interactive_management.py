@@ -285,6 +285,10 @@ class InteractiveManagementGateAndDirectiveTests(
         controller, _backend, callbacks, _store, _factory = self.make_controller(
             workspace,
             "/? status",
+            "/help override",
+            "/help language",
+            "/help persona",
+            "/help reset",
             "/status",
             "/language EN",
             "/persona plot default_kim_eun_hee",
@@ -330,6 +334,12 @@ class InteractiveManagementGateAndDirectiveTests(
         self.assertEqual(_durable_file_snapshot(workspace), before)
         rendered = "".join(callbacks.records)
         self.assertIn("Syntax: /status", rendered)
+        self.assertEqual(
+            rendered.count(
+                "Syntax: /override language LANG | persona AGENT NAME | reset"
+            ),
+            4,
+        )
         self.assertIn(
             "[session]\n"
             "  Session: none\n"
@@ -436,7 +446,7 @@ class InteractiveManagementGateAndDirectiveTests(
                 workspace.load_session_overrides("session"),
                 {"language": "EN", "persona": None, "agents": {}},
             )
-            return "/persona plot directive_persona"
+            return "/override persona plot directive_persona"
 
         def verify_persona_then_reset(_prompt: str) -> str:
             """Verify canonical agent persistence before returning reset."""
@@ -454,7 +464,7 @@ class InteractiveManagementGateAndDirectiveTests(
                     },
                 },
             )
-            return "/reset"
+            return "/override reset"
 
         def verify_reset_then_quit(_prompt: str) -> str:
             """Verify reset clears only runtime overrides before quitting."""
@@ -467,7 +477,7 @@ class InteractiveManagementGateAndDirectiveTests(
 
         controller, backend, callbacks, _store, _factory = self.make_controller(
             workspace,
-            "/language EN",
+            "/override language EN",
             verify_language_then_set_persona,
             verify_persona_then_reset,
             verify_reset_then_quit,
@@ -543,8 +553,8 @@ class InteractiveManagementGateAndDirectiveTests(
         before = (state.read_bytes(), state.stat().st_mtime_ns)
         controller, backend, callbacks, _store, _factory = self.make_controller(
             workspace,
-            "/language 한국어.v2",
-            "/persona plot missing_persona",
+            "/override language 한국어.v2",
+            "/override persona plot missing_persona",
             "/quit",
             runtime=_REAL_RUNTIME,
         )

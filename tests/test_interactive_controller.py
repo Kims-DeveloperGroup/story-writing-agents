@@ -3984,6 +3984,7 @@ class ControllerCommandTests(ControllerTestCase):
             "/session list",
             "/session pause",
             "/exit",
+            "/quit",
         )
         with (
             mock.patch.object(
@@ -4012,6 +4013,7 @@ class ControllerCommandTests(ControllerTestCase):
                 mock.call("/session list"),
                 mock.call("/session pause"),
                 mock.call("/exit"),
+                mock.call("/quit"),
             ],
         )
         self.assertEqual(_tree_snapshot(workspace.root), before)
@@ -4024,6 +4026,8 @@ class ControllerCommandTests(ControllerTestCase):
         )
         self.assertIn("[error command_invalid] unknown command: /sesion\n", rendered)
         self.assertIn("[hint] Try /session, or type /help.\n", rendered)
+        self.assertIn("[error command_invalid] unknown command: /exit\n", rendered)
+        self.assertIn("[hint] Try /quit, or type /help.\n", rendered)
         unavailable = (
             "[error command_invalid] This command is not available in the "
             "session lobby.\n"
@@ -14118,11 +14122,16 @@ class ControllerEndAndCleanupTests(ControllerTestCase):
                     workspace.path(_access_relative("session")).exists()
                 )
 
-    def test_quit_exit_and_eof_release_before_close_without_pausing(self) -> None:
-        for terminal_exit in ("/quit", "/exit", EOFError()):
-            with self.subTest(exit=repr(terminal_exit)):
-                workspace, backend, controller, _callbacks = (
-                    self.prepared_attached_controller(terminal_exit)
+    def test_quit_and_eof_release_before_close_without_pausing(self) -> None:
+        cases = (
+            ("quit", ("/quit",), False),
+            ("removed_exit", ("/exit", "/quit"), True),
+            ("eof", (EOFError(),), False),
+        )
+        for label, reads, removed_exit in cases:
+            with self.subTest(exit=label):
+                workspace, backend, controller, callbacks = (
+                    self.prepared_attached_controller(*reads)
                 )
                 events: list[str] = []
                 original_detach = backend.release_session_access
@@ -14148,6 +14157,16 @@ class ControllerEndAndCleanupTests(ControllerTestCase):
                     ],
                     "ready",
                 )
+                rendered = "".join(callbacks.records)
+                if removed_exit:
+                    self.assertIn(
+                        "[error command_invalid] unknown command: /exit\n",
+                        rendered,
+                    )
+                    self.assertIn(
+                        "[hint] Try /quit, or type /help.\n",
+                        rendered,
+                    )
 
     def test_cleanup_failure_overrides_normal_exit_and_not_primary_error(self) -> None:
         workspace, backend, controller, callbacks = (

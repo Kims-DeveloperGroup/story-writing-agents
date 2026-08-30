@@ -4402,7 +4402,7 @@ raise SystemExit(cli.main([]))
 
         preview_mark = process.output_mark()
         process.send_text("/")
-        process.wait_for_text("/exit", after=preview_mark)
+        process.wait_for_text("/quit", after=preview_mark)
         preview = process.text_after(preview_mark)
         self.assertIn("Suggestions [open]", preview)
         compact_preview = "".join(preview.split())
@@ -4412,10 +4412,9 @@ raise SystemExit(cli.main([]))
             "/to",
             "/agent",
             "/agents",
-            "/language",
-            "/persona",
-            "/reset",
+            "/auth",
             "/settings",
+            "/override",
             "/run",
             "/draft-file",
             "/session",
@@ -4428,13 +4427,15 @@ raise SystemExit(cli.main([]))
             "/help",
             "/?",
             "/quit",
-            "/exit",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, compact_preview)
         self.assertNotIn("/compose", preview)
         self.assertNotIn("/send", preview)
         self.assertNotIn("/cancel", preview)
+        for hidden in ("/language", "/persona", "/reset", "/exit"):
+            with self.subTest(hidden=hidden):
+                self.assertNotIn(hidden, compact_preview)
         self.assertEqual(_durable_tree(self.workspace.root), before)
         self.assertFalse(self.provider_log.exists())
 
@@ -4468,6 +4469,25 @@ raise SystemExit(cli.main([]))
         process.wait_for_text("story[lobby]> ", after=submit_mark)
         self.assertIn("\x1b[J", submitted)
         self.assertNotIn("Suggestions [open]", submitted)
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+
+        removed_exit_mark = process.output_mark()
+        process.send_text("/exit\n")
+        process.wait_for_text(
+            "Interactive erro",
+            after=removed_exit_mark,
+        )
+        removed_exit = process.wait_for_text(
+            "story[lobby]> ",
+            after=removed_exit_mark,
+        )
+        compact_removed_exit = "".join(removed_exit.split())
+        self.assertIn(
+            "[errorcommand_invalid]unknowncommand:/exit",
+            compact_removed_exit,
+        )
+        self.assertIn("Try/quit,ortype/help.", compact_removed_exit)
         self.assertEqual(_durable_tree(self.workspace.root), before)
         self.assertFalse(self.provider_log.exists())
 
@@ -4909,12 +4929,24 @@ raise SystemExit(cli.main([]))
             "Writing artifact references",
             after=help_mark,
         )
+        lobby.wait_for_text(
+            "/override language LANG | persona AGENT NAME | reset",
+            after=help_mark,
+        )
         help_output = lobby.wait_for_text("story[lobby]> ", after=help_mark)
         self.assertIn("Writing artifact references", help_output)
         self.assertIn(
             "".join(guidance.split()),
             "".join(help_output.split()),
         )
+        compact_help = "".join(help_output.split())
+        self.assertIn(
+            "/overridelanguageLANG|personaAGENTNAME|reset",
+            compact_help,
+        )
+        for hidden in ("/languageLANG", "/personaAGENTNAME", "/exit"):
+            with self.subTest(hidden=hidden):
+                self.assertNotIn(hidden, compact_help)
         lobby.send_text("/quit\n\n")
         self.assertEqual(lobby.wait_for_exit(), 0, lobby.normalized_text)
         self.assertEqual(
