@@ -601,6 +601,12 @@ class ContextExecutionErrorCode(StrEnum):
     CONTINUATION_MISMATCH = "continuation_mismatch"
 
 
+class _ContextExecutionErrorDetail(StrEnum):
+    """Private allow-list for fixed, content-free execution diagnostics."""
+
+    READ_SOURCE_HANDLES_REQUIRED = "read_source_handles_required"
+
+
 _EXECUTION_ERROR_MESSAGES = {
     ContextExecutionErrorCode.INVALID_VALUE: "contextual invocation is invalid",
     ContextExecutionErrorCode.PROVIDER_CONTRACT: (
@@ -617,6 +623,16 @@ _EXECUTION_ERROR_MESSAGES = {
     ),
 }
 
+_EXECUTION_ERROR_DETAIL_MESSAGES = {
+    (
+        ContextExecutionErrorCode.MALFORMED_ACTION,
+        _ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED,
+    ): (
+        "contextual provider read action is invalid: `d` must contain source "
+        "handles returned by the preceding context search"
+    ),
+}
+
 
 class ContextExecutionError(ValueError):
     """Report one fixed contextual lifecycle failure without story content."""
@@ -630,8 +646,22 @@ class ContextExecutionError(ValueError):
         super().__init__(_EXECUTION_ERROR_MESSAGES[code])
 
 
-def _execution_error(code: ContextExecutionErrorCode) -> ContextExecutionError:
-    return ContextExecutionError(code)
+def _execution_error(
+    code: ContextExecutionErrorCode,
+    *,
+    detail: _ContextExecutionErrorDetail | None = None,
+) -> ContextExecutionError:
+    failure = ContextExecutionError(code)
+    if detail is None:
+        return failure
+    if type(detail) is not _ContextExecutionErrorDetail:
+        raise TypeError("context execution error detail is invalid")
+    try:
+        message = _EXECUTION_ERROR_DETAIL_MESSAGES[(code, detail)]
+    except KeyError:
+        raise TypeError("context execution error detail is invalid") from None
+    failure.args = (message,)
+    return failure
 
 
 def _validate_sync_callback(value: object, *, optional: bool = True) -> None:
@@ -2398,11 +2428,20 @@ def _decode_context_action(
             "r": "read",
             "a": "answer",
         }.get(raw["a"] if type(raw["a"]) is str else None)
-        if action_kind is None or action_kind not in allowed_actions:
+        if action_kind is None:
             raise ValueError
         data = raw["d"]
         used_handles = raw["u"]
         if type(data) is not list or type(used_handles) is not list:
+            raise ValueError
+        if action_kind not in allowed_actions:
+            if action_kind == "read" and not used_handles:
+                raise _execution_error(
+                    ContextExecutionErrorCode.MALFORMED_ACTION,
+                    detail=(
+                        _ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED
+                    ),
+                )
             raise ValueError
         if action_kind == "search":
             if used_handles or not data:
@@ -2446,10 +2485,21 @@ def _decode_context_action(
         if action_kind == "read":
             if used_handles:
                 raise ValueError
-            return ContextReadAction(
-                correlation,
-                tuple(resolve_handle(item) for item in data),
-            )
+            try:
+                handles = tuple(resolve_handle(item) for item in data)
+            except ContextActionError as exc:
+                if exc.code in {
+                    ContextActionErrorCode.HANDLE_INVALID,
+                    ContextActionErrorCode.INVALID_VALUE,
+                }:
+                    raise _execution_error(
+                        ContextExecutionErrorCode.MALFORMED_ACTION,
+                        detail=(
+                            _ContextExecutionErrorDetail.READ_SOURCE_HANDLES_REQUIRED
+                        ),
+                    ) from None
+                raise
+            return ContextReadAction(correlation, handles)
         if len(data) != 1:
             raise ValueError
         return ContextAnswerAction(

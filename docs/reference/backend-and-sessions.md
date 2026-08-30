@@ -260,6 +260,26 @@ The terminal vocabulary is closed:
 | `rejected` | `malformed_structured_response`, `response_correlation_mismatch`, `response_semantic_rejected`, `action_exhausted`, `answer_validation_failed` |
 | `post_response_runtime_failure` | `thread_persistence_failed`, `reference_runtime_failed`, `context_runtime_failed` |
 
+One contextual-action rejection has narrower user guidance. When a structurally
+recognizable READ wire action arrives before any context search, or its `d`
+array contains invalid or foreign values instead of source handles returned by
+the immediately preceding search, Story raises this exact runtime exception:
+
+```text
+BackendProtocolError: contextual provider read action is invalid: `d` must contain source handles returned by the preceding context search
+```
+
+The provider did not raise `BackendProtocolError`; the runtime translates its
+internal `ContextExecutionErrorCode.MALFORMED_ACTION` through this fixed,
+content-safe allow-list. Other malformed JSON and unrelated malformed action
+shapes retain the generic `BackendProtocolError: contextual provider action is
+malformed`. Either path rejects the response with
+`rejected`/`malformed_structured_response`, taints the contextual attempt, and
+does not advance its ready checkpoint. Untrusted `d` values do not enter the
+exception or conversation history. When its best-effort exchange records are
+available, use bare `/exchanges` to inspect the authorized immutable request,
+exact valid raw `ProviderResult` projection, and terminal outcome.
+
 The request append is attempted before invocation. A valid raw
 `ProviderResult` is appended immediately on return, before accounting,
 decode/domain validation, the separate rejected-response artifact, and thread

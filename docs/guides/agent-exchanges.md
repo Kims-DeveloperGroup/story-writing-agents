@@ -210,6 +210,19 @@ is fail-open, advances before each append, and never retries.
 
 ### Diagnose a rejected structured response
 
+If the shell reports
+``BackendProtocolError: contextual provider read action is invalid: `d` must
+contain source handles returned by the preceding context search``, Story
+received a recognizable contextual READ action before any search or with
+invalid/foreign values instead of handles from that preceding search. Story,
+not the provider, raises this fixed content-safe exception. The internal code
+remains `ContextExecutionErrorCode.MALFORMED_ACTION`; the terminal outcome is
+`rejected`/`malformed_structured_response`, the contextual attempt is tainted,
+its ready checkpoint does not advance, and the response is rejected. Raw `d`
+values do not enter the error or conversation history. Other malformed JSON or
+action shapes retain the generic `BackendProtocolError: contextual provider
+action is malformed`.
+
 1. Keep the affected workspace private and attach the affected session.
 2. Run `/exchanges`; choose the exact Debate or Conversation full ID and
    subject, then the agent named by the sanitized error or runtime log.

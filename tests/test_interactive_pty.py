@@ -382,6 +382,20 @@ if control.get("mode") == "malformed":
         control.get("response", "not-json"),
         encoding="utf-8",
     )
+elif control.get("mode") == "invalid_read":
+    output_path.write_text(
+        json.dumps(
+            {
+                "a": "r",
+                "c": payload["c"],
+                "d": ["conflict", "PRIVATE/critique text"],
+                "u": [],
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
 elif isinstance(query, list):
     if (
         len(query) != 5
@@ -7870,6 +7884,37 @@ asyncio.run(main())
             "MALFORMED_PROVIDER_VALUE_MUST_NOT_APPEAR",
             malformed_history,
         )
+
+        self._set_provider_control(mode="invalid_read")
+        mark = process.output_mark()
+        process.send_line("invalid read provider turn")
+        process.wait_for_text("[error provider_protocol_error]", after=mark)
+        process.wait_for_text("story[alpha:lead]> ", after=mark)
+        invalid_read_error = process.text_after(mark)
+        self.assertNotIn("conflict", invalid_read_error)
+        self.assertNotIn("PRIVATE/critique text", invalid_read_error)
+        invalid_read_events = store.read("alpha", selected.conversation_id)
+        concrete_diagnostic = (
+            "BackendProtocolError: contextual provider read action is invalid: "
+            "`d` must contain source handles returned by the preceding context search"
+        )
+        self.assertEqual(invalid_read_events[-1].content, concrete_diagnostic)
+        self.assertNotIn("conflict", invalid_read_events[-1].content)
+        self.assertNotIn("PRIVATE/critique text", invalid_read_events[-1].content)
+
+        mark = process.output_mark()
+        process.send_line("/history 2")
+        process.wait_for_text("[context]", after=mark)
+        process.wait_for_text("story[alpha:lead]> ", after=mark)
+        invalid_read_history = process.text_after(mark)
+        compact_history = "".join(invalid_read_history.split()).replace("│", "")
+        self.assertIn(
+            "contextualproviderreadactionisinvalid:`d`mustcontainsourcehandles"
+            "returnedbytheprecedingcontextsearch",
+            compact_history,
+        )
+        self.assertNotIn("conflict", invalid_read_history)
+        self.assertNotIn("PRIVATE/critique text", invalid_read_history)
 
         self._set_provider_control(mode="auto")
         mark = process.output_mark()

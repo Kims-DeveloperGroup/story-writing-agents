@@ -849,6 +849,61 @@ class CompactWireDecoderTests(unittest.TestCase):
             }
         )
 
+    def test_invalid_read_values_report_only_fixed_source_handle_guidance(self) -> None:
+        private_values = ("conflict", "PRIVATE/critique text")
+        with self.assertRaises(service_module.ContextExecutionError) as caught:
+            self.decode(
+                {
+                    "a": "r",
+                    "c": self.token,
+                    "d": list(private_values),
+                    "u": [],
+                }
+            )
+
+        failure = caught.exception
+        self.assertIs(
+            failure.code,
+            service_module.ContextExecutionErrorCode.MALFORMED_ACTION,
+        )
+        self.assertEqual(
+            str(failure),
+            "contextual provider read action is invalid: `d` must contain "
+            "source handles returned by the preceding context search",
+        )
+        self.assertIsNone(failure.__cause__)
+        rendered = "\n".join(
+            (
+                str(failure),
+                repr(failure),
+                repr(failure.__cause__),
+                repr(failure.__context__),
+            )
+        )
+        for private in private_values:
+            self.assertNotIn(private, rendered)
+
+    def test_unrelated_malformed_actions_keep_generic_diagnostic(self) -> None:
+        cases = (
+            "{",
+            {"a": "a", "c": self.token, "d": [], "u": []},
+            {"a": "r", "c": self.token, "d": ["h1"], "u": ["h1"]},
+        )
+        for value in cases:
+            with self.subTest(value=value), self.assertRaises(
+                service_module.ContextExecutionError
+            ) as caught:
+                self.decode(value)
+            self.assertIs(
+                caught.exception.code,
+                service_module.ContextExecutionErrorCode.MALFORMED_ACTION,
+            )
+            self.assertEqual(
+                str(caught.exception),
+                "contextual provider action is malformed",
+            )
+            self.assertIsNone(caught.exception.__cause__)
+
     def test_double_encoded_or_invalid_structured_results_reject(self) -> None:
         cases = (
             (
