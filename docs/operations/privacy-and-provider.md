@@ -617,7 +617,7 @@ operating-system infrastructure. Picker, cursor, mode, search, match position,
 footer result/index, and help state are process-local and discarded on close;
 that does not erase exchange files, process memory, scrollback, screenshots, or
 copied frames. See [Inspect agent exchanges](../guides/agent-exchanges.md) and
-the pinned external [design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/93c3823a17c965f1e3449a9ce3d98636ebf441d6/docs/design-system.md).
+the pinned external [design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec/docs/design-system.md).
 
 Retention is bounded but not secure erasure. Per-stream rotation and global
 oldest-record pruning use ordinary unlink or replacement. User deletion,

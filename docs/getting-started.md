@@ -63,16 +63,26 @@ interactive use, persistence/trust limits, and the current redistribution
 restriction.
 
 The normal installation also installs the independent read-only
-`jsonl-viewer` at the required exact VCS commit. It records bounded plaintext
-agent requests, exact valid `ProviderResult` projections, and terminal
-outcomes; after a session is attached, bare `/exchanges` works without a
-setting, enablement step, or extra. The historical `viewer` extra is still
-accepted as an empty compatibility alias. A checkout can retain
+`jsonl-viewer` 0.1.1 at the required exact VCS commit. It records bounded
+plaintext agent requests, exact valid `ProviderResult` projections, and
+terminal outcomes; after a session is attached, bare `/exchanges` works
+without a setting, enablement step, or extra. The historical `viewer` extra is
+still accepted as an empty compatibility alias. A checkout can retain
 `python -m pip install --editable '.[viewer]'`, but it installs the same
 capability as the editable command above. Neither form invokes a provider or
-enables a service. The matching optional development submodule, pin checks,
-picker-first workflow, preview, nested JSON, colors, privacy limits, and
-recovery are in
+enables a service.
+
+Pulling updated Story source does not update packages already installed in the
+active environment. After updating a checkout, rerun:
+
+```bash
+python -m pip install --editable .
+```
+
+That ordinary reinstall upgrades viewer 0.1.0 to the required 0.1.1; it does
+not require an uninstall, `--force-reinstall`, or `--ignore-installed`. The
+matching optional development submodule, pin checks, picker-first workflow,
+preview, nested JSON, colors, privacy limits, and recovery are in
 [Inspect agent exchanges](guides/agent-exchanges.md).
 
 ## 2. Check the runtime without a provider

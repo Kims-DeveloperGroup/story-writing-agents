@@ -123,7 +123,7 @@ semantic model. It also governs the isolated package-internal ranged viewer
 where explicitly identified; the installed controller invokes it through
 provider-bound `$`/`$$` prompt editing without exporting it as a command. The
 separate `/exchanges` renderer contract lives in the pinned external
-[JSONL viewer design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/93c3823a17c965f1e3449a9ce3d98636ebf441d6/docs/design-system.md);
+[JSONL viewer design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec/docs/design-system.md);
 this document governs only Story's picker and terminal-host integration.
 
 The words **must**, **must not**, and **may** below constrain the delivery
@@ -149,7 +149,7 @@ current production behavior.
 | #87 picker foundation | Implemented: package-internal immutable picker/control/viewport state, pure initialization/reconciliation/live/fallback transitions, responsive live/full-list rendering, a dedicated history-free sole-driver lifecycle, and an unlisted resource-free adapter. #93 supplies its first installed consumer. |
 | #414 agent-exchange viewer integration | Implemented: bare attached-session `/exchanges` opens transient inventory-derived scope and complete-roster agent pickers, prepares one immutable exact or empty snapshot through a lazy exact required-package facade, and hosts the independent renderer through Story's sole raw-terminal driver. Picker/view state is discarded on close; provider, focus, and source bytes are unchanged. |
 | #422 hosted Search prompt cancellation | Implemented: capable `Search field: ` and `Search query: ` editors are history-free and transient. Escape discards the local draft, redraws the exact last validated successfully presented frame, emits no external-view event, and preserves viewer source, mode, search, match, position, and footer state. Prompt navigation is editing-local; bounded unsupported or incomplete sequences cancel without leaking suffix bytes. Main-view Escape and ordinary-line fallback remain unchanged. |
-| #423 required viewer installation | Implemented: every normal Story wheel or editable installation resolves `jsonl-viewer` from exact VCS commit `93c3823a17c965f1e3449a9ce3d98636ebf441d6`; `/exchanges` needs no setting, enablement, or extra. The empty `viewer` extra remains accepted for command compatibility, the matching git submodule is optional audit/development source rather than a runtime import path, and a missing or incompatible viewer produces standard-install repair guidance. |
+| #423 required viewer installation | Implemented: every normal Story wheel or editable installation resolves `jsonl-viewer` 0.1.1 from exact VCS commit `1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec`; `/exchanges` needs no setting, enablement, or extra. The empty `viewer` extra remains accepted for command compatibility, the matching git submodule is optional audit/development source rather than a runtime import path, and missing, older, or incompatible installations receive standard-install upgrade or repair guidance. |
 | #94 workspace Codex defaults | Implemented: the original slice added optional workspace fallback Codex model and reasoning values. The current closed twelve-field system schema also contains Antigravity model/effort, nullable `default_backend`, independent desired `conversation_storage_backend`, default-disabled local conversation-RAG provider/automatic values, and strict-boolean `show_message_details`; new workspaces initialize provider fields to null, automatic RAG and message details to false, and storage to filesystem. Legacy files remain valid and byte-preserved until a successful canonical persistence, and each backend validates and captures initial effective invocation values before the installed Settings activation path may replace its live-capable runtime generation. |
 | #93 settings UI | Implemented: global alias-free `/settings` edits isolated current/pending snapshots of workspace defaults, desired conversation storage, and per-agent provider/model/effort choices through shared picker and prompt controls. Confirmed full-path Apply Changes validates exact configuration, optional route-generation, and persona baselines, coordinates storage readiness, writes prepared system/agent/optional-route targets deterministically, and attempts exact rollback after failure. The workflow adds no supported public save API. |
 | #299 live execution profiles and context | Implemented: `/settings` authenticates, preflights, persists, and applies mixed live-capable runtime settings to the current shell without restart; desired storage and Conversation RAG remain next-shell settings, and launch overrides remain read-only. Message details controls whether responsive input/reply views include backend-authoritative provider/model/effort facts, sources, confirmation, and thread disposition; `/agents` and `/status` remain fully diagnostic. Provider switches advance durable route generations, while every substantive call rehydrates bounded belonging-session context even on a fresh native thread. Schema-v2 profile diagnostics remain content-free. |
@@ -668,8 +668,8 @@ cursor, search, match, footer result/index, and help value on return. The
 renderer's exact Simple/Verbose, gutter, search, color, responsive, recursive
 nested-JSON expansion, leaf-only truncation, and help rules
 remain solely in the pinned external [design
-system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/93c3823a17c965f1e3449a9ce3d98636ebf441d6/docs/design-system.md)
-and its [nine deterministic samples](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/93c3823a17c965f1e3449a9ce3d98636ebf441d6/docs/samples).
+system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec/docs/design-system.md)
+and its [nine deterministic samples](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec/docs/samples).
 
 Search cancellation adds no color role and no persistent status. Read-only
 meaning remains in the literal header and help copy, while line gutters,
@@ -685,8 +685,11 @@ setting or activation step. An older install command containing `[viewer]`
 remains accepted but is behaviorally identical. Checkout developers initialize
 `vendor/jsonl-viewer` only when they need to audit or test the pinned external
 source; Story artifacts omit that source, and runtime imports never use it. A
-missing, damaged, or incompatible distribution is a broken standard install
-and directs the user to repair or reinstall Story.
+source update alone does not mutate the active environment: rerunning the
+ordinary editable Story install upgrades viewer 0.1.0 to 0.1.1 without force,
+ignore, or uninstall. A missing viewer uses the same normal installation path;
+forced reinstall is reserved for damaged or incompatible files after the exact
+0.1.1 pin is already selected.
 
 ## Key and commit semantics
 
