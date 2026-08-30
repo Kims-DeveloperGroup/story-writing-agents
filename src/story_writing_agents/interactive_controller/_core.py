@@ -6045,7 +6045,7 @@ class InteractiveController:
         self,
         failure: AgentExchangeViewerError,
     ) -> None:
-        """Render one fixed optional-viewer failure without external prose."""
+        """Render one fixed required-viewer failure without external prose."""
 
         self._record_debug_error(
             DebugOperation.INTERACTIVE_COMMAND,
@@ -6054,12 +6054,18 @@ class InteractiveController:
         )
         if failure.code == "installation_required":
             code = InteractiveErrorCode.CONFIGURATION_INVALID
-            summary = "The optional agent exchange viewer is unavailable."
-            hint = "Install story-writing-agents[viewer] and retry /exchanges."
+            summary = "The required agent exchange viewer is unavailable."
+            hint = (
+                "Repair or reinstall the standard story-writing-agents "
+                "installation and retry /exchanges."
+            )
         elif failure.code == "incompatible":
             code = InteractiveErrorCode.CONFIGURATION_INVALID
-            summary = "The installed agent exchange viewer is incompatible."
-            hint = "Reinstall story-writing-agents[viewer] and retry /exchanges."
+            summary = "The required agent exchange viewer is incompatible with Story."
+            hint = (
+                "Repair or reinstall the standard story-writing-agents "
+                "installation and retry /exchanges."
+            )
         else:
             code = InteractiveErrorCode.INTERNAL_ERROR
             summary = "The agent exchange viewer failed."

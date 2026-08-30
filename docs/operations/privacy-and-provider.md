@@ -10,8 +10,8 @@
 > commands, plus interactive settings, startup composition, automatic
 > preflight, and private one-turn `/rag` arming.
 > They also cover the content-safe runtime debug log, automatic bounded
-> agent-exchange store, optional isolated `/exchanges` viewer, and the separate
-> bounded store for eligible rejected provider responses.
+> agent-exchange store, required base-installed isolated `/exchanges` viewer,
+> and the separate bounded store for eligible rejected provider responses.
 > They do not make either provider, its executable, the workspace, or the
 > terminal trusted.
 > Inline canonical references in provider-bound prompt text are active.
@@ -594,8 +594,8 @@ content-free inventory; its second picker contains the complete canonical
 roster. The controller then requests one exact immutable
 session/scope/agent snapshot, or supplies immutable empty bytes for an agent
 without retained records. It never passes a path, descriptor, or writable
-handle to the optional viewer and never invokes, retries, replays, edits, or
-deletes provider work.
+handle to the required independent viewer and never invokes, retries, replays,
+edits, or deletes provider work.
 
 The viewer header deliberately exposes the attached session, exact
 Conversation or Debate full ID and subject, and exact agent ID. Simple mode
@@ -617,7 +617,7 @@ operating-system infrastructure. Picker, cursor, mode, search, match position,
 footer result/index, and help state are process-local and discarded on close;
 that does not erase exchange files, process memory, scrollback, screenshots, or
 copied frames. See [Inspect agent exchanges](../guides/agent-exchanges.md) and
-the pinned external [design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/5d3047aa86212810d867d5b40cb1df3262f1810f/docs/design-system.md).
+the pinned external [design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/93c3823a17c965f1e3449a9ce3d98636ebf441d6/docs/design-system.md).
 
 Retention is bounded but not secure erasure. Per-stream rotation and global
 oldest-record pruning use ordinary unlink or replacement. User deletion,

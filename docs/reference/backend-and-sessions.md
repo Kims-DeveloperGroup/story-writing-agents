@@ -223,7 +223,9 @@ There is no constructor option, retry switch, or new root public API. Direct
 storage inspection remains available through the `agent_exchanges` package.
 The installed bare `/exchanges` command is a later controller/terminal
 integration over immutable snapshots; the backend still imports no controller,
-terminal, picker, viewer, or optional external package.
+terminal, picker, viewer, or external package. Normal Story packaging requires
+the independently maintained viewer, but the backend and exchange store retain
+no viewer dependency or static import.
 
 One successful capture lifecycle uses a fresh
 `exchange_<32 lowercase hexadecimal characters>` identity and preserves the

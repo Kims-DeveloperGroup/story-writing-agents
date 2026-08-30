@@ -1251,22 +1251,27 @@ or EOF at either picker selects nothing and opens no view. An agent without
 retained records opens an immutable empty snapshot with the selected header.
 
 For a nonempty selection, the controller copies one exact session/scope/agent
-snapshot into immutable bytes, validates the optional package's exact
+snapshot into immutable bytes, lazily validates the required package's exact
 `ViewerSpec`, `ViewerHost`, and `view_jsonl` API before terminal acquisition,
 then opens it through Story's sole raw-terminal driver. The header contains
 session, exact Conversation or Debate ID and subject, and agent ID. The external
 viewer supplies read-only Simple/Verbose JSON, source-line gutters, exact
-go-to-line, structured color, bounded string previews, enumerated-field search,
+go-to-line, structured color, bounded recursive expansion of complete nested
+object/array JSON strings, leaf-only string previews, enumerated-field search,
 `n`/`N`, transient result position, help, and complete state disposal on close.
 
 If `jsonl-viewer` is absent, the command reports `configuration_invalid` and
-guides installation of `story-writing-agents[viewer]`. A mismatched public API
-reports the same category with reinstall guidance. Fixed content-free errors
-cover busy, unsupported, unsafe/corrupt, uncorrelatable, disappeared, or failed
-views; eligible failures add only the normal sanitized runtime-debug hint.
-There is no replay, retry, live tail, edit, export, raw path, or external error
-prose. See [Inspect agent exchanges](../guides/agent-exchanges.md) for the exact
-install, picker, viewer, privacy, and recovery workflow.
+reports that the required viewer is unavailable and guides repair or reinstall
+of the standard Story installation. A mismatched public API reports the same
+category and says that the required viewer is incompatible with Story, with
+the same standard-install repair guidance. The historical `viewer` extra is an
+accepted empty compatibility alias, not a distinct repair path. Fixed
+content-free errors cover busy, unsupported, unsafe/corrupt, uncorrelatable,
+disappeared, or failed views; eligible failures add only the normal sanitized
+runtime-debug hint. There is no replay, retry, live tail, edit, export, raw
+path, or external error prose. See
+[Inspect agent exchanges](../guides/agent-exchanges.md) for the exact
+availability, picker, viewer, privacy, and recovery workflow.
 
 Full help is one grouped semantic `Panel` in command-registry order; contextual
 help is one command record with its group, syntax, aliases, provider/artifact

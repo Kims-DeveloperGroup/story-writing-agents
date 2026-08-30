@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import ast
 import configparser
+import email.parser
 import importlib.util
+import io
+import os
 import shutil
 import subprocess
 import sys
@@ -33,11 +36,15 @@ _GENERIC_RAG_REPOSITORY = "https://github.com/Kims-DeveloperGroup/generic-rag.gi
 _GENERIC_RAG_REQUIREMENT = (
     f"generic-rag @ git+{_GENERIC_RAG_REPOSITORY}@{_GENERIC_RAG_PIN}"
 )
-_JSONL_VIEWER_PIN = "5d3047aa86212810d867d5b40cb1df3262f1810f"
+_JSONL_VIEWER_PIN = "93c3823a17c965f1e3449a9ce3d98636ebf441d6"
 _JSONL_VIEWER_REPOSITORY = "https://github.com/Kims-DeveloperGroup/jsonl-viewer.git"
 _JSONL_VIEWER_REQUIREMENT = (
     f"jsonl-viewer @ git+{_JSONL_VIEWER_REPOSITORY}@{_JSONL_VIEWER_PIN}"
 )
+_GITLINK_PATHS = {
+    "vendor/generic-rag": _GENERIC_RAG_PIN,
+    "vendor/jsonl-viewer": _JSONL_VIEWER_PIN,
+}
 
 
 def _module_inventory() -> dict[str, Path]:
@@ -159,11 +166,96 @@ def _copy_build_input(source: Path, destination: Path, *, vendor: bool) -> None:
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
     )
     if vendor:
-        shutil.copytree(
-            source / "vendor" / "generic-rag",
+        _export_gitlink_project(
+            "vendor/generic-rag",
             destination / "vendor" / "generic-rag",
-            ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"),
         )
+        _export_gitlink_project(
+            "vendor/jsonl-viewer",
+            destination / "vendor" / "jsonl-viewer",
+        )
+
+
+def _gitlink_git_directory(relative: str) -> Path:
+    if relative not in _GITLINK_PATHS:
+        raise ValueError("unsupported gitlink path")
+    resolved = subprocess.run(
+        ["git", "rev-parse", "--git-path", f"modules/{relative}"],
+        cwd=_REPOSITORY_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    directory = Path(resolved)
+    if not directory.is_absolute():
+        directory = _REPOSITORY_ROOT / directory
+    if not directory.is_dir():
+        raise AssertionError(f"gitlink object store is unavailable: {relative}")
+    return directory.resolve()
+
+
+def _gitlink_index_entry(relative: str) -> tuple[str, str]:
+    entry = subprocess.run(
+        ["git", "ls-files", "--stage", "--", relative],
+        cwd=_REPOSITORY_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    prefix, observed_path = entry.split("\t", 1)
+    mode, object_id, stage = prefix.split()
+    if stage != "0" or observed_path != relative:
+        raise AssertionError(f"invalid gitlink index entry: {entry!r}")
+    return mode, object_id
+
+
+def _assert_effective_gitlink(test: unittest.TestCase, relative: str) -> None:
+    expected = _GITLINK_PATHS[relative]
+    mode, indexed = _gitlink_index_entry(relative)
+    test.assertEqual(mode, "160000")
+    head = subprocess.run(
+        [
+            "git",
+            f"--git-dir={_gitlink_git_directory(relative)}",
+            "rev-parse",
+            "HEAD",
+        ],
+        cwd=_REPOSITORY_ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    test.assertEqual(head, expected)
+    if indexed != expected:
+        submodule_diff = subprocess.run(
+            ["git", "diff", "--submodule=short", "--", relative],
+            cwd=_REPOSITORY_ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout.strip()
+        test.assertIn(f"-Subproject commit {indexed}", submodule_diff)
+        test.assertIn(f"+Subproject commit {expected}", submodule_diff)
+
+
+def _export_gitlink_project(relative: str, destination: Path) -> None:
+    expected = _GITLINK_PATHS[relative]
+    git_directory = _gitlink_git_directory(relative)
+    archive = subprocess.run(
+        [
+            "git",
+            f"--git-dir={git_directory}",
+            "archive",
+            "--format=zip",
+            expected,
+        ],
+        cwd=_REPOSITORY_ROOT,
+        capture_output=True,
+        check=True,
+    ).stdout
+    destination.mkdir(parents=True)
+    with zipfile.ZipFile(io.BytesIO(archive)) as packaged:
+        packaged.extractall(destination)
 
 
 def _build_local_artifacts(project: Path, distribution: Path) -> tuple[Path, Path]:
@@ -323,9 +415,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 source
                 for source, target in edges
                 if target == "story_writing_agents.agent_context.service"
-                and source.startswith(
-                    "story_writing_agents.interactive_controller."
-                )
+                and source.startswith("story_writing_agents.interactive_controller.")
             },
             {"story_writing_agents.interactive_controller._runtime_policy"},
         )
@@ -447,15 +537,15 @@ class RagModuleBoundaryTests(unittest.TestCase):
 
 
 class RagPackagingBoundaryTests(unittest.TestCase):
-    def test_optional_metadata_lock_and_gitlink_share_one_exact_pin(self) -> None:
+    def test_required_metadata_lock_and_gitlinks_share_exact_pins(self) -> None:
         with (_REPOSITORY_ROOT / "pyproject.toml").open("rb") as handle:
             project = tomllib.load(handle)["project"]
-        self.assertEqual(project["dependencies"], [])
+        self.assertEqual(project["dependencies"], [_JSONL_VIEWER_REQUIREMENT])
         self.assertEqual(
             project["optional-dependencies"],
             {
                 "rag": [_GENERIC_RAG_REQUIREMENT],
-                "viewer": [_JSONL_VIEWER_REQUIREMENT],
+                "viewer": [],
             },
         )
 
@@ -475,12 +565,10 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             f"{_JSONL_VIEWER_REPOSITORY}?rev={_JSONL_VIEWER_PIN}#{_JSONL_VIEWER_PIN}",
         )
         story = packages["story-writing-agents"]
+        self.assertEqual(story["dependencies"], [{"name": "jsonl-viewer"}])
         self.assertEqual(
             story["optional-dependencies"],
-            {
-                "rag": [{"name": "generic-rag"}],
-                "viewer": [{"name": "jsonl-viewer"}],
-            },
+            {"rag": [{"name": "generic-rag"}]},
         )
         self.assertEqual(
             story["metadata"]["requires-dist"],
@@ -492,7 +580,6 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 },
                 {
                     "name": "jsonl-viewer",
-                    "marker": "extra == 'viewer'",
                     "git": f"{_JSONL_VIEWER_REPOSITORY}?rev={_JSONL_VIEWER_PIN}",
                 },
             ],
@@ -520,76 +607,12 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             submodules[viewer_section]["url"],
             _JSONL_VIEWER_REPOSITORY,
         )
-
-        gitlink = subprocess.run(
-            ["git", "ls-files", "--stage", "--", "vendor/generic-rag"],
-            cwd=_REPOSITORY_ROOT,
-            text=True,
-            capture_output=True,
-            check=True,
-        ).stdout.strip()
         self.assertEqual(
-            gitlink,
-            f"160000 {_GENERIC_RAG_PIN} 0\tvendor/generic-rag",
+            (_REPOSITORY_ROOT / "MANIFEST.in").read_text(encoding="utf-8"),
+            "prune vendor/jsonl-viewer\n",
         )
-        submodule_head = subprocess.run(
-            ["git", "-C", "vendor/generic-rag", "rev-parse", "HEAD"],
-            cwd=_REPOSITORY_ROOT,
-            text=True,
-            capture_output=True,
-            check=True,
-        ).stdout.strip()
-        self.assertEqual(submodule_head, _GENERIC_RAG_PIN)
-        submodule_status = subprocess.run(
-            [
-                "git",
-                "-C",
-                "vendor/generic-rag",
-                "status",
-                "--porcelain",
-                "--untracked-files=no",
-            ],
-            cwd=_REPOSITORY_ROOT,
-            text=True,
-            capture_output=True,
-            check=True,
-        ).stdout
-        self.assertEqual(submodule_status, "")
-
-        viewer_gitlink = subprocess.run(
-            ["git", "ls-files", "--stage", "--", "vendor/jsonl-viewer"],
-            cwd=_REPOSITORY_ROOT,
-            text=True,
-            capture_output=True,
-            check=True,
-        ).stdout.strip()
-        self.assertEqual(
-            viewer_gitlink,
-            f"160000 {_JSONL_VIEWER_PIN} 0\tvendor/jsonl-viewer",
-        )
-        viewer_head = subprocess.run(
-            ["git", "-C", "vendor/jsonl-viewer", "rev-parse", "HEAD"],
-            cwd=_REPOSITORY_ROOT,
-            text=True,
-            capture_output=True,
-            check=True,
-        ).stdout.strip()
-        self.assertEqual(viewer_head, _JSONL_VIEWER_PIN)
-        viewer_status = subprocess.run(
-            [
-                "git",
-                "-C",
-                "vendor/jsonl-viewer",
-                "status",
-                "--porcelain",
-                "--untracked-files=no",
-            ],
-            cwd=_REPOSITORY_ROOT,
-            text=True,
-            capture_output=True,
-            check=True,
-        ).stdout
-        self.assertEqual(viewer_status, "")
+        _assert_effective_gitlink(self, "vendor/generic-rag")
+        _assert_effective_gitlink(self, "vendor/jsonl-viewer")
 
     @unittest.skipUnless(
         importlib.util.find_spec("setuptools") is not None,
@@ -604,15 +627,13 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             generic_project = root / "generic-project"
             viewer_project = root / "viewer-project"
             _copy_build_input(_REPOSITORY_ROOT, story_project, vendor=True)
-            _copy_build_input(
-                _REPOSITORY_ROOT / "vendor" / "generic-rag",
+            _export_gitlink_project(
+                "vendor/generic-rag",
                 generic_project,
-                vendor=False,
             )
-            _copy_build_input(
-                _REPOSITORY_ROOT / "vendor" / "jsonl-viewer",
+            _export_gitlink_project(
+                "vendor/jsonl-viewer",
                 viewer_project,
-                vendor=False,
             )
             story_distribution = root / "story-dist"
             generic_distribution = root / "generic-dist"
@@ -633,10 +654,82 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 viewer_distribution,
             )
 
+            with (viewer_project / "pyproject.toml").open("rb") as handle:
+                viewer_project_metadata = tomllib.load(handle)["project"]
+            self.assertEqual(viewer_project_metadata["license"], "MIT")
+            self.assertEqual(viewer_project_metadata["requires-python"], ">=3.11")
+            self.assertEqual(viewer_project_metadata["dependencies"], [])
+            self.assertEqual(
+                (viewer_project / "LICENSE")
+                .read_text(encoding="utf-8")
+                .splitlines()[0],
+                "MIT License",
+            )
+            external_imports: set[str] = set()
+            for source_path in (viewer_project / "src" / "jsonl_viewer").glob("*.py"):
+                tree = ast.parse(
+                    source_path.read_text(encoding="utf-8"),
+                    filename=str(source_path),
+                )
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Import):
+                        external_imports.update(
+                            alias.name.partition(".")[0] for alias in node.names
+                        )
+                    elif isinstance(node, ast.ImportFrom) and node.level == 0:
+                        external_imports.add((node.module or "").partition(".")[0])
+            self.assertTrue(external_imports <= sys.stdlib_module_names)
+            self.assertNotIn("story_writing_agents", external_imports)
+
+            with zipfile.ZipFile(viewer_wheel) as archive:
+                viewer_metadata_name = next(
+                    name
+                    for name in archive.namelist()
+                    if name.endswith(".dist-info/METADATA")
+                )
+                viewer_metadata = email.parser.BytesParser().parsebytes(
+                    archive.read(viewer_metadata_name)
+                )
+            self.assertEqual(viewer_metadata["License-Expression"], "MIT")
+            self.assertEqual(viewer_metadata["Requires-Python"], ">=3.11")
+            self.assertIsNone(viewer_metadata["Requires-Dist"])
+
             with zipfile.ZipFile(story_wheel) as archive:
                 wheel_names = tuple(archive.namelist())
+                metadata_name = next(
+                    name for name in wheel_names if name.endswith(".dist-info/METADATA")
+                )
+                metadata = email.parser.BytesParser().parsebytes(
+                    archive.read(metadata_name)
+                )
             with tarfile.open(story_sdist, "r:gz") as archive:
                 sdist_names = tuple(archive.getnames())
+            self.assertEqual(
+                metadata.get_all("Provides-Extra"),
+                ["rag", "viewer"],
+            )
+            requires = metadata.get_all("Requires-Dist") or []
+            self.assertEqual(len(requires), 2)
+            self.assertTrue(
+                any(
+                    requirement.startswith(
+                        f"jsonl-viewer@ git+{_JSONL_VIEWER_REPOSITORY}@{_JSONL_VIEWER_PIN}"
+                    )
+                    and ";" not in requirement
+                    for requirement in requires
+                ),
+                requires,
+            )
+            self.assertTrue(
+                any(
+                    requirement.startswith(
+                        f"generic-rag@ git+{_GENERIC_RAG_REPOSITORY}@{_GENERIC_RAG_PIN}"
+                    )
+                    and 'extra == "rag"' in requirement
+                    for requirement in requires
+                ),
+                requires,
+            )
             for names in (wheel_names, sdist_names):
                 self.assertTrue(
                     any(
@@ -680,14 +773,14 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 self.assertFalse(any("/generic_rag/" in f"/{name}/" for name in names))
                 self.assertFalse(any("/jsonl_viewer/" in f"/{name}/" for name in names))
 
-            base_target = root / "base-install"
-            base_target.mkdir()
+            damaged_target = root / "damaged-install"
+            damaged_target.mkdir()
             with zipfile.ZipFile(story_wheel) as archive:
-                archive.extractall(base_target)
-            base_script = textwrap.dedent(
+                archive.extractall(damaged_target)
+            damaged_script = textwrap.dedent(
                 f"""
                 import sys
-                sys.path.insert(0, {str(base_target)!r})
+                sys.path.insert(0, {str(damaged_target)!r})
                 import story_writing_agents
                 import story_writing_agents.conversation_rag_cli as rag_cli
                 import story_writing_agents.conversation_rag_composition as composition
@@ -729,25 +822,29 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     )
                 except exchange_viewer.AgentExchangeViewerError as failure:
                     assert failure.code == "installation_required"
+                    assert str(failure) == (
+                        "Required agent exchange viewer is unavailable. Repair or "
+                        "reinstall Story and retry /exchanges."
+                    )
                 else:
-                    raise AssertionError("base install unexpectedly loaded jsonl_viewer")
+                    raise AssertionError("damaged install unexpectedly loaded jsonl_viewer")
                 """
             )
-            base = subprocess.run(
-                [sys.executable, "-I", "-W", "error", "-c", base_script],
+            damaged = subprocess.run(
+                [sys.executable, "-I", "-W", "error", "-c", damaged_script],
                 text=True,
                 capture_output=True,
                 check=False,
             )
             self.assertEqual(
-                base.returncode,
+                damaged.returncode,
                 0,
-                f"stdout:\n{base.stdout}\nstderr:\n{base.stderr}",
+                f"stdout:\n{damaged.stdout}\nstderr:\n{damaged.stderr}",
             )
 
             optional_target = root / "optional-install"
             optional_target.mkdir()
-            for wheel in (story_wheel, generic_wheel):
+            for wheel in (story_wheel, generic_wheel, viewer_wheel):
                 with zipfile.ZipFile(wheel) as archive:
                     archive.extractall(optional_target)
             optional_script = textwrap.dedent(
@@ -831,6 +928,204 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 0,
                 f"stdout:\n{viewer.stdout}\nstderr:\n{viewer.stderr}",
             )
+
+    @unittest.skipUnless(
+        importlib.util.find_spec("setuptools") is not None,
+        "isolated install verification requires setuptools",
+    )
+    def test_clean_base_wheel_editable_and_compatibility_extra_installs(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            story_project = root / "story-project"
+            _copy_build_input(_REPOSITORY_ROOT, story_project, vendor=True)
+            distribution = root / "dist"
+            distribution.mkdir()
+            story_wheel, _story_sdist = _build_local_artifacts(
+                story_project,
+                distribution,
+            )
+            viewer_git_directory = _gitlink_git_directory("vendor/jsonl-viewer")
+            install_environment = os.environ.copy()
+            for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"):
+                install_environment.pop(name, None)
+            install_environment.update(
+                {
+                    "GIT_ALLOW_PROTOCOL": "file",
+                    "GIT_CONFIG_COUNT": "1",
+                    "GIT_CONFIG_KEY_0": (
+                        f"url.file://{viewer_git_directory.as_posix()}/.insteadOf"
+                    ),
+                    "GIT_CONFIG_VALUE_0": _JSONL_VIEWER_REPOSITORY,
+                    "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+                    "PIP_NO_INDEX": "1",
+                    "PYTHONNOUSERSITE": "1",
+                }
+            )
+            probe = textwrap.dedent(
+                f"""
+                import importlib.metadata
+                import json
+                import sys
+
+                mode = sys.argv[1]
+                import story_writing_agents
+                assert not any(
+                    name == "jsonl_viewer" or name.startswith("jsonl_viewer.")
+                    for name in sys.modules
+                )
+                from story_writing_agents.interactive_commands import ActionKind, parse_interactive_line
+                action = parse_interactive_line("/exchanges")
+                assert action.kind is ActionKind.EXCHANGES
+                assert not any(
+                    name == "jsonl_viewer" or name.startswith("jsonl_viewer.")
+                    for name in sys.modules
+                )
+
+                viewer_distribution = importlib.metadata.distribution("jsonl-viewer")
+                direct_url = json.loads(viewer_distribution.read_text("direct_url.json"))
+                assert direct_url == {{
+                    "url": {_JSONL_VIEWER_REPOSITORY!r},
+                    "vcs_info": {{
+                        "commit_id": {_JSONL_VIEWER_PIN!r},
+                        "requested_revision": {_JSONL_VIEWER_PIN!r},
+                        "vcs": "git",
+                    }},
+                }}, direct_url
+                assert viewer_distribution.version == "0.1.0"
+                assert viewer_distribution.requires in (None, [])
+                assert sum(
+                    distribution.metadata["Name"].lower() == "jsonl-viewer"
+                    for distribution in importlib.metadata.distributions()
+                ) == 1
+                try:
+                    importlib.metadata.distribution("generic-rag")
+                except importlib.metadata.PackageNotFoundError:
+                    pass
+                else:
+                    raise AssertionError("base viewer install unexpectedly includes RAG")
+
+                story_distribution = importlib.metadata.distribution(
+                    "story-writing-agents"
+                )
+                assert sorted(story_distribution.metadata.get_all("Provides-Extra")) == [
+                    "rag",
+                    "viewer",
+                ]
+                requirements = story_distribution.metadata.get_all("Requires-Dist")
+                assert len(requirements) == 2
+                viewer_requirements = [
+                    requirement
+                    for requirement in requirements
+                    if requirement.lower().startswith("jsonl-viewer")
+                ]
+                assert len(viewer_requirements) == 1
+                assert ";" not in viewer_requirements[0]
+                if mode.startswith("editable"):
+                    story_direct_url = json.loads(
+                        story_distribution.read_text("direct_url.json")
+                    )
+                    assert story_direct_url["dir_info"] == {{"editable": True}}
+                    assert story_direct_url["url"].startswith("file:")
+
+                from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
+                from story_writing_agents.interactive_controller._exchange_viewer import prepare_agent_exchange_view
+                class Host:
+                    def __init__(self): self.frames = []; self.closed = 0
+                    def terminal_size(self): return (80, 24)
+                    def color_enabled(self): return False
+                    def present(self, frame): self.frames.append(frame)
+                    def read_event(self): return "close"
+                    def close_view(self): self.closed += 1
+                source = b'{{"timestamp":"2026-08-30T00:00:00Z","request_type":"request","content":"ok"}}\\n'
+                host = Host()
+                operation = prepare_agent_exchange_view(
+                    source,
+                    session_id="session_1",
+                    scope_kind=AgentExchangeScopeKind.CONVERSATION,
+                    scope_id="conversation_1",
+                    scope_subject="Subject",
+                    agent_id="lead_orchestrator",
+                )
+                operation(host)
+                assert host.closed == 1
+                assert host.frames and "READ ONLY" in host.frames[0]
+                assert source.endswith(b"\\n")
+                import jsonl_viewer
+                assert jsonl_viewer.__all__ == ["ViewerHost", "ViewerSpec", "view_jsonl"]
+                """
+            )
+            modes = (
+                ("wheel", [str(story_wheel)]),
+                ("editable-base", ["-e", str(story_project)]),
+                ("editable-viewer-extra", ["-e", f"{story_project}[viewer]"]),
+            )
+            for mode, target in modes:
+                with self.subTest(mode=mode):
+                    environment = root / f"venv-{mode}"
+                    created = subprocess.run(
+                        [
+                            sys.executable,
+                            "-m",
+                            "venv",
+                            "--system-site-packages",
+                            str(environment),
+                        ],
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    self.assertEqual(
+                        created.returncode,
+                        0,
+                        f"stdout:\n{created.stdout}\nstderr:\n{created.stderr}",
+                    )
+                    python = environment / "bin" / "python"
+                    installed = subprocess.run(
+                        [
+                            str(python),
+                            "-m",
+                            "pip",
+                            "install",
+                            "--ignore-installed",
+                            "--no-build-isolation",
+                            *target,
+                        ],
+                        env=install_environment,
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    self.assertEqual(
+                        installed.returncode,
+                        0,
+                        f"stdout:\n{installed.stdout}\nstderr:\n{installed.stderr}",
+                    )
+                    checked = subprocess.run(
+                        [str(python), "-m", "pip", "check"],
+                        env=install_environment,
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    self.assertEqual(
+                        checked.returncode,
+                        0,
+                        f"stdout:\n{checked.stdout}\nstderr:\n{checked.stderr}",
+                    )
+                    verified = subprocess.run(
+                        [str(python), "-I", "-W", "error", "-c", probe, mode],
+                        env=install_environment,
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                    )
+                    self.assertEqual(
+                        verified.returncode,
+                        0,
+                        f"stdout:\n{verified.stdout}\nstderr:\n{verified.stderr}",
+                    )
 
 
 if __name__ == "__main__":

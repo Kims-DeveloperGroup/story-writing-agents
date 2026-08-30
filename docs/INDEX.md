@@ -30,7 +30,8 @@ Use this index to find one canonical answer instead of searching a long manual.
 > automation UI.
 > Bare `/exchanges` is a separate attached-session inspection command. It
 > selects an inventoried conversation/debate and canonical agent before opening
-> an optional isolated read-only JSONL viewer over one immutable snapshot.
+> the base-installed isolated read-only JSONL viewer over one immutable
+> snapshot. No setting, enablement step, or extra is required.
 
 ## Availability matrix
 
@@ -44,7 +45,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Open the TTY shell; list, create, resume, switch, or pause sessions | Bare `story` or `story chat` |
 | Show registry help or shell status | Global in the installed shell |
 | Apply directives; safely inspect sessions or debates | Current attachment; no conversation focus required |
-| Inspect recorded agent/provider request, response, and outcome exchanges | Attached shell `/exchanges`; no conversation focus or identifier argument. The command opens transient scope and agent pickers, then the optional pinned read-only viewer. [Install, workflow, preview, and privacy](guides/agent-exchanges.md) |
+| Inspect recorded agent/provider request, response, and outcome exchanges | Every normal installation; attached shell `/exchanges`; no conversation focus, identifier argument, setting, or extra. The command opens transient scope and agent pickers, then the exact-pinned read-only viewer. [Availability, workflow, preview, and privacy](guides/agent-exchanges.md) |
 | Create, list, resume, rename, or archive subject conversations | Installed shell after session attachment; catalog Python API |
 | Serialize or transfer canonical conversation-only archives | Direct `story_writing_agents.conversation_storage` Python API; serialization is pure, while filesystem export/import require a caller-held mutation lease. There is no raw archive shell command or complete-workspace backup. |
 | Use the optional SQLite conversation catalog, transcript store, and exact literal search | Installed shell after an explicit next-shell selection, or direct Python API after readiness preflight and explicit provisioning; derived FTS5 hints are optional and non-authoritative |
@@ -78,7 +79,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 ## Guides
 
 - [Bounded agent context: canonical scenarios, selection, search/read, references, progress, and limits](guides/agent-context.md)
-- [Agent exchanges: optional viewer installation, picker-first inspection, preview, colors, privacy, and recovery](guides/agent-exchanges.md)
+- [Agent exchanges: standard-install availability, picker-first inspection, preview, nested JSON, colors, privacy, and recovery](guides/agent-exchanges.md)
 - [Canonical artifact references](guides/artifact-references.md)
 - [Workspaces](guides/workspaces.md)
 - [Story sessions and subject conversations](guides/story-sessions.md)
@@ -124,8 +125,8 @@ Use this index to find one canonical answer instead of searching a long manual.
 - [Session lifecycle](design/session-lifecycle.md)
 - [Consensus workflow](design/consensus-workflow.md)
 - [Persistence](design/persistence.md)
-- [Pinned JSONL viewer design system and hosted scenarios](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/5d3047aa86212810d867d5b40cb1df3262f1810f/docs/design-system.md)
-- [Pinned deterministic JSONL viewer sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/5d3047aa86212810d867d5b40cb1df3262f1810f/docs/samples)
+- [Pinned JSONL viewer design system and hosted scenarios](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/93c3823a17c965f1e3449a9ce3d98636ebf441d6/docs/design-system.md)
+- [Nine pinned deterministic JSONL viewer sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/93c3823a17c965f1e3449a9ce3d98636ebf441d6/docs/samples)
 
 ## Operations
 
