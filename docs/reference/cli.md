@@ -67,6 +67,10 @@ shell. It never migrates conversations, deletes a source, changes the active
 marker, switches a running shell, dual-writes, or copies the derived FTS
 companion.
 
+For the terms, end-to-end newcomer flow, representative reports, and recovery
+decisions, start with the
+[SQLite conversation-storage guide](../guides/sqlite-conversation-storage.md).
+
 The command is provider-free and dispatches before debug-log construction,
 broader CLI context, authentication, provider/backend/runtime, settings, or
 session construction. Import and request validation perform no SQLite or
@@ -135,8 +139,11 @@ story storage use sqlite
 story
 ```
 
-Use the reverse migration direction before selecting filesystem when SQLite is
-active and nonempty. Every invocation rereads current state. Installation or an
+When SQLite is active, verify toward filesystem before selecting it. Exact
+parity needs no migration. Migration can create source-only identities in an
+otherwise compatible target, but a same-identity conflict or destination-only
+filesystem identity blocks the plan; it is never overwritten or deleted. Every
+invocation rereads current state. Installation or an
 empty provisioned database can remain after later parity, persona-catalog,
 configuration-conflict, or configuration-write failure. Selection does not
 change activation, but `configuration_write_failed` can include rollback

@@ -106,6 +106,9 @@ checked only when a probe, preflight, provisioning, composition, adapter,
 selection, startup, or migration operation requests it. `story init` creates
 neither this database nor an active-state marker.
 
+For a plain-language walkthrough before these normative storage details, see
+[SQLite conversation storage](../../guides/sqlite-conversation-storage.md).
+
 Desired and active storage are separate records. The desired value is the
 `conversation_storage_backend` field in `config/system_defaults.json`; it is
 exactly `filesystem` or `sqlite`, and missing or `null` means filesystem. The
@@ -178,7 +181,9 @@ Host installation is available only through explicit selection consent; shell
 startup and direct preflight never install or provision. Readiness is the
 active Python interpreter's functional SQLite capability, not a standalone
 `sqlite3` binary or FTS5. There is no live switch, dual write, source deletion,
-MySQL adapter, RAG integration, or FTS-dependent result behavior. Explicit
+MySQL adapter, SQLite-specific RAG coupling, or FTS-dependent result behavior.
+Optional RAG can consume the active complete adapter-neutral bundle while
+keeping its own derived generation separate. Explicit
 migration remains a separate provider-free command/direct API over two
 already-ready stores; it never provisions or activates one. See the
 [exact selection workflow](../cli.md#conversation-storage-selection),

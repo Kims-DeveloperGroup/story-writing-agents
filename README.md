@@ -149,6 +149,7 @@ story run --output part-01/opening.md --prompt 'Draft the opening.'
 - [Workspace guide](docs/guides/workspaces.md) explains the editable project files.
 - [Writing artifacts](docs/reference/writing-artifacts.md) separates current reference sources from publication identity, provenance, and recovery.
 - [Conversation archives](docs/reference/conversation-archives.md) documents canonical conversation-only bytes and privileged filesystem transfer.
+- [SQLite conversation storage](docs/guides/sqlite-conversation-storage.md) walks a newcomer through readiness, explicit installation consent, selection, migration, next-shell activation, everyday search, recovery, and the separate RAG boundary.
 - [Optional conversation RAG](docs/guides/conversation-rag.md) covers the local provider/store, noninteractive lifecycle and cited-search commands, interactive settings and one-turn use, and programmatic runtime integration.
 - [Antigravity guide](docs/guides/antigravity.md) covers `agy` setup, authentication, routing, safety, sessions, and provider-free verification.
 - [Story sessions](docs/guides/story-sessions.md) shows shell management, conversation reads, retrieval, and consensus.
@@ -194,7 +195,10 @@ optional SQLite implementation for direct Python composition. The installed
 shell can select the complete filesystem or SQLite bundle for its next launch;
 direct `StoryRuntime` construction still defaults to filesystem unless the
 caller supplies a composed bundle. Start with the
-[package API](docs/reference/package-api.md#optional-sqlite-conversation-storage).
+[SQLite conversation-storage guide](docs/guides/sqlite-conversation-storage.md),
+then use the
+[package API](docs/reference/package-api.md#optional-sqlite-conversation-storage)
+for direct Python integration.
 `SQLiteConversationSearch` keeps the public literal-search contract exact; a
 private disposable FTS5 companion can supply hints but never determines a
 result or readiness.
@@ -230,6 +234,7 @@ Selection changes only the desired backend. It never migrates, deletes, or
 activates data; a successful choice applies when the next shell freshly checks
 readiness and exact canonical parity. The current shell keeps its original
 bundle. See the
+[guided SQLite workflow](docs/guides/sqlite-conversation-storage.md) or the
 [storage selection contract](docs/reference/cli.md#conversation-storage-selection).
 
 Ready filesystem and SQLite stores in the same workspace can be
