@@ -2,13 +2,14 @@
 
 > **Availability:** this page describes implemented runtime ownership,
 > dependency direction, filesystem/SQLite conversation selection, and the
-> installed interactive controller. The controller now uses the package-internal supplied-text viewer
-> for `$`/`$$` prompt editing; the viewer still has no standalone command or
-> supported public API. Separately, bare `/exchanges` selects one bounded
-> agent-exchange snapshot and hosts the optional isolated `jsonl-viewer`
-> package through Story's existing terminal owner. Optional conversation RAG currently has direct Python
-> contracts, a deterministic local provider, a disposable generation store, and
-> explicit composition plus programmatic runtime/agent integration. Six
+> installed interactive controller. The controller now uses the
+> package-internal supplied-text viewer for `$`/`$$` prompt editing; the viewer
+> still has no standalone command or supported public API. Separately, bare
+> `/exchanges` selects one bounded agent-exchange snapshot and hosts the
+> required base-installed, isolated `jsonl-viewer` package through Story's
+> existing terminal owner. Optional conversation RAG currently has direct
+> Python contracts, a deterministic local provider, a disposable generation
+> store, and explicit composition plus programmatic runtime/agent integration. Six
 > noninteractive local lifecycle/search commands are implemented; interactive
 > `/settings`, automatic eligible-turn wiring, and one-turn `/rag QUERY` are
 > also available.
@@ -172,8 +173,8 @@ separate rejected-response artifact channel:
 | `agent_exchanges.storage` | Sole descriptor-relative append, sequence, timestamp, rotation, global pruning, inventory, and immutable snapshot persistence owner |
 | `agent_exchanges.capture` | Fail-open request, exact valid `ProviderResult`, and terminal-outcome sequencing around each physical provider call |
 | `interactive_controller._exchange_policy` | Pure inventory deduplication, newest-scope ordering, Conversation/Debate subject projection, and complete roster-agent choices |
-| `interactive_controller._exchange_viewer` | Sole lazy optional-package boundary; validates the exact external three-name API and Story field/header projection before terminal acquisition |
-| `jsonl-viewer` at the exact optional pin | Independent Story-free immutable JSONL parsing, Simple/Verbose projection, line gutter/navigation, search, rendering, help, and transient view state |
+| `interactive_controller._exchange_viewer` | Sole lazy required-package boundary; validates the exact external three-name API and Story field/header projection before terminal acquisition |
+| `jsonl-viewer` at required base pin `93c3823a17c965f1e3449a9ce3d98636ebf441d6` | Independent Story-free immutable JSONL parsing, recursive bounded nested-JSON display, leaf-only previews, Simple/Verbose projection, line gutter/navigation, search, rendering, help, and transient view state |
 | `interactive_terminal._external_view` | Generic borrowed-host protocol, printable/SGR frame validation, and ordinary-line event adaptation without renderer or Story-domain knowledge |
 | `interactive_terminal._driver` | Sole raw-mode, input, signal, geometry, output, alternate-screen, and restoration lifecycle for the hosted view |
 
@@ -182,10 +183,12 @@ inventory, resolves authoritative catalog/debate display subjects, opens two
 transient pickers, copies one exact immutable snapshot or empty bytes, prepares
 the external operation, and gives it to an unlisted resource-free terminal
 adapter. No storage or capture module imports the controller, terminal, viewer,
-or optional package. The external package imports no Story module. See the
+or external package. Packaging owns unconditional availability, while the
+adapter remains the only lazy runtime import boundary. The external package
+imports no Story module. See the
 [persistence contract](persistence.md#agent-exchange-persistence), [inspection
 guide](../guides/agent-exchanges.md), and pinned external [design
-system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/5d3047aa86212810d867d5b40cb1df3262f1810f/docs/design-system.md).
+system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/93c3823a17c965f1e3449a9ce3d98636ebf441d6/docs/design-system.md).
 
 ## Fixed collaboration model
 
@@ -200,7 +203,7 @@ revision; all must approve. Blackboard and owner-isolated history stay separate.
 | `interactive_controller` | Stable `InteractiveController` import facade; no state or I/O |
 | `interactive_controller._core` | Sole controller state, dispatch, transition order, I/O sequencing, resources, cleanup, typed semantic output composition, responsive active/one-shot execution-profile selection, disposable resume and agent-exchange choices/snapshots, settings hot-activation coordination, and fresh post-submit validation/mutation |
 | `interactive_controller._exchange_policy` | Pure agent-exchange scope/subject/agent projection with exact inventory correlation and no I/O |
-| `interactive_controller._exchange_viewer` | Lazy exact optional `jsonl-viewer` API validation and immutable Story-to-generic viewer specification/operation preparation |
+| `interactive_controller._exchange_viewer` | Lazy exact required `jsonl-viewer` API validation and immutable Story-to-generic viewer specification/operation preparation |
 | `interactive_controller._session_policy` | Pure lifecycle validation, next actions, and typed failure classification |
 | `interactive_controller._conversation_policy` | Pure catalog, reference, search, transcript, and failure interpretation |
 | `interactive_controller._runtime_policy` | Pure progress, result, failure interpretation, and frozen validated inspection facts |
@@ -320,13 +323,14 @@ apply. The viewer itself continues to discover no file and construct no
 reference.
 
 The agent-exchange JSONL viewer is a different unlisted integration. The
-controller owns inventory, subject, scope, agent, optional-package, and snapshot
-policy. It passes exact immutable bytes plus generic header/search fields to the
-external package. `InteractiveExternalViewer` retains only a call capability;
-`_external_view` defines the Story-neutral host/event boundary; the sole driver
-owns raw and alternate-screen resources. The hosted renderer cannot open Story
-files, import Story, call a provider, or retain shell focus. Closing drops every
-picker and viewer-local state and restores the prior shell input route.
+controller owns inventory, subject, scope, agent, installed-package validation,
+and snapshot policy. It passes exact immutable bytes plus generic header/search
+fields to the external package. `InteractiveExternalViewer` retains only a call
+capability; `_external_view` defines the Story-neutral host/event boundary; the
+sole driver owns raw and alternate-screen resources. The hosted renderer cannot
+open Story files, import Story, call a provider, or retain shell focus. Closing
+drops every picker and viewer-local state and restores the prior shell input
+route.
 
 Every capable main, subject, composition, confirmation, picker, or prompt read
 clears its complete live frame before returning on submit, commit, cancel, interrupt,
@@ -439,12 +443,15 @@ runtime, backend, provider, parser, or composer dependency.
 
 The separate agent-exchange view path flows from controller core to pure
 `_exchange_policy`, durable `agent_exchanges` facade contracts, and the lazy
-`_exchange_viewer` adapter. That adapter alone imports the optional external
-package and prepares a callable against the terminal package's private
+`_exchange_viewer` adapter. That adapter alone imports the required external
+package on demand and prepares a callable against the terminal package's private
 `_external_view` host protocol. Terminal core and driver consume only that
 generic callable; they import no exchange schema or controller policy. The
 external package has no dependency back to Story, so the direction remains
-acyclic and its pin is packaging metadata rather than a vendored import path.
+acyclic. Its exact base pin and matching audit submodule are packaging metadata;
+normal runtime imports never use the vendored path. The historical empty
+`viewer` extra preserves installation-command compatibility without defining a
+second capability.
 
 This supports deterministic collaborators, not a dynamic plugin system. Exact
 imports live in [Package API](../reference/package-api.md), lifecycle meaning in

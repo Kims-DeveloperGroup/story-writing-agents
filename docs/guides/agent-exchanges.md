@@ -2,8 +2,8 @@
 
 > **Availability:** bare `/exchanges` is available in the installed interactive
 > shell after a story session is attached. Recording is automatic in the base
-> install. Opening the structured viewer additionally requires the optional
-> `viewer` extra.
+> install, and every normal base wheel or editable install includes the
+> structured viewer. No setting, enablement step, or extra is required.
 
 Agent exchanges are bounded diagnostic records for individual physical calls
 to Codex or Antigravity. Use them to compare what Story asked a provider to do,
@@ -11,30 +11,33 @@ what exact valid `ProviderResult` the adapter returned, and how Story classified
 the call. They are plaintext diagnostics, not a replay log or a security
 boundary.
 
-## Install the optional viewer
+## Availability and installation
 
-The base project has no runtime dependencies and continues to record exchanges
-without `jsonl-viewer`. From a Story checkout, install the optional boundary in
-the active virtual environment with:
+Install Story normally in the active environment. From a checkout:
 
 ```bash
-python -m pip install --editable '.[viewer]'
+python -m pip install --editable .
 ```
 
-For an installed distribution, install the named extra instead:
+Or install the distribution normally:
 
 ```bash
-python -m pip install 'story-writing-agents[viewer]'
+python -m pip install story-writing-agents
 ```
 
-The extra is an exact HTTPS VCS requirement. Its approved commit is
-`5d3047aa86212810d867d5b40cb1df3262f1810f`. A first install normally needs
+Both forms install the required independent `jsonl-viewer` from its exact HTTPS
+VCS requirement at
+`93c3823a17c965f1e3449a9ce3d98636ebf441d6`. A first install normally needs
 Git, network access, and repository access. Installation does not invoke a
-story provider or open an exchange.
+story provider, open an exchange, or enable a service. The historical
+`story-writing-agents[viewer]` and editable `'.[viewer]'` forms remain accepted
+empty compatibility aliases; they install the same normal dependency set and
+add no separate viewer capability.
 
-The matching `vendor/jsonl-viewer` git submodule is review and development
-evidence; pip resolves the VCS requirement rather than importing from the
-vendored directory. Initialize an existing checkout with:
+The matching `vendor/jsonl-viewer` git submodule is optional review and
+development evidence; pip resolves the base VCS requirement rather than
+importing from the vendored directory. A checkout developer who needs to audit
+or test that source can initialize it with:
 
 ```bash
 git submodule sync -- vendor/jsonl-viewer
@@ -43,9 +46,11 @@ git submodule update --init --checkout vendor/jsonl-viewer
 
 The `.gitmodules` entry, gitlink, `pyproject.toml`, and `uv.lock` must identify
 the same full commit. Story wheels and source distributions deliberately omit
-the vendored repository, while installed metadata retains the optional VCS
-requirement. The external package is Python 3.11+, MIT licensed, has no runtime
-dependencies, and has no Story import.
+the vendored repository, while installed metadata retains the required VCS
+dependency. The external package is Python 3.11+, MIT licensed, has no runtime
+dependencies, and has no Story import. Story loads and validates its exact
+three-name API only when `/exchanges` prepares a view; required installation
+does not create a static Story-to-viewer import.
 
 ## Open a recorded scope
 
@@ -100,18 +105,23 @@ AGENT EXCHANGES • READ ONLY • SIMPLE
 Session: novel • Debate: d20260830T010412_ef567890 — Draft an opening. • Agent: character_custodian
 > 1 │ {
 > 1 │   "timestamp": "2026-08-30T01:04:12.000+00:00",
-> 1 │   "request_type": "request",
-> 1 │   "content": "{\"call_kind\":\"debate\",...}"
+> 1 │   "request_type": "response",
+> 1 │   "content": [expanded JSON string ×1] {
+> 1 │     "response_text": [expanded JSON string ×1] {
+> 1 │       "c": "wrong provider correlation value",
+> 1 │       "d": []
+> 1 │     }
+> 1 │   }
 > 1 │ }
-Record 1/3 • source line 1 • 15 fields hidden
+Record 1/3 • source line 1 • JSON display 2 expanded, 0 skipped, 0 truncated
 ↑/↓ records • PgUp/PgDn scroll • g goto • / search • n/N • m mode • h help • q close
 ```
 
 This preview shows the renderer's topology, not a retained Story screenshot.
 The external repository owns the byte-tested renderer contract:
 
-- [Terminal design system and Story-hosted scenario](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/5d3047aa86212810d867d5b40cb1df3262f1810f/docs/design-system.md)
-- [Seven deterministic complete sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/5d3047aa86212810d867d5b40cb1df3262f1810f/docs/samples)
+- [Terminal design system and Story-hosted scenario](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/93c3823a17c965f1e3449a9ce3d98636ebf441d6/docs/design-system.md)
+- [Nine deterministic complete sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/93c3823a17c965f1e3449a9ce3d98636ebf441d6/docs/samples)
 
 Every body record is well-formatted multiline JSON. The left gutter repeats
 the physical JSONL source-record line on continuation rows, so `g` can move to
@@ -121,10 +131,17 @@ Down or `b`/Space pages within a large record and across record boundaries.
 Simple mode shows `timestamp`, `request_type`, and `content`, in that order.
 Verbose mode keeps those fields first, followed by every other top-level field.
 `m` toggles modes unless an active hidden-field search requires Verbose. Simple
-strings retain a visible complete-code-point preview through 4,096 UTF-8 bytes;
-Verbose strings retain one through 65,536 bytes. A visible truncation marker
-and footer accounting distinguish preview truncation from terminal-width
-clipping. Neither changes the source snapshot.
+string leaves retain a visible complete-code-point preview through 4,096 UTF-8
+bytes; Verbose string leaves retain one through 65,536 bytes. Before applying
+that leaf limit, a complete strict JSON object or array stored inside a string
+is recursively expanded through bounded encoding layers. The visible
+`[expanded JSON string ×N]` cues remove the extra outer quote/backslash escaping
+that otherwise obscures nested provider data; genuine text leaves retain the
+escaping required for valid JSON. Preview truncation applies independently to
+string leaves only—it never truncates a container, key, structural token, or
+child. A visible leaf marker and footer accounting distinguish preview
+truncation from terminal-width clipping. None of these derived projections
+changes the source snapshot or makes nested child fields searchable.
 
 The capture store has an independent content bound: an outer `content` value
 retains the longest complete UTF-8 prefix through 262,144 bytes. In Verbose,
@@ -148,6 +165,15 @@ content_full_characters, content_retained_characters, content_truncated,
 content_sha256
 ```
 
+On a capable terminal, both `Search field: ` and `Search query: ` are
+history-free transient editors. Pressing Escape at either prompt discards only
+that unfinished draft and redraws the exact last successfully presented viewer
+frame. Story sends no viewer event, so the selected source record, mode, active
+search, current match, and `current/total` footer position stay unchanged; the
+next key is read as a viewer command. Prompt navigation keys edit locally.
+Unsupported, truncated, or over-limit escape sequences cancel after bounded
+consumption instead of leaking their remaining bytes into viewer commands.
+
 The footer reports transient `current/total` position. `n` moves to the next
 match and `N` to the previous match, wrapping in both directions. Searching a
 field hidden by Simple mode automatically promotes the first hit to Verbose and
@@ -155,7 +181,9 @@ prevents Simple mode while that hidden-field search remains active. `c` clears
 search, and `h` or `?` opens transient help.
 
 Escape dismisses help, then search, then a transient status; with nothing left
-to dismiss it closes. `q` or EOF closes immediately. In ordinary-line fallback,
+to dismiss it closes. This main-view behavior begins after a prompt has
+finished or been cancelled; prompt-local Escape does not clear or close the
+view. `q` or EOF closes immediately. In ordinary-line fallback,
 use `g LINE`, `/ FIELD QUERY`, `j`/`down`, `k`/`up`, `pgdn`, `pgup`, `n`, `N`,
 `m`, `h`, `c`, and `q`/`quit` at `viewer> `.
 
@@ -208,6 +236,17 @@ is fail-open, advances before each append, and never retries.
 
 ## User scenarios
 
+### Inspect exchanges after a normal installation
+
+1. Install Story normally, create or resume a session, and run provider work.
+2. Attach that session and enter bare `/exchanges`; there is no viewer setting,
+   enablement step, extra, or identifier argument.
+3. Choose the exact Conversation or Debate ID plus subject, then choose the
+   agent. The base-installed viewer opens the immutable snapshot.
+4. If an older automation command still installs
+   `story-writing-agents[viewer]`, it remains valid but supplies no capability
+   beyond the normal installation.
+
 ### Diagnose a rejected structured response
 
 If the shell reports
@@ -250,6 +289,16 @@ malformed`.
 6. Close with `q`. Reopening starts in fresh Simple mode with no prior cursor,
    search, match position, footer result, or help state.
 
+### Cancel an accidental search without losing your place
+
+1. While inspecting a match, press `/` and begin entering a field or query.
+2. Press Escape before Enter. The unfinished text disappears and the exact
+   prior read-only frame returns, including its source line, mode, active
+   search, selected match, result position, and footer.
+3. Press `n` or `N` to continue from that retained match, or `/` to start a new
+   search. Nothing from the cancelled draft is searched, recorded, or added to
+   command history.
+
 The separate `debug_logs/provider_error_responses/` channel may retain an
 eligible completed response rejected during decoding. It has different
 eligibility and retention and is not imported into agent exchanges. See
@@ -285,8 +334,8 @@ Common bounded failures are:
 | --- | --- |
 | No attached session | Attach the intended session, then retry bare `/exchanges`. |
 | No records for the session | Run the intended provider work; do not invoke it merely to manufacture diagnostics. |
-| Optional viewer unavailable | Install `story-writing-agents[viewer]` or editable `'.[viewer]'`, then retry. |
-| Installed viewer incompatible | Reinstall the exact `viewer` extra and verify the approved pin. |
+| Required viewer unavailable | Repair or reinstall the normal Story installation, then retry. The compatibility extra is not a separate repair path. |
+| Required viewer incompatible | Repair or reinstall normal Story and verify the approved exact pin. |
 | Store busy | Retry after the concurrent exchange write completes. |
 | Unsafe, corrupt, or uncorrelatable records | Preserve the workspace and inspect the content-safe runtime diagnostic before retrying. |
 | Selected stream disappeared | Rerun `/exchanges` to refresh retained inventory. |

@@ -327,8 +327,8 @@ basis. It records the request before invocation, any exact valid
 is now a separate bare `/exchanges` integration. The controller resolves
 conversation/debate subjects outside this store, selects exact inventory
 identities, and passes one immutable session/scope/agent snapshot to the
-optional isolated viewer. The store still has no subject, terminal, viewer,
-picker, command, or optional-package dependency.
+base-installed isolated viewer. The store still has no subject, terminal,
+viewer, picker, command, or external-package dependency.
 
 Every stored line is one compact, key-sorted, strict-UTF-8 JSON object followed
 by exactly one newline. The expanded schema-v1 shape is:

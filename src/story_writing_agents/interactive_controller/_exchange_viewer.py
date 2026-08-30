@@ -1,4 +1,4 @@
-"""Lazy optional JSONL-viewer adapter for immutable agent exchanges."""
+"""Lazy required JSONL-viewer adapter for immutable agent exchanges."""
 
 from __future__ import annotations
 
@@ -57,16 +57,19 @@ _SEARCHABLE_FIELDS = (
 )
 _FAILURE_MESSAGES = {
     "installation_required": (
-        "Optional agent exchange viewer is unavailable. Install Story with "
-        "the 'viewer' extra and retry /exchanges."
+        "Required agent exchange viewer is unavailable. Repair or reinstall "
+        "Story and retry /exchanges."
     ),
-    "incompatible": "Optional agent exchange viewer is incompatible with Story.",
+    "incompatible": (
+        "Required agent exchange viewer is incompatible with Story. Repair or "
+        "reinstall Story and retry /exchanges."
+    ),
     "view_failed": "Agent exchange viewer failed.",
 }
 
 
 class AgentExchangeViewerError(RuntimeError):
-    """Carry one fixed optional-viewer failure without external diagnostics."""
+    """Carry one fixed required-viewer failure without external diagnostics."""
 
     __slots__ = ("code",)
 

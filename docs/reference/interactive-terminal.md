@@ -1627,9 +1627,10 @@ byte is never guessed into a live key role.
 
 This is a generic package-internal terminal host, not Story's supplied-text
 range renderer and not a supported public terminal API. `/exchanges` is its
-first installed consumer. The controller validates the pinned external package
-and constructs one operation over immutable bytes before calling
-`InteractiveExternalViewer.open()`.
+first installed consumer. Every normal Story installation contains the exact
+pinned external package; the controller still imports and validates its public
+API lazily only while preparing `/exchanges`, then constructs one operation
+over immutable bytes before calling `InteractiveExternalViewer.open()`.
 
 `interactive_terminal._external_view.__all__` is exactly
 `ExternalViewOperation` and `ExternalViewerHost`. The runtime-checkable host
@@ -1667,9 +1668,18 @@ hint.
 On a capable stream, the sole driver maps arrows or `j`/`k`, Page Up/Page Down
 or `b`/Space, `n`, `N`, `m`, `h`/`?`, `c`, and `q`. `g` temporarily restores
 ordinary input for `Go to source line: `; `/` similarly reads `Search field: `
-then `Search query: `. It reacquires raw mode before returning the bounded
-event. A standalone Escape maps to `cancel`; configured VINTR maps to cancel,
-and configured VEOF or physical EOF maps to `None`.
+then `Search query: ` through history-free transient live editors. Enter on a
+valid field and query returns one bounded `search` event. Escape at either
+Search prompt discards the draft, reacquires raw viewer input, redraws the exact
+last validated successfully presented frame, and returns no host event;
+selection, source, mode, active search, current match, result position, footer,
+and help state remain external-engine values and therefore stay unchanged.
+Supported prompt navigation sequences edit locally. Unsupported, truncated, or
+over-limit escape sequences are consumed within the fixed bound and cancel the
+prompt rather than leaking suffix bytes into later viewer commands. After the
+prompt finishes, a standalone main-view Escape retains its `cancel` mapping;
+configured VINTR maps to cancel, and configured VEOF or physical EOF maps to
+`None`.
 
 Ordinary-line fallback supplies `(width, 24)`, disables color, writes each
 complete frame followed by LF, and prompts `viewer> `. It maps `j`/`down`,
@@ -1685,15 +1695,21 @@ attempts idempotent host close, exits the screen, and restores terminal state.
 Active operation failure wins over host-close failure; terminal restoration
 retains its established outer precedence. The latch releases after success or
 failure, so a later independent view can open. Fallback acquires no raw or ANSI
-resource.
+resource. The last presented frame and each Search draft are host-call-local:
+only a frame that passes validation and completes presentation becomes the
+prompt-cancellation redraw source, and all such state is discarded on close or
+failure.
 
 The external operation receives complete-frame geometry and current Story
 color eligibility but owns all JSONL parsing, Simple/Verbose state, line gutter,
 navigation, search, match position, truncation preview, responsive rendering,
-semantic color roles, footer, and help. Those behaviors and seven byte-tested
+semantic color roles, footer, and help. Complete strict object/array JSON
+strings expand recursively as a bounded derived display, removing only their
+extra outer quote/backslash encoding; preview limits apply to string leaves and
+never truncate containers or structure. Those behaviors and nine byte-tested
 frames are authoritative in the pinned external [design
-system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/5d3047aa86212810d867d5b40cb1df3262f1810f/docs/design-system.md)
-and [samples](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/5d3047aa86212810d867d5b40cb1df3262f1810f/docs/samples).
+system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/93c3823a17c965f1e3449a9ce3d98636ebf441d6/docs/design-system.md)
+and [samples](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/93c3823a17c965f1e3449a9ce3d98636ebf441d6/docs/samples).
 Story retains no view state or returned content after `open()` completes.
 
 <a id="exact-search-and-transcript-records"></a>

@@ -106,9 +106,14 @@
 > controller consumers for attributed advisory and consensus messages plus
 > result-defining request context.
 > #414 adds bare `/exchanges`, two transient inventory/roster pickers, a lazy
-> exact optional-package boundary, and one generic hosted external-view
+> exact required-package API boundary, and one generic hosted external-view
 > lifecycle. Story retains sole terminal ownership; the pinned independent
-> package retains JSONL parsing, rendering, navigation, search, and help.
+> package retains JSONL parsing, rendering, navigation, search, and help. #422
+> makes Escape at either Story-hosted Search prompt a local draft cancellation
+> that restores the exact prior viewer frame without emitting a viewer event.
+> #423 makes the exact external package an unconditional normal-install
+> dependency while preserving that lazy runtime boundary; the historical
+> `viewer` extra remains an empty compatibility alias.
 
 This contract governs every human-facing interactive view and control in the
 installed shell. It preserves scrollback and the established command/runtime
@@ -118,7 +123,7 @@ semantic model. It also governs the isolated package-internal ranged viewer
 where explicitly identified; the installed controller invokes it through
 provider-bound `$`/`$$` prompt editing without exporting it as a command. The
 separate `/exchanges` renderer contract lives in the pinned external
-[JSONL viewer design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/5d3047aa86212810d867d5b40cb1df3262f1810f/docs/design-system.md);
+[JSONL viewer design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/93c3823a17c965f1e3449a9ce3d98636ebf441d6/docs/design-system.md);
 this document governs only Story's picker and terminal-host integration.
 
 The words **must**, **must not**, and **may** below constrain the delivery
@@ -126,7 +131,7 @@ issues. Requirements beyond the implemented #82, #83, #84, #85, #86, #79,
 #87, #94, #93, #105, #106, #111, #115, #119, #123, #126, #127, #142,
 #160, #162, #164, #209 provider OAuth initiative, #237, #241, #249, #252,
 #270, #271, #287, #303, #312, #319, #343, #350, #351, #352, #353, #377, #391,
-#397, #414, and #73
+#397, #414, #422, #423, and #73
 slices do not describe
 current production behavior.
 
@@ -142,7 +147,9 @@ current production behavior.
 | #86 composer/confirmation integration | Implemented: RUN/CHAT composition and yes/no confirmation build ordered semantic input views, render equivalent plain/fixed-ANSI projections at the active width, and use pure history-free controls. Established results, signatures, `/send`, `/cancel`, `/say`, defaults, Ctrl-C, EOF, callback cardinality, and controller/runtime behavior remain unchanged. |
 | #79 selectable completion | Implemented: capable main input projects canonical root, subcommand, and finite fixed-option candidates into a semantic palette. Up/Down moves its clamped highlight, Tab applies the highlighted candidate, Escape restores the first pre-completion snapshot when present and dismisses the exact state, and closed-palette Up/Down retains history behavior. Shift-Tab has no action. |
 | #87 picker foundation | Implemented: package-internal immutable picker/control/viewport state, pure initialization/reconciliation/live/fallback transitions, responsive live/full-list rendering, a dedicated history-free sole-driver lifecycle, and an unlisted resource-free adapter. #93 supplies its first installed consumer. |
-| #414 agent-exchange viewer integration | Implemented: bare attached-session `/exchanges` opens transient inventory-derived scope and complete-roster agent pickers, prepares one immutable exact or empty snapshot through a lazy exact optional-package facade, and hosts the independent renderer through Story's sole raw-terminal driver. Picker/view state is discarded on close; provider, focus, and source bytes are unchanged. |
+| #414 agent-exchange viewer integration | Implemented: bare attached-session `/exchanges` opens transient inventory-derived scope and complete-roster agent pickers, prepares one immutable exact or empty snapshot through a lazy exact required-package facade, and hosts the independent renderer through Story's sole raw-terminal driver. Picker/view state is discarded on close; provider, focus, and source bytes are unchanged. |
+| #422 hosted Search prompt cancellation | Implemented: capable `Search field: ` and `Search query: ` editors are history-free and transient. Escape discards the local draft, redraws the exact last validated successfully presented frame, emits no external-view event, and preserves viewer source, mode, search, match, position, and footer state. Prompt navigation is editing-local; bounded unsupported or incomplete sequences cancel without leaking suffix bytes. Main-view Escape and ordinary-line fallback remain unchanged. |
+| #423 required viewer installation | Implemented: every normal Story wheel or editable installation resolves `jsonl-viewer` from exact VCS commit `93c3823a17c965f1e3449a9ce3d98636ebf441d6`; `/exchanges` needs no setting, enablement, or extra. The empty `viewer` extra remains accepted for command compatibility, the matching git submodule is optional audit/development source rather than a runtime import path, and a missing or incompatible viewer produces standard-install repair guidance. |
 | #94 workspace Codex defaults | Implemented: the original slice added optional workspace fallback Codex model and reasoning values. The current closed twelve-field system schema also contains Antigravity model/effort, nullable `default_backend`, independent desired `conversation_storage_backend`, default-disabled local conversation-RAG provider/automatic values, and strict-boolean `show_message_details`; new workspaces initialize provider fields to null, automatic RAG and message details to false, and storage to filesystem. Legacy files remain valid and byte-preserved until a successful canonical persistence, and each backend validates and captures initial effective invocation values before the installed Settings activation path may replace its live-capable runtime generation. |
 | #93 settings UI | Implemented: global alias-free `/settings` edits isolated current/pending snapshots of workspace defaults, desired conversation storage, and per-agent provider/model/effort choices through shared picker and prompt controls. Confirmed full-path Apply Changes validates exact configuration, optional route-generation, and persona baselines, coordinates storage readiness, writes prepared system/agent/optional-route targets deterministically, and attempts exact rollback after failure. The workflow adds no supported public save API. |
 | #299 live execution profiles and context | Implemented: `/settings` authenticates, preflights, persists, and applies mixed live-capable runtime settings to the current shell without restart; desired storage and Conversation RAG remain next-shell settings, and launch overrides remain read-only. Message details controls whether responsive input/reply views include backend-authoritative provider/model/effort facts, sources, confirmation, and thread disposition; `/agents` and `/status` remain fully diagnostic. Provider switches advance durable route generations, while every substantive call rehydrates bounded belonging-session context even on a fresh native thread. Schema-v2 profile diagnostics remain content-free. |
@@ -643,16 +650,43 @@ fail before presentation.
 
 On a capable stream, `RawTerminalDriver` acquires the existing input latch,
 rejects reentry or progress overlap, activates raw mode once, enters one
-alternate screen, maps keys and bounded goto/search prompts to host events,
-closes the host, exits the screen, and restores terminal attributes under the
+alternate screen, and maps keys plus bounded goto/search input to host events.
+The Search field and query each enter one history-free transient prompt state:
+text and supported navigation edit only the local draft; Enter advances from
+the field to the query or completes the pair; Escape, an unsupported sequence,
+or a bounded incomplete sequence discards that draft and transitions directly
+back to the active view.
+That cancellation emits no viewer event and redraws the exact last validated
+successfully presented frame, preserving source, selection, mode, active
+search, current match, result position, footer, and help state. The next key is
+therefore interpreted from the restored main-view state. The driver then closes
+the host, exits the screen, and restores terminal attributes under the
 established failure precedence. In fallback it borrows the existing line
 callbacks, supplies plain geometry/color facts, and leaves complete frames in
-scrollback. Both paths drop every operation, host, picker, mode, cursor, search,
-match, footer result/index, and help value on return. The renderer's exact
-Simple/Verbose, gutter, search, color, responsive, truncation, and help rules
+scrollback. Both paths drop every operation, host, prompt draft, picker, mode,
+cursor, search, match, footer result/index, and help value on return. The
+renderer's exact Simple/Verbose, gutter, search, color, responsive, recursive
+nested-JSON expansion, leaf-only truncation, and help rules
 remain solely in the pinned external [design
-system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/5d3047aa86212810d867d5b40cb1df3262f1810f/docs/design-system.md)
-and its [deterministic samples](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/5d3047aa86212810d867d5b40cb1df3262f1810f/docs/samples).
+system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/93c3823a17c965f1e3449a9ce3d98636ebf441d6/docs/design-system.md)
+and its [nine deterministic samples](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/93c3823a17c965f1e3449a9ce3d98636ebf441d6/docs/samples).
+
+Search cancellation adds no color role and no persistent status. Read-only
+meaning remains in the literal header and help copy, while line gutters,
+selection markers, search markers, and `current/total` text make the restored
+position legible in ANSI, plain, and `NO_COLOR` views. The absence of a commit,
+viewer event, edit, export, replay, or returned content is behavioral, not
+color-dependent.
+
+In the normal-install user path, installing Story resolves the required viewer;
+the user attaches a session and enters bare `/exchanges`, then chooses an exact
+Conversation or Debate ID plus subject and one agent. There is no viewer
+setting or activation step. An older install command containing `[viewer]`
+remains accepted but is behaviorally identical. Checkout developers initialize
+`vendor/jsonl-viewer` only when they need to audit or test the pinned external
+source; Story artifacts omit that source, and runtime imports never use it. A
+missing, damaged, or incompatible distribution is a broken standard install
+and directs the user to repair or reinstall Story.
 
 ## Key and commit semantics
 
@@ -670,7 +704,8 @@ changing the established controls.
 | `Picker` | Up/Down changes highlight among enabled items. Highlight never selects or commits. | Enter selects and commits the highlighted enabled item. | Escape cancels. Ctrl-C and EOF leave without commit and retain the invoking API's typed semantics. |
 | Settings `Prompt` | Text and ordinary line-edit keys edit one history-free value. Completion keys have no effect. | Enter commits the exact buffer for field validation. A valid `/settings` commit applies the pending value and immediately reopens the same editor. | Escape returns one settings level without changing an already applied pending value; Ctrl-C and EOF cancel the whole settings workflow. |
 | Ranged text viewer | Up/Down clears the anchor and moves/clamps the active line. Shift+Up/Down fixes the first anchor and moves the active end through extension, contraction, reversal, and clamping. Other keys are no-ops. Configured VINTR, then VEOF, take priority over ordinary key roles. | Enter returns the active singleton or normalized anchored one-based inclusive range; empty text cannot commit. | Escape returns `cancelled`; configured VINTR returns `interrupted`; configured VEOF or stream EOF returns `eof`. Operational failures are raised after cleanup. |
-| Hosted external JSONL viewer | The external engine consumes Story-mapped Up/Down, Page Up/Page Down, goto, search, next/previous match, mode, help, clear-search, and close events. Story interprets no JSON or viewer state. | Goto/search line prompts commit only one bounded host event; there is no content commit, selection return, replay, or edit. | Escape maps to transient cancel behavior; `q`, EOF, or final cancel closes. Story restores its terminal and discards all view state. |
+| Hosted external JSONL viewer | The external engine consumes Story-mapped Up/Down, Page Up/Page Down, goto, search, next/previous match, mode, help, clear-search, and close events. Story interprets no JSON or viewer state. | Goto and a completed Search pair commit only one bounded host event; there is no content commit, selection return, replay, or edit. | Main-view Escape maps to the external engine's transient cancel behavior; `q`, EOF, or final cancel closes. Story restores its terminal and discards all view state. |
+| Hosted viewer Search prompt | Text and supported navigation edit one history-free field or query draft. Unsupported, truncated, or over-limit escape sequences are consumed within a bound and treated as cancellation. | Enter advances from the field to the query. After both prompts, one nonempty field/query pair becomes a single `search` event; invalid prompt values become the existing `unknown` event. | Escape at either prompt discards the draft, emits no viewer event, redraws the exact prior frame, and resumes the next main-view command with all external state unchanged. Interrupt or EOF closes through the established viewer lifecycle. |
 | Line-oriented composer | Each ordinary line appends exact content. Up/Down, Tab, Shift-Tab, and Escape are no-ops; no full-screen editing or command-history traversal is introduced. | `/send` commits the exact LF-joined content when nonblank. | `/cancel`, Ctrl-C, and EOF preserve established discard outcomes and counts. |
 | Confirmation | Existing accepted yes/no input and blank-default behavior remain authoritative. Up/Down, Tab, Shift-Tab, and Escape are no-ops. Invalid input marks the choices as erroneous, writes one hint, and asks again. | A valid answer or blank default returns the established `yes` or `no` result. | Ctrl-C and EOF return the established `interrupt` or `eof` result. |
 
@@ -2034,7 +2069,7 @@ interactive_controller._core -> interactive_terminal facade components/adapter
 interactive_controller._core -> interactive_controller._exchange_policy
                              -> interactive_controller._exchange_viewer
                              -> agent_exchanges facade
-interactive_controller._exchange_viewer -> jsonl-viewer (optional exact pin)
+interactive_controller._exchange_viewer -> jsonl-viewer (required exact base pin; lazy import)
                                         -> terminal._external_view host contract
 interactive_controller._core -> interactive_settings -> agents/config/errors/workspace
 interactive_controller._core -> provider_catalog -> (standard library only)
@@ -2089,8 +2124,8 @@ callbacks, while the driver owns same-latch nested picker/viewer coordination.
 The separate `_external_view` leaf imports only standard-library contracts. The
 agent-exchange viewer adapter imports that leaf's generic host protocol but no
 driver/core resource implementation; terminal leaves import no exchange,
-storage, controller, provider, or external-renderer module. The optional
-external renderer imports no Story module.
+storage, controller, provider, or external-renderer module. The required,
+independently maintained external renderer imports no Story module.
 
 ### Implemented module-index delta
 
@@ -2101,7 +2136,9 @@ dependency edges in an acyclic graph. #414 adds the internal
 `interactive_controller._exchange_viewer`, and
 `interactive_terminal._external_view` modules. `InteractiveExternalViewer`
 remains an unlisted value in terminal `_core`; the external renderer remains an
-optional exact-pin dependency rather than a Story production module. This
+exact-pinned required base dependency rather than a Story production module.
+Its import remains lazy behind `_exchange_viewer`, and the matching submodule
+remains audit/development source rather than a production import path. This
 design records the user-visible contract without replacing the index's complete
 module ownership.
 
@@ -2219,13 +2256,16 @@ full-schema-first failure, precedence, launch-captured state, exact
 fresh/resume invocation arguments, initialization preservation, and unchanged
 definition/thread/public contracts.
 #414 covers bare parser/help integration, inventory/subject/agent projection,
-snapshot disappearance, exact lazy optional API validation before terminal
+snapshot disappearance, exact lazy API validation before terminal
 ownership, 18-field projection, empty streams, content-free failures, immutable
 bytes/focus, generic host frame/event validation, live/fallback input, raw and
 alternate-screen ownership, reentry/progress exclusion, cleanup precedence,
 pin/metadata/lock/gitlink parity, and built-artifact exclusion. The external
-package separately byte-tests all seven documented frames and plain/ANSI
-equivalence.
+package separately byte-tests all nine documented frames, nested JSON and
+leaf-only truncation, and plain/ANSI equivalence. #423 makes that exact pin a
+normal base requirement, retains the empty compatibility extra, requires
+standard-install repair guidance, and changes no module, edge, public export,
+event, or terminal ownership.
 Issue #119 introduced per-phase handoff/action and message visibility. #353
 supersedes its presentation with one atomic progress Panel containing the
 ordered progress facts and newly readable persisted speech sections. #368

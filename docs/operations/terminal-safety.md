@@ -317,7 +317,7 @@ does not parse or restyle those frames: its host admits only printable text, LF,
 and SGR when color is eligible, rejects every other control, and rejects SGR in
 plain mode. Removing the renderer's allowed decoration preserves the exact
 plain text, gutter markers, JSON, search position, and help. The pinned external
-[design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/5d3047aa86212810d867d5b40cb1df3262f1810f/docs/design-system.md)
+[design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/93c3823a17c965f1e3449a9ce3d98636ebf441d6/docs/design-system.md)
 is authoritative for those roles.
 
 The controller constructs semantic components only from trusted roles/states
@@ -810,20 +810,35 @@ return, other control/format/surrogate characters, line/paragraph separators,
 and every non-SGR escape before output. This is display neutralization, not
 redaction of request or provider-response content.
 
-The controller validates the exact optional `jsonl_viewer` facade, constructor
-and callable signatures, host shape, immutable header/field projection, and
-primary-field order before asking the terminal to open. Missing or incompatible
-packages therefore acquire no raw mode or alternate screen. The renderer
-receives only immutable bytes and a generic specification; it opens no Story
-file and owns no Story scope, storage, provider, retry, replay, or focus policy.
+The controller lazily validates the exact required `jsonl_viewer` facade,
+constructor and callable signatures, host shape, immutable header/field
+projection, and primary-field order before asking the terminal to open.
+Missing or incompatible standard-install packages therefore acquire no raw
+mode or alternate screen and produce fixed repair/reinstall guidance. The
+renderer receives only immutable bytes and a generic specification; it opens no
+Story file and owns no Story scope, storage, provider, retry, replay, or focus
+policy.
+
+Complete strict object/array JSON stored in a string is a derived display
+projection: bounded recursive expansion removes only the extra encoded layer,
+while genuine text escaping remains. Preview limits apply independently to
+string leaves and never truncate a container, key, structural token, or child.
+These transformations happen inside the external renderer and do not weaken
+the host's printable-or-SGR frame validation or mutate source bytes.
 
 The capable lifecycle acquires the universal input latch, rejects reentry or
 progress overlap, validates the current terminal configuration, activates raw
 mode, enters one alternate screen, runs the operation, closes the host, exits
-the screen, restores termios, and releases the latch. Goto and search prompts
-temporarily restore ordinary input, then must reactivate the same configuration
-before another view event. Restoration failure remains fatal; an active
-operation failure takes precedence over host-close failure.
+the screen, restores termios, and releases the latch. Goto temporarily restores
+ordinary input. Search field and query instead use the sole driver's transient,
+history-free line editor and reactivate the same outer viewer configuration
+before another view event. Escape at either Search prompt discards its draft,
+redraws the exact last validated successfully presented frame, and emits no
+external-view event. Supported prompt navigation remains editing-local;
+unsupported, truncated, and over-limit escape sequences are bounded, drained,
+and treated as prompt cancellation so suffix bytes cannot become viewer
+commands. Restoration failure remains fatal; an active operation failure takes
+precedence over host-close failure.
 
 Fallback uses the existing borrowed line callbacks, forces plain frames, and
 never enters raw mode or an alternate screen. Its complete frames, `viewer> `

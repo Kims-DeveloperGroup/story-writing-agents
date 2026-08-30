@@ -171,19 +171,24 @@ Run bare `/exchanges` only after attaching the affected session. The command
 accepts no IDs: select the exact Conversation or Debate full ID and subject,
 then the canonical agent. It does not require or change conversation focus.
 
-If Story reports that the optional viewer is unavailable, install the extra in
-the active environment. Use the first command for an installed distribution or
-the second from a checkout:
+The viewer is part of every normal Story installation. If Story reports that
+the required viewer is unavailable or incompatible, the active environment is
+missing or has damaged/mismatched standard-install files. Repair or reinstall
+Story itself; do not treat the `viewer` extra as a separate fix. For example,
+use the first form for an installed distribution or the second from a checkout:
 
 ```bash
-python -m pip install 'story-writing-agents[viewer]'
-python -m pip install --editable '.[viewer]'
+python -m pip install --force-reinstall story-writing-agents
+python -m pip install --force-reinstall --editable .
 ```
 
-An incompatible-viewer result means the installed three-name API does not
-match the exact pin; reinstall the same extra and verify the submodule, project
-requirement, and lock identify
-`5d3047aa86212810d867d5b40cb1df3262f1810f`.
+The historical `story-writing-agents[viewer]` and editable `'.[viewer]'` forms
+remain accepted empty compatibility aliases but add no capability. An
+incompatible-viewer result means the installed three-name API does not match
+the exact required pin; verify the project requirement and lock identify
+`93c3823a17c965f1e3449a9ce3d98636ebf441d6`. Checkout maintainers can also
+initialize the matching submodule for audit or testing; runtime imports never
+come from `vendor/jsonl-viewer`.
 
 `No agent exchanges are recorded` is not proof that no provider call occurred.
 Capture and storage are fail-open and never retry. Likewise, a correlated

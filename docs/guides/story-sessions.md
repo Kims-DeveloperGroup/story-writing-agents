@@ -9,7 +9,8 @@
 > prompt content remains readable in terminal scrollback, with live capable
 > input reprojected after cleanup and ordinary-line fallback left unduplicated.
 > Bare `/exchanges` needs only the attachment and uses separate transient scope
-> and agent pickers before opening an optional read-only diagnostic viewer.
+> and agent pickers before opening the base-installed read-only diagnostic
+> viewer. It needs no setting, enablement step, or extra.
 
 Key terms: **defaults** are persisted fallbacks; **current attachment** is the
 session held by this shell; **current focus** and **agent focus** select the
@@ -736,7 +737,7 @@ subjects, and retained counts with the newest scope first. The second shows all
 four canonical agents in roster order, including disabled agents and an
 explicit no-record state.
 
-The selected immutable snapshot opens in the optional isolated viewer with the
+The selected immutable snapshot opens in the installed isolated viewer with the
 session, exact scope kind/full ID/subject, and agent ID in its header. Use
 Simple mode to orient by timestamp, request type, and content; use Verbose for
 the remaining outer fields and truncation evidence. Search one enumerated
