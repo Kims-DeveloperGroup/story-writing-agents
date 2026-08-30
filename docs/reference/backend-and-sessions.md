@@ -2,7 +2,8 @@
 
 > **Availability:** `AgentBackend`, `BoundAgent`, the exact lifecycle API, and
 > pure lifecycle contracts are implemented for Codex and Antigravity. The
-> workspace default precedes the final Codex fallback.
+> workspace default precedes the final Codex fallback. Backend physical
+> structured calls are automatically offered to bounded agent-exchange capture.
 
 Key terms: **binding**—agent/provider pairing; **manifest**—durable session and
 thread state; **access claim**—temporary exclusive process ownership;
@@ -210,6 +211,102 @@ privacy boundary in
 and read-only for provider-session state, though they may append a bounded
 operational record. See
 [debug-log privacy](../operations/privacy-and-provider.md#workspace-debug-log-privacy).
+
+<a id="agent-exchange-capture-side-effect"></a>
+
+## Agent-exchange capture side effect
+
+Each backend owns an I/O-free `WorkspaceAgentExchangeCapture`. The established
+structured provider path and the provider-managed contextual path both begin a
+best-effort lifecycle immediately before every physical `adapter.invoke()`.
+There is no constructor option, retry switch, or new root public API. Direct
+storage inspection remains available through the `agent_exchanges` package.
+The installed bare `/exchanges` command is a later controller/terminal
+integration over immutable snapshots; the backend still imports no controller,
+terminal, picker, viewer, or optional external package.
+
+One successful capture lifecycle uses a fresh
+`exchange_<32 lowercase hexadecimal characters>` identity and preserves the
+exact supplied session, canonical agent, provider, and one conversation or
+debate kind/ID across its records. A writing-artifact reference prelude is a
+separate physical call with its own exchange ID, but it inherits the same outer
+conversation/debate correlation as the substantive call.
+
+The nested canonical content shapes are:
+
+```json
+{"call_kind":"conversation","payload":{},"prior_thread_id":null,"schema":{}}
+{"actual_transport_utf8_bytes":null,"response_text":"...","thread_id":"thread_1","usage":null}
+{"code":"accepted","outcome":"accepted"}
+```
+
+The request shape has exactly `call_kind`, `payload`, `prior_thread_id`, and
+`schema`. The response shape has exactly `actual_transport_utf8_bytes`,
+`response_text`, `thread_id`, and `usage`; non-null usage has exactly
+`input_tokens`, `output_tokens`, and `cached_input_tokens`. The outcome shape
+has exactly `code` and `outcome`. These JSON values are stored in the outer
+schema-v1 record's string `content`, subject to the 262,144-byte complete-code-
+point prefix. Full UTF-8 byte and Python Unicode-code-point counts plus SHA-256
+describe the complete capture input, so a truncated record is not the complete
+nested value.
+
+The terminal vocabulary is closed:
+
+| Outcome | Fixed code |
+| --- | --- |
+| `accepted` | `accepted` |
+| `provider_failure` | `provider_invocation_failed`, `provider_timed_out`, `provider_contract_invalid` |
+| `cancelled` | `cancelled` |
+| `rejected` | `malformed_structured_response`, `response_correlation_mismatch`, `response_semantic_rejected`, `action_exhausted`, `answer_validation_failed` |
+| `post_response_runtime_failure` | `thread_persistence_failed`, `reference_runtime_failed`, `context_runtime_failed` |
+
+Two contextual-action rejections have narrower user guidance. Valid JSON with
+the exact contextual action shape but a `c` value that does not equal the
+current request correlation token produces this exact runtime exception:
+
+```text
+BackendProtocolError: contextual provider response is invalid: `c` does not match the current request correlation token
+```
+
+The misplaced value may be provider answer/prose. Story validates correlation
+before interpreting the action kind or data, so this error wins even when the
+same object presents a misleading READ action or data. Neither the received
+`c`, the expected token, nor provider prose placed in `c` enters the exception
+or conversation history.
+
+When a structurally recognizable READ wire action instead arrives before any
+context search, or its `d` array contains invalid or foreign values instead of
+source handles returned by the immediately preceding search, Story raises:
+
+```text
+BackendProtocolError: contextual provider read action is invalid: `d` must contain source handles returned by the preceding context search
+```
+
+The provider does not raise either `BackendProtocolError`; Story translates its
+internal `ContextExecutionErrorCode.MALFORMED_ACTION` through a fixed,
+content-safe allow-list. Other malformed JSON and unrelated malformed action
+shapes retain the generic `BackendProtocolError: contextual provider action is
+malformed`. Correlation mismatch rejects with
+`rejected`/`response_correlation_mismatch`; the READ case rejects with
+`rejected`/`malformed_structured_response`. Both leave the context ledger
+`MALFORMED`, taint the contextual attempt, clear its provider thread state, and
+do not advance its ready checkpoint. Untrusted `d` values likewise do not enter
+the exception or conversation history. When its best-effort exchange records
+are available, use bare `/exchanges` to inspect the authorized immutable
+request, exact valid raw `ProviderResult` projection, and terminal outcome.
+
+The request append is attempted before invocation. A valid raw
+`ProviderResult` is appended immediately on return, before accounting,
+decode/domain validation, the separate rejected-response artifact, and thread
+persistence. Exactly one terminal append is then attempted when the relevant
+backend/context owner knows the outcome. Capture state advances before append;
+all capture failures are suppressed and never retried. Missing files, records,
+outcomes, or sequence values therefore do not prove that no physical provider
+call or result existed.
+
+The user-facing correlation, header, preview, search, and privacy behavior is
+documented in [Inspect agent exchanges](../guides/agent-exchanges.md). The
+viewer cannot retry or replay this backend lifecycle.
 
 ## Lifecycle value contracts
 

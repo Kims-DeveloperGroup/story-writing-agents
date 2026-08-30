@@ -105,6 +105,10 @@
 > package-internal mode-gated accepted-input projection, and #275 installs the
 > controller consumers for attributed advisory and consensus messages plus
 > result-defining request context.
+> #414 adds bare `/exchanges`, two transient inventory/roster pickers, a lazy
+> exact optional-package boundary, and one generic hosted external-view
+> lifecycle. Story retains sole terminal ownership; the pinned independent
+> package retains JSONL parsing, rendering, navigation, search, and help.
 
 This contract governs every human-facing interactive view and control in the
 installed shell. It preserves scrollback and the established command/runtime
@@ -112,14 +116,17 @@ boundaries while giving output, one-line input, line-oriented composition,
 confirmation, suggestions, fixed choices, command history, and pickers one
 semantic model. It also governs the isolated package-internal ranged viewer
 where explicitly identified; the installed controller invokes it through
-provider-bound `$`/`$$` prompt editing without exporting it as a command.
+provider-bound `$`/`$$` prompt editing without exporting it as a command. The
+separate `/exchanges` renderer contract lives in the pinned external
+[JSONL viewer design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/5d3047aa86212810d867d5b40cb1df3262f1810f/docs/design-system.md);
+this document governs only Story's picker and terminal-host integration.
 
 The words **must**, **must not**, and **may** below constrain the delivery
 issues. Requirements beyond the implemented #82, #83, #84, #85, #86, #79,
 #87, #94, #93, #105, #106, #111, #115, #119, #123, #126, #127, #142,
 #160, #162, #164, #209 provider OAuth initiative, #237, #241, #249, #252,
 #270, #271, #287, #303, #312, #319, #343, #350, #351, #352, #353, #377, #391,
-#397, and #73
+#397, #414, and #73
 slices do not describe
 current production behavior.
 
@@ -135,6 +142,7 @@ current production behavior.
 | #86 composer/confirmation integration | Implemented: RUN/CHAT composition and yes/no confirmation build ordered semantic input views, render equivalent plain/fixed-ANSI projections at the active width, and use pure history-free controls. Established results, signatures, `/send`, `/cancel`, `/say`, defaults, Ctrl-C, EOF, callback cardinality, and controller/runtime behavior remain unchanged. |
 | #79 selectable completion | Implemented: capable main input projects canonical root, subcommand, and finite fixed-option candidates into a semantic palette. Up/Down moves its clamped highlight, Tab applies the highlighted candidate, Escape restores the first pre-completion snapshot when present and dismisses the exact state, and closed-palette Up/Down retains history behavior. Shift-Tab has no action. |
 | #87 picker foundation | Implemented: package-internal immutable picker/control/viewport state, pure initialization/reconciliation/live/fallback transitions, responsive live/full-list rendering, a dedicated history-free sole-driver lifecycle, and an unlisted resource-free adapter. #93 supplies its first installed consumer. |
+| #414 agent-exchange viewer integration | Implemented: bare attached-session `/exchanges` opens transient inventory-derived scope and complete-roster agent pickers, prepares one immutable exact or empty snapshot through a lazy exact optional-package facade, and hosts the independent renderer through Story's sole raw-terminal driver. Picker/view state is discarded on close; provider, focus, and source bytes are unchanged. |
 | #94 workspace Codex defaults | Implemented: the original slice added optional workspace fallback Codex model and reasoning values. The current closed twelve-field system schema also contains Antigravity model/effort, nullable `default_backend`, independent desired `conversation_storage_backend`, default-disabled local conversation-RAG provider/automatic values, and strict-boolean `show_message_details`; new workspaces initialize provider fields to null, automatic RAG and message details to false, and storage to filesystem. Legacy files remain valid and byte-preserved until a successful canonical persistence, and each backend validates and captures initial effective invocation values before the installed Settings activation path may replace its live-capable runtime generation. |
 | #93 settings UI | Implemented: global alias-free `/settings` edits isolated current/pending snapshots of workspace defaults, desired conversation storage, and per-agent provider/model/effort choices through shared picker and prompt controls. Confirmed full-path Apply Changes validates exact configuration, optional route-generation, and persona baselines, coordinates storage readiness, writes prepared system/agent/optional-route targets deterministically, and attempts exact rollback after failure. The workflow adds no supported public save API. |
 | #299 live execution profiles and context | Implemented: `/settings` authenticates, preflights, persists, and applies mixed live-capable runtime settings to the current shell without restart; desired storage and Conversation RAG remain next-shell settings, and launch overrides remain read-only. Message details controls whether responsive input/reply views include backend-authoritative provider/model/effort facts, sources, confirmation, and thread disposition; `/agents` and `/status` remain fully diagnostic. Provider switches advance durable route generations, while every substantive call rehydrates bounded belonging-session context even on a fresh native thread. Schema-v2 profile diagnostics remain content-free. |
@@ -617,6 +625,35 @@ and cancellation both close the alternate-screen viewer after cleanup. The #164
 controller caller restores the exact originating buffer/cursor and attaches the
 selected path/range indicator; the #162 viewer itself still owns neither.
 
+### Hosted external JSONL-viewer lifecycle
+
+`/exchanges` does not reuse the ranged viewer above. After two Story-owned
+transient pickers, the controller copies one exact immutable exchange snapshot,
+loads and validates only the pinned package's `ViewerSpec`, `ViewerHost`, and
+`view_jsonl` facade, verifies the constructed header/primary/search projection,
+and prepares one callable before terminal acquisition.
+
+The unlisted `InteractiveExternalViewer` retains only that callable capability.
+Its private `ExternalViewerHost` supplies complete-frame geometry, the current
+color gate, complete-frame presentation, one closed event vocabulary, and
+idempotent close. It owns no stream, path, source bytes, renderer, parser,
+signal, raw mode, alternate screen, or application focus. Frames admit only
+printable text, LF, and eligible SGR; all other control or format characters
+fail before presentation.
+
+On a capable stream, `RawTerminalDriver` acquires the existing input latch,
+rejects reentry or progress overlap, activates raw mode once, enters one
+alternate screen, maps keys and bounded goto/search prompts to host events,
+closes the host, exits the screen, and restores terminal attributes under the
+established failure precedence. In fallback it borrows the existing line
+callbacks, supplies plain geometry/color facts, and leaves complete frames in
+scrollback. Both paths drop every operation, host, picker, mode, cursor, search,
+match, footer result/index, and help value on return. The renderer's exact
+Simple/Verbose, gutter, search, color, responsive, truncation, and help rules
+remain solely in the pinned external [design
+system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/5d3047aa86212810d867d5b40cb1df3262f1810f/docs/design-system.md)
+and its [deterministic samples](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/5d3047aa86212810d867d5b40cb1df3262f1810f/docs/samples).
+
 ## Key and commit semantics
 
 The following table is the complete interaction contract. The existing
@@ -633,6 +670,7 @@ changing the established controls.
 | `Picker` | Up/Down changes highlight among enabled items. Highlight never selects or commits. | Enter selects and commits the highlighted enabled item. | Escape cancels. Ctrl-C and EOF leave without commit and retain the invoking API's typed semantics. |
 | Settings `Prompt` | Text and ordinary line-edit keys edit one history-free value. Completion keys have no effect. | Enter commits the exact buffer for field validation. A valid `/settings` commit applies the pending value and immediately reopens the same editor. | Escape returns one settings level without changing an already applied pending value; Ctrl-C and EOF cancel the whole settings workflow. |
 | Ranged text viewer | Up/Down clears the anchor and moves/clamps the active line. Shift+Up/Down fixes the first anchor and moves the active end through extension, contraction, reversal, and clamping. Other keys are no-ops. Configured VINTR, then VEOF, take priority over ordinary key roles. | Enter returns the active singleton or normalized anchored one-based inclusive range; empty text cannot commit. | Escape returns `cancelled`; configured VINTR returns `interrupted`; configured VEOF or stream EOF returns `eof`. Operational failures are raised after cleanup. |
+| Hosted external JSONL viewer | The external engine consumes Story-mapped Up/Down, Page Up/Page Down, goto, search, next/previous match, mode, help, clear-search, and close events. Story interprets no JSON or viewer state. | Goto/search line prompts commit only one bounded host event; there is no content commit, selection return, replay, or edit. | Escape maps to transient cancel behavior; `q`, EOF, or final cancel closes. Story restores its terminal and discards all view state. |
 | Line-oriented composer | Each ordinary line appends exact content. Up/Down, Tab, Shift-Tab, and Escape are no-ops; no full-screen editing or command-history traversal is introduced. | `/send` commits the exact LF-joined content when nonblank. | `/cancel`, Ctrl-C, and EOF preserve established discard outcomes and counts. |
 | Confirmation | Existing accepted yes/no input and blank-default behavior remain authoritative. Up/Down, Tab, Shift-Tab, and Escape are no-ops. Invalid input marks the choices as erroneous, writes one hint, and asks again. | A valid answer or blank default returns the established `yes` or `no` result. | Ctrl-C and EOF return the established `interrupt` or `eof` result. |
 
@@ -832,8 +870,8 @@ instead use typed error presentation.
 > contracts.
 
 A leading slash automatically opens `SuggestionPalette` at a recognized
-grammar position. Root candidates are the 23 main-available command tokens in
-registry order. Help offers those 23 plus `/compose`, `/send`, and `/cancel`;
+grammar position. Root candidates are the 24 main-available command tokens in
+registry order. Help offers those 24 plus `/compose`, `/send`, and `/cancel`;
 agent-valued slash positions expose the four preferred prompt aliases `lead`,
 `plot`, `character`, and `execution` in route order. Other implemented finite
 positions expose their static subcommands or options. Runtime values such as
@@ -1922,6 +1960,15 @@ typed exit and optional inclusive tuple. These names remain outside public
 remain outside the closed `Component` union, and no application consumer or
 supported signature changes.
 
+#414 adds the unlisted facade identity `InteractiveExternalViewer`. Its
+`open(operation)` accepts only one callable using the private
+`ExternalViewerHost` protocol and returns no view result. The private
+`interactive_terminal._external_view` module exports exactly
+`ExternalViewOperation` and `ExternalViewerHost` for internal composition;
+neither is in the terminal facade's 12-name public `__all__` or the root facade.
+The external `jsonl_viewer` package retains its independent three-name public
+API; Story does not re-export it.
+
 ### `interactive_line_editor` compatibility facade
 
 `story_writing_agents.interactive_line_editor` remains importable with this
@@ -1961,7 +2008,7 @@ boundary. Responsibility and dependency direction are fixed as follows:
 | --- | --- |
 | `interactive_settings` | Package-internal immutable opening baseline and pending configuration, safe lexical persona catalog, validation, exact stale-state detection, changed-only canonical persistence, and reverse exact-byte rollback. It has no terminal, controller, runtime, backend, or parser dependency and no facade export. |
 | `provider_catalog` | Private standard-library-only native-provider catalog subprocess boundary. It owns fresh exact commands, bounded stdout capture, strict provider parsing, fixed content-free states, and child/thread cleanup; it retains no cache, persistence, credentials, raw diagnostics, or import-time resource and has no root-facade export. |
-| `interactive_terminal.__init__` | Compatibility facade with the exact existing 12-name public surface, including the additive optional `write_error()` debug-log-path keyword, plus unlisted package-internal chat-presentation/accent values, stream construction, ordinary semantic output, mode-gated accepted-input projection, picker, cancellable-prompt, and supplied-text viewer seams. It owns no import-time resource or state. |
+| `interactive_terminal.__init__` | Compatibility facade with the exact existing 12-name public surface, including the additive optional `write_error()` debug-log-path keyword, plus unlisted package-internal chat-presentation/accent values, stream construction, ordinary semantic output, mode-gated accepted-input projection, picker, cancellable-prompt, supplied-text viewer, and external-viewer seams. It owns no import-time resource or state. |
 | `interactive_terminal._model` | Immutable semantic components including inline/chat-block message presentation and fixed speaker accents, bounded main-history/control state, distinct static, dynamic-choice, whole-file-reference, and ranged-reference palette positions, composer and picker control state, bounded picker viewport, semantic input/render frames, key/focus values including Shift+Up/Down, and transition/render results. No I/O. |
 | `interactive_terminal._controls` | Pure established line-input, main-command/history, dynamic main-choice, composer-line, confirmation-answer, cancellable-prompt, and picker transitions; immediate ranged-reference palette projection and highlight ownership; bounded history; completion/choice projection; picker initialization/reconciliation, disabled-skipping live navigation, exact fallback grammar, and viewport selection. |
 | `interactive_terminal._render` | Pure safe responsive output and semantic input renderers for plain and fixed ANSI profiles, including directly grouped header/body speaker blocks, header-only accents, terminal-default trailing separation, default-styled body rails with physical-cell wrapping and row-local fallback, bounded live and complete-list fallback picker projections, and the strict JSON agent-reply presentation projection. It sanitizes dynamic content before styling and returns render data without writing. |
@@ -1969,9 +2016,10 @@ boundary. Responsibility and dependency direction are fixed as follows:
 | `interactive_terminal._viewer_model` | Immutable strict-UTF-8 supplied document, active/anchor state, height-bounded viewport, fixed notice, exit kind, and content-free result values; private 8 MiB source, 65,536 logical-line, and complete 16 MiB fallback-projection capacities with LF-only line derivation. No I/O. |
 | `interactive_terminal._viewer_controls` | Pure initialization, clamped ordinary and anchored navigation, normalized commit and noncommit exits, exact ASCII fallback grammar, and contiguous viewport projection. |
 | `interactive_terminal._viewer_render` | Pure bounded-prefix one-row-per-source-line live projection and complete numbered fallback; visible escaping, one-based numbers, plain/ANSI current and selection cues, cell-aware live ellipsis clipping, and no fallback clipping. |
+| `interactive_terminal._external_view` | Generic runtime-checkable borrowed-host and callable contracts, strict printable/LF/eligible-SGR complete-frame validation, and bounded ordinary-line event mapping. It owns no renderer, terminal resource, source, or Story-domain policy. |
 | `interactive_terminal._input_lifecycle` | Irreversible per-driver `UNDECIDED` to `LIVE`/`FALLBACK` selection; exact live source/decoder identity; canonical ASCII/UTF-8/ISO-8859-1 and built-in strict/surrogateescape admission; one persistent exact-byte incremental reader with bounded decoded suffix, stable EOF, poisoning, interrupt reset, and synchronous input exclusion. It owns no stream closure, terminal, key, readiness, screen, or restoration resource. |
-| `interactive_terminal._driver` | Sole owner of raw streams, capability/width/height detection, byte/key decoding integration including Shift+Arrow, pre-activation configured-control validation, fixed Escape readiness wait after any pending decoded suffix, complete-live-frame cleanup, cursor controls, viewer alternate screen, raw mode, restoration, writes, flushes, and one bounded process-local main-history store per instance. Its supported main/composition, history-free semantic prompt, picker, and viewer routes accept call-local collaborators; Enter/Tab converts the nonmodal ranged-source highlight into viewer entry under the same input latch, and non-main input does not consult history. It also mode-gates already rendered accepted-input output: selected `LIVE` uses the existing progress-safe persistent writer, selected `FALLBACK` is silent, and `UNDECIDED` rejects; it retains no payload or commit token. |
-| `interactive_terminal._core` | `InteractiveTerminal`, established public-operation orchestration, semantic composer/confirmation view construction and event mapping, canonical static/dynamic main-choice adapter, package-internal stream factory, semantic render seam, resource-free `InteractiveSemanticOutput`, and unlisted resource-free main, picker, prompt, and supplied-text viewer adapters. The semantic adapter binds separate ordinary-component and accepted-input capabilities; callback construction supplies a no-op accepted-input sink, and stream construction delegates that sink to the sole driver. Core binds call-local reference scope/source-list/text collaborators and these inputs without owning another store/raw implementation. |
+| `interactive_terminal._driver` | Sole owner of raw streams, capability/width/height detection, byte/key decoding integration including Shift+Arrow, pre-activation configured-control validation, fixed Escape readiness wait after any pending decoded suffix, complete-live-frame cleanup, cursor controls, supplied-text and hosted external-view alternate screens, raw mode, restoration, writes, flushes, and one bounded process-local main-history store per instance. Its supported main/composition, history-free semantic prompt, picker, and viewer routes accept call-local collaborators; Enter/Tab converts the nonmodal ranged-source highlight into viewer entry under the same input latch, and non-main input does not consult history. It also mode-gates already rendered accepted-input output: selected `LIVE` uses the existing progress-safe persistent writer, selected `FALLBACK` is silent, and `UNDECIDED` rejects; it retains no payload or commit token. |
+| `interactive_terminal._core` | `InteractiveTerminal`, established public-operation orchestration, semantic composer/confirmation view construction and event mapping, canonical static/dynamic main-choice adapter, package-internal stream factory, semantic render seam, resource-free `InteractiveSemanticOutput`, and unlisted resource-free main, picker, prompt, supplied-text-viewer, and external-viewer adapters. The semantic adapter binds separate ordinary-component and accepted-input capabilities; callback construction supplies a no-op accepted-input sink, and stream construction delegates that sink to the sole driver. Core binds call-local reference scope/source-list/text collaborators and these inputs without owning another store/raw implementation. |
 | `interactive_line_editor` | Standalone/public compatibility-only facade over the same supported main-command reader and one per-editor driver/history store. |
 
 The allowed graph is:
@@ -1980,6 +2028,11 @@ The allowed graph is:
 cli -> interactive_terminal package-internal stream factory -> terminal._core
 cli -> provider_catalog
 interactive_controller._core -> interactive_terminal facade components/adapter
+interactive_controller._core -> interactive_controller._exchange_policy
+                             -> interactive_controller._exchange_viewer
+                             -> agent_exchanges facade
+interactive_controller._exchange_viewer -> jsonl-viewer (optional exact pin)
+                                        -> terminal._external_view host contract
 interactive_controller._core -> interactive_settings -> agents/config/errors/workspace
 interactive_controller._core -> provider_catalog -> (standard library only)
 interactive_controller policy leaves -> terminal facade error contracts
@@ -1989,8 +2042,9 @@ terminal._core -> terminal._controls -> terminal._model
                -> terminal._viewer_controls -> terminal._model / terminal._viewer_model
                -> terminal._viewer_render   -> terminal._model / terminal._viewer_model
                -> terminal._viewer_model
+               -> terminal._external_view
                -> terminal._driver   -> terminal._input_lifecycle
-                                     -> terminal._model / terminal._reference_activation / terminal._viewer_model
+                                     -> terminal._model / terminal._reference_activation / terminal._viewer_model / terminal._external_view
                -> interactive_commands / agents
 interactive_line_editor facade -> same terminal._core / terminal._driver
 ```
@@ -2029,17 +2083,24 @@ document, selection, or geometry after return. The sibling activation leaf
 imports terminal models and the public writing-artifact facade only; it owns no
 catalog or text read. The controller owns provider-span gating and repository
 callbacks, while the driver owns same-latch nested picker/viewer coordination.
+The separate `_external_view` leaf imports only standard-library contracts. The
+agent-exchange viewer adapter imports that leaf's generic host protocol but no
+driver/core resource implementation; terminal leaves import no exchange,
+storage, controller, provider, or external-renderer module. The optional
+external renderer imports no Story module.
 
 ### Implemented module-index delta
 
 The reconciled [Python module index](../../PYTHON_MODULE_INDEX.md) is the
-canonical inventory: 69 importable production units and 275 direct internal
-dependency edges in an acyclic graph. The conversation-presentation work adds
-no production unit or dependency edge: `MessagePresentation` and
-`SpeakerAccent` remain values in `_model`, their renderer remains in `_render`,
-and controller consumers continue to import only the terminal facade. This
-design records the user-visible contract without duplicating the index's module
-ownership or historical arithmetic.
+canonical inventory: 92 importable production units and 372 direct internal
+dependency edges in an acyclic graph. #414 adds the internal
+`interactive_controller._exchange_policy`,
+`interactive_controller._exchange_viewer`, and
+`interactive_terminal._external_view` modules. `InteractiveExternalViewer`
+remains an unlisted value in terminal `_core`; the external renderer remains an
+optional exact-pin dependency rather than a Story production module. This
+design records the user-visible contract without replacing the index's complete
+module ownership.
 
 ## Migration coverage
 
@@ -2064,12 +2125,15 @@ owner. #160 added private catalog-independent reference-source discovery and
 capture beneath the repository's lock and evidence coordination. #164 added
 the private pure reference-activation leaf, preserved public exports, and lets
 the controller borrow source-list/text callbacks without moving repository
-ownership into the terminal. The #209 provider OAuth initiative
+ownership into the terminal. #414 added two exchange-controller leaves and the
+generic external-view terminal leaf, preserved the terminal's 12-name public
+and root facades, and kept the pinned renderer outside Story's module graph.
+The #209 provider OAuth initiative
 added private native-auth and interactive-auth coordination, startup
 presentation, global `/auth`, route/default gates, and settings integration.
 #252 added private bounded provider-catalog discovery and controller/CLI
-composition without changing public exports. The current 69-unit inventory
-and 275 edges remain canonical in the module index; #350–#353 add no module or
+composition without changing public exports. The current 92-unit inventory
+and 372 edges remain canonical in the module index; #350–#353 add no module or
 edge.
 
 ### View groups
@@ -2079,6 +2143,7 @@ edge.
 | Shell scaffold | `Panel`, `Section`, `Prompt`, `Notice` | Idle/focused scope, plain structure, scrollback preserved | #83 (implemented output scaffold; main/subject prompts remain established input, composer/confirmation input implemented by #86) |
 | Lobby/session/conversation orientation | `Panel`, `Section`, `Field`, `Notice` | Current workspace, attachment, focus, and next action remain textual; attached conversation scope is presented initially and only after its controller-local session/handle/subject/sticky-agent tuple changes, with fresh focused-state validation before every prompt and reset on detach | #83 output and #284 cadence (implemented) |
 | Help and command reference | `Panel`, `Section`, `Field`, `ListView`, `Record` | Grouping, syntax, aliases, effects, examples, empty/error | #84 (implemented) |
+| Agent-exchange inspection | Two Story `Picker` values followed by the external renderer's complete frame | Attached session; inventory-only latest-first full-ID/subject scopes; complete roster including empty agents; immutable exact snapshot; header context; content-free errors; no provider/focus/source mutation; all picker/view state transient | #414 integration; pinned external renderer (implemented) |
 | Session/conversation/agent lists and rosters | `ListView`, `Record`, `Field`, `Notice` | Counts, active/focused/archived/empty meaning and stable order; a filtered conversation list first names its normalized query and active/all scope | #84 result views and #275 filtered-request context (implemented) |
 | Search results | `ListView`, `Record`, `Field`, `Notice` | Normalized query and active scope before catalog/service work; citation, snippet, active/archive state, truncation, empty/error | #84 result views and #275 request context (implemented) |
 | Transcript | `ListView`, `Message`, `Notice` | Resolved visible conversation handle and effective start/count before memory work; position, human direction, Sequence, and full body always; Turn/Kind/canonical IDs only with details On; event order and LF content boundaries remain intact | #84 result views, #275 request context, and #352 message presentation (implemented) |
@@ -2103,6 +2168,7 @@ edge.
 | Fixed command values | `SuggestionPalette`, `Field` | Canonical finite grammar choices, including metadata-exposed agent IDs/aliases; palette activity has no effects beyond call-local input state | #79 (implemented) |
 | Single-select and selectable-list choices | `Picker`, `ListView`, `Record`, `Notice` | Disabled-skipping clamped Up/Down highlight, Enter commit, Escape cancel, typed interrupt/EOF, bounded live/full fallback rendering, internal terminal states without a synthetic final control frame | #87 foundation, #93 and #142 consumers (implemented) |
 | Independent ranged text viewer | Private viewer document/state/viewport/result values, not a `Component` | Ordinary versus anchored clamped navigation, inclusive commit, typed noncommit exits, height-bounded alternate-screen rendering, strict complete-text fallback, and no retained caller or composer state | #162 foundation; #164 provider-bound shell caller (implemented) |
+| Hosted external JSONL viewer | Private `ExternalViewerHost`/operation plus external complete frames, not a Story `Component` | Story-owned safe frame/event bridge, sole-driver raw/alternate-screen lifecycle, ordinary-line fallback, reentry/progress exclusion, idempotent close, and no returned or retained content/view state | #414 integration; pinned external renderer (implemented) |
 | Artifact-reference activation | Private marker projection plus existing palette/viewer controls | Provider-span-only `$` completion; immediate exact-`$$` ranged-source palette; direct `$${path}` or highlighted Enter/Tab viewer entry; exact origin restoration; multiple ordered indicators; fixed content-free errors; and fallback second confirmation | #164 (implemented) |
 | Live omitted-resume choices | `SuggestionPalette`, `Picker`, `Prompt`, `Field` | Exact capable command only; controller-owned ordered rows/highlight/fresh validation; Up/Down preview; one-Enter explicit commit; Escape dismissal; Tab no-op; submitted omitted command uses a live capable or numbered fallback picker only after a successful fresh read returns eligible rows; empty/error short-circuit | #142 (implemented) |
 | Settings field and action navigation | `Panel`, `Prompt`, `Picker`, `Field`, `Notice` | Single focus; Settings-only form presentation, including borrowed authentication, with simple titles and textual active/selected/disabled cues; Settings > Conversation RAG and Settings > Agents > Agent settings navigation; retained Language/Persona/rounds/Conversation storage/RAG Provider/RAG Automatic/Message details/Provider/Model/Custom model/Effort editors; first-commit reopen and second-consecutive-equivalent-commit return; clean root with seven choices and no persistence actions; dirty root with all nine rows plus Apply/Discard confirmation and final recheck; details-only live presentation fast path; RAG-only system-config persistence with no authentication, storage, runtime, route/thread, composition, probe/install, catalog, subprocess, socket, or network work; mixed full authentication/activation with next-shell-only storage and RAG; candidate-specific scope notices; subordinate authentication return to Provider; universal capable cleanup and honest fallback visibility; and unchanged standard generic picker navigation and session-resume behavior | #93, #106, #115, #142, #252, #261, #270, #271, #287, #299, #303, #312, #319, #321, #349, #350, and #377 (implemented) |
@@ -2149,6 +2215,14 @@ per-agent schemas, provider-specific safe model/effort validation,
 full-schema-first failure, precedence, launch-captured state, exact
 fresh/resume invocation arguments, initialization preservation, and unchanged
 definition/thread/public contracts.
+#414 covers bare parser/help integration, inventory/subject/agent projection,
+snapshot disappearance, exact lazy optional API validation before terminal
+ownership, 18-field projection, empty streams, content-free failures, immutable
+bytes/focus, generic host frame/event validation, live/fallback input, raw and
+alternate-screen ownership, reentry/progress exclusion, cleanup precedence,
+pin/metadata/lock/gitlink parity, and built-artifact exclusion. The external
+package separately byte-tests all seven documented frames and plain/ANSI
+equivalence.
 Issue #119 introduced per-phase handoff/action and message visibility. #353
 supersedes its presentation with one atomic progress Panel containing the
 ordered progress facts and newly readable persisted speech sections. #368

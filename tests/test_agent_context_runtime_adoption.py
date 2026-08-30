@@ -422,6 +422,12 @@ class _ContextAdapterHarness:
         self.provider_failure_selector: Callable[[dict[str, Any]], bool] = (
             lambda _current: False
         )
+        self.invalid_read_selector: Callable[[dict[str, Any]], bool] = (
+            lambda _current: False
+        )
+        self.correlation_mismatch_selector: Callable[[dict[str, Any]], bool] = (
+            lambda _current: False
+        )
         self.exhaust_selector: Callable[[dict[str, Any]], bool] = (
             lambda _current: False
         )
@@ -664,7 +670,25 @@ class _ContextAdapterHarness:
                 )
                 raise failure
             search = self.search_selector(current)
-            if search is None:
+            if self.correlation_mismatch_selector(current):
+                response = self._json(
+                    {
+                        "a": "r",
+                        "c": "PRIVATE critique prose\x1b]unsafe\x07",
+                        "d": [],
+                        "u": [],
+                    }
+                )
+            elif self.invalid_read_selector(current):
+                response = self._json(
+                    {
+                        "a": "r",
+                        "c": correlation,
+                        "d": ["conflict", "PRIVATE/critique text"],
+                        "u": [],
+                    }
+                )
+            elif search is None:
                 response = self._answer_action(current, correlation)
             else:
                 response = self._search_action(correlation, search)
@@ -1117,6 +1141,145 @@ class ContextualRuntimeAdoptionTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def source_id(filename: str) -> str:
         return writing_artifact_source_id(f"core_documents/{filename}")
+
+    async def test_invalid_read_diagnostic_translation_is_exact_and_allow_listed(
+        self,
+    ) -> None:
+        session_id = "invalid_read_diagnostic"
+        self.ready(session_id)
+        conversation_id = self.conversation(session_id)
+        self.provider.invalid_read_selector = lambda current: (
+            current.get("workflow") == "conversation"
+            and current.get("command") == "invalid read response"
+        )
+
+        with self.assertRaises(BackendProtocolError) as caught:
+            await self.runtime.converse(
+                session_id,
+                conversation_id,
+                PLOT_ARCHITECT,
+                "invalid read response",
+            )
+
+        expected = (
+            "contextual provider read action is invalid: `d` must contain "
+            "source handles returned by the preceding context search"
+        )
+        failure = caught.exception
+        self.assertEqual(str(failure), expected)
+        self.assertIs(type(failure.__cause__), service_module.ContextExecutionError)
+        self.assertIs(
+            failure.__cause__.code,
+            service_module.ContextExecutionErrorCode.MALFORMED_ACTION,
+        )
+        rendered = "\n".join(
+            (
+                str(failure),
+                repr(failure),
+                repr(failure.__cause__),
+            )
+        )
+        for private in ("conflict", "PRIVATE/critique text"):
+            self.assertNotIn(private, rendered)
+        events = self.services.event_store.read(session_id, conversation_id)
+        self.assertEqual(
+            tuple(event.kind for event in events),
+            (
+                ConversationEventKind.USER_MESSAGE,
+                ConversationEventKind.RUNTIME_ERROR,
+            ),
+        )
+        self.assertEqual(events[-1].content, f"BackendProtocolError: {expected}")
+
+        generic = "contextual provider action is malformed"
+        for detail in (
+            "PRIVATE arbitrary detail",
+            expected + " mutated",
+        ):
+            with self.subTest(detail=detail):
+                untrusted = service_module.ContextExecutionError(
+                    service_module.ContextExecutionErrorCode.MALFORMED_ACTION
+                )
+                untrusted.args = (detail,)
+                translated = self.runtime._contextual_backend_error(untrusted)
+                self.assertIs(type(translated), BackendProtocolError)
+                self.assertEqual(str(translated), generic)
+                self.assertNotIn("PRIVATE", repr(translated))
+
+        wrong_code = service_module.ContextExecutionError(
+            service_module.ContextExecutionErrorCode.PROVIDER_CONTRACT
+        )
+        wrong_code.args = (expected,)
+        self.assertIsNone(self.runtime._contextual_backend_error(wrong_code))
+
+    async def test_correlation_mismatch_translates_persists_and_stays_private(
+        self,
+    ) -> None:
+        session_id = "correlation_mismatch_diagnostic"
+        self.ready(session_id)
+        conversation_id = self.conversation(session_id)
+        self.provider.correlation_mismatch_selector = lambda current: (
+            current.get("workflow") == "conversation"
+            and current.get("command") == "correlation mismatch response"
+        )
+
+        with self.assertRaises(BackendProtocolError) as caught:
+            await self.runtime.converse(
+                session_id,
+                conversation_id,
+                PLOT_ARCHITECT,
+                "correlation mismatch response",
+            )
+
+        expected = (
+            "contextual provider response is invalid: `c` does not match the "
+            "current request correlation token"
+        )
+        failure = caught.exception
+        self.assertEqual(str(failure), expected)
+        self.assertIs(type(failure.__cause__), service_module.ContextExecutionError)
+        self.assertIs(
+            failure.__cause__.code,
+            service_module.ContextExecutionErrorCode.MALFORMED_ACTION,
+        )
+        expected_token = self.provider.context_payloads[-1]["c"]
+        self.assertIs(type(expected_token), str)
+        rendered = "\n".join(
+            (
+                str(failure),
+                repr(failure),
+                repr(failure.__cause__),
+                repr(failure.__context__),
+            )
+        )
+        for private in (
+            expected_token,
+            "PRIVATE critique prose",
+            "\x1b",
+            "\x07",
+        ):
+            self.assertNotIn(private, rendered)
+        events = self.services.event_store.read(session_id, conversation_id)
+        self.assertEqual(
+            tuple(event.kind for event in events),
+            (
+                ConversationEventKind.USER_MESSAGE,
+                ConversationEventKind.RUNTIME_ERROR,
+            ),
+        )
+        self.assertEqual(events[-1].content, f"BackendProtocolError: {expected}")
+
+        mutated = service_module.ContextExecutionError(
+            service_module.ContextExecutionErrorCode.MALFORMED_ACTION
+        )
+        mutated.args = (expected + " mutated PRIVATE detail",)
+        translated = self.runtime._contextual_backend_error(mutated)
+        self.assertIs(type(translated), BackendProtocolError)
+        self.assertEqual(
+            str(translated),
+            "contextual provider action is malformed",
+        )
+        self.assertNotIn("PRIVATE", repr(translated))
 
     async def test_raw_workspace_first_turns_and_late_role_core_are_contextual(
         self,

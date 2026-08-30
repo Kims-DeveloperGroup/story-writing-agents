@@ -4,7 +4,9 @@
 > output, established package-supported terminal records, and the unlisted
 > supplied-text ranged viewer. Provider-bound `$`/`$$` editing now invokes that
 > private viewer through the controller, without adding a standalone command or
-> public API. #274 also adds an unlisted mode-gated accepted-input projection
+> public API. Bare `/exchanges` separately hosts the pinned independent JSONL
+> renderer through an unlisted generic borrowed-host seam while Story remains
+> sole terminal owner. #274 also adds an unlisted mode-gated accepted-input projection
 > seam, and #275 uses it for accepted advisory and consensus prompts plus safe
 > result-defining request context. These rules do not make scrollback or process
 > memory private.
@@ -113,6 +115,12 @@ incapable or safely unavailable pre-activation setup uses the complete numbered
 line fallback. The driver observes bounded output width and height before the
 first viewer frame and after every nonexit key. It installs no `SIGWINCH`
 handler or background resize loop, and it never hides or shows the cursor.
+
+The hosted external view uses the same sole driver and input latch but no Story
+renderer state. A capable operation uses one raw-mode/alternate-screen
+lifecycle; fallback borrows plain line callbacks. Nested input, nested view, and
+progress overlap are rejected. The external host receives only complete-frame
+geometry, color eligibility, presentation, closed events, and idempotent close.
 
 For startup storage activation, authenticated runtime preparation, native
 authentication probes, persisted omitted-resume preparation, advisory and
@@ -299,10 +307,18 @@ emits no background, dim, blink, OSC, query, or cursor sequence. Removing those
 allowed decorative sequences yields the exact
 plain structure.
 
-The separate viewer renderer keeps the same safety order and may additionally
+The separate ranged-viewer renderer keeps the same safety order and may additionally
 use fixed inverse SGR 7 for selected rows, including a fixed bold/inverse/cyan
 combination for the active selected row. Its plain `>` and `*` markers retain
 the same current/selection meaning when all viewer decoration is removed.
+
+The external JSONL renderer has its own tested semantic color vocabulary. Story
+does not parse or restyle those frames: its host admits only printable text, LF,
+and SGR when color is eligible, rejects every other control, and rejects SGR in
+plain mode. Removing the renderer's allowed decoration preserves the exact
+plain text, gutter markers, JSON, search position, and help. The pinned external
+[design system](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/5d3047aa86212810d867d5b40cb1df3262f1810f/docs/design-system.md)
+is authoritative for those roles.
 
 The controller constructs semantic components only from trusted roles/states
 and validated facts. Its unlisted `InteractiveSemanticOutput` adapter acquires
@@ -364,10 +380,13 @@ text are sanitized separately before redraw, with embedded LF visible. No
 untrusted text becomes ANSI. Emulators, multiplexers, remote sessions, and
 scrollback may still retain or transform display.
 
-The ranged viewer is the sole separate control vocabulary: fixed
-alternate-screen enter, home-and-clear redraw, and alternate-screen exit
-sequences surround only sanitized, bounded renderer output. Caller text and
-display metadata can never supply these functional sequences.
+There are two separate viewer control vocabularies. The ranged viewer uses
+fixed alternate-screen enter, home-and-clear redraw, and alternate-screen exit
+around Story-rendered sanitized bounded text. The hosted external view uses the
+same fixed screen lifecycle around externally rendered frames that pass the
+host validator. Caller/external text can never supply cursor movement,
+alternate-screen, erase, OSC, mouse, clipboard, title, hyperlink, or raw-mode
+controls.
 
 ## Startup and advisory progress boundary
 
@@ -778,6 +797,42 @@ typed result; the #164 controller caller restores the exact originating
 buffer/cursor and attaches the path/range indicator. See the
 [exact viewer contract](../reference/interactive-terminal.md#independent-ranged-text-viewer)
 and [viewer recovery guidance](recovery-and-limitations.md#ranged-text-viewer-exits-and-recovery).
+
+<a id="hosted-external-view-boundary"></a>
+
+## Hosted external-view boundary
+
+The private `ExternalViewerHost` transfers no terminal resource. Its five
+operations expose bounded geometry, current color eligibility, one complete
+frame, one closed event, and idempotent close. Frame validation accepts exact
+printable text and LF, plus SGR only when color is enabled. It rejects carriage
+return, other control/format/surrogate characters, line/paragraph separators,
+and every non-SGR escape before output. This is display neutralization, not
+redaction of request or provider-response content.
+
+The controller validates the exact optional `jsonl_viewer` facade, constructor
+and callable signatures, host shape, immutable header/field projection, and
+primary-field order before asking the terminal to open. Missing or incompatible
+packages therefore acquire no raw mode or alternate screen. The renderer
+receives only immutable bytes and a generic specification; it opens no Story
+file and owns no Story scope, storage, provider, retry, replay, or focus policy.
+
+The capable lifecycle acquires the universal input latch, rejects reentry or
+progress overlap, validates the current terminal configuration, activates raw
+mode, enters one alternate screen, runs the operation, closes the host, exits
+the screen, restores termios, and releases the latch. Goto and search prompts
+temporarily restore ordinary input, then must reactivate the same configuration
+before another view event. Restoration failure remains fatal; an active
+operation failure takes precedence over host-close failure.
+
+Fallback uses the existing borrowed line callbacks, forces plain frames, and
+never enters raw mode or an alternate screen. Its complete frames, `viewer> `
+prompts, and typed input remain in scrollback. Neither path closes borrowed
+streams or retains the operation, source, frame, event, cursor, search, match,
+footer result/index, help, picker, or mode after return. This is transient
+lifecycle state, not secure erasure from terminal infrastructure or process
+memory. See the [host contract](../reference/interactive-terminal.md#hosted-external-jsonl-viewer)
+and [agent-exchange privacy](privacy-and-provider.md#agent-exchange-privacy).
 
 ## Other input and process-local state
 

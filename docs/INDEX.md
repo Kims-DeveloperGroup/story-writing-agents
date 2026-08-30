@@ -28,6 +28,9 @@ Use this index to find one canonical answer instead of searching a long manual.
 > highlighted source in the independent viewer. A complete `$${path}` opens
 > that source directly on Enter/Tab. These are editing controls, not commands or
 > automation UI.
+> Bare `/exchanges` is a separate attached-session inspection command. It
+> selects an inventoried conversation/debate and canonical agent before opening
+> an optional isolated read-only JSONL viewer over one immutable snapshot.
 
 ## Availability matrix
 
@@ -41,6 +44,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Open the TTY shell; list, create, resume, switch, or pause sessions | Bare `story` or `story chat` |
 | Show registry help or shell status | Global in the installed shell |
 | Apply directives; safely inspect sessions or debates | Current attachment; no conversation focus required |
+| Inspect recorded agent/provider request, response, and outcome exchanges | Attached shell `/exchanges`; no conversation focus or identifier argument. The command opens transient scope and agent pickers, then the optional pinned read-only viewer. [Install, workflow, preview, and privacy](guides/agent-exchanges.md) |
 | Create, list, resume, rename, or archive subject conversations | Installed shell after session attachment; catalog Python API |
 | Serialize or transfer canonical conversation-only archives | Direct `story_writing_agents.conversation_storage` Python API; serialization is pure, while filesystem export/import require a caller-held mutation lease. There is no raw archive shell command or complete-workspace backup. |
 | Use the optional SQLite conversation catalog, transcript store, and exact literal search | Installed shell after an explicit next-shell selection, or direct Python API after readiness preflight and explicit provisioning; derived FTS5 hints are optional and non-authoritative |
@@ -74,6 +78,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 ## Guides
 
 - [Bounded agent context: canonical scenarios, selection, search/read, references, progress, and limits](guides/agent-context.md)
+- [Agent exchanges: optional viewer installation, picker-first inspection, preview, colors, privacy, and recovery](guides/agent-exchanges.md)
 - [Canonical artifact references](guides/artifact-references.md)
 - [Workspaces](guides/workspaces.md)
 - [Story sessions and subject conversations](guides/story-sessions.md)
@@ -114,11 +119,13 @@ Use this index to find one canonical answer instead of searching a long manual.
 - [Overview](design/overview.md)
 - [Agent-context ownership, wire v5, checkpoints, candidate deltas, and recovery](design/agent-context.md)
 - [Interactive CLI design system contract](design/interactive-cli-design-system.md)
-- [Canonical Python module inventory (85 production units)](../PYTHON_MODULE_INDEX.md)
+- [Canonical Python module inventory (92 production units)](../PYTHON_MODULE_INDEX.md)
 - [Prompts, provider boundary, and exact context accounting](design/prompts-and-provider.md)
 - [Session lifecycle](design/session-lifecycle.md)
 - [Consensus workflow](design/consensus-workflow.md)
 - [Persistence](design/persistence.md)
+- [Pinned JSONL viewer design system and hosted scenarios](https://github.com/Kims-DeveloperGroup/jsonl-viewer/blob/5d3047aa86212810d867d5b40cb1df3262f1810f/docs/design-system.md)
+- [Pinned deterministic JSONL viewer sample frames](https://github.com/Kims-DeveloperGroup/jsonl-viewer/tree/5d3047aa86212810d867d5b40cb1df3262f1810f/docs/samples)
 
 ## Operations
 

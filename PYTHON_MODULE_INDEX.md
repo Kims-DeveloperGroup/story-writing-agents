@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 85.
+Importable production units indexed: 92.
 
-Direct internal dependency edges indexed: 349.
+Direct internal dependency edges indexed: 372.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -56,6 +56,7 @@ __main__ -> cli -> conversation_rag_cli
                  |               -> writing_artifacts/writing_artifacts.repository
                  |               -> writing_artifacts.runtime_references
                  -> backend -> agent_context/agent_context.service
+                 |          -> agent_exchanges/agent_exchanges.capture
                  |          -> antigravity_adapter -> agent_context/models
                  |          |                        -> provider_adapter
                  |          |                        -> provider_process
@@ -71,8 +72,10 @@ __main__ -> cli -> conversation_rag_cli
 
 interactive_controller._core -> interactive_controller._session_policy
                              -> interactive_controller._conversation_policy
+                             -> interactive_controller._exchange_policy
+                             -> interactive_controller._exchange_viewer
                              -> interactive_controller._runtime_policy
-                             -> agents/backend/cli_context/debug_log
+                             -> agent_exchanges/agents/backend/cli_context/debug_log
                              -> conversation_rag_composition
                              -> conversation_retrieval/conversation_search
                              -> conversation_storage.contracts/selection
@@ -84,6 +87,10 @@ interactive_controller._core -> interactive_controller._session_policy
 interactive_controller._session_policy -> errors/interactive_terminal/session_lifecycle
 interactive_controller._conversation_policy -> conversation_search/conversations
                                             -> errors/interactive_terminal/workspace
+interactive_controller._exchange_policy -> agent_exchanges/agents/models
+interactive_controller._exchange_viewer -> agent_exchanges
+                                        -> interactive_terminal._external_view
+                                        -> jsonl-viewer (optional exact-pinned external package, lazy)
 interactive_controller._runtime_policy -> agent_context.service
                                        -> conversation_retrieval/conversation_search
                                        -> errors/interactive_terminal/models/workspace
@@ -100,6 +107,7 @@ interactive_terminal -> interactive_terminal._core
 interactive_terminal._core -> agents/interactive_commands
                            -> interactive_terminal._controls
                            -> interactive_terminal._driver
+                           -> interactive_terminal._external_view
                            -> interactive_terminal._model
                            -> interactive_terminal._reference_activation
                            -> interactive_terminal._render
@@ -108,6 +116,7 @@ interactive_terminal._core -> agents/interactive_commands
                            -> interactive_terminal._viewer_render
 interactive_terminal._controls -> interactive_terminal._model
 interactive_terminal._driver -> interactive_terminal._input_lifecycle
+                             -> interactive_terminal._external_view
                              -> interactive_terminal._model
                              -> interactive_terminal._reference_activation
                              -> interactive_terminal._viewer_model
@@ -186,6 +195,11 @@ agent_context.sources -> agent_context.actions/manifest
                       -> conversations/errors/models/workspace
                       -> writing_artifacts.filesystem_sources
                       -> writing_artifacts.references/repository
+agent_exchanges -> agent_exchanges.contracts/storage
+agent_exchanges.capture -> agent_exchanges.contracts/storage
+                        -> provider_adapter/workspace
+agent_exchanges.contracts -> agents/errors
+agent_exchanges.storage -> agents/agent_exchanges.contracts/workspace
 provider_adapter -> agent_context/models
 provider_error_artifacts -> agents/workspace
 provider_auth -> (standard library only)
@@ -318,6 +332,143 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** Immutable module metadata only.
 - **Primary verification/documentation:** `tests/test_workspace_and_config.py`,
   `docs/concepts.md`, and `docs/reference/configuration/agent-configuration.md`.
+
+### `story_writing_agents.agent_exchanges`
+
+- **Source:** `src/story_writing_agents/agent_exchanges/__init__.py`
+- **Responsibility:** Provide the supported bounded agent-exchange storage
+  facade.
+- **Supported surface:** No project-root export. The package facade exposes
+  exactly `AGENT_EXCHANGE_SCHEMA_VERSION`,
+  `AGENT_EXCHANGE_CONTENT_MAX_BYTES`, `AGENT_EXCHANGE_TOTAL_MAX_BYTES`,
+  `AgentExchangeProvider`, `AgentExchangeRequestType`, `AgentExchangeOutcome`,
+  `AgentExchangeScopeKind`, `AgentExchangeFailure`,
+  `AgentExchangeStorageError`, `AgentExchangeRecordInput`,
+  `AgentExchangeAppendReceipt`, `AgentExchangeInventoryItem`,
+  `AgentExchangeSelection`, `AgentExchangeSnapshot`, and
+  `WorkspaceAgentExchangeStore`.
+- **Direct internal dependencies:** `agent_exchanges.contracts` and
+  `agent_exchanges.storage`.
+- **State, resources, and side effects:** Re-exports immutable contracts and
+  the I/O-free store constructor only. Importing creates no filesystem state,
+  lock, descriptor, thread, subprocess, or provider interaction. The separate
+  direct-module capture lifecycle is intentionally not imported or re-exported.
+- **Primary verification/documentation:**
+  `tests/test_agent_exchange_contracts.py`,
+  `tests/test_agent_exchange_capture.py`,
+  `tests/test_agent_exchange_storage.py`,
+  `docs/design/persistence.md#agent-exchange-persistence`,
+  `docs/operations/filesystem-safety.md#agent-exchange-filesystem-safety`,
+  `docs/reference/configuration/session-storage.md`, and
+  `docs/operations/privacy-and-provider.md`.
+
+### `story_writing_agents.agent_exchanges.contracts`
+
+- **Source:** `src/story_writing_agents/agent_exchanges/contracts.py`
+- **Responsibility:** Define the immutable durable agent-exchange schema and
+  classifiable failure language.
+- **Supported surface:** The package facade supports schema version 1, the
+  262,144-byte per-content bound, the 16,777,216-byte managed-JSONL bound, the
+  exact provider/request/outcome/scope/failure enums, fixed safe
+  `AgentExchangeStorageError`, and frozen slotted input, append-receipt,
+  inventory, selection, and snapshot values. Input accepts only session,
+  scope, canonical agent, provider, exchange, request-type, and strict-UTF-8
+  content fields; it has no arbitrary metadata seam. Append receipts expose
+  content-free full and retained UTF-8 byte and Python Unicode code-point
+  counts, truncation state, and the full-content SHA-256. Content-bearing input
+  and snapshot bytes are excluded from representations.
+- **Direct internal dependencies:** `agents` and `errors`.
+- **State, resources, and side effects:** Owns no mutable state or external
+  resource. Importing compiles bounded validation patterns and creates enum and
+  immutable-contract definitions without I/O.
+- **Primary verification/documentation:**
+  `tests/test_agent_exchange_contracts.py`,
+  `tests/test_agent_exchange_capture.py`,
+  `tests/test_agent_exchange_storage.py`,
+  `docs/design/persistence.md#agent-exchange-persistence`,
+  `docs/reference/configuration/session-storage.md`, and
+  `docs/operations/privacy-and-provider.md`.
+
+### `story_writing_agents.agent_exchanges.capture`
+
+- **Source:** `src/story_writing_agents/agent_exchanges/capture.py`
+- **Responsibility:** Coordinate fail-open recording for one physical provider
+  exchange.
+- **Supported surface:** No project-root or `agent_exchanges`-facade-supported
+  API. The direct-module package-internal `__all__` exposes exactly
+  `WorkspaceAgentExchangeCapture`, `AgentExchangeCaptureLifecycle`, and
+  `AgentExchangeTerminalCode`. The workspace capture's I/O-free constructor
+  binds the durable store; `begin(...)` requires exact session, conversation or
+  debate scope, canonical agent, provider, and `ProviderInvocation` values and
+  records the request before returning a shared `exchange_<uuidhex>` lifecycle.
+  That lifecycle admits at most one exact `ProviderResult` response and one
+  closed accepted, rejected, provider-failure, cancelled, or post-response
+  runtime-failure terminal attempt. The 13 terminal codes are fixed enums; no
+  arbitrary exception, diagnostic, metadata, or provider-native stream enters
+  the contract.
+- **Direct internal dependencies:** `agent_exchanges.contracts`,
+  `agent_exchanges.storage`, `provider_adapter`, and `workspace`.
+- **State, resources, and side effects:** Import and construction perform no
+  filesystem work. A successful begin assigns one transient UUID correlation,
+  appends canonical compact JSON for the exact invocation schema, payload,
+  prior thread, and call kind, and returns a lifecycle retaining that exact
+  identity plus a private thread lock and state. A completed response projects
+  only response text, result thread, exact-or-null usage, and exact-or-null
+  transport bytes; a terminal projects only outcome and fixed code. Response
+  and terminal state advances before append, so duplicate or failed attempts
+  are never retried. Every begin, response, or terminal serialization,
+  validation, or storage `BaseException` is fail-open; a failed begin returns a
+  disabled lifecycle. The retained
+  `WorkspaceAgentExchangeStore` remains the sole filesystem, locking, rotation,
+  pruning, sequence, timestamp, truncation, and snapshot owner.
+- **Primary verification/documentation:**
+  `tests/test_agent_exchange_capture.py`,
+  `tests/test_agent_exchange_contracts.py`,
+  `tests/test_agent_context_execution.py`, `tests/test_codex_backend.py`, and
+  `tests/test_antigravity_parity.py`.
+
+### `story_writing_agents.agent_exchanges.storage`
+
+- **Source:** `src/story_writing_agents/agent_exchanges/storage.py`
+- **Responsibility:** Own secure bounded append and snapshot lifecycles for
+  workspace agent-exchange JSONL.
+- **Supported surface:** The package facade exposes only
+  `WorkspaceAgentExchangeStore`. Construction performs no I/O;
+  `append(record)` durably assigns global and per-agent sequences plus a UTC
+  millisecond timestamp, `inventory(session_id)` returns content-free exact
+  scope selections, and `snapshot(selection)` returns immutable canonical
+  strict-UTF-8 JSONL bytes without a writable path or handle. Storage failures
+  cross the boundary only as fixed `AgentExchangeFailure` codes and prose;
+  `agent_exchanges.capture` owns fail-open submission policy.
+- **Direct internal dependencies:** `agents`, `agent_exchanges.contracts`, and
+  `workspace`.
+- **State, resources, and side effects:** Import and construction perform no
+  filesystem work. Mutations exclusively own
+  `debug_logs/agent_exchanges/`, its independent
+  `.agent_exchanges.lock`, canonical global and per-session/per-agent durable
+  high-water state, private session directories, and active plus seven rotated
+  two-MiB agent JSONL segments. Each content value retains the longest complete
+  UTF-8 prefix through 262,144 bytes, full and retained UTF-8 byte and Python
+  Unicode code-point counts, truncation state, and the full SHA-256. A weak
+  per-workspace process lock and bounded
+  cross-process advisory lock serialize append, rotation, newest-record global
+  pruning, inventory, and snapshot reads. The owner borrows only `Workspace`'s
+  identity-bound root open/reverification seam; all owned traversal and
+  mutation is descriptor-relative, no-follow, exact-name, mode-, identity-,
+  type-, link-, size-, schema-, and canonical-serialization checked. Durable
+  global and stream high-water reservation precedes append, so failed calls may
+  leave gaps but cannot reuse a sequence. Partial record suffixes are rolled
+  back, complete records rotate before overflow, and only validated managed
+  JSONL records are pruned by global workspace sequence to the 16-MiB cap.
+  Absent readers create nothing. The module never imports, scans, validates,
+  prunes, migrates, or counts sibling `provider_error_responses` or
+  `runtime.jsonl` state and owns no provider, viewer, terminal, or CLI behavior.
+- **Primary verification/documentation:**
+  `tests/test_agent_exchange_storage.py`,
+  `docs/design/persistence.md#agent-exchange-persistence`,
+  `docs/operations/filesystem-safety.md#agent-exchange-filesystem-safety`,
+  `docs/reference/configuration/session-storage.md`, and
+  `docs/operations/privacy-and-provider.md`.
 
 ### `story_writing_agents.agent_context`
 
@@ -483,8 +634,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ContextInvocationBinding`,
   `ContextInvocationRequest`, `ContextInvocationResult`,
   `ContextInvocationSession`, `ContextInvocationState`, `ContextProvider`,
-  `ContextProviderCallRequest`, `ContextProviderCallResult`,
-  `ContextProviderFailureFacts`, `ContextReferencePreludeRequest`,
+  `ContextProviderCallFinalizer`, `ContextProviderCallRequest`,
+  `ContextProviderCallResult`, `ContextProviderFailureFacts`,
+  `ContextProviderTerminalCode`, `ContextReferencePreludeRequest`,
   `ContextReferencePreludeResult`, `ContextReadReceipt`, `ContextScope`,
   `ContextSourceClassification`, `context_provider_failure_facts`, and
   `record_context_provider_failure`. `AgentContextService` derives the exact
@@ -532,6 +684,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   the substantive action budget, and must complete before verified ledger
   commit. The two failure-fact helpers attach and recover only validated
   content-free physical call facts without replacing the original exception.
+  Each substantive raw result carries one required, synchronous, repr-hidden,
+  comparison-excluded `ContextProviderCallFinalizer`; the service invokes it
+  exactly once after semantic acceptance or rejection, cancellation, or a
+  closed post-response runtime failure. Search/read acceptance follows complete
+  observation construction and lifecycle-event delivery; terminal-answer
+  acceptance precedes post-commit observer delivery, and finalizer
+  `BaseException` never replaces contextual state or control flow. The
+  service-owned protocol keeps capture adaptation in `backend`; this module
+  imports no exchange contract or store.
   Its supported direct-module-only `ContextExecutionEventKind`, frozen
   `ContextExecutionEvent`, and synchronous `ContextExecutionEventSink` expose
   fixed lifecycle outcomes with exact scope and operation identity, required
@@ -558,8 +719,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   content-free workspace digest, and process-local async locks keyed by exact
   scope/provider/definition/policy identity. Each invocation creates bounded
   transient manifests, source materials, provider payload mappings, call
-  accounting, and an invocation session whose 32-byte HMAC secret, handle
-  table, counters, and receipts are cleared on answer or failure. Source I/O is
+  accounting, one current borrowed call finalizer, and an invocation session
+  whose 32-byte HMAC secret, handle table, counters, and receipts are cleared
+  on answer or failure. Source I/O is
   delegated to the injected registry adapters, ledger persistence remains
   ledger-owned, and provider transport/native-thread storage remains delegated
   through `ContextProvider`. Every physical call is appended in order; only a
@@ -577,6 +739,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:**
   `tests/test_agent_context_service.py`,
   `tests/test_agent_context_execution.py`,
+  `tests/test_agent_exchange_capture.py`,
   `tests/test_agent_context_runtime_adoption.py`,
   `tests/test_agent_context_release_scenarios.py`,
   `tests/test_context_accounting_optimized.py`, `tests/test_codex_backend.py`,
@@ -758,7 +921,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   decoders and enforce exact request correlation before orchestration can
   authorize a contextual checkpoint.
 - **Direct internal dependencies:** `agent_context`, `agent_context.service`,
-  `agents`, `antigravity_adapter`, `codex_adapter`, `config`,
+  the supported `agent_exchanges` facade, the internal
+  `agent_exchanges.capture` module, `agents`, `antigravity_adapter`,
+  `codex_adapter`, `config`,
   `conversation_retrieval`, `debug_log`, `errors`, `interactive_settings`,
   `models`, `provider_adapter`, `provider_error_artifacts`, `provider_process`,
   `session_lifecycle`, and
@@ -816,7 +981,28 @@ every intermediate arrow. The current runtime graph is acyclic.
   failures, requests, prompts, accepted replies, stderr or raw provider streams,
   credentials, authentication output, and provider-native history remain
   ineligible; response bodies are neither rendered nor sent through
-  `debug_log`. For a referenced logical invocation, the
+  `debug_log`. Independently, the backend retains one construction-time,
+  I/O-free `WorkspaceAgentExchangeCapture` and invokes it only at the two
+  physical structured-call seams. Each exactly correlated conversation or
+  debate call records its canonical schema, payload, prior thread, and call
+  kind before adapter invocation; a valid completed `ProviderResult` is
+  submitted immediately after adapter return and before accounting observation,
+  decoding, rejected-response artifact submission, or thread persistence. The
+  same successfully begun exchange identity then receives exactly one closed
+  accepted, rejected, provider-failure, cancelled, or post-response
+  runtime-failure terminal attempt. Legacy outcomes finalize locally;
+  substantive context results carry
+  a service-owned finalizer adapter until the contextual action lifecycle knows
+  its outcome, while mandatory-reference preludes finalize in the backend after
+  decode, authorization, handling, and context construction. Missing or
+  ambiguous legacy correlation disables capture, and every capture call catches
+  `BaseException` without changing provider execution, accounting, thread,
+  taint, decoding, artifact, reference, cancellation, or exception semantics.
+  The capture sees only provider-neutral invocation/result fields and fixed
+  terminal codes, never stderr, stdout, native NDJSON, authentication,
+  credentials, environment values, or arbitrary exception text; its package
+  remains the sole exchange schema, state, and storage owner. For a referenced
+  logical invocation, the
   same thread lock first runs one strict content-free read-action prelude. The
   provider must echo the exact correlation and complete ordered path/range
   batch under a request-specific output schema before the synchronous
@@ -917,6 +1103,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   locks, schema, and rotation.
 - **Primary verification/documentation:**
   `tests/test_agent_context_execution.py`,
+  `tests/test_agent_exchange_capture.py`,
   `tests/test_agent_context_runtime_adoption.py`, `tests/test_codex_backend.py`,
   `tests/test_context_accounting_baseline.py`,
   `tests/test_context_accounting_optimized.py`, `tests/test_prompts.py`,
@@ -2953,6 +3140,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   provider calls and artifact writes: authentication may persist provider-owned
   native auth state, while settings may additionally persist workspace
   configuration.
+  Additive alias-free bare `/exchanges` is represented by the exact
+  no-payload `EXCHANGES` action, accepts no argument or trailing field, and is
+  classified as a provider-free read-only inspection command. Parsing neither
+  imports the optional viewer nor reads exchange storage.
   Story-session parsing recognizes exactly
   `/session create NAME`, `/session resume [NAME]`, `/session pause`, and
   `/session list`, with no old lifecycle verbs or aliases. Conversation
@@ -2960,7 +3151,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   a `CONVERSATION_USE` action without an argument for controller-owned live
   selection, while an included identity remains the action argument. Existing
   pre-authentication public `ActionKind` member names and values remain
-  unchanged, with additive `AUTH` using the exact `"auth"` value. Consensus
+  unchanged, with additive `AUTH` and `EXCHANGES` using the exact `"auth"` and
+  `"exchanges"` values. Consensus
   actions carry an optional `output_path`; `/run --output PART/PATH.md [PROMPT]` and
   `/run --fresh --output PART/PATH.md PROMPT` provide it directly, while an
   omitted value is collected by the controller before composition. Run-option
@@ -2978,10 +3170,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   no provider, filesystem, persistence, environment, or import-time
   operational side effects.
 - **Primary verification/documentation:** `tests/test_interactive_commands.py`,
+  `tests/test_agent_exchange_viewer.py`,
   `tests/test_interactive_terminal_completion.py`,
   `tests/test_public_api_and_cli.py`, and
-  `docs/reference/interactive-command-parser.md`, `docs/reference/cli.md`, and
-  `docs/guides/story-sessions.md`.
+  `docs/reference/interactive-command-parser.md`, `docs/reference/cli.md`,
+  `docs/guides/agent-exchanges.md`, and `docs/guides/story-sessions.md`.
 
 ### `story_writing_agents.interactive_controller`
 
@@ -3268,12 +3461,30 @@ every intermediate arrow. The current runtime graph is acyclic.
   optional content-free reference-operation identity. It maps malformed
   directives and structured `ReferenceOperationFailure` codes to fixed safe
   interactive errors without presenting exception prose.
-- **Direct internal dependencies:** `agents`, `backend`, `cli_context`,
+  Bare attached-session `/exchanges` constructs the Story-owned exchange
+  store, reads one authoritative content-free inventory, and projects
+  newest-first distinct conversation/debate scopes through
+  `_exchange_policy`. Conversation subjects come from the complete active and
+  archived catalog; debate subjects use only the bounded first canonical
+  initiation message. A second transient picker contains every canonical
+  roster agent, including agents without retained records. The controller then
+  passes either the exact immutable selected snapshot or empty immutable bytes
+  for an inventory-proven empty agent stream to `_exchange_viewer`, and opens
+  only its generic operation through the terminal facade's unlisted
+  `InteractiveExternalViewer`. A disappeared stream is refreshed once and is
+  never replaced with another scope or an invented empty snapshot. Picker,
+  search, navigation, and view state are call-local; the path performs no
+  provider call, focus/session mutation, exchange write, retry, replay, or
+  deletion and exposes only fixed content-free storage/projection/viewer
+  failures.
+- **Direct internal dependencies:** `agent_exchanges`, `agents`, `backend`, `cli_context`,
   `conversation_rag_composition`, `conversation_retrieval`,
   `conversation_search`, `conversations`, `debug_log`,
   `conversation_storage.contracts`, `conversation_storage.selection`, `errors`,
   `interactive_auth`, `interactive_commands`,
   `interactive_controller._conversation_policy`,
+  `interactive_controller._exchange_policy`,
+  `interactive_controller._exchange_viewer`,
   `interactive_controller._runtime_policy`,
   `interactive_controller._session_policy`, `interactive_settings`,
   `interactive_terminal`, `models`, `orchestrator`, `provider_adapter`,
@@ -3496,6 +3707,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   retrieval controls/progress/sources, debate context/results, or artifacts,
   and has no import-time operational side effects.
 - **Primary verification/documentation:** `tests/test_interactive_controller.py`,
+  `tests/test_agent_exchange_viewer.py`,
   `tests/test_interactive_management.py`, `tests/test_interactive_consensus.py`,
   `tests/test_interactive_conversation.py`,
   `tests/test_interactive_cancellation.py`, `tests/test_session_lifecycle.py`,
@@ -3505,12 +3717,78 @@ every intermediate arrow. The current runtime graph is acyclic.
   transcript-read integration, and `tests/test_interactive_pty.py` for primary
   process-level POSIX PTY lifecycle verification;
   `docs/design/session-lifecycle.md`,
+  `docs/design/overview.md`, `docs/design/persistence.md`,
   `docs/guides/agent-context-progress.md`,
-  `docs/guides/story-sessions.md`, `docs/guides/artifact-references.md`,
+  `docs/guides/agent-exchanges.md`, `docs/guides/story-sessions.md`,
+  `docs/guides/artifact-references.md`,
   `docs/reference/cli.md`,
   `docs/reference/interactive-terminal.md`, and
   `docs/reference/conversation-retrieval.md` verify the current collaborator,
   lifecycle, selection, and retrieval-presentation contracts.
+
+### `story_writing_agents.interactive_controller._exchange_policy`
+
+- **Source:** `src/story_writing_agents/interactive_controller/_exchange_policy.py`
+- **Responsibility:** Project authoritative exchange inventory into transient
+  scope and agent choices.
+- **Supported surface:** No project-public import. Its exact package-internal
+  `__all__` contains `AgentExchangeProjectionError`,
+  `DEBATE_SUBJECT_UNAVAILABLE`, frozen/slotted `ExchangeAgentChoice` and
+  `ExchangeScopeChoice`, plus `debate_subject_from_messages`,
+  `project_exchange_agents`, and `project_exchange_scopes`. Scope projection
+  rejects cross-session or duplicate streams, deduplicates by exact scope kind
+  and full ID, aggregates counts, and orders newest workspace sequence first
+  with kind and ID tie-breakers. Conversation and debate remain distinct.
+  Conversation subjects must come from the caller's complete catalog;
+  debate subjects use only the exact first user initiation message of kind
+  `prompt` or `draft`, collapse its whitespace, retain at most 512 characters
+  as 511 plus an ellipsis, and otherwise use `[subject unavailable]`.
+  Agent projection preserves canonical roster order and includes an immutable
+  empty choice for every agent without an exact retained stream.
+- **Direct internal dependencies:** `agent_exchanges`, `agents`, and `models`.
+- **State, resources, and side effects:** Immutable contracts and pure
+  projections only. The module owns no inventory, snapshot, catalog, debate
+  log, picker, viewer, filesystem, terminal, provider, or persistent state and
+  performs no I/O or import-time operational side effect.
+- **Primary verification/documentation:** `tests/test_agent_exchange_viewer.py`,
+  `docs/guides/agent-exchanges.md`, `docs/design/overview.md`, and
+  `docs/design/persistence.md`.
+
+### `story_writing_agents.interactive_controller._exchange_viewer`
+
+- **Source:** `src/story_writing_agents/interactive_controller/_exchange_viewer.py`
+- **Responsibility:** Adapt one Story exchange snapshot to the optional generic
+  JSONL viewer.
+- **Supported surface:** No project-public import. Its exact package-internal
+  `__all__` contains fixed-prose `AgentExchangeViewerError` and
+  `prepare_agent_exchange_view`. Preparation accepts immutable bytes and exact
+  Story header facts, lazily imports only installed `jsonl_viewer`, validates
+  its exact three-name facade, `ViewerSpec` constructor, `ViewerHost` method
+  shapes, `view_jsonl(source, spec, host)` signature, and constructed spec
+  projection before returning an operation. Missing packages produce fixed
+  installation guidance; opaque, missing, variadic, or incompatible API
+  shapes produce the fixed incompatible category before terminal acquisition.
+  The generic spec labels the full Conversation or Debate ID and subject,
+  identifies the session and canonical agent, prioritizes timestamp, request
+  type, and content, and enumerates only the exact durable schema fields as
+  searchable. The returned operation accepts the internal borrowed host and
+  calls the viewer exactly once; runtime viewer exceptions become fixed
+  viewer-failed errors without exposing external prose.
+- **Direct internal dependencies:** `agent_exchanges` and
+  `interactive_terminal._external_view`. The separately installed
+  `jsonl-viewer` exact pin is an optional lazy external boundary, not an
+  internal module edge; the vendored gitlink is audit provenance and never a
+  runtime import source.
+- **State, resources, and side effects:** Import is optional-package-free and
+  I/O-free. Preparation retains one immutable source/spec closure only for the
+  returned operation; it acquires no terminal, stream, filesystem handle,
+  provider, storage writer, or persistent state. All viewer state remains
+  external and transient.
+- **Primary verification/documentation:** `tests/test_agent_exchange_viewer.py`,
+  `tests/test_rag_module_and_packaging_boundary.py`,
+  `docs/guides/agent-exchanges.md`, `docs/design/overview.md`,
+  `docs/design/interactive-cli-design-system.md`, and
+  `docs/reference/cli.md`.
 
 ### `story_writing_agents.interactive_controller._session_policy`
 
@@ -3849,6 +4127,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ReferenceInputFailure` provide the controller with private resource-free,
   call-local reference-input seams. They do not change the 12-name facade
   export contract or add terminal/storage ownership.
+  Unlisted package-internal `InteractiveExternalViewer` binds only one
+  terminal's generic external-view operation opener for controller use. It
+  exposes no driver, stream, capability, raw-mode, geometry, or external
+  package type, retains no operation after `open`, and does not change the
+  exact 12-name `__all__` or any public `InteractiveTerminal` method.
 - **Direct internal dependencies:** `interactive_terminal._core`.
 - **State, resources, and side effects:** Owns no terminal resource or mutable
   process state. Import deterministically canonicalizes supported public object
@@ -3862,14 +4145,41 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
   `tests/test_interactive_terminal_picker.py`,
+  `tests/test_interactive_terminal_external_view.py`,
   `tests/test_interactive_terminal_viewer.py`,
   `tests/test_interactive_terminal_views.py`, `tests/test_interactive_pty.py`,
   `docs/design/overview.md`,
-  `docs/reference/interactive-terminal.md`,
+  `docs/guides/agent-exchanges.md`, `docs/reference/interactive-terminal.md`,
   `docs/design/interactive-cli-design-system.md`, and
   `docs/operations/terminal-safety.md`; `tests/test_interactive_commands.py`
   and `docs/reference/interactive-command-parser.md` verify the consumed
   command registry contract.
+
+### `story_writing_agents.interactive_terminal._external_view`
+
+- **Source:** `src/story_writing_agents/interactive_terminal/_external_view.py`
+- **Responsibility:** Define the generic borrowed-host boundary for transient
+  external terminal views.
+- **Supported surface:** Package-internal exact `__all__` contains the
+  runtime-checkable `ExternalViewerHost` protocol and `ExternalViewOperation`
+  callable alias. The protocol exposes only terminal size, color permission,
+  complete-frame presentation, closed event reads, and idempotent view close.
+  Private validation admits printable text, newlines, and authorized ANSI SGR
+  only, so cursor, alternate-screen, raw-mode, and arbitrary control sequences
+  cannot cross from a viewer. The private ordinary-line host maps bounded
+  commands to the same closed navigation/search/goto/help/cancel vocabulary
+  and borrows rather than closes its callbacks or streams.
+- **Direct internal dependencies:** None.
+- **State, resources, and side effects:** Protocols, pure validation, and one
+  call-local borrowed fallback host only. The module owns no terminal mode,
+  signal, geometry source, input latch, stream, viewer engine, filesystem,
+  provider, or persistent state and performs no import-time I/O.
+- **Primary verification/documentation:**
+  `tests/test_interactive_terminal_external_view.py`,
+  `tests/test_interactive_pty.py`, `tests/test_agent_exchange_viewer.py`,
+  `docs/reference/interactive-terminal.md`,
+  `docs/design/interactive-cli-design-system.md`, and
+  `docs/operations/terminal-safety.md`.
 
 ### `story_writing_agents.interactive_terminal._model`
 
@@ -4345,7 +4655,18 @@ every intermediate arrow. The current runtime graph is acyclic.
   and static paths: capable live frame replacement alone reserves the
   rightmost cell, while persistent/static fallback rendering uses the full
   configured width.
+  Package-internal `open_external_view` accepts only one generic operation,
+  rejects reentry and progress overlap through the existing input latch, and
+  supplies either a borrowed ordinary-line host or one raw-driver-owned host.
+  The capable path alone owns raw activation, alternate-screen entry/exit,
+  complete-frame redraw, geometry, closed key/event decoding, canonical
+  restored line prompts for goto/search, and exact terminal restoration.
+  Operation failures outrank host and alternate-screen cleanup failures, while
+  uncertain terminal restoration remains fatal; close and all cleanup are
+  attempted exactly once. The driver never imports or interprets Story exchange
+  records or the external viewer API.
 - **Direct internal dependencies:** `interactive_terminal._input_lifecycle`,
+  `interactive_terminal._external_view`,
   `interactive_terminal._model`, `interactive_terminal._reference_activation`,
   and
   `interactive_terminal._viewer_model`.
@@ -4459,6 +4780,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_history.py`,
   `tests/test_interactive_terminal_picker.py`,
+  `tests/test_interactive_terminal_external_view.py`,
   `tests/test_interactive_terminal_viewer.py`,
   `tests/test_interactive_pty.py`,
   `docs/design/interactive-cli-design-system.md`,
@@ -4628,8 +4950,15 @@ every intermediate arrow. The current runtime graph is acyclic.
   coordination, guarded timing, terminal reclaim, and cleanup to the sole
   driver. The supported public terminal class and facade exports remain
   unchanged.
+  Resource-free `InteractiveExternalViewer` retains only the terminal's
+  package-internal generic operation opener. Callback construction binds a
+  borrowed plain-line host; stream construction binds the sole driver's
+  external-view lifecycle. Neither route imports the optional viewer, exposes
+  terminal resources, nor retains operation, frame, input, search, or
+  navigation state after return or failure.
 - **Direct internal dependencies:** `agents`, `interactive_commands`,
   `interactive_terminal._controls`, `interactive_terminal._driver`,
+  `interactive_terminal._external_view`,
   `interactive_terminal._model`, `interactive_terminal._reference_activation`,
   `interactive_terminal._render`,
   `interactive_terminal._viewer_controls`,
@@ -4672,6 +5001,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_interactive_terminal_foundation.py`,
   `tests/test_interactive_terminal_composer.py`,
   `tests/test_interactive_terminal_picker.py`,
+  `tests/test_interactive_terminal_external_view.py`,
   `tests/test_interactive_terminal_viewer.py`,
   `tests/test_interactive_terminal_views.py`, `tests/test_interactive_pty.py`,
   `docs/design/overview.md`,
@@ -5109,7 +5439,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `FilesystemConversationEventStore`, `Workspace`, and
   `initialize_workspace`. Package-internal `open_workspace_root_directory` and
   `verify_workspace_root_directory` provide the identity-bound internal-storage
-  boundary used by diagnostic and disposable-generation owners and are
+  boundary used by diagnostic, agent-exchange, and disposable-generation
+  owners and are
   deliberately absent from the project-root facade.
   `Workspace.inspect_debate_context` is the strict, separate context-sidecar
   inspection operation. `Workspace.read_agent_session_state` returns one
@@ -5739,6 +6070,37 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/operations/recovery-and-limitations.md`.
 
 ## Consistency Notes
+
+- Agent-exchange inspection remains one-way and optional. Controller `_core`
+  depends on the supported `agent_exchanges` facade plus pure
+  `_exchange_policy` and lazy `_exchange_viewer`; the latter depends inward on
+  the generic `interactive_terminal._external_view` host contract. Terminal
+  `_core` and `_driver` also depend inward on that contract, while the driver
+  remains the sole stream, input-latch, raw-mode, alternate-screen, geometry,
+  signal, presentation, and restoration owner. These three new modules and ten
+  internal edges produce 92 modules and 372 edges without a cycle. Root,
+  `agent_exchanges`, and `interactive_terminal` facades remain exactly 120, 15,
+  and 12 names. `jsonl-viewer` is loaded only by `_exchange_viewer` after an
+  explicit command and is validated before terminal acquisition; its exact VCS
+  extra and gitlink pin are external audit/package facts, not production units
+  or internal edges. No production import uses `vendor/jsonl-viewer`.
+
+- Agent-exchange capture remains one-way and isolated from provider-native
+  transport. `backend` alone composes the feature and depends explicitly on
+  the supported `agent_exchanges` facade for durable provider/scope enums and
+  on the direct-only `agent_exchanges.capture` module for its internal
+  lifecycle; capture depends inward on
+  `agent_exchanges.contracts`, `agent_exchanges.storage`, `provider_adapter`,
+  and `workspace`. The service-owned contextual finalizer protocol keeps
+  `agent_context.service` independent from exchange contracts and storage, so
+  the feature adds exactly one module and six internal edges without a cycle.
+  The root and `agent_context` facades remain 120 and 11 names;
+  `agent_exchanges`, its contracts module, its direct-only capture module, and
+  `agent_context.service` expose exactly 15, 14, 3, and 24 names respectively.
+  Capture exclusively submits request, completed-response, and closed-outcome
+  records through the #412 store. It does not import, scan, prune, or alter
+  `provider_error_artifacts`, whose separate #375 eligibility and
+  `provider_error_responses` ownership remain unchanged.
 
 - Live agent-context lifecycle progress remains one-way and content-free:
   `agent_context.service` owns the direct-module event contract and

@@ -4731,6 +4731,18 @@ class StoryRuntime:
             type(failure) is ContextExecutionError
             and failure.code is ContextExecutionErrorCode.MALFORMED_ACTION
         ):
+            message = str(failure)
+            if message in {
+                (
+                    "contextual provider read action is invalid: `d` must contain "
+                    "source handles returned by the preceding context search"
+                ),
+                (
+                    "contextual provider response is invalid: `c` does not match "
+                    "the current request correlation token"
+                ),
+            }:
+                return BackendProtocolError(message)
             return BackendProtocolError("contextual provider action is malformed")
         return None
 

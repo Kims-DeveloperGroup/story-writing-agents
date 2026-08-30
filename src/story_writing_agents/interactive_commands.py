@@ -35,6 +35,7 @@ class ActionKind(StrEnum):
     SEARCH = "search"
     TRANSCRIPT = "transcript"
     INSPECT = "inspect"
+    EXCHANGES = "exchanges"
     HISTORY = "history"
     STATUS = "status"
     AUTH = "auth"
@@ -309,6 +310,7 @@ _ACTION_FIELD_RULES: dict[
         frozenset({"argument"}),
     ),
     ActionKind.INSPECT: (frozenset({"argument"}), _NO_FIELDS),
+    ActionKind.EXCHANGES: (_NO_FIELDS, _NO_FIELDS),
     ActionKind.HISTORY: (frozenset({"count"}), _NO_FIELDS),
     ActionKind.STATUS: (_NO_FIELDS, _NO_FIELDS),
     ActionKind.AUTH: (_NO_FIELDS, _NO_FIELDS),
@@ -529,6 +531,14 @@ COMMANDS: tuple[CommandSpec, ...] = (
     ),
     CommandSpec(
         "Inspection",
+        "/exchanges",
+        (),
+        False,
+        False,
+        "/exchanges",
+    ),
+    CommandSpec(
+        "Inspection",
         "/history [COUNT]",
         (),
         False,
@@ -575,6 +585,7 @@ _COMMAND_ALIASES: dict[str, str] = {
     "search": "/search",
     "transcript": "/transcript",
     "inspect": "/inspect",
+    "exchanges": "/exchanges",
     "history": "/history",
     "status": "/status",
     "help": "/help",
@@ -995,6 +1006,8 @@ def _parse_slash_command(line: str) -> InteractiveAction:
         return _parse_transcript(tail)
     if command == "inspect":
         return _parse_inspect(tail)
+    if command == "exchanges":
+        return _no_argument_action(tail, ActionKind.EXCHANGES, "/exchanges")
     if command == "history":
         return _parse_history(tail)
     if command == "status":

@@ -11,6 +11,14 @@ from dataclasses import dataclass, field, replace
 from types import TracebackType
 from typing import Mapping, TypeVar
 
+from ..agent_exchanges import (
+    AgentExchangeFailure,
+    AgentExchangeInventoryItem,
+    AgentExchangeScopeKind,
+    AgentExchangeSelection,
+    AgentExchangeStorageError,
+    WorkspaceAgentExchangeStore,
+)
 from ..agents import (
     AGENT_SPECS,
     CHARACTER_CUSTODIAN,
@@ -133,6 +141,7 @@ from ..interactive_terminal import (
     Field,
     InteractiveError,
     InteractiveErrorCode,
+    InteractiveExternalViewer,
     InteractivePickerInput,
     InteractivePromptInput,
     ReferenceInputFailure,
@@ -208,6 +217,17 @@ from ._conversation_policy import (
     validate_search_result_handles,
     validate_transcript_page,
     visible_conversation_handle,
+)
+from ._exchange_policy import (
+    AgentExchangeProjectionError,
+    ExchangeAgentChoice,
+    ExchangeScopeChoice,
+    project_exchange_agents,
+    project_exchange_scopes,
+)
+from ._exchange_viewer import (
+    AgentExchangeViewerError,
+    prepare_agent_exchange_view,
 )
 from ._runtime_policy import (
     ContextProgressProjection,
@@ -700,6 +720,7 @@ class InteractiveController:
         "_context",
         "_debug_log",
         "_error_write_count",
+        "_external_viewer",
         "_last_started_debate_by_session",
         "_main_input",
         "_picker_input",
@@ -783,6 +804,7 @@ class InteractiveController:
         self._semantic_output = InteractiveSemanticOutput(terminal)
         self._picker_input = InteractivePickerInput(terminal)
         self._prompt_input = InteractivePromptInput(terminal)
+        self._external_viewer = InteractiveExternalViewer(terminal)
         self._advisory_progress = InteractiveAdvisoryProgress(terminal)
         self._debate_progress = InteractiveDebateProgress(terminal)
         self._composition_input = InteractiveCompositionInput(terminal)
@@ -2364,6 +2386,9 @@ class InteractiveController:
             return False
         if action.kind is ActionKind.INSPECT:
             self._inspect_attached_runtime(action)
+            return False
+        if action.kind is ActionKind.EXCHANGES:
+            self._view_attached_agent_exchanges()
             return False
         if action.kind is ActionKind.HISTORY:
             self._write_focused_conversation_history(action)
@@ -5679,6 +5704,367 @@ class InteractiveController:
             self._semantic_output.write_component(
                 self._debate_context_component(context_facts)
             )
+
+    def _view_attached_agent_exchanges(self) -> None:
+        """Select and open one immutable attached-session exchange snapshot.
+
+        Inventory, catalog, and debate reads are exact and provider-free. The
+        two pickers retain no state after returning, an empty canonical-agent
+        stream is represented by immutable empty bytes, and a stream that
+        disappears after selection is refreshed once but never substituted
+        with an empty snapshot.
+        """
+
+        session_id = self._attached_session_id
+        if session_id is None:
+            self._write_error(
+                InteractiveError(InteractiveErrorCode.SESSION_NOT_ATTACHED)
+            )
+            return
+
+        store = WorkspaceAgentExchangeStore(self._workspace)
+        try:
+            inventory = self._run_picker_preparation(
+                lambda: store.inventory(session_id)
+            )
+        except _ControllerAbort:
+            raise
+        except AgentExchangeStorageError as failure:
+            self._present_agent_exchange_storage_failure(failure)
+            return
+        if not inventory:
+            self._write_notice(
+                f"No agent exchanges are recorded for session {session_id}.",
+                label="agent exchanges",
+                role=SemanticRole.MUTED,
+                state=ViewState.EMPTY,
+            )
+            return
+
+        try:
+            scope_choices = self._run_picker_preparation(
+                lambda: self._load_agent_exchange_scope_choices(
+                    session_id,
+                    inventory,
+                )
+            )
+        except _ControllerAbort:
+            raise
+        except Exception as failure:
+            self._present_agent_exchange_projection_failure(failure)
+            return
+        if not scope_choices:
+            self._present_agent_exchange_projection_failure(
+                AgentExchangeProjectionError(
+                    "nonempty exchange inventory produced no scope choices"
+                )
+            )
+            return
+
+        scope_choice = self._pick_agent_exchange_scope(scope_choices)
+        if scope_choice is None:
+            return
+        try:
+            agent_choices = project_exchange_agents(
+                session_id,
+                scope_choice.scope_kind,
+                scope_choice.scope_id,
+                inventory,
+            )
+        except Exception as failure:
+            self._present_agent_exchange_projection_failure(failure)
+            return
+        agent_choice = self._pick_agent_exchange_agent(agent_choices)
+        if agent_choice is None:
+            return
+
+        source: bytes | None
+        if agent_choice.selection is None:
+            source = b""
+        else:
+            try:
+                source = self._read_agent_exchange_source(
+                    store,
+                    agent_choice.selection,
+                )
+            except _ControllerAbort:
+                raise
+            except AgentExchangeStorageError as failure:
+                self._present_agent_exchange_storage_failure(failure)
+                return
+            except Exception as failure:
+                self._present_agent_exchange_projection_failure(failure)
+                return
+            if source is None:
+                self._write_notice(
+                    (
+                        "The selected agent exchanges are no longer available. "
+                        "Retry /exchanges to refresh the picker."
+                    ),
+                    label="agent exchanges",
+                    role=SemanticRole.WARNING,
+                    state=ViewState.CANCELLED,
+                )
+                return
+
+        try:
+            operation = prepare_agent_exchange_view(
+                source,
+                session_id=session_id,
+                scope_kind=scope_choice.scope_kind,
+                scope_id=scope_choice.scope_id,
+                scope_subject=scope_choice.subject,
+                agent_id=agent_choice.agent_id,
+            )
+        except AgentExchangeViewerError as failure:
+            self._present_agent_exchange_viewer_failure(failure)
+            return
+        except Exception as failure:
+            self._present_agent_exchange_projection_failure(failure)
+            return
+        try:
+            self._external_viewer.open(operation)
+        except AgentExchangeViewerError as failure:
+            self._present_agent_exchange_viewer_failure(failure)
+
+    def _load_agent_exchange_scope_choices(
+        self,
+        session_id: str,
+        inventory: tuple[AgentExchangeInventoryItem, ...],
+    ) -> tuple[ExchangeScopeChoice, ...]:
+        """Read authoritative subjects and project one inventory snapshot."""
+
+        entries = self._catalog_entries(session_id)
+        conversation_subjects = {
+            entry.conversation_id: entry.subject for entry in entries
+        }
+        debate_ids = tuple(
+            sorted(
+                {
+                    item.selection.scope_id
+                    for item in inventory
+                    if item.selection.scope_kind is AgentExchangeScopeKind.DEBATE
+                }
+            )
+        )
+        debate_messages = {
+            debate_id: self._workspace.read_debate_messages(
+                session_id,
+                debate_id,
+            )
+            for debate_id in debate_ids
+        }
+        return project_exchange_scopes(
+            session_id,
+            inventory,
+            conversation_subjects=conversation_subjects,
+            debate_messages=debate_messages,
+        )
+
+    def _pick_agent_exchange_scope(
+        self,
+        choices: tuple[ExchangeScopeChoice, ...],
+    ) -> ExchangeScopeChoice | None:
+        """Return one transient exact scope selection or ``None`` on cancel."""
+
+        outcome = self._picker_input.read_picker(
+            Prompt(
+                "View agent exchanges",
+                instruction="Choose a conversation or debate.",
+            ),
+            tuple(
+                Choice(
+                    choice.identity,
+                    choice.label,
+                    description=(
+                        f"{choice.record_count} recorded "
+                        f"{'exchange' if choice.record_count == 1 else 'exchanges'}"
+                    ),
+                )
+                for choice in choices
+            ),
+            transient=True,
+        )
+        if outcome.kind in {
+            ControlOutcomeKind.CANCEL,
+            ControlOutcomeKind.INTERRUPT,
+            ControlOutcomeKind.EOF,
+        }:
+            return None
+        if outcome.kind is not ControlOutcomeKind.COMMIT or outcome.text is None:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        selected = tuple(
+            choice for choice in choices if choice.identity == outcome.text
+        )
+        if len(selected) != 1:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        return selected[0]
+
+    def _pick_agent_exchange_agent(
+        self,
+        choices: tuple[ExchangeAgentChoice, ...],
+    ) -> ExchangeAgentChoice | None:
+        """Return one transient canonical-agent selection or cancel."""
+
+        outcome = self._picker_input.read_picker(
+            Prompt(
+                "View agent exchanges",
+                instruction="Choose a canonical agent.",
+            ),
+            tuple(
+                Choice(
+                    choice.agent_id,
+                    f"{choice.display_name} ({choice.agent_id})",
+                    description=(
+                        "No recorded exchanges"
+                        if not choice.has_records
+                        else (
+                            f"{choice.record_count} recorded "
+                            f"{'exchange' if choice.record_count == 1 else 'exchanges'}"
+                        )
+                    ),
+                )
+                for choice in choices
+            ),
+            transient=True,
+        )
+        if outcome.kind in {
+            ControlOutcomeKind.CANCEL,
+            ControlOutcomeKind.INTERRUPT,
+            ControlOutcomeKind.EOF,
+        }:
+            return None
+        if outcome.kind is not ControlOutcomeKind.COMMIT or outcome.text is None:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        selected = tuple(
+            choice for choice in choices if choice.agent_id == outcome.text
+        )
+        if len(selected) != 1:
+            raise _ControllerAbort(
+                InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
+            )
+        return selected[0]
+
+    def _read_agent_exchange_source(
+        self,
+        store: WorkspaceAgentExchangeStore,
+        selection: AgentExchangeSelection,
+    ) -> bytes | None:
+        """Read an exact snapshot, refreshing one disappeared stream once."""
+
+        for attempt in range(2):
+            try:
+                snapshot = self._run_picker_preparation(
+                    lambda: store.snapshot(selection)
+                )
+            except AgentExchangeStorageError as failure:
+                if failure.failure is not AgentExchangeFailure.NOT_FOUND:
+                    raise
+                if attempt == 1:
+                    return None
+                inventory = self._run_picker_preparation(
+                    lambda: store.inventory(selection.session_id)
+                )
+                matches = tuple(
+                    item.selection for item in inventory if item.selection == selection
+                )
+                if not matches:
+                    return None
+                if len(matches) != 1:
+                    raise AgentExchangeProjectionError(
+                        "agent exchange inventory contains duplicate streams"
+                    )
+                continue
+            if snapshot.selection != selection:
+                raise AgentExchangeProjectionError(
+                    "agent exchange snapshot changed its exact selection"
+                )
+            return snapshot.jsonl_bytes
+        return None
+
+    def _present_agent_exchange_storage_failure(
+        self,
+        failure: AgentExchangeStorageError,
+    ) -> None:
+        """Render one fixed content-free storage failure and safe next step."""
+
+        self._record_debug_error(
+            DebugOperation.INTERACTIVE_COMMAND,
+            failure,
+            session_id=self._attached_session_id,
+        )
+        if failure.failure is AgentExchangeFailure.CONTENTION:
+            summary = "Agent exchange storage is busy."
+            hint = "Retry /exchanges after the current exchange write completes."
+        elif failure.failure is AgentExchangeFailure.UNSUPPORTED_PLATFORM:
+            summary = "Agent exchange storage is unavailable on this platform."
+            hint = "Use a supported local filesystem and retry /exchanges."
+        elif failure.failure in {
+            AgentExchangeFailure.CORRUPT_STORAGE,
+            AgentExchangeFailure.UNSAFE_STORAGE,
+        }:
+            summary = "Agent exchange storage could not be read safely."
+            hint = "Inspect the sanitized diagnostic before retrying /exchanges."
+        else:
+            summary = "Agent exchange records could not be read."
+            hint = "Retry /exchanges; if it repeats, inspect the sanitized diagnostic."
+        self._write_error(
+            InteractiveError(
+                InteractiveErrorCode.WORKSPACE_INVALID,
+                summary=summary,
+                hint=hint,
+            )
+        )
+
+    def _present_agent_exchange_projection_failure(
+        self,
+        failure: Exception,
+    ) -> None:
+        """Render fixed correlation guidance without exposing stored content."""
+
+        self._record_debug_error(
+            DebugOperation.INTERACTIVE_COMMAND,
+            failure,
+            session_id=self._attached_session_id,
+        )
+        self._write_error(
+            InteractiveError(
+                InteractiveErrorCode.WORKSPACE_INVALID,
+                summary="Agent exchange records could not be correlated safely.",
+                hint=("Inspect the sanitized diagnostic before retrying /exchanges."),
+            )
+        )
+
+    def _present_agent_exchange_viewer_failure(
+        self,
+        failure: AgentExchangeViewerError,
+    ) -> None:
+        """Render one fixed optional-viewer failure without external prose."""
+
+        self._record_debug_error(
+            DebugOperation.INTERACTIVE_COMMAND,
+            failure,
+            session_id=self._attached_session_id,
+        )
+        if failure.code == "installation_required":
+            code = InteractiveErrorCode.CONFIGURATION_INVALID
+            summary = "The optional agent exchange viewer is unavailable."
+            hint = "Install story-writing-agents[viewer] and retry /exchanges."
+        elif failure.code == "incompatible":
+            code = InteractiveErrorCode.CONFIGURATION_INVALID
+            summary = "The installed agent exchange viewer is incompatible."
+            hint = "Reinstall story-writing-agents[viewer] and retry /exchanges."
+        else:
+            code = InteractiveErrorCode.INTERNAL_ERROR
+            summary = "The agent exchange viewer failed."
+            hint = "Inspect the sanitized diagnostic before retrying /exchanges."
+        self._write_error(InteractiveError(code, summary=summary, hint=hint))
 
     def _read_safe_debate_inspection(
         self,

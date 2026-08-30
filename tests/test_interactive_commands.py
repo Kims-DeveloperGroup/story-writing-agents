@@ -93,6 +93,7 @@ COMMAND_NAMES = {
     "search": "/search",
     "transcript": "/transcript",
     "inspect": "/inspect",
+    "exchanges": "/exchanges",
     "history": "/history",
     "status": "/status",
     "help": "/help",
@@ -147,6 +148,7 @@ ACTION_RULES = {
         {"argument"},
     ),
     ActionKind.INSPECT: ({"argument"}, set()),
+    ActionKind.EXCHANGES: (set(), set()),
     ActionKind.HISTORY: ({"count"}, set()),
     ActionKind.STATUS: (set(), set()),
     ActionKind.AUTH: (set(), set()),
@@ -261,6 +263,7 @@ class ActionContractTests(unittest.TestCase):
             "SEARCH": "search",
             "TRANSCRIPT": "transcript",
             "INSPECT": "inspect",
+            "EXCHANGES": "exchanges",
             "HISTORY": "history",
             "STATUS": "status",
             "AUTH": "auth",
@@ -441,7 +444,7 @@ class ActionContractTests(unittest.TestCase):
 
 
 class CommandRegistryTests(unittest.TestCase):
-    def test_registry_is_the_exact_ordered_twenty_three_row_contract(self) -> None:
+    def test_registry_is_the_exact_ordered_twenty_four_row_contract(self) -> None:
         expected = (
             CommandSpec("Conversation", "/compose", (), False, False, "/compose"),
             CommandSpec("Conversation", "/send", (), False, False, "/send"),
@@ -555,6 +558,14 @@ class CommandRegistryTests(unittest.TestCase):
                 False,
                 False,
                 "/inspect last",
+            ),
+            CommandSpec(
+                "Inspection",
+                "/exchanges",
+                (),
+                False,
+                False,
+                "/exchanges",
             ),
             CommandSpec(
                 "Inspection",
@@ -714,6 +725,7 @@ class SuccessfulParsingTests(unittest.TestCase):
                 "/inspect last",
                 InteractiveAction(ActionKind.INSPECT, argument="last"),
             ),
+            ("/exchanges", InteractiveAction(ActionKind.EXCHANGES)),
             ("/history 20", InteractiveAction(ActionKind.HISTORY, count=20)),
             ("/status", InteractiveAction(ActionKind.STATUS)),
             ("/auth", InteractiveAction(ActionKind.AUTH)),
@@ -899,6 +911,7 @@ class SuccessfulParsingTests(unittest.TestCase):
             ("/run ", InteractiveAction(ActionKind.RUN)),
             ("/run\t\t", InteractiveAction(ActionKind.RUN)),
             ("/inspect ", InteractiveAction(ActionKind.INSPECT)),
+            ("/exchanges\t", InteractiveAction(ActionKind.EXCHANGES)),
             ("/history\t\t", InteractiveAction(ActionKind.HISTORY)),
             (
                 "/session resume ",
@@ -1283,6 +1296,7 @@ class InvalidInputTests(ParserAssertions, unittest.TestCase):
             "/auth",
             "/reset",
             "/settings",
+            "/exchanges",
             "/session list",
             "/session pause",
             "/quit",
@@ -1718,6 +1732,7 @@ class CommandCompletionProjectionTests(unittest.TestCase):
         "/search",
         "/transcript",
         "/inspect",
+        "/exchanges",
         "/history",
         "/status",
         "/help",

@@ -1570,6 +1570,7 @@ class ControllerContractTests(ControllerTestCase):
         expected_dependencies = {
             "interactive_controller": {"interactive_controller._core"},
             "interactive_controller._core": {
+                "agent_exchanges",
                 "agents",
                 "backend",
                 "cli_context",
@@ -1585,6 +1586,8 @@ class ControllerContractTests(ControllerTestCase):
                 "interactive_commands",
                 "interactive_settings",
                 "interactive_controller._conversation_policy",
+                "interactive_controller._exchange_policy",
+                "interactive_controller._exchange_viewer",
                 "interactive_controller._runtime_policy",
                 "interactive_controller._session_policy",
                 "interactive_terminal",
@@ -1870,8 +1873,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 85)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 349)
+        self.assertEqual(len(modules), 92)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 372)
         self.assertTrue(
             {
                 "story_writing_agents.conversation_storage.archive",
@@ -1884,6 +1887,9 @@ class ControllerContractTests(ControllerTestCase):
                 "story_writing_agents.conversation_rag_cli",
                 "story_writing_agents.conversation_rag_runtime",
                 "story_writing_agents.provider_catalog",
+                "story_writing_agents.interactive_controller._exchange_policy",
+                "story_writing_agents.interactive_controller._exchange_viewer",
+                "story_writing_agents.interactive_terminal._external_view",
             }
             <= modules
         )

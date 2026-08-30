@@ -165,10 +165,50 @@ feature. See
 [retention](../reference/configuration/session-storage.md#runtime-debug-log-storage),
 and [filesystem safety](../operations/filesystem-safety.md#debug-log-filesystem-safety).
 
+## `/exchanges` does not open the expected response
+
+Run bare `/exchanges` only after attaching the affected session. The command
+accepts no IDs: select the exact Conversation or Debate full ID and subject,
+then the canonical agent. It does not require or change conversation focus.
+
+If Story reports that the optional viewer is unavailable, install the extra in
+the active environment. Use the first command for an installed distribution or
+the second from a checkout:
+
+```bash
+python -m pip install 'story-writing-agents[viewer]'
+python -m pip install --editable '.[viewer]'
+```
+
+An incompatible-viewer result means the installed three-name API does not
+match the exact pin; reinstall the same extra and verify the submodule, project
+requirement, and lock identify
+`5d3047aa86212810d867d5b40cb1df3262f1810f`.
+
+`No agent exchanges are recorded` is not proof that no provider call occurred.
+Capture and storage are fail-open and never retry. Likewise, a correlated
+request plus `provider_failure` outcome with no response means no exact valid
+`ProviderResult` crossed Story's adapter boundary; it does not prove that the
+native process emitted no stdout, stderr, tool/reasoning, or NDJSON data. A
+completed valid result rejected by Story normally has request, response, and
+`rejected` outcome under one `exchange_id`.
+
+For `storage is busy`, wait for the current exchange write and retry. Preserve
+the workspace on unsafe, corrupt, uncorrelatable, or viewer failures; inspect
+only the content-safe `debug_logs/runtime.jsonl` before deciding on recovery.
+If the selected stream expired after its picker was built, rerun `/exchanges`
+to refresh inventory. Do not invoke or retry provider work merely to populate
+diagnostics. See the complete [viewer workflow, privacy boundary, and error
+table](agent-exchanges.md).
+
 ## Inspect a rejected provider response
 
 For a sanitized `provider_protocol_error`, start with
 `debug_logs/runtime.jsonl` for content-safe exception type and frame metadata.
+Then use `/exchanges` to select the affected session scope and agent and inspect
+the correlated request, optional valid raw `ProviderResult`, and terminal
+outcome. This is the primary structured read-only view, but it never captures
+provider-native stdout, stderr, NDJSON, or tool/reasoning streams.
 If Codex or Antigravity returned a completed body that structured decoding
 rejected, a separate record may exist under
 `debug_logs/provider_error_responses/`. The terminal does not print that path or

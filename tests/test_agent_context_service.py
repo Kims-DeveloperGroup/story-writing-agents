@@ -9,6 +9,8 @@ import unittest
 from dataclasses import FrozenInstanceError, fields, replace
 from unittest import mock
 
+import story_writing_agents
+from story_writing_agents import agent_context as agent_context_package
 from story_writing_agents.agent_context import service as service_module
 from story_writing_agents.agent_context.accounting import canonical_provider_json
 from story_writing_agents.agent_context.actions import (
@@ -42,7 +44,6 @@ from story_writing_agents.agent_context.service import (
     ContextInvocationBinding,
     ContextInvocationSession,
     ContextInvocationState,
-    ContextReadReceipt,
 )
 from story_writing_agents.agent_context.sources import (
     CONTEXT_SOURCE_POLICY,
@@ -296,9 +297,11 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
                 "ContextInvocationSession",
                 "ContextInvocationState",
                 "ContextProvider",
+                "ContextProviderCallFinalizer",
                 "ContextProviderCallRequest",
                 "ContextProviderCallResult",
                 "ContextProviderFailureFacts",
+                "ContextProviderTerminalCode",
                 "ContextReferencePreludeRequest",
                 "ContextReferencePreludeResult",
                 "ContextReadReceipt",
@@ -352,6 +355,28 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
         self.assertEqual(
             tuple(item.value for item in ContextInvocationState),
             ("open", "searching", "reading", "answer_authorized", "failed"),
+        )
+        self.assertEqual(
+            tuple(item.value for item in service_module.ContextProviderTerminalCode),
+            (
+                "malformed_structured_response",
+                "response_correlation_mismatch",
+                "response_semantic_rejected",
+                "action_exhausted",
+                "answer_validation_failed",
+                "reference_runtime_failed",
+                "context_runtime_failed",
+            ),
+        )
+        for facade in (story_writing_agents, agent_context_package):
+            self.assertFalse(hasattr(facade, "ContextProviderCallFinalizer"))
+            self.assertFalse(hasattr(facade, "ContextProviderTerminalCode"))
+        self.assertEqual(
+            tuple(
+                field.name
+                for field in fields(service_module.ContextProviderCallResult)
+            ),
+            ("response_text", "thread_id", "accounting", "finalizer"),
         )
         self.assertEqual(
             tuple(field.name for field in fields(ContextInvocationBinding)),
@@ -823,6 +848,103 @@ class CompactWireDecoderTests(unittest.TestCase):
                 "u": [],
             }
         )
+
+    def test_invalid_read_values_report_only_fixed_source_handle_guidance(self) -> None:
+        private_values = ("conflict", "PRIVATE/critique text")
+        with self.assertRaises(service_module.ContextExecutionError) as caught:
+            self.decode(
+                {
+                    "a": "r",
+                    "c": self.token,
+                    "d": list(private_values),
+                    "u": [],
+                }
+            )
+
+        failure = caught.exception
+        self.assertIs(
+            failure.code,
+            service_module.ContextExecutionErrorCode.MALFORMED_ACTION,
+        )
+        self.assertEqual(
+            str(failure),
+            "contextual provider read action is invalid: `d` must contain "
+            "source handles returned by the preceding context search",
+        )
+        self.assertIsNone(failure.__cause__)
+        rendered = "\n".join(
+            (
+                str(failure),
+                repr(failure),
+                repr(failure.__cause__),
+                repr(failure.__context__),
+            )
+        )
+        for private in private_values:
+            self.assertNotIn(private, rendered)
+
+    def test_correlation_mismatch_precedes_read_validation_and_is_content_free(
+        self,
+    ) -> None:
+        actual_correlation = "PRIVATE critique prose\x1b]unsafe\x07"
+        with self.assertRaises(service_module.ContextExecutionError) as caught:
+            self.decode(
+                {
+                    "a": "r",
+                    "c": actual_correlation,
+                    "d": [],
+                    "u": [],
+                }
+            )
+
+        failure = caught.exception
+        self.assertIs(
+            failure.code,
+            service_module.ContextExecutionErrorCode.MALFORMED_ACTION,
+        )
+        self.assertEqual(
+            str(failure),
+            "contextual provider response is invalid: `c` does not match the "
+            "current request correlation token",
+        )
+        self.assertIsNone(failure.__cause__)
+        rendered = "\n".join(
+            (
+                str(failure),
+                repr(failure),
+                repr(failure.__cause__),
+                repr(failure.__context__),
+            )
+        )
+        for private in (
+            self.token,
+            actual_correlation,
+            "PRIVATE critique prose",
+            "\x1b",
+            "\x07",
+        ):
+            self.assertNotIn(private, rendered)
+
+    def test_unrelated_malformed_actions_keep_generic_diagnostic(self) -> None:
+        cases = (
+            "{",
+            {"a": "a", "c": self.token, "d": [], "u": []},
+            {"a": "r", "c": self.token, "d": ["h1"], "u": ["h1"]},
+        )
+        for value in cases:
+            with self.subTest(value=value), self.assertRaises(
+                service_module.ContextExecutionError
+            ) as caught:
+                self.decode(value)
+            self.assertIs(
+                caught.exception.code,
+                service_module.ContextExecutionErrorCode.MALFORMED_ACTION,
+            )
+            self.assertEqual(
+                str(caught.exception),
+                "contextual provider action is malformed",
+            )
+            self.assertIsNone(caught.exception.__cause__)
 
     def test_double_encoded_or_invalid_structured_results_reject(self) -> None:
         cases = (

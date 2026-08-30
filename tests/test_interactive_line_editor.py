@@ -49,6 +49,7 @@ EXPECTED_SUGGESTIONS = (
     "/search",
     "/transcript",
     "/inspect",
+    "/exchanges",
     "/history",
     "/status",
     "/help",
