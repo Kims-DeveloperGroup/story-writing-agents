@@ -1,3 +1,6 @@
 [submodule "vendor/generic-rag"]
 	path = vendor/generic-rag
 	url = https://github.com/Kims-DeveloperGroup/generic-rag.git
+[submodule "vendor/jsonl-viewer"]
+	path = vendor/jsonl-viewer
+	url = https://github.com/Kims-DeveloperGroup/jsonl-viewer.git

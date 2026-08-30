@@ -24,15 +24,15 @@ parse_interactive_line(line: str) -> InteractiveAction
 ```
 
 Actions, metadata, and parser are package exports; routes are module-supported.
-`AUTH`, `SETTINGS`, and their registry rows are additive supported parser
-surface, including through the existing root-facade exports. Export names/order
-and the terminal supported surface remain unchanged.
+`AUTH`, `SETTINGS`, `EXCHANGES`, and their registry rows are additive supported
+parser surface, including through the existing root-facade exports. Export
+names/order and the terminal supported surface remain unchanged.
 
 `ActionKind` values:
 
 ```text
 ignored message routed_message set_target list_agents compose send cancel
-run run_fresh draft_file rag search transcript inspect history status auth settings
+run run_fresh draft_file rag search transcript inspect exchanges history status auth settings
 set_language set_persona reset session_list session_create session_open session_pause
 conversation_new conversation_list conversation_list_all conversation_use
 conversation_subject conversation_archive help quit parse_error
@@ -66,7 +66,7 @@ only the four preferred prompt aliases—`lead`, `plot`, `character`, and
 | Consensus | `/run [--fresh] [--output PART/PATH.md] [PROMPT]`; `/draft-file PATH` |
 | Sessions | `/session list \| create NAME \| resume [NAME] \| pause` |
 | Conversations | `/conversation new [SUBJECT] \| list [--all] [QUERY] \| resume [ID] \| subject SUBJECT \| archive [ID]` |
-| Inspection | `/search QUERY`; `/transcript ID [COUNT] [--from SEQUENCE]`; `/inspect [DEBATE\|last]`; `/history [COUNT]`; `/status`; `/help [COMMAND]` |
+| Inspection | `/search QUERY`; `/transcript ID [COUNT] [--from SEQUENCE]`; `/inspect [DEBATE\|last]`; `/exchanges`; `/history [COUNT]`; `/status`; `/help [COMMAND]` |
 | Exit | `/quit` |
 
 `/agent`, `/?`, and `/exit` alias `/to`, `/help`, and `/quit`. Flags describe
@@ -129,13 +129,13 @@ positions are:
 
 | Position | Ordered replacements |
 | --- | --- |
-| Root command | The 23 main-available canonical commands and aliases in registry order; standalone `/compose`, `/send`, and `/cancel` are excluded. |
+| Root command | The 24 main-available canonical commands and aliases in registry order; standalone `/compose`, `/send`, and `/cancel` are excluded. |
 | `/session` | `list`, `create`, `resume`, `pause` |
 | `/conversation` | `new`, `list`, `resume`, `subject`, `archive` |
 | `/to`, `/agent`, `/persona` agent | The four preferred prompt aliases—`lead`, `plot`, `character`, and `execution`—in route order. Other accepted aliases remain parser-compatible but are not duplicated as completion candidates. |
 | `/run` option | `--fresh` |
 | `/conversation list` option | `--all` |
-| `/help`, `/?` command | The 23 root replacements plus `/compose`, `/send`, and `/cancel` in registry order. |
+| `/help`, `/?` command | The 24 root replacements plus `/compose`, `/send`, and `/cancel` in registry order. |
 | `/inspect` argument | `last` |
 | `/transcript ID [COUNT]` option | `--from` |
 
@@ -208,8 +208,11 @@ concerns. `/language ARG`
 takes one control-free token; `/persona AGENT ARG` takes a route alias and
 token, returning the canonical ID. `/history [COUNT]` takes an optional positive
 ASCII integer; omission means all. `/inspect [ID|last]` takes at most one
-control-free token. Runtime [gates](cli.md#interactive-streams) are not parser
-concerns.
+control-free token. `/exchanges` is alias-free and accepts no argument; it
+returns the `exchanges` action without reading inventory or loading the optional
+viewer. Its attached-session gate, two pickers, immutable snapshot, and viewer
+lifecycle are controller concerns. Runtime [gates](cli.md#interactive-streams)
+are not parser concerns.
 
 ## Other grammar and failures
 

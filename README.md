@@ -21,6 +21,11 @@ and write a manuscript only after all three voting specialists agree.
 > bootstrap/delta, search/read, answer, and checkpoint progress. See
 > [Bounded agent context](docs/guides/agent-context.md) for concrete user
 > scenarios, exact reference behavior, limits, and what agents can access.
+> Every physical provider call also attempts a bounded request, optional raw
+> valid `ProviderResult`, and terminal-outcome record. After a session is
+> attached, bare `/exchanges` opens scope and agent pickers followed by an
+> optional isolated read-only JSONL viewer. See
+> [Inspect agent exchanges](docs/guides/agent-exchanges.md).
 
 ## Quick start
 
@@ -59,7 +64,12 @@ python -m pip install --editable .
 rehash
 ```
 
-That is the RAG-free base installation. Approved internal, non-redistributing
+That is the dependency-free base installation. It records bounded agent
+exchanges but does not install their structured viewer. Install the optional
+viewer from a checkout with `python -m pip install --editable '.[viewer]'`; it
+uses an exact VCS pin and does not invoke a provider. See
+[Inspect agent exchanges](docs/guides/agent-exchanges.md#install-the-optional-viewer).
+Approved internal, non-redistributing
 evaluation can use the optional direct Python boundary, deterministic local
 provider, disposable generation store, and programmatic runtime/agent
 integration. Noninteractive `story rag` status, opt-in, rebuild, cited search,
@@ -101,6 +111,7 @@ At `story[lobby]>`, create a session and focus a subject conversation:
 Which core-document constraint should shape the opening?
 /run --output part-01/opening.md Draft the opening from the current conversation focus.
 /inspect last
+/exchanges
 /quit
 ```
 
@@ -142,6 +153,7 @@ story run --output part-01/opening.md --prompt 'Draft the opening.'
 - [Antigravity guide](docs/guides/antigravity.md) covers `agy` setup, authentication, routing, safety, sessions, and provider-free verification.
 - [Story sessions](docs/guides/story-sessions.md) shows shell management, conversation reads, retrieval, and consensus.
 - [Bounded agent context](docs/guides/agent-context.md) explains selection, search/read, debate deltas, Part-scoped changes, exact references, progress, and recovery.
+- [Inspect agent exchanges](docs/guides/agent-exchanges.md) explains optional viewer installation, picker-first request/response/outcome inspection, colors, privacy, and recovery.
 - [Session lifecycle](docs/design/session-lifecycle.md) maps internal state to commands, output, errors, and next actions.
 - [Consensus-run guide](docs/guides/consensus-runs.md) covers prompts, drafts, outputs, and round limits.
 - [CLI reference](docs/reference/cli.md) is the exact installed command contract.
@@ -243,6 +255,9 @@ See the [CLI contract](docs/reference/cli.md#conversation-storage-migration).
 - Deadlocked and interrupted debates cannot resume under the same debate ID.
 - Workspace content, logs, rejected-provider-response artifacts, provider
   metadata, agent state, and manuscripts are plaintext.
+- `debug_logs/agent_exchanges/` deliberately contains bounded plaintext
+  provider-call requests and results. Simple viewer mode is not redaction, and
+  capture gaps never prove that a provider call or result did not occur.
 - Writing-artifact publication is journaled and catalog-last, and rolls forward
   on the next catalog or publication access after an interruption. It is not
   one transaction with debate logs, lifecycle state, or result files.

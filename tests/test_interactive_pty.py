@@ -18,6 +18,11 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from story_writing_agents.agent_exchanges import (
+    AgentExchangeScopeKind,
+    AgentExchangeSelection,
+    WorkspaceAgentExchangeStore,
+)
 from story_writing_agents.backend import AgentBackend
 from story_writing_agents.cli_context import (
     load_cli_context,
@@ -380,6 +385,34 @@ output_path = Path(argv[argv.index("--output-last-message") + 1])
 if control.get("mode") == "malformed":
     output_path.write_text(
         control.get("response", "not-json"),
+        encoding="utf-8",
+    )
+elif control.get("mode") == "invalid_read":
+    output_path.write_text(
+        json.dumps(
+            {
+                "a": "r",
+                "c": payload["c"],
+                "d": ["conflict", "PRIVATE/critique text"],
+                "u": [],
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+elif control.get("mode") == "correlation_mismatch":
+    output_path.write_text(
+        json.dumps(
+            {
+                "a": "r",
+                "c": "PRIVATE critique prose\u001b]unsafe\u0007",
+                "d": [],
+                "u": [],
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
         encoding="utf-8",
     )
 elif isinstance(query, list):
@@ -1589,6 +1622,61 @@ for attempt in range(2):
         self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 2)
         self.assertNotIn(b"\x1b[?25", process.raw_bytes)
         self.assertIn("RESULT=1:selected", result)
+        self.assertEqual(
+            process.final_terminal_attributes,
+            process.original_terminal_attributes,
+        )
+        self.assertEqual(_durable_tree(self.workspace.root), before)
+        self.assertFalse(self.provider_log.exists())
+
+    def test_external_view_returns_terminal_to_the_interactive_shell(self) -> None:
+        """Borrow and restore one real PTY before ordinary shell input resumes."""
+
+        source = r'''
+import sys
+
+from story_writing_agents.interactive_terminal import (
+    InteractiveExternalViewer,
+    build_stream_terminal,
+)
+
+terminal = build_stream_terminal(input, sys.stdin, sys.stdout)
+viewer = InteractiveExternalViewer(terminal)
+events = []
+
+def operation(host):
+    host.present("external read-only frame")
+    events.append(host.read_event())
+
+viewer.open(operation)
+print(f"VIEW_EVENT={events[0]}")
+print(f"SHELL_VALUE={input('shell> ')}")
+'''
+        before = _durable_tree(self.workspace.root)
+        process = self._spawn_python(
+            source,
+            environment_overrides={"TERM": "xterm-256color"},
+            terminal_columns=52,
+            decorative_color=True,
+        )
+        process.wait_for_text("external read-only frame")
+        assert termios is not None
+        active = termios.tcgetattr(process.master_fd)
+        self.assertFalse(active[3] & termios.ICANON)
+        self.assertFalse(active[3] & termios.ECHO)
+
+        process.send_text("q")
+        process.wait_for_text("shell> ")
+        restored = termios.tcgetattr(process.master_fd)
+        self.assertTrue(restored[3] & termios.ICANON)
+        self.assertTrue(restored[3] & termios.ECHO)
+        process.send_line("after-view")
+
+        output = process.wait_for_text("SHELL_VALUE=after-view")
+        self.assertEqual(process.wait_for_exit(), 0, process.normalized_text)
+        self.assertIn("VIEW_EVENT=close", output)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049h"), 1)
+        self.assertEqual(process.raw_bytes.count(b"\x1b[?1049l"), 1)
         self.assertEqual(
             process.final_terminal_attributes,
             process.original_terminal_attributes,
@@ -7815,6 +7903,89 @@ asyncio.run(main())
             "MALFORMED_PROVIDER_VALUE_MUST_NOT_APPEAR",
             malformed_history,
         )
+
+        self._set_provider_control(mode="invalid_read")
+        mark = process.output_mark()
+        process.send_line("invalid read provider turn")
+        process.wait_for_text("[error provider_protocol_error]", after=mark)
+        process.wait_for_text("story[alpha:lead]> ", after=mark)
+        invalid_read_error = process.text_after(mark)
+        self.assertNotIn("conflict", invalid_read_error)
+        self.assertNotIn("PRIVATE/critique text", invalid_read_error)
+        invalid_read_events = store.read("alpha", selected.conversation_id)
+        concrete_diagnostic = (
+            "BackendProtocolError: contextual provider read action is invalid: "
+            "`d` must contain source handles returned by the preceding context search"
+        )
+        self.assertEqual(invalid_read_events[-1].content, concrete_diagnostic)
+        self.assertNotIn("conflict", invalid_read_events[-1].content)
+        self.assertNotIn("PRIVATE/critique text", invalid_read_events[-1].content)
+
+        mark = process.output_mark()
+        process.send_line("/history 2")
+        process.wait_for_text("[context]", after=mark)
+        process.wait_for_text("story[alpha:lead]> ", after=mark)
+        invalid_read_history = process.text_after(mark)
+        compact_history = "".join(invalid_read_history.split()).replace("│", "")
+        self.assertIn(
+            "contextualproviderreadactionisinvalid:`d`mustcontainsourcehandles"
+            "returnedbytheprecedingcontextsearch",
+            compact_history,
+        )
+        self.assertNotIn("conflict", invalid_read_history)
+        self.assertNotIn("PRIVATE/critique text", invalid_read_history)
+
+        self._set_provider_control(mode="correlation_mismatch")
+        mark = process.output_mark()
+        process.send_line("correlation mismatch provider turn")
+        process.wait_for_text("[error provider_protocol_error]", after=mark)
+        process.wait_for_text("story[alpha:lead]> ", after=mark)
+        correlation_error = process.text_after(mark)
+        for private in ("PRIVATE critique prose", "\x1b]", "\x07"):
+            self.assertNotIn(private, correlation_error)
+        correlation_events = store.read("alpha", selected.conversation_id)
+        correlation_diagnostic = (
+            "BackendProtocolError: contextual provider response is invalid: "
+            "`c` does not match the current request correlation token"
+        )
+        self.assertEqual(correlation_events[-1].content, correlation_diagnostic)
+
+        exchange_snapshot = WorkspaceAgentExchangeStore(self.workspace).snapshot(
+            AgentExchangeSelection(
+                "alpha",
+                AgentExchangeScopeKind.CONVERSATION,
+                selected.conversation_id,
+                "lead_orchestrator",
+            )
+        )
+        exchange_records = [
+            json.loads(line) for line in exchange_snapshot.jsonl_bytes.splitlines()
+        ]
+        self.assertEqual(
+            [record["request_type"] for record in exchange_records[-3:]],
+            ["request", "response", "outcome"],
+        )
+        self.assertEqual(
+            json.loads(exchange_records[-1]["content"]),
+            {
+                "code": "response_correlation_mismatch",
+                "outcome": "rejected",
+            },
+        )
+
+        mark = process.output_mark()
+        process.send_line("/history 2")
+        process.wait_for_text("[context]", after=mark)
+        process.wait_for_text("story[alpha:lead]> ", after=mark)
+        correlation_history = process.text_after(mark)
+        compact_history = "".join(correlation_history.split()).replace("│", "")
+        self.assertIn(
+            "contextualproviderresponseisinvalid:`c`doesnotmatchthecurrent"
+            "requestcorrelationtoken",
+            compact_history,
+        )
+        for private in ("PRIVATE critique prose", "\x1b]", "\x07"):
+            self.assertNotIn(private, correlation_history)
 
         self._set_provider_control(mode="auto")
         mark = process.output_mark()

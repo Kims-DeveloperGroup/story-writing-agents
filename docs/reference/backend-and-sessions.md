@@ -220,8 +220,10 @@ Each backend owns an I/O-free `WorkspaceAgentExchangeCapture`. The established
 structured provider path and the provider-managed contextual path both begin a
 best-effort lifecycle immediately before every physical `adapter.invoke()`.
 There is no constructor option, retry switch, or new root public API. Direct
-storage inspection remains available through the `agent_exchanges` package;
-the `/exchanges` picker and isolated viewer are future integration work.
+storage inspection remains available through the `agent_exchanges` package.
+The installed bare `/exchanges` command is a later controller/terminal
+integration over immutable snapshots; the backend still imports no controller,
+terminal, picker, viewer, or optional external package.
 
 One successful capture lifecycle uses a fresh
 `exchange_<32 lowercase hexadecimal characters>` identity and preserves the
@@ -258,6 +260,41 @@ The terminal vocabulary is closed:
 | `rejected` | `malformed_structured_response`, `response_correlation_mismatch`, `response_semantic_rejected`, `action_exhausted`, `answer_validation_failed` |
 | `post_response_runtime_failure` | `thread_persistence_failed`, `reference_runtime_failed`, `context_runtime_failed` |
 
+Two contextual-action rejections have narrower user guidance. Valid JSON with
+the exact contextual action shape but a `c` value that does not equal the
+current request correlation token produces this exact runtime exception:
+
+```text
+BackendProtocolError: contextual provider response is invalid: `c` does not match the current request correlation token
+```
+
+The misplaced value may be provider answer/prose. Story validates correlation
+before interpreting the action kind or data, so this error wins even when the
+same object presents a misleading READ action or data. Neither the received
+`c`, the expected token, nor provider prose placed in `c` enters the exception
+or conversation history.
+
+When a structurally recognizable READ wire action instead arrives before any
+context search, or its `d` array contains invalid or foreign values instead of
+source handles returned by the immediately preceding search, Story raises:
+
+```text
+BackendProtocolError: contextual provider read action is invalid: `d` must contain source handles returned by the preceding context search
+```
+
+The provider does not raise either `BackendProtocolError`; Story translates its
+internal `ContextExecutionErrorCode.MALFORMED_ACTION` through a fixed,
+content-safe allow-list. Other malformed JSON and unrelated malformed action
+shapes retain the generic `BackendProtocolError: contextual provider action is
+malformed`. Correlation mismatch rejects with
+`rejected`/`response_correlation_mismatch`; the READ case rejects with
+`rejected`/`malformed_structured_response`. Both leave the context ledger
+`MALFORMED`, taint the contextual attempt, clear its provider thread state, and
+do not advance its ready checkpoint. Untrusted `d` values likewise do not enter
+the exception or conversation history. When its best-effort exchange records
+are available, use bare `/exchanges` to inspect the authorized immutable
+request, exact valid raw `ProviderResult` projection, and terminal outcome.
+
 The request append is attempted before invocation. A valid raw
 `ProviderResult` is appended immediately on return, before accounting,
 decode/domain validation, the separate rejected-response artifact, and thread
@@ -266,6 +303,10 @@ backend/context owner knows the outcome. Capture state advances before append;
 all capture failures are suppressed and never retried. Missing files, records,
 outcomes, or sequence values therefore do not prove that no physical provider
 call or result existed.
+
+The user-facing correlation, header, preview, search, and privacy behavior is
+documented in [Inspect agent exchanges](../guides/agent-exchanges.md). The
+viewer cannot retry or replay this backend lifecycle.
 
 ## Lifecycle value contracts
 

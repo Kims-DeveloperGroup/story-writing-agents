@@ -1134,6 +1134,170 @@ class ContextExecutionFailureTests(ContextExecutionTestCase):
             self.assertIs(inspection.record.attempt.outcome, expected)
             self.assertTrue(provider.tainted)
 
+    async def test_invalid_read_response_rejects_taints_and_never_advances(self) -> None:
+        private_values = ("conflict", "PRIVATE/critique text")
+
+        def invalid_read(
+            call: ContextProviderCallRequest,
+            _provider: _ScriptedProvider,
+        ) -> str:
+            return json.dumps(
+                {
+                    "a": "r",
+                    "c": _correlation(call),
+                    "d": list(private_values),
+                    "u": [],
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+
+        request = self.request(session_id="session-invalid-read")
+        provider = _ScriptedProvider((invalid_read,))
+        events: list[ContextExecutionEvent] = []
+
+        with self.assertRaises(ContextExecutionError) as caught:
+            await self.invoke(provider, request, event_sink=events.append)
+
+        failure = caught.exception
+        self.assertIs(failure.code, ContextExecutionErrorCode.MALFORMED_ACTION)
+        self.assertEqual(
+            str(failure),
+            "contextual provider read action is invalid: `d` must contain "
+            "source handles returned by the preceding context search",
+        )
+        rendered = "\n".join(
+            (
+                str(failure),
+                repr(failure),
+                repr(failure.__cause__),
+                repr(failure.__context__),
+            )
+        )
+        for private in private_values:
+            self.assertNotIn(private, rendered)
+        self.assertEqual(
+            provider.finalizers[0].calls,
+            [
+                (
+                    "rejected",
+                    ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+                )
+            ],
+        )
+        self.assertEqual(len(provider.tainted), 1)
+        self.assertEqual(provider.threads, {})
+        self.assertIn(ContextExecutionEventKind.TAINTED, {event.kind for event in events})
+        self.assertIs(
+            events[-1].kind,
+            ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED,
+        )
+        inspection = self.inspect(provider, request)
+        self.assertIs(inspection.record.state, ContextLedgerRecordState.TAINTED)
+        self.assertIs(
+            inspection.record.attempt.outcome,
+            ContextLedgerAttemptOutcome.MALFORMED,
+        )
+        self.assertIsNone(inspection.record.ready_checkpoint)
+
+    async def test_correlation_mismatch_rejects_normally_and_during_redecode(
+        self,
+    ) -> None:
+        private_correlation = "PRIVATE critique prose\x1b]unsafe\x07"
+
+        def mismatch(
+            _call: ContextProviderCallRequest,
+            _provider: _ScriptedProvider,
+        ) -> str:
+            return json.dumps(
+                {
+                    "a": "r",
+                    "c": private_correlation,
+                    "d": [],
+                    "u": [],
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+
+        self.publish()
+        cases = (
+            ("normal", (mismatch,)),
+            (
+                "max-action",
+                (_search, _read_search_hit, _search, _read_search_hit, mismatch),
+            ),
+        )
+        expected = (
+            "contextual provider response is invalid: `c` does not match the "
+            "current request correlation token"
+        )
+        for label, responses in cases:
+            with self.subTest(label=label):
+                request = self.request(
+                    session_id=f"session-correlation-{label}",
+                    operation_id=f"operation-correlation-{label}",
+                    result_correlation_id=f"result-correlation-{label}",
+                )
+                provider = _ScriptedProvider(responses)
+                events: list[ContextExecutionEvent] = []
+
+                with self.assertRaises(ContextExecutionError) as caught:
+                    await self.invoke(provider, request, event_sink=events.append)
+
+                failure = caught.exception
+                self.assertIs(
+                    failure.code,
+                    ContextExecutionErrorCode.MALFORMED_ACTION,
+                )
+                self.assertEqual(str(failure), expected)
+                expected_token = _correlation(provider.calls[-1])
+                rendered = "\n".join(
+                    (
+                        str(failure),
+                        repr(failure),
+                        repr(failure.__cause__),
+                        repr(failure.__context__),
+                    )
+                )
+                for private in (
+                    expected_token,
+                    private_correlation,
+                    "PRIVATE critique prose",
+                    "\x1b",
+                    "\x07",
+                ):
+                    self.assertNotIn(private, rendered)
+                self.assertEqual(
+                    [finalizer.calls for finalizer in provider.finalizers[:-1]],
+                    [[("accepted", None)]] * (len(provider.finalizers) - 1),
+                )
+                self.assertEqual(
+                    provider.finalizers[-1].calls,
+                    [
+                        (
+                            "rejected",
+                            ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH,
+                        )
+                    ],
+                )
+                self.assertEqual(len(provider.tainted), 1)
+                self.assertEqual(provider.threads, {})
+                self.assertIs(
+                    events[-1].kind,
+                    ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED,
+                )
+                inspection = self.inspect(provider, request)
+                self.assertIs(
+                    inspection.record.state,
+                    ContextLedgerRecordState.TAINTED,
+                )
+                self.assertIs(
+                    inspection.record.attempt.outcome,
+                    ContextLedgerAttemptOutcome.MALFORMED,
+                )
+                self.assertIsNone(inspection.record.ready_checkpoint)
+
     async def test_output_and_source_failures_never_advance_ready(self) -> None:
         forged = "ctxh_v1_" + "0" * 64
 
