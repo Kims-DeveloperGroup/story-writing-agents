@@ -605,6 +605,7 @@ class _ContextExecutionErrorDetail(StrEnum):
     """Private allow-list for fixed, content-free execution diagnostics."""
 
     READ_SOURCE_HANDLES_REQUIRED = "read_source_handles_required"
+    RESPONSE_CORRELATION_MISMATCH = "response_correlation_mismatch"
 
 
 _EXECUTION_ERROR_MESSAGES = {
@@ -630,6 +631,13 @@ _EXECUTION_ERROR_DETAIL_MESSAGES = {
     ): (
         "contextual provider read action is invalid: `d` must contain source "
         "handles returned by the preceding context search"
+    ),
+    (
+        ContextExecutionErrorCode.MALFORMED_ACTION,
+        _ContextExecutionErrorDetail.RESPONSE_CORRELATION_MISMATCH,
+    ): (
+        "contextual provider response is invalid: `c` does not match the "
+        "current request correlation token"
     ),
 }
 
@@ -661,7 +669,27 @@ def _execution_error(
     except KeyError:
         raise TypeError("context execution error detail is invalid") from None
     failure.args = (message,)
+    failure._detail = detail
     return failure
+
+
+def _execution_error_has_detail(
+    failure: ContextExecutionError,
+    detail: _ContextExecutionErrorDetail,
+) -> bool:
+    """Recognize only one internally attached, unchanged fixed detail."""
+
+    if (
+        type(failure) is not ContextExecutionError
+        or type(detail) is not _ContextExecutionErrorDetail
+        or getattr(failure, "_detail", None) is not detail
+    ):
+        return False
+    try:
+        expected = _EXECUTION_ERROR_DETAIL_MESSAGES[(failure.code, detail)]
+    except KeyError:
+        return False
+    return str(failure) == expected
 
 
 def _validate_sync_callback(value: object, *, optional: bool = True) -> None:
@@ -983,6 +1011,19 @@ class ContextProviderTerminalCode(StrEnum):
     ANSWER_VALIDATION_FAILED = "answer_validation_failed"
     REFERENCE_RUNTIME_FAILED = "reference_runtime_failed"
     CONTEXT_RUNTIME_FAILED = "context_runtime_failed"
+
+
+def _context_provider_decode_terminal_code(
+    failure: ContextExecutionError,
+) -> ContextProviderTerminalCode:
+    """Classify one rejected decoded response without response content."""
+
+    if _execution_error_has_detail(
+        failure,
+        _ContextExecutionErrorDetail.RESPONSE_CORRELATION_MISMATCH,
+    ):
+        return ContextProviderTerminalCode.RESPONSE_CORRELATION_MISMATCH
+    return ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE
 
 
 @runtime_checkable
@@ -2422,7 +2463,12 @@ def _decode_context_action(
         )
         raw = _exact_object(value, frozenset({"a", "c", "d", "u"}))
         if not _correlation_token_matches(raw["c"], correlation):
-            raise ValueError
+            raise _execution_error(
+                ContextExecutionErrorCode.MALFORMED_ACTION,
+                detail=(
+                    _ContextExecutionErrorDetail.RESPONSE_CORRELATION_MISMATCH
+                ),
+            )
         action_kind = {
             "s": "search",
             "r": "read",
@@ -4160,7 +4206,9 @@ class AgentContextService:
                             if finalizer is not None:
                                 _reject_provider_call_without_replacing(
                                     finalizer,
-                                    ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+                                    _context_provider_decode_terminal_code(
+                                        decode_failure
+                                    ),
                                 )
                             raise decode_failure
                         if type(exhausted_action) in {
@@ -4183,7 +4231,9 @@ class AgentContextService:
                     if finalizer is not None:
                         _reject_provider_call_without_replacing(
                             finalizer,
-                            ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE,
+                            _context_provider_decode_terminal_code(
+                                decode_failure
+                            ),
                         )
                     raise
                 terminal_provider_succeeded = False
@@ -4354,7 +4404,7 @@ class AgentContextService:
                     code = (
                         ContextProviderTerminalCode.ACTION_EXHAUSTED
                         if stage == "exhausted"
-                        else ContextProviderTerminalCode.MALFORMED_STRUCTURED_RESPONSE
+                        else _context_provider_decode_terminal_code(failure)
                     )
                     _reject_provider_call_without_replacing(finalizer, code)
                 elif stage in {"action", "answer"} and isinstance(

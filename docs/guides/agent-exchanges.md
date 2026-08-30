@@ -215,13 +215,28 @@ If the shell reports
 contain source handles returned by the preceding context search``, Story
 received a recognizable contextual READ action before any search or with
 invalid/foreign values instead of handles from that preceding search. Story,
-not the provider, raises this fixed content-safe exception. The internal code
-remains `ContextExecutionErrorCode.MALFORMED_ACTION`; the terminal outcome is
+not the provider, raises this fixed content-safe exception. Its terminal
+outcome is
 `rejected`/`malformed_structured_response`, the contextual attempt is tainted,
 its ready checkpoint does not advance, and the response is rejected. Raw `d`
-values do not enter the error or conversation history. Other malformed JSON or
-action shapes retain the generic `BackendProtocolError: contextual provider
-action is malformed`.
+values do not enter the error or conversation history.
+
+If the shell instead reports
+``BackendProtocolError: contextual provider response is invalid: `c` does not
+match the current request correlation token``, valid exact-shape contextual
+JSON supplied the wrong `c` value—for example, provider answer/prose—instead of
+the current request correlation token. Story validates `c` before interpreting
+a misleading READ action or its data. Story, not the provider, raises this
+fixed exception; neither the received `c`, the expected token, nor prose placed
+in `c` enters the error or history. The terminal outcome is
+`rejected`/`response_correlation_mismatch`; the ledger is `MALFORMED`, the
+contextual attempt is tainted, its provider thread state is cleared, and its
+ready checkpoint does not advance.
+
+Both cases retain internal
+`ContextExecutionErrorCode.MALFORMED_ACTION`. Other malformed JSON or action
+shapes retain the generic `BackendProtocolError: contextual provider action is
+malformed`.
 
 1. Keep the affected workspace private and attach the affected session.
 2. Run `/exchanges`; choose the exact Debate or Conversation full ID and

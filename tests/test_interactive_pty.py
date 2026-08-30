@@ -18,6 +18,11 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from story_writing_agents.agent_exchanges import (
+    AgentExchangeScopeKind,
+    AgentExchangeSelection,
+    WorkspaceAgentExchangeStore,
+)
 from story_writing_agents.backend import AgentBackend
 from story_writing_agents.cli_context import (
     load_cli_context,
@@ -389,6 +394,20 @@ elif control.get("mode") == "invalid_read":
                 "a": "r",
                 "c": payload["c"],
                 "d": ["conflict", "PRIVATE/critique text"],
+                "u": [],
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+elif control.get("mode") == "correlation_mismatch":
+    output_path.write_text(
+        json.dumps(
+            {
+                "a": "r",
+                "c": "PRIVATE critique prose\u001b]unsafe\u0007",
+                "d": [],
                 "u": [],
             },
             ensure_ascii=False,
@@ -7915,6 +7934,58 @@ asyncio.run(main())
         )
         self.assertNotIn("conflict", invalid_read_history)
         self.assertNotIn("PRIVATE/critique text", invalid_read_history)
+
+        self._set_provider_control(mode="correlation_mismatch")
+        mark = process.output_mark()
+        process.send_line("correlation mismatch provider turn")
+        process.wait_for_text("[error provider_protocol_error]", after=mark)
+        process.wait_for_text("story[alpha:lead]> ", after=mark)
+        correlation_error = process.text_after(mark)
+        for private in ("PRIVATE critique prose", "\x1b]", "\x07"):
+            self.assertNotIn(private, correlation_error)
+        correlation_events = store.read("alpha", selected.conversation_id)
+        correlation_diagnostic = (
+            "BackendProtocolError: contextual provider response is invalid: "
+            "`c` does not match the current request correlation token"
+        )
+        self.assertEqual(correlation_events[-1].content, correlation_diagnostic)
+
+        exchange_snapshot = WorkspaceAgentExchangeStore(self.workspace).snapshot(
+            AgentExchangeSelection(
+                "alpha",
+                AgentExchangeScopeKind.CONVERSATION,
+                selected.conversation_id,
+                "lead_orchestrator",
+            )
+        )
+        exchange_records = [
+            json.loads(line) for line in exchange_snapshot.jsonl_bytes.splitlines()
+        ]
+        self.assertEqual(
+            [record["request_type"] for record in exchange_records[-3:]],
+            ["request", "response", "outcome"],
+        )
+        self.assertEqual(
+            json.loads(exchange_records[-1]["content"]),
+            {
+                "code": "response_correlation_mismatch",
+                "outcome": "rejected",
+            },
+        )
+
+        mark = process.output_mark()
+        process.send_line("/history 2")
+        process.wait_for_text("[context]", after=mark)
+        process.wait_for_text("story[alpha:lead]> ", after=mark)
+        correlation_history = process.text_after(mark)
+        compact_history = "".join(correlation_history.split()).replace("│", "")
+        self.assertIn(
+            "contextualproviderresponseisinvalid:`c`doesnotmatchthecurrent"
+            "requestcorrelationtoken",
+            compact_history,
+        )
+        for private in ("PRIVATE critique prose", "\x1b]", "\x07"):
+            self.assertNotIn(private, correlation_history)
 
         self._set_provider_control(mode="auto")
         mark = process.output_mark()

@@ -883,6 +883,48 @@ class CompactWireDecoderTests(unittest.TestCase):
         for private in private_values:
             self.assertNotIn(private, rendered)
 
+    def test_correlation_mismatch_precedes_read_validation_and_is_content_free(
+        self,
+    ) -> None:
+        actual_correlation = "PRIVATE critique prose\x1b]unsafe\x07"
+        with self.assertRaises(service_module.ContextExecutionError) as caught:
+            self.decode(
+                {
+                    "a": "r",
+                    "c": actual_correlation,
+                    "d": [],
+                    "u": [],
+                }
+            )
+
+        failure = caught.exception
+        self.assertIs(
+            failure.code,
+            service_module.ContextExecutionErrorCode.MALFORMED_ACTION,
+        )
+        self.assertEqual(
+            str(failure),
+            "contextual provider response is invalid: `c` does not match the "
+            "current request correlation token",
+        )
+        self.assertIsNone(failure.__cause__)
+        rendered = "\n".join(
+            (
+                str(failure),
+                repr(failure),
+                repr(failure.__cause__),
+                repr(failure.__context__),
+            )
+        )
+        for private in (
+            self.token,
+            actual_correlation,
+            "PRIVATE critique prose",
+            "\x1b",
+            "\x07",
+        ):
+            self.assertNotIn(private, rendered)
+
     def test_unrelated_malformed_actions_keep_generic_diagnostic(self) -> None:
         cases = (
             "{",
