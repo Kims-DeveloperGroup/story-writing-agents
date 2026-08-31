@@ -191,7 +191,7 @@ class ConversationStorageMigrationSurfaceTests(unittest.TestCase):
             dependencies,
             {
                 "errors",
-                "workspace",
+                "workspace.core",
                 "archive",
                 "composition",
                 "contracts",

@@ -132,12 +132,14 @@ def deterministic_runtime_environment() -> Iterator[None]:
     with ExitStack() as stack:
         stack.enter_context(mock.patch("uuid.uuid4", new=identifiers))
         for target in (
+            "story_writing_agents.conversation_storage.filesystem.uuid4",
             "story_writing_agents.workspace.core.uuid4",
             "story_writing_agents.writing_artifacts.repository.uuid4",
             "story_writing_agents.writing_artifacts._storage.uuid4",
         ):
             stack.enter_context(mock.patch(target, new=identifiers))
         for target in (
+            "story_writing_agents.conversation_storage.filesystem.datetime",
             "story_writing_agents.orchestrator.datetime",
             "story_writing_agents.workspace.core.datetime",
             "story_writing_agents.debug_log.datetime",

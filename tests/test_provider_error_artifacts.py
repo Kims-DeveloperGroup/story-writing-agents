@@ -438,11 +438,13 @@ class ProviderErrorArtifactContractTests(unittest.TestCase):
         self.assertEqual(dependencies, {"agents", "workspace"})
         source_root = source_path.parent
         workspace_package = source_root / "workspace"
+        filesystem_owner = source_root / "conversation_storage" / "filesystem.py"
         dependency_paths = {
             "agents": (source_root / "agents.py",),
             "workspace": (
                 workspace_package / "__init__.py",
                 workspace_package / "core.py",
+                filesystem_owner,
             ),
         }
         self.assertFalse((source_root / "workspace.py").exists())
@@ -465,11 +467,11 @@ class ProviderErrorArtifactContractTests(unittest.TestCase):
         )
         self.assertEqual(
             {
-                node.module
+                (node.level, node.module)
                 for node in ast.walk(facade_tree)
-                if isinstance(node, ast.ImportFrom) and node.level == 1
+                if isinstance(node, ast.ImportFrom) and node.level > 0
             },
-            {"core"},
+            {(1, "core"), (2, "conversation_storage.filesystem")},
         )
         core_tree = ast.parse(
             (workspace_package / "core.py").read_text(encoding="utf-8")
@@ -482,6 +484,15 @@ class ProviderErrorArtifactContractTests(unittest.TestCase):
             },
             {"agents", "conversations", "errors", "models", "writing_artifacts"},
         )
+        owner_tree = ast.parse(filesystem_owner.read_text(encoding="utf-8"))
+        self.assertEqual(
+            {
+                node.module
+                for node in ast.walk(owner_tree)
+                if isinstance(node, ast.ImportFrom) and node.level == 2
+            },
+            {"conversations", "errors", "workspace.core"},
+        )
 
         repository_root = Path(__file__).resolve().parents[1]
         environment = os.environ.copy()
@@ -491,8 +502,14 @@ class ProviderErrorArtifactContractTests(unittest.TestCase):
             "from pathlib import Path; import story_writing_agents as facade; "
             "from story_writing_agents import provider_error_artifacts as module; "
             "from story_writing_agents import workspace; "
+            "from story_writing_agents.workspace import core; "
+            "from story_writing_agents.conversation_storage import filesystem; "
             "assert all(name not in facade.__all__ for name in module.__all__); "
-            "assert module.Workspace is workspace.Workspace; "
+            "assert module.Workspace is workspace.Workspace is core.Workspace; "
+            "assert workspace.FilesystemConversationCatalog is "
+            "filesystem.FilesystemConversationCatalog; "
+            "assert workspace.FilesystemConversationEventStore is "
+            "filesystem.FilesystemConversationEventStore; "
             "assert module.open_workspace_root_directory is "
             "workspace.open_workspace_root_directory; "
             "assert module.verify_workspace_root_directory is "

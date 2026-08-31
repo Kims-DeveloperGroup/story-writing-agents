@@ -406,7 +406,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             ]
         )
         source_files = tuple(source_root.rglob("*.py"))
-        self.assertEqual(len(source_files), 96)
+        self.assertEqual(len(source_files), 97)
         self.assertTrue(
             {
                 source_root / "conversations" / "__init__.py",
@@ -416,6 +416,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
                 source_root / "workspace" / "__init__.py",
                 source_root / "workspace" / "core.py",
                 source_root / "conversation_storage" / "archive.py",
+                source_root / "conversation_storage" / "filesystem.py",
                 source_root / "conversation_storage" / "filesystem_archive.py",
                 source_root / "conversation_storage" / "migration.py",
                 source_root / "conversation_storage" / "provisioning.py",
@@ -435,14 +436,15 @@ class SessionLifecycleContractTests(unittest.TestCase):
         self.assertNotIn(source_root / "conversations.py", source_files)
         self.assertNotIn(source_root / "workspace.py", source_files)
         index = (source_root.parents[1] / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8")
-        self.assertIn("Importable production units indexed: 96.", index)
-        self.assertIn("Direct internal dependency edges indexed: 379.", index)
+        self.assertIn("Importable production units indexed: 97.", index)
+        self.assertIn("Direct internal dependency edges indexed: 385.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         for module_name in (
             "story_writing_agents.conversations",
             "story_writing_agents.conversations.catalog",
             "story_writing_agents.conversations.context",
             "story_writing_agents.conversations.events",
+            "story_writing_agents.conversation_storage.filesystem",
             "story_writing_agents.workspace",
             "story_writing_agents.workspace.core",
         ):

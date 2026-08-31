@@ -19,7 +19,7 @@ projections over the same events.
 
 ## Public contract
 
-The package facade exports these frozen, slotted contracts and filesystem
+The package-root facade exports these frozen, slotted contracts and filesystem
 adapter:
 
 ```python
@@ -35,6 +35,15 @@ CONVERSATION_EVENT_SCHEMA_VERSION = 1
 CONVERSATION_CONTEXT_POLICY = ConversationContextPolicy(24, 32_768)
 FilesystemConversationEventStore(workspace, *, catalog=None)
 ```
+
+The established
+`story_writing_agents.FilesystemConversationEventStore` and
+`story_writing_agents.workspace.FilesystemConversationEventStore` imports are
+aliases of the same class defined by
+`story_writing_agents.conversation_storage.filesystem`. Direct owner-module
+imports are available for internal or advanced ownership clarity. The
+`story_writing_agents.conversation_storage` package facade deliberately does
+not export the class.
 
 `ConversationEventStore` defines:
 
@@ -161,7 +170,10 @@ rewrites, or deletes events.
 
 ## Storage and validation boundary
 
-For the filesystem adapter, the path is
+The `story_writing_agents.conversation_storage.filesystem` owner holds the weak
+process-wide per-conversation lock across filesystem catalog validation,
+transcript parsing, complete-file replacement, and context selection. It owns
+the exact JSONL serialization and path
 `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/transcript.jsonl`.
 The catalog identity must exist but may be archived. A missing transcript reads
 as empty without creating a file. A present empty, malformed,

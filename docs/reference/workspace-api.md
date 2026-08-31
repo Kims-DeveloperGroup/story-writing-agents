@@ -1,8 +1,8 @@
 # Workspace API
 
 > **Availability:** workspace initialization, safe persistence primitives,
-> directives, inspection, and the filesystem conversation adapters are
-> implemented Python APIs.
+> directives, inspection, and supported facade aliases for the filesystem
+> conversation adapters are implemented Python APIs.
 
 Key terms: **relative path**—a location beneath the workspace root; **atomic
 replacement**—one complete file replacing another; **reservation**—exclusive
@@ -202,9 +202,30 @@ raises `DirectiveError`. Exact forms and precedence are in
 Key terms: **catalog**—conversation metadata and discovery; **event store**—the
 visible transcript and its bounded context view.
 
-`FilesystemConversationCatalog(workspace)` and
-`FilesystemConversationEventStore(workspace, *, catalog=None)` are backed by
-`Workspace`. Their contracts live in [Conversation catalog](conversation-catalog.md)
-and [Conversation transcripts](conversation-transcripts.md). See
+`story_writing_agents.workspace` remains the supported static user-facing
+facade for `FilesystemConversationCatalog(workspace)` and
+`FilesystemConversationEventStore(workspace, *, catalog=None)`. Those names,
+the package-root names, and the direct
+`story_writing_agents.conversation_storage.filesystem` owner names are
+identical class objects. The owner module is their canonical defining module;
+the `story_writing_agents.conversation_storage` package facade does not export
+them. Direct owner imports are intended for internal or advanced ownership
+clarity.
+
+The filesystem owner retains or constructs `Workspace` collaborators and
+exclusively owns conversation metadata/transcript paths, parsing,
+serialization, allocation cleanup, and the weak process-wide transcript lock
+registry. `workspace.core` continues to own generic secure workspace
+filesystem primitives plus debate/session persistence; its debate-sidecar
+event validation uses a distinct internal field set and does not share
+conversation persistence ownership. Private conversation implementation
+globals are not available from the workspace facade.
+
+This boundary move changes no supported import, constructor, path, persisted
+byte, validation, error, lock behavior, or user workflow, and requires no data
+rewrite or migration. Only reflection or debugging observes the owner module
+as the two classes' canonical `__module__`. Their contracts live in
+[Conversation catalog](conversation-catalog.md) and
+[Conversation transcripts](conversation-transcripts.md). See
 [Filesystem safety](../operations/filesystem-safety.md) for the security
 boundary and [Session storage](configuration/session-storage.md) for paths.

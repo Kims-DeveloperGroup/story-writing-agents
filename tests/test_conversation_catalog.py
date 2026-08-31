@@ -20,6 +20,7 @@ import story_writing_agents.conversations as conversations_module
 import story_writing_agents.conversations.catalog as conversation_catalog_module
 import story_writing_agents.conversations.context as conversation_context_module
 import story_writing_agents.conversations.events as conversation_events_module
+import story_writing_agents.conversation_storage.filesystem as filesystem_module
 import story_writing_agents.workspace as workspace_module
 import story_writing_agents.workspace.core as workspace_core_module
 from story_writing_agents import (
@@ -394,7 +395,7 @@ class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
         catalog = FilesystemConversationCatalog(workspace)
         fixed_uuid = UUID("11111111-2222-3333-4444-555555555555")
         with mock.patch.object(
-            workspace_core_module,
+            filesystem_module,
             "uuid4",
             return_value=fixed_uuid,
         ):
@@ -423,7 +424,7 @@ class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
         catalog = FilesystemConversationCatalog(workspace)
         fixed_uuid = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         with mock.patch.object(
-            workspace_core_module,
+            filesystem_module,
             "uuid4",
             return_value=fixed_uuid,
         ) as generate:
@@ -451,7 +452,7 @@ class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
         conversation_id = f"c_{fixed_uuid.hex}"
 
         with mock.patch.object(
-            workspace_core_module,
+            filesystem_module,
             "uuid4",
             return_value=fixed_uuid,
         ):
@@ -869,6 +870,14 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
             story_writing_agents.FilesystemConversationCatalog,
             workspace_module.FilesystemConversationCatalog,
         )
+        self.assertIs(
+            story_writing_agents.FilesystemConversationCatalog,
+            filesystem_module.FilesystemConversationCatalog,
+        )
+        self.assertEqual(
+            filesystem_module.FilesystemConversationCatalog.__module__,
+            filesystem_module.__name__,
+        )
         self.assertTrue(getattr(ConversationCatalog, "_is_protocol", False))
         self.assertTrue(issubclass(ConversationExistsError, StoryWritingAgentsError))
         self.assertTrue(issubclass(ConversationNotFoundError, StoryWritingAgentsError))
@@ -966,6 +975,7 @@ import story_writing_agents.conversations.events as events
 import story_writing_agents.conversations.catalog as catalog
 import story_writing_agents.conversations as conversations
 import story_writing_agents
+import story_writing_agents.conversation_storage.filesystem as filesystem
 import story_writing_agents.workspace as workspace
 assert story_writing_agents.ConversationCatalog is conversations.ConversationCatalog
 assert story_writing_agents.ConversationMetadata is conversations.ConversationMetadata
@@ -979,7 +989,13 @@ for name in {tuple(sorted(_PUBLIC_CONVERSATION_OBJECTS))!r}:
 assert (
     story_writing_agents.FilesystemConversationCatalog
     is workspace.FilesystemConversationCatalog
+    is filesystem.FilesystemConversationCatalog
 )
+assert filesystem.__all__ == [
+    "FilesystemConversationCatalog",
+    "FilesystemConversationEventStore",
+]
+assert filesystem.FilesystemConversationCatalog.__module__ == filesystem.__name__
 assert set({sorted(CONVERSATION_CATALOG_METHODS)!r}) <= set(dir(conversations.ConversationCatalog))
 """
         completed = subprocess.run(

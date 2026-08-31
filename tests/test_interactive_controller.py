@@ -1873,8 +1873,8 @@ class ControllerContractTests(ControllerTestCase):
 
         for module_name in graph:
             visit(module_name)
-        self.assertEqual(len(modules), 96)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 379)
+        self.assertEqual(len(modules), 97)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 385)
         self.assertTrue(
             {
                 "story_writing_agents.conversations",
@@ -1882,6 +1882,7 @@ class ControllerContractTests(ControllerTestCase):
                 "story_writing_agents.conversations.context",
                 "story_writing_agents.conversations.events",
                 "story_writing_agents.conversation_storage.archive",
+                "story_writing_agents.conversation_storage.filesystem",
                 "story_writing_agents.conversation_storage.filesystem_archive",
                 "story_writing_agents.conversation_storage.migration",
                 "story_writing_agents.conversation_storage.sqlite_database",

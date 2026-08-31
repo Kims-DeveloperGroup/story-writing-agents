@@ -19,7 +19,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, Callable, TypeVar
 
-from ..workspace import Workspace
+from ..workspace.core import Workspace
 
 
 SQLITE_APPLICATION_ID = 0x53574143

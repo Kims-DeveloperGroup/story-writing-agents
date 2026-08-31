@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 from uuid import UUID
 
-import story_writing_agents.workspace.core as workspace_module
+import story_writing_agents.conversation_storage.filesystem as filesystem_module
 from story_writing_agents.backend import AgentBackend
 from story_writing_agents.cli_context import (
     load_cli_context,
@@ -178,7 +178,7 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
             UUID(hex="a" * 32),
         )
         with mock.patch.object(
-            workspace_module,
+            filesystem_module,
             "uuid4",
             side_effect=identifiers,
         ):
@@ -323,7 +323,7 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
         workspace = self.make_workspace()
         catalog = FilesystemConversationCatalog(workspace)
         with mock.patch.object(
-            workspace_module,
+            filesystem_module,
             "uuid4",
             return_value=UUID(hex=_A[2:]),
         ):
@@ -403,7 +403,7 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
             UUID(hex=_COLLIDING_B[2:]),
         )
         with mock.patch.object(
-            workspace_module,
+            filesystem_module,
             "uuid4",
             side_effect=identifiers,
         ):
@@ -461,7 +461,7 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
         self.seed_default_ready_session(workspace)
         catalog = FilesystemConversationCatalog(workspace)
         with mock.patch.object(
-            workspace_module,
+            filesystem_module,
             "uuid4",
             return_value=UUID(hex=_A[2:]),
         ):

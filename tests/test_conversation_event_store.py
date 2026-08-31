@@ -19,6 +19,7 @@ import story_writing_agents
 import story_writing_agents.conversations as conversations_module
 import story_writing_agents.conversations.context as conversation_context_module
 import story_writing_agents.conversations.events as conversation_events_module
+import story_writing_agents.conversation_storage.filesystem as filesystem_module
 import story_writing_agents.workspace as workspace_module
 import story_writing_agents.workspace.core as workspace_core_module
 from story_writing_agents import (
@@ -928,7 +929,7 @@ class FilesystemConversationEventStorePersistenceTests(
             return sentinel
 
         with mock.patch.object(
-            workspace_core_module,
+            filesystem_module,
             "select_bounded_conversation_context",
             side_effect=select_while_transcript_lock_is_held,
         ) as select:
@@ -1560,6 +1561,14 @@ class ConversationEventPackageBoundaryTests(unittest.TestCase):
             story_writing_agents.FilesystemConversationEventStore,
             workspace_module.FilesystemConversationEventStore,
         )
+        self.assertIs(
+            story_writing_agents.FilesystemConversationEventStore,
+            filesystem_module.FilesystemConversationEventStore,
+        )
+        self.assertEqual(
+            filesystem_module.FilesystemConversationEventStore.__module__,
+            filesystem_module.__name__,
+        )
 
     def test_package_and_boundary_modules_import_cleanly_without_side_effects(
         self,
@@ -1576,6 +1585,7 @@ import story_writing_agents.conversations.context as context
 import story_writing_agents.conversations.events as events
 import story_writing_agents.conversations as conversations
 import story_writing_agents
+import story_writing_agents.conversation_storage.filesystem as filesystem
 import story_writing_agents.workspace as workspace
 assert story_writing_agents.ConversationEvent is conversations.ConversationEvent
 assert story_writing_agents.ConversationEventStore is conversations.ConversationEventStore
@@ -1590,7 +1600,13 @@ assert (
 assert (
     story_writing_agents.FilesystemConversationEventStore
     is workspace.FilesystemConversationEventStore
+    is filesystem.FilesystemConversationEventStore
 )
+assert filesystem.__all__ == [
+    "FilesystemConversationCatalog",
+    "FilesystemConversationEventStore",
+]
+assert filesystem.FilesystemConversationEventStore.__module__ == filesystem.__name__
 assert set({sorted(_EVENT_FIELDS)!r}) == set(conversations.ConversationEvent.__dataclass_fields__)
 assert set({sorted(_APPEND_FIELDS)!r}) == set(
     conversations.ConversationEventAppend.__dataclass_fields__

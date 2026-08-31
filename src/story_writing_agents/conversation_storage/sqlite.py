@@ -45,7 +45,7 @@ from ..errors import (
     WorkspaceSecurityError,
     WorkspaceVersionUnsupportedError,
 )
-from ..workspace import Workspace
+from ..workspace.core import Workspace
 from .archive import (
     CONVERSATION_ARCHIVE_SCHEMA_VERSION,
     ConversationArchive,
