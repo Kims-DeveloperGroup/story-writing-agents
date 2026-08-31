@@ -17,6 +17,8 @@ from unittest import mock
 
 import story_writing_agents
 import story_writing_agents.conversations as conversations_module
+import story_writing_agents.conversations.context as conversation_context_module
+import story_writing_agents.conversations.events as conversation_events_module
 import story_writing_agents.workspace as workspace_module
 from story_writing_agents import (
     CONVERSATION_CONTEXT_POLICY,
@@ -83,6 +85,20 @@ _WINDOW_FIELDS = (
     "retained_utf8_bytes",
     "truncated",
 )
+_EVENT_EXPORTS = {
+    "CONVERSATION_EVENT_SCHEMA_VERSION",
+    "ConversationEvent",
+    "ConversationEventAppend",
+    "ConversationEventKind",
+}
+_CONTEXT_EXPORTS = {
+    "CONVERSATION_CONTEXT_POLICY",
+    "ConversationContextPolicy",
+    "ConversationContextWindow",
+    "ConversationEventStore",
+    "select_bounded_conversation_context",
+    "validate_conversation_context_window",
+}
 
 
 def _transcript_path(
@@ -415,7 +431,7 @@ class ConversationContextSelectorTests(unittest.TestCase):
         )
 
     def test_empty_unmatched_and_runtime_error_completion_are_exact(self) -> None:
-        select = conversations_module.select_bounded_conversation_context
+        select = conversation_context_module.select_bounded_conversation_context
         self.assertEqual(
             select(()),
             ConversationContextWindow((), 0, 0, 0, 0, False),
@@ -455,7 +471,7 @@ class ConversationContextSelectorTests(unittest.TestCase):
         self.assertEqual(incomplete.total_complete_turns, 0)
 
     def test_turn_and_utf8_caps_keep_the_newest_whole_suffix(self) -> None:
-        select = conversations_module.select_bounded_conversation_context
+        select = conversation_context_module.select_bounded_conversation_context
         events: list[ConversationEvent] = []
         for turn_number in range(1, 26):
             events.extend(
@@ -525,7 +541,7 @@ class ConversationContextSelectorTests(unittest.TestCase):
         self.assertEqual(select(oversized).omitted_turns, 1)
 
     def test_non_tuple_identity_pairing_and_contiguous_tampering_fail(self) -> None:
-        select = conversations_module.select_bounded_conversation_context
+        select = conversation_context_module.select_bounded_conversation_context
         user = self.event(
             1,
             "turn_a",
@@ -549,6 +565,127 @@ class ConversationContextSelectorTests(unittest.TestCase):
             with self.subTest(events=events):
                 with self.assertRaises((TypeError, ValueError)):
                     select(events)  # type: ignore[arg-type]
+
+
+class ConversationContextValidationTests(unittest.TestCase):
+    """Verify the context owner's identity and complete-turn validation."""
+
+    @staticmethod
+    def event_pair() -> tuple[ConversationEvent, ConversationEvent]:
+        user = make_stored_event(
+            sequence=1,
+            turn_id="turn_a",
+            kind=ConversationEventKind.USER_MESSAGE,
+            sender="user",
+            recipient=LEAD_ORCHESTRATOR,
+            content="question",
+        )
+        reply = make_stored_event(
+            sequence=2,
+            turn_id="turn_a",
+            kind=ConversationEventKind.AGENT_REPLY,
+            sender=LEAD_ORCHESTRATOR,
+            recipient="user",
+            content="reply",
+        )
+        return user, reply
+
+    @staticmethod
+    def window(
+        events: tuple[ConversationEvent, ...],
+    ) -> ConversationContextWindow:
+        return ConversationContextWindow(
+            events=events,
+            total_complete_turns=1,
+            retained_turns=1,
+            omitted_turns=0,
+            retained_utf8_bytes=sum(
+                len(event.content.encode("utf-8")) for event in events
+            ),
+            truncated=False,
+        )
+
+    def test_canonical_complete_pair_returns_the_same_window(self) -> None:
+        window = self.window(self.event_pair())
+
+        returned = conversation_context_module.validate_conversation_context_window(
+            window,
+            session_id="session_a",
+            conversation_id="conversation_a",
+        )
+
+        self.assertIs(returned, window)
+
+    def test_identity_incomplete_pairing_and_order_tampering_are_rejected(
+        self,
+    ) -> None:
+        user, reply = self.event_pair()
+        canonical = self.window((user, reply))
+        cases = (
+            (
+                "different session",
+                canonical,
+                {
+                    "session_id": "session_b",
+                    "conversation_id": "conversation_a",
+                },
+            ),
+            (
+                "different conversation",
+                canonical,
+                {
+                    "session_id": "session_a",
+                    "conversation_id": "conversation_b",
+                },
+            ),
+            (
+                "excluded turn",
+                canonical,
+                {
+                    "session_id": "session_a",
+                    "conversation_id": "conversation_a",
+                    "excluded_turn_id": "turn_a",
+                },
+            ),
+            (
+                "incomplete turn",
+                self.window((user,)),
+                {
+                    "session_id": "session_a",
+                    "conversation_id": "conversation_a",
+                },
+            ),
+            (
+                "two user events",
+                self.window((user, replace(user, sequence=2))),
+                {
+                    "session_id": "session_a",
+                    "conversation_id": "conversation_a",
+                },
+            ),
+            (
+                "decreasing sequence",
+                self.window((reply, user)),
+                {
+                    "session_id": "session_a",
+                    "conversation_id": "conversation_a",
+                },
+            ),
+            (
+                "reply sender mismatch",
+                self.window((user, replace(reply, sender=PLOT_ARCHITECT))),
+                {
+                    "session_id": "session_a",
+                    "conversation_id": "conversation_a",
+                },
+            ),
+        )
+        for label, window, arguments in cases:
+            with self.subTest(label=label), self.assertRaises(ValueError):
+                conversation_context_module.validate_conversation_context_window(
+                    window,
+                    **arguments,
+                )
 
 
 class InMemoryConversationEventStoreContractTests(
@@ -1305,6 +1442,28 @@ class FilesystemConversationEventStoreConcurrencyTests(
 
 class ConversationEventPackageBoundaryTests(unittest.TestCase):
     def test_public_signatures_protocol_and_exports_are_exact(self) -> None:
+        self.assertEqual(set(conversation_events_module.__all__), _EVENT_EXPORTS)
+        self.assertEqual(len(conversation_events_module.__all__), len(_EVENT_EXPORTS))
+        self.assertEqual(set(conversation_context_module.__all__), _CONTEXT_EXPORTS)
+        self.assertEqual(
+            len(conversation_context_module.__all__),
+            len(_CONTEXT_EXPORTS),
+        )
+        for owner, names in (
+            (conversation_events_module, _EVENT_EXPORTS),
+            (conversation_context_module, _CONTEXT_EXPORTS),
+        ):
+            for name in names:
+                with self.subTest(owner=owner.__name__, name=name):
+                    self.assertIs(
+                        getattr(owner, name),
+                        getattr(conversations_module, name),
+                    )
+
+        self.assertIs(
+            ConversationEventStore,
+            conversation_context_module.ConversationEventStore,
+        )
         self.assertTrue(getattr(ConversationEventStore, "_is_protocol", False))
         self.assertEqual(
             set(
@@ -1321,6 +1480,50 @@ class ConversationEventPackageBoundaryTests(unittest.TestCase):
         self.assertIs(append_hints["return"], ConversationEvent)
         self.assertEqual(read_hints["return"], tuple[ConversationEvent, ...])
         self.assertIs(context_hints["return"], ConversationContextWindow)
+
+        select = conversation_context_module.select_bounded_conversation_context
+        validate = conversation_context_module.validate_conversation_context_window
+        self.assertEqual(tuple(inspect.signature(select).parameters), ("events",))
+        validate_signature = inspect.signature(validate)
+        self.assertEqual(
+            tuple(validate_signature.parameters),
+            (
+                "context",
+                "session_id",
+                "conversation_id",
+                "excluded_turn_id",
+            ),
+        )
+        self.assertIs(
+            validate_signature.parameters["context"].kind,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        )
+        for name in ("session_id", "conversation_id", "excluded_turn_id"):
+            self.assertIs(
+                validate_signature.parameters[name].kind,
+                inspect.Parameter.KEYWORD_ONLY,
+            )
+        self.assertIsNone(validate_signature.parameters["conversation_id"].default)
+        self.assertIsNone(
+            validate_signature.parameters["excluded_turn_id"].default
+        )
+        self.assertEqual(
+            get_type_hints(select),
+            {
+                "events": tuple[ConversationEvent, ...],
+                "return": ConversationContextWindow,
+            },
+        )
+        self.assertEqual(
+            get_type_hints(validate),
+            {
+                "context": ConversationContextWindow,
+                "session_id": str,
+                "conversation_id": str | None,
+                "excluded_turn_id": str | None,
+                "return": ConversationContextWindow,
+            },
+        )
 
         constructor = inspect.signature(FilesystemConversationEventStore)
         self.assertEqual(tuple(constructor.parameters), ("workspace", "catalog"))
@@ -1366,12 +1569,23 @@ class ConversationEventPackageBoundaryTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         code = f"""
 import sys
+from typing import get_type_hints
 sys.path.insert(0, {str(source)!r})
-import story_writing_agents
+import story_writing_agents.conversations.context as context
+import story_writing_agents.conversations.events as events
 import story_writing_agents.conversations as conversations
+import story_writing_agents
 import story_writing_agents.workspace as workspace
 assert story_writing_agents.ConversationEvent is conversations.ConversationEvent
 assert story_writing_agents.ConversationEventStore is conversations.ConversationEventStore
+assert events.ConversationEvent is conversations.ConversationEvent
+assert context.ConversationContextWindow is conversations.ConversationContextWindow
+assert context.ConversationEventStore is conversations.ConversationEventStore
+assert context.ConversationEventStore.__module__ == "story_writing_agents.conversations"
+assert (
+    get_type_hints(context.ConversationEventStore.read_context)["return"]
+    is conversations.ConversationContextWindow
+)
 assert (
     story_writing_agents.FilesystemConversationEventStore
     is workspace.FilesystemConversationEventStore

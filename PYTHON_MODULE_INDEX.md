@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 92.
+Importable production units indexed: 95.
 
-Direct internal dependency edges indexed: 372.
+Direct internal dependency edges indexed: 378.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -206,8 +206,11 @@ provider_auth -> (standard library only)
 provider_catalog -> (standard library only)
 provider_process -> (standard library only)
 session_lifecycle -> (standard library only)
-workspace -> conversations -> agents/errors
-          -> models/writing_artifacts
+conversations -> conversations.catalog/context/events
+conversations.catalog -> errors
+conversations.context -> conversations.events/errors
+conversations.events -> agents/errors
+workspace -> conversations/models/writing_artifacts
 writing_artifacts -> writing_artifacts.authorization/catalog/directives/read_actions/references
 writing_artifacts.authorization -> writing_artifacts.catalog/references
 writing_artifacts.directives -> writing_artifacts.references
@@ -2903,28 +2906,31 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ### `story_writing_agents.conversations`
 
-- **Source:** `src/story_writing_agents/conversations.py`
-- **Responsibility:** Define and validate provider-neutral subject-conversation
-  persistence contracts.
-- **Supported surface:** Package-supported
-  `CONVERSATION_CONTEXT_POLICY`, `CONVERSATION_EVENT_SCHEMA_VERSION`,
+- **Source:** `src/story_writing_agents/conversations/__init__.py`
+- **Responsibility:** Provide the stable subject-conversation contract import
+  boundary.
+- **Supported surface:** Exactly 17 names in `__all__` in their established
+  order: `CONVERSATION_CONTEXT_POLICY`,
+  `CONVERSATION_EVENT_SCHEMA_VERSION`,
   `CONVERSATION_METADATA_SCHEMA_VERSION`,
   `CONVERSATION_SUBJECT_NORMALIZATION_VERSION`,
   `MAX_CONVERSATION_SUBJECT_LENGTH`, `ConversationCatalog`,
   `ConversationContextPolicy`, `ConversationContextWindow`,
   `ConversationEvent`, `ConversationEventAppend`, `ConversationEventKind`,
-  `ConversationEventStore`, `ConversationMetadata`, `ConversationStatus`, and
-  `normalize_conversation_subject`. The canonical
-  `select_bounded_conversation_context` and
-  `validate_conversation_context_window` helpers are module-supported rather
-  than facade-exported. The selector validates one exact chronological
-  transcript snapshot and derives its fixed-policy newest suffix of complete
-  turns without persistence access.
-- **Direct internal dependencies:** `agents` and `errors`.
-- **State, resources, and side effects:** Immutable value contracts plus
-  deterministic normalization, pure fixed-policy complete-turn context
-  selection, and identity-bound context-window validation only; owns no
-  mutable state or external resource.
+  `ConversationEventStore`, `ConversationMetadata`, `ConversationStatus`,
+  `normalize_conversation_subject`, `select_bounded_conversation_context`, and
+  `validate_conversation_context_window`. The first 15 remain supported by the
+  project-root facade; the two pure context helpers remain supported only from
+  this facade. Every binding is the object defined by its owning leaf, without
+  a wrapper, and every supported class or function retains the canonical
+  `story_writing_agents.conversations` module identity.
+- **Direct internal dependencies:** `conversations.catalog`,
+  `conversations.context`, and `conversations.events`.
+- **State, resources, and side effects:** Owns no mutable state or external
+  resource. Import loads the three pure contract leaves and deterministically
+  binds their public object metadata to the canonical facade identity; it
+  performs no filesystem, provider, process, environment, thread, or
+  application-startup operation.
 - **Primary verification/documentation:**
   `tests/conversation_catalog_contract.py`,
   `tests/conversation_event_store_contract.py`,
@@ -2932,6 +2938,73 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_conversation_event_store.py`,
   `docs/reference/conversation-catalog.md`, and
   `docs/reference/conversation-transcripts.md`.
+
+### `story_writing_agents.conversations.catalog`
+
+- **Source:** `src/story_writing_agents/conversations/catalog.py`
+- **Responsibility:** Define subject-conversation identity and lifecycle
+  contracts.
+- **Supported surface:** Exactly seven owning-module names in `__all__`:
+  `CONVERSATION_METADATA_SCHEMA_VERSION`,
+  `CONVERSATION_SUBJECT_NORMALIZATION_VERSION`,
+  `MAX_CONVERSATION_SUBJECT_LENGTH`, `ConversationCatalog`,
+  `ConversationMetadata`, `ConversationStatus`, and
+  `normalize_conversation_subject`. The conversations and project-root
+  facades expose the same defining objects.
+- **Direct internal dependencies:** `errors`.
+- **State, resources, and side effects:** Immutable metadata values, the
+  storage-neutral catalog protocol, and deterministic subject, identifier, and
+  timestamp validation only; owns no mutable state or external resource and
+  performs no import-time I/O.
+- **Primary verification/documentation:**
+  `tests/conversation_catalog_contract.py`,
+  `tests/test_conversation_catalog.py`,
+  `docs/reference/conversation-catalog.md`, and
+  `docs/reference/package-api.md`.
+
+### `story_writing_agents.conversations.context`
+
+- **Source:** `src/story_writing_agents/conversations/context.py`
+- **Responsibility:** Define bounded-context-capable transcript access
+  contracts.
+- **Supported surface:** Exactly six owning-module names in `__all__`:
+  `CONVERSATION_CONTEXT_POLICY`, `ConversationContextPolicy`,
+  `ConversationContextWindow`, `ConversationEventStore`,
+  `select_bounded_conversation_context`, and
+  `validate_conversation_context_window`. The event-store protocol lives at
+  this higher layer so its `read_context` annotation resolves the defining
+  context-window object without a reverse event-module dependency. The
+  conversations facade exposes the same defining objects; the project-root
+  facade omits only the two pure helpers.
+- **Direct internal dependencies:** `conversations.events` and `errors`.
+- **State, resources, and side effects:** Immutable policy and window values,
+  the storage-neutral transcript port, pure fixed-policy complete-turn
+  selection, and identity-bound context validation only; owns no mutable state
+  or external resource and performs no import-time I/O.
+- **Primary verification/documentation:**
+  `tests/conversation_event_store_contract.py`,
+  `tests/test_conversation_event_store.py`,
+  `docs/reference/conversation-transcripts.md`, and
+  `docs/reference/package-api.md`.
+
+### `story_writing_agents.conversations.events`
+
+- **Source:** `src/story_writing_agents/conversations/events.py`
+- **Responsibility:** Define immutable visible conversation-event schemas.
+- **Supported surface:** Exactly four owning-module names in `__all__`:
+  `CONVERSATION_EVENT_SCHEMA_VERSION`, `ConversationEvent`,
+  `ConversationEventAppend`, and `ConversationEventKind`. The conversations
+  and project-root facades expose the same defining objects.
+- **Direct internal dependencies:** `agents` and `errors`.
+- **State, resources, and side effects:** Immutable event values plus
+  deterministic identifier, actor, payload, sequence, and timestamp validation
+  only; owns no mutable state or external resource and performs no import-time
+  I/O.
+- **Primary verification/documentation:**
+  `tests/conversation_event_store_contract.py`,
+  `tests/test_conversation_event_store.py`,
+  `docs/reference/conversation-transcripts.md`, and
+  `docs/reference/package-api.md`.
 
 ### `story_writing_agents.debug_log`
 
