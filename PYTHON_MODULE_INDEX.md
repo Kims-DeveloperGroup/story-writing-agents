@@ -2389,23 +2389,26 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:**
   `src/story_writing_agents/conversation_storage/filesystem.py`
-- **Responsibility:** Own filesystem conversation catalog and authoritative
-  transcript persistence.
-- **Supported surface:** Exactly `FilesystemConversationCatalog` and
-  `FilesystemConversationEventStore` in `__all__`, in that order. The owning
-  module, stable `workspace` facade, and project-root facade expose the same
-  class objects. Their canonical defining module is
-  `story_writing_agents.conversation_storage.filesystem`; constructors,
-  signatures, path-like inputs, concrete `isinstance` behavior, and the
-  established workspace and root imports remain supported. The
-  `conversation_storage` package facade deliberately does not re-export either
-  class.
+- **Responsibility:** Own authoritative filesystem persistence for conversation
+  metadata and histories.
+- **Supported surface:** Exactly `FilesystemConversationCatalog`,
+  `FilesystemConversationEventStore`, and
+  `FilesystemCollaborationEventStore` in `__all__`, in that order. The owning
+  module exposes all three class objects. The stable `workspace` facade and
+  project-root facade continue to expose only the first two established v1
+  classes; `FilesystemCollaborationEventStore` is a direct-module-only API and
+  is not actively composed. Every class's canonical defining module is
+  `story_writing_agents.conversation_storage.filesystem`; established v1
+  constructors, signatures, path-like inputs, concrete `isinstance` behavior,
+  and workspace and root imports remain supported. The `conversation_storage`
+  package facade deliberately does not re-export any of the three classes.
 - **Direct internal dependencies:** `conversations`, `errors`, and
   `workspace.core`.
-- **State, resources, and side effects:** Import creates only one guarded weak
-  process-wide transcript-lock registry and immutable schema/allocation
-  constants; it performs no filesystem access and opens no resource. Each
-  catalog retains one supplied or constructed `Workspace`, owns bounded UUID
+- **State, resources, and side effects:** Import creates only separate guarded
+  weak process-wide v1 transcript- and v2 collaboration-history-lock registries
+  plus immutable schema/allocation constants; it performs no filesystem access
+  and opens no resource. Each catalog retains one supplied or constructed
+  `Workspace`, owns bounded UUID
   allocation and exact metadata JSON under
   `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/metadata.json`,
   and uses the workspace's secure path and atomic replacement primitives.
@@ -2414,18 +2417,33 @@ every intermediate arrow. The current runtime graph is acyclic.
   workspace/session/conversation identity, strictly parses and serializes exact
   authoritative JSONL at the sibling `transcript.jsonl`, and holds that lock
   across catalog validation, transcript reads, bounded-context selection, and
-  complete-file atomic append replacement. Failed create cleanup remains
-  confined to a newly empty conversation directory; catalog and absent-
-  transcript reads do not create storage.
+  complete-file atomic append replacement. Each collaboration store likewise
+  retains one workspace plus its supplied or default catalog and uses a weak
+  per-history process lock. A present-history read or append additionally owns
+  a blocking POSIX advisory lock through the persistent sibling
+  `.collaboration-history.lock`; unsupported locking fails closed. The store
+  reads only strict canonical schema-v2 JSONL from
+  `collaboration-history.jsonl`, validates the complete path-bound history and
+  projection, and maps stored-history corruption to the fixed read/append
+  boundaries. A new atomic batch is assigned contiguous sequence and batch
+  metadata plus durable timestamps, then the complete history is staged in the
+  same directory, file-fsynced, replaced, and directory-fsynced before success
+  is returned. Exact retries recover the original receipt after an uncertain
+  post-replace failure. Failed create cleanup remains confined to a newly empty
+  conversation directory; catalog, absent-transcript, and absent-collaboration-
+  history reads do not create storage.
 - **Primary verification/documentation:**
   `tests/test_conversation_catalog.py`,
   `tests/conversation_catalog_contract.py`,
   `tests/test_conversation_event_store.py`,
   `tests/conversation_event_store_contract.py`,
+  `tests/test_filesystem_collaboration_event_store.py`,
   `tests/test_conversation_storage.py`,
   `tests/test_filesystem_conversation_archive.py`,
   `docs/reference/conversation-catalog.md`,
   `docs/reference/conversation-transcripts.md`,
+  `docs/reference/package-api.md`,
+  `docs/reference/collaboration-history.md`,
   `docs/design/persistence.md`, and
   `docs/operations/filesystem-safety.md`.
 
@@ -3061,20 +3079,21 @@ every intermediate arrow. The current runtime graph is acyclic.
   sequence order and are retained atomically under the fixed 24-record/32-KiB
   caps. This provider-context value is distinct from
   `CollaborationEventStore.read_context()`, which continues to return the
-  recovery/state projection. The v2 store is the sole unused
-  batch-oriented collaboration port and returns its owning pure projection;
+  recovery/state projection. The v2 store is the sole batch-oriented
+  collaboration port, is consumed by the uncomposed direct-module filesystem
+  adapter, and returns its owning pure projection;
   candidate validation deterministically returns the original
   `ALREADY_COMMITTED` receipt for an exact retry and raises the fixed append
   failure taxonomy for batch/event conflicts, stale sequence, invalid
-  candidates, or corrupt existing history. No active v1 storage or runtime
-  consumer uses it in this change. The
+  candidates, or corrupt existing history. No active composition, v1 storage,
+  or runtime consumer uses it in this change. The
   conversations facade exposes the same defining objects, while the
   project-root facade exposes only the established v1 subset.
 - **Direct internal dependencies:** `conversations.events` and `errors`.
 - **State, resources, and side effects:** Immutable policy, window, and
   projection/readable values; immutable closed field and transition metadata;
-  the v1 and unused v2 storage-neutral ports; pure fixed-policy selection; and
-  deterministic full-history, candidate,
+  the v1 and direct-adapter-consumed v2 storage-neutral ports; pure fixed-policy
+  selection; and deterministic full-history, candidate,
   transition, correlation, budget-lineage, and atomic co-batch validation
   including exact external-exchange/result closure and rejection of every late
   provider/execution event outside the exact active running attempt. Owns no
@@ -3083,6 +3102,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/conversation_event_store_contract.py`,
   `tests/test_conversation_event_store.py`,
   `tests/test_collaboration_context.py`,
+  `tests/test_filesystem_collaboration_event_store.py`,
   `docs/reference/conversation-transcripts.md`,
   `docs/reference/package-api.md`, and
   `docs/reference/collaboration-history.md`.

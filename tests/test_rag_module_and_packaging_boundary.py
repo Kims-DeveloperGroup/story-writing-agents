@@ -1055,13 +1055,17 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 assert filesystem.__all__ == [
                     "FilesystemConversationCatalog",
                     "FilesystemConversationEventStore",
+                    "FilesystemCollaborationEventStore",
                 ]
                 for name in workspace_core.__all__:
                     value = getattr(workspace, name)
                     assert value is getattr(workspace_core, name)
                     assert value is getattr(story_writing_agents, name)
                     assert value.__module__ == "story_writing_agents.workspace"
-                for name in filesystem.__all__:
+                for name in (
+                    "FilesystemConversationCatalog",
+                    "FilesystemConversationEventStore",
+                ):
                     value = getattr(workspace, name)
                     assert value is getattr(filesystem, name)
                     assert value is getattr(story_writing_agents, name)
@@ -1069,6 +1073,17 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     assert not hasattr(workspace_core, name)
                     assert name not in conversation_storage.__all__
                     assert not hasattr(conversation_storage, name)
+                direct_only_name = "FilesystemCollaborationEventStore"
+                direct_only_value = getattr(filesystem, direct_only_name)
+                assert direct_only_value.__module__ == filesystem.__name__
+                for boundary in (
+                    story_writing_agents,
+                    workspace,
+                    workspace_core,
+                    conversation_storage,
+                ):
+                    assert direct_only_name not in boundary.__all__
+                    assert not hasattr(boundary, direct_only_name)
                 for name in (
                     "open_workspace_root_directory",
                     "verify_workspace_root_directory",
@@ -1083,6 +1098,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 assert "__getattr__" not in vars(filesystem)
                 assert filesystem.FilesystemConversationCatalog.__init__.__globals__ is filesystem.__dict__
                 assert filesystem.FilesystemConversationEventStore.__init__.__globals__ is filesystem.__dict__
+                assert filesystem.FilesystemCollaborationEventStore.__init__.__globals__ is filesystem.__dict__
                 assert len(rag_cli.__all__) == 7
                 assert len(composition.__all__) == 10
                 assert len(local.__all__) == 5

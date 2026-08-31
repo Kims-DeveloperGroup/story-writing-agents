@@ -461,6 +461,83 @@ path-mismatched record raises `WorkspaceFormatError`. Symlinks raise
 `WorkspaceSecurityError`. Exact event rules are in
 [Conversation transcripts](../reference/conversation-transcripts.md).
 
+<a id="schema-v2-collaboration-history-safety"></a>
+
+## Schema-v2 collaboration-history safety
+
+`FilesystemCollaborationEventStore` is a separate direct-module adapter. It is
+not the active schema-v1 event store, is not exported through a package facade,
+and is not selected by the shell. It owns only these siblings below an existing
+catalog conversation:
+
+```text
+collaboration-history.jsonl
+.collaboration-history.lock
+```
+
+`transcript.jsonl` remains the independent schema-v1 owner. Construction and
+an absent-history read create no v2 storage. Present reads and appends verify
+catalog identity, use the workspace's contained no-symlink path checks, and
+hold both a weak per-history process lock and a blocking POSIX exclusive
+advisory lock. A present guard must remain the same regular non-symlink file
+after open. Unsupported safe-open, advisory-lock, or directory-fsync primitives
+fail closed rather than weakening the operation.
+
+The history must be strict canonical schema-v2 JSONL: one exact encoded event
+per line and exactly one final LF. The adapter validates every record's path
+identity, complete batch metadata, contiguous sequence, unique IDs, digest,
+state transition, correlation, budget, and co-batch closure before returning a
+read or considering an append. A present empty file, malformed or noncanonical
+JSON, invalid UTF-8, schema-v1 record, partial batch, or invalid complete
+history raises `WorkspaceFormatError`. `append_batch()` maps that stored
+corruption to `CollaborationAppendError(CORRUPT_HISTORY)`; neither path mutates
+the rejected bytes.
+
+Append publication is one complete-file replacement:
+
+1. validate the locked current history and candidate;
+2. assign contiguous sequence/batch metadata and canonical UTC timestamps;
+3. write the complete canonical image to a same-directory mode-`0600`
+   temporary file;
+4. flush and file-fsync it;
+5. atomically replace `collaboration-history.jsonl`; and
+6. mandatorily fsync the parent directory before returning `APPENDED`.
+
+Failure before replace leaves the old history or absence authoritative and
+cleans the temporary file when cleanup remains possible. Failure after replace,
+including directory-fsync, advisory unlock, or descriptor close, is uncertain:
+the call reports an operational error while a complete new history may be
+visible. Retry only the exact same `batch_id` and exact canonical drafts. If
+the replacement is present, validation returns the original sequence range and
+timestamps as `ALREADY_COMMITTED`; do not create a fresh batch merely because
+the first call lacked a receipt.
+
+The history contains plaintext user-visible proposal, message, assignment,
+reply, decision, result, notice, interruption, and state facts. A newly staged
+history file and newly created guard request mode `0600`; existing workspace
+directory ownership and access policy remain the operator's responsibility.
+The adapter is not encryption, authorization, backup, retention, secure erase,
+or permission repair.
+
+Use failures as follows:
+
+| Observation | Safe response |
+| --- | --- |
+| `APPENDED` | Continue from the returned exact receipt and freshly read history. |
+| `ALREADY_COMMITTED` | Treat the exact retry as success; retain its original sequences and timestamps. |
+| Fixed semantic conflict | Preserve history; reread for stale CAS, or repair caller-generated batch/event identity. Never force the rejected candidate. |
+| Operational error before commit is known | Preserve the workspace. If replace might have happened, retry only the exact batch. |
+| `WorkspaceFormatError` or `corrupt_history` | Stop normal appends, preserve the exact bytes, and restore only a trusted complete schema-v2 history through an owning future recovery/transfer workflow. |
+| Unsafe lock/history path | Stop writers and inspect the containing workspace with trusted local tools. Do not follow, replace, or repair an alias in place. |
+
+Do not hand-edit, pretty-print, truncate, combine, or copy schema-v1 transcript
+bytes into this file. This adapter supplies no conversion, rollback, repair,
+archive, or workspace-migration workflow. Durable confirmation and projected
+next action remain evidence only; reading them never recreates a provider,
+workspace lease, Git capability, credential, or permission to repeat work. See
+[Structured collaboration history](../reference/collaboration-history.md#direct-filesystem-storage-and-retry)
+and the [persistence boundary](../design/persistence.md#structured-collaboration-history-persistence).
+
 <a id="conversation-archive-filesystem-safety"></a>
 
 ## Conversation archive filesystem safety

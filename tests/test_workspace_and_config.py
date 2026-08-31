@@ -21,6 +21,7 @@ from typing import NoReturn
 from unittest import mock
 
 import story_writing_agents
+import story_writing_agents.conversation_storage as conversation_storage_facade
 from story_writing_agents import (
     AGENT_SPECS,
     CHARACTER_CUSTODIAN,
@@ -279,10 +280,12 @@ class WorkspaceTests(unittest.TestCase):
         self,
     ) -> None:
         core_names = ["Workspace", "initialize_workspace"]
-        owner_names = [
+        v1_owner_names = [
             "FilesystemConversationCatalog",
             "FilesystemConversationEventStore",
         ]
+        direct_only_name = "FilesystemCollaborationEventStore"
+        owner_names = [*v1_owner_names, direct_only_name]
         public_names = [
             "Workspace",
             "initialize_workspace",
@@ -322,6 +325,10 @@ class WorkspaceTests(unittest.TestCase):
                 ("workspace", inspect.Parameter.POSITIONAL_OR_KEYWORD, required),
             ),
             filesystem_module.FilesystemConversationEventStore: (
+                ("workspace", inspect.Parameter.POSITIONAL_OR_KEYWORD, required),
+                ("catalog", inspect.Parameter.KEYWORD_ONLY, None),
+            ),
+            filesystem_module.FilesystemCollaborationEventStore: (
                 ("workspace", inspect.Parameter.POSITIONAL_OR_KEYWORD, required),
                 ("catalog", inspect.Parameter.KEYWORD_ONLY, None),
             ),
@@ -374,6 +381,7 @@ class WorkspaceTests(unittest.TestCase):
         for globals_mapping in (
             filesystem_module.FilesystemConversationCatalog.__init__.__globals__,
             filesystem_module.FilesystemConversationEventStore.__init__.__globals__,
+            filesystem_module.FilesystemCollaborationEventStore.__init__.__globals__,
         ):
             self.assertIs(globals_mapping, filesystem_module.__dict__)
 
@@ -381,6 +389,19 @@ class WorkspaceTests(unittest.TestCase):
             self.assertFalse(hasattr(workspace_module, name))
             self.assertNotIn(name, workspace_module.__all__)
             self.assertNotIn(name, filesystem_module.__dict__.get("__getattr__", ()))
+        direct_only_value = getattr(filesystem_module, direct_only_name)
+        self.assertEqual(direct_only_value.__module__, filesystem_module.__name__)
+        self.assertIs(
+            pickle.loads(pickle.dumps(direct_only_value)),
+            direct_only_value,
+        )
+        for facade in (
+            workspace_facade,
+            story_writing_agents,
+            conversation_storage_facade,
+        ):
+            self.assertNotIn(direct_only_name, facade.__all__)
+            self.assertFalse(hasattr(facade, direct_only_name))
         self.assertNotIn("Workspace", filesystem_module.__all__)
         self.assertNotIn("initialize_workspace", filesystem_module.__all__)
         self.assertNotIn("_CONVERSATION_EVENT_FIELDS", vars(workspace_module))
@@ -450,6 +471,11 @@ facade = importlib.import_module("story_writing_agents.workspace")
 core = importlib.import_module("story_writing_agents.workspace.core")
 owner = importlib.import_module("story_writing_agents.conversation_storage.filesystem")
 storage = importlib.import_module("story_writing_agents.conversation_storage")
+v1_owner_names = (
+    "FilesystemConversationCatalog",
+    "FilesystemConversationEventStore",
+)
+direct_only_name = "FilesystemCollaborationEventStore"
 assert facade.__all__ == [
     "Workspace",
     "initialize_workspace",
@@ -460,16 +486,22 @@ assert core.__all__ == ["Workspace", "initialize_workspace"]
 assert owner.__all__ == [
     "FilesystemConversationCatalog",
     "FilesystemConversationEventStore",
+    "FilesystemCollaborationEventStore",
 ]
 for name in core.__all__:
     assert getattr(root, name) is getattr(facade, name) is getattr(core, name)
     assert getattr(facade, name).__module__ == "story_writing_agents.workspace"
-for name in owner.__all__:
+for name in v1_owner_names:
     assert getattr(root, name) is getattr(facade, name) is getattr(owner, name)
     assert getattr(facade, name).__module__ == owner.__name__
     assert not hasattr(core, name)
     assert name not in storage.__all__
     assert not hasattr(storage, name)
+direct_only_value = getattr(owner, direct_only_name)
+assert direct_only_value.__module__ == owner.__name__
+for boundary in (root, facade, core, storage):
+    assert direct_only_name not in boundary.__all__
+    assert not hasattr(boundary, direct_only_name)
 for name in (
     "open_workspace_root_directory",
     "verify_workspace_root_directory",
@@ -513,6 +545,7 @@ assert facade.__dict__.get("__getattr__") is None
 assert owner.__dict__.get("__getattr__") is None
 assert owner.FilesystemConversationCatalog.__init__.__globals__ is owner.__dict__
 assert owner.FilesystemConversationEventStore.__init__.__globals__ is owner.__dict__
+assert owner.FilesystemCollaborationEventStore.__init__.__globals__ is owner.__dict__
 print("ok")
 """
             with (

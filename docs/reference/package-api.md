@@ -122,9 +122,10 @@ selection API or standalone artifact command. See
 
 ## Structured collaboration history boundary
 
-Schema-v2 collaboration contracts are supported only through the static
-`story_writing_agents.conversations` facade. Importing it performs no I/O and
-does not start the runtime, a provider, a store, or a shell:
+Schema-v2 collaboration value, wire, validation, and projection contracts are
+supported through the static `story_writing_agents.conversations` facade.
+Importing it performs no I/O and does not start the runtime, a provider, a
+store, or a shell:
 
 ```python
 from story_writing_agents.conversations import (
@@ -154,12 +155,36 @@ Every facade binding is the same object as its owning-leaf
 binding. All collaboration classes and functions report
 `story_writing_agents.conversations` as their canonical public module.
 
-No schema-v2 collaboration name is exported by the exact 120-name
+No schema-v2 conversation value is exported by the exact 120-name
 `story_writing_agents` root or by `story_writing_agents.conversation_storage`.
-There is no dynamic forwarding or alternate import path. The current runtime,
+There is no dynamic forwarding. The current runtime, selected
 filesystem/SQLite transcript adapters, and UI use only the established
-schema-v1 contracts; the v2 `CollaborationEventStore` remains an unimplemented
-caller-owned protocol.
+schema-v1 contracts. A direct Python caller can now satisfy the v2
+`CollaborationEventStore` protocol with the concrete filesystem adapter:
+
+```python
+from story_writing_agents.conversation_storage.filesystem import (
+    FilesystemCollaborationEventStore,
+)
+```
+
+Its constructor is
+`FilesystemCollaborationEventStore(workspace, *, catalog=None)`. It exposes
+`append_batch(batch)`, `read(session_id, conversation_id)`, and
+`read_context(session_id, conversation_id)`. Construction performs no I/O.
+The class is the third name in the owning module's `__all__`, after the two
+established v1 filesystem classes, but it is deliberately absent from the
+`conversation_storage`, `workspace`, and project-root facades and from active
+composition. This is an intentional direct-module import path, not dynamic
+forwarding.
+
+The adapter owns strict schema-v2 `collaboration-history.jsonl` plus its
+`.collaboration-history.lock`, atomic full-history append/retry, and state
+projection. It does not replace or forward the active v1 `transcript.jsonl`,
+does not implement SQLite/archive/transfer, and does not call a provider or
+recreate authority. See the
+[direct storage scenario](collaboration-history.md#direct-filesystem-storage-and-retry)
+and [filesystem safety](../operations/filesystem-safety.md#schema-v2-collaboration-history-safety).
 
 The fixed collaboration constants are schema version `2`, round limit `2`,
 physical-call limit `12`, maximum visible text size `32_768` UTF-8 bytes, and
@@ -176,8 +201,8 @@ rejects schema-v1 or corrupt v2 histories. Default bounded context contains
 only a content-free schema/session/conversation/count/tail bootstrap; only
 explicit unique known event IDs add whole records under the fixed caps. It has
 no current-input or provider operation. `CollaborationHistoryProjection`
-remains the separate state/recovery summary and the return type of the future
-store port's `read_context()`.
+remains the separate state/recovery summary and the return type of the store
+port's `read_context()`.
 
 Exact literal search, original-range citations, snapshot paging, and derived
 readable-document identity are not added to this facade. They are the following
@@ -205,12 +230,14 @@ package-root-supported schema-v1 surface plus those 12 v2 names. None of the 12
 is re-exported at the project root. The direct operations are pure, perform no
 I/O, and do not activate storage, runtime, RAG, or provider behavior.
 
-Start with [Structured collaboration history](collaboration-history.md) for
-the exact user impact, proposal closure, structured-decision rule, state table,
-atomic batch contract, restart behavior, privacy limits, and executable Python
-examples. See [Conversation search](conversation-search.md#schema-v2-readable-collaboration-history)
-for the direct read surface. Export availability alone does not authorize execution and does not
-imply a concrete store, current UI, command, provider workflow, or migration.
+Start with [Structured collaboration history](collaboration-history.md) for the
+exact user impact, proposal closure, structured-decision rule, state table,
+atomic batch and direct-filesystem contracts, restart behavior, privacy limits,
+and Python examples. See
+[Conversation search](conversation-search.md#schema-v2-readable-collaboration-history)
+for the pure direct read surface. Export availability and stored history do not
+authorize execution and do not imply current UI, command, provider workflow,
+SQLite support, archive support, or migration.
 
 <a id="conversation-literal-search-mechanics"></a>
 

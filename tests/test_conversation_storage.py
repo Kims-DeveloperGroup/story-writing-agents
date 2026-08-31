@@ -1681,6 +1681,7 @@ class ConversationStorageBoundaryTests(unittest.TestCase):
             [
                 "FilesystemConversationCatalog",
                 "FilesystemConversationEventStore",
+                "FilesystemCollaborationEventStore",
             ],
         )
         self.assertEqual(
@@ -1712,11 +1713,23 @@ class ConversationStorageBoundaryTests(unittest.TestCase):
             with self.subTest(filesystem_owner_name=name):
                 self.assertNotIn(name, storage.__all__)
                 self.assertFalse(hasattr(storage, name))
+        for name in (
+            "FilesystemConversationCatalog",
+            "FilesystemConversationEventStore",
+        ):
+            with self.subTest(root_filesystem_name=name):
                 self.assertIn(name, story_writing_agents.__all__)
                 self.assertIs(
                     getattr(story_writing_agents, name),
                     getattr(filesystem_module, name),
                 )
+        self.assertNotIn(
+            "FilesystemCollaborationEventStore",
+            story_writing_agents.__all__,
+        )
+        self.assertFalse(
+            hasattr(story_writing_agents, "FilesystemCollaborationEventStore")
+        )
         for name in expected:
             with self.subTest(root_name=name):
                 self.assertNotIn(name, story_writing_agents.__all__)
@@ -1746,6 +1759,7 @@ class ConversationStorageBoundaryTests(unittest.TestCase):
                 "conversation_storage/filesystem.py": {
                     "FilesystemConversationCatalog",
                     "FilesystemConversationEventStore",
+                    "FilesystemCollaborationEventStore",
                 }
             },
         )
@@ -1815,12 +1829,14 @@ class ConversationStorageBoundaryTests(unittest.TestCase):
             "assert len(archive.__all__) == 22; "
             "assert len(filesystem_archive.__all__) == 2; "
             "assert filesystem.__all__ == "
-            "['FilesystemConversationCatalog', 'FilesystemConversationEventStore']; "
+            "['FilesystemConversationCatalog', 'FilesystemConversationEventStore', "
+            "'FilesystemCollaborationEventStore']; "
             "assert len(package.__all__) == 64; "
             "assert all(name not in package.__all__ for name in filesystem.__all__); "
             "assert all(not hasattr(package, name) for name in filesystem.__all__); "
             "assert all(getattr(root, name) is getattr(filesystem, name) "
-            "for name in filesystem.__all__); "
+            "for name in filesystem.__all__[:2]); "
+            "assert not hasattr(root, 'FilesystemCollaborationEventStore'); "
             "assert len(root.__all__) == 120; "
             "assert all(name not in root.__all__ for name in expected); "
             "assert all(not hasattr(root, name) for name in expected); "
