@@ -378,19 +378,19 @@ shows the one exact command and warns that it changes host packages with the
 real terminal attached. The separate confirmation highlights NO and runs the
 command only after exact YES. Decline, recognized CI, unsupported platform,
 installation failure, failed same-interpreter reprobe, provisioning failure,
-or migration/parity failure leaves configuration unchanged.
+or transfer/parity failure leaves configuration unchanged.
 
 An explicit SQLite choice may create the fixed empty database, but it never
-copies conversations. If Apply Changes says migration is required, leave the current
-shell, run the provider-free migration and verification commands in the active
+copies conversations. If Apply Changes says transfer is required, leave the current
+shell, run the provider-free transfer and verification commands in the active
 direction, reopen `/settings`, select SQLite again, choose Apply Changes, and
 start a new shell.
 When returning to filesystem, verify from active SQLite first. Select
-filesystem directly if the stores already match; migrate only source identities
+filesystem directly if the stores already match; transfer only source identities
 that are absent from an otherwise compatible filesystem target. A same-identity
-conflict or destination-only filesystem identity blocks migration instead of
+conflict or destination-only filesystem identity blocks transfer instead of
 being overwritten or deleted. See the
-[guided SQLite workflow](sqlite-conversation-storage.md#sqlite-storage-reverse-migration)
+[guided SQLite workflow](sqlite-conversation-storage.md#sqlite-storage-reverse-transfer)
 and [exact selection contract](../reference/cli.md#conversation-storage-selection).
 
 Apply Changes fails closed if either configuration file, the provider-route generation

@@ -1,4 +1,4 @@
-"""Provider-free canonical filesystem and SQLite conversation migration."""
+"""Provider-free canonical filesystem and SQLite conversation transfer."""
 
 from __future__ import annotations
 
@@ -62,12 +62,12 @@ from .sqlite import (
 )
 
 
-CONVERSATION_STORAGE_MIGRATION_SCHEMA_VERSION = 1
-CONVERSATION_STORAGE_MIGRATION_CHECKPOINT_DIRECTORY = (
-    "agent_states/orchestrator_state/conversation_storage_migrations"
+CONVERSATION_STORAGE_TRANSFER_SCHEMA_VERSION = 1
+CONVERSATION_STORAGE_TRANSFER_CHECKPOINT_DIRECTORY = (
+    "agent_states/orchestrator_state/conversation_storage_transfers"
 )
 
-_MIGRATION_TIMEOUT_SECONDS = 3_600.0
+_TRANSFER_TIMEOUT_SECONDS = 3_600.0
 _SQLITE_SIGNED_INTEGER_MAX = 9_223_372_036_854_775_807
 _CHECKPOINT_IDENTITY_MAX_BYTES = 256
 _CHECKPOINT_FIXED_MAX_BYTES = 4_096
@@ -118,15 +118,15 @@ _FAILURE_CODES = frozenset(
 _Identity = tuple[str, str]
 
 
-class ConversationStorageMigrationOperation(StrEnum):
+class ConversationStorageTransferOperation(StrEnum):
     """Supported explicit conversation-storage workflows."""
 
-    MIGRATE = "migrate"
+    TRANSFER = "transfer"
     VERIFY = "verify"
 
 
-class ConversationStorageMigrationOutcome(StrEnum):
-    """Stable top-level migration report outcomes."""
+class ConversationStorageTransferOutcome(StrEnum):
+    """Stable top-level transfer report outcomes."""
 
     COMPLETED = "completed"
     WORK_REQUIRED = "work_required"
@@ -134,11 +134,11 @@ class ConversationStorageMigrationOutcome(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class ConversationStorageMigrationReport:
-    """One strict counts-only result for migration users and the CLI."""
+class ConversationStorageTransferReport:
+    """One strict counts-only result for transfer users and the CLI."""
 
-    operation: ConversationStorageMigrationOperation
-    outcome: ConversationStorageMigrationOutcome
+    operation: ConversationStorageTransferOperation
+    outcome: ConversationStorageTransferOutcome
     source_backend: ConversationStorageBackend
     destination_backend: ConversationStorageBackend
     dry_run: bool
@@ -154,22 +154,22 @@ class ConversationStorageMigrationReport:
     failure: str | None
 
     def __post_init__(self) -> None:
-        if type(self.operation) is not ConversationStorageMigrationOperation:
-            raise TypeError("migration report operation is invalid")
-        if type(self.outcome) is not ConversationStorageMigrationOutcome:
-            raise TypeError("migration report outcome is invalid")
+        if type(self.operation) is not ConversationStorageTransferOperation:
+            raise TypeError("transfer report operation is invalid")
+        if type(self.outcome) is not ConversationStorageTransferOutcome:
+            raise TypeError("transfer report outcome is invalid")
         if type(self.source_backend) is not ConversationStorageBackend:
-            raise TypeError("migration report source backend is invalid")
+            raise TypeError("transfer report source backend is invalid")
         if type(self.destination_backend) is not ConversationStorageBackend:
-            raise TypeError("migration report destination backend is invalid")
+            raise TypeError("transfer report destination backend is invalid")
         if type(self.dry_run) is not bool:
-            raise TypeError("migration report dry_run is invalid")
+            raise TypeError("transfer report dry_run is invalid")
         if type(self.parity) is not ConversationStorageParity or self.parity not in (
             ConversationStorageParity.VERIFIED,
             ConversationStorageParity.MISMATCH,
             ConversationStorageParity.UNVERIFIED,
         ):
-            raise ValueError("migration report parity is invalid")
+            raise ValueError("transfer report parity is invalid")
         for value in (
             self.create,
             self.identical,
@@ -180,35 +180,35 @@ class ConversationStorageMigrationReport:
             self.source_events,
         ):
             if type(value) is not int or value < 0:
-                raise TypeError("migration report counts are invalid")
+                raise TypeError("transfer report counts are invalid")
         if self.checkpoint not in _CHECKPOINT_STATES:
-            raise ValueError("migration report checkpoint is invalid")
-        if self.outcome is ConversationStorageMigrationOutcome.FAILED:
+            raise ValueError("transfer report checkpoint is invalid")
+        if self.outcome is ConversationStorageTransferOutcome.FAILED:
             if self.failure not in _FAILURE_CODES:
-                raise ValueError("migration report failure is invalid")
+                raise ValueError("transfer report failure is invalid")
         elif self.failure is not None:
-            raise ValueError("successful migration report failure must be null")
+            raise ValueError("successful transfer report failure must be null")
 
     @classmethod
     def failed(
         cls,
         *,
-        operation: ConversationStorageMigrationOperation | str,
+        operation: ConversationStorageTransferOperation | str,
         source_backend: ConversationStorageBackend | str,
         destination_backend: ConversationStorageBackend | str,
         dry_run: bool,
         failure: str,
-    ) -> ConversationStorageMigrationReport:
+    ) -> ConversationStorageTransferReport:
         """Build a zero-count content-free report for an adapter entry failure."""
 
         resolved_operation = (
             operation
-            if type(operation) is ConversationStorageMigrationOperation
-            else ConversationStorageMigrationOperation(operation)
+            if type(operation) is ConversationStorageTransferOperation
+            else ConversationStorageTransferOperation(operation)
         )
         return cls(
             operation=resolved_operation,
-            outcome=ConversationStorageMigrationOutcome.FAILED,
+            outcome=ConversationStorageTransferOutcome.FAILED,
             source_backend=_coerce_backend(source_backend),
             destination_backend=_coerce_backend(destination_backend),
             dry_run=dry_run,
@@ -228,10 +228,10 @@ class ConversationStorageMigrationReport:
     def exit_code(self) -> int:
         """Return the fixed process exit for this complete result."""
 
-        if self.outcome is not ConversationStorageMigrationOutcome.FAILED:
+        if self.outcome is not ConversationStorageTransferOutcome.FAILED:
             return 0
         if (
-            self.operation is ConversationStorageMigrationOperation.VERIFY
+            self.operation is ConversationStorageTransferOperation.VERIFY
             and self.parity is ConversationStorageParity.MISMATCH
             and self.failure == "parity_mismatch"
             and self.conflict == 0
@@ -244,7 +244,7 @@ class ConversationStorageMigrationReport:
         """Return the fixed version-1 JSON-compatible report schema."""
 
         return {
-            "schema_version": CONVERSATION_STORAGE_MIGRATION_SCHEMA_VERSION,
+            "schema_version": CONVERSATION_STORAGE_TRANSFER_SCHEMA_VERSION,
             "operation": self.operation.value,
             "outcome": self.outcome.value,
             "from": self.source_backend.value,
@@ -279,7 +279,7 @@ class ConversationStorageMigrationReport:
 
 @dataclass(slots=True)
 class _WorkflowState:
-    operation: ConversationStorageMigrationOperation
+    operation: ConversationStorageTransferOperation
     source_backend: ConversationStorageBackend
     destination_backend: ConversationStorageBackend
     dry_run: bool
@@ -295,12 +295,12 @@ class _WorkflowState:
 
     def report(
         self,
-        outcome: ConversationStorageMigrationOutcome,
+        outcome: ConversationStorageTransferOutcome,
         *,
         parity: ConversationStorageParity,
         failure: str | None = None,
-    ) -> ConversationStorageMigrationReport:
-        return ConversationStorageMigrationReport(
+    ) -> ConversationStorageTransferReport:
+        return ConversationStorageTransferReport(
             operation=self.operation,
             outcome=outcome,
             source_backend=self.source_backend,
@@ -320,11 +320,11 @@ class _WorkflowState:
 
 
 @dataclass(frozen=True, slots=True)
-class _MigrationWorkspaceTopology:
+class _TransferWorkspaceTopology:
     root: Path
 
     @classmethod
-    def capture(cls, workspace: Workspace) -> _MigrationWorkspaceTopology:
+    def capture(cls, workspace: Workspace) -> _TransferWorkspaceTopology:
         if not isinstance(workspace, Workspace):
             raise TypeError("workspace must be a Workspace")
         root = Path(os.fspath(workspace.root))
@@ -357,7 +357,7 @@ class _ArchiveAdapters:
 
 
 @dataclass(frozen=True, slots=True)
-class _MigrationPlan:
+class _TransferPlan:
     source_archive: ConversationArchive
     destination_archive: ConversationArchive
     source_records: dict[_Identity, ConversationArchiveConversation]
@@ -379,7 +379,7 @@ class _Checkpoint:
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "schema_version": CONVERSATION_STORAGE_MIGRATION_SCHEMA_VERSION,
+            "schema_version": CONVERSATION_STORAGE_TRANSFER_SCHEMA_VERSION,
             "direction": self.direction,
             "source_fingerprint": self.source_fingerprint,
             "source": {
@@ -398,27 +398,27 @@ class _Checkpoint:
 
 
 class _CheckpointInvalidError(Exception):
-    """A fixed migration checkpoint cannot be trusted."""
+    """A fixed transfer checkpoint cannot be trusted."""
 
 
 class _CheckpointVersionError(_CheckpointInvalidError):
     """A recognized checkpoint uses an unsupported schema version."""
 
 
-def migrate_conversation_storage(
+def transfer_conversation_storage(
     workspace: Workspace,
     *,
     source_backend: ConversationStorageBackend | str,
     destination_backend: ConversationStorageBackend | str,
     dry_run: bool = False,
-) -> ConversationStorageMigrationReport:
-    """Plan or migrate one activated backend to the other canonical backend."""
+) -> ConversationStorageTransferReport:
+    """Plan or transfer one active backend to the other canonical backend."""
 
     if type(dry_run) is not bool:
         raise TypeError("dry_run must be a boolean")
     return _run_storage_workflow(
         workspace,
-        operation=ConversationStorageMigrationOperation.MIGRATE,
+        operation=ConversationStorageTransferOperation.TRANSFER,
         source_backend=_coerce_backend(source_backend),
         destination_backend=_coerce_backend(destination_backend),
         dry_run=dry_run,
@@ -430,12 +430,12 @@ def verify_conversation_storage(
     *,
     source_backend: ConversationStorageBackend | str,
     destination_backend: ConversationStorageBackend | str,
-) -> ConversationStorageMigrationReport:
+) -> ConversationStorageTransferReport:
     """Compare one activated canonical backend with the other without mutation."""
 
     return _run_storage_workflow(
         workspace,
-        operation=ConversationStorageMigrationOperation.VERIFY,
+        operation=ConversationStorageTransferOperation.VERIFY,
         source_backend=_coerce_backend(source_backend),
         destination_backend=_coerce_backend(destination_backend),
         dry_run=False,
@@ -445,11 +445,11 @@ def verify_conversation_storage(
 def _run_storage_workflow(
     workspace: Workspace,
     *,
-    operation: ConversationStorageMigrationOperation,
+    operation: ConversationStorageTransferOperation,
     source_backend: ConversationStorageBackend,
     destination_backend: ConversationStorageBackend,
     dry_run: bool,
-) -> ConversationStorageMigrationReport:
+) -> ConversationStorageTransferReport:
     state = _WorkflowState(
         operation=operation,
         source_backend=source_backend,
@@ -458,25 +458,25 @@ def _run_storage_workflow(
     )
     if source_backend is destination_backend:
         return state.report(
-            ConversationStorageMigrationOutcome.FAILED,
+            ConversationStorageTransferOutcome.FAILED,
             parity=ConversationStorageParity.UNVERIFIED,
             failure="invalid_request",
         )
 
     try:
-        topology = _MigrationWorkspaceTopology.capture(workspace)
+        topology = _TransferWorkspaceTopology.capture(workspace)
         operation_workspace = topology.workspace()
         coordinator = WorkspaceConversationStorageMutationCoordinator(
             operation_workspace
         )
         if coordinator.workspace_key != topology.workspace_key:
             raise ConversationStorageCoordinationError()
-        with coordinator.borrow(timeout_seconds=_MIGRATION_TIMEOUT_SECONDS) as lease:
+        with coordinator.borrow(timeout_seconds=_TRANSFER_TIMEOUT_SECONDS) as lease:
             _validate_lease(lease, topology.workspace_key)
             activation = load_conversation_storage_activation_state(operation_workspace)
             if activation.backend is not source_backend:
                 return state.report(
-                    ConversationStorageMigrationOutcome.FAILED,
+                    ConversationStorageTransferOutcome.FAILED,
                     parity=ConversationStorageParity.UNVERIFIED,
                     failure="activation_mismatch",
                 )
@@ -512,7 +512,7 @@ def _run_storage_workflow(
             blocked = _blocked_plan_report(state)
             if blocked is not None:
                 return blocked
-            if operation is ConversationStorageMigrationOperation.VERIFY:
+            if operation is ConversationStorageTransferOperation.VERIFY:
                 return _verification_report(state, plan)
 
             source_fingerprint = hashlib.sha256(source_wire).hexdigest()
@@ -530,9 +530,9 @@ def _run_storage_workflow(
             if dry_run:
                 return state.report(
                     (
-                        ConversationStorageMigrationOutcome.WORK_REQUIRED
+                        ConversationStorageTransferOutcome.WORK_REQUIRED
                         if plan.create
-                        else ConversationStorageMigrationOutcome.COMPLETED
+                        else ConversationStorageTransferOutcome.COMPLETED
                     ),
                     parity=(
                         ConversationStorageParity.UNVERIFIED
@@ -588,7 +588,7 @@ def _run_storage_workflow(
             final_destination = _export_canonical(destination_adapter, lease)
             if serialize_conversation_archive(final_destination) != source_wire:
                 return state.report(
-                    ConversationStorageMigrationOutcome.FAILED,
+                    ConversationStorageTransferOutcome.FAILED,
                     parity=ConversationStorageParity.MISMATCH,
                     failure="parity_mismatch",
                 )
@@ -610,7 +610,7 @@ def _run_storage_workflow(
             state.checkpoint = "completed"
             _validate_lease(lease, topology.workspace_key)
             return state.report(
-                ConversationStorageMigrationOutcome.COMPLETED,
+                ConversationStorageTransferOutcome.COMPLETED,
                 parity=ConversationStorageParity.VERIFIED,
             )
     except (KeyboardInterrupt, SystemExit):
@@ -639,7 +639,7 @@ def _build_plan(
     destination: ConversationArchive,
     *,
     destination_backend: ConversationStorageBackend,
-) -> _MigrationPlan:
+) -> _TransferPlan:
     source_records = _archive_records(source)
     destination_records = _archive_records(destination)
     create: list[_Identity] = []
@@ -660,7 +660,7 @@ def _build_plan(
             identical.append(identity)
         else:
             conflicts.append(identity)
-    return _MigrationPlan(
+    return _TransferPlan(
         source_archive=source,
         destination_archive=destination,
         source_records=source_records,
@@ -722,25 +722,25 @@ def _archive_counts(archive: ConversationArchive) -> tuple[int, int]:
 
 def _blocked_plan_report(
     state: _WorkflowState,
-) -> ConversationStorageMigrationReport | None:
+) -> ConversationStorageTransferReport | None:
     if state.conflict:
         return state.report(
-            ConversationStorageMigrationOutcome.FAILED,
+            ConversationStorageTransferOutcome.FAILED,
             parity=ConversationStorageParity.UNVERIFIED,
             failure="conflict",
         )
     if state.unsupported:
         return state.report(
-            ConversationStorageMigrationOutcome.FAILED,
+            ConversationStorageTransferOutcome.FAILED,
             parity=ConversationStorageParity.UNVERIFIED,
             failure="unsupported",
         )
     if (
-        state.operation is ConversationStorageMigrationOperation.MIGRATE
+        state.operation is ConversationStorageTransferOperation.TRANSFER
         and state.destination_only
     ):
         return state.report(
-            ConversationStorageMigrationOutcome.FAILED,
+            ConversationStorageTransferOutcome.FAILED,
             parity=ConversationStorageParity.UNVERIFIED,
             failure="destination_only",
         )
@@ -749,16 +749,16 @@ def _blocked_plan_report(
 
 def _verification_report(
     state: _WorkflowState,
-    plan: _MigrationPlan,
-) -> ConversationStorageMigrationReport:
+    plan: _TransferPlan,
+) -> ConversationStorageTransferReport:
     if plan.create or plan.destination_only:
         return state.report(
-            ConversationStorageMigrationOutcome.FAILED,
+            ConversationStorageTransferOutcome.FAILED,
             parity=ConversationStorageParity.MISMATCH,
             failure="parity_mismatch",
         )
     return state.report(
-        ConversationStorageMigrationOutcome.COMPLETED,
+        ConversationStorageTransferOutcome.COMPLETED,
         parity=ConversationStorageParity.VERIFIED,
     )
 
@@ -767,7 +767,7 @@ def _load_resume_progress(
     workspace: Workspace,
     *,
     lease: ConversationStorageMutationLease,
-    plan: _MigrationPlan,
+    plan: _TransferPlan,
     direction: str,
     source_fingerprint: str,
     source_events: int,
@@ -968,7 +968,7 @@ def _parse_checkpoint(value: object, *, expected_direction: str) -> _Checkpoint:
         raise _CheckpointInvalidError()
     version = value.get("schema_version")
     if type(version) is int and (
-        version != CONVERSATION_STORAGE_MIGRATION_SCHEMA_VERSION
+        version != CONVERSATION_STORAGE_TRANSFER_SCHEMA_VERSION
     ):
         raise _CheckpointVersionError()
     if set(value) != _CHECKPOINT_FIELDS or type(version) is not int:
@@ -1073,7 +1073,7 @@ def _validate_checkpoint(
 def _checkpoint_relative(direction: str) -> str:
     if direction not in ("filesystem-to-sqlite", "sqlite-to-filesystem"):
         raise _CheckpointInvalidError()
-    return f"{CONVERSATION_STORAGE_MIGRATION_CHECKPOINT_DIRECTORY}/{direction}.json"
+    return f"{CONVERSATION_STORAGE_TRANSFER_CHECKPOINT_DIRECTORY}/{direction}.json"
 
 
 def _exact_object(value: object, fields: frozenset[str]) -> dict[str, Any]:
@@ -1104,7 +1104,7 @@ def _reject_constant(_value: str) -> None:
 def _failure_report(
     state: _WorkflowState,
     failure: Exception,
-) -> ConversationStorageMigrationReport:
+) -> ConversationStorageTransferReport:
     parity = ConversationStorageParity.UNVERIFIED
     if isinstance(failure, ConversationArchiveConflictError):
         state.conflict = max(state.conflict, 1)
@@ -1157,7 +1157,7 @@ def _failure_report(
     if state.phase == "destination_final" and code == "destination_invalid":
         parity = ConversationStorageParity.MISMATCH
     return state.report(
-        ConversationStorageMigrationOutcome.FAILED,
+        ConversationStorageTransferOutcome.FAILED,
         parity=parity,
         failure=code,
     )
@@ -1197,11 +1197,11 @@ def _validate_lease(
 
 
 __all__ = [
-    "CONVERSATION_STORAGE_MIGRATION_SCHEMA_VERSION",
-    "CONVERSATION_STORAGE_MIGRATION_CHECKPOINT_DIRECTORY",
-    "ConversationStorageMigrationOperation",
-    "ConversationStorageMigrationOutcome",
-    "ConversationStorageMigrationReport",
-    "migrate_conversation_storage",
+    "CONVERSATION_STORAGE_TRANSFER_SCHEMA_VERSION",
+    "CONVERSATION_STORAGE_TRANSFER_CHECKPOINT_DIRECTORY",
+    "ConversationStorageTransferOperation",
+    "ConversationStorageTransferOutcome",
+    "ConversationStorageTransferReport",
+    "transfer_conversation_storage",
     "verify_conversation_storage",
 ]

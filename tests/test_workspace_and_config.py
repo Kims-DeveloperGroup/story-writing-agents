@@ -218,9 +218,7 @@ def debate_context_window(
         total_complete_turns=3,
         retained_turns=1,
         omitted_turns=2,
-        retained_utf8_bytes=sum(
-            len(event.content.encode("utf-8")) for event in events
-        ),
+        retained_utf8_bytes=sum(len(event.content.encode("utf-8")) for event in events),
         truncated=True,
     )
 
@@ -256,14 +254,10 @@ class AgentRosterTests(unittest.TestCase):
             EXECUTION_SPECIALIST: ("narrative_rules.md",),
         }
         expected_prompt_files = {
-            agent_id: f"config/agents/{agent_id}/AGENTS.md"
-            for agent_id in ROSTER
+            agent_id: f"config/agents/{agent_id}/AGENTS.md" for agent_id in ROSTER
         }
         self.assertEqual(
-            {
-                agent_id: AGENT_SPECS[agent_id].system_prompt_file
-                for agent_id in ROSTER
-            },
+            {agent_id: AGENT_SPECS[agent_id].system_prompt_file for agent_id in ROSTER},
             expected_prompt_files,
         )
         for agent_id in SPECIALIST_IDS:
@@ -302,9 +296,7 @@ class WorkspaceTests(unittest.TestCase):
             with self.subTest(public_name=name):
                 value = getattr(workspace_facade, name)
                 self.assertIs(value, getattr(story_writing_agents, name))
-                owner = (
-                    workspace_module if name in core_names else filesystem_module
-                )
+                owner = workspace_module if name in core_names else filesystem_module
                 self.assertIs(value, getattr(owner, name))
                 expected_module = (
                     "story_writing_agents.workspace"
@@ -421,9 +413,7 @@ class WorkspaceTests(unittest.TestCase):
                 workspace,
                 catalog=catalog,
             )
-            path_event_store = filesystem_module.FilesystemConversationEventStore(
-                root
-            )
+            path_event_store = filesystem_module.FilesystemConversationEventStore(root)
 
             self.assertIs(catalog.workspace, workspace)
             self.assertIs(event_store.workspace, workspace)
@@ -431,7 +421,9 @@ class WorkspaceTests(unittest.TestCase):
             for adapter in (path_catalog, path_event_store):
                 self.assertIsInstance(adapter.workspace, Workspace)
                 self.assertEqual(adapter.workspace.root, workspace.root)
-            self.assertIsInstance(catalog, filesystem_module.FilesystemConversationCatalog)
+            self.assertIsInstance(
+                catalog, filesystem_module.FilesystemConversationCatalog
+            )
             self.assertIsInstance(
                 event_store,
                 filesystem_module.FilesystemConversationEventStore,
@@ -524,14 +516,28 @@ for module_name in (
     assert consumer.verify_workspace_root_directory is facade.verify_workspace_root_directory
 smoke = importlib.import_module("story_writing_agents.smoke")
 assert smoke.WORKSPACE_DIRECTORIES is facade.WORKSPACE_DIRECTORIES
-for module_name in (
-    "story_writing_agents.conversation_storage.composition",
-    "story_writing_agents.conversation_storage.filesystem_archive",
-):
-    consumer = importlib.import_module(module_name)
-    assert consumer.Workspace is core.Workspace
-    assert consumer.FilesystemConversationCatalog is owner.FilesystemConversationCatalog
-    assert consumer.FilesystemConversationEventStore is owner.FilesystemConversationEventStore
+composition = importlib.import_module(
+    "story_writing_agents.conversation_storage.composition"
+)
+assert composition.Workspace is core.Workspace
+assert (
+    composition.FilesystemConversationCatalog
+    is owner.FilesystemConversationCatalog
+)
+assert (
+    composition.FilesystemConversationEventStore
+    is owner.FilesystemConversationEventStore
+)
+archive = importlib.import_module(
+    "story_writing_agents.conversation_storage.filesystem_archive"
+)
+assert archive.Workspace is core.Workspace
+assert archive.FilesystemConversationCatalog is owner.FilesystemConversationCatalog
+assert (
+    archive.FilesystemCollaborationEventStore
+    is owner.FilesystemCollaborationEventStore
+)
+assert not hasattr(archive, "FilesystemConversationEventStore")
 for module_name in (
     "story_writing_agents.conversation_storage.migration",
     "story_writing_agents.conversation_storage.provisioning",
@@ -571,13 +577,12 @@ print("ok")
         self.assertFalse(hasattr(workspace, "read_core_documents"))
         self.assertEqual(
             core_snapshot(workspace),
-            {
-                filename: f"test input for {filename}\n"
-                for filename in CORE_DOCUMENTS
-            },
+            {filename: f"test input for {filename}\n" for filename in CORE_DOCUMENTS},
         )
 
-    def test_generic_writes_reject_canonical_artifacts_but_keep_other_helpers(self) -> None:
+    def test_generic_writes_reject_canonical_artifacts_but_keep_other_helpers(
+        self,
+    ) -> None:
         workspace = initialized_workspace(self)
         canonical_paths = (
             *(f"core_documents/{filename}" for filename in CORE_DOCUMENTS),
@@ -608,7 +613,9 @@ print("ok")
             {"value": 1},
         )
 
-    def test_generic_writes_reject_reserved_case_and_normalization_aliases(self) -> None:
+    def test_generic_writes_reject_reserved_case_and_normalization_aliases(
+        self,
+    ) -> None:
         workspace = initialized_workspace(self)
         aliases = (
             "Core_Documents/global_outline.md",
@@ -704,9 +711,7 @@ print("ok")
             mock.patch.object(
                 workspace_module.os,
                 "set_inheritable",
-                side_effect=AssertionError(
-                    "terminal retry reached os.set_inheritable"
-                ),
+                side_effect=AssertionError("terminal retry reached os.set_inheritable"),
             ) as set_inheritable,
             mock.patch.object(
                 workspace_module.os,
@@ -783,10 +788,7 @@ print("ok")
 
         self.assertIn(
             function_name,
-            {
-                frame.name
-                for frame in traceback.extract_tb(failure.__traceback__)
-            },
+            {frame.name for frame in traceback.extract_tb(failure.__traceback__)},
         )
 
     def test_root_identity_seams_preserve_public_surface_and_verify_existing_root(
@@ -884,8 +886,7 @@ print("ok")
                             }
                             if exc.errno in unsupported:
                                 self.skipTest(
-                                    "directory symlink creation is unsupported: "
-                                    f"{exc}"
+                                    f"directory symlink creation is unsupported: {exc}"
                                 )
                             raise
                     parked_before = tuple(
@@ -911,9 +912,7 @@ print("ok")
                                 descriptor,
                             )
                         with self.assertRaises(WorkspaceSecurityError):
-                            workspace_module.open_workspace_root_directory(
-                                workspace
-                            )
+                            workspace_module.open_workspace_root_directory(workspace)
                     finally:
                         os.close(descriptor)
 
@@ -1009,9 +1008,7 @@ print("ok")
                         for relative in WORKSPACE_DIRECTORIES
                     )
                 )
-                self.assertTrue(
-                    workspace.path("config/system_defaults.json").is_file()
-                )
+                self.assertTrue(workspace.path("config/system_defaults.json").is_file())
                 repeated = os.stat(root, follow_symlinks=False)
                 self.assertEqual(
                     (repeated.st_dev, repeated.st_ino),
@@ -1140,12 +1137,8 @@ print("ok")
                         external_before = snapshot_directory_namespace(external)
                         root = parent.joinpath(*components)
                         workspace = Workspace(root)
-                        selected = parent.joinpath(
-                            *components[: replacement_index + 1]
-                        )
-                        parked = selected.with_name(
-                            f".parked-{selected.name}-{phase}"
-                        )
+                        selected = parent.joinpath(*components[: replacement_index + 1])
+                        parked = selected.with_name(f".parked-{selected.name}-{phase}")
                         replaced = False
 
                         def replace_selected_ancestor() -> None:
@@ -1167,9 +1160,7 @@ print("ok")
                         real_entries = (
                             workspace_module._initialize_pending_workspace_entries
                         )
-                        real_walk = (
-                            workspace_module._walk_pending_workspace_directories
-                        )
+                        real_walk = workspace_module._walk_pending_workspace_directories
                         real_stat = os.stat
                         real_link = os.link
                         real_replace = os.replace
@@ -1402,9 +1393,7 @@ print("ok")
                         wraps=workspace._directory,
                     ) as child_directory,
                 ):
-                    caught = self.assert_safe_symlink_refusal(
-                        workspace.initialize
-                    )
+                    caught = self.assert_safe_symlink_refusal(workspace.initialize)
 
                 self.assertIs(caught, refusal)
                 self.assert_originating_traceback(caught, "fail_final_retry")
@@ -1445,9 +1434,7 @@ print("ok")
                     getattr(errno, "EOPNOTSUPP", errno.EINVAL),
                 }
                 if exc.errno in unsupported:
-                    self.skipTest(
-                        f"directory symlink creation is unsupported: {exc}"
-                    )
+                    self.skipTest(f"directory symlink creation is unsupported: {exc}")
                 raise
             link_target = os.readlink(root)
 
@@ -1456,13 +1443,9 @@ print("ok")
                 "_directory",
                 wraps=workspace._directory,
             ) as child_directory:
-                first_error = self.assert_safe_symlink_refusal(
-                    workspace.initialize
-                )
+                first_error = self.assert_safe_symlink_refusal(workspace.initialize)
                 self.assertEqual(snapshot_directory_namespace(external), before)
-                second_error = self.assert_identity_unavailable(
-                    workspace.initialize
-                )
+                second_error = self.assert_identity_unavailable(workspace.initialize)
             child_directory.assert_not_called()
 
             self.assertTrue(root.is_symlink())
@@ -1514,9 +1497,7 @@ print("ok")
                     else:
                         self.fail("pending bind stat failure did not propagate")
                 self.assertEqual(tuple(canonical_root.iterdir()), ())
-                second_error = self.assert_identity_unavailable(
-                    workspace.initialize
-                )
+                second_error = self.assert_identity_unavailable(workspace.initialize)
             child_directory.assert_not_called()
 
             self.assertTrue(canonical_root.is_dir())
@@ -1559,13 +1540,9 @@ print("ok")
                     "stat",
                     side_effect=zero_root_identity,
                 ):
-                    first_error = self.assert_identity_unavailable(
-                        workspace.initialize
-                    )
+                    first_error = self.assert_identity_unavailable(workspace.initialize)
                 self.assertEqual(tuple(canonical_root.iterdir()), ())
-                second_error = self.assert_identity_unavailable(
-                    workspace.initialize
-                )
+                second_error = self.assert_identity_unavailable(workspace.initialize)
             child_directory.assert_not_called()
 
             self.assertTrue(canonical_root.is_dir())
@@ -1896,17 +1873,16 @@ print("ok")
             self.assertEqual(set(write_roots), {bound_descriptor})
             self.assertEqual(root_close_count, 1)
             self.assertIsInstance(workspace._root_identity, tuple)
-            anchor_events = [
-                event for event in events if event[0] == "anchor_open"
-            ]
+            anchor_events = [event for event in events if event[0] == "anchor_open"]
             self.assertEqual(len(anchor_events), 2)
             self.assertTrue(
-                all(event[1] == os.fspath(workspace.root.anchor) for event in anchor_events)
+                all(
+                    event[1] == os.fspath(workspace.root.anchor)
+                    for event in anchor_events
+                )
             )
             root_close_at = next(
-                index
-                for index, event in enumerate(events)
-                if event[0] == "root_close"
+                index for index, event in enumerate(events) if event[0] == "root_close"
             )
             self.assertGreater(
                 root_close_at,
@@ -1924,10 +1900,7 @@ print("ok")
                     self.assertTrue(flags & os.O_NOFOLLOW)
             self.assertTrue(relative_stats)
             self.assertTrue(
-                all(
-                    values.get("follow_symlinks") is False
-                    for values in relative_stats
-                )
+                all(values.get("follow_symlinks") is False for values in relative_stats)
             )
             self.assertTrue(links)
             self.assertTrue(
@@ -2186,9 +2159,7 @@ print("ok")
                     snapshot_directory_namespace(external),
                     external_before,
                 )
-                self.assertTrue(
-                    workspace.path("config/system_defaults.json").is_file()
-                )
+                self.assertTrue(workspace.path("config/system_defaults.json").is_file())
                 self.assertIs(workspace.initialize(), workspace)
 
     def test_pending_root_set_inheritable_process_control_closes_descriptors(
@@ -2202,9 +2173,7 @@ print("ok")
                     temporary = tempfile.TemporaryDirectory()
                     self.addCleanup(temporary.cleanup)
                     root = (
-                        Path(temporary.name)
-                        / "descriptor_ancestor"
-                        / "descriptor_root"
+                        Path(temporary.name) / "descriptor_ancestor" / "descriptor_root"
                     )
                     workspace = Workspace(root)
                     target_path = {
@@ -2342,7 +2311,9 @@ print("ok")
                         self.assertIs(caught, body_failure)
                         self.assert_originating_traceback(caught, "fail_body_write")
                     else:
-                        self.fail(f"{body_type.__name__} body failure did not propagate")
+                        self.fail(
+                            f"{body_type.__name__} body failure did not propagate"
+                        )
 
                 self.assertEqual(root_close_count, 1)
                 self.assert_terminal_initialize_has_no_io(workspace)
@@ -2539,9 +2510,7 @@ print("ok")
             child.assert_not_called()
             self.assertFalse(root.exists())
             self.assertIs(workspace.initialize(), workspace)
-            self.assertTrue(
-                workspace.path("config/system_defaults.json").is_file()
-            )
+            self.assertTrue(workspace.path("config/system_defaults.json").is_file())
 
     def test_unavailable_non_directory_and_zero_root_identity_fail_closed(
         self,
@@ -2637,9 +2606,7 @@ print("ok")
                 )
                 self.assertIs(workspace.initialize(), workspace)
                 self.assert_identity_unavailable(
-                    lambda: workspace_module.open_workspace_root_directory(
-                        workspace
-                    )
+                    lambda: workspace_module.open_workspace_root_directory(workspace)
                 )
 
     def test_initial_system_defaults_are_exact_and_legacy_bytes_are_preserved(
@@ -2727,7 +2694,9 @@ print("ok")
             legacy,
         )
 
-    def test_initialization_creates_topology_and_preserves_existing_content(self) -> None:
+    def test_initialization_creates_topology_and_preserves_existing_content(
+        self,
+    ) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -2745,13 +2714,9 @@ print("ok")
             self.assertFalse(workspace.path(f"core_documents/{filename}").exists())
         for agent_id in ROSTER:
             self.assertTrue(
-                workspace.path(
-                    AGENT_SPECS[agent_id].system_prompt_file
-                ).is_file()
+                workspace.path(AGENT_SPECS[agent_id].system_prompt_file).is_file()
             )
-        self.assertTrue(
-            workspace.path("config/system_defaults.json").is_file()
-        )
+        self.assertTrue(workspace.path("config/system_defaults.json").is_file())
         self.assertTrue(workspace.path("config/agent_configs.json").is_file())
 
         workspace.initialize()
@@ -2807,8 +2772,7 @@ print("ok")
     ) -> None:
         workspace = initialized_workspace(self)
         customized = {
-            agent_id: f"custom prompt for {agent_id}\n"
-            for agent_id in ROSTER
+            agent_id: f"custom prompt for {agent_id}\n" for agent_id in ROSTER
         }
         for agent_id, content in customized.items():
             workspace.write_text(
@@ -2840,9 +2804,7 @@ print("ok")
         for agent_id, content in customized.items():
             with self.subTest(preserved_agent=agent_id):
                 self.assertEqual(
-                    workspace.read_text(
-                        AGENT_SPECS[agent_id].system_prompt_file
-                    ),
+                    workspace.read_text(AGENT_SPECS[agent_id].system_prompt_file),
                     content,
                 )
 
@@ -2850,9 +2812,7 @@ print("ok")
         for agent_id in ROSTER:
             with self.subTest(reset_agent=agent_id):
                 self.assertEqual(
-                    workspace.read_text(
-                        AGENT_SPECS[agent_id].system_prompt_file
-                    ),
+                    workspace.read_text(AGENT_SPECS[agent_id].system_prompt_file),
                     DEFAULT_AGENT_PROMPTS[agent_id],
                 )
         self.assertEqual(
@@ -2884,7 +2844,9 @@ print("ok")
         with self.assertRaisesRegex(ConfigurationError, "language"):
             ConfigManager(workspace).load_system_defaults()
 
-    def test_path_traversal_absolute_paths_and_symlink_escape_are_rejected(self) -> None:
+    def test_path_traversal_absolute_paths_and_symlink_escape_are_rejected(
+        self,
+    ) -> None:
         workspace = initialized_workspace(self)
         outside = tempfile.TemporaryDirectory()
         self.addCleanup(outside.cleanup)
@@ -2923,6 +2885,7 @@ print("ok")
             )
         self.assertEqual(original_state.read_bytes(), original_before)
 
+
 class DebateContextSidecarTests(unittest.TestCase):
     """Verify immutable, strict, identity-bound debate context sidecars."""
 
@@ -2935,9 +2898,7 @@ class DebateContextSidecarTests(unittest.TestCase):
         self.assertIsNone(
             self.workspace.inspect_debate_context("session_a", "debate_a")
         )
-        self.assertIsNone(
-            runtime.inspect_debate_context("session_a", "debate_a")
-        )
+        self.assertIsNone(runtime.inspect_debate_context("session_a", "debate_a"))
         self.assertIsNone(
             runtime.session("session_a").inspect_debate_context("debate_a")
         )
@@ -3020,9 +2981,7 @@ class DebateContextSidecarTests(unittest.TestCase):
             mode=DebateContextMode.INCLUDED,
             snapshot=context,
         )
-        included = self.workspace.inspect_debate_context(
-            "session_a", "included_debate"
-        )
+        included = self.workspace.inspect_debate_context("session_a", "included_debate")
         assert included is not None
         snapshot = included["snapshot"]
         assert isinstance(snapshot, dict)
@@ -3037,7 +2996,9 @@ class DebateContextSidecarTests(unittest.TestCase):
                 "truncated",
             },
         )
-        self.assertEqual(snapshot["events"], [event.to_dict() for event in context.events])
+        self.assertEqual(
+            snapshot["events"], [event.to_dict() for event in context.events]
+        )
         self.assertTrue(
             all(
                 set(event)
@@ -3169,10 +3130,7 @@ class ConfigurationCascadeTests(unittest.TestCase):
                 "max_debate_rounds": 1,
             },
         )
-        configs = {
-            agent_id: {"language": None, "persona": None}
-            for agent_id in ROSTER
-        }
+        configs = {agent_id: {"language": None, "persona": None} for agent_id in ROSTER}
         configs[PLOT_ARCHITECT] = {
             "language": "JA",
             "persona": "agent_persona",
@@ -3311,11 +3269,7 @@ class ConfigurationCascadeTests(unittest.TestCase):
                     ),
                     configs,
                 )
-                overrides = (
-                    None
-                    if override is None
-                    else {PLOT_ARCHITECT: override}
-                )
+                overrides = None if override is None else {PLOT_ARCHITECT: override}
                 resolved = self.manager.resolve_from_snapshot(
                     current,
                     PLOT_ARCHITECT,
@@ -3364,8 +3318,9 @@ class ConfigurationCascadeTests(unittest.TestCase):
             ),
         )
         for factory in invalid:
-            with self.subTest(factory=factory), self.assertRaises(
-                (TypeError, ValueError)
+            with (
+                self.subTest(factory=factory),
+                self.assertRaises((TypeError, ValueError)),
             ):
                 factory()
 
@@ -3546,10 +3501,7 @@ class ConfigurationCascadeTests(unittest.TestCase):
             "low.value",
             "a" * 33,
         )
-        expected = (
-            "codex_reasoning_effort must be null or match "
-            "[a-z][a-z0-9_-]{0,31}"
-        )
+        expected = "codex_reasoning_effort must be null or match [a-z][a-z0-9_-]{0,31}"
         for effort in invalid:
             with self.subTest(effort=effort):
                 self.workspace.write_json(
@@ -3594,9 +3546,7 @@ class ConfigurationCascadeTests(unittest.TestCase):
                     "antigravity_model must be safe non-empty text or null",
                 )
 
-        expected = (
-            "antigravity_effort must be null or one of: low, medium, high"
-        )
+        expected = "antigravity_effort must be null or one of: low, medium, high"
         for effort in (False, "", "minimal", "xhigh", "HIGH"):
             with self.subTest(invalid_effort=effort):
                 with self.assertRaises(ConfigurationError) as caught:
@@ -3651,7 +3601,9 @@ class ConfigurationCascadeTests(unittest.TestCase):
         ):
             with self.subTest(field=field):
                 invalid = dict(trailing)
-                invalid[PLOT_ARCHITECT] = dict(trailing[PLOT_ARCHITECT], **{field: value})
+                invalid[PLOT_ARCHITECT] = dict(
+                    trailing[PLOT_ARCHITECT], **{field: value}
+                )
                 with self.assertRaises(ConfigurationError):
                     self.manager.validate_configuration(
                         self.workspace.read_json("config/system_defaults.json"),
@@ -3661,7 +3613,9 @@ class ConfigurationCascadeTests(unittest.TestCase):
     def test_language_and_persona_cascade_independently(self) -> None:
         defaults = self.manager.resolve(CHARACTER_CUSTODIAN)
         self.assertEqual(defaults.backend, "codex")
-        self.assertEqual((defaults.language, defaults.persona), ("KO", "global_persona"))
+        self.assertEqual(
+            (defaults.language, defaults.persona), ("KO", "global_persona")
+        )
 
         agent = self.manager.resolve(PLOT_ARCHITECT)
         self.assertEqual(agent.backend, "codex")
@@ -3740,10 +3694,7 @@ class ConfigurationCascadeTests(unittest.TestCase):
                 "max_debate_rounds": 1,
             },
         )
-        configs = {
-            agent_id: {"language": None, "persona": None}
-            for agent_id in ROSTER
-        }
+        configs = {agent_id: {"language": None, "persona": None} for agent_id in ROSTER}
         configs[PLOT_ARCHITECT]["unexpected"] = True
         self.workspace.write_json("config/agent_configs.json", configs)
         with self.assertRaisesRegex(ConfigurationError, "unexpected"):
@@ -3810,7 +3761,9 @@ class DirectiveTests(unittest.TestCase):
             PLOT_ARCHITECT,
             fresh.workspace.load_session_overrides(self.session_id),
         )
-        self.assertEqual((resolved.language, resolved.persona), ("EN", "directive_persona"))
+        self.assertEqual(
+            (resolved.language, resolved.persona), ("EN", "directive_persona")
+        )
 
         reset_state = fresh.apply_directive(self.session_id, "[RESET: ALL]")
         self.assertEqual(
@@ -3875,13 +3828,9 @@ class ConversationStorageConfigurationTests(unittest.TestCase):
                 if include_null:
                     legacy["conversation_storage_backend"] = None
                 self.workspace.write_json("config/system_defaults.json", legacy)
-                before = self.workspace.path(
-                    "config/system_defaults.json"
-                ).read_bytes()
+                before = self.workspace.path("config/system_defaults.json").read_bytes()
                 snapshot = self.manager.load_configuration_snapshot()
-                self.assertIsNone(
-                    snapshot.system_defaults.conversation_storage_backend
-                )
+                self.assertIsNone(snapshot.system_defaults.conversation_storage_backend)
                 self.assertEqual(
                     self.workspace.path("config/system_defaults.json").read_bytes(),
                     before,
@@ -3899,9 +3848,7 @@ class ConversationStorageConfigurationTests(unittest.TestCase):
                 system = dict(DEFAULT_SYSTEM_CONFIG)
                 system["conversation_storage_backend"] = value
                 self.workspace.write_json("config/system_defaults.json", system)
-                before = self.workspace.path(
-                    "config/system_defaults.json"
-                ).read_bytes()
+                before = self.workspace.path("config/system_defaults.json").read_bytes()
                 with self.assertRaises(ConfigurationError):
                     self.manager.load_configuration_snapshot()
                 self.assertEqual(
@@ -4010,9 +3957,7 @@ class ConversationStorageConfigurationTests(unittest.TestCase):
             )
         write.assert_not_called()
 
-        system_before = self.workspace.path(
-            "config/system_defaults.json"
-        ).read_bytes()
+        system_before = self.workspace.path("config/system_defaults.json").read_bytes()
         agents = dict(baseline.configuration.agent_configs)
         agents[PLOT_ARCHITECT] = replace(
             agents[PLOT_ARCHITECT],
@@ -4106,9 +4051,7 @@ class ConversationStorageConfigurationTests(unittest.TestCase):
     ) -> None:
         baseline = self.manager.load_configuration_baseline()
         agents = dict(baseline.configuration.agent_configs)
-        agents[PLOT_ARCHITECT] = replace(
-            agents[PLOT_ARCHITECT], backend="antigravity"
-        )
+        agents[PLOT_ARCHITECT] = replace(agents[PLOT_ARCHITECT], backend="antigravity")
         candidate = ConfigurationSnapshot(
             replace(
                 baseline.configuration.system_defaults,

@@ -64,7 +64,6 @@ from .archive import (
     ConversationArchive,
     ConversationArchiveConflictError,
     ConversationArchiveConversation,
-    ConversationArchiveEvent,
     ConversationArchiveSession,
     deserialize_conversation_archive,
     serialize_conversation_archive,
@@ -796,6 +795,7 @@ class SQLiteConversationArchiveAdapter(_SQLiteAdapter):
         ) -> ConversationArchiveImportReceipt:
             nonlocal effective
             _validate_database_snapshot(connection)
+            _require_no_legacy_conversation_events(connection)
             imported = False
             for metadata, events, normalized_subject in records:
                 current = _select_metadata(
@@ -804,7 +804,7 @@ class SQLiteConversationArchiveAdapter(_SQLiteAdapter):
                     metadata.conversation_id,
                 )
                 if current is not None:
-                    current_events = _select_events(
+                    current_events = _select_collaboration_events(
                         connection,
                         metadata.session_id,
                         metadata.conversation_id,
@@ -818,7 +818,7 @@ class SQLiteConversationArchiveAdapter(_SQLiteAdapter):
                     normalized_subject=normalized_subject,
                 )
                 for event in events:
-                    _insert_event(connection, event)
+                    _insert_collaboration_event(connection, event)
                 imported = True
                 effective = True
             receipt = ConversationArchiveImportReceipt(
@@ -2066,10 +2066,18 @@ def _validate_append(
 def _read_conversation_archive(connection: object) -> ConversationArchive:
     """Return one fully canonical archive from a verified database snapshot."""
 
-    metadata, grouped = _read_validated_database_snapshot(connection)
+    _require_no_legacy_conversation_events(connection)
+    metadata_rows = connection.execute(  # type: ignore[attr-defined]
+        _METADATA_SELECT + " ORDER BY session_id, created_at, conversation_id"
+    ).fetchall()
+    metadata = tuple(_metadata_from_row(row) for row in metadata_rows)
     sessions: dict[str, list[ConversationArchiveConversation]] = {}
     for item in metadata:
-        events = grouped[(item.session_id, item.conversation_id)]
+        events = _select_collaboration_events(
+            connection,
+            item.session_id,
+            item.conversation_id,
+        )
         sessions.setdefault(item.session_id, []).append(
             ConversationArchiveConversation(
                 schema_version=item.schema_version,
@@ -2080,21 +2088,7 @@ def _read_conversation_archive(connection: object) -> ConversationArchive:
                 status=item.status,
                 created_at=item.created_at,
                 updated_at=item.updated_at,
-                events=tuple(
-                    ConversationArchiveEvent(
-                        schema_version=event.schema_version,
-                        session_id=event.session_id,
-                        conversation_id=event.conversation_id,
-                        turn_id=event.turn_id,
-                        sequence=event.sequence,
-                        timestamp=event.timestamp,
-                        sender=event.sender,
-                        recipient=event.recipient,
-                        kind=event.kind,
-                        content=event.content,
-                    )
-                    for event in events
-                ),
+                events=events,
             )
         )
     archive = ConversationArchive(
@@ -2112,13 +2106,15 @@ def _read_conversation_archive(connection: object) -> ConversationArchive:
 
 def _canonical_archive_records(
     payload: ConversationArchive,
-) -> tuple[tuple[ConversationMetadata, tuple[ConversationEvent, ...], str], ...]:
+) -> tuple[tuple[ConversationMetadata, tuple[CollaborationEventV2, ...], str], ...]:
     """Preflight every canonical and SQLite-specific sink bound before I/O."""
 
     canonical = deserialize_conversation_archive(
         serialize_conversation_archive(payload)
     )
-    records: list[tuple[ConversationMetadata, tuple[ConversationEvent, ...], str]] = []
+    records: list[
+        tuple[ConversationMetadata, tuple[CollaborationEventV2, ...], str]
+    ] = []
     for session in canonical.sessions:
         for conversation in session.conversations:
             if (
@@ -2136,29 +2132,18 @@ def _canonical_archive_records(
                 created_at=conversation.created_at,
                 updated_at=conversation.updated_at,
             )
-            events: list[ConversationEvent] = []
+            events: list[CollaborationEventV2] = []
             for archived_event in conversation.events:
                 if (
                     type(archived_event.sequence) is not int
                     or archived_event.sequence > _SQLITE_SIGNED_INTEGER_MAX
+                    or archived_event.batch_ordinal > _SQLITE_SIGNED_INTEGER_MAX
+                    or archived_event.batch_size > _SQLITE_SIGNED_INTEGER_MAX
                 ):
                     raise SQLiteDatabaseFormatError()
-                events.append(
-                    ConversationEvent(
-                        schema_version=archived_event.schema_version,
-                        session_id=archived_event.session_id,
-                        conversation_id=archived_event.conversation_id,
-                        turn_id=archived_event.turn_id,
-                        sequence=archived_event.sequence,
-                        timestamp=archived_event.timestamp,
-                        sender=archived_event.sender,
-                        recipient=archived_event.recipient,
-                        kind=archived_event.kind,
-                        content=archived_event.content,
-                    )
-                )
+                events.append(archived_event)
             canonical_events = tuple(events)
-            _validate_event_collection(
+            _validate_collaboration_event_collection(
                 canonical_events,
                 session_id=metadata.session_id,
                 conversation_id=metadata.conversation_id,
@@ -2171,6 +2156,18 @@ def _canonical_archive_records(
                 )
             )
     return tuple(records)
+
+
+def _require_no_legacy_conversation_events(connection: object) -> None:
+    """Reject schema-v1 transcript rows before archive export or import mutation."""
+
+    row = connection.execute(  # type: ignore[attr-defined]
+        "SELECT 1 FROM conversation_events LIMIT 1"
+    ).fetchone()
+    if row is not None:
+        if type(row) is not tuple or row != (1,):
+            raise SQLiteDatabaseFormatError()
+        raise SQLiteDatabaseFormatError()
 
 
 __all__ = [

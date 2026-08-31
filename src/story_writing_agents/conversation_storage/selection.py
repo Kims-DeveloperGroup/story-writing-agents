@@ -35,7 +35,7 @@ from .contracts import (
     ConversationStorageBackend,
     ConversationStorageCapability,
     ConversationStorageCoordinationError,
-    ConversationStorageMigrationReadiness,
+    ConversationStorageTransferReadiness,
     ConversationStorageMutationLease,
     ConversationStorageParity,
     ConversationStorageServices,
@@ -71,7 +71,7 @@ class ConversationStorageSelectionFailure(StrEnum):
     INSTALLATION_FAILED = "installation_failed"
     INTERPRETER_UNAVAILABLE = "interpreter_unavailable"
     PROVISIONING_FAILED = "provisioning_failed"
-    MIGRATION_REQUIRED = "migration_required"
+    TRANSFER_REQUIRED = "transfer_required"
     PARITY_MISMATCH = "parity_mismatch"
     CONFIGURATION_INVALID = "configuration_invalid"
     CONFIGURATION_CONFLICT = "configuration_conflict"
@@ -296,7 +296,7 @@ def inspect_conversation_storage_parity(
     source_backend: ConversationStorageBackend | str,
     target_backend: ConversationStorageBackend | str,
     source_generation: int,
-) -> ConversationStorageMigrationReadiness:
+) -> ConversationStorageTransferReadiness:
     """Freshly compare public canonical archives under the caller's lease."""
 
     if not isinstance(workspace, Workspace):
@@ -327,7 +327,7 @@ def inspect_conversation_storage_parity(
         else:
             parity = ConversationStorageParity.MISMATCH
     _validate_lease(lease, topology.workspace_key)
-    return ConversationStorageMigrationReadiness(
+    return ConversationStorageTransferReadiness(
         source_backend=source,
         target_backend=target,
         source_generation=source_generation,
@@ -596,7 +596,7 @@ def select_conversation_storage(
                 failure = (
                     ConversationStorageSelectionFailure.PARITY_MISMATCH
                     if readiness.parity is ConversationStorageParity.MISMATCH
-                    else ConversationStorageSelectionFailure.MIGRATION_REQUIRED
+                    else ConversationStorageSelectionFailure.TRANSFER_REQUIRED
                 )
                 return _selection_failure(
                     failure,

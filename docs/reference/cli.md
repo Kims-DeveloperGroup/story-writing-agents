@@ -7,7 +7,7 @@
 > canonical artifact references. In eligible
 > interactive prompt spans, `$`, `$${path}`, and `$$` discover and attach them
 > without submitting. Separate provider-free `story storage` commands select a
-> desired next-shell backend or migrate and verify already-ready stores.
+> desired next-shell backend or transfer and verify already-ready stores.
 > Noninteractive `story rag` commands inspect and operate the optional fixed
 > local conversation-RAG projection without authenticating a story-agent
 > provider. Interactive `/settings` persists the next-shell local/automatic
@@ -30,7 +30,7 @@
 | Session reopen | `story session reopen [SESSION] [--workspace PATH]` |
 | Session pause | `story session pause [SESSION] [--workspace PATH]` |
 | Storage use | `story storage use BACKEND [--install-missing --yes] [--workspace PATH]` |
-| Storage migrate | `story storage migrate --from BACKEND --to BACKEND [--dry-run] [--workspace PATH]` |
+| Storage transfer | `story storage transfer --from BACKEND --to BACKEND [--dry-run] [--workspace PATH]` |
 | Storage verify | `story storage verify --from BACKEND --to BACKEND [--workspace PATH]` |
 | RAG status | `story rag status [--workspace PATH] [--session ID]` |
 | RAG enable | `story rag enable --provider PROVIDER [--workspace PATH]` |
@@ -63,7 +63,7 @@ successful lifecycle process exits.
 `story storage use BACKEND [--install-missing --yes] [--workspace PATH]`
 accepts exactly `filesystem` or `sqlite`. It resolves `--workspace PATH` or the
 nearest initialized workspace and saves only the desired backend for the next
-shell. It never migrates conversations, deletes a source, changes the active
+shell. It never transfers conversations, deletes a source, changes the active
 marker, switches a running shell, dual-writes, or copies the derived FTS
 companion.
 
@@ -121,7 +121,7 @@ empty destination; it never copies the filesystem store. Under the workspace
 lease, selection then compares fresh canonical archives from the current active
 backend and requested target. Same-backend selection or an empty active source
 needs no parity. A nonempty source requires exact parity: an empty target
-reports `migration_required`, while a nonempty divergent target reports
+reports `transfer_required`, while a nonempty divergent target reports
 `parity_mismatch`. Exact comparison includes active and archived metadata and
 every event, including `runtime_error`; FTS is excluded.
 
@@ -131,16 +131,16 @@ Use this sequence when moving a nonempty filesystem store to SQLite:
 story storage use sqlite
 # If installation_required, review the table above before authorizing:
 story storage use sqlite --install-missing --yes
-# If migration_required, the empty database remains ready:
-story storage migrate --from filesystem --to sqlite --dry-run
-story storage migrate --from filesystem --to sqlite
+# If transfer_required, the empty database remains ready:
+story storage transfer --from filesystem --to sqlite --dry-run
+story storage transfer --from filesystem --to sqlite
 story storage verify --from filesystem --to sqlite
 story storage use sqlite
 story
 ```
 
 When SQLite is active, verify toward filesystem before selecting it. Exact
-parity needs no migration. Migration can create source-only identities in an
+parity needs no transfer. Transfer can create source-only identities in an
 otherwise compatible target, but a same-identity conflict or destination-only
 filesystem identity blocks the plan; it is never overwritten or deleted. Every
 invocation rereads current state. Installation or an
@@ -175,7 +175,7 @@ activation:                next_shell unchanged
 configuration_conflict configuration_invalid configuration_write_failed
 coordination_failed installation_disallowed installation_failed
 installation_required installation_unsupported interpreter_unavailable
-invalid_request migration_required parity_mismatch provisioning_failed
+invalid_request transfer_required parity_mismatch provisioning_failed
 workspace_invalid
 ```
 
@@ -207,11 +207,13 @@ authentication, backend, or session startup fails. See
 [filesystem safety](../operations/filesystem-safety.md#conversation-storage-selection-and-startup-safety),
 and [recovery](../operations/recovery-and-limitations.md#conversation-storage-selection-and-activation-recovery).
 
-<a id="conversation-storage-migration"></a>
+<a id="conversation-storage-transfer"></a>
 
-## Conversation storage migration
+## Conversation storage transfer
 
 `BACKEND` is exactly `filesystem` or `sqlite`, and the two values must differ.
+The old `story storage migrate` spelling is invalid argparse syntax and exits
+`2` before workspace I/O; there is no compatibility alias.
 The command uses `--workspace PATH` or the nearest initialized workspace. The
 `--from` value must equal the workspace's current conversation-storage
 activation state; absence of that state means filesystem generation zero.
@@ -220,25 +222,45 @@ source or destination. These commands never install or provision SQLite,
 change activation or settings, delete the source, dual-write future changes,
 or copy the derived FTS companion.
 
+Only canonical archive schema 2 is transferable. A filesystem
+`transcript.jsonl`, any SQLite `conversation_events` row, or schema-1 archive
+bytes fail closed before destination mutation. There is no upgrade or
+conversion command. Catalog metadata still legitimately reports
+`schema_version:1`; that field is independent of the archive's top-level
+`schema_version:2`.
+
 Use the same direction for planning, transfer, and confirmation:
 
 ```bash
-story storage migrate --from filesystem --to sqlite --dry-run
-story storage migrate --from filesystem --to sqlite
+story storage transfer --from filesystem --to sqlite --dry-run
+story storage transfer --from filesystem --to sqlite
 story storage verify --from filesystem --to sqlite
 ```
+
+These commands do not activate SQLite. After the verified transfer, save the
+desired backend and start a new shell:
+
+```bash
+story storage use sqlite
+story
+```
+
+The externally visible flow is `work_required` from dry-run, then
+`completed`/`verified` with checkpoint `completed` from transfer, then an
+independent verified comparison, desired-backend selection, and finally
+next-launch activation. Each transition is a separate command and fresh check.
 
 Each invocation freshly exports both stores under one workspace mutation lease
 and classifies every conversation identity as `create`, `identical`,
 `conflict`, `unsupported`, or `destination_only`. Conflict or unsupported
 SQLite values block both operations. `unsupported` means a source subject
 revision or event sequence cannot fit SQLite's signed 64-bit integer range.
-Destination-only data blocks migration; verify instead reports an otherwise
+Destination-only data blocks transfer; verify instead reports an otherwise
 valid create/destination-only difference as a parity mismatch. Exact parity
 covers every canonical active/archived metadata field and every event including
 `runtime_error`. FTS data is excluded.
 
-`--dry-run` is accepted only by `migrate`. It performs activation/readiness,
+`--dry-run` is accepted only by `transfer`. It performs activation/readiness,
 fresh exports, planning, and—when the plan is otherwise unblocked—checkpoint
 validation, but writes neither destination conversations nor a checkpoint. It
 reports `work_required` when at least one conversation would be created and
@@ -253,7 +275,7 @@ record and dispatches before broader CLI context, authentication, provider,
 runtime, settings, or session construction. A representative dry-run line is:
 
 ```json
-{"checkpoint":"none","counts":{"conflict":0,"create":3,"destination_only":0,"identical":0,"unsupported":0},"dry_run":true,"failure":null,"from":"filesystem","operation":"migrate","outcome":"work_required","parity":"unverified","schema_version":1,"source":{"conversations":3,"events":4},"to":"sqlite"}
+{"checkpoint":"none","counts":{"conflict":0,"create":3,"destination_only":0,"identical":0,"unsupported":0},"dry_run":true,"failure":null,"from":"filesystem","operation":"transfer","outcome":"work_required","parity":"unverified","schema_version":1,"source":{"conversations":3,"events":25},"to":"sqlite"}
 ```
 
 The exact top-level fields are `checkpoint`, `counts`, `dry_run`, `failure`,
@@ -276,9 +298,17 @@ Reports expose only fixed backend/outcome/failure values, checkpoint state, and
 aggregate counts. They do not include conversation identities, subjects,
 events, paths, exception text, malformed values, or FTS data.
 
+For a reverse transfer, SQLite must be the active source. Run the same sequence
+with `--from sqlite --to filesystem`, then `story storage use filesystem` and
+start a new shell. If a transfer is interrupted, retry the exact same command:
+the coordinator rereads both stores, trusts only an exact source fingerprint
+and checkpoint, accepts only create-or-identical destination records, and
+performs a fresh final parity check. A stale source, conflict, extra destination
+identity, invalid checkpoint, or legacy data stops rather than overwrites.
+
 Exit status is fixed:
 
-- `0`: successful migration, valid dry-run (including `work_required`), or
+- `0`: successful transfer, valid dry-run (including `work_required`), or
   verified equality;
 - `1`: verify-only, otherwise valid create or destination-only parity mismatch;
   and
@@ -286,11 +316,11 @@ Exit status is fixed:
   data/version, unsafe state, checkpoint failure, source/destination failure,
   or another operational failure.
 
-A successful migration retains a terminal direction-specific checkpoint and
+A successful transfer retains a terminal direction-specific checkpoint and
 freshly proves source/destination canonical parity, but never activates the
 destination. Failure after destination work does not imply rollback across
-both stores. See [Conversation storage migration recovery](../operations/recovery-and-limitations.md#conversation-storage-migration-recovery)
-before retrying and [Session storage](configuration/session-storage.md#conversation-migration-checkpoints)
+both stores. See [Conversation storage transfer recovery](../operations/recovery-and-limitations.md#conversation-storage-transfer-recovery)
+before retrying and [Session storage](configuration/session-storage.md#conversation-transfer-checkpoints)
 for checkpoint contents.
 
 <a id="conversation-rag-operations"></a>
@@ -310,7 +340,7 @@ The operation scopes are exact:
 | --- | --- |
 | `status` | Session-scoped. Uses `--session ID` or the saved default. Optimistically reads the persisted active filesystem/SQLite authority and derived state twice. It does not acquire/create the conversation-storage mutation lock, create the RAG subtree, rewrite configuration, activate desired storage, or clean orphans. Every valid observation—including non-ready state—has outcome `completed` and exit `0`. |
 | `enable` | Workspace-scoped. Requires exact `--provider local`; no session is accepted. It checks the optional distribution/version/capabilities before a complete configuration compare-and-set. Success saves provider `local` or reports configuration `unchanged`; it preserves the current automatic boolean and builds nothing. |
-| `rebuild` | Session-scoped. Without `--yes`, returns `confirmation_required` before storage activation. With confirmation, it runs configured-storage startup/activation, requires enabled compatible local RAG, rebuilds the complete authorized active target from the beginning, verifies publication while the mutation lease remains held, then returns the same inspection shape as status. It never provisions or migrates storage. |
+| `rebuild` | Session-scoped. Without `--yes`, returns `confirmation_required` before storage activation. With confirmation, it runs configured-storage startup/activation, requires enabled compatible local RAG, rebuilds the complete authorized active target from the beginning, verifies publication while the mutation lease remains held, then returns the same inspection shape as status. It never provisions or transfers storage. |
 | `search` | Session-scoped. Requires one nonblank strict-UTF-8 positional `QUERY`, runs configured-storage startup/activation, requires enabled compatible local RAG, and performs bounded literal-first plus local-vector retrieval. Every retained range is reauthorized and reread from the current authoritative store. It invokes no story agent and never echoes the query. Quote multiword shell input. |
 | `disable` | Workspace-scoped. Accepts no session. A complete configuration compare-and-set clears the provider and sets automatic to `false`; derived and authoritative data remain. |
 | `purge` | Session-scoped. Requires `--yes` and removes only the addressed session's validated derived active/status/generation contents. It does not require provider enablement, compose authoritative storage, or alter configuration; authoritative conversations and other sessions remain. |
@@ -318,7 +348,7 @@ The operation scopes are exact:
 Status composes only the persisted active backend. Confirmed rebuild and search
 instead call the normal desired-storage activation workflow before RAG
 dispatch, so a ready and canonically equal next-shell selection can advance the
-active marker. Neither operation installs/provisions SQLite, migrates data,
+active marker. Neither operation installs/provisions SQLite, transfers data,
 falls back to another backend, or couples the derived generation store to a
 storage adapter. Purge does not consult either backend.
 
@@ -576,7 +606,7 @@ snapshots both the workspace system defaults and per-agent configuration. The
 repeatable `--backend AGENT=BACKEND` accepts canonical
 agent IDs and exactly `codex` or `antigravity`; it changes only that backend
 instance. Duplicate agents are rejected. Legacy `gemini` is rejected with
-fixed migration guidance to use `antigravity`.
+fixed transition guidance to use `antigravity`.
 
 For Codex, a non-null `--codex-model` on `story chat` or `story run` overrides
 all persisted Codex model values; otherwise each agent inherits its
@@ -1032,7 +1062,7 @@ create-only provisioning, and fresh parity, while rejecting any exact-byte
 change to either configuration document, the optional provider-route generation
 record, or the persona catalog since opening. A host prerequisite, empty SQLite
 database, or lazy storage guard created during readiness may remain after a
-later failure, but Apply Changes never migrates or activates conversation data.
+later failure, but Apply Changes never transfers or activates conversation data.
 
 The prepared persistence boundary contains
 `config/system_defaults.json`, `config/agent_configs.json`, and, when needed,

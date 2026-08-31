@@ -405,8 +405,7 @@ def _compact_reply_metadata(
     return (
         f"{_provider_display_name(profile.provider)} / "
         f"{_execution_value(profile.model)} / "
-        f"{_execution_value(profile.effort)} · "
-        + " · ".join(qualifiers)
+        f"{_execution_value(profile.effort)} · " + " · ".join(qualifiers)
     )
 
 
@@ -5057,8 +5056,8 @@ class InteractiveController:
             ConversationStorageSelectionFailure.PROVISIONING_FAILED: (
                 "SQLite conversation storage is unavailable or invalid."
             ),
-            ConversationStorageSelectionFailure.MIGRATION_REQUIRED: (
-                "Migrate the active conversations to the requested backend first."
+            ConversationStorageSelectionFailure.TRANSFER_REQUIRED: (
+                "Transfer the active conversations to the requested backend first."
             ),
             ConversationStorageSelectionFailure.PARITY_MISMATCH: (
                 "Fresh conversation archive parity does not match."
@@ -6267,9 +6266,7 @@ class InteractiveController:
         progress_callback_failure: BaseException | None = None
         supports_context_progress = bool(
             "context_event_sink"
-            in inspect.signature(
-                self._runtime.converse_with_retrieval
-            ).parameters
+            in inspect.signature(self._runtime.converse_with_retrieval).parameters
             and getattr(
                 self._runtime,
                 "conversation_storage_services",
@@ -6576,10 +6573,7 @@ class InteractiveController:
 
         if event.subject_kind == "debate":
             assert event.phase is not None and event.round_number is not None
-            prefix = (
-                f"{event.agent_id} · round {event.round_number} · "
-                f"{event.phase}: "
-            )
+            prefix = f"{event.agent_id} · round {event.round_number} · {event.phase}: "
         else:
             prefix = ""
         kind = event.kind
@@ -6915,8 +6909,7 @@ class InteractiveController:
             else self._runtime.run_draft
         )
         supports_context_progress = bool(
-            "context_event_sink"
-            in inspect.signature(context_runtime_method).parameters
+            "context_event_sink" in inspect.signature(context_runtime_method).parameters
             and getattr(
                 self._runtime,
                 "conversation_storage_services",
@@ -7072,7 +7065,8 @@ class InteractiveController:
         if supports_context_progress and (
             any(not event.terminal for event in context_operations.values())
             or (
-                result.status in {
+                result.status
+                in {
                     DebateStatus.CONSENSUS,
                     DebateStatus.DEADLOCK,
                 }
@@ -7202,9 +7196,7 @@ class InteractiveController:
         phase = event.phase
         role, outcome_state = self._debate_progress_style(phase)
         panel_state = (
-            ViewState.IDLE
-            if outcome_state is ViewState.LOADING
-            else outcome_state
+            ViewState.IDLE if outcome_state is ViewState.LOADING else outcome_state
         )
         committed_offset = self._debate_message_offsets.get(key, 0)
         start = 0 if phase is DebateProgressPhase.STARTED else committed_offset

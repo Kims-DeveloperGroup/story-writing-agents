@@ -51,8 +51,8 @@ from story_writing_agents.conversation_storage import (
     ConversationStorageCoordinationError,
     ConversationStorageError,
     ConversationStorageFailure,
-    ConversationStorageMigrationReadiness,
-    ConversationStorageMigrationRequiredError,
+    ConversationStorageTransferReadiness,
+    ConversationStorageTransferRequiredError,
     ConversationStorageMutationLease,
     ConversationStorageParity,
     ConversationStorageParityError,
@@ -114,8 +114,8 @@ def _readiness(
     generation: int = 0,
     source_is_empty: bool = True,
     parity: ConversationStorageParity = ConversationStorageParity.NOT_REQUIRED,
-) -> ConversationStorageMigrationReadiness:
-    return ConversationStorageMigrationReadiness(
+) -> ConversationStorageTransferReadiness:
+    return ConversationStorageTransferReadiness(
         source_backend=source,
         target_backend=target,
         source_generation=generation,
@@ -189,7 +189,7 @@ class ConversationStorageContractTests(unittest.TestCase):
             "inconsistent_services",
             "backend_unavailable",
             "provisioning_needed",
-            "migration_required",
+            "transfer_required",
             "parity_mismatch",
             "activation_state_invalid",
             "activation_state_unsupported",
@@ -219,8 +219,8 @@ class ConversationStorageContractTests(unittest.TestCase):
                 ConversationStorageFailure.PROVISIONING_NEEDED,
             ),
             (
-                ConversationStorageMigrationRequiredError,
-                ConversationStorageFailure.MIGRATION_REQUIRED,
+                ConversationStorageTransferRequiredError,
+                ConversationStorageFailure.TRANSFER_REQUIRED,
             ),
             (
                 ConversationStorageParityError,
@@ -259,7 +259,7 @@ class ConversationStorageContractTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             ConversationStorageError("coordination_failed")  # type: ignore[arg-type]
 
-    def test_preflight_and_migration_readiness_raise_typed_fixed_failures(
+    def test_preflight_and_transfer_readiness_raise_typed_fixed_failures(
         self,
     ) -> None:
         ready = ConversationStoragePreflight(
@@ -308,7 +308,7 @@ class ConversationStorageContractTests(unittest.TestCase):
         for parity, error_type in (
             (
                 ConversationStorageParity.UNVERIFIED,
-                ConversationStorageMigrationRequiredError,
+                ConversationStorageTransferRequiredError,
             ),
             (ConversationStorageParity.MISMATCH, ConversationStorageParityError),
         ):
@@ -719,8 +719,7 @@ class ConversationStorageServicesTests(unittest.TestCase):
         self.assertEqual(len(calls), 5)
         self.assertTrue(
             all(
-                coordinator is services.mutation_coordinator
-                and timeout == 30.0
+                coordinator is services.mutation_coordinator and timeout == 30.0
                 for coordinator, timeout in calls
             )
         )
@@ -1124,7 +1123,7 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
         for parity, error_type in (
             (
                 ConversationStorageParity.UNVERIFIED,
-                ConversationStorageMigrationRequiredError,
+                ConversationStorageTransferRequiredError,
             ),
             (ConversationStorageParity.MISMATCH, ConversationStorageParityError),
         ):
@@ -1703,7 +1702,17 @@ class ConversationStorageBoundaryTests(unittest.TestCase):
         )
         expected = set().union(*(module.__all__ for module in owning_modules))
         self.assertEqual(set(storage.__all__), expected)
-        self.assertEqual(len(storage.__all__), 64)
+        self.assertEqual(len(archive_module.__all__), 21)
+        self.assertEqual(len(contracts_module.__all__), 34)
+        self.assertEqual(len(storage.__all__), 63)
+        for old_name in (
+            "ConversationArchiveEvent",
+            "ConversationStorageMigrationReadiness",
+            "ConversationStorageMigrationRequiredError",
+        ):
+            self.assertFalse(hasattr(storage, old_name))
+            self.assertFalse(hasattr(contracts_module, old_name))
+            self.assertNotIn(old_name, storage.__all__)
         for module in owning_modules:
             for name in module.__all__:
                 with self.subTest(module=module.__name__, name=name):
@@ -1826,12 +1835,13 @@ class ConversationStorageBoundaryTests(unittest.TestCase):
             "expected=(set(archive.__all__) | set(contracts.__all__) | "
             "set(composition.__all__) | set(filesystem_archive.__all__)); "
             "assert set(package.__all__) == expected; "
-            "assert len(archive.__all__) == 22; "
+            "assert len(archive.__all__) == 21; "
             "assert len(filesystem_archive.__all__) == 2; "
             "assert filesystem.__all__ == "
             "['FilesystemConversationCatalog', 'FilesystemConversationEventStore', "
             "'FilesystemCollaborationEventStore']; "
-            "assert len(package.__all__) == 64; "
+            "assert len(contracts.__all__) == 34; "
+            "assert len(package.__all__) == 63; "
             "assert all(name not in package.__all__ for name in filesystem.__all__); "
             "assert all(not hasattr(package, name) for name in filesystem.__all__); "
             "assert all(getattr(root, name) is getattr(filesystem, name) "

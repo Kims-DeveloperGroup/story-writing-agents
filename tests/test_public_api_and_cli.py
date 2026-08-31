@@ -781,8 +781,7 @@ class PublicApiTests(unittest.TestCase):
                 parameters = tuple(signature.parameters.values())
                 self.assertTrue(
                     all(
-                        parameter.kind
-                        is inspect.Parameter.POSITIONAL_OR_KEYWORD
+                        parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
                         for parameter in parameters[:positional_count]
                     )
                 )
@@ -895,9 +894,7 @@ class PublicApiTests(unittest.TestCase):
         self.assertIs(services.kind, inspect.Parameter.KEYWORD_ONLY)
         self.assertIsNone(services.default)
         self.assertEqual(
-            get_type_hints(StoryRuntime.__init__)[
-                "conversation_storage_services"
-            ],
+            get_type_hints(StoryRuntime.__init__)["conversation_storage_services"],
             ConversationStorageServices | None,
         )
         rag_service = constructor.parameters["conversation_rag_service"]
@@ -959,11 +956,13 @@ class PublicApiTests(unittest.TestCase):
                 signature = inspect.signature(method)
                 self.assertEqual(tuple(signature.parameters), names)
                 parameters = tuple(signature.parameters.values())
-                self.assertTrue(all(
-                    parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
-                    and parameter.default is inspect.Parameter.empty
-                    for parameter in parameters[:positional_count]
-                ))
+                self.assertTrue(
+                    all(
+                        parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+                        and parameter.default is inspect.Parameter.empty
+                        for parameter in parameters[:positional_count]
+                    )
+                )
                 self.assertIs(
                     parameters[-1].kind,
                     inspect.Parameter.KEYWORD_ONLY,
@@ -1153,7 +1152,9 @@ class PublicApiTests(unittest.TestCase):
 
 
 class RuntimeSessionContextObserverTests(unittest.IsolatedAsyncioTestCase):
-    async def test_all_bound_runtime_forms_forward_the_same_sink_unchanged(self) -> None:
+    async def test_all_bound_runtime_forms_forward_the_same_sink_unchanged(
+        self,
+    ) -> None:
         runtime = SimpleNamespace(
             converse=mock.AsyncMock(return_value=mock.sentinel.conversation_result),
             converse_with_retrieval=mock.AsyncMock(
@@ -1412,7 +1413,7 @@ class CliTests(unittest.TestCase):
             ["session", "reopen", "--help"],
             ["session", "pause", "--help"],
             ["storage", "--help"],
-            ["storage", "migrate", "--help"],
+            ["storage", "transfer", "--help"],
             ["storage", "verify", "--help"],
             ["storage", "use", "--help"],
         ):
@@ -1438,6 +1439,18 @@ class CliTests(unittest.TestCase):
                         "--antigravity-effort",
                     ):
                         self.assertIn(option, completed.stdout)
+
+        storage_help = subprocess.run(
+            [sys.executable, "-m", "story_writing_agents", "storage", "--help"],
+            cwd=repository_root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(storage_help.returncode, 0, storage_help.stderr)
+        self.assertIn("transfer", storage_help.stdout)
+        self.assertNotIn("migrate", storage_help.stdout)
 
     def test_non_tty_guard_precedes_input_options_workspace_and_backend(self) -> None:
         cases = (
@@ -1544,7 +1557,9 @@ class CliTests(unittest.TestCase):
                 contextlib.redirect_stderr(stderr),
             ):
                 self.assertEqual(main(["init", str(target)]), 2)
-            self.assertEqual(stderr.getvalue(), "WorkspaceFormatError: initialization failed\n")
+            self.assertEqual(
+                stderr.getvalue(), "WorkspaceFormatError: initialization failed\n"
+            )
             self.assertNotIn("debug_logs/runtime.jsonl", stderr.getvalue())
             initialize.assert_called_once_with(
                 str(target),
@@ -1573,10 +1588,9 @@ class CliTests(unittest.TestCase):
     ) -> None:
         """Exercise the real CLI/workspace boundary through a no-follow race."""
 
-        if (
-            os.rename not in getattr(os, "supports_dir_fd", ())
-            or os.symlink not in getattr(os, "supports_dir_fd", ())
-        ):
+        if os.rename not in getattr(
+            os, "supports_dir_fd", ()
+        ) or os.symlink not in getattr(os, "supports_dir_fd", ()):
             self.skipTest("descriptor-relative rename/symlink is unavailable")
         with tempfile.TemporaryDirectory() as temporary:
             parent = Path(temporary)
@@ -1635,9 +1649,7 @@ class CliTests(unittest.TestCase):
             self.assertTrue(substituted)
             self.assertEqual(stdout.getvalue(), "")
             self.assertTrue(
-                stderr.getvalue().startswith(
-                    ("NotADirectoryError: ", "OSError: ")
-                )
+                stderr.getvalue().startswith(("NotADirectoryError: ", "OSError: "))
             )
             self.assertNotIn('"workspace"', stdout.getvalue())
             self.assertNotIn("debug_logs/runtime.jsonl", stderr.getvalue())
@@ -1684,9 +1696,7 @@ class CliTests(unittest.TestCase):
                 try:
                     root.symlink_to(external, target_is_directory=True)
                 except (NotImplementedError, OSError) as exc:
-                    self.skipTest(
-                        f"directory symlink replacement unavailable: {exc}"
-                    )
+                    self.skipTest(f"directory symlink replacement unavailable: {exc}")
                 substituted = True
                 real_entries(
                     target_workspace,
@@ -1711,9 +1721,7 @@ class CliTests(unittest.TestCase):
             self.assertTrue(substituted)
             self.assertEqual(stdout.getvalue(), "")
             self.assertTrue(
-                stderr.getvalue().startswith(
-                    ("NotADirectoryError: ", "OSError: ")
-                )
+                stderr.getvalue().startswith(("NotADirectoryError: ", "OSError: "))
             )
             self.assertNotIn("debug_logs/runtime.jsonl", stderr.getvalue())
             self.assertTrue(root.is_symlink())
@@ -1777,9 +1785,7 @@ class CliTests(unittest.TestCase):
                         except type(failure) as caught:
                             self.assertIs(caught, failure)
                         else:
-                            self.fail(
-                                f"{type(failure).__name__} did not propagate"
-                            )
+                            self.fail(f"{type(failure).__name__} did not propagate")
                         exit_code = None
 
                 if isinstance(failure, Exception):
@@ -1835,9 +1841,7 @@ class CliTests(unittest.TestCase):
                     self.assertEqual(completed.stdout, "")
                     self.assertEqual(
                         completed.stderr,
-                        expected_interactive_error(
-                            InteractiveErrorCode.TTY_REQUIRED
-                        ),
+                        expected_interactive_error(InteractiveErrorCode.TTY_REQUIRED),
                     )
                     self.assertEqual(tuple(root.iterdir()), before)
 
@@ -1952,12 +1956,8 @@ class CliTests(unittest.TestCase):
                 ):
                     self.assertEqual(main(arguments), 7)
 
-                expected_workspace_option = (
-                    str(workspace.root) if arguments else None
-                )
-                resolve_workspace.assert_called_once_with(
-                    expected_workspace_option
-                )
+                expected_workspace_option = str(workspace.root) if arguments else None
+                resolve_workspace.assert_called_once_with(expected_workspace_option)
                 load_context.assert_called_once_with(workspace)
                 backend_factory.assert_called_once_with(
                     workspace,
@@ -1992,9 +1992,7 @@ class CliTests(unittest.TestCase):
                 )
                 action = terminal.read_main()
                 self.assertEqual((action.kind.value, action.text), ("line", "/status"))
-                main_reader.assert_called_once_with(
-                    "story[lobby]> "
-                )
+                main_reader.assert_called_once_with("story[lobby]> ")
                 self.assertEqual(stdin.readline_calls, 0)
                 controller_value.run_session_lobby.assert_called_once_with(
                     requested_session=requested
@@ -2039,9 +2037,7 @@ class CliTests(unittest.TestCase):
 
         original_validate_executable = cli_module._validate_antigravity_executable
         original_establish = cli_module.establish_default_backend
-        original_load_snapshot = (
-            cli_module.ConfigManager.load_configuration_snapshot
-        )
+        original_load_snapshot = cli_module.ConfigManager.load_configuration_snapshot
         original_routes = cli_module._effective_interactive_providers
         original_activate = cli_module.activate_configured_conversation_storage
         storage_startups: list[ConversationStorageStartup] = []
@@ -2227,7 +2223,7 @@ class CliTests(unittest.TestCase):
     ) -> None:
         custom_summary = "Conversation storage activation could not be completed."
         custom_hint = (
-            "Run story storage use, migrate, or verify as appropriate, then "
+            "Run story storage use, transfer, or verify as appropriate, then "
             "retry after concurrent workspace storage work finishes."
         )
         cases = (
@@ -2474,9 +2470,7 @@ class CliTests(unittest.TestCase):
                 system_before = workspace.path(
                     "config/system_defaults.json"
                 ).read_bytes()
-                agent_before = workspace.path(
-                    "config/agent_configs.json"
-                ).read_bytes()
+                agent_before = workspace.path("config/agent_configs.json").read_bytes()
                 none = provider_snapshot(
                     ProviderAuthState.UNAUTHENTICATED,
                     ProviderAuthState.UNAVAILABLE,
@@ -2546,7 +2540,9 @@ class CliTests(unittest.TestCase):
                     ["welcome", "probe_all", "run"],
                 )
 
-    def test_storage_activation_cas_remains_after_later_provider_interrupt(self) -> None:
+    def test_storage_activation_cas_remains_after_later_provider_interrupt(
+        self,
+    ) -> None:
         workspace = initialized_workspace(self)
         provision(workspace)
         system = workspace.read_json("config/system_defaults.json")
@@ -2861,9 +2857,7 @@ class CliTests(unittest.TestCase):
                 return main(["chat"]), stderr.getvalue()
 
         unstarted_backend = mock.Mock()
-        constructor_failure = mock.Mock(
-            side_effect=RuntimeError("constructor-secret")
-        )
+        constructor_failure = mock.Mock(side_effect=RuntimeError("constructor-secret"))
         exit_code, stderr = invoke_with(
             unstarted_backend,
             constructor_failure,
@@ -3233,8 +3227,7 @@ class CliTests(unittest.TestCase):
                     self.assertEqual(stderr.getvalue(), "")
                     self.assertEqual(
                         stdout.getvalue(),
-                        json.dumps({"workspace": str(root.resolve())}, indent=2)
-                        + "\n",
+                        json.dumps({"workspace": str(root.resolve())}, indent=2) + "\n",
                     )
                     logger.assert_called_once()
                     logged_workspace = logger.call_args.args[0]
@@ -3443,9 +3436,9 @@ class CliTests(unittest.TestCase):
         self.assertEqual(json.loads(stdout.getvalue())["session_id"], "record_success")
         records = [
             json.loads(line)
-            for line in workspace.path(
-                "debug_logs/runtime.jsonl"
-            ).read_text(encoding="utf-8").splitlines()
+            for line in workspace.path("debug_logs/runtime.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
         ]
         projected = [
             (
