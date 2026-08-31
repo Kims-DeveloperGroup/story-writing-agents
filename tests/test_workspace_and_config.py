@@ -8,6 +8,8 @@ import json
 import os
 import pickle
 import stat
+import subprocess
+import sys
 import tempfile
 import traceback
 import unittest
@@ -37,7 +39,7 @@ from story_writing_agents import (
     initialize_workspace,
     parse_directive,
 )
-from story_writing_agents import workspace as workspace_module
+from story_writing_agents import workspace as workspace_facade
 from story_writing_agents.agents import CORE_DOCUMENTS
 from story_writing_agents.config import (
     AgentConfig,
@@ -52,15 +54,15 @@ from story_writing_agents.errors import (
     ConfigurationError,
     DebateExistsError,
     DirectiveError,
-    ManuscriptExistsError,
     WorkspaceFormatError,
     WorkspaceSecurityError,
 )
-from story_writing_agents.workspace import (
+from story_writing_agents.workspace import WORKSPACE_DIRECTORIES
+from story_writing_agents.workspace import core as workspace_module
+from story_writing_agents.workspace.core import (
     DEFAULT_AGENT_CONFIGS,
     DEFAULT_AGENT_PROMPTS,
     DEFAULT_SYSTEM_CONFIG,
-    WORKSPACE_DIRECTORIES,
 )
 
 from tests.helpers import core_snapshot, initialized_workspace
@@ -270,6 +272,174 @@ class AgentRosterTests(unittest.TestCase):
 
 
 class WorkspaceTests(unittest.TestCase):
+    def test_facade_core_and_root_contract_is_exact_and_identity_stable(
+        self,
+    ) -> None:
+        public_names = [
+            "Workspace",
+            "initialize_workspace",
+            "FilesystemConversationCatalog",
+            "FilesystemConversationEventStore",
+        ]
+        self.assertEqual(workspace_facade.__all__, public_names)
+        self.assertEqual(workspace_module.__all__, public_names)
+        self.assertNotIn("__getattr__", vars(workspace_facade))
+
+        for name in public_names:
+            with self.subTest(public_name=name):
+                value = getattr(workspace_facade, name)
+                self.assertIs(value, getattr(workspace_module, name))
+                self.assertIs(value, getattr(story_writing_agents, name))
+                self.assertEqual(value.__module__, "story_writing_agents.workspace")
+                self.assertIs(pickle.loads(pickle.dumps(value)), value)
+
+        required = inspect.Parameter.empty
+        signatures = {
+            Workspace: (("root", inspect.Parameter.POSITIONAL_OR_KEYWORD, required),),
+            initialize_workspace: (
+                ("root", inspect.Parameter.POSITIONAL_OR_KEYWORD, required),
+                ("overwrite_prompts", inspect.Parameter.KEYWORD_ONLY, False),
+            ),
+            workspace_module.FilesystemConversationCatalog: (
+                ("workspace", inspect.Parameter.POSITIONAL_OR_KEYWORD, required),
+            ),
+            workspace_module.FilesystemConversationEventStore: (
+                ("workspace", inspect.Parameter.POSITIONAL_OR_KEYWORD, required),
+                ("catalog", inspect.Parameter.KEYWORD_ONLY, None),
+            ),
+        }
+        for value, expected in signatures.items():
+            with self.subTest(signature=value.__name__):
+                parameters = inspect.signature(value).parameters
+                self.assertEqual(tuple(parameters), tuple(row[0] for row in expected))
+                for name, kind, default in expected:
+                    self.assertIs(parameters[name].kind, kind)
+                    self.assertIs(parameters[name].default, default)
+
+        internal_names = (
+            "open_workspace_root_directory",
+            "verify_workspace_root_directory",
+            "WORKSPACE_DIRECTORIES",
+        )
+        for name in internal_names:
+            with self.subTest(internal_name=name):
+                self.assertIs(
+                    getattr(workspace_facade, name),
+                    getattr(workspace_module, name),
+                )
+                self.assertNotIn(name, workspace_facade.__all__)
+                self.assertNotIn(name, workspace_module.__all__)
+                self.assertNotIn(name, story_writing_agents.__all__)
+                self.assertFalse(hasattr(story_writing_agents, name))
+
+        for incidental_name in (
+            "os",
+            "datetime",
+            "uuid4",
+            "DEFAULT_AGENT_CONFIGS",
+            "DEFAULT_AGENT_PROMPTS",
+            "DEFAULT_SYSTEM_CONFIG",
+            "_initialize_pending_workspace_entries",
+        ):
+            with self.subTest(incidental_name=incidental_name):
+                self.assertFalse(hasattr(workspace_facade, incidental_name))
+
+        implementation_globals = (
+            Workspace.__init__.__globals__,
+            initialize_workspace.__globals__,
+            workspace_module.FilesystemConversationCatalog.__init__.__globals__,
+            workspace_module.FilesystemConversationEventStore.__init__.__globals__,
+            workspace_facade.open_workspace_root_directory.__globals__,
+            workspace_facade.verify_workspace_root_directory.__globals__,
+        )
+        for globals_mapping in implementation_globals:
+            self.assertIs(globals_mapping, workspace_module.__dict__)
+
+    def test_facade_import_orders_are_clean_and_filesystem_neutral(self) -> None:
+        source = Path(__file__).resolve().parents[1] / "src"
+        import_orders = (
+            (
+                "story_writing_agents",
+                "story_writing_agents.workspace",
+                "story_writing_agents.workspace.core",
+            ),
+            (
+                "story_writing_agents.workspace",
+                "story_writing_agents.workspace.core",
+                "story_writing_agents",
+            ),
+            (
+                "story_writing_agents.agent_exchanges.storage",
+                "story_writing_agents.workspace.core",
+                "story_writing_agents.workspace",
+            ),
+        )
+        for import_order in import_orders:
+            script = f"""
+import importlib
+import sys
+sys.path.insert(0, {str(source)!r})
+for module_name in {import_order!r}:
+    importlib.import_module(module_name)
+root = importlib.import_module("story_writing_agents")
+facade = importlib.import_module("story_writing_agents.workspace")
+core = importlib.import_module("story_writing_agents.workspace.core")
+assert facade.__all__ == [
+    "Workspace",
+    "initialize_workspace",
+    "FilesystemConversationCatalog",
+    "FilesystemConversationEventStore",
+]
+for name in facade.__all__:
+    assert getattr(root, name) is getattr(facade, name) is getattr(core, name)
+    assert getattr(facade, name).__module__ == "story_writing_agents.workspace"
+for name in (
+    "open_workspace_root_directory",
+    "verify_workspace_root_directory",
+    "WORKSPACE_DIRECTORIES",
+):
+    assert getattr(facade, name) is getattr(core, name)
+    assert name not in facade.__all__
+    assert name not in root.__all__
+    assert not hasattr(root, name)
+for module_name in (
+    "story_writing_agents.agent_context.ledger",
+    "story_writing_agents.agent_exchanges.storage",
+    "story_writing_agents.conversation_rag_store",
+    "story_writing_agents.debug_log",
+    "story_writing_agents.provider_error_artifacts",
+):
+    consumer = importlib.import_module(module_name)
+    assert consumer.Workspace is facade.Workspace
+    assert consumer.open_workspace_root_directory is facade.open_workspace_root_directory
+    assert consumer.verify_workspace_root_directory is facade.verify_workspace_root_directory
+smoke = importlib.import_module("story_writing_agents.smoke")
+assert smoke.WORKSPACE_DIRECTORIES is facade.WORKSPACE_DIRECTORIES
+for module_name in (
+    "story_writing_agents.conversation_storage.composition",
+    "story_writing_agents.conversation_storage.filesystem_archive",
+):
+    consumer = importlib.import_module(module_name)
+    assert consumer.Workspace is facade.Workspace
+    assert consumer.FilesystemConversationCatalog is facade.FilesystemConversationCatalog
+    assert consumer.FilesystemConversationEventStore is facade.FilesystemConversationEventStore
+print("ok")
+"""
+            with (
+                self.subTest(import_order=import_order),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                completed = subprocess.run(
+                    [sys.executable, "-B", "-I", "-W", "error", "-c", script],
+                    cwd=temporary,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertEqual(completed.stdout, "ok\n")
+                self.assertEqual(list(Path(temporary).iterdir()), [])
+
     def test_core_fixture_snapshot_is_explicitly_raw_and_runtime_reader_is_absent(
         self,
     ) -> None:
@@ -510,7 +680,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(
             tuple(
                 inspect.signature(
-                    workspace_module.open_workspace_root_directory
+                    workspace_facade.open_workspace_root_directory
                 ).parameters
             ),
             ("workspace",),
@@ -518,7 +688,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(
             tuple(
                 inspect.signature(
-                    workspace_module.verify_workspace_root_directory
+                    workspace_facade.verify_workspace_root_directory
                 ).parameters
             ),
             ("workspace", "descriptor"),
@@ -534,9 +704,9 @@ class WorkspaceTests(unittest.TestCase):
             root.mkdir()
             workspace = Workspace(root)
             expected = os.stat(root, follow_symlinks=False)
-            descriptor = workspace_module.open_workspace_root_directory(workspace)
+            descriptor = workspace_facade.open_workspace_root_directory(workspace)
             try:
-                workspace_module.verify_workspace_root_directory(
+                workspace_facade.verify_workspace_root_directory(
                     workspace,
                     descriptor,
                 )

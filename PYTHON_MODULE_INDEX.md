@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 95.
+Importable production units indexed: 96.
 
-Direct internal dependency edges indexed: 378.
+Direct internal dependency edges indexed: 379.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -210,7 +210,8 @@ conversations -> conversations.catalog/context/events
 conversations.catalog -> errors
 conversations.context -> conversations.events/errors
 conversations.events -> agents/errors
-workspace -> conversations/models/writing_artifacts
+workspace -> workspace.core
+workspace.core -> agents/conversations/errors/models/writing_artifacts
 writing_artifacts -> writing_artifacts.authorization/catalog/directives/read_actions/references
 writing_artifacts.authorization -> writing_artifacts.catalog/references
 writing_artifacts.directives -> writing_artifacts.references
@@ -5530,16 +5531,41 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ### `story_writing_agents.workspace`
 
-- **Source:** `src/story_writing_agents/workspace.py`
+- **Source:** `src/story_writing_agents/workspace/__init__.py`
+- **Responsibility:** Provide the stable workspace import boundary.
+- **Supported surface:** Exactly `Workspace`, `initialize_workspace`,
+  `FilesystemConversationCatalog`, and `FilesystemConversationEventStore` in
+  `__all__`, re-exported from `workspace.core` as the same objects exposed by
+  the project-root facade. Their canonical `__module__` remains
+  `story_writing_agents.workspace`, preserving established signatures and
+  pickle lookup. Package-internal `open_workspace_root_directory`,
+  `verify_workspace_root_directory`, and `WORKSPACE_DIRECTORIES` are statically
+  bound on both the facade and core for existing internal consumers but are
+  absent from both modules' `__all__` and from the project-root facade. No
+  incidental core implementation global or private helper is forwarded.
+- **Direct internal dependencies:** `workspace.core`.
+- **State, resources, and side effects:** Owns no state or external resource.
+  Import deterministically canonicalizes the four public objects' defining
+  module metadata and performs no filesystem write, provider, environment,
+  thread, or application-startup operation.
+- **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
+  `tests/test_workspace_and_config.py`, and `docs/reference/workspace-api.md`.
+
+### `story_writing_agents.workspace.core`
+
+- **Source:** `src/story_writing_agents/workspace/core.py`
 - **Responsibility:** Provide the secure workspace filesystem and persistence
   boundary.
-- **Supported surface:** Package-supported `FilesystemConversationCatalog`,
-  `FilesystemConversationEventStore`, `Workspace`, and
-  `initialize_workspace`. Package-internal `open_workspace_root_directory` and
-  `verify_workspace_root_directory` provide the identity-bound internal-storage
-  boundary used by diagnostic, agent-exchange, and disposable-generation
-  owners and are
-  deliberately absent from the project-root facade.
+- **Supported surface:** Defining `FilesystemConversationCatalog`,
+  `FilesystemConversationEventStore`, `Workspace`, and `initialize_workspace`
+  in the same exact public `__all__` as the workspace facade. The facade
+  re-exports those objects with their established canonical workspace-module
+  identity. Package-internal `open_workspace_root_directory`,
+  `verify_workspace_root_directory`, and `WORKSPACE_DIRECTORIES` provide the
+  identity-bound internal-storage and topology boundary used by diagnostic,
+  agent-exchange, disposable-generation, and smoke owners; they remain
+  deliberately absent from both public `__all__` declarations and the
+  project-root facade.
   `Workspace.inspect_debate_context` is the strict, separate context-sidecar
   inspection operation. `Workspace.read_agent_session_state` returns one
   validated owner's complete session outcomes in stable chronology, while

@@ -23,7 +23,7 @@ from unittest import mock
 import story_writing_agents
 from story_writing_agents import agent_context as agent_context_module
 from story_writing_agents import cli as cli_module
-from story_writing_agents import workspace as workspace_module
+from story_writing_agents.workspace import core as workspace_module
 from story_writing_agents.conversation_storage import (
     selection as storage_selection_module,
 )
@@ -93,7 +93,7 @@ from story_writing_agents.provider_auth import (
     ProviderAuthState,
     ProviderAuthStatus,
 )
-from story_writing_agents.workspace import DEFAULT_AGENT_PROMPTS
+from story_writing_agents.workspace.core import DEFAULT_AGENT_PROMPTS
 
 from tests.helpers import initialized_workspace
 from tests.sqlite_conversation_storage_fixture import database_path, provision

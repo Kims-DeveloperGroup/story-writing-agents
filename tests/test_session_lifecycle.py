@@ -406,13 +406,15 @@ class SessionLifecycleContractTests(unittest.TestCase):
             ]
         )
         source_files = tuple(source_root.rglob("*.py"))
-        self.assertEqual(len(source_files), 95)
+        self.assertEqual(len(source_files), 96)
         self.assertTrue(
             {
                 source_root / "conversations" / "__init__.py",
                 source_root / "conversations" / "catalog.py",
                 source_root / "conversations" / "context.py",
                 source_root / "conversations" / "events.py",
+                source_root / "workspace" / "__init__.py",
+                source_root / "workspace" / "core.py",
                 source_root / "conversation_storage" / "archive.py",
                 source_root / "conversation_storage" / "filesystem_archive.py",
                 source_root / "conversation_storage" / "migration.py",
@@ -431,15 +433,18 @@ class SessionLifecycleContractTests(unittest.TestCase):
             <= set(source_files)
         )
         self.assertNotIn(source_root / "conversations.py", source_files)
+        self.assertNotIn(source_root / "workspace.py", source_files)
         index = (source_root.parents[1] / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8")
-        self.assertIn("Importable production units indexed: 95.", index)
-        self.assertIn("Direct internal dependency edges indexed: 378.", index)
+        self.assertIn("Importable production units indexed: 96.", index)
+        self.assertIn("Direct internal dependency edges indexed: 379.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         for module_name in (
             "story_writing_agents.conversations",
             "story_writing_agents.conversations.catalog",
             "story_writing_agents.conversations.context",
             "story_writing_agents.conversations.events",
+            "story_writing_agents.workspace",
+            "story_writing_agents.workspace.core",
         ):
             self.assertIn(f"### `{module_name}`", index)
         environment = dict(os.environ, PYTHONPATH=str(source_root.parent))

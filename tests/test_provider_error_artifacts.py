@@ -436,11 +436,52 @@ class ProviderErrorArtifactContractTests(unittest.TestCase):
             if isinstance(node, ast.ImportFrom) and node.level == 1
         }
         self.assertEqual(dependencies, {"agents", "workspace"})
-        for dependency in dependencies:
-            dependency_source = source_path.with_name(f"{dependency}.py").read_text(
-                encoding="utf-8"
-            )
-            self.assertNotIn("from .provider_error_artifacts import", dependency_source)
+        source_root = source_path.parent
+        workspace_package = source_root / "workspace"
+        dependency_paths = {
+            "agents": (source_root / "agents.py",),
+            "workspace": (
+                workspace_package / "__init__.py",
+                workspace_package / "core.py",
+            ),
+        }
+        self.assertFalse((source_root / "workspace.py").exists())
+        for dependency, paths in dependency_paths.items():
+            with self.subTest(dependency=dependency):
+                for path in paths:
+                    self.assertTrue(path.is_file(), path)
+                    dependency_source = path.read_text(encoding="utf-8")
+                    self.assertNotIn(
+                        "from .provider_error_artifacts import",
+                        dependency_source,
+                    )
+                    self.assertNotIn(
+                        "from ..provider_error_artifacts import",
+                        dependency_source,
+                    )
+
+        facade_tree = ast.parse(
+            (workspace_package / "__init__.py").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            {
+                node.module
+                for node in ast.walk(facade_tree)
+                if isinstance(node, ast.ImportFrom) and node.level == 1
+            },
+            {"core"},
+        )
+        core_tree = ast.parse(
+            (workspace_package / "core.py").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            {
+                node.module
+                for node in ast.walk(core_tree)
+                if isinstance(node, ast.ImportFrom) and node.level == 2
+            },
+            {"agents", "conversations", "errors", "models", "writing_artifacts"},
+        )
 
         repository_root = Path(__file__).resolve().parents[1]
         environment = os.environ.copy()
@@ -449,7 +490,13 @@ class ProviderErrorArtifactContractTests(unittest.TestCase):
         script = (
             "from pathlib import Path; import story_writing_agents as facade; "
             "from story_writing_agents import provider_error_artifacts as module; "
+            "from story_writing_agents import workspace; "
             "assert all(name not in facade.__all__ for name in module.__all__); "
+            "assert module.Workspace is workspace.Workspace; "
+            "assert module.open_workspace_root_directory is "
+            "workspace.open_workspace_root_directory; "
+            "assert module.verify_workspace_root_directory is "
+            "workspace.verify_workspace_root_directory; "
             "assert list(Path.cwd().iterdir()) == []; print('ok')"
         )
         with tempfile.TemporaryDirectory() as temporary:

@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 from uuid import UUID
 
-from story_writing_agents import workspace as workspace_module
+import story_writing_agents.workspace.core as workspace_module
 from story_writing_agents.backend import AgentBackend
 from story_writing_agents.cli_context import (
     load_cli_context,

@@ -21,6 +21,7 @@ import story_writing_agents.conversations.catalog as conversation_catalog_module
 import story_writing_agents.conversations.context as conversation_context_module
 import story_writing_agents.conversations.events as conversation_events_module
 import story_writing_agents.workspace as workspace_module
+import story_writing_agents.workspace.core as workspace_core_module
 from story_writing_agents import (
     CONVERSATION_METADATA_SCHEMA_VERSION,
     CONVERSATION_SUBJECT_NORMALIZATION_VERSION,
@@ -392,7 +393,11 @@ class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
         workspace = self.new_workspace()
         catalog = FilesystemConversationCatalog(workspace)
         fixed_uuid = UUID("11111111-2222-3333-4444-555555555555")
-        with mock.patch.object(workspace_module, "uuid4", return_value=fixed_uuid):
+        with mock.patch.object(
+            workspace_core_module,
+            "uuid4",
+            return_value=fixed_uuid,
+        ):
             first = catalog.create("session_a", "First session")
             second = catalog.create("session_b", "Second session")
 
@@ -418,7 +423,7 @@ class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
         catalog = FilesystemConversationCatalog(workspace)
         fixed_uuid = UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         with mock.patch.object(
-            workspace_module,
+            workspace_core_module,
             "uuid4",
             return_value=fixed_uuid,
         ) as generate:
@@ -445,9 +450,13 @@ class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
         fixed_uuid = UUID("12345678-1234-5678-1234-567812345678")
         conversation_id = f"c_{fixed_uuid.hex}"
 
-        with mock.patch.object(workspace_module, "uuid4", return_value=fixed_uuid):
+        with mock.patch.object(
+            workspace_core_module,
+            "uuid4",
+            return_value=fixed_uuid,
+        ):
             with mock.patch.object(
-                workspace_module.os,
+                workspace_core_module.os,
                 "link",
                 side_effect=OSError("simulated create link failure"),
             ):
@@ -474,7 +483,7 @@ class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
         before = target.read_bytes()
 
         with mock.patch.object(
-            workspace_module.os,
+            workspace_core_module.os,
             "replace",
             side_effect=OSError("simulated replace failure"),
         ):

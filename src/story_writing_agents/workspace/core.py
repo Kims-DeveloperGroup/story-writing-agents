@@ -17,7 +17,7 @@ from types import TracebackType
 from typing import Any, Callable, Mapping
 from uuid import uuid4
 
-from .agents import (
+from ..agents import (
     AGENT_SPECS,
     AGENT_STATE_DIRECTORIES,
     CHARACTER_CUSTODIAN,
@@ -26,7 +26,7 @@ from .agents import (
     PLOT_ARCHITECT,
     ROSTER,
 )
-from .conversations import (
+from ..conversations import (
     CONVERSATION_EVENT_SCHEMA_VERSION,
     CONVERSATION_METADATA_SCHEMA_VERSION,
     ConversationCatalog,
@@ -39,7 +39,7 @@ from .conversations import (
     select_bounded_conversation_context,
     validate_conversation_context_window,
 )
-from .errors import (
+from ..errors import (
     ConversationExistsError,
     ConversationNotFoundError,
     DebateExistsError,
@@ -48,13 +48,13 @@ from .errors import (
     WorkspaceFormatError,
     WorkspaceSecurityError,
 )
-from .models import (
+from ..models import (
     AgentStateEntry,
     DebateContextMode,
     DebateMessage,
     DebateResult,
 )
-from .writing_artifacts import canonical_artifact_kind
+from ..writing_artifacts import canonical_artifact_kind
 
 
 _SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
@@ -2684,3 +2684,11 @@ def _meaningful_directory_identity(
     ):
         return None
     return device, inode
+
+
+__all__ = [
+    "Workspace",
+    "initialize_workspace",
+    "FilesystemConversationCatalog",
+    "FilesystemConversationEventStore",
+]
