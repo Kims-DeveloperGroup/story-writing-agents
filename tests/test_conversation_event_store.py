@@ -1597,6 +1597,7 @@ assert (
 assert filesystem.__all__ == [
     "FilesystemConversationCatalog",
     "FilesystemConversationEventStore",
+    "FilesystemCollaborationEventStore",
 ]
 assert filesystem.FilesystemConversationEventStore.__module__ == filesystem.__name__
 assert set({sorted(_EVENT_FIELDS)!r}) == set(conversations.ConversationEvent.__dataclass_fields__)

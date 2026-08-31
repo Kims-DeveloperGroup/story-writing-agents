@@ -5,10 +5,12 @@
 > event/field records, content-free bootstrap, and bounded selected context are
 > available from that facade; literal search, exact citation resolution,
 > snapshot paging, and derived document identity are pure direct-module APIs in
-> `story_writing_agents.conversation_search`. None is used by the current
-> runtime, filesystem or SQLite conversation stores, transcript views, shell,
-> or provider calls. Integration children #475-#479 own those later steps.
-> There is no conversion or user action now.
+> `story_writing_agents.conversation_search`. A separate direct-module
+> `FilesystemCollaborationEventStore` now persists the v2 contract for Python
+> callers. It is not exported by a package facade or composed into the current
+> runtime, filesystem/SQLite storage selection, transcript views, shell, or
+> provider calls. Integration children #476-#479 own those later steps. There
+> is no conversion or shell action now.
 
 Key terms: **proposal**—the complete disclosure for one possible step;
 **decision**—one structured `confirm`, `reject`, or `revise` response to the
@@ -31,12 +33,13 @@ closed public field set, resolve a hit to the exact original Unicode substring,
 page one unchanged snapshot, derive a stable lookup-document ID, and explicitly
 select bounded records for possible later provider context.
 
-It cannot yet run a lead or specialist, change a story artifact, mutate Git,
-persist through either current conversation-storage adapter, or display a new
-shell workflow. It does not reinterpret free text as permission. It does not
-turn a stored confirmation or projected `next_safe_action` into executable or
-reconstructible authority. No current command, transcript, storage selection,
-or provider route changes.
+It cannot yet run a lead or specialist, change a story artifact, mutate Git, or
+display a new shell workflow. A direct Python caller can now persist exact v2
+batches on the filesystem and read them after restart, but that adapter is not
+the current selected conversation-storage service. It does not reinterpret
+free text as permission or turn a stored confirmation or projected
+`next_safe_action` into executable or reconstructible authority. No current
+command, v1 transcript, storage selection, or provider route changes.
 
 Before this addition, the pure v2 projector answered operational questions such
 as “what state is this step in?” and “what is the next safe action?” It did not
@@ -50,10 +53,10 @@ Conceptually, the distinction is:
 | Current conversation transcript | Schema-v2 collaboration history |
 | --- | --- |
 | One user message followed by one agent reply or runtime error | Ordered typed exchanges among user, lead, specialists, runtime, artifact, and Git actors |
-| Schema version `1`; current runtime/storage/UI authority | Schema version `2`; pure future-facing contract only |
+| Schema version `1`; current runtime/storage/UI authority | Schema version `2`; pure contracts plus an uncomposed direct filesystem adapter |
 | Text content and complete-turn context | Proposals, exact decisions, dispatches, replies, terminal provider facts, results, and durable step states |
 | Appends one visible event | Requires atomic batches for facts that must never be separated |
-| Accepted by current transcript stores | Deliberately rejected by the v2 history projector, which accepts only canonical v2 events |
+| Accepted by current transcript stores | Rejected by v1 transcript stores; accepted by the direct v2 filesystem adapter and pure projector |
 
 The two histories remain distinct. Schema-v1 `ConversationEvent` values are not
 schema-v2 collaboration events, and `project_collaboration_history()` rejects
@@ -81,8 +84,10 @@ application can, without invoking a provider:
 
 The default context selection includes no readable record text. Current user
 input is not accepted by this selector and remains a separate invocation
-input. Nothing in this scenario persists history, authorizes retrieval, starts
-a provider call, or supplies the UI; #475-#479 own integration.
+input. These pure readable operations do not persist history, authorize
+retrieval, start a provider call, or supply the UI. The direct filesystem
+adapter described below can supply the canonical history; #476-#479 own the
+remaining integration.
 
 ## Illustrative future interaction
 
@@ -373,7 +378,7 @@ Requested/retained/omitted counts and `truncated` report the result.
 The selector has no `current_input` parameter. The current user input remains
 separate, and the selected value still does not invoke a provider or establish
 retrieval authorization. Runtime composition and provider delivery are later
-#475-#479 work.
+#476-#479 work.
 
 ## Atomic batch flow
 
@@ -405,12 +410,15 @@ read(session_id: str, conversation_id: str) -> tuple[CollaborationEvent, ...]
 read_context(session_id: str, conversation_id: str) -> CollaborationHistoryProjection
 ```
 
-It is a protocol, not an implementation. Callers own a conforming adapter and
-its persistence, locking, timestamp assignment, durability, retention, and
-access controls. The current filesystem and SQLite conversation stores do not
-implement it. The store decides whether an atomically committed candidate is
-`APPENDED` or an exact retry is `ALREADY_COMMITTED`; an exact retry returns the
-original sequence range and timestamps.
+The protocol remains storage-neutral. Direct Python callers can implement it
+themselves or use
+`story_writing_agents.conversation_storage.filesystem.FilesystemCollaborationEventStore`.
+That class is a direct-module API, not a `conversation_storage`, `workspace`,
+or project-root export and not an active storage bundle. The selected v1
+filesystem store and SQLite store remain separate. The v2 store decides
+whether an atomically committed candidate is `APPENDED` or an exact retry is
+`ALREADY_COMMITTED`; exact retry returns the original sequence range and
+timestamps before current-tail CAS is evaluated.
 
 | Append result/failure | Meaning | Safe response |
 | --- | --- | --- |
@@ -425,6 +433,88 @@ original sequence range and timestamps.
 The last five rows are the complete fixed `CollaborationAppendFailure` set.
 `CollaborationAppendError.failure` carries that semantic value; exception text
 adds no authority or hidden diagnostic detail.
+
+### Direct filesystem storage and retry
+
+The adapter owns two v2-only siblings below the existing catalog conversation:
+
+```text
+discussion_logs/SESSION/interactive/conversations/CONVERSATION/
+├── metadata.json
+├── transcript.jsonl                 # unchanged active schema-v1 history
+├── collaboration-history.jsonl      # strict canonical schema-v2 JSONL
+└── .collaboration-history.lock      # persistent advisory guard
+```
+
+Construction retains the workspace and catalog without filesystem I/O. After
+catalog identity succeeds, an absent v2 history reads as empty and creates
+neither v2 file. A present history is decoded one canonical event per line with
+exactly one final LF, correlated to its path, and fully projected before it is
+returned. Empty-present, malformed, noncanonical, schema-v1, incomplete-batch,
+identity-mismatched, or invalid-transition bytes raise `WorkspaceFormatError`.
+An append against that corruption instead raises
+`CollaborationAppendError(CORRUPT_HISTORY)` and does not rewrite the file.
+
+Given a caller-constructed canonical `CollaborationEventBatch` named `batch`,
+the direct call and externally visible results are:
+
+```python
+from story_writing_agents.conversation_storage.filesystem import (
+    FilesystemCollaborationEventStore,
+)
+
+store = FilesystemCollaborationEventStore(workspace, catalog=catalog)
+
+first = store.append_batch(batch)
+events = store.read(batch.events[0].session_id, batch.events[0].conversation_id)
+state = store.read_context(
+    batch.events[0].session_id,
+    batch.events[0].conversation_id,
+)
+retry = store.append_batch(batch)
+
+output = {
+    "first": first.status.value,
+    "range": (first.first_sequence, first.last_sequence),
+    "stored_event_ids": tuple(event.event_id for event in events),
+    "state": state.current_state.value,
+    "retry": retry.status.value,
+    "same_timestamps": retry.timestamps == first.timestamps,
+}
+```
+
+For a two-event proposal/awaiting-confirmation batch at an empty tail, the
+observable shape is:
+
+```python
+{
+    "first": "APPENDED",
+    "range": (1, 2),
+    "stored_event_ids": ("proposal_event", "request_event"),
+    "state": "awaiting_confirmation",
+    "retry": "ALREADY_COMMITTED",
+    "same_timestamps": True,
+}
+```
+
+The adapter holds a per-history process lock and blocking POSIX exclusive
+advisory lock across validation and publication. It serializes the complete
+canonical history to a same-directory mode-`0600` temporary file, flushes and
+file-fsyncs it, atomically replaces the history, then mandatorily fsyncs the
+parent directory. Only then does it return `APPENDED`. A failure before replace
+leaves the old history. A failure after replace reports operational uncertainty
+even though complete new bytes may be visible; retry the exact same batch ID
+and content so a visible commit resolves to its original
+`ALREADY_COMMITTED` receipt without duplication.
+
+The history contains plaintext user-visible collaboration facts. A newly
+published history and newly created guard request owner-only `0600` modes, but
+the adapter is not encryption, workspace access control, backup, retention, or
+permission repair. Do not hand-edit, reformat, or copy schema-v1 transcript
+bytes into the v2 file. After an operationally uncertain append, preserve the
+workspace and retry only the exact batch. After `corrupt_history`, stop normal
+appends and preserve the bytes for diagnosis; this child supplies no repair,
+conversion, or migration workflow.
 
 ## State and user-action contract
 
@@ -475,7 +565,8 @@ enter `recovery_required`; and `recovery_required` is terminal in this contract.
 
 This example uses only the implemented `story_writing_agents.conversations`
 facade. It performs no I/O or provider call. The manual storage-metadata step is
-only an in-memory illustration; a future concrete store would own it.
+only an in-memory illustration; the direct filesystem adapter owns that step
+when a caller chooses to persist the batch.
 
 ```python
 from story_writing_agents.conversations import (
@@ -755,13 +846,17 @@ state, and digest only—never bytes. Provider credentials, capabilities, raw
 provider protocol bodies, hidden reasoning, and reconstructed authorization do
 not belong in any payload.
 
-This contract does not define a concrete store, filesystem path, SQLite schema,
-CLI command, UI, provider call, lead-agent behavior, artifact/Git executor,
-credential model, migration, complete workspace backup, or recovery tool. It
-also does not wire readable records into a provider prompt, automatic context,
-RAG generation, or storage search; #475-#479 own those integrations. It
-also does not provide the full lead-agent usage guide; that later workflow is
-owned by issue #460. See [conversation transcripts](conversation-transcripts.md)
-for the active schema-v1 path, [persistence](../design/persistence.md) for
-authority ownership, and [package API](package-api.md#structured-collaboration-history-boundary)
-for the supported import boundary.
+The direct filesystem adapter defines only the v2 paths and durability boundary
+above. This contract still defines no SQLite schema, CLI command, UI, provider
+call, lead-agent behavior, artifact/Git executor, credential model, migration,
+complete workspace backup, or recovery tool. It also does not wire readable
+records into a provider prompt, automatic context, RAG generation, storage
+search, archive, or selected runtime service; #476-#479 own those integrations.
+It also does not provide the full lead-agent usage guide; that later workflow
+is owned by issue #460. See
+[conversation transcripts](conversation-transcripts.md) for the active
+schema-v1 path, [persistence](../design/persistence.md) for authority ownership,
+[filesystem safety](../operations/filesystem-safety.md#schema-v2-collaboration-history-safety)
+for failure handling, and
+[package API](package-api.md#structured-collaboration-history-boundary) for the
+supported import boundary.

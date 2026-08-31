@@ -19,8 +19,9 @@
 > `StoryRuntime` creates and finalizes reference evidence for inline referenced
 > operations; Python callers can inspect it by operation ID. Separately, the
 > pure schema-v2 collaboration-history values and store port are available from
-> `story_writing_agents.conversations`, but no current runtime, filesystem,
-> SQLite, transcript, or shell path activates or persists them.
+> `story_writing_agents.conversations`. Direct Python callers can persist that
+> port with the uncomposed filesystem adapter; no current runtime, selected
+> filesystem/SQLite bundle, transcript view, or shell path activates it.
 
 Key terms: **blackboard**—public debate JSONL; **sidecar**—context stored apart
 from established debate records; **create-only**—never replaces an existing
@@ -40,7 +41,7 @@ provisioning nor migration alone selects runtime authority.
 | Provider manifest and access claim | `AgentBackend` |
 | Session/conversation defaults | CLI context helpers |
 | Conversation metadata, transcript, and search | `conversation_storage.filesystem` owns filesystem metadata/transcript paths, bytes, and locking; the active filesystem or SQLite bundle supplies the complete catalog, event-store, and search authority |
-| Schema-v2 structured collaboration history | Caller-supplied future adapter implementing `CollaborationEventStore`; the current project supplies immutable values, canonical encoding, validation, and projection only, with no concrete persistence owner |
+| Schema-v2 structured collaboration history | `conversation_storage.filesystem` supplies a direct, uncomposed `FilesystemCollaborationEventStore`; conversations still owns immutable values, canonical encoding, validation, and projection |
 | Canonical conversation archive value and bytes | `conversation_storage.archive`; caller owns any stored or transmitted bytes |
 | Same-workspace conversation migration and checkpoints | `conversation_storage.migration`; canonical archive adapters remain the data boundary |
 | Desired storage, readiness, and startup activation | Configuration owns desired value; `conversation_storage.selection` owns preparation/parity and next-shell marker CAS |
@@ -71,17 +72,45 @@ Schema-v2 collaboration history is a storage-neutral contract, not another
 active transcript backend. `story_writing_agents.conversations` owns immutable
 events, proposal and result values, canonical JSON encoders/decoders, atomic
 batch validation, and pure history projection. `CollaborationEventStore` is a
-three-method protocol for `append_batch()`, `read()`, and `read_context()`; no
-filesystem or SQLite implementation is currently provided.
+three-method protocol for `append_batch()`, `read()`, and `read_context()`.
 
-A future application that supplies this port owns its persistence path,
-locking, atomic commit, canonical UTC timestamp assignment, durability,
-retention, and access control. It must append a batch as all or nothing, assign
-contiguous event sequences and stable batch metadata, and return the original
-receipt for an exact retry. The current filesystem and SQLite
+`conversation_storage.filesystem.FilesystemCollaborationEventStore` now
+implements that port for direct Python callers. It is intentionally absent from
+the `conversation_storage`, `workspace`, and project-root facades and from the
+active storage composition. The current filesystem and SQLite
 `ConversationEventStore` adapters continue to own only schema-v1 transcript
 events. A schema-v1 event is rejected when presented as v2 history; neither
 channel is a migration or fallback for the other.
+
+```text
+discussion_logs/<session>/interactive/conversations/<conversation>/
+├── metadata.json
+├── transcript.jsonl
+├── collaboration-history.jsonl
+└── .collaboration-history.lock
+```
+
+Construction performs no I/O. An absent history reads empty without creating
+the v2 files. Present reads and appends combine a weak per-history process lock
+with a blocking POSIX advisory lock, validate catalog/path identity and the
+complete canonical history, and reject v1 or corrupt bytes without rewriting
+them. The adapter assigns one contiguous sequence range, zero-based complete
+ordinals, recomputed digest, and canonical UTC timestamps to a valid batch.
+Exact committed retry is detected before tail CAS and returns the original
+receipt.
+
+Publication rewrites the complete canonical JSONL through a same-directory
+mode-`0600` temporary file, file fsync, atomic replace, and mandatory directory
+fsync. Only then can `APPENDED` escape. Pre-replace failure preserves the old
+history. Post-replace failure is uncertain: complete new bytes may exist, and
+retrying the exact same batch resolves them as `ALREADY_COMMITTED`. Newly
+published history and a newly created guard request `0600`, but this is
+plaintext persistence, not encryption, access control, backup, retention, or
+permission repair. See
+[filesystem safety](../operations/filesystem-safety.md#schema-v2-collaboration-history-safety)
+for operator response and
+[Structured collaboration history](../reference/collaboration-history.md#direct-filesystem-storage-and-retry)
+for the direct API scenario.
 
 Stored confirmation and projected next-action values remain evidence. They
 cannot preserve, serialize, or reconstruct a provider capability, workspace

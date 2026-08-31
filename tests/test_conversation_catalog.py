@@ -988,6 +988,7 @@ assert (
 assert filesystem.__all__ == [
     "FilesystemConversationCatalog",
     "FilesystemConversationEventStore",
+    "FilesystemCollaborationEventStore",
 ]
 assert filesystem.FilesystemConversationCatalog.__module__ == filesystem.__name__
 assert set({sorted(CONVERSATION_CATALOG_METHODS)!r}) <= set(dir(conversations.ConversationCatalog))
