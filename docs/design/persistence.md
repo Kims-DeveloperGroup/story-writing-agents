@@ -17,7 +17,10 @@
 > commands. Interactive `/settings` persists next-shell selection, while the
 > controller retains any armed one-turn query only in process memory.
 > `StoryRuntime` creates and finalizes reference evidence for inline referenced
-> operations; Python callers can inspect it by operation ID.
+> operations; Python callers can inspect it by operation ID. Separately, the
+> pure schema-v2 collaboration-history values and store port are available from
+> `story_writing_agents.conversations`, but no current runtime, filesystem,
+> SQLite, transcript, or shell path activates or persists them.
 
 Key terms: **blackboard**—public debate JSONL; **sidecar**—context stored apart
 from established debate records; **create-only**—never replaces an existing
@@ -37,6 +40,7 @@ provisioning nor migration alone selects runtime authority.
 | Provider manifest and access claim | `AgentBackend` |
 | Session/conversation defaults | CLI context helpers |
 | Conversation metadata, transcript, and search | `conversation_storage.filesystem` owns filesystem metadata/transcript paths, bytes, and locking; the active filesystem or SQLite bundle supplies the complete catalog, event-store, and search authority |
+| Schema-v2 structured collaboration history | Caller-supplied future adapter implementing `CollaborationEventStore`; the current project supplies immutable values, canonical encoding, validation, and projection only, with no concrete persistence owner |
 | Canonical conversation archive value and bytes | `conversation_storage.archive`; caller owns any stored or transmitted bytes |
 | Same-workspace conversation migration and checkpoints | `conversation_storage.migration`; canonical archive adapters remain the data boundary |
 | Desired storage, readiness, and startup activation | Configuration owns desired value; `conversation_storage.selection` owns preparation/parity and next-shell marker CAS |
@@ -58,6 +62,36 @@ that need those resources depend directly on
 `conversation_storage.filesystem` and `workspace.core`, not on the stable
 `story_writing_agents.workspace` user facade; the dependency graph remains
 acyclic.
+
+<a id="structured-collaboration-history-persistence"></a>
+
+## Structured collaboration history persistence boundary
+
+Schema-v2 collaboration history is a storage-neutral contract, not another
+active transcript backend. `story_writing_agents.conversations` owns immutable
+events, proposal and result values, canonical JSON encoders/decoders, atomic
+batch validation, and pure history projection. `CollaborationEventStore` is a
+three-method protocol for `append_batch()`, `read()`, and `read_context()`; no
+filesystem or SQLite implementation is currently provided.
+
+A future application that supplies this port owns its persistence path,
+locking, atomic commit, canonical UTC timestamp assignment, durability,
+retention, and access control. It must append a batch as all or nothing, assign
+contiguous event sequences and stable batch metadata, and return the original
+receipt for an exact retry. The current filesystem and SQLite
+`ConversationEventStore` adapters continue to own only schema-v1 transcript
+events. A schema-v1 event is rejected when presented as v2 history; neither
+channel is a migration or fallback for the other.
+
+Stored confirmation and projected next-action values remain evidence. They
+cannot preserve, serialize, or reconstruct a provider capability, workspace
+lease, Git authority, credential, or any other executor. After restart, a
+future runtime must reacquire live authority. A confirmed proposal requires a
+fresh `reconfirmation_required` request when that authority was lost; a running
+attempt without an authoritative result becomes `outcome_unknown` and is never
+replayed. No call-bearing work is valid after that state. See
+[Structured collaboration history](../reference/collaboration-history.md) for
+the exact user, state, batch, retry, privacy, and recovery contracts.
 
 <a id="conversation-archive-persistence"></a>
 

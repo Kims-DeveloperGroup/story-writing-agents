@@ -48,12 +48,17 @@ from tests.conversation_catalog_contract import (
     CONVERSATION_CATALOG_METHODS,
     ConversationCatalogContractMixin,
 )
+from tests.collaboration_contract_fixture import (
+    COLLABORATION_CONTEXT_EXPORTS,
+    COLLABORATION_EVENT_EXPORTS,
+    CONVERSATION_FACADE_EXPORTS,
+)
 
 
 _CREATED_AT = "2026-08-12T01:02:03.456789+00:00"
 _UPDATED_AT = "2026-08-12T02:03:04.567890+00:00"
 
-_CONVERSATION_FACADE_EXPORTS = (
+_V1_CONVERSATION_FACADE_EXPORTS = (
     "CONVERSATION_CONTEXT_POLICY",
     "CONVERSATION_EVENT_SCHEMA_VERSION",
     "CONVERSATION_METADATA_SCHEMA_VERSION",
@@ -72,6 +77,7 @@ _CONVERSATION_FACADE_EXPORTS = (
     "select_bounded_conversation_context",
     "validate_conversation_context_window",
 )
+_CONVERSATION_FACADE_EXPORTS = CONVERSATION_FACADE_EXPORTS
 _CATALOG_EXPORTS = {
     "CONVERSATION_METADATA_SCHEMA_VERSION",
     "CONVERSATION_SUBJECT_NORMALIZATION_VERSION",
@@ -81,21 +87,9 @@ _CATALOG_EXPORTS = {
     "ConversationStatus",
     "normalize_conversation_subject",
 }
-_EVENT_EXPORTS = {
-    "CONVERSATION_EVENT_SCHEMA_VERSION",
-    "ConversationEvent",
-    "ConversationEventAppend",
-    "ConversationEventKind",
-}
-_CONTEXT_EXPORTS = {
-    "CONVERSATION_CONTEXT_POLICY",
-    "ConversationContextPolicy",
-    "ConversationContextWindow",
-    "ConversationEventStore",
-    "select_bounded_conversation_context",
-    "validate_conversation_context_window",
-}
-_ROOT_CONVERSATION_EXPORTS = set(_CONVERSATION_FACADE_EXPORTS).difference(
+_EVENT_EXPORTS = set(COLLABORATION_EVENT_EXPORTS)
+_CONTEXT_EXPORTS = set(COLLABORATION_CONTEXT_EXPORTS)
+_ROOT_CONVERSATION_EXPORTS = set(_V1_CONVERSATION_FACADE_EXPORTS).difference(
     {
         "select_bounded_conversation_context",
         "validate_conversation_context_window",
