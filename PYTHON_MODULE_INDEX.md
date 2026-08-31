@@ -2079,15 +2079,31 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.conversation_search`
 
 - **Source:** `src/story_writing_agents/conversation_search.py`
-- **Responsibility:** Provide provider-neutral deterministic read-only
-  conversation search and bounded cited transcript-read contracts.
-- **Supported surface:** Package-supported `CONVERSATION_MEMORY_POLICY`,
+- **Responsibility:** Define provider-neutral deterministic conversation-history
+  discovery contracts.
+- **Supported surface:** Exactly 25 names in `__all__`. The established
+  package-supported surface remains `CONVERSATION_MEMORY_POLICY`,
   `ConversationCitation`, `ConversationMemoryPolicy`,
   `ConversationMemoryService`, `ConversationSearch`, `ConversationSearchHit`,
   `ConversationSearchMatchKind`, `ConversationSearchQuery`,
   `ConversationSearchResult`, `ConversationSearchScope`,
   `ConversationTranscriptCursor`, `ConversationTranscriptPage`, and
-  `ReferenceConversationSearch`. `ConversationMemoryService.scope` is an
+  `ReferenceConversationSearch`. The additive direct-module-only schema-v2
+  surface is `COLLABORATION_READABLE_SOURCE_SCHEMA_ID`,
+  `CollaborationHistoryCitation`, `CollaborationHistoryPage`,
+  `CollaborationHistoryPageCursor`, `CollaborationHistorySearchHit`,
+  `CollaborationHistorySearchQuery`, `CollaborationHistorySearchResult`,
+  `collaboration_readable_document_id`, `continue_collaboration_history`,
+  `page_collaboration_history`, `resolve_collaboration_citation`, and
+  `search_collaboration_history`. None is
+  re-exported by the project root. Schema-v2 citations bind one event and
+  stable readable field plus optional zero-based assignment/input ordinal and
+  exact original-field code-point range. Page cursors bind both the observed
+  tail sequence and tail batch digest. The derived readable-field identity
+  length-frames the complete canonical stored event plus fixed schema,
+  workspace/conversation, metadata-revision, field-coordinate, and exact
+  readable-byte facts; it is never append, confirmation, or recovery
+  authority. `ConversationMemoryService.scope` is an
   additive read-only projection of its immutable authorized session scope. Its
   established positional catalog/event-store construction remains valid, and
   an additive keyword-only structural `conversation_storage_services` input
@@ -2096,7 +2112,13 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `conversation_literal_search`,
   `conversations`, and `errors`.
 - **State, resources, and side effects:** Immutable value contracts and fixed
-  policy metadata own no mutable state or external resource. The reference
+  policy/schema metadata own no mutable state or external resource. Pure v2
+  search first validates and projects the complete authoritative history,
+  applies the established NFKC/casefold/control/whitespace literal behavior,
+  maps normalization and case-fold expansion back to exact original-field
+  code-point ranges, and returns deterministic sequence/field-ordered matches.
+  Pure paging retains whole readable records under fixed count/UTF-8 caps and
+  rejects either sequence or tail-digest drift. The reference
   adapter delegates normalization, subject classification, snippet
   construction, and result sorting to the supported pure literal module while
   retaining its established bounded catalog/event-store scan semantics.
@@ -2112,6 +2134,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:**
   `tests/conversation_search_contract.py`,
   `tests/test_conversation_search.py`, and
+  `tests/test_collaboration_context.py`,
+  `docs/reference/collaboration-history.md`,
   `docs/reference/conversation-search.md`.
 
 ### `story_writing_agents.conversation_storage`
@@ -2960,13 +2984,14 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/conversations/__init__.py`
 - **Responsibility:** Provide the stable subject-conversation and schema-v2
   collaboration contract import boundary.
-- **Supported surface:** Exactly 74 names in `__all__`: the established 17 v1
-  conversation names; all 38 immutable `Collaboration*` values, enums,
-  payloads, errors, projection, and store protocol defined by the two owning
-  leaves; `CollaborationPayload`; the four `COLLABORATION_*` constants; the
+- **Supported surface:** Exactly 83 names in `__all__`: the established 17 v1
+  conversation names; the immutable schema-v2 event, proposal, state,
+  readable-field/record/context, error, projection, and store contracts defined
+  by the two owning leaves; `CollaborationPayload`; the five
+  `COLLABORATION_*` constants; the
   two digest functions; the eight strict canonical proposal/event/draft/batch
-  encode/decode functions; and the three pure collaboration
-  projection/candidate/transition functions. Every binding is the object
+  encode/decode functions; and the five pure collaboration readable/history,
+  bounded-context, candidate, and transition functions. Every binding is the object
   defined by its owning leaf, without a wrapper, and every supported class or
   function retains the canonical `story_writing_agents.conversations` module
   identity. The project-root facade retains exactly its established v1 subset
@@ -3015,13 +3040,28 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.conversations.context`
 
 - **Source:** `src/story_writing_agents/conversations/context.py`
-- **Responsibility:** Define pure conversation and collaboration history
-  projection and access contracts.
-- **Supported surface:** Exactly 12 owning-module names in `__all__`: the six
+- **Responsibility:** Define pure bounded projections over conversation
+  histories.
+- **Supported surface:** Exactly 21 owning-module names in `__all__`: the six
   established v1 context names plus `CollaborationEventStore`,
   `CollaborationHistoryProjection`, `CollaborationNextAction`,
   `project_collaboration_history`, `validate_collaboration_candidate_batch`,
-  and `validate_collaboration_transition`. The v2 store is the sole unused
+  and `validate_collaboration_transition`; plus
+  `COLLABORATION_READABLE_CONTEXT_POLICY`,
+  `CollaborationContextBootstrap`, `CollaborationReadableContext`,
+  `CollaborationReadableContextPolicy`, `CollaborationReadableField`,
+  `CollaborationReadableFieldKey`, `CollaborationReadableRecord`,
+  `project_collaboration_readable_history`, and
+  `select_bounded_collaboration_context`. One validated readable record retains
+  every canonical event identity and complete typed public payload while its
+  closed fields expose only visible message/reply, proposal purpose/impact/
+  assignment/input, dispatch, interruption, fixed state/decision/outcome, and
+  call-usage text. The default provider-context selection carries only a
+  content-free history bootstrap; explicitly selected event records remain in
+  sequence order and are retained atomically under the fixed 24-record/32-KiB
+  caps. This provider-context value is distinct from
+  `CollaborationEventStore.read_context()`, which continues to return the
+  recovery/state projection. The v2 store is the sole unused
   batch-oriented collaboration port and returns its owning pure projection;
   candidate validation deterministically returns the original
   `ALREADY_COMMITTED` receipt for an exact retry and raises the fixed append
@@ -3032,8 +3072,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   project-root facade exposes only the established v1 subset.
 - **Direct internal dependencies:** `conversations.events` and `errors`.
 - **State, resources, and side effects:** Immutable policy, window, and
-  projection values; the v1 and unused v2 storage-neutral ports; pure
-  fixed-policy selection; and deterministic full-history, candidate,
+  projection/readable values; immutable closed field and transition metadata;
+  the v1 and unused v2 storage-neutral ports; pure fixed-policy selection; and
+  deterministic full-history, candidate,
   transition, correlation, budget-lineage, and atomic co-batch validation
   including exact external-exchange/result closure and rejection of every late
   provider/execution event outside the exact active running attempt. Owns no

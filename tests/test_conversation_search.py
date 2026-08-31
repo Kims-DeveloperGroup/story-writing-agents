@@ -9,7 +9,7 @@ import subprocess
 import sys
 import unittest
 import unicodedata
-from dataclasses import FrozenInstanceError, fields
+from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
 
 import story_writing_agents
@@ -49,8 +49,25 @@ from story_writing_agents.conversation_literal_search import (
     normalize_conversation_literal_query,
     normalize_conversation_literal_text,
 )
+from story_writing_agents.conversation_search import (
+    COLLABORATION_READABLE_SOURCE_SCHEMA_ID,
+    CollaborationHistoryPageCursor,
+    CollaborationHistorySearchQuery,
+    collaboration_readable_document_id,
+    continue_collaboration_history,
+    page_collaboration_history,
+    resolve_collaboration_citation,
+    search_collaboration_history,
+)
 from story_writing_agents.conversation_storage import (
     compose_filesystem_conversation_storage,
+)
+from story_writing_agents.conversations import (
+    CollaborationEventKind,
+    CollaborationMessagePayload,
+    CollaborationReadableFieldKey,
+    CollaborationStepState,
+    project_collaboration_readable_history,
 )
 
 from tests.conversation_search_contract import (
@@ -59,6 +76,17 @@ from tests.conversation_search_contract import (
     MemoryConversationCatalog,
     MemoryConversationEventStore,
     append_turn,
+)
+from tests.collaboration_contract_fixture import (
+    RUNTIME,
+    USER,
+    awaiting_history,
+    executed_history,
+    make_batch,
+    make_draft,
+    make_proposal,
+    proposal_state,
+    store_batch,
 )
 from tests.helpers import initialized_workspace
 
@@ -1060,6 +1088,233 @@ class ConversationSearchFilesystemSafetyTests(unittest.TestCase):
         self.assertEqual(before, self.snapshot(workspace.root))
 
 
+class CollaborationReadableSearchContractTests(unittest.TestCase):
+    def test_normalized_matches_cite_exact_original_codepoint_ranges(self) -> None:
+        purpose = "Straße ＡＢＣ e\u0301    vessel"
+        history, _ = awaiting_history(make_proposal(purpose=purpose))
+
+        for query, expected in (
+            ("STRASSE", "Straße"),
+            ("abc", "ＡＢＣ"),
+            ("é vessel", "e\u0301    vessel"),
+        ):
+            with self.subTest(query=query):
+                request = CollaborationHistorySearchQuery(query)
+                first = search_collaboration_history(history, request)
+                self.assertEqual(first, search_collaboration_history(history, request))
+                self.assertEqual(len(first.hits), 1)
+                hit = first.hits[0]
+                self.assertIs(
+                    hit.citation.field_key,
+                    CollaborationReadableFieldKey.PROPOSAL_PURPOSE,
+                )
+                self.assertEqual(
+                    purpose[
+                        hit.citation.start_codepoint : hit.citation.end_codepoint
+                    ],
+                    expected,
+                )
+                self.assertEqual(
+                    resolve_collaboration_citation(history, hit.citation),
+                    expected,
+                )
+
+        citation = search_collaboration_history(
+            history,
+            CollaborationHistorySearchQuery("strasse"),
+        ).hits[0].citation
+        for stale in (
+            replace(citation, event_id="missing_event"),
+            replace(citation, sequence=citation.sequence + 1),
+            replace(
+                citation,
+                field_key=(
+                    CollaborationReadableFieldKey.PROPOSAL_ASSIGNMENT_INSTRUCTION
+                ),
+                assignment_ordinal=99,
+            ),
+            replace(citation, end_codepoint=len(purpose) + 1),
+        ):
+            with self.subTest(stale=stale):
+                with self.assertRaises(ValueError):
+                    resolve_collaboration_citation(history, stale)
+
+    def test_search_order_limits_and_privacy_are_deterministic(self) -> None:
+        history, _, _ = executed_history()
+        query = CollaborationHistorySearchQuery("physical_calls", limit=2)
+        result = search_collaboration_history(history, query)
+
+        self.assertEqual(len(result.hits), 2)
+        self.assertGreater(result.matched_fields, len(result.hits))
+        self.assertTrue(result.truncated)
+        coordinates = tuple(
+            (
+                hit.citation.sequence,
+                hit.citation.field_key.value,
+                hit.citation.assignment_ordinal,
+                hit.citation.input_ordinal,
+            )
+            for hit in result.hits
+        )
+        self.assertEqual(
+            coordinates,
+            tuple(
+                sorted(
+                    coordinates,
+                    key=lambda value: (
+                        value[0],
+                        tuple(CollaborationReadableFieldKey).index(
+                            CollaborationReadableFieldKey(value[1])
+                        ),
+                        -1 if value[2] is None else value[2],
+                        -1 if value[3] is None else value[3],
+                    ),
+                )
+            ),
+        )
+        readable_keys = {
+            field.key.value
+            for record in project_collaboration_readable_history(history)
+            for field in record.fields
+        }
+        for forbidden in (
+            "authority",
+            "capability",
+            "private",
+            "provider_session",
+            "revision_digest",
+        ):
+            self.assertFalse(any(forbidden in key for key in readable_keys))
+
+    def test_pages_cover_one_snapshot_and_reject_tail_or_digest_drift(self) -> None:
+        history, proposal, _ = executed_history()
+        first = page_collaboration_history(history, max_records=3)
+        self.assertIsInstance(first.next_cursor, CollaborationHistoryPageCursor)
+        assert first.next_cursor is not None
+
+        pages = [first]
+        cursor = first.next_cursor
+        while cursor is not None:
+            page = continue_collaboration_history(history, cursor)
+            pages.append(page)
+            cursor = page.next_cursor
+        self.assertEqual(
+            tuple(record.sequence for page in pages for record in page.records),
+            tuple(range(1, len(history) + 1)),
+        )
+        self.assertTrue(all(page.snapshot_last_sequence == len(history) for page in pages))
+        self.assertTrue(
+            all(
+                page.snapshot_tail_batch_digest == history[-1].batch_digest
+                for page in pages
+            )
+        )
+
+        result_event = next(
+            event for event in reversed(history) if event.event_id == "execution_result"
+        )
+        extended = store_batch(
+            history,
+            make_batch(
+                history,
+                "batch_search_completed",
+                make_draft(
+                    "search_completion_notice",
+                    CollaborationEventKind.MESSAGE,
+                    RUNTIME,
+                    USER,
+                    CollaborationMessagePayload("Visible completion notice."),
+                ),
+                make_draft(
+                    "search_completed_state",
+                    CollaborationEventKind.STEP_STATE,
+                    RUNTIME,
+                    USER,
+                    proposal_state(
+                        proposal,
+                        CollaborationStepState.COMPLETED,
+                        execution_result_event_id=result_event.event_id,
+                    ),
+                ),
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "stale collaboration page cursor"):
+            continue_collaboration_history(extended, first.next_cursor)
+        digest_drift = replace(
+            first.next_cursor,
+            snapshot_tail_batch_digest="sha256:" + "0" * 64,
+        )
+        with self.assertRaisesRegex(ValueError, "stale collaboration page cursor"):
+            continue_collaboration_history(history, digest_drift)
+
+    def test_document_identity_binds_canonical_event_and_readable_coordinates(
+        self,
+    ) -> None:
+        history, _ = awaiting_history()
+        record = project_collaboration_readable_history(history)[0]
+        field = record.fields[0]
+        base = collaboration_readable_document_id(
+            workspace_id="workspace_a",
+            metadata_revision=1,
+            record=record,
+            field=field,
+        )
+        self.assertEqual(
+            base,
+            collaboration_readable_document_id(
+                workspace_id="workspace_a",
+                metadata_revision=1,
+                record=record,
+                field=field,
+            ),
+        )
+        self.assertTrue(base.startswith("sha256:"))
+        self.assertEqual(len(base), 71)
+        variants = (
+            collaboration_readable_document_id(
+                workspace_id="workspace_b",
+                metadata_revision=1,
+                record=record,
+                field=field,
+            ),
+            collaboration_readable_document_id(
+                workspace_id="workspace_a",
+                metadata_revision=2,
+                record=record,
+                field=field,
+            ),
+            collaboration_readable_document_id(
+                workspace_id="workspace_a",
+                metadata_revision=1,
+                record=replace(record, timestamp="2026-09-01T00:00:00+00:00"),
+                field=field,
+            ),
+            collaboration_readable_document_id(
+                workspace_id="workspace_a",
+                metadata_revision=1,
+                record=record,
+                field=record.fields[1],
+            ),
+        )
+        self.assertTrue(all(value != base for value in variants))
+
+        changed_history, _ = awaiting_history(
+            make_proposal(purpose=f"{field.text} changed")
+        )
+        changed_record = project_collaboration_readable_history(changed_history)[0]
+        changed = collaboration_readable_document_id(
+            workspace_id="workspace_a",
+            metadata_revision=1,
+            record=changed_record,
+            field=changed_record.fields[0],
+        )
+        self.assertNotEqual(changed, base)
+        self.assertEqual(
+            COLLABORATION_READABLE_SOURCE_SCHEMA_ID,
+            "story-collaboration-readable-event-field-v2",
+        )
+
+
 class ConversationSearchPackageBoundaryTests(unittest.TestCase):
     def test_literal_search_dependency_is_one_way_and_leaf_owned(self) -> None:
         search_tree = ast.parse(
@@ -1085,7 +1340,7 @@ class ConversationSearchPackageBoundaryTests(unittest.TestCase):
         self.assertEqual(dependencies(literal_tree), set())
 
     def test_module_and_facade_exports_are_identical(self) -> None:
-        expected = {
+        established = {
             "CONVERSATION_MEMORY_POLICY",
             "ConversationCitation",
             "ConversationMemoryPolicy",
@@ -1100,9 +1355,26 @@ class ConversationSearchPackageBoundaryTests(unittest.TestCase):
             "ConversationTranscriptPage",
             "ReferenceConversationSearch",
         }
-        self.assertEqual(set(search_module.__all__), expected)
-        self.assertTrue(expected.issubset(story_writing_agents.__all__))
-        for name in expected:
+        collaboration_direct = {
+            "COLLABORATION_READABLE_SOURCE_SCHEMA_ID",
+            "CollaborationHistoryCitation",
+            "CollaborationHistoryPage",
+            "CollaborationHistoryPageCursor",
+            "CollaborationHistorySearchHit",
+            "CollaborationHistorySearchQuery",
+            "CollaborationHistorySearchResult",
+            "collaboration_readable_document_id",
+            "continue_collaboration_history",
+            "page_collaboration_history",
+            "resolve_collaboration_citation",
+            "search_collaboration_history",
+        }
+        self.assertEqual(set(search_module.__all__), established | collaboration_direct)
+        self.assertEqual(len(search_module.__all__), 25)
+        self.assertEqual(len(set(search_module.__all__)), 25)
+        self.assertTrue(established.issubset(story_writing_agents.__all__))
+        self.assertTrue(collaboration_direct.isdisjoint(story_writing_agents.__all__))
+        for name in established:
             with self.subTest(name=name):
                 self.assertIs(
                     getattr(story_writing_agents, name),
@@ -1121,9 +1393,12 @@ class ConversationSearchPackageBoundaryTests(unittest.TestCase):
                 (
                     "import sys; sys.path.insert(0, r'"
                     + str(root / "src")
-                    + "'); import story_writing_agents.conversation_search as m; "
+                    + "'); import story_writing_agents; "
+                    "import story_writing_agents.conversation_search as m; "
                     "import story_writing_agents.conversation_literal_search as l; "
-                    "assert len(m.__all__) == 13; assert len(l.__all__) == 6; "
+                    "assert len(m.__all__) == 25; assert len(l.__all__) == 6; "
+                    "assert 'CollaborationHistoryCitation' not in "
+                    "story_writing_agents.__all__; "
                     "assert 'sqlite3' not in sys.modules"
                 ),
             ],

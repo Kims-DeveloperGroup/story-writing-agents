@@ -33,9 +33,12 @@ Use this index to find one canonical answer instead of searching a long manual.
 > the base-installed isolated read-only JSONL viewer over one immutable
 > snapshot. No setting, enablement step, or extra is required.
 > Schema-v2 structured collaboration history is also available as a pure
-> `story_writing_agents.conversations` Python contract. It is not active in the
-> current runtime, storage adapters, transcript UI, or shell, and requires no
-> migration or user action.
+> `story_writing_agents.conversations` Python contract. That facade now includes
+> one-readable-record-per-event and bounded explicit-context projections; the
+> direct `conversation_search` module supplies pure search, exact citations,
+> snapshot paging, and derived document identity. None is active in the current
+> runtime, storage adapters, transcript UI, shell, RAG, or provider calls;
+> #475-#479 own integration.
 
 ## Availability matrix
 
@@ -59,7 +62,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Parse the interactive command language and route metadata | Python API; the shell dispatches a documented subset |
 | Compose a prompt and render safe terminal records | Shell `/run --output PART/PATH.md`; module-supported terminal Python API |
 | Append/read transcripts; derive bounded complete-turn context | Shell turns append/consume context and `/transcript` reads fresh bounded pages; Python API |
-| Model and validate a future lead-led collaboration history | Pure `story_writing_agents.conversations` schema-v2 Python API only; no current runtime, store, UI, provider, or command integration. [User impact, proposals, decisions, states, recovery, and examples](reference/collaboration-history.md) |
+| Model, validate, inspect, search, cite, page, or explicitly select a future lead-led collaboration history | Pure `story_writing_agents.conversations` facade and direct `story_writing_agents.conversation_search` schema-v2 Python APIs only; no current runtime, store, UI, RAG, provider, or command integration. [User impact, readable records, state versus context, and examples](reference/collaboration-history.md) |
 | Search one session and cite hits | Attached shell `/search` for active records; Python API can explicitly include archived records |
 | Ask an agent to retrieve cited conversation history | Focused shell conversation; additive Python runtime API; active records in the current session only |
 | Observe bounded agent-context execution | Automatic live shell progress for contextual ordinary/retrieval/debate work; optional synchronous `context_event_sink` on all `StoryRuntime` and `RuntimeSession` provider-bound entry forms. [States, output, privacy, and recovery](guides/agent-context-progress.md) |
@@ -106,9 +109,9 @@ Use this index to find one canonical answer instead of searching a long manual.
 - [Optional conversation RAG direct-module API](reference/package-api.md#optional-conversation-rag-boundary)
 - [Conversation catalog](reference/conversation-catalog.md)
 - [Conversation transcripts](reference/conversation-transcripts.md)
-- [Structured collaboration history: user impact, exact decisions, states, recovery, wire format, and Python examples](reference/collaboration-history.md)
+- [Structured collaboration history: user impact, exact decisions, readable records, state/context separation, recovery, wire format, and Python examples](reference/collaboration-history.md)
 - [Canonical conversation archives, transfer, and storage migration](reference/conversation-archives.md)
-- [Conversation search and cited transcript pages](reference/conversation-search.md)
+- [Conversation search, cited transcript pages, and direct-only readable-v2 search/citation/page/document-ID contracts](reference/conversation-search.md)
 - [Bounded agent-directed conversation retrieval](reference/conversation-retrieval.md)
 - [Interactive command parser](reference/interactive-command-parser.md)
 - [Interactive terminal component](reference/interactive-terminal.md)

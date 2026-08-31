@@ -451,8 +451,8 @@ class SessionLifecycleContractTests(unittest.TestCase):
         self.assertEqual(len(headings), 97)
         self.assertEqual(len(set(headings)), 97)
         self.assertEqual(set(headings), expected_modules)
-        self.assertIn("Exactly 74 names in `__all__`", index)
-        self.assertIn("Exactly 12 owning-module names in `__all__`", index)
+        self.assertIn("Exactly 83 names in `__all__`", index)
+        self.assertIn("Exactly 21 owning-module names in `__all__`", index)
         self.assertIn("Exactly 55 owning-module names in `__all__`", index)
         self.assertIn(
             "project-root facade retains exactly its established v1 subset",

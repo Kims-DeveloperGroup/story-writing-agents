@@ -1,10 +1,14 @@
 # Structured collaboration history
 
 > **Availability:** schema-v2 collaboration history is an immutable, pure
-> Python contract under `story_writing_agents.conversations`. It is not used by
-> the current runtime, filesystem or SQLite conversation stores, transcript
-> views, or shell. Later lead-agent work beginning with issue #467 may compose
-> it. There is no migration or user action now.
+> Python contract under `story_writing_agents.conversations`. Readable
+> event/field records, content-free bootstrap, and bounded selected context are
+> available from that facade; literal search, exact citation resolution,
+> snapshot paging, and derived document identity are pure direct-module APIs in
+> `story_writing_agents.conversation_search`. None is used by the current
+> runtime, filesystem or SQLite conversation stores, transcript views, shell,
+> or provider calls. Integration children #475-#479 own those later steps.
+> There is no conversion or user action now.
 
 Key terms: **proposal**—the complete disclosure for one possible step;
 **decision**—one structured `confirm`, `reject`, or `revise` response to the
@@ -21,12 +25,25 @@ bind a structured decision to that proposal; retain successful sibling results
 when another assignment fails; and expose a deterministic recovery state after
 a restart.
 
+Issue #474 also makes that exact v2 history readable without weakening it. A
+Python caller can project one complete typed record per event, search only the
+closed public field set, resolve a hit to the exact original Unicode substring,
+page one unchanged snapshot, derive a stable lookup-document ID, and explicitly
+select bounded records for possible later provider context.
+
 It cannot yet run a lead or specialist, change a story artifact, mutate Git,
 persist through either current conversation-storage adapter, or display a new
 shell workflow. It does not reinterpret free text as permission. It does not
 turn a stored confirmation or projected `next_safe_action` into executable or
 reconstructible authority. No current command, transcript, storage selection,
 or provider route changes.
+
+Before this addition, the pure v2 projector answered operational questions such
+as “what state is this step in?” and “what is the next safe action?” It did not
+provide a supported display/search record for each event. Now the state
+projection remains unchanged and a separate readable projection answers “what
+public event and fields can I show, search, page, or select?” Neither projection
+performs I/O or grants authority.
 
 Conceptually, the distinction is:
 
@@ -41,6 +58,31 @@ Conceptually, the distinction is:
 The two histories remain distinct. Schema-v1 `ConversationEvent` values are not
 schema-v2 collaboration events, and `project_collaboration_history()` rejects
 them. This separation defines no conversion workflow and requires no migration.
+
+## Explicit readable-history scenario
+
+Suppose a future application has already obtained a complete canonical v2
+history and the user asks, “Where did we discuss the outline range?” The
+application can, without invoking a provider:
+
+1. call `project_collaboration_readable_history()` to obtain one record for
+   every event, including the complete typed payload;
+2. call `search_collaboration_history()` with `OUTLINE RANGE` and receive an
+   exact citation into `proposal.purpose` or an assignment instruction;
+3. call `resolve_collaboration_citation()` against the current complete history
+   and display the original substring `outline range`, not normalized text;
+4. page the same validated snapshot, continuing only while both its last
+   sequence and tail batch digest still match;
+5. derive a content-source ID for one readable field if a later integration
+   needs a lookup/RAG document identity; and
+6. pass the cited event ID explicitly to
+   `select_bounded_collaboration_context()` if that later integration chooses
+   to include the record.
+
+The default context selection includes no readable record text. Current user
+input is not accepted by this selector and remains a separate invocation
+input. Nothing in this scenario persists history, authorizes retrieval, starts
+a provider call, or supplies the UI; #475-#479 own integration.
 
 ## Illustrative future interaction
 
@@ -208,6 +250,130 @@ assignment facts. Because any assignment failed, overall outcome is `failed`
 and synthesis must be `not_attempted` with zero submitted calls and no
 synthesis result. An advisory also has zero synthesis by design, even when its
 single assignment succeeds.
+
+## Readable record and field projection
+
+`project_collaboration_readable_history(events)` first performs the same full
+canonical-history validation as `project_collaboration_history()`. Schema-v1
+events, partial batches, sequence gaps, duplicate identities, digest drift,
+illegal transitions, and any other corrupt v2 history fail before it returns a
+record. The function is pure and returns an exact tuple in durable sequence
+order.
+
+There is exactly one `CollaborationReadableRecord` per event. It repeats every
+canonical event fact—schema, session/conversation/turn/step/event identity,
+sequence and timestamp, batch identity/ordinal/size/digest, typed sender and
+recipient, derived direction, event kind, and the complete typed payload—then
+adds a deterministic tuple of searchable public fields. The record is a view;
+it does not replace or rewrite the event.
+
+`CollaborationReadableField` contains an exact `key` and original `text`, plus
+a zero-based `assignment_ordinal` or `input_ordinal` only when the field is
+nested at that coordinate. The closed field keys, in deterministic field
+order, are:
+
+```text
+message.content
+specialist_reply.content
+proposal.purpose
+proposal.user_impact
+proposal.assignment.instruction
+proposal.input.locator
+proposal.input.range
+proposal.call_usage
+proposal.assignment.call_limit
+proposal.synthesis.call_limit
+dispatch.instruction
+dispatch.call_limit
+interruption.content
+step.state
+confirmation.decision
+execution.outcome
+execution.assignment.outcome
+execution.assignment.call_usage
+execution.synthesis.outcome
+execution.synthesis.call_usage
+terminal.scope
+terminal.outcome
+terminal.call_usage
+```
+
+Proposal ranges render as `whole` or `lines:START-END`; call fields use fixed
+`name=value` text. The field set exposes visible content and public facts only.
+It adds no authority, capability, provider-session, hidden diagnostic,
+profile/input revision digest, or private reasoning field. The complete typed
+payload remains available on the record for faithful inspection, while search
+is limited to this closed field set.
+
+## Search, citations, pages, and derived identity
+
+The pure direct module `story_writing_agents.conversation_search` owns the v2
+read APIs. Search validates and projects the complete history, then applies the
+existing literal normalization: strict UTF-8 NFKC, case folding, category-C
+replacement, and whitespace collapse. Query input itself must be nonblank, no
+more than 200 characters, and contain no category-C character. Search is not
+regex, fuzzy, or semantic.
+
+Every returned `CollaborationHistoryCitation` binds session, conversation,
+event ID, one-based sequence, field key, optional zero-based nested ordinal,
+and a zero-based start-inclusive/end-exclusive Unicode codepoint range in the
+original field. Case-fold expansions, compatibility characters, combining
+sequences, control replacement, and collapsed whitespace are mapped back to
+the exact original range. `resolve_collaboration_citation(events, citation)`
+revalidates the current complete history and returns that original substring;
+stale event, identity, field, ordinal, or range facts fail closed.
+
+One field contributes at most its first normalized-literal match. Hits sort by
+event sequence, closed field-key order, assignment ordinal, then input ordinal.
+Search returns at most 10 hits by default and 50 when explicitly requested,
+scans at most 10,000 records, and bounds each normalized snippet to 240
+characters and 1,024 UTF-8 bytes. `scan_truncated` distinguishes scan
+exhaustion; `truncated` also covers the hit limit.
+
+`page_collaboration_history()` returns whole readable records from an inclusive
+sequence range. It defaults to 24 records; the maximum is 100 records and
+32,768 aggregate readable-field UTF-8 bytes. A continuation cursor retains the
+range and page limits and binds both `snapshot_last_sequence` and
+`snapshot_tail_batch_digest`. `continue_collaboration_history()` rejects an
+append, rewritten tail digest, changed identity, or other drift rather than
+mixing snapshots. An oversized first record fails instead of being split.
+
+`collaboration_readable_document_id()` returns a 71-character
+`sha256:`-prefixed derived identity for one record field. SHA-256 input
+length-frames the complete canonical encoded event, followed by the fixed
+readable-source schema ID, collaboration schema version, workspace identity,
+session/conversation identity, positive metadata revision, event ID/sequence,
+batch digest, field key, optional ordinals, and exact readable text bytes. The
+fixed source schema ID is
+`story-collaboration-readable-event-field-v2`. Changing any bound fact changes
+the ID. This is only a derived lookup/context-source identity: it is never an
+event ID, append receipt, confirmation capability, state/recovery fact, or
+authorization to reread or execute anything.
+
+See [Conversation search](conversation-search.md#schema-v2-readable-collaboration-history)
+for signatures, page/search limits, and focused examples.
+
+## State projection versus possible provider context
+
+These similarly named values have different jobs:
+
+| Contract | Answers | Contains by default | Authority |
+| --- | --- | --- | --- |
+| `CollaborationHistoryProjection` from `project_collaboration_history()` and future `CollaborationEventStore.read_context()` | What proposal/state/decision/attempt/result is current, and what action is safe to consider? | State and recovery summary | Evidence only |
+| `tuple[CollaborationReadableRecord, ...]` from `project_collaboration_readable_history()` | What complete typed public events and closed searchable fields exist? | Every validated event record | Evidence only |
+| `CollaborationReadableContext` from `select_bounded_collaboration_context()` | Which explicitly named records fit a possible later provider-context budget? | Content-free `CollaborationContextBootstrap`; zero records | Evidence only |
+
+The bootstrap contains schema version, optional history identity, record count,
+last sequence, and tail batch digest. Only unique, known `event_ids` explicitly
+supplied by the caller can add records. Selection restores authoritative
+sequence order regardless of request order, retains each record atomically,
+and caps the result at 24 records and 32,768 readable-field UTF-8 bytes.
+Requested/retained/omitted counts and `truncated` report the result.
+
+The selector has no `current_input` parameter. The current user input remains
+separate, and the selected value still does not invoke a provider or establish
+retrieval authorization. Runtime composition and provider delivery are later
+#475-#479 work.
 
 ## Atomic batch flow
 
@@ -461,6 +627,124 @@ Proposal and batch digests are `sha256:` plus 64 lowercase hexadecimal digits.
 The decoder bounds a document at 8 MiB; individual visible text remains subject
 to its tighter field limit.
 
+## Python readable/search/page/context example
+
+Continuing with the validated two-event `history` above, this uses every #474
+operation. The structured dictionaries show the significant output facts; the
+functions themselves return the immutable typed values documented here.
+
+```python
+from story_writing_agents.conversation_search import (
+    CollaborationHistorySearchQuery,
+    collaboration_readable_document_id,
+    continue_collaboration_history,
+    page_collaboration_history,
+    resolve_collaboration_citation,
+    search_collaboration_history,
+)
+from story_writing_agents.conversations import (
+    CollaborationReadableContextPolicy,
+    project_collaboration_readable_history,
+    select_bounded_collaboration_context,
+)
+
+records = project_collaboration_readable_history(history)
+project_output = {
+    "record_count": len(records),
+    "first_event": records[0].event_id,
+    "first_kind": records[0].kind.value,
+    "payload_type": type(records[0].payload).__name__,
+    "first_field": records[0].fields[0].key.value,
+}
+assert project_output == {
+    "record_count": 2,
+    "first_event": "proposal_event",
+    "first_kind": "message",
+    "payload_type": "CollaborationProposal",
+    "first_field": "proposal.purpose",
+}
+
+result = search_collaboration_history(
+    history,
+    CollaborationHistorySearchQuery(text="OUTLINE RANGE", limit=1),
+)
+hit = result.hits[0]
+resolved = resolve_collaboration_citation(history, hit.citation)
+search_output = {
+    "normalized_query": result.normalized_query,
+    "event_id": hit.citation.event_id,
+    "field": hit.citation.field_key.value,
+    "codepoints": (
+        hit.citation.start_codepoint,
+        hit.citation.end_codepoint,
+    ),
+    "resolved_original": resolved,
+}
+assert search_output == {
+    "normalized_query": "outline range",
+    "event_id": "proposal_event",
+    "field": "proposal.purpose",
+    "codepoints": (37, 50),
+    "resolved_original": "outline range",
+}
+
+first_page = page_collaboration_history(history, max_records=1)
+assert [record.event_id for record in first_page.records] == ["proposal_event"]
+assert first_page.snapshot_last_sequence == 2
+assert first_page.next_cursor is not None
+second_page = continue_collaboration_history(history, first_page.next_cursor)
+assert [record.event_id for record in second_page.records] == ["request_event"]
+
+default_context = select_bounded_collaboration_context(history)
+assert default_context.records == ()
+assert default_context.bootstrap.total_records == 2
+assert default_context.bootstrap.last_sequence == 2
+
+selected_context = select_bounded_collaboration_context(
+    history,
+    event_ids=(hit.citation.event_id,),
+    policy=CollaborationReadableContextPolicy(
+        max_records=1,
+        max_utf8_bytes=32_768,
+    ),
+)
+context_output = {
+    "requested": selected_context.requested_records,
+    "retained": selected_context.retained_records,
+    "omitted": selected_context.omitted_records,
+    "event_ids": tuple(record.event_id for record in selected_context.records),
+    "truncated": selected_context.truncated,
+}
+assert context_output == {
+    "requested": 1,
+    "retained": 1,
+    "omitted": 0,
+    "event_ids": ("proposal_event",),
+    "truncated": False,
+}
+
+document_id = collaboration_readable_document_id(
+    workspace_id="workspace_a",
+    metadata_revision=1,
+    record=records[0],
+    field=records[0].fields[0],
+)
+document_output = {
+    "schema_id": "story-collaboration-readable-event-field-v2",
+    "prefix": document_id[:7],
+    "length": len(document_id),
+}
+assert document_output == {
+    "schema_id": "story-collaboration-readable-event-field-v2",
+    "prefix": "sha256:",
+    "length": 71,
+}
+```
+
+Appending to or changing `history` before the continuation makes the cursor
+stale. Changing an event/field coordinate makes the citation or document input
+different or invalid. These examples call no store and no provider.
+
 ## Privacy, authority, and non-goals
 
 Canonical v2 history may contain user-visible proposal text, instructions,
@@ -474,6 +758,8 @@ not belong in any payload.
 This contract does not define a concrete store, filesystem path, SQLite schema,
 CLI command, UI, provider call, lead-agent behavior, artifact/Git executor,
 credential model, migration, complete workspace backup, or recovery tool. It
+also does not wire readable records into a provider prompt, automatic context,
+RAG generation, or storage search; #475-#479 own those integrations. It
 also does not provide the full lead-agent usage guide; that later workflow is
 owned by issue #460. See [conversation transcripts](conversation-transcripts.md)
 for the active schema-v1 path, [persistence](../design/persistence.md) for

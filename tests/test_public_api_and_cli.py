@@ -1127,8 +1127,23 @@ class PublicApiTests(unittest.TestCase):
     ) -> None:
         from story_writing_agents import conversation_search
 
-        required = set(conversation_search.__all__)
+        direct_only = {
+            "COLLABORATION_READABLE_SOURCE_SCHEMA_ID",
+            "CollaborationHistoryCitation",
+            "CollaborationHistoryPage",
+            "CollaborationHistoryPageCursor",
+            "CollaborationHistorySearchHit",
+            "CollaborationHistorySearchQuery",
+            "CollaborationHistorySearchResult",
+            "collaboration_readable_document_id",
+            "continue_collaboration_history",
+            "page_collaboration_history",
+            "resolve_collaboration_citation",
+            "search_collaboration_history",
+        }
+        required = set(conversation_search.__all__).difference(direct_only)
         self.assertTrue(required.issubset(story_writing_agents.__all__))
+        self.assertTrue(direct_only.isdisjoint(story_writing_agents.__all__))
         for name in required:
             with self.subTest(name=name):
                 self.assertIs(
