@@ -294,6 +294,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `RuntimeSession`, `Runtime`, and `Session` from `orchestrator`; and
   `FilesystemConversationCatalog`, `FilesystemConversationEventStore`,
   `Workspace`, plus `initialize_workspace` from `workspace`.
+  Schema-v2 `Collaboration*` contracts are intentionally omitted from this
+  project-root facade and are supported only by the conversations facade.
   The re-exported `ActionKind` includes the additive `AUTH` case, while it and
   `InteractiveAction` retain the earlier additive search and transcript cases
   plus the optional positive `start_sequence` payload; the facade name count
@@ -2956,23 +2958,19 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.conversations`
 
 - **Source:** `src/story_writing_agents/conversations/__init__.py`
-- **Responsibility:** Provide the stable subject-conversation contract import
-  boundary.
-- **Supported surface:** Exactly 17 names in `__all__` in their established
-  order: `CONVERSATION_CONTEXT_POLICY`,
-  `CONVERSATION_EVENT_SCHEMA_VERSION`,
-  `CONVERSATION_METADATA_SCHEMA_VERSION`,
-  `CONVERSATION_SUBJECT_NORMALIZATION_VERSION`,
-  `MAX_CONVERSATION_SUBJECT_LENGTH`, `ConversationCatalog`,
-  `ConversationContextPolicy`, `ConversationContextWindow`,
-  `ConversationEvent`, `ConversationEventAppend`, `ConversationEventKind`,
-  `ConversationEventStore`, `ConversationMetadata`, `ConversationStatus`,
-  `normalize_conversation_subject`, `select_bounded_conversation_context`, and
-  `validate_conversation_context_window`. The first 15 remain supported by the
-  project-root facade; the two pure context helpers remain supported only from
-  this facade. Every binding is the object defined by its owning leaf, without
-  a wrapper, and every supported class or function retains the canonical
-  `story_writing_agents.conversations` module identity.
+- **Responsibility:** Provide the stable subject-conversation and schema-v2
+  collaboration contract import boundary.
+- **Supported surface:** Exactly 74 names in `__all__`: the established 17 v1
+  conversation names; all 38 immutable `Collaboration*` values, enums,
+  payloads, errors, projection, and store protocol defined by the two owning
+  leaves; `CollaborationPayload`; the four `COLLABORATION_*` constants; the
+  two digest functions; the eight strict canonical proposal/event/draft/batch
+  encode/decode functions; and the three pure collaboration
+  projection/candidate/transition functions. Every binding is the object
+  defined by its owning leaf, without a wrapper, and every supported class or
+  function retains the canonical `story_writing_agents.conversations` module
+  identity. The project-root facade retains exactly its established v1 subset
+  and exports no schema-v2 collaboration name.
 - **Direct internal dependencies:** `conversations.catalog`,
   `conversations.context`, and `conversations.events`.
 - **State, resources, and side effects:** Owns no mutable state or external
@@ -2985,8 +2983,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/conversation_event_store_contract.py`,
   `tests/test_conversation_catalog.py`,
   `tests/test_conversation_event_store.py`,
-  `docs/reference/conversation-catalog.md`, and
-  `docs/reference/conversation-transcripts.md`.
+  `tests/test_collaboration_events.py`,
+  `tests/test_collaboration_context.py`,
+  `docs/reference/conversation-catalog.md`,
+  `docs/reference/conversation-transcripts.md`,
+  `docs/reference/collaboration-history.md`.
 
 ### `story_writing_agents.conversations.catalog`
 
@@ -3014,46 +3015,63 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.conversations.context`
 
 - **Source:** `src/story_writing_agents/conversations/context.py`
-- **Responsibility:** Define bounded-context-capable transcript access
-  contracts.
-- **Supported surface:** Exactly six owning-module names in `__all__`:
-  `CONVERSATION_CONTEXT_POLICY`, `ConversationContextPolicy`,
-  `ConversationContextWindow`, `ConversationEventStore`,
-  `select_bounded_conversation_context`, and
-  `validate_conversation_context_window`. The event-store protocol lives at
-  this higher layer so its `read_context` annotation resolves the defining
-  context-window object without a reverse event-module dependency. The
-  conversations facade exposes the same defining objects; the project-root
-  facade omits only the two pure helpers.
+- **Responsibility:** Define pure conversation and collaboration history
+  projection and access contracts.
+- **Supported surface:** Exactly 12 owning-module names in `__all__`: the six
+  established v1 context names plus `CollaborationEventStore`,
+  `CollaborationHistoryProjection`, `CollaborationNextAction`,
+  `project_collaboration_history`, `validate_collaboration_candidate_batch`,
+  and `validate_collaboration_transition`. The v2 store is the sole unused
+  batch-oriented collaboration port and returns its owning pure projection;
+  candidate validation deterministically returns the original
+  `ALREADY_COMMITTED` receipt for an exact retry and raises the fixed append
+  failure taxonomy for batch/event conflicts, stale sequence, invalid
+  candidates, or corrupt existing history. No active v1 storage or runtime
+  consumer uses it in this change. The
+  conversations facade exposes the same defining objects, while the
+  project-root facade exposes only the established v1 subset.
 - **Direct internal dependencies:** `conversations.events` and `errors`.
-- **State, resources, and side effects:** Immutable policy and window values,
-  the storage-neutral transcript port, pure fixed-policy complete-turn
-  selection, and identity-bound context validation only; owns no mutable state
-  or external resource and performs no import-time I/O.
+- **State, resources, and side effects:** Immutable policy, window, and
+  projection values; the v1 and unused v2 storage-neutral ports; pure
+  fixed-policy selection; and deterministic full-history, candidate,
+  transition, correlation, budget-lineage, and atomic co-batch validation
+  including exact external-exchange/result closure and rejection of every late
+  provider/execution event outside the exact active running attempt. Owns no
+  mutable state or external resource and performs no import-time I/O.
 - **Primary verification/documentation:**
   `tests/conversation_event_store_contract.py`,
   `tests/test_conversation_event_store.py`,
-  `docs/reference/conversation-transcripts.md`, and
-  `docs/reference/package-api.md`.
+  `tests/test_collaboration_context.py`,
+  `docs/reference/conversation-transcripts.md`,
+  `docs/reference/package-api.md`, and
+  `docs/reference/collaboration-history.md`.
 
 ### `story_writing_agents.conversations.events`
 
 - **Source:** `src/story_writing_agents/conversations/events.py`
-- **Responsibility:** Define immutable visible conversation-event schemas.
-- **Supported surface:** Exactly four owning-module names in `__all__`:
-  `CONVERSATION_EVENT_SCHEMA_VERSION`, `ConversationEvent`,
-  `ConversationEventAppend`, and `ConversationEventKind`. The conversations
-  and project-root facades expose the same defining objects.
+- **Responsibility:** Define immutable visible conversation and collaboration
+  event schemas.
+- **Supported surface:** Exactly 55 owning-module names in `__all__`: the four
+  established v1 event names; four schema-v2 constants; the closed
+  `Collaboration*` actors, kinds, directions, inputs, profiles, basis, budget,
+  assignments, proposal, outcomes, payloads, events, batches, receipts,
+  failures, and errors; `CollaborationPayload`; two canonical digest
+  functions; and eight strict proposal/event/draft/batch encode/decode
+  functions. The conversations facade exposes every defining object, while
+  the project-root facade retains only the established v1 names.
 - **Direct internal dependencies:** `agents` and `errors`.
-- **State, resources, and side effects:** Immutable event values plus
-  deterministic identifier, actor, payload, sequence, and timestamp validation
-  only; owns no mutable state or external resource and performs no import-time
-  I/O.
+- **State, resources, and side effects:** Immutable v1 and v2 values plus
+  deterministic identifier, strict UTF-8/size/privacy, actor direction,
+  proposal closure, 2-round/12-call reservation, payload, outcome, canonical
+  JSON, digest, batch, sequence, and timestamp validation only. Owns no mutable
+  state or external resource and performs no import-time I/O.
 - **Primary verification/documentation:**
   `tests/conversation_event_store_contract.py`,
   `tests/test_conversation_event_store.py`,
-  `docs/reference/conversation-transcripts.md`, and
-  `docs/reference/package-api.md`.
+  `tests/test_collaboration_events.py`,
+  `docs/reference/conversation-transcripts.md`,
+  `docs/reference/package-api.md`, and
+  `docs/reference/collaboration-history.md`.
 
 ### `story_writing_agents.debug_log`
 
@@ -6240,6 +6258,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/operations/recovery-and-limitations.md`.
 
 ## Consistency Notes
+
+- Schema-v2 collaboration contracts extend the three existing conversations
+  units without adding a module or an internal dependency edge. Events owns
+  immutable values, strict canonical serialization and digests, fixed
+  receipts/failures, and independent value invariants; context depends inward
+  on events and owns pure history/candidate/transition/co-batch validation plus
+  the sole unused v2 store protocol; the conversations facade statically
+  re-exports that intentional surface. The project-root facade and every
+  active v1 store/runtime consumer remain unchanged. The source inventory and
+  import graph therefore remain 97 production units, 385 direct internal
+  edges, and zero directed cycles.
 
 - Agent-exchange inspection remains one-way and isolated. Controller `_core`
   depends on the supported `agent_exchanges` facade plus pure

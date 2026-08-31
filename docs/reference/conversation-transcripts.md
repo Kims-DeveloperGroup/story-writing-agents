@@ -6,6 +6,9 @@
 > with context accounting; `/search` cites active events. Both adapters remain
 > available through their documented Python imports; direct runtime
 > construction defaults to filesystem unless supplied a complete bundle.
+> A separate schema-v2 structured-collaboration contract is available through
+> `story_writing_agents.conversations`, but it is not used by these adapters,
+> the current runtime, `/transcript`, `/history`, search, or context selection.
 
 Key terms: **event**—one visible stored record; **complete turn**—one user event
 plus one outcome; **unmatched turn**—a user event without an outcome;
@@ -16,6 +19,23 @@ The transcript is authoritative. `read()` returns its complete stored history;
 `read_context()` derives provider context without changing it. The
 [memory service](conversation-search.md) supplies bounded search and read
 projections over the same events.
+
+## Separate structured collaboration history
+
+The contracts on this page remain schema version `1`: a user message followed
+by one agent reply or runtime error. Schema-v2 `CollaborationEvent` values model
+future ordered user/lead/specialist/runtime/artifact/Git exchanges, exact
+proposal decisions, execution facts, and recovery states. They share the
+`story_writing_agents.conversations` facade for public imports but do not share
+a storage protocol, stored path, context selector, or runtime authority.
+
+`project_collaboration_history()` accepts only canonical v2 events and rejects
+the schema-v1 `ConversationEvent` defined below. Conversely, the current
+filesystem and SQLite transcript stores accept only this page's schema-v1
+values. There is no conversion workflow and no current user action. See
+[Structured collaboration history](collaboration-history.md) for the future
+contract and [persistence ownership](../design/persistence.md#structured-collaboration-history-persistence)
+for the unimplemented store boundary.
 
 ## Public contract
 

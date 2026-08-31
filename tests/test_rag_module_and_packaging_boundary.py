@@ -1028,10 +1028,23 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.interactive_terminal._external_view as external_view
                 import story_writing_agents.conversation_storage as conversation_storage
                 import story_writing_agents.conversation_storage.filesystem as filesystem
+                import story_writing_agents.conversations as conversations
+                import story_writing_agents.conversations.context as conversation_context
+                import story_writing_agents.conversations.events as conversation_events
                 import story_writing_agents.workspace as workspace
                 import story_writing_agents.workspace.core as workspace_core
                 from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
                 assert len(story_writing_agents.__all__) == 120
+                assert len(conversations.__all__) == 74
+                assert len(conversation_events.__all__) == 55
+                assert len(conversation_context.__all__) == 12
+                assert conversations.CollaborationProposal is conversation_events.CollaborationProposal
+                assert conversations.CollaborationEventStore is conversation_context.CollaborationEventStore
+                assert conversations.CollaborationProposal.__module__ == "story_writing_agents.conversations"
+                assert conversations.project_collaboration_history.__module__ == "story_writing_agents.conversations"
+                assert not hasattr(story_writing_agents, "CollaborationProposal")
+                assert not hasattr(story_writing_agents, "CollaborationEventStore")
+                assert "__getattr__" not in vars(conversations)
                 assert workspace.__all__ == [
                     "Workspace",
                     "initialize_workspace",
@@ -1257,9 +1270,30 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.conversations.catalog as catalog
                 import story_writing_agents.conversations.context as context
                 import story_writing_agents.conversations.events as events
+                assert len(story_writing_agents.__all__) == 120
+                assert len(conversations.__all__) == 74
+                assert len(events.__all__) == 55
+                assert len(context.__all__) == 12
                 assert catalog.ConversationCatalog is conversations.ConversationCatalog
                 assert events.ConversationEvent is conversations.ConversationEvent
                 assert context.ConversationEventStore is conversations.ConversationEventStore
+                assert events.CollaborationProposal is conversations.CollaborationProposal
+                assert context.CollaborationEventStore is conversations.CollaborationEventStore
+                assert context.CollaborationHistoryProjection is conversations.CollaborationHistoryProjection
+                assert not hasattr(story_writing_agents, "CollaborationProposal")
+                assert not hasattr(story_writing_agents, "CollaborationEventStore")
+                for name in (
+                    "CollaborationProposal",
+                    "CollaborationEvent",
+                    "CollaborationEventBatch",
+                    "CollaborationEventStore",
+                    "CollaborationHistoryProjection",
+                    "project_collaboration_history",
+                    "validate_collaboration_candidate_batch",
+                ):
+                    assert getattr(conversations, name).__module__ == (
+                        "story_writing_agents.conversations"
+                    )
                 for name in (
                     "ConversationCatalog",
                     "ConversationContextPolicy",
@@ -1298,6 +1332,12 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                         "return"
                     ]
                     is conversations.ConversationContextWindow
+                )
+                assert (
+                    get_type_hints(context.CollaborationEventStore.read_context)[
+                        "return"
+                    ]
+                    is conversations.CollaborationHistoryProjection
                 )
                 assert not any(
                     name == "jsonl_viewer" or name.startswith("jsonl_viewer.")

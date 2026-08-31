@@ -8,6 +8,7 @@ import inspect
 import json
 import multiprocessing
 import os
+import re
 import socket
 import stat
 import subprocess
@@ -439,6 +440,25 @@ class SessionLifecycleContractTests(unittest.TestCase):
         self.assertIn("Importable production units indexed: 97.", index)
         self.assertIn("Direct internal dependency edges indexed: 385.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
+        headings = tuple(re.findall(r"^### `([^`]+)`$", index, flags=re.MULTILINE))
+        expected_modules: set[str] = set()
+        for path in source_files:
+            relative = path.relative_to(source_root).with_suffix("")
+            parts = relative.parts
+            if parts[-1] == "__init__":
+                parts = parts[:-1]
+            expected_modules.add(".".join(("story_writing_agents", *parts)))
+        self.assertEqual(len(headings), 97)
+        self.assertEqual(len(set(headings)), 97)
+        self.assertEqual(set(headings), expected_modules)
+        self.assertIn("Exactly 74 names in `__all__`", index)
+        self.assertIn("Exactly 12 owning-module names in `__all__`", index)
+        self.assertIn("Exactly 55 owning-module names in `__all__`", index)
+        self.assertIn(
+            "project-root facade retains exactly its established v1 subset",
+            index,
+        )
+        self.assertIn("exports no schema-v2 collaboration name", index)
         for module_name in (
             "story_writing_agents.conversations",
             "story_writing_agents.conversations.catalog",

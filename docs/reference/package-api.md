@@ -7,7 +7,11 @@
 > modules plus direct-only conversation migration, provisioning, and selection;
 > optional conversation RAG also uses seven supported direct modules, with the
 > generic adapter available only through its pinned extra. None is a
-> package-root facade export. Context and progress types are Python
+> package-root facade export. The 74-name
+> `story_writing_agents.conversations` facade also supplies a pure schema-v2
+> structured-collaboration contract; its collaboration names are deliberately
+> omitted from the package root and are not active in current runtime or
+> storage paths. Context and progress types are Python
 > APIs; an export does not imply a CLI command.
 
 Key terms: **package facade**—the names re-exported at the package root;
@@ -111,6 +115,56 @@ interactive activation values remain internal. The installed controller uses
 that private UI boundary for `$`/`$$` prompt editing without adding a public
 selection API or standalone artifact command. See
 [Canonical writing artifacts](writing-artifacts.md).
+
+<a id="structured-collaboration-history-boundary"></a>
+
+## Structured collaboration history boundary
+
+Schema-v2 collaboration contracts are supported only through the static
+`story_writing_agents.conversations` facade. Importing it performs no I/O and
+does not start the runtime, a provider, a store, or a shell:
+
+```python
+from story_writing_agents.conversations import (
+    CollaborationEventBatch,
+    CollaborationEventStore,
+    CollaborationProposal,
+    decode_collaboration_batch,
+    encode_collaboration_batch,
+    project_collaboration_history,
+)
+```
+
+The facade exports exactly 74 names: the established 17 schema-v1 conversation
+names and 57 schema-v2 additions. Of those additions, 44 names begin with
+`Collaboration` or `COLLABORATION_`; the remainder are the two digest functions,
+eight proposal/event/draft/batch encode/decode functions, and three pure
+projection/candidate/transition functions. The owning `conversations.events`
+and `conversations.context` modules export exactly 55 and 12 names,
+respectively. Every facade binding is the same object as its owning-leaf
+binding. All collaboration classes and functions report
+`story_writing_agents.conversations` as their canonical public module.
+
+No schema-v2 collaboration name is exported by the exact 120-name
+`story_writing_agents` root or by `story_writing_agents.conversation_storage`.
+There is no dynamic forwarding or alternate import path. The current runtime,
+filesystem/SQLite transcript adapters, and UI use only the established
+schema-v1 contracts; the v2 `CollaborationEventStore` remains an unimplemented
+caller-owned protocol.
+
+The fixed collaboration constants are schema version `2`, round limit `2`,
+physical-call limit `12`, and maximum visible text size `32_768` UTF-8 bytes.
+The facade exposes immutable typed actors, inputs, profiles, assignments,
+budget, proposal, payload, outcome, event, batch, receipt, error, history
+projection, and next-action values. It also exposes strict canonical UTF-8 JSON
+encode/decode, SHA-256 digest, complete-history projection, candidate-batch,
+and state-transition functions.
+
+Start with [Structured collaboration history](collaboration-history.md) for
+the exact user impact, proposal closure, structured-decision rule, state table,
+atomic batch contract, restart behavior, privacy limits, and executable Python
+example. Export availability alone does not authorize execution and does not
+imply a concrete store, current UI, command, provider workflow, or migration.
 
 <a id="conversation-literal-search-mechanics"></a>
 
@@ -1322,6 +1376,12 @@ migration input, or FTS-only search mode.
 | `ConversationSearchMatchKind` | `exact_subject`, `subject_prefix`, `subject_substring`, `transcript` |
 | `ConversationRetrievalActionKind` | `search_conversations`, `read_transcript`, `answer` |
 | `ConversationRetrievalProgressPhase` | `search_started`, `search_completed`, `read_started`, `read_completed` |
+| `CollaborationActorKind` | `user`, `lead`, `specialist`, `runtime`, `artifact`, `git` |
+| `CollaborationEventKind` | `message`, `assignment_dispatch`, `specialist_reply`, `step_state`, `confirmation`, `execution_result`, `interruption`, `terminal_outcome` |
+| `CollaborationConfirmationDecision` | `confirm`, `reject`, `revise` |
+| `CollaborationStepState` | `awaiting_confirmation`, `reconfirmation_required`, `confirmed`, `running`, `completed`, `rejected`, `superseded`, `interrupted`, `failed`, `outcome_unknown`, `recovery_required` |
+| `CollaborationAppendStatus` | `APPENDED`, `ALREADY_COMMITTED` |
+| `CollaborationAppendFailure` | `stale_sequence`, `batch_id_conflict`, `event_id_conflict`, `invalid_transition`, `corrupt_history` |
 
 These are `StrEnum` values. Use members such as `Verdict.APPROVE`; a plain
 string like `"approve"` is not accepted where reply validation requires the
@@ -1339,6 +1399,7 @@ aliases. See [Backend and sessions](backend-and-sessions.md#lifecycle-value-cont
 - [Canonical writing artifacts](writing-artifacts.md)
 - [Conversation catalog](conversation-catalog.md)
 - [Conversation transcripts](conversation-transcripts.md)
+- [Structured collaboration history](collaboration-history.md)
 - [Canonical conversation archives and storage migration](conversation-archives.md)
 - [Conversation search and cited transcript pages](conversation-search.md)
 - [Bounded conversation retrieval](conversation-retrieval.md)
@@ -1349,10 +1410,12 @@ aliases. See [Backend and sessions](backend-and-sessions.md#lifecycle-value-cont
 Lower-level modules may contain implementation helpers. The package-root facade
 matches its `__all__`; archive names are supported only through the explicitly
 documented conversation-storage subpackage and its owning-module surfaces.
-The explicitly documented literal-search, SQLite adapter, SQLite companion,
-conversation-migration, provisioning, selection, and conversation-RAG modules
-are also supported direct-module surfaces and match their own `__all__` values.
-None is re-exported by the package-root or conversation-storage facade.
+The explicitly documented conversations facade, literal-search, SQLite
+adapter, SQLite companion, conversation-migration, provisioning, selection,
+and conversation-RAG modules are also supported surfaces and match their own
+`__all__` values. Schema-v2 collaboration names are exposed only by the
+conversations facade; the other listed direct-module names are not re-exported
+by the package-root or conversation-storage facade.
 
 `story_writing_agents.agent_context` is an 11-name accounting-only facade. It
 is absent from the 120-name package-root facade and does not export manifest,
@@ -1362,11 +1425,12 @@ observer types are supported only from
 [Runtime API](runtime-api.md#context-lifecycle-observer) and
 [Agent-context design](../design/agent-context.md#package-boundary-and-owners).
 
-The exact current inventories are package root `120`, conversation storage
-`64`, conversation search `13`, SQLite database owner `12`, SQLite adapter
-`14`, literal-search mechanics `6`, SQLite companion owner `5`, conversation
+The exact current inventories are package root `120`, conversations `74`
+(`55` events owner / `12` context owner), conversation storage `64`,
+conversation search `13`, SQLite database owner `12`, SQLite adapter `14`,
+literal-search mechanics `6`, SQLite companion owner `5`, conversation
 migration `7`, provisioning `4`, selection `8`, conversation RAG contracts
 `35`, generic RAG adapter `3`, local RAG provider `5`, RAG generation store `8`,
 RAG composition `10`, RAG runtime `10`, and RAG CLI `7`. The production module
-inventory is `84`, with 346 dependency edges, zero cycles, and facade counts
-120/11/31 (root / agent-context accounting / writing artifacts).
+inventory is `97`, with 385 dependency edges, zero cycles, and the established
+facade counts 120/11/31 (root / agent-context accounting / writing artifacts).

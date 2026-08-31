@@ -32,6 +32,10 @@ Use this index to find one canonical answer instead of searching a long manual.
 > selects an inventoried conversation/debate and canonical agent before opening
 > the base-installed isolated read-only JSONL viewer over one immutable
 > snapshot. No setting, enablement step, or extra is required.
+> Schema-v2 structured collaboration history is also available as a pure
+> `story_writing_agents.conversations` Python contract. It is not active in the
+> current runtime, storage adapters, transcript UI, or shell, and requires no
+> migration or user action.
 
 ## Availability matrix
 
@@ -55,6 +59,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Parse the interactive command language and route metadata | Python API; the shell dispatches a documented subset |
 | Compose a prompt and render safe terminal records | Shell `/run --output PART/PATH.md`; module-supported terminal Python API |
 | Append/read transcripts; derive bounded complete-turn context | Shell turns append/consume context and `/transcript` reads fresh bounded pages; Python API |
+| Model and validate a future lead-led collaboration history | Pure `story_writing_agents.conversations` schema-v2 Python API only; no current runtime, store, UI, provider, or command integration. [User impact, proposals, decisions, states, recovery, and examples](reference/collaboration-history.md) |
 | Search one session and cite hits | Attached shell `/search` for active records; Python API can explicitly include archived records |
 | Ask an agent to retrieve cited conversation history | Focused shell conversation; additive Python runtime API; active records in the current session only |
 | Observe bounded agent-context execution | Automatic live shell progress for contextual ordinary/retrieval/debate work; optional synchronous `context_event_sink` on all `StoryRuntime` and `RuntimeSession` provider-bound entry forms. [States, output, privacy, and recovery](guides/agent-context-progress.md) |
@@ -101,6 +106,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 - [Optional conversation RAG direct-module API](reference/package-api.md#optional-conversation-rag-boundary)
 - [Conversation catalog](reference/conversation-catalog.md)
 - [Conversation transcripts](reference/conversation-transcripts.md)
+- [Structured collaboration history: user impact, exact decisions, states, recovery, wire format, and Python examples](reference/collaboration-history.md)
 - [Canonical conversation archives, transfer, and storage migration](reference/conversation-archives.md)
 - [Conversation search and cited transcript pages](reference/conversation-search.md)
 - [Bounded agent-directed conversation retrieval](reference/conversation-retrieval.md)
@@ -121,7 +127,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 - [Overview](design/overview.md)
 - [Agent-context ownership, wire v5, checkpoints, candidate deltas, and recovery](design/agent-context.md)
 - [Interactive CLI design system contract](design/interactive-cli-design-system.md)
-- [Canonical Python module inventory (92 production units)](../PYTHON_MODULE_INDEX.md)
+- [Canonical Python module inventory (97 production units)](../PYTHON_MODULE_INDEX.md)
 - [Prompts, provider boundary, and exact context accounting](design/prompts-and-provider.md)
 - [Session lifecycle](design/session-lifecycle.md)
 - [Consensus workflow](design/consensus-workflow.md)

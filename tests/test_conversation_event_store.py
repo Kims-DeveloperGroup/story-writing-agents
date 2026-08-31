@@ -56,6 +56,10 @@ from tests.conversation_event_store_contract import (
     make_append,
     make_stored_event,
 )
+from tests.collaboration_contract_fixture import (
+    COLLABORATION_CONTEXT_EXPORTS,
+    COLLABORATION_EVENT_EXPORTS,
+)
 
 
 _EVENT_FIELDS = (
@@ -87,20 +91,8 @@ _WINDOW_FIELDS = (
     "retained_utf8_bytes",
     "truncated",
 )
-_EVENT_EXPORTS = {
-    "CONVERSATION_EVENT_SCHEMA_VERSION",
-    "ConversationEvent",
-    "ConversationEventAppend",
-    "ConversationEventKind",
-}
-_CONTEXT_EXPORTS = {
-    "CONVERSATION_CONTEXT_POLICY",
-    "ConversationContextPolicy",
-    "ConversationContextWindow",
-    "ConversationEventStore",
-    "select_bounded_conversation_context",
-    "validate_conversation_context_window",
-}
+_EVENT_EXPORTS = set(COLLABORATION_EVENT_EXPORTS)
+_CONTEXT_EXPORTS = set(COLLABORATION_CONTEXT_EXPORTS)
 
 
 def _transcript_path(
