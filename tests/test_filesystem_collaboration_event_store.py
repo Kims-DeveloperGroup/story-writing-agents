@@ -36,9 +36,6 @@ from story_writing_agents.conversations import (
     CollaborationAppendStatus,
     CollaborationEvent,
     CollaborationEventBatch,
-    CollaborationEventKind,
-    CollaborationInterruptionPayload,
-    CollaborationMessagePayload,
     CollaborationStepState,
     ConversationEvent,
     ConversationEventKind,
@@ -52,18 +49,8 @@ from story_writing_agents.errors import WorkspaceFormatError, WorkspaceSecurityE
 from story_writing_agents.workspace.core import Workspace
 
 from tests.collaboration_contract_fixture import (
-    ATTEMPT_ID,
-    RUNTIME,
     SESSION_ID,
-    USER,
-    awaiting_history,
-    batch_from_history,
-    confirmed_history,
-    executed_history,
-    make_batch,
-    make_draft,
-    proposal_state,
-    running_history,
+    contract_batches,
 )
 
 
@@ -104,91 +91,6 @@ def _harness():
         )
     finally:
         temporary.cleanup()
-
-
-def _retarget(
-    batch: CollaborationEventBatch,
-    conversation_id: str,
-    *,
-    batch_id: str | None = None,
-) -> CollaborationEventBatch:
-    return CollaborationEventBatch(
-        batch_id=batch.batch_id if batch_id is None else batch_id,
-        expected_last_sequence=batch.expected_last_sequence,
-        events=tuple(
-            replace(event, conversation_id=conversation_id) for event in batch.events
-        ),
-    )
-
-
-def _contract_batches(conversation_id: str) -> dict[str, CollaborationEventBatch]:
-    awaiting, proposal = awaiting_history()
-    confirmed, _ = confirmed_history(proposal)
-    running, _ = running_history(proposal)
-    executed, _, _ = executed_history(proposal)
-    completion = make_batch(
-        executed,
-        "batch_completed",
-        make_draft(
-            "notice_completed",
-            CollaborationEventKind.MESSAGE,
-            RUNTIME,
-            USER,
-            CollaborationMessagePayload("Visible completed notice."),
-        ),
-        make_draft(
-            "state_completed",
-            CollaborationEventKind.STEP_STATE,
-            RUNTIME,
-            USER,
-            proposal_state(
-                proposal,
-                CollaborationStepState.COMPLETED,
-                execution_result_event_id="execution_result",
-            ),
-        ),
-    )
-    unknown = make_batch(
-        running,
-        "batch_unknown",
-        make_draft(
-            "unknown_interruption",
-            CollaborationEventKind.INTERRUPTION,
-            RUNTIME,
-            USER,
-            CollaborationInterruptionPayload(
-                ATTEMPT_ID,
-                "No authoritative result exists after restart.",
-            ),
-        ),
-        make_draft(
-            "unknown_state",
-            CollaborationEventKind.STEP_STATE,
-            RUNTIME,
-            USER,
-            proposal_state(
-                proposal,
-                CollaborationStepState.OUTCOME_UNKNOWN,
-                execution_attempt_id=ATTEMPT_ID,
-            ),
-        ),
-    )
-    return {
-        "proposal": _retarget(
-            batch_from_history(awaiting, "batch_proposal"), conversation_id
-        ),
-        "confirmation": _retarget(
-            batch_from_history(confirmed, "batch_confirmation"), conversation_id
-        ),
-        "running": _retarget(
-            batch_from_history(running, "batch_running"), conversation_id
-        ),
-        "result": _retarget(
-            batch_from_history(executed, "batch_result"), conversation_id
-        ),
-        "completion": _retarget(completion, conversation_id),
-        "unknown": _retarget(unknown, conversation_id),
-    }
 
 
 def _encode_history(events: tuple[CollaborationEvent, ...]) -> bytes:
@@ -265,7 +167,7 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
             self.assertFalse(value.history_path.exists())
             self.assertFalse(value.lock_path.exists())
 
-            batch = _contract_batches(value.conversation_id)["proposal"]
+            batch = contract_batches(value.conversation_id)["proposal"]
             receipt = value.store.append_batch(batch)
             events = value.store.read(SESSION_ID, value.conversation_id)
 
@@ -320,7 +222,7 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
 
     def test_catalog_failures_and_wrong_identity_do_not_create_history(self) -> None:
         with _harness() as value:
-            batch = _contract_batches(value.conversation_id)["proposal"]
+            batch = contract_batches(value.conversation_id)["proposal"]
             wrong = SimpleNamespace(
                 session_id=SESSION_ID,
                 conversation_id="different_conversation",
@@ -348,7 +250,7 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
         self,
     ) -> None:
         with _harness() as value:
-            batches = _contract_batches(value.conversation_id)
+            batches = contract_batches(value.conversation_id)
             original = value.store.append_batch(batches["proposal"])
             value.store.append_batch(batches["confirmation"])
             committed = value.history_path.read_bytes()
@@ -411,7 +313,7 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
         self,
     ) -> None:
         with _harness() as value:
-            batches = _contract_batches(value.conversation_id)
+            batches = contract_batches(value.conversation_id)
             _append_prefix(
                 value.store,
                 batches,
@@ -425,7 +327,7 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
             )
 
         with _harness() as value:
-            batches = _contract_batches(value.conversation_id)
+            batches = contract_batches(value.conversation_id)
             _append_prefix(
                 value.store,
                 batches,
@@ -452,7 +354,7 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
         )
         for prefix, name, selected in split_cases:
             with self.subTest(batch=name), _harness() as value:
-                batches = _contract_batches(value.conversation_id)
+                batches = contract_batches(value.conversation_id)
                 _append_prefix(value.store, batches, prefix)
                 before = (
                     value.history_path.read_bytes()
@@ -502,7 +404,7 @@ class FilesystemCollaborationEventStoreCorruptionTests(unittest.TestCase):
             "wrong_identity",
         ):
             with self.subTest(corruption=name), _harness() as value:
-                batch = _contract_batches(value.conversation_id)["proposal"]
+                batch = contract_batches(value.conversation_id)["proposal"]
                 value.store.append_batch(batch)
                 first, second = value.store.read(SESSION_ID, value.conversation_id)
                 v1 = ConversationEvent(
@@ -599,7 +501,7 @@ class FilesystemCollaborationEventStoreConcurrencyTests(unittest.TestCase):
 
     def _run_thread_race(self, *, identical: bool) -> list[object]:
         with _harness() as value:
-            first = _contract_batches(value.conversation_id)["proposal"]
+            first = contract_batches(value.conversation_id)["proposal"]
             second = first if identical else self._different_batch(first)
             barrier = threading.Barrier(3)
             results: Queue[object] = Queue()
@@ -658,7 +560,7 @@ class FilesystemCollaborationEventStoreConcurrencyTests(unittest.TestCase):
 
     def _run_process_race(self, *, identical: bool) -> list[tuple[object, ...]]:
         with _harness() as value:
-            first = _contract_batches(value.conversation_id)["proposal"]
+            first = contract_batches(value.conversation_id)["proposal"]
             second = first if identical else self._different_batch(first)
             context = multiprocessing.get_context("spawn")
             start = context.Event()
@@ -732,7 +634,7 @@ class FilesystemCollaborationEventStoreFailureTests(unittest.TestCase):
     ) -> None:
         for failure in ("file_fsync", "replace"):
             with self.subTest(failure=failure), _harness() as value:
-                batches = _contract_batches(value.conversation_id)
+                batches = contract_batches(value.conversation_id)
                 value.store.append_batch(batches["proposal"])
                 before = value.history_path.read_bytes()
                 if failure == "file_fsync":
@@ -763,7 +665,7 @@ class FilesystemCollaborationEventStoreFailureTests(unittest.TestCase):
         self,
     ) -> None:
         with _harness() as value:
-            batch = _contract_batches(value.conversation_id)["proposal"]
+            batch = contract_batches(value.conversation_id)["proposal"]
             real_fsync = filesystem_module.os.fsync
 
             def fail_directory(descriptor: int) -> None:
@@ -793,7 +695,7 @@ class FilesystemCollaborationEventStoreFailureTests(unittest.TestCase):
         self,
     ) -> None:
         with _harness() as value:
-            batch = _contract_batches(value.conversation_id)["proposal"]
+            batch = contract_batches(value.conversation_id)["proposal"]
             with mock.patch.object(filesystem_module, "_fcntl", None):
                 with self.assertRaises(OSError):
                     value.store.append_batch(batch)
@@ -801,7 +703,7 @@ class FilesystemCollaborationEventStoreFailureTests(unittest.TestCase):
             self.assertFalse(value.lock_path.exists())
 
         with _harness() as value:
-            batch = _contract_batches(value.conversation_id)["proposal"]
+            batch = contract_batches(value.conversation_id)["proposal"]
             outside = value.workspace.root / "outside-lock-target"
             outside.write_text("untouched", encoding="utf-8")
             value.lock_path.symlink_to(outside)
@@ -811,7 +713,7 @@ class FilesystemCollaborationEventStoreFailureTests(unittest.TestCase):
             self.assertFalse(value.history_path.exists())
 
         with _harness() as value:
-            batch = _contract_batches(value.conversation_id)["proposal"]
+            batch = contract_batches(value.conversation_id)["proposal"]
             assert filesystem_module._fcntl is not None
             real_flock = filesystem_module._fcntl.flock
 
@@ -832,7 +734,7 @@ class FilesystemCollaborationEventStoreFailureTests(unittest.TestCase):
             self.assertFalse(value.history_path.exists())
 
         with _harness() as value:
-            batch = _contract_batches(value.conversation_id)["proposal"]
+            batch = contract_batches(value.conversation_id)["proposal"]
             assert filesystem_module._fcntl is not None
             real_flock = filesystem_module._fcntl.flock
 

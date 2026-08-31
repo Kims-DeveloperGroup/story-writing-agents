@@ -1,7 +1,7 @@
 """SQLite database lifecycle owner for optional conversation storage.
 
 The module deliberately loads :mod:`sqlite3` only when an operation is
-requested.  It owns the contained database path, the exact version-1 schema,
+requested.  It owns the contained database path, the exact version-2 schema,
 per-operation connections and transactions, read-only verification, and
 create-only provisioning.  Domain construction remains in ``sqlite`` and is
 supplied here as a validation callback.
@@ -26,7 +26,7 @@ SQLITE_APPLICATION_ID = 0x53574143
 SQLITE_BUSY_TIMEOUT_SECONDS = 5.0
 SQLITE_DATABASE_PATH = "discussion_logs/conversation_storage.sqlite3"
 SQLITE_MINIMUM_VERSION = (3, 7, 16)
-SQLITE_SCHEMA_VERSION = 1
+SQLITE_SCHEMA_VERSION = 2
 
 _DATABASE_HEADER_SIZE = 100
 _DATABASE_MAGIC = b"SQLite format 3\x00"
@@ -74,7 +74,7 @@ CREATE TABLE conversation_storage_identity (
     schema_fingerprint TEXT NOT NULL,
     lexical_generation INTEGER NOT NULL,
     CHECK (typeof(singleton) = 'integer' AND singleton = 1),
-    CHECK (typeof(schema_version) = 'integer' AND schema_version = 1),
+    CHECK (typeof(schema_version) = 'integer' AND schema_version = 2),
     CHECK (typeof(schema_fingerprint) = 'text' AND length(schema_fingerprint) = 64),
     CHECK (typeof(lexical_generation) = 'integer' AND lexical_generation >= 0)
 )
@@ -143,6 +143,50 @@ CREATE TABLE conversation_events (
 )
 """.strip()
 
+_CREATE_COLLABORATION_EVENTS_SQL = """
+CREATE TABLE collaboration_events (
+    session_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    schema_version INTEGER NOT NULL,
+    event_id TEXT NOT NULL,
+    turn_id TEXT NOT NULL,
+    step_id TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    batch_id TEXT NOT NULL,
+    batch_ordinal INTEGER NOT NULL,
+    batch_size INTEGER NOT NULL,
+    batch_digest TEXT NOT NULL,
+    event_bytes BLOB NOT NULL,
+    PRIMARY KEY (session_id, conversation_id, sequence),
+    FOREIGN KEY (session_id, conversation_id)
+        REFERENCES conversations (session_id, conversation_id)
+        ON UPDATE RESTRICT ON DELETE RESTRICT,
+    CHECK (typeof(session_id) = 'text' AND length(CAST(session_id AS BLOB)) > 0),
+    CHECK (
+        typeof(conversation_id) = 'text'
+        AND length(CAST(conversation_id AS BLOB)) > 0
+    ),
+    CHECK (typeof(sequence) = 'integer' AND sequence >= 1),
+    CHECK (typeof(schema_version) = 'integer' AND schema_version = 2),
+    CHECK (typeof(event_id) = 'text' AND length(CAST(event_id AS BLOB)) > 0),
+    CHECK (typeof(turn_id) = 'text' AND length(CAST(turn_id AS BLOB)) > 0),
+    CHECK (typeof(step_id) = 'text' AND length(CAST(step_id AS BLOB)) > 0),
+    CHECK (typeof(timestamp) = 'text' AND length(CAST(timestamp AS BLOB)) > 0),
+    CHECK (typeof(batch_id) = 'text' AND length(CAST(batch_id AS BLOB)) > 0),
+    CHECK (typeof(batch_ordinal) = 'integer' AND batch_ordinal >= 0),
+    CHECK (typeof(batch_size) = 'integer' AND batch_size >= 1),
+    CHECK (batch_ordinal < batch_size),
+    CHECK (
+        typeof(batch_digest) = 'text'
+        AND length(batch_digest) = 71
+        AND substr(batch_digest, 1, 7) = 'sha256:'
+        AND substr(batch_digest, 8) NOT GLOB '*[^0-9a-f]*'
+    ),
+    CHECK (typeof(event_bytes) = 'blob' AND length(event_bytes) > 0)
+)
+""".strip()
+
 _CREATE_CONVERSATION_ORDER_INDEX_SQL = """
 CREATE INDEX conversations_creation_order
 ON conversations (session_id, created_at, conversation_id)
@@ -161,6 +205,16 @@ ON conversation_events (session_id, conversation_id, turn_id, turn_slot)
 _CREATE_RECENT_OUTCOME_INDEX_SQL = """
 CREATE INDEX conversation_events_recent_outcomes
 ON conversation_events (session_id, conversation_id, turn_slot, sequence DESC)
+""".strip()
+
+_CREATE_COLLABORATION_EVENT_ID_INDEX_SQL = """
+CREATE UNIQUE INDEX collaboration_events_event_ids
+ON collaboration_events (session_id, conversation_id, event_id)
+""".strip()
+
+_CREATE_COLLABORATION_BATCH_ORDINAL_INDEX_SQL = """
+CREATE UNIQUE INDEX collaboration_events_batch_ordinals
+ON collaboration_events (session_id, conversation_id, batch_id, batch_ordinal)
 """.strip()
 
 _CREATE_CONTIGUOUS_TRIGGER_SQL = """
@@ -219,17 +273,39 @@ BEGIN
 END
 """.strip()
 
+_CREATE_COLLABORATION_CONTIGUOUS_TRIGGER_SQL = """
+CREATE TRIGGER collaboration_events_contiguous_insert
+BEFORE INSERT ON collaboration_events
+FOR EACH ROW
+WHEN NEW.sequence != COALESCE(
+    (
+        SELECT MAX(sequence) + 1
+        FROM collaboration_events
+        WHERE session_id = NEW.session_id
+          AND conversation_id = NEW.conversation_id
+    ),
+    1
+)
+BEGIN
+    SELECT RAISE(ABORT, 'collaboration event sequence is not contiguous');
+END
+""".strip()
+
 _SCHEMA_STATEMENTS = (
     _CREATE_IDENTITY_SQL,
     _CREATE_CONVERSATIONS_SQL,
     _CREATE_EVENTS_SQL,
+    _CREATE_COLLABORATION_EVENTS_SQL,
     _CREATE_CONVERSATION_ORDER_INDEX_SQL,
     _CREATE_CONVERSATION_STATUS_INDEX_SQL,
     _CREATE_TURN_SLOT_INDEX_SQL,
     _CREATE_RECENT_OUTCOME_INDEX_SQL,
+    _CREATE_COLLABORATION_EVENT_ID_INDEX_SQL,
+    _CREATE_COLLABORATION_BATCH_ORDINAL_INDEX_SQL,
     _CREATE_CONTIGUOUS_TRIGGER_SQL,
     _CREATE_USER_BEFORE_OUTCOME_TRIGGER_SQL,
     _CREATE_ADDRESSED_REPLY_TRIGGER_SQL,
+    _CREATE_COLLABORATION_CONTIGUOUS_TRIGGER_SQL,
 )
 
 
@@ -334,7 +410,7 @@ class SQLiteDatabase:
         *,
         validate_lease: _LeaseValidator,
     ) -> None:
-        """Create and atomically install v1 storage, or verify an existing file."""
+        """Create and atomically install v2 storage, or verify an existing file."""
 
         validate_lease()
         module = _load_and_probe_sqlite()
@@ -803,6 +879,20 @@ class SQLiteDatabase:
                 verification=True,
             )
             if orphan_rows:
+                raise SQLiteDatabaseFormatError()
+
+            collaboration_orphan_rows = _fetchall(
+                module,
+                connection,
+                "SELECT event.session_id, event.conversation_id "
+                "FROM collaboration_events AS event "
+                "LEFT JOIN conversations AS conversation "
+                "ON conversation.session_id = event.session_id "
+                "AND conversation.conversation_id = event.conversation_id "
+                "WHERE conversation.session_id IS NULL LIMIT 1",
+                verification=True,
+            )
+            if collaboration_orphan_rows:
                 raise SQLiteDatabaseFormatError()
 
             validate_snapshot(connection)

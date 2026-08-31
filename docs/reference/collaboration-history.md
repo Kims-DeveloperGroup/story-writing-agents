@@ -6,11 +6,12 @@
 > available from that facade; literal search, exact citation resolution,
 > snapshot paging, and derived document identity are pure direct-module APIs in
 > `story_writing_agents.conversation_search`. A separate direct-module
-> `FilesystemCollaborationEventStore` now persists the v2 contract for Python
-> callers. It is not exported by a package facade or composed into the current
-> runtime, filesystem/SQLite storage selection, transcript views, shell, or
-> provider calls. Integration children #476-#479 own those later steps. There
-> is no conversion or shell action now.
+> `FilesystemCollaborationEventStore` and `SQLiteCollaborationEventStore` now
+> persist the v2 contract for direct Python callers. Neither is exported by a
+> package facade or composed into the current runtime, storage selection,
+> transcript views, shell, or provider calls. SQLite's active bundle remains
+> v1-shaped; archive transfer is unchanged until #477 and runtime cutover is
+> deferred to #479. There is no conversion or shell action now.
 
 Key terms: **proposal**—the complete disclosure for one possible step;
 **decision**—one structured `confirm`, `reject`, or `revise` response to the
@@ -34,12 +35,21 @@ page one unchanged snapshot, derive a stable lookup-document ID, and explicitly
 select bounded records for possible later provider context.
 
 It cannot yet run a lead or specialist, change a story artifact, mutate Git, or
-display a new shell workflow. A direct Python caller can now persist exact v2
-batches on the filesystem and read them after restart, but that adapter is not
-the current selected conversation-storage service. It does not reinterpret
-free text as permission or turn a stored confirmation or projected
-`next_safe_action` into executable or reconstructible authority. No current
-command, v1 transcript, storage selection, or provider route changes.
+display a new shell workflow. A direct Python caller can persist exact v2
+batches on the filesystem or in the exact schema-v2 SQLite database and read
+them after restart. Neither adapter is the current selected
+conversation-storage service. They do not reinterpret free text as permission
+or turn a stored confirmation or projected `next_safe_action` into executable
+or reconstructible authority. No current command, v1 transcript, storage
+selection, archive transfer, or provider route changes.
+
+Before #476, SQLite could store only the current v1 catalog/transcript channel;
+v2 callers had to use the filesystem adapter. After #476, a direct caller can
+choose either persistence form with the same append/read contract. Users still
+cannot select, migrate, archive, search through the active bundle, or run v2
+collaboration through the shell. A fresh SQLite database is now exact schema
+version `2`; an existing schema-v1 database is rejected unchanged, with no
+`ALTER`, converter, compatibility, or automatic migration path.
 
 Before this addition, the pure v2 projector answered operational questions such
 as “what state is this step in?” and “what is the next safe action?” It did not
@@ -53,10 +63,10 @@ Conceptually, the distinction is:
 | Current conversation transcript | Schema-v2 collaboration history |
 | --- | --- |
 | One user message followed by one agent reply or runtime error | Ordered typed exchanges among user, lead, specialists, runtime, artifact, and Git actors |
-| Schema version `1`; current runtime/storage/UI authority | Schema version `2`; pure contracts plus an uncomposed direct filesystem adapter |
+| Schema version `1`; current runtime/storage/UI authority | Schema version `2`; pure contracts plus uncomposed direct filesystem and SQLite adapters |
 | Text content and complete-turn context | Proposals, exact decisions, dispatches, replies, terminal provider facts, results, and durable step states |
 | Appends one visible event | Requires atomic batches for facts that must never be separated |
-| Accepted by current transcript stores | Rejected by v1 transcript stores; accepted by the direct v2 filesystem adapter and pure projector |
+| Accepted by current transcript stores | Rejected by v1 transcript stores; accepted by the direct v2 filesystem/SQLite adapters and pure projector |
 
 The two histories remain distinct. Schema-v1 `ConversationEvent` values are not
 schema-v2 collaboration events, and `project_collaboration_history()` rejects
@@ -86,7 +96,7 @@ The default context selection includes no readable record text. Current user
 input is not accepted by this selector and remains a separate invocation
 input. These pure readable operations do not persist history, authorize
 retrieval, start a provider call, or supply the UI. The direct filesystem
-adapter described below can supply the canonical history; #476-#479 own the
+adapters described below can supply the canonical history; #477-#479 own the
 remaining integration.
 
 ## Illustrative future interaction
@@ -364,7 +374,7 @@ These similarly named values have different jobs:
 
 | Contract | Answers | Contains by default | Authority |
 | --- | --- | --- | --- |
-| `CollaborationHistoryProjection` from `project_collaboration_history()` and future `CollaborationEventStore.read_context()` | What proposal/state/decision/attempt/result is current, and what action is safe to consider? | State and recovery summary | Evidence only |
+| `CollaborationHistoryProjection` from `project_collaboration_history()` or a direct `CollaborationEventStore.read_context()` | What proposal/state/decision/attempt/result is current, and what action is safe to consider? | State and recovery summary | Evidence only |
 | `tuple[CollaborationReadableRecord, ...]` from `project_collaboration_readable_history()` | What complete typed public events and closed searchable fields exist? | Every validated event record | Evidence only |
 | `CollaborationReadableContext` from `select_bounded_collaboration_context()` | Which explicitly named records fit a possible later provider-context budget? | Content-free `CollaborationContextBootstrap`; zero records | Evidence only |
 
@@ -377,8 +387,8 @@ Requested/retained/omitted counts and `truncated` report the result.
 
 The selector has no `current_input` parameter. The current user input remains
 separate, and the selected value still does not invoke a provider or establish
-retrieval authorization. Runtime composition and provider delivery are later
-#476-#479 work.
+retrieval authorization. Runtime composition and provider delivery remain
+later #478-#479 work.
 
 ## Atomic batch flow
 
@@ -412,10 +422,12 @@ read_context(session_id: str, conversation_id: str) -> CollaborationHistoryProje
 
 The protocol remains storage-neutral. Direct Python callers can implement it
 themselves or use
-`story_writing_agents.conversation_storage.filesystem.FilesystemCollaborationEventStore`.
-That class is a direct-module API, not a `conversation_storage`, `workspace`,
-or project-root export and not an active storage bundle. The selected v1
-filesystem store and SQLite store remain separate. The v2 store decides
+`story_writing_agents.conversation_storage.filesystem.FilesystemCollaborationEventStore`
+or
+`story_writing_agents.conversation_storage.sqlite.SQLiteCollaborationEventStore`.
+Both classes are direct-module APIs, not `conversation_storage`, `workspace`,
+or project-root exports and not active storage-bundle members. The selected v1
+filesystem and SQLite event stores remain separate. A v2 store decides
 whether an atomically committed candidate is `APPENDED` or an exact retry is
 `ALREADY_COMMITTED`; exact retry returns the original sequence range and
 timestamps before current-tail CAS is evaluated.
@@ -516,6 +528,98 @@ workspace and retry only the exact batch. After `corrupt_history`, stop normal
 appends and preserve the bytes for diagnosis; this child supplies no repair,
 conversion, or migration workflow.
 
+### Direct SQLite storage and retry
+
+`SQLiteCollaborationEventStore` uses the existing fixed main-database path:
+
+```text
+discussion_logs/conversation_storage.sqlite3
+```
+
+A newly provisioned database is exact SQLite schema version `2`: its 14
+application objects retain the v1 catalog/transcript tables and add the
+`collaboration_events` table, two uniqueness indexes, and one contiguous-insert
+trigger. Existing schema-v1 databases are rejected unchanged. There is no
+in-place `ALTER`, converter, compatibility mode, or automatic migration.
+
+Construction performs no I/O and has the same coordinator options as the
+other SQLite adapters:
+
+```python
+SQLiteCollaborationEventStore(
+    workspace: Workspace | str | os.PathLike[str],
+    *,
+    mutation_coordinator: ConversationStorageMutationCoordinator | None = None,
+    mutation_timeout_seconds: float = 5.0,
+)
+```
+
+Assuming the schema-v2 database is provisioned, its v1 catalog contains the
+addressed conversation, and `batch` is the two-event value from the example
+below, a direct call has this observable result:
+
+```python
+from story_writing_agents.conversation_storage.sqlite import (
+    SQLiteCollaborationEventStore,
+)
+
+store = SQLiteCollaborationEventStore(workspace)
+first = store.append_batch(batch)
+retry = store.append_batch(batch)
+events = store.read("session_a", conversation_id)
+state = store.read_context("session_a", conversation_id)
+
+output = {
+    "first": first.status.value,
+    "range": (first.first_sequence, first.last_sequence),
+    "retry": retry.status.value,
+    "same_receipt": retry.timestamps == first.timestamps,
+    "event_ids": tuple(event.event_id for event in events),
+    "state": state.current_state.value,
+}
+```
+
+```python
+{
+    "first": "APPENDED",
+    "range": (1, 2),
+    "retry": "ALREADY_COMMITTED",
+    "same_receipt": True,
+    "event_ids": ("proposal_event", "request_event"),
+    "state": "awaiting_confirmation",
+}
+```
+
+Append borrows the workspace mutation coordinator and uses one
+`BEGIN IMMEDIATE` transaction. It validates the complete addressed v2 history,
+applies exact-retry and conflict precedence, inserts every event or none, and
+returns `APPENDED` only after commit and final database/path checks. A failure
+before commit rolls back. A commit can become durable before a later check
+reports an operational failure; after that uncertainty, preserve the database
+and retry the exact same batch ID and content. A visible commit then resolves
+to its original `ALREADY_COMMITTED` receipt instead of duplicating events.
+Independent threads and processes serialize through the coordinator and
+SQLite transaction: identical same-tail candidates produce one `APPENDED` and
+one `ALREADY_COMMITTED`, while distinct candidates produce one `APPENDED` and
+one `stale_sequence`.
+
+Each row stores the canonical public collaboration event as a plaintext BLOB
+and repeats only the facts needed for validation and uniqueness. It stores no
+hidden reasoning, provider diagnostics, credentials, or referenced file bytes.
+The main database uses UTF-8, DELETE journal mode, `synchronous=FULL`, foreign
+keys, a five-second busy timeout, contained path checks, and owner-only mode on
+fresh provisioning. This is not encryption, backup, permission repair,
+retention, or secure erasure.
+
+Malformed collaboration rows make direct `read()`/`read_context()` fail with
+`WorkspaceFormatError`; append maps addressed-history corruption to
+`CollaborationAppendError(CORRUPT_HISTORY)`. Operational availability,
+coordination, path-security, and unsupported-version failures remain separate
+public categories. Preserve the database and stop normal work after
+corruption; this adapter repairs nothing. The v1-shaped active bundle, lexical
+generation, literal-search/FTS authority, archive transfer, storage selection,
+and shell remain unchanged in #476.
+
 ## State and user-action contract
 
 These are the complete and exact states. “Next action” names the
@@ -565,8 +669,8 @@ enter `recovery_required`; and `recovery_required` is terminal in this contract.
 
 This example uses only the implemented `story_writing_agents.conversations`
 facade. It performs no I/O or provider call. The manual storage-metadata step is
-only an in-memory illustration; the direct filesystem adapter owns that step
-when a caller chooses to persist the batch.
+only an in-memory illustration; either direct persistence adapter owns that
+step when a caller chooses to store the batch.
 
 ```python
 from story_writing_agents.conversations import (
@@ -846,12 +950,13 @@ state, and digest only—never bytes. Provider credentials, capabilities, raw
 provider protocol bodies, hidden reasoning, and reconstructed authorization do
 not belong in any payload.
 
-The direct filesystem adapter defines only the v2 paths and durability boundary
-above. This contract still defines no SQLite schema, CLI command, UI, provider
-call, lead-agent behavior, artifact/Git executor, credential model, migration,
-complete workspace backup, or recovery tool. It also does not wire readable
-records into a provider prompt, automatic context, RAG generation, storage
-search, archive, or selected runtime service; #476-#479 own those integrations.
+The direct filesystem and SQLite adapters define only their v2 persistence and
+durability boundaries above. This contract still defines no CLI command, UI,
+provider call, lead-agent behavior, artifact/Git executor, credential model,
+migration, complete workspace backup, or recovery tool. It also does not wire
+readable records into a provider prompt, automatic context, RAG generation,
+storage search, archive, or selected runtime service; #477-#479 own those
+integrations.
 It also does not provide the full lead-agent usage guide; that later workflow
 is owned by issue #460. See
 [conversation transcripts](conversation-transcripts.md) for the active
