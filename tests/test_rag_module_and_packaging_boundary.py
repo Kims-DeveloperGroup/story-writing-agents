@@ -332,9 +332,33 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 92)
-        self.assertEqual(len(edges), 372)
+        self.assertEqual(len(modules), 95)
+        self.assertEqual(len(edges), 378)
         self.assertIsNone(_cycle_witness(modules, edges))
+        conversation_dependencies = {
+            "story_writing_agents.conversations": {
+                "story_writing_agents.conversations.catalog",
+                "story_writing_agents.conversations.context",
+                "story_writing_agents.conversations.events",
+            },
+            "story_writing_agents.conversations.catalog": {
+                "story_writing_agents.errors",
+            },
+            "story_writing_agents.conversations.events": {
+                "story_writing_agents.agents",
+                "story_writing_agents.errors",
+            },
+            "story_writing_agents.conversations.context": {
+                "story_writing_agents.conversations.events",
+                "story_writing_agents.errors",
+            },
+        }
+        for source, expected in conversation_dependencies.items():
+            with self.subTest(conversation_source=source):
+                self.assertEqual(
+                    {target for edge_source, target in edges if edge_source == source},
+                    expected,
+                )
         self.assertEqual(
             _generic_importers(modules),
             {"story_writing_agents.generic_rag_adapter"},
@@ -751,13 +775,21 @@ class RagPackagingBoundaryTests(unittest.TestCase):
             )
             requires = metadata.get_all("Requires-Dist") or []
             self.assertEqual(len(requires), 2)
+            normalized_requires = []
+            for requirement in requires:
+                name, separator, reference = requirement.partition("@")
+                normalized_requires.append(
+                    requirement
+                    if not separator
+                    else f"{name.rstrip()}@ {reference.lstrip()}"
+                )
             self.assertTrue(
                 any(
                     requirement.startswith(
                         f"jsonl-viewer@ git+{_JSONL_VIEWER_REPOSITORY}@{_JSONL_VIEWER_PIN}"
                     )
                     and ";" not in requirement
-                    for requirement in requires
+                    for requirement in normalized_requires
                 ),
                 requires,
             )
@@ -767,11 +799,28 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                         f"generic-rag@ git+{_GENERIC_RAG_REPOSITORY}@{_GENERIC_RAG_PIN}"
                     )
                     and 'extra == "rag"' in requirement
-                    for requirement in requires
+                    for requirement in normalized_requires
                 ),
                 requires,
             )
+            conversation_package_paths = (
+                "story_writing_agents/conversations/__init__.py",
+                "story_writing_agents/conversations/catalog.py",
+                "story_writing_agents/conversations/context.py",
+                "story_writing_agents/conversations/events.py",
+            )
             for names in (wheel_names, sdist_names):
+                for package_path in conversation_package_paths:
+                    self.assertTrue(
+                        any(name.endswith(package_path) for name in names),
+                        package_path,
+                    )
+                self.assertFalse(
+                    any(
+                        name.endswith("story_writing_agents/conversations.py")
+                        for name in names
+                    )
+                )
                 self.assertTrue(
                     any(
                         name.endswith("story_writing_agents/conversation_rag.py")
@@ -1012,9 +1061,56 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import importlib.metadata
                 import json
                 import sys
+                from typing import get_type_hints
 
                 mode = sys.argv[1]
                 import story_writing_agents
+                import story_writing_agents.conversations as conversations
+                import story_writing_agents.conversations.catalog as catalog
+                import story_writing_agents.conversations.context as context
+                import story_writing_agents.conversations.events as events
+                assert catalog.ConversationCatalog is conversations.ConversationCatalog
+                assert events.ConversationEvent is conversations.ConversationEvent
+                assert context.ConversationEventStore is conversations.ConversationEventStore
+                for name in (
+                    "ConversationCatalog",
+                    "ConversationContextPolicy",
+                    "ConversationContextWindow",
+                    "ConversationEvent",
+                    "ConversationEventAppend",
+                    "ConversationEventKind",
+                    "ConversationEventStore",
+                    "ConversationMetadata",
+                    "ConversationStatus",
+                    "normalize_conversation_subject",
+                    "select_bounded_conversation_context",
+                    "validate_conversation_context_window",
+                ):
+                    assert getattr(conversations, name).__module__ == (
+                        "story_writing_agents.conversations"
+                    )
+                for name in (
+                    "ConversationCatalog",
+                    "ConversationContextPolicy",
+                    "ConversationContextWindow",
+                    "ConversationEvent",
+                    "ConversationEventAppend",
+                    "ConversationEventKind",
+                    "ConversationEventStore",
+                    "ConversationMetadata",
+                    "ConversationStatus",
+                    "normalize_conversation_subject",
+                ):
+                    assert getattr(story_writing_agents, name) is getattr(
+                        conversations,
+                        name,
+                    )
+                assert (
+                    get_type_hints(context.ConversationEventStore.read_context)[
+                        "return"
+                    ]
+                    is conversations.ConversationContextWindow
+                )
                 assert not any(
                     name == "jsonl_viewer" or name.startswith("jsonl_viewer.")
                     for name in sys.modules
