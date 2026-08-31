@@ -332,8 +332,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 95)
-        self.assertEqual(len(edges), 378)
+        self.assertEqual(len(modules), 96)
+        self.assertEqual(len(edges), 379)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
@@ -359,6 +359,32 @@ class RagModuleBoundaryTests(unittest.TestCase):
                     {target for edge_source, target in edges if edge_source == source},
                     expected,
                 )
+        workspace_dependencies = {
+            "story_writing_agents.workspace": {
+                "story_writing_agents.workspace.core",
+            },
+            "story_writing_agents.workspace.core": {
+                "story_writing_agents.agents",
+                "story_writing_agents.conversations",
+                "story_writing_agents.errors",
+                "story_writing_agents.models",
+                "story_writing_agents.writing_artifacts",
+            },
+        }
+        for source, expected in workspace_dependencies.items():
+            with self.subTest(workspace_source=source):
+                self.assertEqual(
+                    {target for edge_source, target in edges if edge_source == source},
+                    expected,
+                )
+        self.assertEqual(
+            {
+                source
+                for source, target in edges
+                if target == "story_writing_agents.workspace.core"
+            },
+            {"story_writing_agents.workspace"},
+        )
         self.assertEqual(
             _generic_importers(modules),
             {"story_writing_agents.generic_rag_adapter"},
@@ -809,8 +835,17 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 "story_writing_agents/conversations/context.py",
                 "story_writing_agents/conversations/events.py",
             )
+            workspace_package_paths = (
+                "story_writing_agents/workspace/__init__.py",
+                "story_writing_agents/workspace/core.py",
+            )
             for names in (wheel_names, sdist_names):
                 for package_path in conversation_package_paths:
+                    self.assertTrue(
+                        any(name.endswith(package_path) for name in names),
+                        package_path,
+                    )
+                for package_path in workspace_package_paths:
                     self.assertTrue(
                         any(name.endswith(package_path) for name in names),
                         package_path,
@@ -818,6 +853,12 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 self.assertFalse(
                     any(
                         name.endswith("story_writing_agents/conversations.py")
+                        for name in names
+                    )
+                )
+                self.assertFalse(
+                    any(
+                        name.endswith("story_writing_agents/workspace.py")
                         for name in names
                     )
                 )
@@ -880,8 +921,33 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.interactive_controller._exchange_policy as exchange_policy
                 import story_writing_agents.interactive_controller._exchange_viewer as exchange_viewer
                 import story_writing_agents.interactive_terminal._external_view as external_view
+                import story_writing_agents.workspace as workspace
+                import story_writing_agents.workspace.core as workspace_core
                 from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
                 assert len(story_writing_agents.__all__) == 120
+                assert workspace.__all__ == [
+                    "Workspace",
+                    "initialize_workspace",
+                    "FilesystemConversationCatalog",
+                    "FilesystemConversationEventStore",
+                ]
+                assert workspace_core.__all__ == workspace.__all__
+                for name in workspace.__all__:
+                    value = getattr(workspace, name)
+                    assert value is getattr(workspace_core, name)
+                    assert value is getattr(story_writing_agents, name)
+                    assert value.__module__ == "story_writing_agents.workspace"
+                for name in (
+                    "open_workspace_root_directory",
+                    "verify_workspace_root_directory",
+                    "WORKSPACE_DIRECTORIES",
+                ):
+                    assert getattr(workspace, name) is getattr(workspace_core, name)
+                    assert name not in workspace.__all__
+                    assert name not in story_writing_agents.__all__
+                    assert not hasattr(story_writing_agents, name)
+                assert not hasattr(workspace, "os")
+                assert "__getattr__" not in vars(workspace)
                 assert len(rag_cli.__all__) == 7
                 assert len(composition.__all__) == 10
                 assert len(local.__all__) == 5

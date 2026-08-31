@@ -20,6 +20,7 @@ import story_writing_agents.conversations as conversations_module
 import story_writing_agents.conversations.context as conversation_context_module
 import story_writing_agents.conversations.events as conversation_events_module
 import story_writing_agents.workspace as workspace_module
+import story_writing_agents.workspace.core as workspace_core_module
 from story_writing_agents import (
     CONVERSATION_CONTEXT_POLICY,
     CONVERSATION_EVENT_SCHEMA_VERSION,
@@ -927,7 +928,7 @@ class FilesystemConversationEventStorePersistenceTests(
             return sentinel
 
         with mock.patch.object(
-            workspace_module,
+            workspace_core_module,
             "select_bounded_conversation_context",
             side_effect=select_while_transcript_lock_is_held,
         ) as select:
@@ -1197,7 +1198,7 @@ class FilesystemConversationEventStoreFailureTests(
 ):
     def test_failed_first_replace_leaves_no_transcript_and_does_not_retry(self) -> None:
         with mock.patch.object(
-            workspace_module.os,
+            workspace_core_module.os,
             "replace",
             side_effect=OSError("simulated first replace failure"),
         ) as replace:
@@ -1213,7 +1214,7 @@ class FilesystemConversationEventStoreFailureTests(
         user = self.store.append(self.request("turn_a"))
         before = self.transcript.read_bytes()
         with mock.patch.object(
-            workspace_module.os,
+            workspace_core_module.os,
             "replace",
             side_effect=OSError("simulated replace failure"),
         ) as replace:

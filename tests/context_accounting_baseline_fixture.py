@@ -10,7 +10,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Iterator
 from unittest import TestCase, mock
 
 from story_writing_agents import (
@@ -132,14 +132,14 @@ def deterministic_runtime_environment() -> Iterator[None]:
     with ExitStack() as stack:
         stack.enter_context(mock.patch("uuid.uuid4", new=identifiers))
         for target in (
-            "story_writing_agents.workspace.uuid4",
+            "story_writing_agents.workspace.core.uuid4",
             "story_writing_agents.writing_artifacts.repository.uuid4",
             "story_writing_agents.writing_artifacts._storage.uuid4",
         ):
             stack.enter_context(mock.patch(target, new=identifiers))
         for target in (
             "story_writing_agents.orchestrator.datetime",
-            "story_writing_agents.workspace.datetime",
+            "story_writing_agents.workspace.core.datetime",
             "story_writing_agents.debug_log.datetime",
             "story_writing_agents.writing_artifacts.repository.datetime",
         ):

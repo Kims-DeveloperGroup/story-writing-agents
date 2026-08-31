@@ -1269,11 +1269,47 @@ class DebugLogContractTests(unittest.TestCase):
             if isinstance(node, ast.ImportFrom) and node.level == 1
         }
         self.assertEqual(dependencies, {"agents", "provider_adapter", "workspace"})
-        for dependency in dependencies:
-            dependency_source = (
-                Path(debug_module.__file__).with_name(f"{dependency}.py")
-            ).read_text(encoding="utf-8")
-            self.assertNotIn("from .debug_log import", dependency_source)
+        source_root = Path(debug_module.__file__).parent
+        workspace_package = source_root / "workspace"
+        dependency_paths = {
+            "agents": (source_root / "agents.py",),
+            "provider_adapter": (source_root / "provider_adapter.py",),
+            "workspace": (
+                workspace_package / "__init__.py",
+                workspace_package / "core.py",
+            ),
+        }
+        self.assertFalse((source_root / "workspace.py").exists())
+        for dependency, paths in dependency_paths.items():
+            with self.subTest(dependency=dependency):
+                for path in paths:
+                    self.assertTrue(path.is_file(), path)
+                    dependency_source = path.read_text(encoding="utf-8")
+                    self.assertNotIn("from .debug_log import", dependency_source)
+                    self.assertNotIn("from ..debug_log import", dependency_source)
+
+        facade_tree = ast.parse(
+            (workspace_package / "__init__.py").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            {
+                node.module
+                for node in ast.walk(facade_tree)
+                if isinstance(node, ast.ImportFrom) and node.level == 1
+            },
+            {"core"},
+        )
+        core_tree = ast.parse(
+            (workspace_package / "core.py").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            {
+                node.module
+                for node in ast.walk(core_tree)
+                if isinstance(node, ast.ImportFrom) and node.level == 2
+            },
+            {"agents", "conversations", "errors", "models", "writing_artifacts"},
+        )
 
         repository_root = Path(__file__).resolve().parents[1]
         environment = os.environ.copy()
@@ -1283,7 +1319,13 @@ class DebugLogContractTests(unittest.TestCase):
             "from pathlib import Path; "
             "import story_writing_agents as facade; "
             "from story_writing_agents import debug_log as module; "
+            "from story_writing_agents import workspace; "
             "assert all(name not in facade.__all__ for name in module.__all__); "
+            "assert module.Workspace is workspace.Workspace; "
+            "assert module.open_workspace_root_directory is "
+            "workspace.open_workspace_root_directory; "
+            "assert module.verify_workspace_root_directory is "
+            "workspace.verify_workspace_root_directory; "
             "assert module.DEBUG_LOG_RELATIVE_PATH == 'debug_logs/runtime.jsonl'; "
             "assert list(Path.cwd().iterdir()) == []; print('ok')"
         )

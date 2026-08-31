@@ -431,7 +431,10 @@ class CliDefaultPersistenceTests(unittest.TestCase):
         save_default_conversation(self.workspace, "chapter", "first")
         target = conversation_default_path(self.workspace, "chapter")
         before = (target.read_bytes(), target.stat().st_mtime_ns)
-        with mock.patch("story_writing_agents.workspace.os.replace", side_effect=OSError("replace failed")):
+        with mock.patch(
+            "story_writing_agents.workspace.core.os.replace",
+            side_effect=OSError("replace failed"),
+        ):
             with self.assertRaises(OSError):
                 save_default_conversation(self.workspace, "chapter", "second")
         self.assertEqual((target.read_bytes(), target.stat().st_mtime_ns), before)
