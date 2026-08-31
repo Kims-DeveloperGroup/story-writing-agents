@@ -63,6 +63,7 @@ from story_writing_agents.conversation_storage.sqlite import (
     SQLITE_CONVERSATION_STORAGE_SCHEMA_VERSION,
     SQLiteConversationArchiveAdapter,
     SQLiteConversationCatalog,
+    SQLiteCollaborationEventStore,
     SQLiteConversationEventStore,
     SQLiteConversationSearch,
     compose_sqlite_conversation_archive,
@@ -1776,6 +1777,7 @@ class SQLiteBoundaryAndCompositionTests(unittest.TestCase):
             "SQLITE_CONVERSATION_STORAGE_SCHEMA_VERSION",
             "SQLiteConversationArchiveAdapter",
             "SQLiteConversationCatalog",
+            "SQLiteCollaborationEventStore",
             "SQLiteConversationEventStore",
             "SQLiteConversationSearch",
             "compose_sqlite_conversation_archive",
@@ -1792,7 +1794,11 @@ class SQLiteBoundaryAndCompositionTests(unittest.TestCase):
             "discussion_logs/conversation_storage.sqlite3",
         )
         self.assertEqual(SQLITE_CONVERSATION_STORAGE_MINIMUM_VERSION, (3, 7, 16))
-        self.assertEqual(SQLITE_CONVERSATION_STORAGE_SCHEMA_VERSION, 1)
+        self.assertEqual(SQLITE_CONVERSATION_STORAGE_SCHEMA_VERSION, 2)
+        self.assertIs(
+            SQLiteCollaborationEventStore,
+            sqlite_module.SQLiteCollaborationEventStore,
+        )
         self.assertEqual(
             SQLITE_CONVERSATION_SEARCH_INDEX_PATH,
             "discussion_logs/.conversation_storage_fts5.sqlite3",
@@ -2133,7 +2139,8 @@ class SQLitePreflightAndProvisionTests(unittest.TestCase):
             int.from_bytes(first[68:72], "big"),
             SQLITE_CONVERSATION_STORAGE_APPLICATION_ID,
         )
-        self.assertEqual(int.from_bytes(first[60:64], "big"), 1)
+        self.assertEqual(int.from_bytes(first[60:64], "big"), 2)
+        self.assertEqual(target.stat().st_mode & 0o777, 0o600)
         self.assertFalse(
             any(
                 Path(f"{target}{suffix}").exists()

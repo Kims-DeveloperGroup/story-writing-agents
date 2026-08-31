@@ -2722,7 +2722,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:**
   `src/story_writing_agents/conversation_storage/sqlite_database.py`
 - **Responsibility:** Own the optional SQLite database identity,
-  version-1 schema, fixed contained path, capability probe, connection and
+  version-2 schema, fixed contained path, capability probe, connection and
   transaction lifecycle, verification, and create-only provisioning mechanics.
 - **Supported surface:** Exactly 12 names in `__all__`: fixed
   `SQLITE_APPLICATION_ID`, `SQLITE_BUSY_TIMEOUT_SECONDS`,
@@ -2749,17 +2749,24 @@ every intermediate arrow. The current runtime graph is acyclic.
   canonical root once and retains only its exact key and the fixed contained
   `discussion_logs/conversation_storage.sqlite3` path, so later mutation of the
   supplied `Workspace.root` cannot retarget database I/O. Construction performs
-  only path arithmetic and creates nothing. Schema version 1 has ten explicit
-  application-owned objects: three tables, four indexes, and three insert
-  triggers. Its singleton identity owns the exact nonnegative lexical
-  generation; event rows own required canonical `searchable_content` beside
-  their public source. The added recent-outcome index serves bounded context,
-  while the event composite-primary-key autoindex serves ordered/MAX sequence
-  access, so no redundant explicit event-order index is owned. FTS and its
-  shadow objects are absent from this authoritative database manifest. This
-  amended exact version-1 fingerprint is the supported schema; an older
-  unpublished development fingerprint is rejected rather than migrated, and
-  this owner exposes no v2 or migration operation.
+  only path arithmetic and creates nothing. Schema version 2 has fourteen
+  explicit application-owned objects: four tables, six indexes, and four
+  insert triggers. It retains the established schema-v1 catalog and transcript
+  rows inside the version-2 database while adding one authoritative
+  `collaboration_events` table. The singleton identity owns the exact
+  nonnegative lexical generation; v1 event rows own required canonical
+  `searchable_content` beside their public source. Collaboration rows own every
+  indexed identity, sequence, timestamp, and batch fact beside the exact
+  canonical schema-v2 event BLOB. Two unique collaboration indexes enforce
+  event-ID and batch-ordinal identity per conversation, and a separate insert
+  trigger enforces contiguous collaboration sequence allocation. The recent-
+  outcome index serves bounded v1 context, while each event table's composite-
+  primary-key autoindex serves ordered/MAX sequence access, so no redundant
+  explicit event-order index is owned. FTS and its shadow objects are absent
+  from this authoritative database manifest. The exact version-2 fingerprint
+  is the only supported schema; a schema-v1 database is rejected without
+  mutation rather than altered or migrated, and this owner exposes no schema-
+  conversion operation.
   Each ordinary read or write, and each standalone explicit verification, owns
   and closes one non-creating URI connection. Provisioning and recovery from
   interrupted publication may instead use a bounded sequence of individually
@@ -2782,7 +2789,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   race-winner provisioning validation additionally check database integrity,
   an empty `foreign_key_check`, composite ownership, every contiguous
   event/correlation invariant supplied by the adapter, every derived normalized
-  subject, and every canonical searchable event value. Verification rejects
+  subject, and every canonical searchable v1 event value. The adapter-supplied
+  snapshot validator additionally reconstructs every collaboration BLOB and
+  verifies its redundant SQL fields, catalog ownership, complete batches, and
+  legal full-history projection. Verification rejects
   unsafe or multiply linked named files; a named-database symlink or a
   nonmeaningful device/inode identity fails closed as a security error. Strict
   verification/preflight,
@@ -2813,6 +2823,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   preserved and rejected.
 - **Primary verification/documentation:**
   `tests/test_sqlite_database.py`,
+  `tests/test_sqlite_collaboration_event_store.py`,
   `tests/test_conversation_storage.py`,
   `tests/test_conversation_catalog.py`,
   `tests/conversation_catalog_contract.py`,
@@ -2820,6 +2831,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/conversation_search_contract.py`,
   `docs/guides/sqlite-conversation-storage.md`,
   `docs/design/persistence.md`,
+  `docs/reference/collaboration-history.md`,
+  `docs/reference/package-api.md`,
   `docs/reference/configuration/session-storage.md`,
   `docs/reference/conversation-catalog.md`,
   `docs/reference/conversation-transcripts.md`,
@@ -2832,16 +2845,17 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:** `src/story_writing_agents/conversation_storage/sqlite.py`
 - **Responsibility:** Provide the explicitly selected optional standard-library
-  SQLite catalog, event-store, exact literal-search, archive, runtime probe,
-  storage preflight, provisioning, and composition adapter boundary without
-  changing filesystem defaults or activation.
-- **Supported surface:** Exactly 14 names in `__all__`: fixed
+  SQLite catalog, v1 and collaboration event stores, exact literal-search,
+  archive, runtime probe, storage preflight, provisioning, and composition
+  adapter boundary without changing filesystem defaults or activation.
+- **Supported surface:** Exactly 15 names in `__all__`: fixed
   `SQLITE_CONVERSATION_STORAGE_APPLICATION_ID`,
   `SQLITE_CONVERSATION_STORAGE_BUSY_TIMEOUT_SECONDS`,
   `SQLITE_CONVERSATION_STORAGE_DATABASE_PATH`,
   `SQLITE_CONVERSATION_STORAGE_MINIMUM_VERSION`, and
   `SQLITE_CONVERSATION_STORAGE_SCHEMA_VERSION` constants;
-  `SQLiteConversationArchiveAdapter`, `SQLiteConversationCatalog`,
+  `SQLiteConversationArchiveAdapter`, `SQLiteConversationCatalog`, direct-
+  module-only `SQLiteCollaborationEventStore`,
   `SQLiteConversationEventStore`, and `SQLiteConversationSearch`; and
   `compose_sqlite_conversation_archive`,
   `compose_sqlite_conversation_storage`,
@@ -2850,6 +2864,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `provision_sqlite_conversation_storage`. The archive adapter directly
   consumes and produces the canonical `ConversationArchive` values owned by
   the sibling `archive` module; it adds no private payload or record surface.
+  `SQLiteCollaborationEventStore` is absent from the conversation-storage and
+  project-root facades and is not returned by active service composition.
 - **Direct internal dependencies:** `conversation_literal_search`,
   `conversation_search`,
   `conversation_storage.archive`,
@@ -2887,6 +2903,24 @@ every intermediate arrow. The current runtime graph is acyclic.
   non-runtime event projections. Companion failure cannot roll back main state
   and leaves exact fallback available.
 
+  `SQLiteCollaborationEventStore` reads one complete addressed canonical v2
+  history and validates every redundant SQL field, BLOB, batch, transition,
+  and catalog identity before returning events or the pure recovery
+  projection. Append borrows the established workspace coordinator and uses
+  the database owner's `BEGIN IMMEDIATE` transaction directly, so it validates
+  the complete existing history, resolves an exact batch retry before CAS,
+  assigns contiguous sequences, canonical UTC timestamps, ordinals, size,
+  digest, and canonical event bytes, and inserts every event or none. It re-
+  reads the completed transaction image before commit. Stored corruption is
+  mapped to the fixed read/append boundaries; semantic retry, batch/event
+  conflict, stale-sequence, and invalid-transition precedence comes from the
+  pure collaboration validator. A precommit failure rolls back the complete
+  batch, while an uncertain postcommit result is resolved by the durable batch
+  ID and returns the original sequence range and timestamps. This direct v2
+  path does not advance lexical generation, rebuild or consult FTS, compose an
+  active service, alter the v1 event store, or create archive/transfer
+  authority.
+
   `SQLiteConversationSearch` owns one main-database read transaction for its
   complete scan: it selects at most 257 metadata rows to bound a 256-
   conversation scan, validates at most 10,000 ordered event rows, preserves
@@ -2923,6 +2957,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   activation state.
 - **Primary verification/documentation:**
   `tests/test_sqlite_conversation_storage.py`,
+  `tests/test_sqlite_collaboration_event_store.py`,
   `tests/test_conversation_storage_migration.py`,
   `tests/test_conversation_storage.py`,
   `tests/test_conversation_catalog.py`,
@@ -2933,6 +2968,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/INDEX.md`,
   `docs/guides/sqlite-conversation-storage.md`,
   `docs/design/persistence.md`,
+  `docs/reference/collaboration-history.md`,
   `docs/reference/package-api.md`,
   `docs/reference/conversation-archives.md`,
   `docs/reference/configuration/session-storage.md`,
@@ -3081,7 +3117,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `CollaborationEventStore.read_context()`, which continues to return the
   recovery/state projection. The v2 store is the sole batch-oriented
   collaboration port, is consumed by the uncomposed direct-module filesystem
-  adapter, and returns its owning pure projection;
+  and SQLite adapters, and returns its owning pure projection;
   candidate validation deterministically returns the original
   `ALREADY_COMMITTED` receipt for an exact retry and raises the fixed append
   failure taxonomy for batch/event conflicts, stale sequence, invalid

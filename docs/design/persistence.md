@@ -20,8 +20,9 @@
 > operations; Python callers can inspect it by operation ID. Separately, the
 > pure schema-v2 collaboration-history values and store port are available from
 > `story_writing_agents.conversations`. Direct Python callers can persist that
-> port with the uncomposed filesystem adapter; no current runtime, selected
-> filesystem/SQLite bundle, transcript view, or shell path activates it.
+> port with uncomposed filesystem or SQLite adapters; no current runtime,
+> selected filesystem/SQLite bundle, transcript view, archive path, or shell
+> path activates it.
 
 Key terms: **blackboard**—public debate JSONL; **sidecar**—context stored apart
 from established debate records; **create-only**—never replaces an existing
@@ -41,7 +42,7 @@ provisioning nor migration alone selects runtime authority.
 | Provider manifest and access claim | `AgentBackend` |
 | Session/conversation defaults | CLI context helpers |
 | Conversation metadata, transcript, and search | `conversation_storage.filesystem` owns filesystem metadata/transcript paths, bytes, and locking; the active filesystem or SQLite bundle supplies the complete catalog, event-store, and search authority |
-| Schema-v2 structured collaboration history | `conversation_storage.filesystem` supplies a direct, uncomposed `FilesystemCollaborationEventStore`; conversations still owns immutable values, canonical encoding, validation, and projection |
+| Schema-v2 structured collaboration history | `conversation_storage.filesystem` and `conversation_storage.sqlite` supply direct, uncomposed event stores; conversations still owns immutable values, canonical encoding, validation, and projection |
 | Canonical conversation archive value and bytes | `conversation_storage.archive`; caller owns any stored or transmitted bytes |
 | Same-workspace conversation migration and checkpoints | `conversation_storage.migration`; canonical archive adapters remain the data boundary |
 | Desired storage, readiness, and startup activation | Configuration owns desired value; `conversation_storage.selection` owns preparation/parity and next-shell marker CAS |
@@ -74,11 +75,12 @@ events, proposal and result values, canonical JSON encoders/decoders, atomic
 batch validation, and pure history projection. `CollaborationEventStore` is a
 three-method protocol for `append_batch()`, `read()`, and `read_context()`.
 
-`conversation_storage.filesystem.FilesystemCollaborationEventStore` now
-implements that port for direct Python callers. It is intentionally absent from
-the `conversation_storage`, `workspace`, and project-root facades and from the
-active storage composition. The current filesystem and SQLite
-`ConversationEventStore` adapters continue to own only schema-v1 transcript
+`conversation_storage.filesystem.FilesystemCollaborationEventStore` and
+`conversation_storage.sqlite.SQLiteCollaborationEventStore` implement that
+port for direct Python callers. Both are intentionally absent from the
+`conversation_storage`, `workspace`, and project-root facades and from active
+storage composition. The current filesystem and SQLite
+`ConversationEventStore` members continue to own only schema-v1 transcript
 events. A schema-v1 event is rejected when presented as v2 history; neither
 channel is a migration or fallback for the other.
 
@@ -111,6 +113,32 @@ permission repair. See
 for operator response and
 [Structured collaboration history](../reference/collaboration-history.md#direct-filesystem-storage-and-retry)
 for the direct API scenario.
+
+The SQLite implementation uses the existing
+`discussion_logs/conversation_storage.sqlite3` authority but requires exact
+database schema version `2`. Its 14-object manifest retains all v1
+catalog/transcript resources and adds one collaboration table, two uniqueness
+indexes, and a contiguous-sequence trigger. A schema-v1 database is rejected
+unchanged; there is no `ALTER`, converter, compatibility, or automatic
+migration. Fresh provisioning owns the existing UTF-8/DELETE/FULL,
+five-second-busy-timeout, contained-path, synchronization, and owner-only file
+boundary.
+
+One direct collaboration append borrows the workspace coordinator, opens
+`BEGIN IMMEDIATE`, validates the complete addressed history, applies exact
+retry/conflict/CAS/transition precedence, and inserts the whole canonical batch
+or none. Precommit failure rolls back. `APPENDED` escapes only after commit and
+final checks; if a later check reports failure after the commit became durable,
+retrying the exact batch resolves to its original `ALREADY_COMMITTED` receipt.
+The coordinator and transaction serialize threads and processes. Canonical
+public payloads are plaintext BLOBs with redundant validated facts, never
+hidden reasoning, provider diagnostics, credentials, or reference bytes.
+
+This direct store does not advance the v1 lexical generation, feed FTS, join
+the composed bundle, change search, or extend archive transfer. FTS remains a
+non-authoritative v1 literal-search hint. Active service/archive integration is
+deferred to #477-#479. See the
+[direct SQLite scenario](../reference/collaboration-history.md#direct-sqlite-storage-and-retry).
 
 Stored confirmation and projected next-action values remain evidence. They
 cannot preserve, serialize, or reconstruct a provider capability, workspace
@@ -271,7 +299,7 @@ and [current commands, runtime, and interactive workflow](../guides/conversation
 
 The optional adapter owns one fixed contained file:
 `discussion_logs/conversation_storage.sqlite3`. Its database identity is schema
-version `1`, SQLite application ID `0x53574143` (`SWAC`), UTF-8 encoding, and a
+version `2`, SQLite application ID `0x53574143` (`SWAC`), UTF-8 encoding, and a
 fixed schema cookie and schema-manifest fingerprint. The internal database
 owner reads the canonical `Workspace.root` once at construction and pins both
 its workspace key and database path. Later mutation of the supplied
@@ -290,15 +318,14 @@ Routine adapter calls instead verify bounded database/schema identity and
 validate only the rows involved in the requested operation; they do not scan
 unrelated database contents.
 
-Schema v1 has ten explicit application-owned objects: three authoritative
-tables, four indexes, and three insert triggers. The tables hold one singleton
-storage identity with a nonnegative lexical generation, catalog rows keyed by
-`(session_id, conversation_id)`, and ordered event rows keyed by
-`(session_id, conversation_id, sequence)`. The two catalog indexes serve
-active/all creation ordering, the unique turn-slot index serves addressed turn
-lookup and uniqueness, and the recent-outcome index serves bounded context
-selection. Event ordering still uses SQLite's composite-primary-key autoindex,
-so there is no redundant explicit event-order index.
+Schema v2 has 14 explicit application-owned objects: four authoritative tables,
+six indexes, and four insert triggers. The retained v1 resources hold the
+singleton identity/lexical generation, catalog rows, and ordered transcript
+rows. The added collaboration table stores canonical schema-v2 events as
+plaintext BLOBs plus redundant identity, sequence, batch, and digest facts; two
+unique indexes protect event IDs and batch ordinals, and one trigger protects
+contiguous sequence insertion. Ordered reads still use composite-primary-key
+autoindexes, so there are no redundant order indexes.
 
 Catalog rows retain exact public metadata plus required canonical
 `normalized_subject`; event rows retain the exact public event plus required
@@ -322,7 +349,8 @@ Every supported mutation acquires the workspace conversation-storage
 coordinator before opening its `mode=rw` connection. It verifies the database
 and active workspace/owner-thread lease, uses `BEGIN IMMEDIATE`, performs the
 operation with operation-local row validation and database constraints, and
-advances the required lexical generation for an effective change. It then
+advances the required lexical generation for an effective v1 change. Direct v2
+collaboration append leaves lexical generation and FTS unchanged. It then
 reverifies schema identity plus the lease, commits, checks the named database
 identity, and closes. A required lexical-state failure rolls back the
 authoritative mutation; an already-effective archive or unarchive is a no-op
@@ -356,10 +384,12 @@ artifacts, provider state, or other workspace channels. Routine writes do not
 run the exhaustive preflight scan over unrelated rows. In particular, append
 uses the indexed maximum sequence and reads at most the addressed turn's one
 user row and one outcome row; it does not reconstruct the full transcript.
-`read_context()` obtains an exact complete-turn count and materializes at most
-the newest 25 addressed complete pairs—50 events—to retain the fixed 24-turn
-window and detect its boundary. A full `read()` still validates and returns the
-complete history.
+`read_context()` for the v1 transcript obtains an exact complete-turn count and
+materializes at most the newest 25 addressed complete pairs—50 events—to retain
+the fixed 24-turn window and detect its boundary. A full `read()` still
+validates and returns the complete transcript. Direct v2 collaboration reads
+and append validation reconstruct the complete addressed collaboration history
+instead.
 
 Database provisioning builds and verifies one private temporary database,
 installs it create-only, and synchronizes the installed file and containing
@@ -374,6 +404,14 @@ mutation and again after mutation in the same transaction, so an orphan,
 malformed row, or divergent existing identity cannot be silently adopted or
 dropped; failure rolls back the whole import.
 
+Provisioning creates schema v2 only. A recognized schema-v1 database is an
+unsupported version and is preserved byte-for-byte; provisioning, preflight,
+and ordinary adapters do not upgrade it. There is no schema migration,
+compatibility read, converter, or dual-write path. Existing archive and
+same-workspace data-migration operations still cover only the v1
+catalog/transcript resources inside a ready schema-v2 database. They neither
+export nor import collaboration rows until #477.
+
 Without POSIX `fcntl`, a valid existing database can still be preflighted and
 read observationally. Supported coordinator acquisition, installation through
 selection, provisioning, configuration save, activation, and mutations fail
@@ -384,10 +422,12 @@ this database. `/settings` and `story storage use` may explicitly prepare it
 and save SQLite as desired storage, but neither activates or migrates it. The
 explicit migration coordinator can copy canonical conversations between an
 already-ready database and the filesystem, but it does not install, provision,
-or activate SQLite. Shell startup never installs or provisions. There is no
-live switch, dual write, source deletion, RAG coupling, MySQL, or FTS-dependent
-search behavior in this adapter. The separate disposable RAG store is neither a
-SQLite table nor a conversation backend. See the
+or activate SQLite. Shell startup never installs or provisions. The composed
+SQLite service remains v1-shaped and does not include
+`SQLiteCollaborationEventStore`; active cutover is deferred to #479. There is
+no live switch, dual write, source deletion, RAG coupling, MySQL, or
+FTS-dependent search behavior in this adapter. The separate disposable RAG
+store is neither a SQLite table nor a conversation backend. See the
 [direct API](../reference/package-api.md#optional-sqlite-conversation-storage),
 [filesystem boundary](../operations/filesystem-safety.md#sqlite-conversation-storage-safety),
 and [recovery table](../operations/recovery-and-limitations.md#sqlite-conversation-storage-recovery).

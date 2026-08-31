@@ -5,6 +5,14 @@ transcripts in one workspace database. Filesystem storage remains the default,
 and changing storage does not change how `/conversation`, `/search`,
 `/transcript`, or ordinary story turns work.
 
+The database format is now exact schema version `2`. It retains the current v1
+catalog/transcript resources and adds direct-only schema-v2 collaboration
+history persistence. This is an intermediate integration boundary: shell
+commands and the selected service bundle still use only the v1-shaped channel,
+archive transfer is unchanged until #477, and active v2 cutover is deferred to
+#479. A Python integrator can use the direct collaboration store now; a shell
+user cannot select or display it yet.
+
 For a new workspace with no conversations, the shortest safe path is:
 
 ```bash
@@ -38,6 +46,7 @@ These terms describe different parts of one switch:
 | Migration | Copying canonical conversations from the active store to the other ready store, then proving exact parity. Migration never selects or activates the destination. |
 | Adapter/service bundle | The catalog, transcript-event store, literal search, and mutation coordinator that all operate on the same backend. The shell passes one complete bundle to conversation features. |
 | Derived FTS hint | An optional disposable SQLite full-text-search companion that can suggest search candidates. It never decides truth or readiness; exact search falls back to the authoritative database. |
+| Direct v2 collaboration store | An uncomposed Python adapter for atomic schema-v2 batches in the main database. It is not part of the selected bundle, commands, archive, or FTS. |
 
 The desired and active records are deliberately separate. This lets Story
 prepare and verify a change without switching a running shell:
@@ -369,7 +378,7 @@ clear. All of these workspace records are plaintext.
 | Desired backend | `config/system_defaults.json`, key `conversation_storage_backend` | Exactly `filesystem`, `sqlite`, or null/missing for the filesystem default. Selection saves it only after checks pass. |
 | Active backend | `config/conversation_storage_state.json`, schema v1 with `backend` and nonnegative `generation` | Missing means filesystem generation zero. Startup alone advances it; do not edit it. |
 | Filesystem conversation authority | `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/{metadata.json,transcript.jsonl}` | Authoritative only while filesystem is active. It holds plaintext metadata and visible transcript events. |
-| Main SQLite conversation authority | `discussion_logs/conversation_storage.sqlite3`, application ID `0x53574143` (`SWAC`), schema v1 | Authoritative only while SQLite is active. It holds canonical metadata/events plus required normalized search values and a lexical generation. Back it up. |
+| Main SQLite conversation authority | `discussion_logs/conversation_storage.sqlite3`, application ID `0x53574143` (`SWAC`), schema v2 | Its v1 catalog/transcript portion is authoritative only while SQLite is active. A direct caller separately owns whether its canonical v2 collaboration rows are authoritative. Back up the whole database. |
 | Derived literal-search hint | `discussion_logs/.conversation_storage_fts5.sqlite3`, schema v1 | Optional and disposable. It repeats normalized searchable plaintext, can be omitted from an authoritative backup, and never decides truth. |
 | Migration progress | `agent_states/orchestrator_state/conversation_storage_migrations/{filesystem-to-sqlite,sqlite-to-filesystem}.json` | One retained schema-v1 checkpoint per direction. It stores identities, counts, fingerprint, and progress, but no subject or event content. |
 | Mutation coordination | `config/.conversation_storage.lock` | A guard for supported writers, not configuration, activation state, or conversation data. |
@@ -391,8 +400,8 @@ remove them to make a database look ready.
 
 ### Not stored in the SQLite conversation database
 
-- provider credentials, native provider state, request/response diagnostics,
-  or installer output;
+- provider credentials, native provider state, hidden reasoning, raw provider
+  diagnostics, referenced file bytes, or installer output;
 - debate logs, manuscripts, writing artifacts, core documents, configuration,
   runtime debug logs, or session-lifecycle records;
 - migration checkpoint contents beyond identity and progress metadata;
@@ -403,6 +412,37 @@ Ordinary conversation subjects and visible user/reply events **are** stored in
 the active authority. SQLite provides no encryption or secure erasure. Protect
 the main database, optional companion, checkpoints, backups, and terminal
 output according to the workspace's sensitivity.
+
+### Direct schema-v2 collaboration operations
+
+For a Python integrator, the change is:
+
+| Before #476 | After #476 |
+| --- | --- |
+| SQLite stored the current v1 catalog/transcript channel only. | A direct `SQLiteCollaborationEventStore` can atomically append/read canonical v2 collaboration batches in the same main database. |
+| V2 persistence required the direct filesystem adapter. | Filesystem and SQLite direct adapters expose the same append/read contract. |
+| No selected service exposed v2 collaboration. | Still unchanged: selection, shell, archive, search, FTS, and runtime remain v1-shaped. |
+
+The direct store requires a provisioned schema-v2 database and an existing
+catalog conversation. Its append holds the workspace coordinator, uses
+`BEGIN IMMEDIATE`, validates the complete addressed history, and commits every
+event or none. A precommit failure rolls back. If a final check reports failure
+after commit, preserve the database and retry the exact same batch ID/content;
+the visible commit returns `ALREADY_COMMITTED` with its original receipt.
+Identical concurrent candidates therefore commit once and retry once; distinct
+same-tail candidates commit once and reject the other as stale.
+
+An existing schema-v1 database is rejected unchanged. Do not rename, hand-edit,
+or `ALTER` it: there is no schema migration, converter, or compatibility mode.
+Malformed collaboration rows also fail closed; preserve the main database and
+stop direct appends. Canonical public collaboration payloads are plaintext in
+the main database, while hidden reasoning, provider diagnostics, credentials,
+and referenced file bytes are excluded. FTS remains a disposable,
+non-authoritative v1 literal-search hint and is not updated by v2 appends.
+
+See the exact constructor, `APPENDED` then `ALREADY_COMMITTED` sample, failure
+categories, and read output in
+[Direct SQLite storage and retry](../reference/collaboration-history.md#direct-sqlite-storage-and-retry).
 
 <a id="sqlite-storage-recovery"></a>
 

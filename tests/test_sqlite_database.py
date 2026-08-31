@@ -157,14 +157,16 @@ def _assert_exhaustive_statements(
 
     test_case.assertEqual(trace.count("PRAGMA integrity_check"), expected_count)
     test_case.assertEqual(trace.count("PRAGMA foreign_key_check"), expected_count)
-    test_case.assertEqual(
-        sum(
-            "LEFT JOIN conversations AS conversation" in statement
-            and "WHERE conversation.session_id IS NULL" in statement
-            for statement in trace
-        ),
-        expected_count,
-    )
+    for table in ("conversation_events", "collaboration_events"):
+        test_case.assertEqual(
+            sum(
+                f"FROM {table} AS event" in statement
+                and "LEFT JOIN conversations AS conversation" in statement
+                and "WHERE conversation.session_id IS NULL" in statement
+                for statement in trace
+            ),
+            expected_count,
+        )
 
 
 def _stat_identity_witness(
@@ -237,9 +239,7 @@ class SQLiteDatabaseVerificationTests(unittest.TestCase):
             ],
         )
         self.assertTrue(closed)
-        self.assertFalse(
-            any("fts" in statement.lower() for statement in statements)
-        )
+        self.assertFalse(any("fts" in statement.lower() for statement in statements))
         self.assertFalse(
             any(
                 database_module.SQLITE_DATABASE_PATH in statement
@@ -353,7 +353,7 @@ class SQLiteDatabaseVerificationTests(unittest.TestCase):
                         raw[68:72] = (0).to_bytes(4, "big")
                         expected_error = WorkspaceFormatError
                     elif case == "version":
-                        raw[60:64] = (2).to_bytes(4, "big")
+                        raw[60:64] = (1).to_bytes(4, "big")
                         expected_error = WorkspaceVersionUnsupportedError
                     else:
                         raw[56:60] = (2).to_bytes(4, "big")
@@ -621,19 +621,23 @@ class SQLiteDatabaseVerificationTests(unittest.TestCase):
         workspace = initialized_workspace(self)
         provision(workspace)
         expected_objects = (
+            ("index", "collaboration_events_batch_ordinals"),
+            ("index", "collaboration_events_event_ids"),
             ("index", "conversation_events_recent_outcomes"),
             ("index", "conversation_events_turn_slots"),
             ("index", "conversations_creation_order"),
             ("index", "conversations_status_creation_order"),
+            ("table", "collaboration_events"),
             ("table", "conversation_events"),
             ("table", "conversation_storage_identity"),
             ("table", "conversations"),
+            ("trigger", "collaboration_events_contiguous_insert"),
             ("trigger", "conversation_events_addressed_reply_insert"),
             ("trigger", "conversation_events_contiguous_insert"),
             ("trigger", "conversation_events_user_before_outcome_insert"),
         )
         expected_fingerprint = (
-            "07249791c4c515db4c2b9ee7b5dc208e462ab48d3f9fde82cfbcf3bc768e26ce"
+            "db4138ff65bcca8fd6ddf11d17c2bf67d619e1480b03acda2d536268dd2f95db"
         )
 
         with raw_connection(workspace) as connection:
@@ -678,7 +682,7 @@ class SQLiteDatabaseVerificationTests(unittest.TestCase):
             )
 
         self.assertEqual(objects, expected_objects)
-        self.assertEqual(len(objects), 10)
+        self.assertEqual(len(objects), 14)
         self.assertNotIn(
             ("index", "conversation_events_sequence_order"),
             objects,
@@ -1839,7 +1843,7 @@ class SQLiteDatabaseProvisioningTests(unittest.TestCase):
 
         def unsupported_version(_workspace: Workspace, target: Path) -> None:
             raw = bytearray(target.read_bytes())
-            raw[60:64] = (2).to_bytes(4, "big")
+            raw[60:64] = (1).to_bytes(4, "big")
             target.write_bytes(raw)
 
         def invalid_manifest(workspace: Workspace, _target: Path) -> None:

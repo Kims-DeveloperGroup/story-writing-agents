@@ -1099,7 +1099,7 @@ I/O and keeps `sqlite3` lazy; resolving a string or path-like argument still
 follows ordinary `Workspace` construction. The `compose_*` functions perform
 their documented readiness preflight.
 
-The owning module exports exactly 14 names:
+The owning module exports exactly 15 names:
 
 ```python
 from story_writing_agents.conversation_storage.sqlite import (
@@ -1110,6 +1110,7 @@ from story_writing_agents.conversation_storage.sqlite import (
     SQLITE_CONVERSATION_STORAGE_SCHEMA_VERSION,
     SQLiteConversationArchiveAdapter,
     SQLiteConversationCatalog,
+    SQLiteCollaborationEventStore,
     SQLiteConversationEventStore,
     SQLiteConversationSearch,
     compose_sqlite_conversation_archive,
@@ -1128,16 +1129,16 @@ The constants are exact:
 | `SQLITE_CONVERSATION_STORAGE_BUSY_TIMEOUT_SECONDS` | `5.0` |
 | `SQLITE_CONVERSATION_STORAGE_DATABASE_PATH` | `"discussion_logs/conversation_storage.sqlite3"` |
 | `SQLITE_CONVERSATION_STORAGE_MINIMUM_VERSION` | `(3, 7, 16)` |
-| `SQLITE_CONVERSATION_STORAGE_SCHEMA_VERSION` | `1` |
+| `SQLITE_CONVERSATION_STORAGE_SCHEMA_VERSION` | `2` |
 
-Schema v1 owns exactly ten explicit objects: three tables, four indexes, and
-three insert triggers. Ordered event reads use the event table's composite
-primary-key autoindex, not a redundant explicit event-order index. Addressed
-turn lookup uses the unique turn-slot index; bounded context uses the
-recent-outcome index. Required authoritative lexical state consists of
-canonical normalized subjects, canonical searchable event content, and one
-nonnegative generation. FTS and its shadow objects never enter the main
-database.
+Schema v2 owns exactly 14 explicit objects: four tables, six indexes, and four
+insert triggers. It retains the intermediate v1 catalog/transcript objects and
+adds one canonical collaboration-event table, event-ID and batch-ordinal
+uniqueness indexes, and a contiguous-sequence trigger. Ordered transcript and
+collaboration reads use their composite-primary-key autoindexes, not redundant
+explicit order indexes. Required authoritative lexical state remains limited
+to the v1 catalog/transcript channel. FTS and its shadow objects never enter the
+main database or determine v2 collaboration truth.
 
 The public call signatures are:
 
@@ -1154,6 +1155,23 @@ SQLiteConversationEventStore(
     mutation_coordinator: ConversationStorageMutationCoordinator | None = None,
     mutation_timeout_seconds: float = 5.0,
 )
+SQLiteCollaborationEventStore(
+    workspace: Workspace | str | os.PathLike[str],
+    *,
+    mutation_coordinator: ConversationStorageMutationCoordinator | None = None,
+    mutation_timeout_seconds: float = 5.0,
+)
+SQLiteCollaborationEventStore.append_batch(
+    batch: CollaborationEventBatch,
+) -> CollaborationAppendReceipt
+SQLiteCollaborationEventStore.read(
+    session_id: str,
+    conversation_id: str,
+) -> tuple[CollaborationEvent, ...]
+SQLiteCollaborationEventStore.read_context(
+    session_id: str,
+    conversation_id: str,
+) -> CollaborationHistoryProjection
 SQLiteConversationSearch(
     workspace: Workspace | str | os.PathLike[str],
     *,
@@ -1202,6 +1220,16 @@ compose_sqlite_conversation_archive(
 ) -> SQLiteConversationArchiveAdapter
 ```
 
+`SQLiteCollaborationEventStore` is direct-only: it is absent from the package
+root, `conversation_storage` facade, workspace facade, composed services,
+selection, migration, archive, shell, and current runtime. A direct caller can
+now persist one canonical v2 batch atomically, read the complete addressed
+history, and project its state after restart. Users cannot yet activate that
+history through the selected SQLite bundle or commands. Existing schema-v1
+databases are rejected without mutation; this release provides no database
+migration or compatibility layer. See the
+[APPENDED/retry scenario](collaboration-history.md#direct-sqlite-storage-and-retry).
+
 The explicit runtime probe is observational and touches no workspace: it
 functionally exercises SQLite through the active Python interpreter without a
 standalone executable or FTS5 gate. Database preflight is also observational:
@@ -1235,24 +1263,34 @@ unless an integration already depends on the database-owner module.
 
 Existing-database preflight is exhaustive: it verifies database/schema
 identity, runs SQLite integrity and global foreign-key checks, rejects orphan
-events, and reconstructs every metadata and event row. Ordinary catalog and
-event-store calls use bounded identity verification plus operation-local row
-validation instead. They do not certify unrelated database contents. Append
-reads the indexed maximum sequence and at most the addressed turn's one user
-row and one outcome row. `read_context()` obtains the exact complete-turn total
-and materializes at most the newest 25 addressed pairs—50 events—to retain 24
-and detect the boundary. Full `read()` still reconstructs the complete
-transcript. Database `TEXT` is strict UTF-8; malformed stored text or a required
-lexical projection that differs from its public source maps to a content-free
-`WorkspaceFormatError`, while a caller-owned `UnicodeDecodeError` is not
-reclassified as storage corruption.
+v1 or v2 events, and reconstructs every metadata, transcript, and collaboration
+row. Ordinary adapters use bounded identity verification plus operation-local
+validation instead. The v1 append retains its indexed bounded lookup behavior.
+The direct v2 read reconstructs the complete addressed collaboration history;
+its append validates that same complete history inside `BEGIN IMMEDIATE`
+before inserting the whole candidate or none. It does not advance the v1
+lexical generation or refresh FTS. Database `TEXT` is strict UTF-8 and the v2
+canonical event is stored as a plaintext BLOB with redundant validated facts.
+Malformed stored values map to the documented content-free format or
+collaboration-corruption category.
 
-Every effective catalog/event mutation and archive import updates the required
-main-database lexical values and advances its generation atomically. Failure
-rolls back both domain and lexical state; an already-in-target-state status
-call or an exact archive reimport is generation-stable. A best-effort companion
-refresh runs only after the main commit under the still-valid lease, so its
-failure cannot roll back authoritative work and exact search remains available.
+Every effective v1 catalog/transcript mutation and archive import updates the
+required main-database lexical values and advances its generation atomically.
+Failure rolls back both domain and lexical state; an already-in-target-state
+status call or exact archive reimport is generation-stable. A best-effort
+companion refresh runs only after the main commit under the still-valid lease,
+so its failure cannot roll back authoritative work and exact search remains
+available. The direct v2 collaboration append deliberately leaves lexical
+state and the companion unchanged.
+
+The collaboration adapter validates retry, batch-ID conflict, event-ID
+conflict, stale-tail CAS, and state transition in fixed precedence. Its receipt
+is `APPENDED` only after commit and final checks. Precommit failure rolls back;
+postcommit failure can report operational uncertainty after the complete batch
+is durable. Retrying the exact same batch returns the original
+`ALREADY_COMMITTED` receipt. The coordinator plus `BEGIN IMMEDIATE` serialize
+independent processes: identical candidates commit once and retry once;
+distinct same-tail candidates commit once and reject the loser as stale.
 
 For initial creation, provision only when the application deliberately wants a
 new empty SQLite destination. Provisioning never installs SQLite and does not
@@ -1405,11 +1443,12 @@ malformed rows and divergent existing identities fail without a partial import.
 The migration coordinator composes this adapter with the filesystem archive
 adapter rather than exposing database internals.
 
-The amended exact schema remains version `1`; it is the first published
-contract for this adapter. A database created by older unpublished pre-Issue-257
-development code can fail the new exact fingerprint. This API defines neither
-a v2 schema nor migration or compatibility behavior for that development
-artifact.
+The exact database schema is now version `2`. It is a strict superset for this
+intermediate release: the v1 catalog/transcript resources remain, and the v2
+collaboration table/index/trigger resources are added. A schema-v1 database,
+including one created by older unpublished development code, is rejected
+unchanged. This API defines no `ALTER`, converter, migration, compatibility, or
+dual-write behavior.
 
 On platforms without POSIX `fcntl`, valid existing storage can still be
 preflighted and read observationally. The supported mutation coordinator cannot
@@ -1421,15 +1460,16 @@ configuration save, and startup activation also require that coordinator and
 therefore fail closed on those platforms.
 
 None of these names is re-exported by `story_writing_agents` or
-`story_writing_agents.conversation_storage`. The installed shell uses SQLite
-only after the separate desired-selection and next-shell activation workflow;
-direct runtime construction remains filesystem by default. The adapter module
+`story_writing_agents.conversation_storage`. The installed shell uses only the
+v1-shaped SQLite services after the separate desired-selection and next-shell
+activation workflow; direct runtime construction remains filesystem by
+default. The direct collaboration store is not included. The adapter module
 itself adds no automatic installation, configuration selection, activation,
-RAG, MySQL, or new citation behavior. Explicit migration is owned by the
-separate direct migration module/CLI and operates only after SQLite is ready;
-it does not select the destination. The private local FTS5 companion supplies
-non-authoritative hints only and is not a backend, readiness requirement,
-migration input, or FTS-only search mode.
+RAG, MySQL, or new citation behavior. Existing archive/migration APIs still
+transfer only v1 catalog/transcript state; #477 owns their v2 extension and
+#479 owns active cutover. The private local FTS5 companion supplies
+non-authoritative v1 literal-search hints only and is not v2 authority, a
+backend, readiness requirement, migration input, or FTS-only search mode.
 
 ## Enum values
 
@@ -1488,9 +1528,10 @@ documented conversation-storage subpackage and its owning-module surfaces.
 The explicitly documented conversations facade, literal-search, SQLite
 adapter, SQLite companion, conversation-migration, provisioning, selection,
 and conversation-RAG modules are also supported surfaces and match their own
-`__all__` values. Schema-v2 collaboration names are exposed only by the
-conversations facade; the other listed direct-module names are not re-exported
-by the package-root or conversation-storage facade.
+`__all__` values. Schema-v2 values and ports are exposed by the conversations
+facade; the filesystem and SQLite persistence classes are direct-module-only
+names and are not re-exported by the package-root or conversation-storage
+facade.
 
 `story_writing_agents.agent_context` is an 11-name accounting-only facade. It
 is absent from the 120-name package-root facade and does not export manifest,
@@ -1503,7 +1544,7 @@ observer types are supported only from
 The exact current inventories are package root `120`, conversations `83`
 (`55` events owner / `21` context owner), conversation storage `64`,
 conversation search `25` (13 established root-supported names plus 12
-direct-only v2 names), SQLite database owner `12`, SQLite adapter `14`,
+direct-only v2 names), SQLite database owner `12`, SQLite adapter `15`,
 literal-search mechanics `6`, SQLite companion owner `5`, conversation
 migration `7`, provisioning `4`, selection `8`, conversation RAG contracts
 `35`, generic RAG adapter `3`, local RAG provider `5`, RAG generation store `8`,
