@@ -78,6 +78,7 @@ from story_writing_agents.conversation_storage import contracts as contracts_mod
 from story_writing_agents.conversation_storage import (
     filesystem_archive as filesystem_archive_module,
 )
+from story_writing_agents.conversation_storage import filesystem as filesystem_module
 
 from tests.conversation_event_store_contract import make_append
 
@@ -538,6 +539,22 @@ class ConversationStorageServicesTests(unittest.TestCase):
         self.assertIsInstance(services.catalog, FilesystemConversationCatalog)
         self.assertIsInstance(services.event_store, FilesystemConversationEventStore)
         self.assertIsInstance(services.search, ReferenceConversationSearch)
+        self.assertIs(
+            composition_module.FilesystemConversationCatalog,
+            filesystem_module.FilesystemConversationCatalog,
+        )
+        self.assertIs(
+            composition_module.FilesystemConversationEventStore,
+            filesystem_module.FilesystemConversationEventStore,
+        )
+        self.assertIn(
+            filesystem_module.FilesystemConversationCatalog,
+            type(services.catalog).__mro__,
+        )
+        self.assertIn(
+            filesystem_module.FilesystemConversationEventStore,
+            type(services.event_store).__mro__,
+        )
         self.assertEqual(
             services.mutation_coordinator.workspace_key,
             services.provenance.workspace_key,
@@ -1660,6 +1677,13 @@ print("released", flush=True)
 class ConversationStorageBoundaryTests(unittest.TestCase):
     def test_package_exports_owning_modules_and_root_facade_are_exact(self) -> None:
         self.assertEqual(
+            filesystem_module.__all__,
+            [
+                "FilesystemConversationCatalog",
+                "FilesystemConversationEventStore",
+            ],
+        )
+        self.assertEqual(
             composition_module.__all__,
             [
                 "CONVERSATION_STORAGE_ACTIVATION_STATE_PATH",
@@ -1684,22 +1708,66 @@ class ConversationStorageBoundaryTests(unittest.TestCase):
                 with self.subTest(module=module.__name__, name=name):
                     self.assertIs(getattr(storage, name), getattr(module, name))
         self.assertEqual(len(story_writing_agents.__all__), 120)
+        for name in filesystem_module.__all__:
+            with self.subTest(filesystem_owner_name=name):
+                self.assertNotIn(name, storage.__all__)
+                self.assertFalse(hasattr(storage, name))
+                self.assertIn(name, story_writing_agents.__all__)
+                self.assertIs(
+                    getattr(story_writing_agents, name),
+                    getattr(filesystem_module, name),
+                )
         for name in expected:
             with self.subTest(root_name=name):
                 self.assertNotIn(name, story_writing_agents.__all__)
                 self.assertFalse(hasattr(story_writing_agents, name))
 
+    def test_filesystem_classes_are_defined_only_by_the_owner_module(self) -> None:
+        package_root = Path(filesystem_module.__file__).parents[1]
+        owner_names = set(filesystem_module.__all__)
+        definition_files: dict[str, set[str]] = {}
+        for source_path in sorted(package_root.rglob("*.py")):
+            tree = ast.parse(
+                source_path.read_text(encoding="utf-8"),
+                filename=os.fspath(source_path),
+            )
+            definitions = {
+                node.name
+                for node in tree.body
+                if isinstance(node, ast.ClassDef) and node.name in owner_names
+            }
+            if definitions:
+                definition_files[source_path.relative_to(package_root).as_posix()] = (
+                    definitions
+                )
+        self.assertEqual(
+            definition_files,
+            {
+                "conversation_storage/filesystem.py": {
+                    "FilesystemConversationCatalog",
+                    "FilesystemConversationEventStore",
+                }
+            },
+        )
+
     def test_internal_dependency_direction_is_minimal_and_acyclic(self) -> None:
         expected_dependencies = {
             archive_module: {"conversations", "errors"},
             contracts_module: {"conversation_search", "conversations", "errors"},
-            composition_module: {"conversation_search", "workspace", "contracts"},
+            composition_module: {
+                "conversation_search",
+                "workspace.core",
+                "filesystem",
+                "contracts",
+            },
+            filesystem_module: {"conversations", "errors", "workspace.core"},
             filesystem_archive_module: {
                 "archive",
                 "contracts",
+                "filesystem",
                 "conversations",
                 "errors",
-                "workspace",
+                "workspace.core",
             },
         }
         for module, expected in expected_dependencies.items():
@@ -1737,6 +1805,8 @@ class ConversationStorageBoundaryTests(unittest.TestCase):
             "import story_writing_agents.conversation_storage.contracts as contracts; "
             "import story_writing_agents.conversation_storage.composition "
             "as composition; "
+            "import story_writing_agents.conversation_storage.filesystem "
+            "as filesystem; "
             "import story_writing_agents.conversation_storage.filesystem_archive "
             "as filesystem_archive; "
             "expected=(set(archive.__all__) | set(contracts.__all__) | "
@@ -1744,7 +1814,13 @@ class ConversationStorageBoundaryTests(unittest.TestCase):
             "assert set(package.__all__) == expected; "
             "assert len(archive.__all__) == 22; "
             "assert len(filesystem_archive.__all__) == 2; "
+            "assert filesystem.__all__ == "
+            "['FilesystemConversationCatalog', 'FilesystemConversationEventStore']; "
             "assert len(package.__all__) == 64; "
+            "assert all(name not in package.__all__ for name in filesystem.__all__); "
+            "assert all(not hasattr(package, name) for name in filesystem.__all__); "
+            "assert all(getattr(root, name) is getattr(filesystem, name) "
+            "for name in filesystem.__all__); "
             "assert len(root.__all__) == 120; "
             "assert all(name not in root.__all__ for name in expected); "
             "assert all(not hasattr(root, name) for name in expected); "

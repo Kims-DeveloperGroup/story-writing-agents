@@ -1,9 +1,11 @@
 """Stable import boundary for workspace persistence."""
 
-from .core import (
-    WORKSPACE_DIRECTORIES as WORKSPACE_DIRECTORIES,
+from ..conversation_storage.filesystem import (
     FilesystemConversationCatalog as FilesystemConversationCatalog,
     FilesystemConversationEventStore as FilesystemConversationEventStore,
+)
+from .core import (
+    WORKSPACE_DIRECTORIES as WORKSPACE_DIRECTORIES,
     Workspace as Workspace,
     initialize_workspace as initialize_workspace,
     open_workspace_root_directory as open_workspace_root_directory,
@@ -13,8 +15,6 @@ from .core import (
 
 Workspace.__module__ = __name__
 initialize_workspace.__module__ = __name__
-FilesystemConversationCatalog.__module__ = __name__
-FilesystemConversationEventStore.__module__ = __name__
 
 __all__ = [
     "Workspace",

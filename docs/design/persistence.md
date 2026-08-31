@@ -36,7 +36,7 @@ provisioning nor migration alone selects runtime authority.
 | Per-agent history | Its owning agent |
 | Provider manifest and access claim | `AgentBackend` |
 | Session/conversation defaults | CLI context helpers |
-| Conversation metadata, transcript, and search | One composed active filesystem or SQLite services bundle; filesystem is the missing/legacy default |
+| Conversation metadata, transcript, and search | `conversation_storage.filesystem` owns filesystem metadata/transcript paths, bytes, and locking; the active filesystem or SQLite bundle supplies the complete catalog, event-store, and search authority |
 | Canonical conversation archive value and bytes | `conversation_storage.archive`; caller owns any stored or transmitted bytes |
 | Same-workspace conversation migration and checkpoints | `conversation_storage.migration`; canonical archive adapters remain the data boundary |
 | Desired storage, readiness, and startup activation | Configuration owns desired value; `conversation_storage.selection` owns preparation/parity and next-shell marker CAS |
@@ -50,6 +50,14 @@ provisioning nor migration alone selects runtime authority.
 | Canonical writing artifacts and provenance | `WritingArtifactRepository` |
 | Explicit-reference operation and invocation evidence | `WritingArtifactRepository`; content-free create-only records |
 | Explicit-reference selected content | Transient repository/backend carriers and one immediate provider payload; no workspace evidence field |
+
+`workspace.core` owns the generic secure workspace filesystem primitives and
+the existing session/debate persistence. It does not own filesystem
+conversation catalog or transcript persistence. Conversation-storage modules
+that need those resources depend directly on
+`conversation_storage.filesystem` and `workspace.core`, not on the stable
+`story_writing_agents.workspace` user facade; the dependency graph remains
+acyclic.
 
 <a id="conversation-archive-persistence"></a>
 
@@ -743,6 +751,11 @@ The paired events are one complete turn. Top-level objects have exactly the six
 shown keys, event objects exactly the ten shown keys, and snapshot objects
 exactly the six shown keys. Snapshot metadata must match ordered,
 identity-bound events and fixed context caps.
+
+`workspace.core` validates these embedded debate-sidecar events with a distinct
+internal field set. That validation does not share physical persistence,
+serialization, path, or lock-registry ownership with authoritative
+conversation transcripts.
 
 Included mode always stores an exact snapshot, including the empty form
 `events: []` with zero counts and `truncated: false`. Fresh mode keeps the same

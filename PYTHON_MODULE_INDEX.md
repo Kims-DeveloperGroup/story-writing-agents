@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 96.
+Importable production units indexed: 97.
 
-Direct internal dependency edges indexed: 379.
+Direct internal dependency edges indexed: 385.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -158,25 +158,27 @@ conversation_storage -> conversation_storage.archive/composition/contracts
 conversation_storage.archive -> conversations/errors
 conversation_storage.composition -> conversation_search
                                  -> conversation_storage.contracts
-                                 -> workspace
+                                 -> conversation_storage.filesystem
+                                 -> workspace.core
 conversation_storage.contracts -> conversation_search/conversations/errors
+conversation_storage.filesystem -> conversations/errors/workspace.core
 conversation_storage.filesystem_archive -> conversation_storage.archive/contracts
-                                        -> conversations/errors/workspace
+                                        -> conversation_storage.filesystem
+                                        -> conversations/errors/workspace.core
 conversation_storage.migration -> conversation_storage.archive/composition/contracts
                                -> conversation_storage.filesystem_archive/sqlite
-                               -> errors/workspace
-conversation_storage.provisioning -> conversation_storage.contracts/sqlite/workspace
-conversation_storage.selection -> config/workspace
+                               -> errors/workspace.core
+conversation_storage.provisioning -> conversation_storage.contracts/sqlite/workspace.core
+conversation_storage.selection -> config/workspace.core
                                -> conversation_storage.archive/composition/contracts
                                -> conversation_storage.filesystem_archive/provisioning/sqlite
-conversation_storage.sqlite_database -> workspace
+conversation_storage.sqlite_database -> workspace.core
 conversation_storage.sqlite_search_index -> (standard library only)
 conversation_storage.sqlite -> conversation_literal_search/conversation_search
-                            -> conversation_storage.archive
-                            -> conversations/errors/workspace
+                            -> conversation_storage.archive/composition/contracts
+                            -> conversations/errors/workspace.core
                             -> conversation_storage.sqlite_database
                             -> conversation_storage.sqlite_search_index
-                            -> conversation_storage.composition/contracts
 orchestrator -> agent_context.actions/manifest/planning/service/sources
              -> conversation_rag_runtime
              -> conversation_storage.composition/contracts
@@ -210,7 +212,7 @@ conversations -> conversations.catalog/context/events
 conversations.catalog -> errors
 conversations.context -> conversations.events/errors
 conversations.events -> agents/errors
-workspace -> workspace.core
+workspace -> conversation_storage.filesystem/workspace.core
 workspace.core -> agents/conversations/errors/models/writing_artifacts
 writing_artifacts -> writing_artifacts.authorization/catalog/directives/read_actions/references
 writing_artifacts.authorization -> writing_artifacts.catalog/references
@@ -2278,7 +2280,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   internally. These guarantees do not change established paths, root exports,
   or the default backend.
 - **Direct internal dependencies:** `conversation_search`,
-  `conversation_storage.contracts`, and `workspace`.
+  `conversation_storage.contracts`, `conversation_storage.filesystem`, and
+  `workspace.core`.
 - **State, resources, and side effects:** Import initializes only a synchronized
   weak in-process registry and immutable constants; it performs no filesystem
   access and opens no resource. The frozen topology owns only one canonical
@@ -2356,6 +2359,50 @@ every intermediate arrow. The current runtime graph is acyclic.
   `docs/reference/conversation-transcripts.md`, and
   `docs/reference/conversation-search.md`.
 
+### `story_writing_agents.conversation_storage.filesystem`
+
+- **Source:**
+  `src/story_writing_agents/conversation_storage/filesystem.py`
+- **Responsibility:** Own filesystem conversation catalog and authoritative
+  transcript persistence.
+- **Supported surface:** Exactly `FilesystemConversationCatalog` and
+  `FilesystemConversationEventStore` in `__all__`, in that order. The owning
+  module, stable `workspace` facade, and project-root facade expose the same
+  class objects. Their canonical defining module is
+  `story_writing_agents.conversation_storage.filesystem`; constructors,
+  signatures, path-like inputs, concrete `isinstance` behavior, and the
+  established workspace and root imports remain supported. The
+  `conversation_storage` package facade deliberately does not re-export either
+  class.
+- **Direct internal dependencies:** `conversations`, `errors`, and
+  `workspace.core`.
+- **State, resources, and side effects:** Import creates only one guarded weak
+  process-wide transcript-lock registry and immutable schema/allocation
+  constants; it performs no filesystem access and opens no resource. Each
+  catalog retains one supplied or constructed `Workspace`, owns bounded UUID
+  allocation and exact metadata JSON under
+  `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/metadata.json`,
+  and uses the workspace's secure path and atomic replacement primitives.
+  Each event store retains one workspace plus its supplied or default catalog,
+  selects one weakly retained process-wide lock per canonical
+  workspace/session/conversation identity, strictly parses and serializes exact
+  authoritative JSONL at the sibling `transcript.jsonl`, and holds that lock
+  across catalog validation, transcript reads, bounded-context selection, and
+  complete-file atomic append replacement. Failed create cleanup remains
+  confined to a newly empty conversation directory; catalog and absent-
+  transcript reads do not create storage.
+- **Primary verification/documentation:**
+  `tests/test_conversation_catalog.py`,
+  `tests/conversation_catalog_contract.py`,
+  `tests/test_conversation_event_store.py`,
+  `tests/conversation_event_store_contract.py`,
+  `tests/test_conversation_storage.py`,
+  `tests/test_filesystem_conversation_archive.py`,
+  `docs/reference/conversation-catalog.md`,
+  `docs/reference/conversation-transcripts.md`,
+  `docs/design/persistence.md`, and
+  `docs/operations/filesystem-safety.md`.
+
 ### `story_writing_agents.conversation_storage.filesystem_archive`
 
 - **Source:**
@@ -2369,7 +2416,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   keyword-only `on_conversation_completed` callback is the supported progress
   seam for a caller that owns resumability.
 - **Direct internal dependencies:** `conversation_storage.archive`,
-  `conversation_storage.contracts`, `conversations`, `errors`, and `workspace`.
+  `conversation_storage.contracts`, `conversation_storage.filesystem`,
+  `conversations`, `errors`, and `workspace.core`.
 - **State, resources, and side effects:** Import performs no I/O. One adapter
   captures only one private immutable canonical root and workspace key; it
   retains no caller `Workspace` or publicly reachable catalog/event-store
@@ -2432,7 +2480,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `conversation_storage.archive`,
   `conversation_storage.composition`, `conversation_storage.contracts`,
   `conversation_storage.filesystem_archive`, `conversation_storage.sqlite`,
-  `errors`, and `workspace`.
+  `errors`, and `workspace.core`.
 - **State, resources, and side effects:** Import defines frozen values, fixed
   policy metadata, validators, and workflow functions only; it performs no I/O
   and does not load `sqlite3`. Each call captures one canonical absolute
@@ -2510,7 +2558,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   provisioning states plus a content-free typed failure and optional storage
   preflight.
 - **Direct internal dependencies:** `conversation_storage.contracts`,
-  `conversation_storage.sqlite`, and `workspace`.
+  `conversation_storage.sqlite`, and `workspace.core`.
 - **State, resources, and side effects:** Import defines immutable policy,
   values, and the adapter class only; it performs no platform probe, environment
   read, executable lookup, subprocess execution, filesystem access, database
@@ -2566,7 +2614,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `parity_mismatch`, `configuration_invalid`, `configuration_conflict`, or
   `configuration_write_failed`; its outcome is `completed|failed` and its exit
   code is zero only for a completed report.
-- **Direct internal dependencies:** `config`, `workspace`,
+- **Direct internal dependencies:** `config`, `workspace.core`,
   `conversation_storage.archive`, `conversation_storage.composition`,
   `conversation_storage.contracts`,
   `conversation_storage.filesystem_archive`,
@@ -2646,7 +2694,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   unsupported implementation details. The sibling
   `conversation_storage.sqlite` adapter is the production consumer of this
   owner interface.
-- **Direct internal dependencies:** `workspace`.
+- **Direct internal dependencies:** `workspace.core`.
 - **State, resources, and side effects:** Import defines immutable schema and
   policy metadata only and deliberately does not load `sqlite3`; each requested
   operation lazily loads and probes the standard-library module for SQLite
@@ -2764,7 +2812,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `conversation_storage.sqlite_database`,
   `conversation_storage.sqlite_search_index`,
   `conversation_storage.composition`, `conversation_storage.contracts`,
-  `conversations`, `errors`, and `workspace`.
+  `conversations`, `errors`, and `workspace.core`.
 - **State, resources, and side effects:** Import defines immutable constants
   and adapter classes only; it performs no I/O,
   constructs no adapter, and does not load `sqlite3`. Each adapter retains one
@@ -5535,32 +5583,38 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Responsibility:** Provide the stable workspace import boundary.
 - **Supported surface:** Exactly `Workspace`, `initialize_workspace`,
   `FilesystemConversationCatalog`, and `FilesystemConversationEventStore` in
-  `__all__`, re-exported from `workspace.core` as the same objects exposed by
-  the project-root facade. Their canonical `__module__` remains
-  `story_writing_agents.workspace`, preserving established signatures and
-  pickle lookup. Package-internal `open_workspace_root_directory`,
+  `__all__`: the first two are defined by `workspace.core`, and the filesystem
+  conversation classes are defined by `conversation_storage.filesystem`. All
+  four are the same objects exposed by the project-root facade, while both
+  conversation classes are also identical to their owner-module exports.
+  `Workspace` and `initialize_workspace` retain canonical module identity
+  `story_writing_agents.workspace`; the conversation classes intentionally
+  identify `story_writing_agents.conversation_storage.filesystem` as their
+  canonical defining module. Established signatures, workspace/root imports,
+  and pickle lookup through those canonical modules remain supported.
+  Package-internal `open_workspace_root_directory`,
   `verify_workspace_root_directory`, and `WORKSPACE_DIRECTORIES` are statically
   bound on both the facade and core for existing internal consumers but are
   absent from both modules' `__all__` and from the project-root facade. No
   incidental core implementation global or private helper is forwarded.
-- **Direct internal dependencies:** `workspace.core`.
+- **Direct internal dependencies:** `conversation_storage.filesystem` and
+  `workspace.core`.
 - **State, resources, and side effects:** Owns no state or external resource.
-  Import deterministically canonicalizes the four public objects' defining
-  module metadata and performs no filesystem write, provider, environment,
-  thread, or application-startup operation.
+  Import deterministically canonicalizes only the workspace class and
+  initializer's defining-module metadata, imports the side-effect-free
+  filesystem owner, and performs no filesystem write, provider, environment,
+  thread creation, or application-startup operation.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_workspace_and_config.py`, and `docs/reference/workspace-api.md`.
 
 ### `story_writing_agents.workspace.core`
 
 - **Source:** `src/story_writing_agents/workspace/core.py`
-- **Responsibility:** Provide the secure workspace filesystem and persistence
-  boundary.
-- **Supported surface:** Defining `FilesystemConversationCatalog`,
-  `FilesystemConversationEventStore`, `Workspace`, and `initialize_workspace`
-  in the same exact public `__all__` as the workspace facade. The facade
-  re-exports those objects with their established canonical workspace-module
-  identity. Package-internal `open_workspace_root_directory`,
+- **Responsibility:** Own secure generic workspace filesystem persistence.
+- **Supported surface:** Exactly `Workspace` and `initialize_workspace` in
+  `__all__`. The stable workspace facade re-exports those objects and retains
+  their established canonical workspace-module identity. Package-internal
+  `open_workspace_root_directory`,
   `verify_workspace_root_directory`, and `WORKSPACE_DIRECTORIES` provide the
   identity-bound internal-storage and topology boundary used by diagnostic,
   agent-exchange, disposable-generation, and smoke owners; they remain
@@ -5570,7 +5624,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   inspection operation. `Workspace.read_agent_session_state` returns one
   validated owner's complete session outcomes in stable chronology, while
   `read_agent_state` remains its debate-ID-validating compatibility delegate;
-  topology, serialization, and lock-registry details are internal.
+  topology and serialization details are internal.
 - **Direct internal dependencies:** `agents`, `conversations`, `errors`, and
   `models`, plus the `writing_artifacts` facade.
 - **State, resources, and side effects:** Owns topology, path and symlink
@@ -5612,11 +5666,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   public path I/O remains pathname-based and nontransactional and may observe a
   real directory installed later at the same root path. The module also owns
   strict UTF-8 and JSON I/O, overrides, agent and debate state, logs, results,
-  and per-conversation metadata under
-  `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/metadata.json`,
-  authoritative visible events under
-  `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/transcript.jsonl`,
-  immutable debate-context sidecars under
+  and immutable debate-context sidecars under
   `discussion_logs/<session_id>/<debate_id>.context.json`, and generic atomic
   text/JSON replacement, except that its supported generic text/JSON writers
   reject canonical writing-artifact identities plus every case-folded or
@@ -5631,9 +5681,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   debates. Persisted debate results may carry one validated content-free
   `reference_operation_id`; omission is canonical for `None` and no-reference
   runs. Workspace owns only that result serialization and never the reference
-  evidence or artifact content. A
-  guarded process-wide weak lock registry serializes operations per
-  workspace/session/conversation. The fixed initialized topology includes
+  evidence or artifact content. Filesystem conversation metadata, transcripts,
+  allocation, parsing, serialization, cleanup, and the guarded weak transcript-
+  lock registry belong exclusively to `conversation_storage.filesystem`; core
+  neither defines nor imports those owners. The fixed initialized topology
+  includes
   `agent_states/orchestrator_state/conversation_defaults` and `debug_logs`;
   existing initialized workspaces need neither directory until the corresponding
   owning feature first creates it lazily. `debug_log`, not `Workspace`, owns the
@@ -5646,15 +5698,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   per-agent entries retain a null backend,
   language, persona, and both providers' model/effort values.
   Existing configuration bytes are never migrated or rewritten by
-  initialization. `cli_context` owns
-  the schema stored
-  in the conversation-default directory. The backend-owned story-session
-  process-access claim remains the cross-process same-session write guard.
-  Catalog and absent-transcript reads do not create storage. Transcript access
-  validates catalog identity, and appends atomically replace the complete file.
-  `FilesystemConversationEventStore.read_context` retains its event lock across
-  catalog validation and one authoritative transcript read, then delegates the
-  pure fixed-policy selection to `conversations`.
+  initialization. `cli_context` owns the schema stored in the conversation-
+  default directory. The backend-owned story-session process-access claim
+  remains the cross-process same-session write guard.
 - **Primary verification/documentation:** `tests/test_workspace_and_config.py`,
   `tests/test_debug_log.py`, `tests/test_agent_state.py`,
   `tests/test_lifecycle_atomicity.py`,

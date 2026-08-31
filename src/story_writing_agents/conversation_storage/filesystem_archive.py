@@ -12,10 +12,10 @@ from typing import Callable
 
 from ..conversations import ConversationEvent, ConversationMetadata
 from ..errors import ManuscriptExistsError
-from ..workspace import (
+from ..workspace.core import Workspace
+from .filesystem import (
     FilesystemConversationCatalog,
     FilesystemConversationEventStore,
-    Workspace,
 )
 from .archive import (
     CONVERSATION_ARCHIVE_MAX_AGGREGATE_UTF8_BYTES,

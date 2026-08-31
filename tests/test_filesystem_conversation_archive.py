@@ -42,6 +42,7 @@ from story_writing_agents.conversation_storage import (
     serialize_conversation_archive,
 )
 from story_writing_agents.conversation_storage import archive as archive_module
+from story_writing_agents.conversation_storage import filesystem as filesystem_module
 from story_writing_agents.conversation_storage import (
     filesystem_archive as filesystem_archive_module,
 )
@@ -147,6 +148,26 @@ class FilesystemConversationArchiveCompositionTests(unittest.TestCase):
 
         self.assertEqual(workspace_snapshot(workspace.root), before)
         self.assertIsInstance(adapter, FilesystemConversationArchiveAdapter)
+        self.assertIs(
+            filesystem_archive_module.FilesystemConversationCatalog,
+            filesystem_module.FilesystemConversationCatalog,
+        )
+        self.assertIs(
+            filesystem_archive_module.FilesystemConversationEventStore,
+            filesystem_module.FilesystemConversationEventStore,
+        )
+        operation = filesystem_archive_module._ArchiveWorkspaceTopology.capture(
+            workspace
+        ).operation()
+        self.assertIs(
+            type(operation.catalog),
+            filesystem_module.FilesystemConversationCatalog,
+        )
+        self.assertIs(
+            type(operation.event_store),
+            filesystem_module.FilesystemConversationEventStore,
+        )
+        self.assertIs(operation.event_store.catalog, operation.catalog)
         for name in ("workspace", "catalog", "event_store"):
             with self.subTest(name=name):
                 self.assertFalse(hasattr(adapter, name))

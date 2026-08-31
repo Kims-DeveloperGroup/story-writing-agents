@@ -438,6 +438,12 @@ and [privacy](privacy-and-provider.md#agent-exchange-privacy).
 
 ## Conversation transcript safety
 
+`story_writing_agents.conversation_storage.filesystem` is the physical owner
+of filesystem conversation metadata and transcript paths, parsing,
+serialization, and the transcript lock registry. `Workspace` supplies the
+generic secure path and atomic-replacement primitives; `workspace.core` does
+not own conversation catalog or transcript persistence.
+
 Transcript reads and appends for the same workspace, session, and conversation
 share a weakly retained process-wide lock. Different conversations are not
 serialized together. An append validates the complete old transcript, then

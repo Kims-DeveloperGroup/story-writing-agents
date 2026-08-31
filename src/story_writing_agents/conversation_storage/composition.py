@@ -25,10 +25,10 @@ from ..conversation_search import (
     ConversationSearchScope,
     ReferenceConversationSearch,
 )
-from ..workspace import (
+from ..workspace.core import Workspace
+from .filesystem import (
     FilesystemConversationCatalog,
     FilesystemConversationEventStore,
-    Workspace,
 )
 from .contracts import (
     CONVERSATION_STORAGE_ACTIVATION_SCHEMA_VERSION,

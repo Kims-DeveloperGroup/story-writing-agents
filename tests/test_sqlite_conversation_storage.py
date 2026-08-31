@@ -1897,7 +1897,7 @@ assert all(name not in package.__all__ for name in literal_owner.__all__)
                 "conversation_literal_search",
                 "conversations",
                 "errors",
-                "workspace",
+                "workspace.core",
                 "sqlite_database",
                 "sqlite_search_index",
                 "composition",

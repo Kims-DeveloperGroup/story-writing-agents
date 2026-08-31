@@ -17,7 +17,7 @@ from ..config import (
     ConfigurationSnapshot,
     ConfigManager,
 )
-from ..workspace import Workspace
+from ..workspace.core import Workspace
 from .archive import (
     ConversationArchive,
     deserialize_conversation_archive,

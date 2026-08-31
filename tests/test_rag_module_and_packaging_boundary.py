@@ -332,8 +332,8 @@ class RagModuleBoundaryTests(unittest.TestCase):
     ) -> None:
         modules = _module_inventory()
         edges = _internal_edges(modules)
-        self.assertEqual(len(modules), 96)
-        self.assertEqual(len(edges), 379)
+        self.assertEqual(len(modules), 97)
+        self.assertEqual(len(edges), 385)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
@@ -361,6 +361,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 )
         workspace_dependencies = {
             "story_writing_agents.workspace": {
+                "story_writing_agents.conversation_storage.filesystem",
                 "story_writing_agents.workspace.core",
             },
             "story_writing_agents.workspace.core": {
@@ -370,9 +371,75 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.models",
                 "story_writing_agents.writing_artifacts",
             },
+            "story_writing_agents.conversation_storage.filesystem": {
+                "story_writing_agents.conversations",
+                "story_writing_agents.errors",
+                "story_writing_agents.workspace.core",
+            },
         }
         for source, expected in workspace_dependencies.items():
             with self.subTest(workspace_source=source):
+                self.assertEqual(
+                    {target for edge_source, target in edges if edge_source == source},
+                    expected,
+                )
+        changed_storage_dependencies = {
+            "story_writing_agents.conversation_storage.composition": {
+                "story_writing_agents.conversation_search",
+                "story_writing_agents.conversation_storage.contracts",
+                "story_writing_agents.conversation_storage.filesystem",
+                "story_writing_agents.workspace.core",
+            },
+            "story_writing_agents.conversation_storage.filesystem_archive": {
+                "story_writing_agents.conversation_storage.archive",
+                "story_writing_agents.conversation_storage.contracts",
+                "story_writing_agents.conversation_storage.filesystem",
+                "story_writing_agents.conversations",
+                "story_writing_agents.errors",
+                "story_writing_agents.workspace.core",
+            },
+            "story_writing_agents.conversation_storage.migration": {
+                "story_writing_agents.conversation_storage.archive",
+                "story_writing_agents.conversation_storage.composition",
+                "story_writing_agents.conversation_storage.contracts",
+                "story_writing_agents.conversation_storage.filesystem_archive",
+                "story_writing_agents.conversation_storage.sqlite",
+                "story_writing_agents.errors",
+                "story_writing_agents.workspace.core",
+            },
+            "story_writing_agents.conversation_storage.provisioning": {
+                "story_writing_agents.conversation_storage.contracts",
+                "story_writing_agents.conversation_storage.sqlite",
+                "story_writing_agents.workspace.core",
+            },
+            "story_writing_agents.conversation_storage.selection": {
+                "story_writing_agents.config",
+                "story_writing_agents.conversation_storage.archive",
+                "story_writing_agents.conversation_storage.composition",
+                "story_writing_agents.conversation_storage.contracts",
+                "story_writing_agents.conversation_storage.filesystem_archive",
+                "story_writing_agents.conversation_storage.provisioning",
+                "story_writing_agents.conversation_storage.sqlite",
+                "story_writing_agents.workspace.core",
+            },
+            "story_writing_agents.conversation_storage.sqlite_database": {
+                "story_writing_agents.workspace.core",
+            },
+            "story_writing_agents.conversation_storage.sqlite": {
+                "story_writing_agents.conversation_literal_search",
+                "story_writing_agents.conversation_search",
+                "story_writing_agents.conversation_storage.archive",
+                "story_writing_agents.conversation_storage.composition",
+                "story_writing_agents.conversation_storage.contracts",
+                "story_writing_agents.conversation_storage.sqlite_database",
+                "story_writing_agents.conversation_storage.sqlite_search_index",
+                "story_writing_agents.conversations",
+                "story_writing_agents.errors",
+                "story_writing_agents.workspace.core",
+            },
+        }
+        for source, expected in changed_storage_dependencies.items():
+            with self.subTest(storage_source=source):
                 self.assertEqual(
                     {target for edge_source, target in edges if edge_source == source},
                     expected,
@@ -383,7 +450,38 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 for source, target in edges
                 if target == "story_writing_agents.workspace.core"
             },
-            {"story_writing_agents.workspace"},
+            {
+                "story_writing_agents.conversation_storage.composition",
+                "story_writing_agents.conversation_storage.filesystem",
+                "story_writing_agents.conversation_storage.filesystem_archive",
+                "story_writing_agents.conversation_storage.migration",
+                "story_writing_agents.conversation_storage.provisioning",
+                "story_writing_agents.conversation_storage.selection",
+                "story_writing_agents.conversation_storage.sqlite",
+                "story_writing_agents.conversation_storage.sqlite_database",
+                "story_writing_agents.workspace",
+            },
+        )
+        self.assertEqual(
+            {
+                source
+                for source, target in edges
+                if target
+                == "story_writing_agents.conversation_storage.filesystem"
+            },
+            {
+                "story_writing_agents.conversation_storage.composition",
+                "story_writing_agents.conversation_storage.filesystem_archive",
+                "story_writing_agents.workspace",
+            },
+        )
+        self.assertFalse(
+            {
+                source
+                for source, target in edges
+                if source.startswith("story_writing_agents.conversation_storage.")
+                and target == "story_writing_agents.workspace"
+            }
         )
         self.assertEqual(
             _generic_importers(modules),
@@ -839,6 +937,9 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 "story_writing_agents/workspace/__init__.py",
                 "story_writing_agents/workspace/core.py",
             )
+            filesystem_owner_path = (
+                "story_writing_agents/conversation_storage/filesystem.py"
+            )
             for names in (wheel_names, sdist_names):
                 for package_path in conversation_package_paths:
                     self.assertTrue(
@@ -850,6 +951,10 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                         any(name.endswith(package_path) for name in names),
                         package_path,
                     )
+                self.assertTrue(
+                    any(name.endswith(filesystem_owner_path) for name in names),
+                    filesystem_owner_path,
+                )
                 self.assertFalse(
                     any(
                         name.endswith("story_writing_agents/conversations.py")
@@ -921,6 +1026,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.interactive_controller._exchange_policy as exchange_policy
                 import story_writing_agents.interactive_controller._exchange_viewer as exchange_viewer
                 import story_writing_agents.interactive_terminal._external_view as external_view
+                import story_writing_agents.conversation_storage as conversation_storage
+                import story_writing_agents.conversation_storage.filesystem as filesystem
                 import story_writing_agents.workspace as workspace
                 import story_writing_agents.workspace.core as workspace_core
                 from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
@@ -931,12 +1038,24 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     "FilesystemConversationCatalog",
                     "FilesystemConversationEventStore",
                 ]
-                assert workspace_core.__all__ == workspace.__all__
-                for name in workspace.__all__:
+                assert workspace_core.__all__ == ["Workspace", "initialize_workspace"]
+                assert filesystem.__all__ == [
+                    "FilesystemConversationCatalog",
+                    "FilesystemConversationEventStore",
+                ]
+                for name in workspace_core.__all__:
                     value = getattr(workspace, name)
                     assert value is getattr(workspace_core, name)
                     assert value is getattr(story_writing_agents, name)
                     assert value.__module__ == "story_writing_agents.workspace"
+                for name in filesystem.__all__:
+                    value = getattr(workspace, name)
+                    assert value is getattr(filesystem, name)
+                    assert value is getattr(story_writing_agents, name)
+                    assert value.__module__ == filesystem.__name__
+                    assert not hasattr(workspace_core, name)
+                    assert name not in conversation_storage.__all__
+                    assert not hasattr(conversation_storage, name)
                 for name in (
                     "open_workspace_root_directory",
                     "verify_workspace_root_directory",
@@ -948,6 +1067,9 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                     assert not hasattr(story_writing_agents, name)
                 assert not hasattr(workspace, "os")
                 assert "__getattr__" not in vars(workspace)
+                assert "__getattr__" not in vars(filesystem)
+                assert filesystem.FilesystemConversationCatalog.__init__.__globals__ is filesystem.__dict__
+                assert filesystem.FilesystemConversationEventStore.__init__.__globals__ is filesystem.__dict__
                 assert len(rag_cli.__all__) == 7
                 assert len(composition.__all__) == 10
                 assert len(local.__all__) == 5

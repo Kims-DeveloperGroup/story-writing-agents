@@ -57,6 +57,9 @@ from story_writing_agents.errors import (
     WorkspaceFormatError,
     WorkspaceSecurityError,
 )
+from story_writing_agents.conversation_storage import (
+    filesystem as filesystem_module,
+)
 from story_writing_agents.workspace import WORKSPACE_DIRECTORIES
 from story_writing_agents.workspace import core as workspace_module
 from story_writing_agents.workspace.core import (
@@ -275,6 +278,11 @@ class WorkspaceTests(unittest.TestCase):
     def test_facade_core_and_root_contract_is_exact_and_identity_stable(
         self,
     ) -> None:
+        core_names = ["Workspace", "initialize_workspace"]
+        owner_names = [
+            "FilesystemConversationCatalog",
+            "FilesystemConversationEventStore",
+        ]
         public_names = [
             "Workspace",
             "initialize_workspace",
@@ -282,15 +290,25 @@ class WorkspaceTests(unittest.TestCase):
             "FilesystemConversationEventStore",
         ]
         self.assertEqual(workspace_facade.__all__, public_names)
-        self.assertEqual(workspace_module.__all__, public_names)
+        self.assertEqual(workspace_module.__all__, core_names)
+        self.assertEqual(filesystem_module.__all__, owner_names)
         self.assertNotIn("__getattr__", vars(workspace_facade))
+        self.assertNotIn("__getattr__", vars(filesystem_module))
 
         for name in public_names:
             with self.subTest(public_name=name):
                 value = getattr(workspace_facade, name)
-                self.assertIs(value, getattr(workspace_module, name))
                 self.assertIs(value, getattr(story_writing_agents, name))
-                self.assertEqual(value.__module__, "story_writing_agents.workspace")
+                owner = (
+                    workspace_module if name in core_names else filesystem_module
+                )
+                self.assertIs(value, getattr(owner, name))
+                expected_module = (
+                    "story_writing_agents.workspace"
+                    if name in core_names
+                    else "story_writing_agents.conversation_storage.filesystem"
+                )
+                self.assertEqual(value.__module__, expected_module)
                 self.assertIs(pickle.loads(pickle.dumps(value)), value)
 
         required = inspect.Parameter.empty
@@ -300,10 +318,10 @@ class WorkspaceTests(unittest.TestCase):
                 ("root", inspect.Parameter.POSITIONAL_OR_KEYWORD, required),
                 ("overwrite_prompts", inspect.Parameter.KEYWORD_ONLY, False),
             ),
-            workspace_module.FilesystemConversationCatalog: (
+            filesystem_module.FilesystemConversationCatalog: (
                 ("workspace", inspect.Parameter.POSITIONAL_OR_KEYWORD, required),
             ),
-            workspace_module.FilesystemConversationEventStore: (
+            filesystem_module.FilesystemConversationEventStore: (
                 ("workspace", inspect.Parameter.POSITIONAL_OR_KEYWORD, required),
                 ("catalog", inspect.Parameter.KEYWORD_ONLY, None),
             ),
@@ -336,6 +354,7 @@ class WorkspaceTests(unittest.TestCase):
             "os",
             "datetime",
             "uuid4",
+            "select_bounded_conversation_context",
             "DEFAULT_AGENT_CONFIGS",
             "DEFAULT_AGENT_PROMPTS",
             "DEFAULT_SYSTEM_CONFIG",
@@ -344,16 +363,58 @@ class WorkspaceTests(unittest.TestCase):
             with self.subTest(incidental_name=incidental_name):
                 self.assertFalse(hasattr(workspace_facade, incidental_name))
 
-        implementation_globals = (
+        core_globals = (
             Workspace.__init__.__globals__,
             initialize_workspace.__globals__,
-            workspace_module.FilesystemConversationCatalog.__init__.__globals__,
-            workspace_module.FilesystemConversationEventStore.__init__.__globals__,
             workspace_facade.open_workspace_root_directory.__globals__,
             workspace_facade.verify_workspace_root_directory.__globals__,
         )
-        for globals_mapping in implementation_globals:
+        for globals_mapping in core_globals:
             self.assertIs(globals_mapping, workspace_module.__dict__)
+        for globals_mapping in (
+            filesystem_module.FilesystemConversationCatalog.__init__.__globals__,
+            filesystem_module.FilesystemConversationEventStore.__init__.__globals__,
+        ):
+            self.assertIs(globals_mapping, filesystem_module.__dict__)
+
+        for name in owner_names:
+            self.assertFalse(hasattr(workspace_module, name))
+            self.assertNotIn(name, workspace_module.__all__)
+            self.assertNotIn(name, filesystem_module.__dict__.get("__getattr__", ()))
+        self.assertNotIn("Workspace", filesystem_module.__all__)
+        self.assertNotIn("initialize_workspace", filesystem_module.__all__)
+        self.assertNotIn("_CONVERSATION_EVENT_FIELDS", vars(workspace_module))
+        self.assertIn("_DEBATE_CONTEXT_EVENT_FIELDS", vars(workspace_module))
+        self.assertIn("_CONVERSATION_EVENT_FIELDS", vars(filesystem_module))
+        self.assertNotIn("_DEBATE_CONTEXT_EVENT_FIELDS", vars(filesystem_module))
+
+    def test_filesystem_owner_constructors_preserve_path_and_instance_behavior(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = Workspace(root)
+            catalog = filesystem_module.FilesystemConversationCatalog(workspace)
+            path_catalog = filesystem_module.FilesystemConversationCatalog(root)
+            event_store = filesystem_module.FilesystemConversationEventStore(
+                workspace,
+                catalog=catalog,
+            )
+            path_event_store = filesystem_module.FilesystemConversationEventStore(
+                root
+            )
+
+            self.assertIs(catalog.workspace, workspace)
+            self.assertIs(event_store.workspace, workspace)
+            self.assertIs(event_store.catalog, catalog)
+            for adapter in (path_catalog, path_event_store):
+                self.assertIsInstance(adapter.workspace, Workspace)
+                self.assertEqual(adapter.workspace.root, workspace.root)
+            self.assertIsInstance(catalog, filesystem_module.FilesystemConversationCatalog)
+            self.assertIsInstance(
+                event_store,
+                filesystem_module.FilesystemConversationEventStore,
+            )
 
     def test_facade_import_orders_are_clean_and_filesystem_neutral(self) -> None:
         source = Path(__file__).resolve().parents[1] / "src"
@@ -362,14 +423,17 @@ class WorkspaceTests(unittest.TestCase):
                 "story_writing_agents",
                 "story_writing_agents.workspace",
                 "story_writing_agents.workspace.core",
+                "story_writing_agents.conversation_storage.filesystem",
             ),
             (
+                "story_writing_agents.conversation_storage.filesystem",
                 "story_writing_agents.workspace",
                 "story_writing_agents.workspace.core",
                 "story_writing_agents",
             ),
             (
                 "story_writing_agents.agent_exchanges.storage",
+                "story_writing_agents.conversation_storage.filesystem",
                 "story_writing_agents.workspace.core",
                 "story_writing_agents.workspace",
             ),
@@ -384,15 +448,28 @@ for module_name in {import_order!r}:
 root = importlib.import_module("story_writing_agents")
 facade = importlib.import_module("story_writing_agents.workspace")
 core = importlib.import_module("story_writing_agents.workspace.core")
+owner = importlib.import_module("story_writing_agents.conversation_storage.filesystem")
+storage = importlib.import_module("story_writing_agents.conversation_storage")
 assert facade.__all__ == [
     "Workspace",
     "initialize_workspace",
     "FilesystemConversationCatalog",
     "FilesystemConversationEventStore",
 ]
-for name in facade.__all__:
+assert core.__all__ == ["Workspace", "initialize_workspace"]
+assert owner.__all__ == [
+    "FilesystemConversationCatalog",
+    "FilesystemConversationEventStore",
+]
+for name in core.__all__:
     assert getattr(root, name) is getattr(facade, name) is getattr(core, name)
     assert getattr(facade, name).__module__ == "story_writing_agents.workspace"
+for name in owner.__all__:
+    assert getattr(root, name) is getattr(facade, name) is getattr(owner, name)
+    assert getattr(facade, name).__module__ == owner.__name__
+    assert not hasattr(core, name)
+    assert name not in storage.__all__
+    assert not hasattr(storage, name)
 for name in (
     "open_workspace_root_directory",
     "verify_workspace_root_directory",
@@ -420,9 +497,22 @@ for module_name in (
     "story_writing_agents.conversation_storage.filesystem_archive",
 ):
     consumer = importlib.import_module(module_name)
-    assert consumer.Workspace is facade.Workspace
-    assert consumer.FilesystemConversationCatalog is facade.FilesystemConversationCatalog
-    assert consumer.FilesystemConversationEventStore is facade.FilesystemConversationEventStore
+    assert consumer.Workspace is core.Workspace
+    assert consumer.FilesystemConversationCatalog is owner.FilesystemConversationCatalog
+    assert consumer.FilesystemConversationEventStore is owner.FilesystemConversationEventStore
+for module_name in (
+    "story_writing_agents.conversation_storage.migration",
+    "story_writing_agents.conversation_storage.provisioning",
+    "story_writing_agents.conversation_storage.selection",
+    "story_writing_agents.conversation_storage.sqlite",
+    "story_writing_agents.conversation_storage.sqlite_database",
+):
+    consumer = importlib.import_module(module_name)
+    assert consumer.Workspace is core.Workspace
+assert facade.__dict__.get("__getattr__") is None
+assert owner.__dict__.get("__getattr__") is None
+assert owner.FilesystemConversationCatalog.__init__.__globals__ is owner.__dict__
+assert owner.FilesystemConversationEventStore.__init__.__globals__ is owner.__dict__
 print("ok")
 """
             with (

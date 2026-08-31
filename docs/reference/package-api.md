@@ -38,8 +38,8 @@ The exact 120-name export inventory is:
 - runtime: `StoryRuntime`, `RuntimeSession`, `Runtime`, `Session`;
 - directives: `DirectiveKind`, `RuntimeDirective`, `parse_directive`,
   `apply_directive`;
-- workspace: `Workspace`, `initialize_workspace`,
-  `FilesystemConversationCatalog`, `FilesystemConversationEventStore`;
+- workspace facade: `Workspace`, `initialize_workspace`, and the supported
+  `FilesystemConversationCatalog`/`FilesystemConversationEventStore` aliases;
 - conversation catalog: `ConversationCatalog`, `ConversationMetadata`,
   `ConversationStatus`, `normalize_conversation_subject`,
   `CONVERSATION_METADATA_SCHEMA_VERSION`,
@@ -82,6 +82,22 @@ The exact 120-name export inventory is:
 
 `Runtime` is exactly an alias of `StoryRuntime`; `Session` is exactly an alias
 of `RuntimeSession`. They do not provide different behavior.
+
+`FilesystemConversationCatalog` and `FilesystemConversationEventStore` are
+identical class objects through the package root, the supported static
+`story_writing_agents.workspace` facade, and their defining owner module,
+`story_writing_agents.conversation_storage.filesystem`. Their canonical
+`__module__` is now that owner module. The
+`story_writing_agents.conversation_storage` package facade deliberately does
+not export either class; its direct `filesystem` module is the internal or
+advanced import when ownership clarity matters.
+
+Users keep every established root/workspace import, constructor, operation,
+path, persisted byte, error, and workflow. No data rewrite, migration, or other
+action is required. Only reflection, debugging, or similar implementation
+inspection sees the new canonical module. Private conversation implementation
+globals—including serializers, path helpers, and the weak transcript-lock
+registry—are not exposed through the workspace facade.
 
 Canonical artifact value contracts live in
 `story_writing_agents.writing_artifacts`, but are intentionally absent from the
@@ -629,6 +645,11 @@ from story_writing_agents.conversation_storage import (
 )
 ```
 
+This facade intentionally does not add `FilesystemConversationCatalog` or
+`FilesystemConversationEventStore`; those two concrete classes are owned by
+the direct `story_writing_agents.conversation_storage.filesystem` module while
+their established root and workspace-facade aliases remain supported.
+
 These imports add no raw archive CLI command and perform no scan or mutation.
 The separate storage migration CLI composes archive adapters rather than
 serializing caller-owned archive bytes. Exact
@@ -684,6 +705,13 @@ That pinning does not change standalone construction. A directly instantiated
 `FilesystemConversationEventStore(workspace)` retains the established borrowed
 workspace behavior, and `Workspace` itself remains mutable and pathname-based.
 The optional SQLite adapter has its own separately pinned database owner.
+
+Composition, archive transfer, migration, provisioning, selection, and the
+SQLite implementation use the concrete filesystem owner and/or
+`workspace.core` primitives they require. No conversation-storage
+implementation module depends on the `story_writing_agents.workspace` facade,
+so this stable facade does not reverse storage dependencies and the
+module graph remains acyclic.
 
 `WorkspaceConversationStorageMutationCoordinator(workspace)` likewise captures
 its root without I/O. Its key, the guard lazily opened by an outer `borrow`, and
