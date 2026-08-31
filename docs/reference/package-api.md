@@ -7,11 +7,13 @@
 > modules plus direct-only conversation migration, provisioning, and selection;
 > optional conversation RAG also uses seven supported direct modules, with the
 > generic adapter available only through its pinned extra. None is a
-> package-root facade export. The 74-name
+> package-root facade export. The 83-name
 > `story_writing_agents.conversations` facade also supplies a pure schema-v2
-> structured-collaboration contract; its collaboration names are deliberately
-> omitted from the package root and are not active in current runtime or
-> storage paths. Context and progress types are Python
+> structured-collaboration contract, including readable record and bounded
+> context projections. Twelve additive v2 search/citation/page/document-ID
+> names are direct-only from `story_writing_agents.conversation_search`.
+> Collaboration names are deliberately omitted from the package root and are
+> not active in current runtime or storage paths. Context and progress types are Python
 > APIs; an export does not imply a CLI command.
 
 Key terms: **package facade**—the names re-exported at the package root;
@@ -126,22 +128,29 @@ does not start the runtime, a provider, a store, or a shell:
 
 ```python
 from story_writing_agents.conversations import (
+    CollaborationContextBootstrap,
     CollaborationEventBatch,
     CollaborationEventStore,
     CollaborationProposal,
+    CollaborationReadableContext,
+    CollaborationReadableField,
+    CollaborationReadableRecord,
     decode_collaboration_batch,
     encode_collaboration_batch,
     project_collaboration_history,
+    project_collaboration_readable_history,
+    select_bounded_collaboration_context,
 )
 ```
 
-The facade exports exactly 74 names: the established 17 schema-v1 conversation
-names and 57 schema-v2 additions. Of those additions, 44 names begin with
-`Collaboration` or `COLLABORATION_`; the remainder are the two digest functions,
-eight proposal/event/draft/batch encode/decode functions, and three pure
-projection/candidate/transition functions. The owning `conversations.events`
-and `conversations.context` modules export exactly 55 and 12 names,
-respectively. Every facade binding is the same object as its owning-leaf
+The facade exports exactly 83 names: the established 17 schema-v1 conversation
+names plus immutable schema-v2 event, proposal, state, readable-field/record/
+context, error, projection, and store contracts; five `COLLABORATION_*`
+constants; two digest functions; eight proposal/event/draft/batch
+encode/decode functions; and five pure readable/history, bounded-context,
+candidate, and transition functions. The owning `conversations.events` and
+`conversations.context` modules export exactly 55 and 21 names, respectively.
+Every facade binding is the same object as its owning-leaf
 binding. All collaboration classes and functions report
 `story_writing_agents.conversations` as their canonical public module.
 
@@ -153,17 +162,54 @@ schema-v1 contracts; the v2 `CollaborationEventStore` remains an unimplemented
 caller-owned protocol.
 
 The fixed collaboration constants are schema version `2`, round limit `2`,
-physical-call limit `12`, and maximum visible text size `32_768` UTF-8 bytes.
+physical-call limit `12`, maximum visible text size `32_768` UTF-8 bytes, and
+default readable-context policy 24 records/32,768 readable UTF-8 bytes.
 The facade exposes immutable typed actors, inputs, profiles, assignments,
 budget, proposal, payload, outcome, event, batch, receipt, error, history
-projection, and next-action values. It also exposes strict canonical UTF-8 JSON
-encode/decode, SHA-256 digest, complete-history projection, candidate-batch,
-and state-transition functions.
+projection, readable record/field/context, and next-action values. It also
+exposes strict canonical UTF-8 JSON encode/decode, SHA-256 digest,
+complete-history state/readable projection, explicit bounded record selection,
+candidate-batch, and state-transition functions.
+
+Readable projection returns one complete typed record per canonical event and
+rejects schema-v1 or corrupt v2 histories. Default bounded context contains
+only a content-free schema/session/conversation/count/tail bootstrap; only
+explicit unique known event IDs add whole records under the fixed caps. It has
+no current-input or provider operation. `CollaborationHistoryProjection`
+remains the separate state/recovery summary and the return type of the future
+store port's `read_context()`.
+
+Exact literal search, original-range citations, snapshot paging, and derived
+readable-document identity are not added to this facade. They are the following
+12 direct-only names from the existing `conversation_search` owner:
+
+```python
+from story_writing_agents.conversation_search import (
+    COLLABORATION_READABLE_SOURCE_SCHEMA_ID,
+    CollaborationHistoryCitation,
+    CollaborationHistoryPage,
+    CollaborationHistoryPageCursor,
+    CollaborationHistorySearchHit,
+    CollaborationHistorySearchQuery,
+    CollaborationHistorySearchResult,
+    collaboration_readable_document_id,
+    continue_collaboration_history,
+    page_collaboration_history,
+    resolve_collaboration_citation,
+    search_collaboration_history,
+)
+```
+
+`conversation_search` exports exactly 25 names: its unchanged 13-name
+package-root-supported schema-v1 surface plus those 12 v2 names. None of the 12
+is re-exported at the project root. The direct operations are pure, perform no
+I/O, and do not activate storage, runtime, RAG, or provider behavior.
 
 Start with [Structured collaboration history](collaboration-history.md) for
 the exact user impact, proposal closure, structured-decision rule, state table,
 atomic batch contract, restart behavior, privacy limits, and executable Python
-example. Export availability alone does not authorize execution and does not
+examples. See [Conversation search](conversation-search.md#schema-v2-readable-collaboration-history)
+for the direct read surface. Export availability alone does not authorize execution and does not
 imply a concrete store, current UI, command, provider workflow, or migration.
 
 <a id="conversation-literal-search-mechanics"></a>
@@ -1382,13 +1428,15 @@ migration input, or FTS-only search mode.
 | `CollaborationStepState` | `awaiting_confirmation`, `reconfirmation_required`, `confirmed`, `running`, `completed`, `rejected`, `superseded`, `interrupted`, `failed`, `outcome_unknown`, `recovery_required` |
 | `CollaborationAppendStatus` | `APPENDED`, `ALREADY_COMMITTED` |
 | `CollaborationAppendFailure` | `stale_sequence`, `batch_id_conflict`, `event_id_conflict`, `invalid_transition`, `corrupt_history` |
+| `CollaborationReadableFieldKey` | `message.content`, `specialist_reply.content`, `proposal.purpose`, `proposal.user_impact`, `proposal.assignment.instruction`, `proposal.input.locator`, `proposal.input.range`, `proposal.call_usage`, `proposal.assignment.call_limit`, `proposal.synthesis.call_limit`, `dispatch.instruction`, `dispatch.call_limit`, `interruption.content`, `step.state`, `confirmation.decision`, `execution.outcome`, `execution.assignment.outcome`, `execution.assignment.call_usage`, `execution.synthesis.outcome`, `execution.synthesis.call_usage`, `terminal.scope`, `terminal.outcome`, `terminal.call_usage` |
 
 These are `StrEnum` values. Use members such as `Verdict.APPROVE`; a plain
 string like `"approve"` is not accepted where reply validation requires the
 enum member.
 
-There are no alternate lifecycle summaries, projections, or package-root
-aliases. See [Backend and sessions](backend-and-sessions.md#lifecycle-value-contracts).
+There are no alternate session-lifecycle summaries, projections, or
+package-root aliases. See
+[Backend and sessions](backend-and-sessions.md#lifecycle-value-contracts).
 
 ## Reference map
 
@@ -1425,9 +1473,10 @@ observer types are supported only from
 [Runtime API](runtime-api.md#context-lifecycle-observer) and
 [Agent-context design](../design/agent-context.md#package-boundary-and-owners).
 
-The exact current inventories are package root `120`, conversations `74`
-(`55` events owner / `12` context owner), conversation storage `64`,
-conversation search `13`, SQLite database owner `12`, SQLite adapter `14`,
+The exact current inventories are package root `120`, conversations `83`
+(`55` events owner / `21` context owner), conversation storage `64`,
+conversation search `25` (13 established root-supported names plus 12
+direct-only v2 names), SQLite database owner `12`, SQLite adapter `14`,
 literal-search mechanics `6`, SQLite companion owner `5`, conversation
 migration `7`, provisioning `4`, selection `8`, conversation RAG contracts
 `35`, generic RAG adapter `3`, local RAG provider `5`, RAG generation store `8`,

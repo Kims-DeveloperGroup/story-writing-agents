@@ -852,7 +852,7 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
     ) -> None:
         self.assertEqual(tuple(events_owner.__all__), COLLABORATION_EVENT_EXPORTS)
         self.assertEqual(tuple(context_owner.__all__), COLLABORATION_CONTEXT_EXPORTS)
-        self.assertEqual(len(conversations.__all__), 74)
+        self.assertEqual(len(conversations.__all__), 83)
         self.assertNotIn("__getattr__", vars(events_owner))
         self.assertNotIn("__getattr__", vars(context_owner))
         self.assertNotIn("__getattr__", vars(conversations))
@@ -861,7 +861,7 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
             for name in conversations.__all__
             if name.startswith("Collaboration") or name.startswith("COLLABORATION_")
         }
-        self.assertEqual(len(collaboration_names), 44)
+        self.assertEqual(len(collaboration_names), 51)
         for owner in (events_owner, context_owner):
             for name in owner.__all__:
                 if name.startswith("Collaboration") or name.startswith(
@@ -967,9 +967,9 @@ import story_writing_agents
 import story_writing_agents.conversations as facade
 import story_writing_agents.conversations.context as context
 import story_writing_agents.conversations.events as events
-assert len(facade.__all__) == 74
+assert len(facade.__all__) == 83
 assert len(events.__all__) == 55
-assert len(context.__all__) == 12
+assert len(context.__all__) == 21
 assert facade.CollaborationProposal is events.CollaborationProposal
 assert facade.CollaborationEventStore is context.CollaborationEventStore
 assert not hasattr(story_writing_agents, "CollaborationProposal")
