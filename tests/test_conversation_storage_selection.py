@@ -26,7 +26,7 @@ from story_writing_agents.conversation_storage import (
     ConversationStorageBackend,
     ConversationStorageCapability,
     ConversationStorageCoordinationError,
-    ConversationStorageMigrationReadiness,
+    ConversationStorageTransferReadiness,
     ConversationStorageParity,
     ConversationStoragePreflight,
     ConversationStorageProvisioningNeededError,
@@ -90,8 +90,8 @@ def _readiness(
     *,
     empty: bool = False,
     generation: int = 0,
-) -> ConversationStorageMigrationReadiness:
-    return ConversationStorageMigrationReadiness(
+) -> ConversationStorageTransferReadiness:
+    return ConversationStorageTransferReadiness(
         source_backend=source,
         target_backend=target,
         source_generation=generation,
@@ -133,7 +133,7 @@ class ConversationStorageSelectionSurfaceTests(unittest.TestCase):
                 "installation_failed",
                 "interpreter_unavailable",
                 "provisioning_failed",
-                "migration_required",
+                "transfer_required",
                 "parity_mismatch",
                 "configuration_invalid",
                 "configuration_conflict",
@@ -186,7 +186,7 @@ class ConversationStorageSelectionSurfaceTests(unittest.TestCase):
         with self.assertRaises(FrozenInstanceError):
             report.outcome = "completed"  # type: ignore[misc]
 
-    def test_selection_module_has_no_migration_or_checkpoint_dependency(self) -> None:
+    def test_selection_has_no_transfer_workflow_or_checkpoint_dependency(self) -> None:
         tree = ast.parse(Path(selection_module.__file__).read_text(encoding="utf-8"))
         imported = {
             node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
@@ -263,7 +263,9 @@ class ConversationStorageSelectionTests(unittest.TestCase):
         coordinator.assert_not_called()
         self.assertEqual(_configuration_bytes(self.workspace), before)
 
-    def test_explicit_default_noop_and_legacy_save_are_canonical_twelve_key(self) -> None:
+    def test_explicit_default_noop_and_legacy_save_are_canonical_twelve_key(
+        self,
+    ) -> None:
         before = _configuration_bytes(self.workspace)
         report = select_conversation_storage(self.workspace, "filesystem")
         self.assertEqual(
@@ -747,7 +749,7 @@ class ConversationStorageParityTests(unittest.TestCase):
         self,
         source: ConversationStorageBackend,
         target: ConversationStorageBackend,
-    ) -> ConversationStorageMigrationReadiness:
+    ) -> ConversationStorageTransferReadiness:
         coordinator = WorkspaceConversationStorageMutationCoordinator(self.workspace)
         with coordinator.borrow(timeout_seconds=2.0) as lease:
             return inspect_conversation_storage_parity(
@@ -758,7 +760,7 @@ class ConversationStorageParityTests(unittest.TestCase):
                 source_generation=0,
             )
 
-    def test_empty_source_and_same_backend_need_no_migration_or_checkpoint(
+    def test_empty_source_and_same_backend_need_no_transfer_or_checkpoint(
         self,
     ) -> None:
         self.import_archive(ConversationStorageBackend.SQLITE, nonempty_archive())

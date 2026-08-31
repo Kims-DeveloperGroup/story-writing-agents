@@ -9,9 +9,11 @@
 > `FilesystemCollaborationEventStore` and `SQLiteCollaborationEventStore` now
 > persist the v2 contract for direct Python callers. Neither is exported by a
 > package facade or composed into the current runtime, storage selection,
-> transcript views, shell, or provider calls. SQLite's active bundle remains
-> v1-shaped; archive transfer is unchanged until #477 and runtime cutover is
-> deferred to #479. There is no conversion or shell action now.
+> transcript views, shell, or provider calls. Canonical archive schema 2 and
+> `story storage transfer` now carry these exact v2 histories between ready
+> filesystem and SQLite stores. SQLite's active bundle remains v1-shaped;
+> runtime cutover is deferred to #478/#479. There is no conversion of legacy
+> history.
 
 Key terms: **proposal**—the complete disclosure for one possible step;
 **decision**—one structured `confirm`, `reject`, or `revise` response to the
@@ -40,16 +42,18 @@ batches on the filesystem or in the exact schema-v2 SQLite database and read
 them after restart. Neither adapter is the current selected
 conversation-storage service. They do not reinterpret free text as permission
 or turn a stored confirmation or projected `next_safe_action` into executable
-or reconstructible authority. No current command, v1 transcript, storage
-selection, archive transfer, or provider route changes.
+or reconstructible authority. Storage selection and provider routing remain
+unchanged. Archive and backend transfer are the first integrated consumers of
+v2 history.
 
 Before #476, SQLite could store only the current v1 catalog/transcript channel;
 v2 callers had to use the filesystem adapter. After #476, a direct caller can
 choose either persistence form with the same append/read contract. Users still
-cannot select, migrate, archive, search through the active bundle, or run v2
-collaboration through the shell. A fresh SQLite database is now exact schema
+cannot select or run v2 collaboration through the active shell, but they can
+transfer already-canonical v2 history between ready backends. A fresh SQLite
+database is exact schema
 version `2`; an existing schema-v1 database is rejected unchanged, with no
-`ALTER`, converter, compatibility, or automatic migration path.
+`ALTER`, converter, compatibility, or automatic upgrade path.
 
 Before this addition, the pure v2 projector answered operational questions such
 as “what state is this step in?” and “what is the next safe action?” It did not
@@ -70,7 +74,8 @@ Conceptually, the distinction is:
 
 The two histories remain distinct. Schema-v1 `ConversationEvent` values are not
 schema-v2 collaboration events, and `project_collaboration_history()` rejects
-them. This separation defines no conversion workflow and requires no migration.
+them. This separation defines no conversion workflow. Transfer accepts v2
+history only and rejects schema-v1 sources instead of upgrading them.
 
 ## Explicit readable-history scenario
 
@@ -96,8 +101,8 @@ The default context selection includes no readable record text. Current user
 input is not accepted by this selector and remains a separate invocation
 input. These pure readable operations do not persist history, authorize
 retrieval, start a provider call, or supply the UI. The direct filesystem
-adapters described below can supply the canonical history; #477-#479 own the
-remaining integration.
+adapters described below can supply the canonical history; archive/transfer
+uses it, while #478/#479 own the remaining active-service integration.
 
 ## Illustrative future interaction
 
@@ -453,7 +458,7 @@ The adapter owns two v2-only siblings below the existing catalog conversation:
 ```text
 discussion_logs/SESSION/interactive/conversations/CONVERSATION/
 ├── metadata.json
-├── transcript.jsonl                 # unchanged active schema-v1 history
+├── transcript.jsonl                 # legacy active-v1 residue; archive/transfer rejects it
 ├── collaboration-history.jsonl      # strict canonical schema-v2 JSONL
 └── .collaboration-history.lock      # persistent advisory guard
 ```
@@ -526,7 +531,7 @@ permission repair. Do not hand-edit, reformat, or copy schema-v1 transcript
 bytes into the v2 file. After an operationally uncertain append, preserve the
 workspace and retry only the exact batch. After `corrupt_history`, stop normal
 appends and preserve the bytes for diagnosis; this child supplies no repair,
-conversion, or migration workflow.
+conversion or repair workflow.
 
 ### Direct SQLite storage and retry
 
@@ -540,7 +545,7 @@ A newly provisioned database is exact SQLite schema version `2`: its 14
 application objects retain the v1 catalog/transcript tables and add the
 `collaboration_events` table, two uniqueness indexes, and one contiguous-insert
 trigger. Existing schema-v1 databases are rejected unchanged. There is no
-in-place `ALTER`, converter, compatibility mode, or automatic migration.
+in-place `ALTER`, converter, compatibility mode, or automatic upgrade.
 
 Construction performs no I/O and has the same coordinator options as the
 other SQLite adapters:
@@ -951,12 +956,12 @@ provider protocol bodies, hidden reasoning, and reconstructed authorization do
 not belong in any payload.
 
 The direct filesystem and SQLite adapters define only their v2 persistence and
-durability boundaries above. This contract still defines no CLI command, UI,
-provider call, lead-agent behavior, artifact/Git executor, credential model,
-migration, complete workspace backup, or recovery tool. It also does not wire
-readable records into a provider prompt, automatic context, RAG generation,
-storage search, archive, or selected runtime service; #477-#479 own those
-integrations.
+durability boundaries above. Archive schema 2 and backend transfer consume
+their canonical histories, but this contract still defines no UI, provider
+call, lead-agent behavior, artifact/Git executor, credential model, complete
+workspace backup, or recovery tool. It also does not wire readable records
+into a provider prompt, automatic context, RAG generation, storage search, or
+selected runtime service; #478/#479 own those integrations.
 It also does not provide the full lead-agent usage guide; that later workflow
 is owned by issue #460. See
 [conversation transcripts](conversation-transcripts.md) for the active

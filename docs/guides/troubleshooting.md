@@ -267,20 +267,20 @@ without deleting prior provider-native data.
 retry. For `session_ownership_unknown`, preserve the claim and guard; inspect
 [access recovery](../operations/recovery-and-limitations.md#session-access-recovery).
 
-## Conversation storage selection or migration fails
+## Conversation storage selection or transfer fails
 
 Keep desired storage in `config/system_defaults.json` distinct from the active
 backend recorded by `config/conversation_storage_state.json`. `/settings` and
 `story storage use` select desired storage for the next shell; they never
-migrate data, and startup fails closed instead of silently falling back.
+transfer data, and startup fails closed instead of silently falling back.
 
 Preserve both stores, the active marker, and both configuration files. Do not
 hand-edit them or delete one store to force agreement. For selection,
 installation, provisioning, parity, or startup failures, follow
 [selection and activation recovery](../operations/recovery-and-limitations.md#conversation-storage-selection-and-activation-recovery).
-For migrate or verify failures, also preserve the migration checkpoint and
+For transfer or verify failures, also preserve the transfer checkpoint and
 follow
-[migration recovery](../operations/recovery-and-limitations.md#conversation-storage-migration-recovery).
+[transfer recovery](../operations/recovery-and-limitations.md#conversation-storage-transfer-recovery).
 
 ## A prompt or draft file fails
 

@@ -46,7 +46,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 | --- | --- |
 | Initialize a workspace; run or inspect a debate | Installed CLI and Python API |
 | Configure Codex or Antigravity per agent | Persistent JSON or shell `/settings`; one-process CLI overrides for `story chat` and `story run` |
-| Select filesystem or SQLite conversation storage | Shell `/settings` or provider-free `story storage use`; selection saves desired storage for the next shell and never migrates or activates data. [Newcomer workflow](guides/sqlite-conversation-storage.md) and [exact report](reference/cli.md#conversation-storage-selection) |
+| Select filesystem or SQLite conversation storage | Shell `/settings` or provider-free `story storage use`; selection saves desired storage for the next shell and never transfers or activates data. [Newcomer workflow](guides/sqlite-conversation-storage.md) and [exact report](reference/cli.md#conversation-storage-selection) |
 | Check or complete native provider authentication | Interactive startup gate or global shell `/auth`; [exact commands and routing invariant](reference/cli.md#interactive-provider-authentication) |
 | Create, reopen, or pause a provider session | Installed CLI and Python API |
 | Open the TTY shell; list, create, resume, switch, or pause sessions | Bare `story` or `story chat` |
@@ -56,7 +56,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 | Create, list, resume, rename, or archive subject conversations | Installed shell after session attachment; catalog Python API |
 | Serialize or transfer canonical conversation-only archives | Direct `story_writing_agents.conversation_storage` Python API; serialization is pure, while filesystem export/import require a caller-held mutation lease. There is no raw archive shell command or complete-workspace backup. |
 | Use the optional SQLite conversation catalog, transcript store, and exact literal search | Installed shell after an explicit next-shell selection, or direct Python API after readiness preflight and explicit provisioning; derived FTS5 hints are optional and non-authoritative. [Setup, data lifecycle, and recovery](guides/sqlite-conversation-storage.md) |
-| Plan, copy, or verify canonical conversations between filesystem and SQLite | Provider-free `story storage migrate` / `story storage verify`, or the direct `conversation_storage.migration` API. Both stores are in one workspace, SQLite is already ready, `--from` is active, and the workflow never activates or deletes a backend. [Scenario-driven migration](guides/sqlite-conversation-storage.md#sqlite-storage-migration) |
+| Plan, copy, or verify canonical v2 collaboration history between filesystem and SQLite | Provider-free `story storage transfer` / `story storage verify`, or the transfer-named direct API retained in the internal `conversation_storage.migration` module. Both stores are in one workspace, SQLite is already ready, `--from` is active, and the workflow never activates or deletes a backend. [Scenario-driven transfer](guides/sqlite-conversation-storage.md#sqlite-storage-transfer) |
 | List or target agents; send ordinary, `@AGENT`, or `/say` turns | Installed shell; an active conversation must have current focus |
 | Read durable/access facts and perform exact session transitions | Python API; used by the installed shell and runtime |
 | Parse the interactive command language and route metadata | Python API; the shell dispatches a documented subset |
@@ -94,7 +94,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 - [Live agent-context progress, states, privacy, and observer recovery](guides/agent-context-progress.md)
 - [Glasswater interactive end-to-end journey](guides/glasswater-scenario.md)
 - [Provider-free smoke test](guides/smoke-test.md)
-- [SQLite conversation storage: readiness, selection, migration, activation, search, data lifecycle, and recovery](guides/sqlite-conversation-storage.md)
+- [SQLite conversation storage: readiness, selection, transfer, activation, search, data lifecycle, and recovery](guides/sqlite-conversation-storage.md)
 - [Optional conversation RAG setup, commands, runtime boundary, and interactive use](guides/conversation-rag.md)
 - [Antigravity setup, routing, and safety](guides/antigravity.md)
 - [Consensus runs](guides/consensus-runs.md)
@@ -110,7 +110,7 @@ Use this index to find one canonical answer instead of searching a long manual.
 - [Conversation catalog](reference/conversation-catalog.md)
 - [Conversation transcripts](reference/conversation-transcripts.md)
 - [Structured collaboration history: user impact, exact decisions, readable records, state/context separation, recovery, wire format, and Python examples](reference/collaboration-history.md)
-- [Canonical conversation archives, transfer, and storage migration](reference/conversation-archives.md)
+- [Canonical v2 conversation archives and backend transfer](reference/conversation-archives.md)
 - [Conversation search, cited transcript pages, and direct-only readable-v2 search/citation/page/document-ID contracts](reference/conversation-search.md)
 - [Bounded agent-directed conversation retrieval](reference/conversation-retrieval.md)
 - [Interactive command parser](reference/interactive-command-parser.md)

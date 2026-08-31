@@ -1,4 +1,4 @@
-"""Conversation-storage selection, composition, and migration contracts."""
+"""Conversation-storage selection, composition, and transfer contracts."""
 
 from .archive import (
     CONVERSATION_ARCHIVE_SCHEMA_VERSION,
@@ -15,7 +15,6 @@ from .archive import (
     ConversationArchiveDestinationError,
     ConversationArchiveDigestError,
     ConversationArchiveError,
-    ConversationArchiveEvent,
     ConversationArchiveFormatError,
     ConversationArchiveSession,
     ConversationArchiveSourceChangedError,
@@ -53,8 +52,8 @@ from .contracts import (
     ConversationStorageCoordinationError,
     ConversationStorageError,
     ConversationStorageFailure,
-    ConversationStorageMigrationReadiness,
-    ConversationStorageMigrationRequiredError,
+    ConversationStorageTransferReadiness,
+    ConversationStorageTransferRequiredError,
     ConversationStorageMutationCoordinator,
     ConversationStorageMutationLease,
     ConversationStorageParity,
@@ -93,7 +92,6 @@ __all__ = [
     "ConversationArchiveDestinationError",
     "ConversationArchiveDigestError",
     "ConversationArchiveError",
-    "ConversationArchiveEvent",
     "ConversationArchiveFormatError",
     "ConversationArchiveImportReceipt",
     "ConversationArchiveImportStatus",
@@ -117,8 +115,8 @@ __all__ = [
     "ConversationStorageCoordinationError",
     "ConversationStorageError",
     "ConversationStorageFailure",
-    "ConversationStorageMigrationReadiness",
-    "ConversationStorageMigrationRequiredError",
+    "ConversationStorageTransferReadiness",
+    "ConversationStorageTransferRequiredError",
     "ConversationStorageMutationCoordinator",
     "ConversationStorageMutationLease",
     "ConversationStorageParity",

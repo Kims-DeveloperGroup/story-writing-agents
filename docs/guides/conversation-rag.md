@@ -82,7 +82,7 @@ generation.
 | User | Installs the optional boundary when approved, opts the workspace in, chooses Automatic or arms `/rag`, and decides whether content may reach a story provider. | A query cannot widen the attached session, focused conversation, artifact authorization, or fixed budgets. |
 | Shell/controller | Enforces attachment, active focus, eligible turn type, exact `/rag` scope, one-turn consumption, and content-free terminal status. | `/rag` performs no retrieval, saves no query, and never changes automatic policy. |
 | Story runtime | Runs at most one preflight, merges literal-first candidates, reauthorizes stable references, rereads exact ranges, validates final citations, commits the visible turn, then attempts projection. | It does not trust derived text/scores, recurse into retrieval, or expand debate/consensus scope. |
-| Active conversation storage | Supplies the complete catalog, visible events, literal search, and coordination authority from filesystem or SQLite. | Only one backend is authoritative; RAG does not select, migrate, provision, or validate it. |
+| Active conversation storage | Supplies the complete catalog, visible events, literal search, and coordination authority from filesystem or SQLite. | Only one backend is authoritative; RAG does not select, transfer, provision, or validate it. |
 | Local RAG service | Builds disposable projections and proposes bounded semantic candidates through the fixed local embedder/ranker. | It has no runtime network, credentials, story-provider lifecycle, transcript authority, or raw-score output. |
 | Codex or Antigravity story agent | Receives the visible story message plus only the bounded, freshly reread excerpts and stable `g1` through `g20` labels on the initial request. | It receives no vector handle, RAG query, credential, or permission to retrieve another scope. |
 | Renderer | Shows the story reply, content-free outcome/reason, and proven sources. | It does not print excerpt bodies as interactive diagnostics; direct `story rag search` is the separate content-bearing output. |
@@ -500,7 +500,7 @@ story rag purge --session novel --yes
 ```
 
 Confirmed rebuild and search use the same configured-storage activation
-preflight as a new shell. They never install/provision SQLite or migrate data;
+preflight as a new shell. They never install/provision SQLite or transfer data;
 a desired backend must already be ready and canonically equal before activation
 can advance. Status instead reads only the persisted active backend and repeats
 both authority and RAG-state reads to reject drift. Purge touches no
@@ -932,7 +932,7 @@ The fixed projection admits only active conversations with complete visible
 RAG participates only in its six lifecycle/search commands, next-shell Local
 composition, eligible automatic or forced preflight, and best-effort
 post-commit projection. It is not involved in `/run`, debate, consensus,
-literal `/search`, `init`, artifact indexing, conversation-storage migration,
+literal `/search`, `init`, artifact indexing, conversation-storage transfer,
 SQLite readiness/provisioning, hidden provider history or credentials, or
 MySQL. The active storage adapter supplies authority through the same complete
 bundle; neither backend-specific FTS hints nor RAG candidates decide truth.

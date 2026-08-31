@@ -66,7 +66,7 @@ class ConversationStorageFailure(StrEnum):
     INCONSISTENT_SERVICES = "inconsistent_services"
     BACKEND_UNAVAILABLE = "backend_unavailable"
     PROVISIONING_NEEDED = "provisioning_needed"
-    MIGRATION_REQUIRED = "migration_required"
+    TRANSFER_REQUIRED = "transfer_required"
     PARITY_MISMATCH = "parity_mismatch"
     ACTIVATION_STATE_INVALID = "activation_state_invalid"
     ACTIVATION_STATE_UNSUPPORTED = "activation_state_unsupported"
@@ -113,11 +113,11 @@ class ConversationStorageProvisioningNeededError(ConversationStorageError):
         super().__init__(ConversationStorageFailure.PROVISIONING_NEEDED)
 
 
-class ConversationStorageMigrationRequiredError(ConversationStorageError):
-    """Fixed failure when a nonempty source has no verified migration."""
+class ConversationStorageTransferRequiredError(ConversationStorageError):
+    """Fixed failure when a nonempty source has no verified transfer."""
 
     def __init__(self) -> None:
-        super().__init__(ConversationStorageFailure.MIGRATION_REQUIRED)
+        super().__init__(ConversationStorageFailure.TRANSFER_REQUIRED)
 
 
 class ConversationStorageParityError(ConversationStorageError):
@@ -219,7 +219,7 @@ class ConversationStoragePreflight:
 
 
 @dataclass(frozen=True, slots=True)
-class ConversationStorageMigrationReadiness:
+class ConversationStorageTransferReadiness:
     """Parity proof governing whether one requested backend may activate."""
 
     source_backend: ConversationStorageBackend
@@ -264,7 +264,7 @@ class ConversationStorageMigrationReadiness:
             return
         if self.parity is ConversationStorageParity.MISMATCH:
             raise ConversationStorageParityError()
-        raise ConversationStorageMigrationRequiredError()
+        raise ConversationStorageTransferRequiredError()
 
 
 @dataclass(frozen=True, slots=True)
@@ -421,8 +421,7 @@ class ConversationStorageServices:
         )
         for component, method_names in required_methods:
             if any(
-                not callable(getattr(component, name, None))
-                for name in method_names
+                not callable(getattr(component, name, None)) for name in method_names
             ):
                 raise ConversationStorageServicesError()
         if not callable(getattr(self.mutation_coordinator, "borrow", None)):
@@ -517,8 +516,8 @@ __all__ = [
     "ConversationStorageCoordinationError",
     "ConversationStorageError",
     "ConversationStorageFailure",
-    "ConversationStorageMigrationReadiness",
-    "ConversationStorageMigrationRequiredError",
+    "ConversationStorageTransferReadiness",
+    "ConversationStorageTransferRequiredError",
     "ConversationStorageMutationCoordinator",
     "ConversationStorageMutationLease",
     "ConversationStorageParity",

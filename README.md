@@ -154,7 +154,7 @@ story run --output part-01/opening.md --prompt 'Draft the opening.'
 - [Workspace guide](docs/guides/workspaces.md) explains the editable project files.
 - [Writing artifacts](docs/reference/writing-artifacts.md) separates current reference sources from publication identity, provenance, and recovery.
 - [Conversation archives](docs/reference/conversation-archives.md) documents canonical conversation-only bytes and privileged filesystem transfer.
-- [SQLite conversation storage](docs/guides/sqlite-conversation-storage.md) walks a newcomer through readiness, explicit installation consent, selection, migration, next-shell activation, everyday search, recovery, and the separate RAG boundary.
+- [SQLite conversation storage](docs/guides/sqlite-conversation-storage.md) walks a newcomer through readiness, explicit installation consent, selection, transfer, next-shell activation, everyday search, recovery, and the separate RAG boundary.
 - [Optional conversation RAG](docs/guides/conversation-rag.md) covers the local provider/store, noninteractive lifecycle and cited-search commands, interactive settings and one-turn use, and programmatic runtime integration.
 - [Antigravity guide](docs/guides/antigravity.md) covers `agy` setup, authentication, routing, safety, sessions, and provider-free verification.
 - [Story sessions](docs/guides/story-sessions.md) shows shell management, conversation reads, retrieval, and consensus.
@@ -173,7 +173,7 @@ story run --output part-01/opening.md --prompt 'Draft the opening.'
 `AgentBackend` coordinates Codex and Antigravity. Route precedence is a CLI
 override, explicit agent route, persisted workspace default, then Codex.
 The only supported backend names are `codex` and `antigravity`; legacy
-`gemini` configuration is rejected with migration guidance.
+`gemini` configuration is rejected with transition guidance.
 `StoryRuntime` owns consensus, advisory sequencing, and retrieval authorization. See the [system design](docs/design/overview.md).
 
 <a id="minimal-python-api"></a>
@@ -224,18 +224,18 @@ story storage use sqlite --install-missing --yes
 ```
 
 If the active filesystem store is nonempty, selection can instead report
-`migration_required`. The ready SQLite destination can then be copied and
+`transfer_required`. The ready SQLite destination can then be copied and
 verified before selection is retried:
 
 ```bash
-story storage migrate --from filesystem --to sqlite --dry-run
-story storage migrate --from filesystem --to sqlite
+story storage transfer --from filesystem --to sqlite --dry-run
+story storage transfer --from filesystem --to sqlite
 story storage verify --from filesystem --to sqlite
 story storage use sqlite
 story
 ```
 
-Selection changes only the desired backend. It never migrates, deletes, or
+Selection changes only the desired backend. It never transfers, deletes, or
 activates data; a successful choice applies when the next shell freshly checks
 readiness and exact canonical parity. The current shell keeps its original
 bundle. See the
@@ -246,16 +246,18 @@ Ready filesystem and SQLite stores in the same workspace can be
 planned, copied, and compared without a provider:
 
 ```bash
-story storage migrate --from filesystem --to sqlite --dry-run
-story storage migrate --from filesystem --to sqlite
+story storage transfer --from filesystem --to sqlite --dry-run
+story storage transfer --from filesystem --to sqlite
 story storage verify --from filesystem --to sqlite
 ```
 
 `--from` must name the workspace's active backend, and the two backend names
-must differ. Migration preserves exact active and archived conversation
-metadata and every transcript event, but it never provisions SQLite, changes
-the active backend, deletes the source, or copies the derived FTS companion.
-See the [CLI contract](docs/reference/cli.md#conversation-storage-migration).
+must differ. Transfer preserves exact active and archived conversation
+metadata and every canonical collaboration event, but it never provisions
+SQLite, changes the active backend, deletes the source, or copies the derived
+FTS companion. Archives and transfers accept only v2 collaboration history;
+old transcript files and legacy database event rows are rejected, not upgraded.
+See the [CLI contract](docs/reference/cli.md#conversation-storage-transfer).
 
 <a id="current-limitations"></a>
 
@@ -274,7 +276,7 @@ See the [CLI contract](docs/reference/cli.md#conversation-storage-migration).
 - Conversation storage defaults to filesystem. `/settings` and provider-free
   `story storage use` can save filesystem or SQLite as the desired backend for
   the next shell. SQLite host installation requires explicit confirmation, and
-  startup never installs or provisions it. Migration remains a separate
+  startup never installs or provisions it. Transfer remains a separate
   provider-free copy/parity workflow over two ready same-workspace stores and
   never activates or deletes one. There is no live switch, dual write, or MySQL
   adapter. Optional local conversation RAG is disabled by
@@ -285,7 +287,7 @@ See the [CLI contract](docs/reference/cli.md#conversation-storage-migration).
   for the next shell; explicitly enabled automatic retrieval and `/rag QUERY`
   affect only eligible focused advisory turns. The
   derived FTS5 companion does not change readiness, exact literal results,
-  migration parity, or selection.
+  transfer parity, or selection.
 - Smoke's explicit workspace is not read-only and retains bounded plaintext
   diagnostics when they can be written; abrupt termination can interrupt
   cleanup. A pass does not validate provider/model, terminal behavior,

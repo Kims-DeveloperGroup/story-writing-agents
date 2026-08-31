@@ -10,12 +10,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from ..conversations import ConversationEvent, ConversationMetadata
+from ..conversations import (
+    CollaborationEvent,
+    ConversationMetadata,
+    encode_collaboration_event,
+)
 from ..errors import ManuscriptExistsError
 from ..workspace.core import Workspace
 from .filesystem import (
+    FilesystemCollaborationEventStore,
     FilesystemConversationCatalog,
-    FilesystemConversationEventStore,
 )
 from .archive import (
     CONVERSATION_ARCHIVE_MAX_AGGREGATE_UTF8_BYTES,
@@ -30,7 +34,6 @@ from .archive import (
     ConversationArchiveDestinationChangedError,
     ConversationArchiveDestinationError,
     ConversationArchiveError,
-    ConversationArchiveEvent,
     ConversationArchiveFormatError,
     ConversationArchiveSession,
     ConversationArchiveSourceChangedError,
@@ -52,7 +55,9 @@ _DISCUSSION_LOGS = Path("discussion_logs")
 _INTERACTIVE = "interactive"
 _CONVERSATIONS = "conversations"
 _METADATA = "metadata.json"
-_TRANSCRIPT = "transcript.jsonl"
+_COLLABORATION_HISTORY = "collaboration-history.jsonl"
+_COLLABORATION_LOCK = ".collaboration-history.lock"
+_LEGACY_TRANSCRIPT = "transcript.jsonl"
 _MAX_INVENTORY_ENTRIES = 1_000_000
 _MAX_INCLUDED_FILE_BYTES = 67_108_864
 _MAX_INCLUDED_TOTAL_BYTES = 134_217_728
@@ -87,7 +92,7 @@ class _ArchiveWorkspaceTopology:
         return _ArchiveOperation(
             workspace=workspace,
             catalog=catalog,
-            event_store=FilesystemConversationEventStore(
+            event_store=FilesystemCollaborationEventStore(
                 workspace,
                 catalog=catalog,
             ),
@@ -100,13 +105,13 @@ class _ArchiveOperation:
 
     workspace: Workspace
     catalog: FilesystemConversationCatalog
-    event_store: FilesystemConversationEventStore
+    event_store: FilesystemCollaborationEventStore
 
 
 @dataclass(frozen=True, slots=True)
 class _StoredConversation:
     value: ConversationArchiveConversation
-    transcript_present: bool
+    history_present: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,7 +125,7 @@ class _PlannedFile:
 class _InstallPlan:
     value: ConversationArchiveConversation
     metadata: _PlannedFile | None
-    transcript: _PlannedFile | None
+    history: _PlannedFile | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,9 +343,9 @@ class FilesystemConversationArchiveAdapter(
                     )
                     or created
                 )
-            if plan.transcript is not None:
+            if plan.history is not None:
                 created = (
-                    self._install_transcript(
+                    self._install_history(
                         operation,
                         plan,
                         validate_lease=validate_lease,
@@ -399,7 +404,7 @@ class FilesystemConversationArchiveAdapter(
         ):
             raise ConversationArchiveDestinationChangedError()
         if plan.value.events:
-            if not self._transcript_collision_is_exact(
+            if not self._history_collision_is_exact(
                 operation,
                 plan.value,
                 validate_lease=validate_lease,
@@ -407,13 +412,13 @@ class FilesystemConversationArchiveAdapter(
                 raise ConversationArchiveDestinationChangedError()
         else:
             try:
-                transcript = operation.workspace.path(
-                    _transcript_relative(
+                history = operation.workspace.path(
+                    _history_relative(
                         plan.value.session_id,
                         plan.value.conversation_id,
                     )
                 )
-                if os.path.lexists(transcript):
+                if os.path.lexists(history):
                     raise ConversationArchiveDestinationChangedError()
             except ConversationArchiveError:
                 raise
@@ -562,7 +567,7 @@ class FilesystemConversationArchiveAdapter(
                 raise ValueError("empty conversation session layout")
 
             conversation_ids: list[str] = []
-            transcript_presence: dict[str, bool] = {}
+            history_presence: dict[str, bool] = {}
             for name in sorted(catalog_entries):
                 budget.charge_conversation()
                 conversation_id = operation.workspace.validate_identifier(
@@ -585,19 +590,24 @@ class FilesystemConversationArchiveAdapter(
                 if (
                     entries is None
                     or _METADATA not in entries
-                    or not set(entries).issubset({_METADATA, _TRANSCRIPT})
+                    or _LEGACY_TRANSCRIPT in entries
+                    or not set(entries).issubset(
+                        {_METADATA, _COLLABORATION_HISTORY, _COLLABORATION_LOCK}
+                    )
                 ):
                     raise ValueError("invalid conversation artifact layout")
-                transcript_present = _TRANSCRIPT in entries
+                if _COLLABORATION_LOCK in entries:
+                    self._require_excluded_regular(entries[_COLLABORATION_LOCK])
+                history_present = _COLLABORATION_HISTORY in entries
                 conversation_ids.append(conversation_id)
-                transcript_presence[conversation_id] = transcript_present
+                history_presence[conversation_id] = history_present
 
             if conversation_ids:
                 budget.charge_contributing_session()
             for conversation_id in sorted(conversation_ids):
                 validate_lease()
                 metadata_relative = _metadata_relative(session_id, conversation_id)
-                transcript_relative = _transcript_relative(
+                history_relative = _history_relative(
                     session_id,
                     conversation_id,
                 )
@@ -617,7 +627,7 @@ class FilesystemConversationArchiveAdapter(
                 ):
                     raise ValueError("conversation catalog identity mismatch")
 
-                present = transcript_presence[conversation_id]
+                present = history_presence[conversation_id]
                 self._require_included_file(
                     operation,
                     budget,
@@ -629,26 +639,31 @@ class FilesystemConversationArchiveAdapter(
                         operation,
                         budget,
                         validate_lease,
-                        transcript_relative,
+                        history_relative,
                     )
                 events = operation.event_store.read(session_id, conversation_id)
                 if type(events) is not tuple:
                     raise ConversationArchiveFormatError()
                 budget.charge_events(len(events))
-                if any(type(event) is not ConversationEvent for event in events):
+                if any(type(event) is not CollaborationEvent for event in events):
                     raise ConversationArchiveFormatError()
                 if present and not events:
-                    raise ValueError("empty transcript artifact")
+                    raise ValueError("empty collaboration history artifact")
                 budget.consume_text(stored_metadata.subject)
                 for event in events:
-                    budget.consume_text(event.content)
+                    budget.consume_text(
+                        encode_collaboration_event(event).decode(
+                            "utf-8",
+                            errors="strict",
+                        )
+                    )
                 value = self._archive_conversation(
                     stored_metadata,
                     events,
                 )
                 inventory[(session_id, conversation_id)] = _StoredConversation(
                     value=value,
-                    transcript_present=present,
+                    history_present=present,
                 )
         validate_lease()
         return budget.snapshot(inventory)
@@ -741,7 +756,7 @@ class FilesystemConversationArchiveAdapter(
     @staticmethod
     def _archive_conversation(
         metadata: ConversationMetadata,
-        events: tuple[ConversationEvent, ...],
+        events: tuple[CollaborationEvent, ...],
     ) -> ConversationArchiveConversation:
         if type(metadata) is not ConversationMetadata or type(events) is not tuple:
             raise ConversationArchiveFormatError()
@@ -754,21 +769,7 @@ class FilesystemConversationArchiveAdapter(
             status=metadata.status,
             created_at=metadata.created_at,
             updated_at=metadata.updated_at,
-            events=tuple(
-                ConversationArchiveEvent(
-                    schema_version=event.schema_version,
-                    session_id=event.session_id,
-                    conversation_id=event.conversation_id,
-                    turn_id=event.turn_id,
-                    sequence=event.sequence,
-                    timestamp=event.timestamp,
-                    sender=event.sender,
-                    recipient=event.recipient,
-                    kind=event.kind,
-                    content=event.content,
-                )
-                for event in events
-            ),
+            events=events,
         )
 
     @staticmethod
@@ -811,13 +812,13 @@ class FilesystemConversationArchiveAdapter(
                                 ),
                                 _metadata_text(conversation),
                             ),
-                            transcript=(
+                            history=(
                                 _planned_file(
-                                    _transcript_relative(
+                                    _history_relative(
                                         conversation.session_id,
                                         conversation.conversation_id,
                                     ),
-                                    _transcript_text(conversation),
+                                    _history_text(conversation),
                                 )
                                 if conversation.events
                                 else None
@@ -827,7 +828,7 @@ class FilesystemConversationArchiveAdapter(
                     continue
                 if not _metadata_equal(stored.value, conversation):
                     raise ConversationArchiveConflictError()
-                if stored.transcript_present:
+                if stored.history_present:
                     if stored.value.events != conversation.events:
                         raise ConversationArchiveConflictError()
                     plans.append(_InstallPlan(conversation, None, None))
@@ -838,13 +839,13 @@ class FilesystemConversationArchiveAdapter(
                     _InstallPlan(
                         value=conversation,
                         metadata=None,
-                        transcript=(
+                        history=(
                             _planned_file(
-                                _transcript_relative(
+                                _history_relative(
                                     conversation.session_id,
                                     conversation.conversation_id,
                                 ),
-                                _transcript_text(conversation),
+                                _history_text(conversation),
                             )
                             if conversation.events
                             else None
@@ -868,14 +869,14 @@ class FilesystemConversationArchiveAdapter(
                 expected_after[(session.session_id, conversation.conversation_id)] = (
                     _StoredConversation(
                         value=conversation,
-                        transcript_present=bool(conversation.events),
+                        history_present=bool(conversation.events),
                     )
                 )
 
         planned_files = tuple(
             planned
             for plan in plans
-            for planned in (plan.metadata, plan.transcript)
+            for planned in (plan.metadata, plan.history)
             if planned is not None
         )
         missing_paths: set[Path] = set()
@@ -955,14 +956,14 @@ class FilesystemConversationArchiveAdapter(
         validate_lease()
         return True
 
-    def _install_transcript(
+    def _install_history(
         self,
         operation: _ArchiveOperation,
         plan: _InstallPlan,
         *,
         validate_lease: Callable[[], None],
     ) -> bool:
-        planned = plan.transcript
+        planned = plan.history
         if planned is None or not plan.value.events:
             raise ConversationArchiveDestinationError()
         validate_lease()
@@ -985,7 +986,7 @@ class FilesystemConversationArchiveAdapter(
                 overwrite=False,
             )
         except ManuscriptExistsError:
-            if self._transcript_collision_is_exact(
+            if self._history_collision_is_exact(
                 operation,
                 plan.value,
                 validate_lease=validate_lease,
@@ -1067,7 +1068,7 @@ class FilesystemConversationArchiveAdapter(
         except Exception:
             return False
 
-    def _transcript_collision_is_exact(
+    def _history_collision_is_exact(
         self,
         operation: _ArchiveOperation,
         conversation: ConversationArchiveConversation,
@@ -1085,7 +1086,7 @@ class FilesystemConversationArchiveAdapter(
             )
             self._bounded_regular_size(
                 operation,
-                _transcript_relative(
+                _history_relative(
                     conversation.session_id,
                     conversation.conversation_id,
                 ),
@@ -1102,8 +1103,7 @@ class FilesystemConversationArchiveAdapter(
             if len(events) != len(conversation.events):
                 return False
             exact = all(
-                type(event) is ConversationEvent
-                and self._archive_event(event) == expected
+                type(event) is CollaborationEvent and event == expected
                 for event, expected in zip(events, conversation.events, strict=True)
             )
             validate_lease()
@@ -1112,21 +1112,6 @@ class FilesystemConversationArchiveAdapter(
             raise
         except Exception:
             return False
-
-    @staticmethod
-    def _archive_event(event: ConversationEvent) -> ConversationArchiveEvent:
-        return ConversationArchiveEvent(
-            schema_version=event.schema_version,
-            session_id=event.session_id,
-            conversation_id=event.conversation_id,
-            turn_id=event.turn_id,
-            sequence=event.sequence,
-            timestamp=event.timestamp,
-            sender=event.sender,
-            recipient=event.recipient,
-            kind=event.kind,
-            content=event.content,
-        )
 
 
 def _metadata_relative(session_id: str, conversation_id: str) -> Path:
@@ -1140,8 +1125,10 @@ def _metadata_relative(session_id: str, conversation_id: str) -> Path:
     )
 
 
-def _transcript_relative(session_id: str, conversation_id: str) -> Path:
-    return _metadata_relative(session_id, conversation_id).with_name(_TRANSCRIPT)
+def _history_relative(session_id: str, conversation_id: str) -> Path:
+    return _metadata_relative(session_id, conversation_id).with_name(
+        _COLLABORATION_HISTORY
+    )
 
 
 def _metadata_equal(
@@ -1206,26 +1193,9 @@ def _metadata_text(conversation: ConversationArchiveConversation) -> str:
         raise ConversationArchiveFormatError() from None
 
 
-def _transcript_text(conversation: ConversationArchiveConversation) -> str:
+def _history_text(conversation: ConversationArchiveConversation) -> str:
     return "".join(
-        json.dumps(
-            ConversationEvent(
-                schema_version=event.schema_version,
-                session_id=event.session_id,
-                conversation_id=event.conversation_id,
-                turn_id=event.turn_id,
-                sequence=event.sequence,
-                timestamp=event.timestamp,
-                sender=event.sender,
-                recipient=event.recipient,
-                kind=event.kind,
-                content=event.content,
-            ).to_dict(),
-            ensure_ascii=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-        + "\n"
+        encode_collaboration_event(event).decode("utf-8", errors="strict") + "\n"
         for event in conversation.events
     )
 

@@ -237,13 +237,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     storage = subcommands.add_parser(
         "storage",
-        help="select, migrate, or verify authoritative conversation storage",
+        help="select, transfer, or verify authoritative conversation storage",
     )
     storage_actions = storage.add_subparsers(
         dest="storage_action",
         required=True,
     )
-    for action in ("migrate", "verify"):
+    for action in ("transfer", "verify"):
         action_parser = storage_actions.add_parser(action)
         action_parser.add_argument(
             "--from",
@@ -258,7 +258,7 @@ def build_parser() -> argparse.ArgumentParser:
             required=True,
         )
         action_parser.add_argument("--workspace", help=_WORKSPACE_HELP)
-        if action == "migrate":
+        if action == "transfer":
             action_parser.add_argument("--dry-run", action="store_true")
     use = storage_actions.add_parser("use")
     use.add_argument("backend", metavar="BACKEND")
@@ -302,9 +302,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     smoke.add_argument(
         "--workspace",
-        help=(
-            "use an explicit workspace path and retain diagnostic artifacts"
-        ),
+        help=("use an explicit workspace path and retain diagnostic artifacts"),
     )
     return parser
 
@@ -327,9 +325,7 @@ def _parse_backend_overrides(values: Sequence[str]) -> dict[str, str]:
         if agent_id not in ROSTER:
             raise ConfigurationError(f"unknown backend override agent: {agent_id}")
         if agent_id in result:
-            raise ConfigurationError(
-                f"duplicate backend override agent: {agent_id}"
-            )
+            raise ConfigurationError(f"duplicate backend override agent: {agent_id}")
         validated = ConfigManager.validate_backend(backend)
         assert validated is not None
         result[agent_id] = validated
@@ -348,9 +344,7 @@ def _parse_positive_timeout_seconds(value: object) -> float:
     try:
         timeout = float(value)
     except (TypeError, ValueError) as exc:
-        raise ConfigurationError(
-            "Codex timeout must be a positive number"
-        ) from exc
+        raise ConfigurationError("Codex timeout must be a positive number") from exc
     if not math.isfinite(timeout) or timeout <= 0:
         raise ConfigurationError("Codex timeout must be a positive number")
     return timeout
@@ -466,11 +460,7 @@ def _write_interactive_cli_error(
     )
     terminal.write_error(
         error,
-        debug_log_path=(
-            _INTERACTIVE_DEBUG_LOG_NOTICE
-            if debug_log_available
-            else None
-        ),
+        debug_log_path=(_INTERACTIVE_DEBUG_LOG_NOTICE if debug_log_available else None),
     )
 
 
@@ -634,7 +624,7 @@ def _classify_conversation_storage_startup_failure(
         InteractiveErrorCode.CONFIGURATION_INVALID,
         summary="Conversation storage activation could not be completed.",
         hint=(
-            "Run story storage use, migrate, or verify as appropriate, then "
+            "Run story storage use, transfer, or verify as appropriate, then "
             "retry after concurrent workspace storage work finishes."
         ),
     )
@@ -817,13 +807,9 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
         backend_overrides = _parse_backend_overrides(backend_values)
         timeout_seconds = _parse_positive_timeout_seconds(timeout_value)
         if requested_session is not None:
-            requested_session = Workspace.validate_identifier(
-                requested_session
-            )
+            requested_session = Workspace.validate_identifier(requested_session)
         model = ConfigManager.validate_codex_model(model)
-        antigravity_model = ConfigManager.validate_antigravity_model(
-            antigravity_model
-        )
+        antigravity_model = ConfigManager.validate_antigravity_model(antigravity_model)
         antigravity_effort = ConfigManager.validate_antigravity_effort(
             antigravity_effort
         )
@@ -831,9 +817,7 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
             antigravity_executable
         )
     except Exception as exc:
-        _write_interactive_cli_error(
-            _classify_interactive_configuration_failure(exc)
-        )
+        _write_interactive_cli_error(_classify_interactive_configuration_failure(exc))
         return 2
 
     try:
@@ -945,9 +929,7 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
             newly_authenticated_provider=newly_authenticated,
         )
         if default_provider is None:
-            raise RuntimeError(
-                "authenticated startup snapshot has no default provider"
-            )
+            raise RuntimeError("authenticated startup snapshot has no default provider")
         establish_default_backend(workspace, default_provider)
         manager = ConfigManager(workspace)
         configuration = manager.load_configuration_snapshot()
@@ -1070,9 +1052,7 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
         return 2
 
     try:
-        result = controller.run_session_lobby(
-            requested_session=requested_session
-        )
+        result = controller.run_session_lobby(requested_session=requested_session)
     except Exception as exc:
         _record_cli_error(debug_log, DebugOperation.INTERACTIVE_LOBBY, exc)
         _write_interactive_cli_error(
@@ -1084,9 +1064,7 @@ def _run_interactive_cli(arguments: argparse.Namespace) -> int:
         debug_log,
         DebugOperation.CLI_COMMAND,
         DebugPhase.SUCCEEDED if result == 0 else DebugPhase.FAILED,
-        outcome=(
-            DebugOutcome.COMPLETED if result == 0 else DebugOutcome.FAILED
-        ),
+        outcome=(DebugOutcome.COMPLETED if result == 0 else DebugOutcome.FAILED),
     )
     return result
 
@@ -1235,11 +1213,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _trace_cli(
                     debug_log,
                     DebugOperation.CLI_COMMAND,
-                    (
-                        DebugPhase.SUCCEEDED
-                        if exit_code == 0
-                        else DebugPhase.FAILED
-                    ),
+                    (DebugPhase.SUCCEEDED if exit_code == 0 else DebugPhase.FAILED),
                     outcome=(
                         DebugOutcome.COMPLETED
                         if exit_code == 0
@@ -1262,12 +1236,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     assert desired is not None
                     install_missing = arguments.install_missing
                     yes = arguments.yes
-                    if (
-                        install_missing != yes
-                        or (
-                            desired != "sqlite"
-                            and (install_missing or yes)
-                        )
+                    if install_missing != yes or (
+                        desired != "sqlite" and (install_missing or yes)
                     ):
                         use_report = ConversationStorageSelectionReport.failed(
                             ConversationStorageSelectionFailure.INVALID_REQUEST,
@@ -1293,18 +1263,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return use_report.exit_code
 
             from .conversation_storage.migration import (
-                ConversationStorageMigrationOperation,
-                ConversationStorageMigrationReport,
-                migrate_conversation_storage,
+                ConversationStorageTransferOperation,
+                ConversationStorageTransferReport,
+                transfer_conversation_storage,
                 verify_conversation_storage,
             )
 
-            operation = ConversationStorageMigrationOperation(arguments.storage_action)
+            operation = ConversationStorageTransferOperation(arguments.storage_action)
             dry_run = bool(getattr(arguments, "dry_run", False))
             try:
                 workspace = resolve_workspace(arguments.workspace)
             except Exception:
-                storage_report = ConversationStorageMigrationReport.failed(
+                storage_report = ConversationStorageTransferReport.failed(
                     operation=operation,
                     source_backend=arguments.source_backend,
                     destination_backend=arguments.destination_backend,
@@ -1313,13 +1283,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             else:
                 storage_report = (
-                    migrate_conversation_storage(
+                    transfer_conversation_storage(
                         workspace,
                         source_backend=arguments.source_backend,
                         destination_backend=arguments.destination_backend,
                         dry_run=dry_run,
                     )
-                    if operation is ConversationStorageMigrationOperation.MIGRATE
+                    if operation is ConversationStorageTransferOperation.TRANSFER
                     else verify_conversation_storage(
                         workspace,
                         source_backend=arguments.source_backend,
@@ -1352,9 +1322,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         if arguments.command == "session":
             if arguments.session_name is not None:
-                session_id = workspace.validate_identifier(
-                    arguments.session_name
-                )
+                session_id = workspace.validate_identifier(arguments.session_name)
             elif cli_context.default_session_id is not None:
                 session_id = workspace.validate_identifier(
                     cli_context.default_session_id

@@ -7,7 +7,7 @@
 > have content-free failures and recognized additive-import recovery. Optional
 > SQLite conversation storage also fails closed. Explicit `/settings` or
 > provider-free `story storage use` can prepare and save desired storage for the
-> next shell; host installation always requires explicit consent. Migration and
+> next shell; host installation always requires explicit consent. Transfer and
 > parity verification remain separate workflows between two already-ready
 > stores. Optional local conversation RAG has no-write status, explicit
 > opt-in/rebuild/search/disable, confirmed derived-only purge recovery,
@@ -51,35 +51,36 @@ of already created exact files, cleanup, overwrite, or deletion.
 | Result or failure | Meaning | Safe response |
 | --- | --- | --- |
 | `ConversationArchiveImportStatus.UNCHANGED` | The complete requested archive state already existed, or the archive was empty. | Treat the destination as unchanged. An empty archive does not prove that the destination is empty. |
-| `ConversationArchiveImportStatus.IMPORTED` | At least one exact metadata or transcript file was created and the complete post-import scan matched. | Continue only after the calling workflow accepts that additive result. This is not proof of complete workspace parity. |
+| `ConversationArchiveImportStatus.IMPORTED` | At least one exact canonical destination conversation was created and the complete post-import scan matched. | Continue only after the calling workflow accepts that additive result. This is not proof of complete workspace parity. |
 | `ConversationArchiveFormatError`, `ConversationArchiveVersionError`, `ConversationArchiveBoundsError`, or `ConversationArchiveDigestError` | The logical value or bytes are invalid, unsupported, oversized, modified, or noncanonical. | Reject the payload. Preserve untrusted input only according to caller policy; do not repair fields, recompute a digest to force acceptance, or import it. |
 | `ConversationArchiveSourceError` | The authoritative source layout or values are malformed or unsafe. | Keep the source unchanged, quiesce all writers, and inspect the fixed conversation subtree offline. Do not copy around the rejected entry. |
 | `ConversationArchiveSourceChangedError` | The two canonical export scans differed or the second scan became invalid. | Discard the attempted export, keep the source quiescent, investigate the change, and start a completely new export only after stability is established. |
-| `ConversationArchiveConflictError` | An addressed destination identity has different metadata or transcript values. | Preserve both inputs and investigate. The adapter does not merge, replace, or delete the destination. |
+| `ConversationArchiveConflictError` | An addressed destination identity has different metadata or collaboration-history values. | Preserve both inputs and investigate. The adapter does not merge, replace, or delete the destination. |
 | `ConversationArchiveDestinationError` | Destination preflight found malformed/unsafe state, or a write could not complete safely. | Preserve the destination. Inspect before deciding whether it is unchanged or contains an exact metadata-first prefix; never remove an unknown artifact to force import. |
 | `ConversationArchiveDestinationChangedError` | A target collision, path change, or complete post-import rescan differed from the preflight plan. | Stop all destination mutation and inspect every addressed identity. Some exact create-only files may already exist; do not assume rollback. |
 | `ConversationStorageCoordinationError` | The lease is invalid, released, expired, wrong-thread, wrong-workspace, or failed during the operation. | End the old lease, quiesce the workspace, and acquire a fresh exact-workspace lease. Inspect possible exact prefixes before reapplying a payload. |
 
 Import deliberately supports resuming only its recognized canonical empty
-directory prefixes or exact metadata awaiting a nonempty transcript. Reapply
+directory prefixes or exact metadata awaiting a nonempty history file. Reapply
 only the identical canonical payload, under a fresh valid lease, after the
 destination is quiescent and inspection shows no divergence. Exact complete
 records are accepted; unrelated complete conversations are preserved. Unknown,
 unsafe, or divergent state is not resumable.
 
-The archive contains only conversation metadata and transcripts, not debates,
+The archive contains only catalog metadata and canonical v2 collaboration
+history, not debates,
 defaults, providers, prompts, manuscripts, artifacts, configuration, logs, or
 other workspace state. It is transport infrastructure rather than a complete
 backup, arbitrary restore, or backend switch. The separate same-workspace
-migration coordinator composes these archive adapters but does not broaden the
+transfer coordinator composes these archive adapters but does not broaden the
 archive contents. See the exact
 [archive contract](../reference/conversation-archives.md).
 
-<a id="conversation-storage-migration-recovery"></a>
+<a id="conversation-storage-transfer-recovery"></a>
 
-## Conversation storage migration recovery
+## Conversation storage transfer recovery
 
-Run migration only after stopping or coordinating every unsupported direct
+Run transfer only after stopping or coordinating every unsupported direct
 writer. `--from` must match the active backend, filesystem and SQLite must be
 distinct, and the SQLite database must already be provisioned and ready. One
 outer coordinator lease then covers planning through fresh final parity. The
@@ -87,22 +88,29 @@ workflow never provisions, activates, dual-writes, deletes, or retries
 automatically.
 
 Use the guide for the
-[forward migration](../guides/sqlite-conversation-storage.md#sqlite-storage-migration)
+[forward transfer](../guides/sqlite-conversation-storage.md#sqlite-storage-transfer)
 and
-[create-or-identical reverse workflow](../guides/sqlite-conversation-storage.md#sqlite-storage-reverse-migration).
+[create-or-identical reverse workflow](../guides/sqlite-conversation-storage.md#sqlite-storage-reverse-transfer).
 
 | Report or exit | Meaning | Safe response |
 | --- | --- | --- |
 | Dry-run `work_required` or `completed`, exit `0` | The fresh plan is valid. `work_required` has at least one `create`; `completed` needs no creation and reports verified parity. No destination or checkpoint was written, although the empty coordinator guard may have been created. | Review all five counts, keep both stores quiescent, then run the same non-dry command if copying is intended. A later run exports and plans again. |
-| Migration `completed` / `verified`, exit `0` | Fresh final source and destination canonical archives matched. A terminal per-direction checkpoint was retained. | Run `story storage verify` for an independent fresh comparison, then separately decide whether to activate in an approved workflow. Do not delete the source or checkpoint based only on this report. |
-| Verify `parity_mismatch`, exit `1` | The otherwise valid plan has source records to create or destination-only records. Verify ignored any checkpoint and changed no conversation state. | Keep both stores, inspect ownership, and migrate only when the destination has no destination-only records. Never use activation to hide the mismatch. |
-| `conflict`, `unsupported`, or migration `destination_only`, exit `2` | A divergent identity, SQLite-unrepresentable integer, or extra destination identity blocks the complete plan. No transfer or checkpoint update occurred. | Preserve both stores and the old checkpoint. Investigate offline; do not overwrite, truncate, delete, or hand-edit one side to force success. |
-| `activation_mismatch`, `activation_invalid`, `provisioning_needed`, `backend_unavailable`, `invalid_request`, `workspace_invalid`, `unsafe_state`, or `coordination_failed`, exit `2` | A precondition or safe-coordination boundary failed. | Correct the selected direction or workspace, restore trustworthy activation/path state, explicitly provision an intended empty SQLite target through its API, or wait for the supported owner. Do not treat migration as installation or activation. |
-| `checkpoint_invalid` or `checkpoint_unsupported`, exit `2` | Migration could not trust its direction-specific checkpoint. Verify does not read checkpoints. | Preserve the file and both stores. Back up and inspect the fixed schema/path offline; do not rewrite progress. Retry migration only after an approved recovery restores trustworthy checkpoint state. |
-| `source_changed`, final `parity_mismatch`, `source_invalid`, `destination_invalid`, or `operational_failure`, exit `2` | Failure may have occurred after destination work. Filesystem-to-SQLite rolls back an uncommitted import, but a source change can follow a committed SQLite transaction. SQLite-to-filesystem can retain complete exact conversations, and checkpoint publication can fail after one completes. | Quiesce both stores. Freshly export/inspect or run verify when safe; never assume rollback. Re-running migration revalidates exact destination records and any checkpoint before resuming. |
+| Transfer `completed` / `verified`, exit `0` | Fresh final source and destination canonical archives matched. A terminal per-direction checkpoint was retained. | Run `story storage verify` for an independent fresh comparison, then separately decide whether to activate in an approved workflow. Do not delete the source or checkpoint based only on this report. |
+| Verify `parity_mismatch`, exit `1` | The otherwise valid plan has source records to create or destination-only records. Verify ignored any checkpoint and changed no conversation state. | Keep both stores, inspect ownership, and transfer only when the destination has no destination-only records. Never use activation to hide the mismatch. |
+| `conflict`, `unsupported`, or transfer `destination_only`, exit `2` | A divergent identity, SQLite-unrepresentable integer, or extra destination identity blocks the complete plan. No transfer or checkpoint update occurred. | Preserve both stores and the old checkpoint. Investigate offline; do not overwrite, truncate, delete, or hand-edit one side to force success. |
+| `activation_mismatch`, `activation_invalid`, `provisioning_needed`, `backend_unavailable`, `invalid_request`, `workspace_invalid`, `unsafe_state`, or `coordination_failed`, exit `2` | A precondition or safe-coordination boundary failed. | Correct the selected direction or workspace, restore trustworthy activation/path state, explicitly provision an intended empty SQLite target through its API, or wait for the supported owner. Do not treat transfer as installation or activation. |
+| `checkpoint_invalid` or `checkpoint_unsupported`, exit `2` | Transfer could not trust its direction-specific checkpoint. Verify does not read checkpoints. | Preserve the file and both stores. Back up and inspect the fixed schema/path offline; do not rewrite progress. Retry transfer only after an approved recovery restores trustworthy checkpoint state. |
+| `source_changed`, final `parity_mismatch`, `source_invalid`, `destination_invalid`, or `operational_failure`, exit `2` | Failure may have occurred after destination work. Filesystem-to-SQLite rolls back an uncommitted import, but a source change can follow a committed SQLite transaction. SQLite-to-filesystem can retain complete exact conversations, and checkpoint publication can fail after one completes. | Quiesce both stores. Freshly export/inspect or run verify when safe; never assume rollback. Re-running transfer revalidates exact destination records and any checkpoint before resuming. |
+
+`source_invalid` or `destination_invalid` can mean that archive/transfer found
+a filesystem `transcript.jsonl` or SQLite `conversation_events` row. Those are
+legacy schema-v1 history, not recovery inputs. Preserve the stores; do not
+rename, parse-and-rewrite, or hand-copy them into v2. Until #478 completes the
+active runtime cutover, ordinary direct-run work can still create exactly this
+intermediate limitation.
 
 Checkpoints remain at
-`agent_states/orchestrator_state/conversation_storage_migrations/{filesystem-to-sqlite,sqlite-to-filesystem}.json`.
+`agent_states/orchestrator_state/conversation_storage_transfers/{filesystem-to-sqlite,sqlite-to-filesystem}.json`.
 They are strict, bounded, regular, singly linked schema-v1 files. A matching
 fingerprint is resumed only when its counts, completed identities, and fresh
 destination records exactly match the fresh source. A changed source starts new
@@ -114,9 +122,9 @@ Filesystem-to-SQLite destination insertion is one transaction. For the reverse
 direction, complete global filesystem preflight precedes mutation and each
 checkpoint advance follows confirmation and reread of one complete exact
 conversation. This permits safe replay after publication/checkpoint uncertainty
-without accepting an incomplete transcript. It is not rollback across both
+without accepting an incomplete history. It is not rollback across both
 stores. Exact command/report semantics are in the
-[CLI reference](../reference/cli.md#conversation-storage-migration).
+[CLI reference](../reference/cli.md#conversation-storage-transfer).
 
 <a id="conversation-storage-selection-and-activation-recovery"></a>
 
@@ -143,11 +151,11 @@ show the normal path before the failure matrix below.
 | `installation_unsupported` or `installation_failed`, exit `2` | The exact OS/package-manager plan is unsupported, or the one authorized installer failed. | Inspect host/package-manager diagnostics. Do not substitute arbitrary arguments through Story. Complete approved host repair separately, then rerun selection. |
 | `interpreter_unavailable`, exit `2` | The installer may have exited zero, but the same Python interpreter still failed its complete SQLite probe. The report can show `installation: completed`. | Rebuild or reinstall that Python interpreter with functional SQLite support, then rerun. Installing only a standalone `sqlite3` binary is insufficient. |
 | `provisioning_failed`, exit `2` | The fixed SQLite database could not be safely proved ready or create-only provisioned. | Preserve the database, sidecars, and temporary residue. Run direct observational preflight or follow the SQLite recovery table; never delete suspect state to force an empty target. |
-| `migration_required`, exit `2` | The active canonical source is nonempty and the requested target is empty. An empty SQLite database created during selection can remain ready. | Run migrate dry-run, migrate, and verify from the active backend to the target; rerun `storage use`, then start a new shell. Selection itself never copies data. |
+| `transfer_required`, exit `2` | The active canonical source is nonempty and the requested target is empty. An empty SQLite database created during selection can remain ready. | Run transfer dry-run, transfer, and verify from the active backend to the target; rerun `storage use`, then start a new shell. Selection itself never copies data. |
 | `parity_mismatch`, exit `2` | Both canonical stores are nonempty and differ. | Preserve both. Use `story storage verify` in the active direction and investigate conflicts or destination-only state offline. Do not overwrite, merge, truncate, or switch around the mismatch. |
 | `configuration_invalid`, `configuration_conflict`, or `configuration_write_failed`, exit `2` | Pending configuration was invalid, an opening config/persona fact changed, or publication/rollback could not be reported as a clean success. Host installation or an empty provisioned database can remain. | Preserve both config files and storage. Reopen Settings or rerun `storage use` from a fresh baseline. After write uncertainty, inspect both complete configuration files before another attempt. |
 | `coordination_failed`, `workspace_invalid`, or `invalid_request`, exit `2` | The workspace/lease/request boundary failed before a safe desired save. | Correct exact syntax/workspace, wait for supported work, and retry with a fresh invocation. Without POSIX `fcntl`, selection, provisioning, config save, and activation remain unavailable. |
-| Interactive startup aborts before the welcome | Desired and active state could not be safely reconciled; the active marker was preserved and there is no silent fallback. | Read the sanitized hint, quiesce unsupported writers, then run `storage use`, migrate, or verify as appropriate. Repair desired/readiness/parity rather than forcing the marker. |
+| Interactive startup aborts before the welcome | Desired and active state could not be safely reconciled; the active marker was preserved and there is no silent fallback. | Read the sanitized hint, quiesce unsupported writers, then run `storage use`, transfer, or verify as appropriate. Repair desired/readiness/parity rather than forcing the marker. |
 | Startup advanced the marker, then later terminal/auth/backend/session startup failed | Activation CAS already succeeded; unrelated later failure is not compensation for that durable switch. | Fix the later failure and start Story again. The new active backend must now be treated as authoritative; do not restore the old marker manually. |
 
 Selection proves coordination briefly, releases it during consent/installation,
@@ -168,7 +176,7 @@ end-to-end command sequence are in the
 
 SQLite preflight is strict, observational, and byte-preserving. It may load and
 probe the host `sqlite3` runtime and open an existing database read-only, but it
-does not create, repair, migrate, rewrite, or remove storage. Readiness applies
+does not create, repair, convert, rewrite, or remove storage. Readiness applies
 to the authoritative main database; the derived FTS companion is not required
 for preflight, provisioning, composition, reads, or exact search.
 
@@ -181,11 +189,11 @@ for the plain-language authority, backup, and exposure model.
 | `provisioning_needed` | On a capable host, the fixed database is absent. | Provision only after deciding the SQLite destination is deliberately empty and acquiring the exact workspace mutation lease. Provisioning does not import filesystem conversations. |
 | `unavailable` or `ConversationStorageUnavailableError` | The active Python interpreter's `sqlite3` is missing, older than 3.7.16, fails its functional runtime probe, the database is busy/locked, or an operational resource is unavailable. | Direct preflight remains observational. For a missing runtime, use the explicit selection workflow only when one allowlisted host command and its consent policy apply; otherwise repair the interpreter outside Story. There is no automatic retry, and the standalone SQLite CLI is not readiness proof. |
 | `ConversationStorageProvisioningNeededError` | Composition or an adapter operation requires a database that has not been provisioned. | Run observational preflight and, only for an intended empty target, the explicit leased provisioning flow. |
-| `WorkspaceVersionUnsupportedError` | The file has the recognized application identity but an unsupported schema version. | Stop workspace processes, preserve and verify a complete backup, then use a compatible runtime or a separately approved schema upgrade. Conversation-data migration does not upgrade SQLite schemas. |
+| `WorkspaceVersionUnsupportedError` | The file has the recognized application identity but an unsupported schema version. | Stop workspace processes, preserve and verify a complete backup, then use a compatible runtime or a separately approved schema upgrade. Conversation-data transfer does not upgrade SQLite schemas. |
 | `WorkspaceFormatError` | Header, schema manifest/fingerprint/cookie, encoding, integrity, foreign keys, required lexical generation/searchable values, event structure, or strict sidecar state is invalid, or the stable database-name entry is nonregular without being a symlink. | Preserve the database and sidecars unchanged. Restore a known-good complete database or investigate offline; do not hand-edit or ask preflight to repair it. |
 | `WorkspaceSecurityError` | The database name is a symlink, or its named/opened path identity is unsafe, nonmeaningful, replaced, mismatched, or has an unexpected link count. | Stop all processes, back up the complete workspace, and restore safe exact path identities. Do not manually follow, unlink, or replace suspicious names. Explicit leased provisioning can recognize only the exact interrupted-publication case described below. |
 | `ConversationStorageCoordinationError` | A lease is wrong-workspace, wrong-thread, expired, released, or cannot be acquired safely; the POSIX advisory guard may also be unavailable or unsafe. | Let the supported owner finish or close it, then acquire a fresh exact-workspace lease. Never reuse or manufacture lease evidence. Without `fcntl`, keep use observational; supported provisioning and mutations remain unavailable. |
-| `ConversationArchiveConflictError` during canonical archive import | An existing identity differs from the incoming exact metadata or transcript. | Keep both sources and investigate. The whole import transaction rolls back; there is no merge or overwrite mode. |
+| `ConversationArchiveConflictError` during canonical archive import | An existing identity differs from the incoming exact metadata or v2 history. | Keep both sources and investigate. The whole import transaction rolls back; there is no merge or overwrite mode. |
 
 ### Derived search companion recovery
 
@@ -218,7 +226,7 @@ generation.
 
 The amended exact schema remains version `1`. A database produced by older
 unpublished pre-Issue-257 development code has the old fingerprint and can be
-rejected as malformed. There is no released-user migration promise, v2 schema,
+rejected as malformed. There is no released-user upgrade promise, v2 schema,
 or automatic conversion for that development artifact.
 
 Preflight and ordinary reads never repair or remove storage. Explicit leased
@@ -270,7 +278,7 @@ append could duplicate intended work. A failed best-effort companion refresh
 does not change that committed main state and needs no mutation replay. Beyond
 the exact leased alias cleanup above, the API performs no repair, compensation,
 retry, schema upgrade, activation, or source deletion. Explicit conversation
-data migration between this ready database and the filesystem uses the separate
+data transfer between this ready database and the filesystem uses the separate
 coordinator described above.
 
 <a id="unsupported-v1-session-data"></a>
@@ -279,7 +287,7 @@ coordinator described above.
 
 V1 provider manifests, `<session_id>.lease.json`, `.lease-claims.lock`, V1
 `cli_context.json`, and `conversation_selections/` are rejected unchanged with
-`WorkspaceVersionUnsupportedError`. There is no migration or compatibility mode.
+`WorkspaceVersionUnsupportedError`. There is no conversion or compatibility mode.
 
 Use this nondestructive reset:
 
@@ -454,7 +462,7 @@ JSON must have the repository's exact canonical bytes; merely reformatting an
 otherwise equivalent record invalidates the ledger. Historical core commits may
 remain, but the catalog must select the unique newest normalized instant for a
 repeated path. An equal newest tie or an older projection is ambiguous and fails
-closed. These records are preserved rather than rewritten or migrated.
+closed. These records are preserved rather than rewritten or converted.
 
 Operators should stop workspace processes, preserve a complete backup, and
 restore exact verified repository metadata. The runtime does not guess a tie or
@@ -476,7 +484,7 @@ Any failure avoids protected work. A partial one- or two-link state—including
 the old development pair—a divergent inode, alias, or extra link fails again on
 later artifact access and remains untouched. Stop all workspace processes,
 preserve a backup, and investigate the triple; there is no cleanup,
-reconstruction, or migration.
+reconstruction, or conversion.
 
 Stop every workspace process before a manual or external filesystem edit. The
 repository lease serializes supported repository writers, but an actively
@@ -744,8 +752,8 @@ derived state stale best-effort; wait for writers to quiesce and rerun.
 prevented a stable operation. There is no automatic retry; let the owning
 storage/RAG operation finish, then rerun status. `storage_unavailable` on search
 or confirmed rebuild belongs to the configured conversation-storage startup
-boundary. Repair/provision/migrate/select that authority through its documented
-workflow before retrying RAG; RAG never provisions or migrates it.
+boundary. Repair/provision/transfer/select that authority through its documented
+workflow before retrying RAG; RAG never provisions or transfers it.
 
 If Local is saved but the next shell prints the fixed one-time Conversation RAG
 unavailable warning, the shell and `/settings` remain usable and configuration
@@ -838,7 +846,7 @@ workflow](privacy-and-provider.md#rejected-provider-response-artifacts).
   `/settings` and provider-free `story storage use` save a desired filesystem
   or SQLite backend for the next shell; host installation is limited to one
   explicitly confirmed allowlisted command, and startup never installs or
-  provisions. Migration/verification remain separate operations over two ready
+  provisions. Transfer/verification remain separate operations over two ready
   stores and never select, activate, or delete one. There is no live switch,
   dual write, automatic retry, MySQL, or FTS-dependent result behavior.
   The private local FTS5 companion supplies non-authoritative hints only.

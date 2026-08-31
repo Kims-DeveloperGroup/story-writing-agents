@@ -5,7 +5,7 @@
 > runtime explicit-reference authorization and backend enforcement, plus direct
 > Python conversation archive values, filesystem transfer, and optional SQLite
 > conversation/search storage, provider-free desired selection, and
-> conversation migration. They also cover the optional fixed-local
+> conversation transfer. They also cover the optional fixed-local
 > conversation-RAG store and noninteractive lifecycle/authorized-search
 > commands, plus interactive settings, startup composition, automatic
 > preflight, and private one-turn `/rag` arming.
@@ -29,7 +29,7 @@ stored or displayed failure text.
 There is no encryption, application access control, or secure erase.
 Documents, debate/context records, provider metadata, subjects, transcripts,
 scrollback, manuscripts, artifact catalogs, commit provenance, transaction
-journals, migration checkpoints, reference-operation evidence, and recovery
+journals, transfer checkpoints, reference-operation evidence, and recovery
 markers have no application-managed retention policy and rely on
 OS/terminal-service protection. The workspace debug log, agent-exchange store,
 and rejected-provider-response store are bounded-retention channels described
@@ -46,8 +46,9 @@ conversations; transcripts retain messages, replies, and runtime errors.
 ### Conversation archive exposure
 
 Canonical conversation archive values and serialized bytes contain exact
-plaintext subjects, identities, timestamps, statuses, user messages, agent
-replies, and runtime-error content. Serialization performs no redaction or
+plaintext subjects, identities, timestamps, statuses, proposals,
+confirmations, specialist replies, execution outcomes, interruption/recovery
+facts, and other typed collaboration payloads. Serialization performs no redaction or
 encryption. Its SHA-256 digest detects modification but provides no secrecy,
 signature, origin authentication, or access control.
 
@@ -55,9 +56,17 @@ Filesystem export deliberately excludes debate/runtime logs, debate
 state/results/context, credentials, provider and agent state, prompts,
 configuration/defaults, storage activation and RAG state, manuscripts, and
 writing artifacts. Those exclusions make the value conversation-only; they do
-not make its included transcript content safe to disclose. Import copies the
+not make its included collaboration content safe to disclose. Import copies the
 included plaintext and neither deletes excluded state nor securely erases a
 source or caller-owned archive copy.
+
+Provider-private state, hidden reasoning, raw provider responses and
+diagnostics, credentials, capabilities, full referenced-file bytes, artifact
+contents, and derived FTS/RAG data are not archive payloads. Therefore an
+archive or backend transfer is not a workspace, provider-session, or recovery
+backup. Only canonical archive schema 2 is accepted; legacy transcript files,
+database event rows, and schema-1 archive bytes are rejected rather than
+redacted or converted.
 
 The runtime owns no archive file or retention policy. A caller that stores,
 transmits, logs, or otherwise retains the returned bytes owns protection and
@@ -65,11 +74,10 @@ cleanup for every copy. See
 [Canonical conversation archives](../reference/conversation-archives.md#archive-non-goals).
 
 The optional `discussion_logs/conversation_storage.sqlite3` database is also
-plaintext and can coexist with the filesystem catalog and transcripts, leaving
+plaintext and can coexist with the filesystem catalog and histories, leaving
 two independent copies under caller control. It contains exact subjects,
-identities, timestamps, status, and transcript content plus derived normalized
-subjects, normalized transcript-search text, lexical generation, and private
-turn slots. Protect the database, any live rollback journal, external backups,
+identities, timestamps, catalog status, canonical collaboration BLOBs, and the
+still-present v1/derived search resources. Protect the database, any live rollback journal, external backups,
 and process memory with the rest of the workspace.
 
 Desired `conversation_storage_backend` in `config/system_defaults.json` and
@@ -89,18 +97,18 @@ the main database; it may omit the companion because exact search falls back
 to the main snapshot. Search preserves and ignores an unsafe companion rather
 than reading or repairing it.
 
-Provisioning is creation, not migration or deletion; archive export/import and
-the explicit storage migration workflow copy plaintext rather than securely
+Provisioning is creation, not transfer or deletion; archive export/import and
+the explicit storage transfer workflow copy plaintext rather than securely
 erasing a source. The canonical archive payload contains exact metadata and
 events in memory, and any persistence or transmission performed by its caller
 is outside the adapters' controls.
 
-`story storage migrate` and `story storage verify` emit one content-free report
+`story storage transfer` and `story storage verify` emit one content-free report
 containing backend names, fixed outcomes/failures, parity, checkpoint state, and
 aggregate classification/source counts. They never print subjects, conversation
 IDs, event text, paths, malformed values, or FTS content and never create a
 runtime debug record. This output boundary does not make the copied destination
-confidential: migration can leave the same plaintext conversations in both
+confidential: transfer can leave the same plaintext conversations in both
 stores, never deletes the source, and does not impose a retention policy.
 
 `story storage use` emits a different counts-free content-free report containing
@@ -111,7 +119,7 @@ output, provider data, or parity counts and never creates a runtime debug
 record. An explicitly run installer instead writes its native stdout and
 stderr to the CLI's stderr stream, outside that JSON boundary.
 
-Retained migration checkpoints contain session and conversation IDs, a SHA-256
+Retained transfer checkpoints contain session and conversation IDs, a SHA-256
 fingerprint of the canonical source archive, source conversation/event counts,
 and completed/total progress. They omit subjects, timestamps, statuses, events,
 runtime errors, and FTS data, but identities, counts, timing of file updates, and
@@ -153,7 +161,7 @@ are provider-free and add no network call, authentication, RAG, or new citation
 mechanism. Optional FTS5 hint lookup adds no network path and never becomes
 search truth. Returned Python values, application logs, process memory, and
 caller-created backups can still move or expose plaintext beyond the
-workspace. Storage migration/verification is also provider-free and dispatches
+workspace. Storage transfer/verification is also provider-free and dispatches
 before authentication, broader settings/context, backend, runtime, session, or
 debug-log construction. It still performs local archive reads and, outside
 dry-run/verify, destination and checkpoint writes. `story storage use` likewise

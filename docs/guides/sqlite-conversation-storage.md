@@ -7,11 +7,12 @@ and changing storage does not change how `/conversation`, `/search`,
 
 The database format is now exact schema version `2`. It retains the current v1
 catalog/transcript resources and adds direct-only schema-v2 collaboration
-history persistence. This is an intermediate integration boundary: shell
-commands and the selected service bundle still use only the v1-shaped channel,
-archive transfer is unchanged until #477, and active v2 cutover is deferred to
-#479. A Python integrator can use the direct collaboration store now; a shell
-user cannot select or display it yet.
+history persistence. This is an intermediate integration boundary: canonical
+archive/transfer now uses only v2 collaboration history, while shell commands
+and the selected service bundle still write the v1-shaped channel. Active v2
+service cutover is deferred to #479. A Python integrator can use the direct
+collaboration store now; a shell user cannot select or display it yet, and
+archive/transfer rejects v1 direct-run transcript residue until #478 completes.
 
 For a new workspace with no conversations, the shortest safe path is:
 
@@ -24,7 +25,7 @@ The first command checks the SQLite support used by the active Python
 interpreter, creates an empty SQLite conversation database when needed, and
 saves SQLite as the **desired backend**. The next `story` launch performs a
 fresh check and makes it the **active backend**. If conversations already exist,
-Story stops with `migration_required`; follow the migration scenario below
+Story stops with `transfer_required`; follow the transfer scenario below
 instead of deleting or moving files by hand.
 
 This guide explains that workflow from a user's point of view. The
@@ -43,10 +44,10 @@ These terms describe different parts of one switch:
 | Active backend | The one store that a shell currently reads and writes. Only one backend is active. |
 | Authority | The active store is the truth for conversation subjects, statuses, and transcript events. A second copy is not a live replica. |
 | Provisioning | Creating and validating a new, empty SQLite database. Provisioning never copies conversations. |
-| Migration | Copying canonical conversations from the active store to the other ready store, then proving exact parity. Migration never selects or activates the destination. |
+| Transfer | Copying canonical v2 collaboration conversations from the active store to the other ready store, then proving exact parity. Transfer never selects or activates the destination. |
 | Adapter/service bundle | The catalog, transcript-event store, literal search, and mutation coordinator that all operate on the same backend. The shell passes one complete bundle to conversation features. |
 | Derived FTS hint | An optional disposable SQLite full-text-search companion that can suggest search candidates. It never decides truth or readiness; exact search falls back to the authoritative database. |
-| Direct v2 collaboration store | An uncomposed Python adapter for atomic schema-v2 batches in the main database. It is not part of the selected bundle, commands, archive, or FTS. |
+| Direct v2 collaboration store | An uncomposed Python adapter for atomic schema-v2 batches in the main database. Archive/transfer uses this history, but it is not yet part of the selected runtime bundle, search, or FTS. |
 
 The desired and active records are deliberately separate. This lets Story
 prepare and verify a change without switching a running shell:
@@ -139,7 +140,7 @@ not enough: if the interpreter still fails the complete probe, Story reports
 
 Provisioning happens only after functional readiness and only for an absent
 SQLite database. It creates an empty target; it does not install SQLite,
-migrate the filesystem store, select the backend, or activate it. A host
+transfer the filesystem store, select the backend, or activate it. A host
 package or empty database created before a later failure can remain.
 
 <a id="sqlite-storage-settings"></a>
@@ -174,70 +175,93 @@ Choose the exact YES to run the command.
 ```
 
 `NO` is highlighted. Only exact `YES` runs the command. Decline, CI refusal,
-installation or reprobe failure, provisioning failure, migration need, parity
+installation or reprobe failure, provisioning failure, transfer need, parity
 mismatch, or a settings conflict leaves configuration unchanged. If the active
 store contains conversations, Settings reports:
 
 ```text
-[conversation storage] Migrate the active conversations to the requested backend first.
+[conversation storage] Transfer the active conversations to the requested backend first.
 ```
 
-Leave the current shell and use the provider-free migration workflow next.
+Leave the current shell and use the provider-free transfer workflow next.
 
-<a id="sqlite-storage-migration"></a>
+<a id="sqlite-storage-transfer"></a>
 
-## Scenario 3: migrate existing filesystem conversations
+## Scenario 3: transfer existing filesystem conversations
 
 Selection deliberately does not copy data. On a workspace whose active
 filesystem store is nonempty, the first selection can create the empty SQLite
 target and then stop with this exact report:
 
 ```json
-{"activation":"unchanged","configuration":"preserved","desired_backend":"sqlite","failure":"migration_required","installation":"not_required","operation":"use","outcome":"failed","parity":"unverified","provisioning":"completed","schema_version":1}
+{"activation":"unchanged","configuration":"preserved","desired_backend":"sqlite","failure":"transfer_required","installation":"not_required","operation":"use","outcome":"failed","parity":"unverified","provisioning":"completed","schema_version":1}
 ```
 
 Keep both stores, then use one direction consistently:
 
 ```bash
-story storage migrate --from filesystem --to sqlite --dry-run
-story storage migrate --from filesystem --to sqlite
+story storage transfer --from filesystem --to sqlite --dry-run
+story storage transfer --from filesystem --to sqlite
 story storage verify --from filesystem --to sqlite
 story storage use sqlite
 ```
 
+The first three commands and the last two commands have different owners and
+effects:
+
+```text
+dry-run: work_required
+  -> transfer: completed + parity verified + checkpoint completed
+  -> verify: completed + parity verified
+  -> storage use sqlite: desired backend saved, active filesystem unchanged
+  -> next story launch: fresh checks may activate SQLite
+```
+
+Transfer itself never selects or activates SQLite. It also does not provision,
+delete, overwrite, merge, dual-write, or create a workspace backup.
+
 | Input | Participating component | Stored or transient data | Output and next action |
 | --- | --- | --- | --- |
-| `migrate ... --dry-run` | Canonical archive exporters and migration planner under the workspace mutation lease | Fresh archive values and the plan are transient. Neither conversations nor a checkpoint are written. | Review `create`, `identical`, `conflict`, `unsupported`, and `destination_only`. Continue only when the plan is unblocked. |
-| `migrate ...` | Same planner plus the destination archive importer | Exact missing conversations are created. The source remains. A successful terminal direction checkpoint is stored. | Require `outcome:"completed"` and `parity:"verified"`; do not treat this as activation. |
+| `transfer ... --dry-run` | Canonical archive exporters and transfer planner under the workspace mutation lease | Fresh archive values and the plan are transient. Neither conversations nor a checkpoint are written. | Review `create`, `identical`, `conflict`, `unsupported`, and `destination_only`. Continue only when the plan is unblocked. |
+| `transfer ...` | Same planner plus the destination archive importer | Exact missing conversations are created. The source remains. A successful terminal direction checkpoint is stored. | Require `outcome:"completed"` and `parity:"verified"`; do not treat this as activation. |
 | `verify ...` | Fresh canonical exporters and parity comparison | Comparison is transient and ignores checkpoints. | Require `parity:"verified"` before selection. |
 | `storage use sqlite` | Storage selection | Desired configuration is saved; active storage remains filesystem. | Start a new shell. |
 
-For a representative source containing three conversations and four events,
+For a representative source containing three conversations and 25 events,
 the exact dry-run line is:
 
 ```json
-{"checkpoint":"none","counts":{"conflict":0,"create":3,"destination_only":0,"identical":0,"unsupported":0},"dry_run":true,"failure":null,"from":"filesystem","operation":"migrate","outcome":"work_required","parity":"unverified","schema_version":1,"source":{"conversations":3,"events":4},"to":"sqlite"}
+{"checkpoint":"none","counts":{"conflict":0,"create":3,"destination_only":0,"identical":0,"unsupported":0},"dry_run":true,"failure":null,"from":"filesystem","operation":"transfer","outcome":"work_required","parity":"unverified","schema_version":1,"source":{"conversations":3,"events":25},"to":"sqlite"}
 ```
 
-The corresponding successful migration and independent verification are:
+The corresponding successful transfer and independent verification are:
 
 ```json
-{"checkpoint":"completed","counts":{"conflict":0,"create":3,"destination_only":0,"identical":0,"unsupported":0},"dry_run":false,"failure":null,"from":"filesystem","operation":"migrate","outcome":"completed","parity":"verified","schema_version":1,"source":{"conversations":3,"events":4},"to":"sqlite"}
+{"checkpoint":"completed","counts":{"conflict":0,"create":3,"destination_only":0,"identical":0,"unsupported":0},"dry_run":false,"failure":null,"from":"filesystem","operation":"transfer","outcome":"completed","parity":"verified","schema_version":1,"source":{"conversations":3,"events":25},"to":"sqlite"}
 ```
 
 ```json
-{"checkpoint":"none","counts":{"conflict":0,"create":0,"destination_only":0,"identical":3,"unsupported":0},"dry_run":false,"failure":null,"from":"filesystem","operation":"verify","outcome":"completed","parity":"verified","schema_version":1,"source":{"conversations":3,"events":4},"to":"sqlite"}
+{"checkpoint":"none","counts":{"conflict":0,"create":0,"destination_only":0,"identical":3,"unsupported":0},"dry_run":false,"failure":null,"from":"filesystem","operation":"verify","outcome":"completed","parity":"verified","schema_version":1,"source":{"conversations":3,"events":25},"to":"sqlite"}
 ```
 
 Counts describe the current workspace and will differ from this fixture. The
 reports deliberately omit identities, subjects, event text, paths, exception
-text, and FTS data. Migration includes active and archived metadata and every
-transcript event, including `runtime_error`; it excludes the derived FTS
+text, and FTS data. Transfer includes active and archived catalog metadata and
+every canonical v2 collaboration event; it excludes the derived FTS
 companion. Session, conversation, turn, sequence, sender, recipient, event-kind,
 status, and revision values remain exact across the copy, so citations derived
 from them stay stable. The workflow never provisions SQLite, changes desired
 or active state, deletes the source, overwrites a conflicting identity, or
 dual-writes future changes.
+
+This path accepts only archive schema 2 and canonical v2 collaboration events.
+It rejects any filesystem `transcript.jsonl`, SQLite `conversation_events`
+row, or schema-1 archive before destination mutation. There is no converter or
+compatibility alias. The `schema_version:1` in catalog metadata and in the
+compact transfer report is valid: those are separate schemas from the
+top-level archive schema 2. Until #478 replaces the active v1 runtime channel,
+a conversation created by an ordinary shell run can therefore make transfer
+fail instead of being upgraded.
 
 After verified parity, selection reports:
 
@@ -246,7 +270,7 @@ After verified parity, selection reports:
 ```
 
 The full report vocabulary and exit statuses are in
-[Conversation storage migration](../reference/cli.md#conversation-storage-migration).
+[Conversation storage transfer](../reference/cli.md#conversation-storage-transfer).
 
 <a id="sqlite-storage-activation"></a>
 
@@ -323,7 +347,7 @@ missing or the companion is stale, busy, unsafe, malformed, or absent, the
 same bounded exact search falls back to authoritative rows without repairing
 the companion.
 
-<a id="sqlite-storage-reverse-migration"></a>
+<a id="sqlite-storage-reverse-transfer"></a>
 
 ## Scenario 6: return to filesystem storage
 
@@ -334,18 +358,40 @@ first compare in the active direction:
 story storage verify --from sqlite --to filesystem
 ```
 
+If verify reports a create-only mismatch, keep SQLite active and run:
+
+```bash
+story storage transfer --from sqlite --to filesystem --dry-run
+story storage transfer --from sqlite --to filesystem
+story storage verify --from sqlite --to filesystem
+story storage use filesystem
+story
+```
+
+An interrupted transfer is retried with the exact same second command. On a
+safe retry, a completed checkpoint and exact destination records are validated
+against a fresh source fingerprint; terminal output can again be:
+
+```json
+{"checkpoint":"completed","counts":{"conflict":0,"create":2,"destination_only":0,"identical":1,"unsupported":0},"dry_run":false,"failure":null,"from":"sqlite","operation":"transfer","outcome":"completed","parity":"verified","schema_version":1,"source":{"conversations":3,"events":25},"to":"filesystem"}
+```
+
+This output proves fresh canonical parity, not that the destination is active.
+The subsequent `storage use` saves only the desired backend; activation occurs
+on the final fresh `story` launch.
+
 | Input | Participating component | Stored or transient data | Output and next action |
 | --- | --- | --- | --- |
-| Reverse `verify`, optional create-or-identical `migrate`, then `storage use filesystem` | The same provider-free migration and selection owners, with SQLite as the active source | Archive comparisons are transient; a real migration can create missing filesystem identities and retain a direction checkpoint. Successful selection saves desired filesystem state but does not change active SQLite state. | Require verified parity, select filesystem, then start a new shell. Preserve both stores throughout. |
+| Reverse `verify`, optional create-or-identical `transfer`, then `storage use filesystem` | The same provider-free transfer and selection owners, with SQLite as the active source | Archive comparisons are transient; a real transfer can create missing filesystem identities and retain a direction checkpoint. Successful selection saves desired filesystem state but does not change active SQLite state. | Require verified parity, select filesystem, then start a new shell. Preserve both stores throughout. |
 
 | Current comparison | Safe next action |
 | --- | --- |
 | Every identity is `identical` and parity is verified | Select filesystem directly with `story storage use filesystem`, then start a new shell. |
-| SQLite contains identities missing from filesystem, with no conflict, unsupported value, or destination-only identity | Run `migrate --from sqlite --to filesystem --dry-run`, migrate, verify, then select filesystem. |
-| The same identity differs in the two stores (`conflict`) | Preserve both stores and investigate offline. Migration never overwrites or merges it. |
-| Filesystem has an identity absent from the active SQLite source (`destination_only`) | Preserve both stores and investigate ownership. Migration will not delete it or declare parity. |
+| SQLite contains identities missing from filesystem, with no conflict, unsupported value, or destination-only identity | Run `transfer --from sqlite --to filesystem --dry-run`, transfer, verify, then select filesystem. |
+| The same identity differs in the two stores (`conflict`) | Preserve both stores and investigate offline. Transfer never overwrites or merges it. |
+| Filesystem has an identity absent from the active SQLite source (`destination_only`) | Preserve both stores and investigate ownership. Transfer will not delete it or declare parity. |
 
-Migration is **create-or-identical** in both directions. A filesystem
+Transfer is **create-or-identical** in both directions. A filesystem
 conversation that evolved after an earlier copy is a conflict, not an update
 target. Do not delete, truncate, or hand-edit either store to force a switch.
 
@@ -377,10 +423,10 @@ clear. All of these workspace records are plaintext.
 | --- | --- | --- |
 | Desired backend | `config/system_defaults.json`, key `conversation_storage_backend` | Exactly `filesystem`, `sqlite`, or null/missing for the filesystem default. Selection saves it only after checks pass. |
 | Active backend | `config/conversation_storage_state.json`, schema v1 with `backend` and nonnegative `generation` | Missing means filesystem generation zero. Startup alone advances it; do not edit it. |
-| Filesystem conversation authority | `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/{metadata.json,transcript.jsonl}` | Authoritative only while filesystem is active. It holds plaintext metadata and visible transcript events. |
-| Main SQLite conversation authority | `discussion_logs/conversation_storage.sqlite3`, application ID `0x53574143` (`SWAC`), schema v2 | Its v1 catalog/transcript portion is authoritative only while SQLite is active. A direct caller separately owns whether its canonical v2 collaboration rows are authoritative. Back up the whole database. |
+| Filesystem canonical v2 conversation authority | `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/{metadata.json,collaboration-history.jsonl}` | Archive/transfer authority. The safe `.collaboration-history.lock` is excluded. Until #478, the active v1 service can instead leave a rejected `transcript.jsonl`. |
+| Main SQLite conversation authority | `discussion_logs/conversation_storage.sqlite3`, application ID `0x53574143` (`SWAC`), schema v2 | `collaboration_events` and catalog metadata are archive/transfer authority. Any row in legacy `conversation_events` rejects archive/transfer. Back up the whole database. |
 | Derived literal-search hint | `discussion_logs/.conversation_storage_fts5.sqlite3`, schema v1 | Optional and disposable. It repeats normalized searchable plaintext, can be omitted from an authoritative backup, and never decides truth. |
-| Migration progress | `agent_states/orchestrator_state/conversation_storage_migrations/{filesystem-to-sqlite,sqlite-to-filesystem}.json` | One retained schema-v1 checkpoint per direction. It stores identities, counts, fingerprint, and progress, but no subject or event content. |
+| Transfer progress | `agent_states/orchestrator_state/conversation_storage_transfers/{filesystem-to-sqlite,sqlite-to-filesystem}.json` | One retained schema-v1 checkpoint per direction. It stores identities, counts, fingerprint, and progress, but no subject or event content. |
 | Mutation coordination | `config/.conversation_storage.lock` | A guard for supported writers, not configuration, activation state, or conversation data. |
 
 Sidecar and temporary files can appear around SQLite transactions or contained
@@ -392,7 +438,7 @@ remove them to make a database look ready.
 | Transient value | Lifetime |
 | --- | --- |
 | Readiness result and installer plan | One probe or selection attempt. |
-| Canonical archive snapshots and parity plan | One migration, verification, selection, or startup check. |
+| Canonical archive snapshots and parity plan | One transfer, verification, selection, or startup check. |
 | SQLite connections and transactions | One adapter operation. |
 | Installer terminal output and compact JSON reports | Process output; the storage CLI does not add a runtime debug record. Terminal or shell scrollback may still retain displayed text. |
 | Pending `/settings` choice | In memory until Apply Changes, discard, cancellation, or shell exit. |
@@ -404,7 +450,7 @@ remove them to make a database look ready.
   diagnostics, referenced file bytes, or installer output;
 - debate logs, manuscripts, writing artifacts, core documents, configuration,
   runtime debug logs, or session-lifecycle records;
-- migration checkpoint contents beyond identity and progress metadata;
+- transfer checkpoint contents beyond identity and progress metadata;
 - the optional conversation-RAG configuration or derived generation; and
 - the derived FTS companion itself, which is a separate database.
 
@@ -417,11 +463,11 @@ output according to the workspace's sensitivity.
 
 For a Python integrator, the change is:
 
-| Before #476 | After #476 |
+| Before #477 | After #477 |
 | --- | --- |
-| SQLite stored the current v1 catalog/transcript channel only. | A direct `SQLiteCollaborationEventStore` can atomically append/read canonical v2 collaboration batches in the same main database. |
-| V2 persistence required the direct filesystem adapter. | Filesystem and SQLite direct adapters expose the same append/read contract. |
-| No selected service exposed v2 collaboration. | Still unchanged: selection, shell, archive, search, FTS, and runtime remain v1-shaped. |
+| Archive/transfer depended on the schema-v1 transcript channel. | Archive schema 2 carries exact `CollaborationEvent` values and both backends import/export canonical v2 history. |
+| Filesystem used `transcript.jsonl`; SQLite used `conversation_events`. | Filesystem uses `collaboration-history.jsonl`; SQLite uses `collaboration_events` canonical BLOB rows. Presence of either legacy channel rejects archive/transfer. |
+| No selected service exposed v2 collaboration. | Still unchanged until #478/#479: selection and the active shell/runtime bundle remain v1-shaped, while archive/transfer is v2-only. |
 
 The direct store requires a provisioned schema-v2 database and an existing
 catalog conversation. Its append holds the workspace coordinator, uses
@@ -433,7 +479,7 @@ Identical concurrent candidates therefore commit once and retry once; distinct
 same-tail candidates commit once and reject the other as stale.
 
 An existing schema-v1 database is rejected unchanged. Do not rename, hand-edit,
-or `ALTER` it: there is no schema migration, converter, or compatibility mode.
+or `ALTER` it: there is no schema upgrade, converter, or compatibility mode.
 Malformed collaboration rows also fail closed; preserve the main database and
 stop direct appends. Canonical public collaboration payloads are plaintext in
 the main database, while hidden reasoning, provider diagnostics, credentials,
@@ -457,8 +503,9 @@ the next action:
 | `installation_disallowed` or `installation_unsupported` | Keep configuration unchanged. Follow the host's approved operations process; do not pass arbitrary install arguments through Story. |
 | `interpreter_unavailable` | Repair or rebuild the active Python interpreter. Installing only a standalone `sqlite3` executable is insufficient. |
 | `provisioning_failed` or unsafe/malformed SQLite state | Preserve the database, sidecars, and residue. Use observational preflight or restore a verified backup; do not delete suspect files to obtain an empty target. |
-| `migration_required` | Dry-run, migrate, verify in the active direction, then select again. The empty target may already exist. |
-| `parity_mismatch`, `conflict`, `destination_only`, or `unsupported` | Preserve both stores and investigate offline. Selection and migration never overwrite, merge, truncate, or delete to resolve the difference. |
+| `transfer_required` | Dry-run, transfer, verify in the active direction, then select again. The empty target may already exist. |
+| `parity_mismatch`, `conflict`, `destination_only`, or `unsupported` | Preserve both stores and investigate offline. Selection and transfer never overwrite, merge, truncate, or delete to resolve the difference. |
+| `source_invalid` or `destination_invalid` with legacy transcript/database rows | Preserve both stores. Schema-v1 history is not transferable; wait for the supported #478 cutover or restore a genuine canonical v2 source. Do not hand-convert rows. |
 | `coordination_failed` | Let the supported owner finish, stop unsupported direct writers, then retry under a fresh workspace lease. |
 | Startup fails before active-state compare-and-set | Fix readiness, parity, or coordination; the prior backend remains active and there is no fallback shell. |
 | Startup fails after active-state compare-and-set | Fix the later terminal/provider/session issue. The new backend is already authoritative. |
@@ -466,11 +513,11 @@ the next action:
 
 Back up the authoritative main SQLite database. The FTS companion may be
 omitted; if retained, protect it as plaintext transcript data and keep it with
-the matching main-database generation. Migration is conversation-only, not a
+the matching main-database generation. Transfer is conversation-only, not a
 complete workspace backup or a SQLite schema upgrade.
 
 For full failure mappings and interrupted-operation rules, use
-[Conversation storage migration recovery](../operations/recovery-and-limitations.md#conversation-storage-migration-recovery),
+[Conversation storage transfer recovery](../operations/recovery-and-limitations.md#conversation-storage-transfer-recovery),
 [Conversation storage selection and activation recovery](../operations/recovery-and-limitations.md#conversation-storage-selection-and-activation-recovery),
 and
 [SQLite conversation-storage recovery](../operations/recovery-and-limitations.md#sqlite-conversation-storage-recovery).
@@ -508,14 +555,14 @@ services = compose_sqlite_conversation_storage(workspace)
 ```
 
 This branch is an application decision to create an empty SQLite destination.
-It never installs a host package, migrates conversations, updates desired or
+It never installs a host package, transfers conversations, updates desired or
 active state, or changes a running runtime. Direct `StoryRuntime(workspace)`
 still defaults to filesystem storage; pass the full `services` bundle
 explicitly when a runtime and memory service must share SQLite provenance.
 Exact imports, signatures, adapter contracts, and injection examples are in the
 [optional SQLite package API](../reference/package-api.md#optional-sqlite-conversation-storage).
-The migration and selection coordinators have separate
-[migration](../reference/package-api.md#conversation-storage-migration-api)
+The transfer and selection coordinators have separate
+[transfer](../reference/package-api.md#conversation-storage-transfer-api)
 and
 [selection APIs](../reference/package-api.md#conversation-storage-selection-api).
 
@@ -529,7 +576,7 @@ adapter-neutral storage bundle and persists a separate per-session derived
 generation under `agent_states/orchestrator_state/conversation_rag/`.
 
 The SQLite FTS companion is only a literal-search hint; it is neither a RAG
-index nor RAG authority. Neither subsystem imports, migrates, validates, or
+index nor RAG authority. Neither subsystem imports, transfers, validates, or
 stores the other's data. RAG status observes the active backend, while a
 confirmed RAG rebuild or cited search may first complete a separately
 configured next-shell storage activation. No SQLite-specific RAG integration,

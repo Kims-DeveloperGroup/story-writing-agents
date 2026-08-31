@@ -28,9 +28,9 @@ workspace/
 │   │   ├── cli_context.json                                   [lazy default session]
 │   │   ├── conversation_defaults/<session_id>.json             [lazy default conversation]
 │   │   ├── provider_route_generations.json                     [lazy route freshness]
-│   │   ├── conversation_storage_migrations/
-│   │   │   ├── filesystem-to-sqlite.json                       [lazy retained migration checkpoint]
-│   │   │   └── sqlite-to-filesystem.json                       [lazy retained migration checkpoint]
+│   │   ├── conversation_storage_transfers/
+│   │   │   ├── filesystem-to-sqlite.json                       [lazy retained transfer checkpoint]
+│   │   │   └── sqlite-to-filesystem.json                       [lazy retained transfer checkpoint]
 │   │   ├── provider_sessions/.access-claims.lock               [lazy guard]
 │   │   ├── provider_sessions/.antigravity/                      [lazy retained provider state]
 │   │   ├── provider_sessions/<session_id>.json                 [lazy manifest]
@@ -78,7 +78,11 @@ workspace/
 │   └── <session_id>/
 │       ├── <debate_id>.{state.json,jsonl,result.json}
 │       ├── <debate_id>.context.json                            [lazy debate context]
-│       └── interactive/conversations/<conversation_id>/{metadata.json,transcript.jsonl}
+│       └── interactive/conversations/<conversation_id>/
+│           ├── metadata.json
+│           ├── collaboration-history.jsonl                     [lazy canonical v2 history]
+│           ├── .collaboration-history.lock                     [lazy excluded safe lock]
+│           └── transcript.jsonl                                [legacy active-v1 residue; rejected by archive/transfer]
 └── manuscript/<part-id>/<safe-relative-markdown-path>           [lazy create-only output]
 ```
 
@@ -92,7 +96,7 @@ trusted. Staging residue is non-authoritative, never catalog-listed, retained
 after successful and failed publication, and may grow. Only exact JSON entries
 under `transactions/` are recovery journals. The three permanent lock names are
 hard links to one regular inode with link count three; partial or old two-link
-state is invalid and is not migrated or reconstructed. See
+state is invalid and is not converted or reconstructed. See
 [Canonical writing artifacts](../writing-artifacts.md).
 
 <a id="optional-sqlite-conversation-storage"></a>
@@ -103,7 +107,7 @@ The fixed `discussion_logs/conversation_storage.sqlite3` file is the optional
 authoritative SQLite conversation store. Importing its direct module creates
 nothing and does not load `sqlite3`; the standard-library module is loaded and
 checked only when a probe, preflight, provisioning, composition, adapter,
-selection, startup, or migration operation requests it. `story init` creates
+selection, startup, or transfer operation requests it. `story init` creates
 neither this database nor an active-state marker.
 
 For a plain-language walkthrough before these normative storage details, see
@@ -152,12 +156,15 @@ coordinator guard; the guard is not a database, desired setting, or activation
 record. The filesystem conversation paths can coexist with the SQLite file,
 but only the active backend is authoritative for the shell. There is no
 automatic synchronization or shared authority. Explicit
-`story storage migrate` can copy the active canonical store into the other
+`story storage transfer` can copy the active canonical store into the other
 already-ready store, and `story storage verify` can compare them; neither
 command changes desired or active state.
 
-The main database is authoritative. It includes required normalized subject
-and transcript-search values plus a lexical generation. The fixed private
+The main schema-v2 database contains catalog metadata, the still-active v1
+`conversation_events` channel, and canonical v2 `collaboration_events`. For
+archive/transfer, only catalog metadata plus `collaboration_events` is
+authoritative; any legacy event row fails closed before mutation. Until #478
+and #479, the selected shell service still uses the v1 channel. The fixed private
 `discussion_logs/.conversation_storage_fts5.sqlite3` companion is a derived,
 owner-only FTS5 hint resource. It can appear after provisioning or an effective
 SQLite mutation, but absence, staleness, an unavailable FTS5 capability, or an
@@ -184,20 +191,26 @@ active Python interpreter's functional SQLite capability, not a standalone
 MySQL adapter, SQLite-specific RAG coupling, or FTS-dependent result behavior.
 Optional RAG can consume the active complete adapter-neutral bundle while
 keeping its own derived generation separate. Explicit
-migration remains a separate provider-free command/direct API over two
+transfer remains a separate provider-free command/direct API over two
 already-ready stores; it never provisions or activates one. See the
 [exact selection workflow](../cli.md#conversation-storage-selection),
 [direct package API](../package-api.md#optional-sqlite-conversation-storage)
 and [recovery guidance](../../operations/recovery-and-limitations.md#sqlite-conversation-storage-recovery).
 
-<a id="conversation-migration-checkpoints"></a>
+Canonical archive wire schema is exactly `2`, while embedded catalog metadata
+and transfer reports/checkpoints each retain their own schema version `1`.
+These values describe different records. Archive schema 1, filesystem
+`transcript.jsonl`, and SQLite `conversation_events` rows are not upgrade
+inputs: transfer rejects them without rewriting either store.
 
-### Conversation migration checkpoints
+<a id="conversation-transfer-checkpoints"></a>
 
-Migration owns one retained checkpoint per direction:
+### Conversation transfer checkpoints
+
+Transfer owns one retained checkpoint per direction:
 
 ```text
-agent_states/orchestrator_state/conversation_storage_migrations/
+agent_states/orchestrator_state/conversation_storage_transfers/
 ├── filesystem-to-sqlite.json
 └── sqlite-to-filesystem.json
 ```
@@ -239,21 +252,21 @@ regular, singly linked stable file; duplicate/extra/missing fields, malformed or
 noncanonical values, another direction, an unsupported version, symlinks, hard
 links, replacements, and oversized state fail closed.
 
-For SQLite-to-filesystem migration, a checkpoint advances only after one
+For SQLite-to-filesystem transfer, a checkpoint advances only after one
 complete exact conversation is present and has been reread. On resume, fresh
 source/destination exports must prove every recorded identity still matches.
 Filesystem-to-SQLite uses one complete transaction and publishes its terminal
-checkpoint only after final parity. A successful migration retains the complete
-terminal checkpoint; a later safe migration with a changed source fingerprint
+checkpoint only after final parity. A successful transfer retains the complete
+terminal checkpoint; a later safe transfer with a changed source fingerprint
 replaces it only after an otherwise unblocked plan. Do not edit or delete it to
 force recovery.
 
 Dry-run reads and validates the applicable checkpoint when planning reaches
 that phase but never writes it. Verify neither reads nor writes a checkpoint.
 Both may create the empty `config/.conversation_storage.lock` while acquiring
-their outer coordinator lease. Migration never changes
+their outer coordinator lease. Transfer never changes
 `config/conversation_storage_state.json`, other settings, or backend activation.
-See [migration recovery](../../operations/recovery-and-limitations.md#conversation-storage-migration-recovery).
+See [transfer recovery](../../operations/recovery-and-limitations.md#conversation-storage-transfer-recovery).
 
 `input_snapshots/` is lazy, internal authorization evidence for nonempty
 explicit-reference operations. Its operation and invocation manifests and
@@ -656,7 +669,7 @@ or remove it while the workspace may be used.
 V1 manifests, `<session_id>.lease.json`, `.lease-claims.lock`, V1
 `cli_context.json` with `selected_session`, and files under
 `conversation_selections/` are detected and rejected with
-`WorkspaceVersionUnsupportedError`. They are not migrated, rewritten, or
+`WorkspaceVersionUnsupportedError`. They are not converted, rewritten, or
 deleted. Preserve them and follow the
 [nondestructive recovery procedure](../../operations/recovery-and-limitations.md#unsupported-v1-session-data).
 

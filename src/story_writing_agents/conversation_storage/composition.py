@@ -42,7 +42,7 @@ from .contracts import (
     ConversationStorageBackend,
     ConversationStorageComponentBinding,
     ConversationStorageCoordinationError,
-    ConversationStorageMigrationReadiness,
+    ConversationStorageTransferReadiness,
     ConversationStorageMutationLease,
     ConversationStorageProvenance,
     ConversationStorageServices,
@@ -50,18 +50,16 @@ from .contracts import (
 )
 
 
-CONVERSATION_STORAGE_ACTIVATION_STATE_PATH = (
-    "config/conversation_storage_state.json"
-)
-CONVERSATION_STORAGE_MUTATION_GUARD_PATH = (
-    "config/.conversation_storage.lock"
-)
+CONVERSATION_STORAGE_ACTIVATION_STATE_PATH = "config/conversation_storage_state.json"
+CONVERSATION_STORAGE_MUTATION_GUARD_PATH = "config/.conversation_storage.lock"
 
-_ACTIVATION_STATE_FIELDS = frozenset({
-    "schema_version",
-    "backend",
-    "generation",
-})
+_ACTIVATION_STATE_FIELDS = frozenset(
+    {
+        "schema_version",
+        "backend",
+        "generation",
+    }
+)
 _MUTATION_LOCK_RETRY_SECONDS = 0.05
 _FILESYSTEM_MUTATION_TIMEOUT_SECONDS = 30.0
 
@@ -328,7 +326,7 @@ class WorkspaceConversationStorageMutationCoordinator:
     lock or extending its expiry. Every supported storage write must validate
     this lease before mutation. Acquire workspace leases in ascending
     ``workspace_key`` order and before catalog, event-store, archive, database,
-    parity, migration, or activation locks.
+    parity, transfer, or activation locks.
     """
 
     __slots__ = ("_state", "_topology", "_workspace_key")
@@ -633,11 +631,11 @@ def compare_and_set_conversation_storage_activation(
     *,
     lease: ConversationStorageMutationLease,
     expected_generation: int,
-    readiness: ConversationStorageMigrationReadiness,
+    readiness: ConversationStorageTransferReadiness,
 ) -> ConversationStorageActivationOutcome:
     """Activate under a supplied valid lease using expected-generation CAS.
 
-    The caller holds one outer lease across source inspection, migration,
+    The caller holds one outer lease across source inspection, transfer,
     parity, and this operation. Same-backend activation is an unwritten no-op.
     A backend change persists generation ``expected_generation + 1`` through
     contained atomic ``Workspace.write_json`` before returning its outcome.
@@ -649,8 +647,8 @@ def compare_and_set_conversation_storage_activation(
         raise TypeError("expected generation must be an integer")
     if expected_generation < 0:
         raise ValueError("expected generation must not be negative")
-    if type(readiness) is not ConversationStorageMigrationReadiness:
-        raise TypeError("readiness must be a ConversationStorageMigrationReadiness")
+    if type(readiness) is not ConversationStorageTransferReadiness:
+        raise TypeError("readiness must be a ConversationStorageTransferReadiness")
     topology = _WorkspaceTopology.capture(workspace)
     workspace_key = topology.workspace_key
     try:
