@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import inspect
 import pickle
 import tempfile
 import unittest
@@ -166,7 +165,11 @@ class ReferenceReadActionContractTests(unittest.TestCase):
     def test_protocol_is_module_only_and_facades_are_exact(self) -> None:
         self.assertTrue(ReferenceReadInvocation._is_protocol)
         self.assertEqual(
-            tuple(name for name in action_module.__dict__ if name.startswith("ReferenceRead")),
+            tuple(
+                name
+                for name in action_module.__dict__
+                if name.startswith("ReferenceRead")
+            ),
             (
                 "ReferenceReadActionKind",
                 "ReferenceReadRequest",
@@ -185,8 +188,10 @@ class ReferenceReadActionContractTests(unittest.TestCase):
             {"ReferenceReadResult", "ReferenceReadInvocation"}
             & set(artifact_facade.__all__)
         )
-        self.assertTrue(all(name not in story_writing_agents.__all__ for name in public))
-        self.assertEqual(len(story_writing_agents.__all__), 120)
+        self.assertTrue(
+            all(name not in story_writing_agents.__all__ for name in public)
+        )
+        self.assertEqual(len(story_writing_agents.__all__), 104)
 
     def test_contract_module_has_clean_accepted_dependency_direction(self) -> None:
         source = Path(action_module.__file__)
@@ -256,7 +261,9 @@ class ReferenceReadRepositoryTests(unittest.TestCase):
         )
         return authorization, coordinator
 
-    def test_five_artifact_batch_delivers_once_in_order_and_accepts_exactly(self) -> None:
+    def test_five_artifact_batch_delivers_once_in_order_and_accepts_exactly(
+        self,
+    ) -> None:
         authorization, invocation = self.invocation("complete", "invoke", 1)
         capability_id = invocation._capability.capability_id
         self.assertNotIn(capability_id, repr(invocation.request))
@@ -297,9 +304,10 @@ class ReferenceReadRepositoryTests(unittest.TestCase):
     def test_prior_delivery_and_one_use_transitions_are_exact(self) -> None:
         authorization, invocation = self.invocation("transitions", "invoke", 1)
         for method in (invocation.record_result_received, invocation.accept):
-            with self.subTest(method=method.__name__), self.assertRaises(
-                ReferenceAuthorizationError
-            ) as raised:
+            with (
+                self.subTest(method=method.__name__),
+                self.assertRaises(ReferenceAuthorizationError) as raised,
+            ):
                 method()
             self.assertIs(
                 raised.exception.code,
@@ -330,7 +338,9 @@ class ReferenceReadRepositoryTests(unittest.TestCase):
             outcome=ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE,
         )
 
-    def test_wrong_partial_reordered_broadened_and_foreign_actions_terminate(self) -> None:
+    def test_wrong_partial_reordered_broadened_and_foreign_actions_terminate(
+        self,
+    ) -> None:
         variants = (
             ("partial", self.references[:-1], None),
             ("reordered", tuple(reversed(self.references)), None),
@@ -356,7 +366,9 @@ class ReferenceReadRepositoryTests(unittest.TestCase):
                 authorization, invocation = self.invocation(name, "invoke", 1)
                 action = ReferenceReadAction(
                     ReferenceReadActionKind.READ_WRITING_ARTIFACTS,
-                    invocation.request.correlation if correlation is None else correlation,
+                    invocation.request.correlation
+                    if correlation is None
+                    else correlation,
                     references,
                 )
                 with self.assertRaises(ReferenceAuthorizationError) as raised:
@@ -481,9 +493,9 @@ class ReferenceReadRepositoryTests(unittest.TestCase):
                             invocation.accept()
                     self.assertIs(raised.exception, unexpected)
                 else:
-                    self.root.joinpath(
-                        "core_documents/global_outline.md"
-                    ).write_bytes(b"CHANGED")
+                    self.root.joinpath("core_documents/global_outline.md").write_bytes(
+                        b"CHANGED"
+                    )
                     with self.assertRaises(ReferenceAuthorizationError) as raised:
                         invocation.accept()
                     self.assertIs(
@@ -495,8 +507,7 @@ class ReferenceReadRepositoryTests(unittest.TestCase):
                 assert history is not None
                 self.assertEqual(
                     tuple(
-                        event.invocation_state
-                        for event in history.invocation_events[0]
+                        event.invocation_state for event in history.invocation_events[0]
                     ),
                     (
                         ReferenceInvocationState.AUTHORIZED,

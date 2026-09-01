@@ -15,7 +15,7 @@ from typing import Any, Callable, Iterable
 SQLITE_CONVERSATION_SEARCH_INDEX_PATH = (
     "discussion_logs/.conversation_storage_fts5.sqlite3"
 )
-SQLITE_CONVERSATION_SEARCH_INDEX_SCHEMA_VERSION = 1
+SQLITE_CONVERSATION_SEARCH_INDEX_SCHEMA_VERSION = 2
 
 _APPLICATION_ID = 0x53574654
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
@@ -33,7 +33,7 @@ CREATE TABLE conversation_search_index_identity (
     tokenizer TEXT NOT NULL,
     runtime_identity TEXT NOT NULL,
     CHECK (typeof(singleton) = 'integer' AND singleton = 1),
-    CHECK (typeof(schema_version) = 'integer' AND schema_version = 1),
+    CHECK (typeof(schema_version) = 'integer' AND schema_version = 2),
     CHECK (typeof(source_generation) = 'integer' AND source_generation >= 0),
     CHECK (typeof(normalization_version) = 'integer' AND normalization_version >= 1),
     CHECK (typeof(tokenizer) = 'text'),
@@ -41,10 +41,14 @@ CREATE TABLE conversation_search_index_identity (
 )
 """.strip()
 _CREATE_FTS_SQL = f"""
-CREATE VIRTUAL TABLE conversation_events_fts USING fts5(
+CREATE VIRTUAL TABLE collaboration_history_fields_fts USING fts5(
     session_id UNINDEXED,
     conversation_id UNINDEXED,
+    event_id UNINDEXED,
     sequence UNINDEXED,
+    field_key UNINDEXED,
+    assignment_ordinal UNINDEXED,
+    input_ordinal UNINDEXED,
     searchable_content,
     tokenize='{_TOKENIZER}'
 )
@@ -100,17 +104,31 @@ def _positive_integer(value: int, *, label: str) -> int:
 
 @dataclass(frozen=True, slots=True)
 class SQLiteConversationSearchIndexDocument:
-    """One canonical visible event projection supplied by the SQLite adapter."""
+    """One exact canonical readable-field projection supplied by the adapter."""
 
     session_id: str
     conversation_id: str
+    event_id: str
     sequence: int
+    field_key: str
+    assignment_ordinal: int | None
+    input_ordinal: int | None
     searchable_content: str
 
     def __post_init__(self) -> None:
         _identifier(self.session_id, label="session ID")
         _identifier(self.conversation_id, label="conversation ID")
+        _identifier(self.event_id, label="event ID")
         _positive_integer(self.sequence, label="event sequence")
+        field_key = _strict_utf8(self.field_key, label="readable field key")
+        if not field_key:
+            raise ValueError("readable field key must not be empty")
+        for ordinal, label in (
+            (self.assignment_ordinal, "assignment ordinal"),
+            (self.input_ordinal, "input ordinal"),
+        ):
+            if ordinal is not None:
+                _non_negative_integer(ordinal, label=label)
         _strict_utf8(
             self.searchable_content,
             label="searchable conversation event content",
@@ -156,7 +174,7 @@ class SQLiteConversationSearchIndex:
         conversation_ids: tuple[str, ...],
         normalized_query: str,
         maximum: int,
-    ) -> frozenset[tuple[str, int]]:
+    ) -> frozenset[tuple[str, str, int, str, int | None, int | None]]:
         """Return valid same-generation candidate coordinates.
 
         Missing, stale, busy, unsafe, unavailable, or malformed state raises
@@ -202,25 +220,42 @@ class SQLiteConversationSearchIndex:
             placeholders = ", ".join("?" for _ in conversations)
             fts_query = '"' + query.replace('"', '""') + '"'
             rows = connection.execute(
-                "SELECT conversation_id, sequence "
-                "FROM conversation_events_fts "
-                "WHERE conversation_events_fts MATCH ? AND session_id = ? "
+                "SELECT conversation_id, event_id, sequence, field_key, "
+                "assignment_ordinal, input_ordinal "
+                "FROM collaboration_history_fields_fts "
+                "WHERE collaboration_history_fields_fts MATCH ? AND session_id = ? "
                 f"AND conversation_id IN ({placeholders}) "
-                "ORDER BY conversation_id, sequence LIMIT ?",
+                "ORDER BY conversation_id, sequence, field_key, "
+                "assignment_ordinal, input_ordinal LIMIT ?",
                 (fts_query, session, *conversations, limit),
             ).fetchall()
-            result: set[tuple[str, int]] = set()
+            result: set[tuple[str, str, int, str, int | None, int | None]] = set()
             for row in rows:
                 if (
                     type(row) is not tuple
-                    or len(row) != 2
+                    or len(row) != 6
                     or type(row[0]) is not str
-                    or type(row[1]) is not int
+                    or type(row[1]) is not str
+                    or type(row[2]) is not int
+                    or type(row[3]) is not str
+                    or type(row[4]) is not int
+                    or type(row[5]) is not int
                     or row[0] not in conversations
-                    or row[1] < 1
+                    or row[2] < 1
+                    or row[4] < -1
+                    or row[5] < -1
                 ):
                     raise SQLiteConversationSearchIndexError()
-                result.add((row[0], row[1]))
+                result.add(
+                    (
+                        row[0],
+                        row[1],
+                        row[2],
+                        row[3],
+                        None if row[4] == -1 else row[4],
+                        None if row[5] == -1 else row[5],
+                    )
+                )
             connection.execute("COMMIT")
         except (KeyboardInterrupt, SystemExit):
             raise
@@ -482,7 +517,7 @@ class SQLiteConversationSearchIndex:
                 runtime=runtime,
                 normalization_version=self._normalization_version,
             )
-            connection.execute("DELETE FROM conversation_events_fts")
+            connection.execute("DELETE FROM collaboration_history_fields_fts")
             _insert_documents(connection, documents)
             connection.execute(
                 "UPDATE conversation_search_index_identity SET "
@@ -497,7 +532,8 @@ class SQLiteConversationSearchIndex:
             )
             _reject_duplicate_documents(connection)
             connection.execute(
-                "INSERT INTO conversation_events_fts(conversation_events_fts) "
+                "INSERT INTO collaboration_history_fields_fts"
+                "(collaboration_history_fields_fts) "
                 "VALUES('integrity-check')"
             )
             try:
@@ -547,18 +583,20 @@ def _runtime() -> _Runtime:
         connection.execute(_CREATE_IDENTITY_SQL)
         connection.execute(_CREATE_FTS_SQL)
         connection.execute(
-            "INSERT INTO conversation_events_fts "
-            "(session_id, conversation_id, sequence, searchable_content) "
-            "VALUES ('probe', 'probe', 1, 'capability probe')"
+            "INSERT INTO collaboration_history_fields_fts "
+            "(session_id, conversation_id, event_id, sequence, field_key, "
+            "assignment_ordinal, input_ordinal, searchable_content) "
+            "VALUES ('probe', 'probe', 'probe', 1, 'message.content', -1, -1, "
+            "'capability probe')"
         )
         probe = connection.execute(
-            "SELECT sequence FROM conversation_events_fts "
-            "WHERE conversation_events_fts MATCH ?",
+            "SELECT sequence FROM collaboration_history_fields_fts "
+            "WHERE collaboration_history_fields_fts MATCH ?",
             ('"capability probe"',),
         ).fetchall()
         if probe != [(1,)]:
             raise SQLiteConversationSearchIndexError()
-        connection.execute("DROP TABLE conversation_events_fts")
+        connection.execute("DROP TABLE collaboration_history_fields_fts")
         connection.execute(_CREATE_FTS_SQL)
         manifest = _schema_manifest(connection)
         runtime_identity = f"sqlite-{row[0]}:{_TOKENIZER}"
@@ -654,13 +692,20 @@ def _insert_documents(
                 "index documents must be SQLiteConversationSearchIndexDocument"
             )
         connection.execute(
-            "INSERT INTO conversation_events_fts "
-            "(session_id, conversation_id, sequence, searchable_content) "
-            "VALUES (?, ?, ?, ?)",
+            "INSERT INTO collaboration_history_fields_fts "
+            "(session_id, conversation_id, event_id, sequence, field_key, "
+            "assignment_ordinal, input_ordinal, searchable_content) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 document.session_id,
                 document.conversation_id,
+                document.event_id,
                 document.sequence,
+                document.field_key,
+                -1
+                if document.assignment_ordinal is None
+                else document.assignment_ordinal,
+                -1 if document.input_ordinal is None else document.input_ordinal,
                 document.searchable_content,
             ),
         )
@@ -670,8 +715,9 @@ def _reject_duplicate_documents(connection: Any) -> None:
     """Reject duplicate authoritative coordinates in one derived generation."""
 
     row = connection.execute(
-        "SELECT 1 FROM conversation_events_fts "
-        "GROUP BY session_id, conversation_id, sequence "
+        "SELECT 1 FROM collaboration_history_fields_fts "
+        "GROUP BY session_id, conversation_id, event_id, sequence, field_key, "
+        "assignment_ordinal, input_ordinal "
         "HAVING COUNT(*) != 1 LIMIT 1"
     ).fetchone()
     if row is not None:

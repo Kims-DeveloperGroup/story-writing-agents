@@ -1,15 +1,14 @@
 # Terminal display safety
 
-> **Availability:** these rules protect shell live editing, migrated semantic
-> output, established package-supported terminal records, and the unlisted
-> supplied-text ranged viewer. Provider-bound `$`/`$$` editing now invokes that
-> private viewer through the controller, without adding a standalone command or
-> public API. Bare `/exchanges` separately hosts the pinned independent JSONL
+> **Availability:** these rules protect current management-shell live editing,
+> semantic output, package-supported terminal records, and retained generic
+> composition/ranged-viewer components. Main input has no provider-bound span,
+> so `$`/`$$` does not invoke the private artifact picker/viewer. Bare
+> `/exchanges` separately hosts the pinned independent JSONL
 > renderer through an unlisted generic borrowed-host seam while Story remains
 > sole terminal owner. #274 also adds an unlisted mode-gated accepted-input projection
-> seam, and #275 uses it for accepted advisory and consensus prompts plus safe
-> result-defining request context. These rules do not make scrollback or process
-> memory private.
+> seam. Its former advisory/consensus controller consumers are historical; these
+> rules do not make scrollback or process memory private.
 
 Key terms: **TTY guard**—check for interactive streams; **typed error**—trusted
 public code instead of exception prose; **display escaping**—showing a control
@@ -346,10 +345,10 @@ last-started mapping.
 
 Conversation-scope deduplication is also controller-owned. Before each attached
 prompt, the controller freshly validates any current focus against the complete
-catalog, then compares one loop-local tuple of session ID, visible handle,
-subject, and sticky agent. It caches the tuple only after the semantic write
-succeeds, drops it on detach, and therefore never treats a failed write as
-presented; reattachment also presents again. The terminal owns no comparison
+catalog, then compares one loop-local tuple of session ID, visible handle, and
+subject. It caches the tuple only after the semantic write succeeds, drops it
+on detach, and therefore never treats a failed write as presented; reattachment
+also presents again. The terminal owns no comparison
 snapshot, catalog state, payload, token, or storage; its existing scope
 operation remains a stateless one-call render.
 
@@ -594,21 +593,16 @@ so its frame remains active and no history entry exists yet. See the exact
 [composition](../reference/interactive-terminal.md#composition-live-suggestions)
 tokens.
 
-Once that cleanup and restoration have completed, #275 uses the accepted-input
-seam to emit one new persistent semantic record for validated ordinary,
-`/say`, and routed advisory text or inline, fresh, and committed composer
-consensus prompts. That record is outside the erased frame and uses the
-existing progress-aware writer before coroutine construction or progress. It
-therefore remains visible through later success, handled provider failure,
-cancellation, deadlock, or post-acceptance interrupt. The seam does not retain
-or recover the editable frame. `FALLBACK` and callback construction remain
-silent so already visible ordinary input is not duplicated.
+The historical schema-v1 accepted-input seam emitted persistent semantic
+records only after cleanup. Issue #478 removes every public advisory/routing/
+composition consumer of that seam. Current ordinary or routed input instead
+renders the fixed unavailable error after cleanup and starts no coroutine,
+progress stream, or transcript append. The generic semantic record components
+remain available for the later structured workflow.
 
-Separate ordinary semantic request records identify safe context without
-reprinting a raw submitted snapshot: consensus output and optional draft-source
-paths, normalized search and filtered-list queries with scope, and resolved
-transcript handle/start/count. They are written before the corresponding later
-work as applicable and remain visible through its handled outcomes.
+Retained local read records identify normalized search/filtered-list scope and
+resolved transcript handle/start/count without reprinting a raw submitted
+snapshot. They are written before the corresponding local read as applicable.
 
 Main palette projection, filtering, highlight, replacement, snapshot restore,
 and dismissal call no parser, story provider, runtime, filesystem, persistence,

@@ -161,7 +161,7 @@ requires the already complete triple.
 
 Partial one- or two-link state, an old two-link development lock, a divergent
 inode, an extra hard link, or any creation/link/flush failure never enters
-protected work and is preserved without cleanup, reconstruction, or migration.
+protected work and is preserved without cleanup, reconstruction, or conversion.
 The triple, link count, open descriptor, directory ancestry, and workspace root
 are reverified around mutations. These hard links belong only to lock identity;
 canonical artifacts remain one-link regular files.
@@ -234,7 +234,7 @@ published create-only with exact path identities and contiguous sequences.
 Delivery evidence is written before the transient content is returned. A
 partial, replaced, aliased, malformed, noncanonical, duplicated, gapped, or
 invalidly transitioned evidence tree is corrupt and is neither repaired nor
-rewritten. Schema-v1 evidence cannot authorize, resume, or be migrated into a
+rewritten. Schema-v1 evidence cannot authorize, resume, or be converted into a
 new operation. Never edit `writing_artifacts/input_snapshots/`; it is repository
 state, not a canonical artifact directory.
 
@@ -436,24 +436,90 @@ sibling owners toward exchange retention. Their sizes do not consume the
 the [exact topology](../reference/configuration/session-storage.md#agent-exchange-storage),
 and [privacy](privacy-and-provider.md#agent-exchange-privacy).
 
-## Conversation transcript safety
+## Unsupported transcript sentinel
 
-Transcript reads and appends for the same workspace, session, and conversation
-share a weakly retained process-wide lock. Different conversations are not
-serialized together. An append validates the complete old transcript, then
-atomically replaces the complete file; readers observe the old or complete new
-version, not a partial appended line.
+The active filesystem schema-v2 owner treats any `transcript.jsonl` below an
+addressed catalog conversation as an unsupported sentinel. It detects that
+file before append/read mutation and preserves it unchanged. A symlink or
+unsafe owning path also fails closed. #454 separately owns a future
+whole-workspace rejection; this boundary checks only the conversation being
+opened.
 
-The event-store adapter does not acquire or verify story-session access. A
-caller that permits multiple processes must acquire the session's V2 access
-claim before same-session writes. The persisted claim and claim guard provide
-cross-process exclusion; the in-process transcript lock alone is insufficient.
+<a id="schema-v2-collaboration-history-safety"></a>
 
-After catalog identity succeeds, a missing transcript is valid empty history.
-An existing empty file, malformed JSONL, invalid sequence or pairing, or
-path-mismatched record raises `WorkspaceFormatError`. Symlinks raise
-`WorkspaceSecurityError`. Exact event rules are in
-[Conversation transcripts](../reference/conversation-transcripts.md).
+## Schema-v2 collaboration-history safety
+
+`FilesystemCollaborationEventStore` is a direct-module-only concrete adapter
+placed behind the selected filesystem service bundle. It is not exported
+through a package facade. It owns these siblings below an existing catalog
+conversation:
+
+```text
+collaboration-history.jsonl
+.collaboration-history.lock
+```
+
+`transcript.jsonl` is rejected as described above. Construction and an
+absent-history read create no v2 storage. Present reads and appends verify
+catalog identity, use the workspace's contained no-symlink path checks, and
+hold both a weak per-history process lock and a blocking POSIX exclusive
+advisory lock. A present guard must remain the same regular non-symlink file
+after open. Unsupported safe-open, advisory-lock, or directory-fsync primitives
+fail closed rather than weakening the operation.
+
+The history must be strict canonical schema-v2 JSONL: one exact encoded event
+per line and exactly one final LF. The adapter validates every record's path
+identity, complete batch metadata, contiguous sequence, unique IDs, digest,
+state transition, correlation, budget, and co-batch closure before returning a
+read or considering an append. A present empty file, malformed or noncanonical
+JSON, invalid UTF-8, schema-v1 record, partial batch, or invalid complete
+history raises `WorkspaceFormatError`. `append_batch()` maps that stored
+corruption to `CollaborationAppendError(CORRUPT_HISTORY)`; neither path mutates
+the rejected bytes.
+
+Append publication is one complete-file replacement:
+
+1. validate the locked current history and candidate;
+2. assign contiguous sequence/batch metadata and canonical UTC timestamps;
+3. write the complete canonical image to a same-directory mode-`0600`
+   temporary file;
+4. flush and file-fsync it;
+5. atomically replace `collaboration-history.jsonl`; and
+6. mandatorily fsync the parent directory before returning `APPENDED`.
+
+Failure before replace leaves the old history or absence authoritative and
+cleans the temporary file when cleanup remains possible. Failure after replace,
+including directory-fsync, advisory unlock, or descriptor close, is uncertain:
+the call reports an operational error while a complete new history may be
+visible. Retry only the exact same `batch_id` and exact canonical drafts. If
+the replacement is present, validation returns the original sequence range and
+timestamps as `ALREADY_COMMITTED`; do not create a fresh batch merely because
+the first call lacked a receipt.
+
+The history contains plaintext user-visible proposal, message, assignment,
+reply, decision, result, notice, interruption, and state facts. A newly staged
+history file and newly created guard request mode `0600`; existing workspace
+directory ownership and access policy remain the operator's responsibility.
+The adapter is not encryption, authorization, backup, retention, secure erase,
+or permission repair.
+
+Use failures as follows:
+
+| Observation | Safe response |
+| --- | --- |
+| `APPENDED` | Continue from the returned exact receipt and freshly read history. |
+| `ALREADY_COMMITTED` | Treat the exact retry as success; retain its original sequences and timestamps. |
+| Fixed semantic conflict | Preserve history; reread for stale CAS, or repair caller-generated batch/event identity. Never force the rejected candidate. |
+| Operational error before commit is known | Preserve the workspace. If replace might have happened, retry only the exact batch. |
+| `WorkspaceFormatError` or `corrupt_history` | Stop normal appends, preserve the exact bytes, and restore only a trusted complete schema-v2 history through an owning future recovery/transfer workflow. |
+| Unsafe lock/history path | Stop writers and inspect the containing workspace with trusted local tools. Do not follow, replace, or repair an alias in place. |
+
+Do not hand-edit, pretty-print, truncate, combine, or copy unsupported
+transcript bytes into this file. Durable confirmation and projected
+next action remain evidence only; reading them never recreates a provider,
+workspace lease, Git capability, credential, or permission to repeat work. See
+[Structured collaboration history](../reference/collaboration-history.md#direct-filesystem-storage-and-retry)
+and the [persistence boundary](../design/persistence.md#structured-collaboration-history-persistence).
 
 <a id="conversation-archive-filesystem-safety"></a>
 
@@ -471,26 +537,38 @@ later caller-root mutation cannot redirect root A transfer into root B.
 
 This archive-owned topology is independent of composed-service provenance and
 SQLite's pinned database owner. The caller must stop or otherwise coordinate
-ordinary catalog and transcript writers for the complete operation: those
+ordinary catalog and history writers for the complete operation: those
 ordinary adapters do not acquire the archive lease, and the lease is not an
 authorization decision.
 
+The archive scans only canonical `metadata.json` and, when nonempty,
+`collaboration-history.jsonl`. It validates but excludes the safe
+`.collaboration-history.lock`. Any `transcript.jsonl` anywhere in the canonical
+conversation namespace rejects export or import before destination mutation;
+legacy bytes are never converted. Import performs a complete preflight, then
+publishes create-only metadata and, for nonempty history, one complete history
+file. An interruption may leave exact metadata-only residue, which the same
+canonical payload can complete; divergent or unsafe residue remains and fails
+closed.
+
 Export strictly enumerates only the authoritative
 `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/`
-namespace. Metadata is required; a transcript is absent for empty history and
-must be a nonempty canonical JSONL file when present. IDs, metadata, complete
-event history, pairing, and path correlation are revalidated through addressed
-`FilesystemConversationCatalog.get()` and
-`FilesystemConversationEventStore.read()` calls. No catalog-wide list is used.
+namespace. `metadata.json` is required. `collaboration-history.jsonl` is absent
+for an empty history and must contain nonempty canonical JSONL when present.
+IDs, metadata, complete collaboration history, pairing, and path correlation
+are revalidated through addressed `FilesystemConversationCatalog.get()` and
+`FilesystemCollaborationEventStore.read()` calls. No catalog-wide list is used.
 
 Every scanned directory must remain a real directory. Every included file must
 be regular and singly linked. Symlinks, hard links, nonregular files, malformed
-or empty present transcripts, orphan/unknown conversation artifacts, invalid
-identifiers, and unexpected interactive layout fail closed. Safe regular
-non-session root files and safe regular noninteractive session siblings are
-excluded without reading their content, but each consumes the one-million-entry
-inventory budget; a safe session without `interactive` is skipped. An unsafe
-excluded entry fails rather than being followed or silently ignored. The normal
+or empty present collaboration histories, orphan/unknown conversation
+artifacts, invalid identifiers, and unexpected interactive layout fail closed.
+Every legacy `transcript.jsonl` is rejected before destination mutation; it is
+never interpreted as collaboration history. Safe regular non-session root files
+and safe regular noninteractive session siblings are excluded without reading
+their content, but each consumes the one-million-entry inventory budget; a safe
+session without `interactive` is skipped. An unsafe excluded entry fails rather
+than being followed or silently ignored. The normal
 `discussion_logs/.gitkeep` sentinel must be a singly linked regular file whose
 zero size is verified from metadata; its bytes are not read.
 
@@ -504,14 +582,16 @@ scan.
 
 Import first canonicalizes and fully validates the bounded archive in memory.
 It then scans the complete destination namespace, classifies the full
-destination-plus-payload union, builds exact planned metadata/transcript bytes,
-projects paths, descendant entries, included bytes, logical text, and canonical
-wire, and checks every planned target and ancestor path before writing
-anything. A late divergent identity or projected bound failure therefore
-prevents an earlier absent identity from being installed. Missing state uses
-the existing create-only atomic workspace writers, metadata first and a
-transcript only for nonempty history. Exact domain-value collisions are
-accepted; divergent or unsafe collisions are preserved and rejected.
+destination-plus-payload union, builds exact planned metadata and canonical
+collaboration-history bytes, projects paths, descendant entries, included
+bytes, logical text, and canonical wire, and checks every planned target and
+ancestor path before writing anything. A late divergent identity or projected
+bound failure therefore prevents an earlier absent identity from being
+installed. Missing state is published as complete create-only files:
+`metadata.json` first, then `collaboration-history.jsonl` only when the history
+is nonempty. An empty history is represented by metadata alone; a present empty
+history file is invalid. Exact domain-value collisions are accepted; divergent
+or unsafe collisions are preserved and rejected.
 
 The lease and containing path are revalidated around each installation. A
 complete destination rescan must then match the preflight inventory plus the
@@ -521,13 +601,19 @@ complete records byte-for-byte. A post-preflight exact target collision is
 accepted only after an addressed domain reread; a divergent collision or
 unrelated post-write mutation is preserved and reported without rollback.
 
-Operational failure may leave canonical directories, exact metadata, or
-complete exact earlier conversations. The same canonical payload can resume
-recognized metadata-first state under a fresh correct lease after the
+Operational failure may leave canonical directories, exact metadata without
+its nonempty history, or complete exact earlier conversations. The same
+canonical payload can resume that recognized inactive metadata-only residue
+and publish its one complete history file under a fresh correct lease after the
 destination is quiescent. Unknown artifacts, divergence, unsafe topology, or a
 post-preflight change instead fail closed; the adapter performs no cleanup or
-automatic retry. Path revalidation narrows but cannot eliminate a hostile
-same-user race between the last check and a native filesystem call.
+automatic retry. After each addressed conversation has been published, import
+rereads its exact metadata and complete collaboration history before invoking
+the durable-progress callback used for a transfer checkpoint. Callback failure
+stops the import but does not roll back complete create-only files. Neither the
+archive import nor its callback activates a backend. Path revalidation narrows
+but cannot eliminate a hostile same-user race between the last check and a
+native filesystem call.
 
 Archive errors are content-free and never expose the rejected path or bytes.
 Exact values, bounds, exclusions, statuses, and error types are in
@@ -552,7 +638,7 @@ The composed filesystem catalog's create, rename, archive, and unarchive plus
 the composed event store's append borrow this same coordinator. Their reads
 remain observational. Direct standalone filesystem adapters retain their
 uncoordinated compatibility behavior and therefore do not participate in
-selection, startup, or migration safety unless their caller stops or otherwise
+selection, startup, or transfer safety unless their caller stops or otherwise
 coordinates them.
 
 A separately constructed
@@ -569,15 +655,15 @@ creating an operation workspace or performing filesystem I/O; a matching call
 reads, revalidates its lease, and publishes only within the captured root.
 Caller-root reassignment during a load or compare-and-set therefore cannot
 redirect its read or write. This path provenance is not an inode-pinned
-snapshot or a transaction with catalog, event, migration, or SQLite work.
+snapshot or a transaction with catalog, event, transfer, or SQLite work.
 SQLite keeps its separate already-pinned database owner. See the
 [composition API](../reference/package-api.md#conversation-storage-composition).
 
-<a id="conversation-storage-migration-safety"></a>
+<a id="conversation-storage-transfer-safety"></a>
 
-## Conversation storage migration safety
+## Conversation storage transfer safety
 
-The migration coordinator captures one canonical workspace root and acquires
+The transfer coordinator captures one canonical workspace root and acquires
 one outer `WorkspaceConversationStorageMutationCoordinator` lease for the
 complete operation. That lease covers activation/readiness checks, fresh
 canonical exports, planning, all destination work, checkpoint publication, and
@@ -590,11 +676,11 @@ workflows create no conversation rows/files or checkpoint.
 The coordinator serializes every supported filesystem/SQLite writer that uses
 the same guard. Direct low-level filesystem catalog/event-store writers do not
 acquire it automatically, and external database/file editors do not participate
-at all. Stop or otherwise coordinate those writers before migration. The guard
+at all. Stop or otherwise coordinate those writers before transfer. The guard
 is advisory coordination, not caller authorization, a hostile-process defense,
 or a transaction spanning both stores.
 
-Migration reads each per-direction checkpoint through a bounded no-follow file
+Transfer reads each per-direction checkpoint through a bounded no-follow file
 descriptor and requires the fixed name and descriptor to remain one regular,
 singly linked file with stable identity and size. Strict UTF-8 JSON parsing
 rejects duplicate, missing, extra, noncanonical, oversized, wrong-direction,
@@ -606,21 +692,25 @@ lease, and rereads the exact result. Do not edit, relink, or replace a checkpoin
 to manufacture progress.
 
 Filesystem-to-SQLite destination work occurs in one `BEGIN IMMEDIATE`
-transaction, so an uncommitted failure rolls back the complete import.
+transaction, so an uncommitted failure rolls back the complete import. It
+imports exact canonical BLOBs into `collaboration_events`; any legacy
+`conversation_events` row rejects the archive before mutation. FTS is excluded
+from parity, and a best-effort refresh after commit cannot change canonical
+success or failure.
 SQLite-to-filesystem work first preflights the complete destination union, then
 uses create-only archive publication. A progress callback runs only after one
-conversation's metadata and optional transcript are present as one complete
+conversation's metadata and optional history are present as one complete
 canonical value and have been reread exactly. If checkpoint publication fails,
 those complete files remain; the next run accepts them only after fresh source
 and destination exports revalidate the fingerprint, counts, completed
 identities, and exact records.
 
-Conflict, unsupported SQLite values, or destination-only data blocks migration
+Conflict, unsupported SQLite values, or destination-only data blocks transfer
 before checkpoint or destination mutation. Final parity still uses fresh
 canonical exports. A source change can therefore be discovered after a complete
 destination transaction, and a final mismatch can follow create-only
 filesystem publication; neither condition triggers destructive rollback. See
-[migration recovery](recovery-and-limitations.md#conversation-storage-migration-recovery)
+[transfer recovery](recovery-and-limitations.md#conversation-storage-transfer-recovery)
 before retrying.
 
 <a id="conversation-storage-selection-and-startup-safety"></a>
@@ -817,18 +907,18 @@ An ordinary read opens one read-only connection, verifies connection policy,
 executes `BEGIN`, verifies bounded database/schema identity, validates the rows
 requested by one adapter operation, commits, closes, then rechecks the sidecar
 and database identity. This gives one stable snapshot for that operation. It
-does not run the exhaustive preflight scan. `SQLiteConversationSearch` uses one
+does not run the exhaustive preflight scan. `SQLiteCollaborationHistorySearch` uses one
 such main-database transaction for its complete bounded search rather than
 composing several catalog and event-store operations.
 
 ### Derived FTS companion
 
-The direct SQLite search adapter may consult the fixed private
+The SQLite collaboration-history search adapter may consult the fixed private
 `discussion_logs/.conversation_storage_fts5.sqlite3` companion while its main
 snapshot is open. The companion is a derived candidate source, not authority:
-all subject matches come from authoritative normalized subjects, and every
-scanned event is checked by exact normalized literal comparison against the
-main database regardless of its hint. False, missing, or reordered hints
+every candidate is checked by exact normalized literal comparison against a
+closed readable event field in the main database. Subjects never create hits.
+False, missing, or reordered hints
 therefore cannot change hits, citations, snippets, counts, truncation, or
 result order.
 
@@ -974,7 +1064,7 @@ entry must reference the unique newest offset-aware commit instant; an equal
 newest tie or older projection fails closed. Missing, subset, malformed, extra,
 duplicate-reservation, noncanonical, or otherwise mismatched ledger/catalog
 state also fails closed; catalog loss does not free paths and is never rewritten,
-reconstructed, or migrated. See
+reconstructed, or converted. See
 [Canonical writing artifacts](../reference/writing-artifacts.md#provenance-and-work-history).
 
 At exact catalog-before recovery, an on-disk pending commit is exempt only when

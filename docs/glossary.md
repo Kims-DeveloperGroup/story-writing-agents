@@ -1,7 +1,9 @@
 # Glossary
 
 > **Availability:** with a session attached, the shell manages conversations,
-> advisory turns, search, transcripts, and consensus. See [Story sessions](guides/story-sessions.md).
+> search, transcripts, history, and inspection. Public advisory turns and
+> consensus are unavailable in this integration stage. See
+> [Story sessions](guides/story-sessions.md).
 
 ## A–W
 
@@ -47,21 +49,23 @@
   approve one revision; deadlock leaves conflicts at the round limit. See
   [Inspection and recovery](guides/inspection-and-recovery.md).
 
-- **Conversation.** An immutable session-scoped subject and visible history.
-  Its catalog stores identity and status; its event store holds the transcript.
+- **Conversation.** An immutable session-scoped identity with mutable display
+  subject/status and authoritative schema-v2 collaboration history.
   See [Conversation catalog](reference/conversation-catalog.md).
 
-- **Conversation catalog and event store.** The catalog owns identity and discovery;
-  the store owns append, full reads, and bounded context. Archive does not hide
-  transcripts. See [Conversation
+- **Conversation catalog and event store.** The catalog owns identity,
+  display-only subject, and discovery; the active v2 store owns atomic append,
+  full reads, and bounded context. Archive does not hide transcript reads. See [Conversation
   transcripts](reference/conversation-transcripts.md).
 
-- **Conversation citation, page, and cursor.** A citation identifies a record;
-  a page is a bounded read, and its cursor continues that snapshot. See
+- **Conversation citation, page, and cursor.** A citation identifies an exact
+  event, readable field, and code-point range; a page is a bounded read, and
+  its cursor continues only the unchanged snapshot. See
   [Conversation search](reference/conversation-search.md).
 
-- **Conversation search.** Bounded literal matching over current-session
-  subjects and visible messages. Direct `/search` is a provider-free CLI
+- **Conversation search.** Bounded literal matching over closed readable event
+  fields in active current-session conversations. Subjects are display-only
+  metadata. Direct `/search` is a provider-free CLI
   command, not a provider call or tool; agent retrieval reaches memory only
   through runtime authorization. See [Conversation search](reference/conversation-search.md).
 
@@ -69,8 +73,8 @@
   holds. A default session is not necessarily attached. See
   [Session lifecycle](design/session-lifecycle.md).
 
-- **Current focus and agent focus.** Current focus is the conversation used for
-  turns; agent focus is the ordinary advisory responder. Both are process-local.
+- **Current conversation focus.** The process-local conversation selected for
+  management and inspection. It does not select an advisory responder.
 
 - **Default session and default conversation.** Persisted fallbacks used when a
   command omits a session or when session attachment restores conversation
@@ -99,8 +103,10 @@
   is missing, permits provider work, or is intentionally stopped. It is
   independent of process access.
 
-- **Event, turn, and context window.** An event is one record; a complete turn
-  pairs user input with a reply or error. Context is a bounded complete-turn view.
+- **Event, turn, and context window.** An event is one canonical schema-v2
+  collaboration fact. A readable record exposes only its closed public fields.
+  Provider context is an explicit bounded whole-record selection; its default
+  bootstrap contains no history content.
   See [Conversation transcripts](reference/conversation-transcripts.md).
 
 - **Fingerprint and provider thread.** A fingerprint identifies resolved prompt
@@ -118,8 +124,9 @@
   [Session storage](reference/configuration/session-storage.md).
 
 - **Manuscript.** Create-only story output at
-  `manuscript/PART/PATH.md` after consensus/finalization. A revision uses a
-  distinct part-scoped path. See [Consensus runs](guides/consensus-runs.md).
+  `manuscript/PART/PATH.md`. Direct repository components and the future
+  confirmed collaboration workflow preserve distinct part-scoped revision
+  paths. See [Consensus runs](guides/consensus-runs.md).
 
 - **Owner-isolated state.** Concise persisted outcomes supplied only to their
   agent, unlike the blackboard; files remain plaintext. See
@@ -139,8 +146,9 @@
   durable `ready` and process access `held_here`. The query is pure and does not
   acquire access.
 
-- **Runtime.** Local orchestration that validates, coordinates debates and turns,
-  and persists results. See the
+- **Runtime.** The current management/configuration/inspection facade plus
+  retained low-level orchestration components. It has no public provider-turn
+  method in this stage. See the
   [System overview](design/overview.md).
 
 - **Story session.** Durable related work/history spanning debates and

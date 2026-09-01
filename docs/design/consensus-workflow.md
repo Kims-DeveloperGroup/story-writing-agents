@@ -1,8 +1,11 @@
 # Consensus workflow
 
-> **Availability:** `StoryRuntime` implements prompt and supplied-draft debates,
-> optional focused-conversation context, trusted progress, terminal results,
-> and approved artifact commits.
+> **Status:** this is the retained internal consensus-algorithm and historical
+> schema-v1 presentation record. `StoryRuntime`, `RuntimeSession`, the installed
+> CLI, and the current shell expose no public method or command that starts it.
+> Existing persisted debates remain inspectable. Future lead/specialist work
+> must enter through the schema-v2 workflows after their integration, not by
+> restoring the consumer described here.
 
 Key terms: **reservation**—the immutable claim on one debate ID; **snapshot**—
 one bounded conversation window; **revision round**—one complete replacement;
@@ -91,7 +94,10 @@ result and state are then durable before
 context-propagation, workspace, finalization, or artifact failure similarly
 saves its result and state before a typed `FAILED` event.
 
-### Interactive phase presentation
+### Historical interactive phase presentation
+
+The following records how the removed schema-v1 controller presented this
+internal algorithm. It is not current runnable shell behavior.
 
 The interactive shell presents each accepted progress event as one Panel titled
 `Debate phase · DISPLAY_NAME` in one terminal write. Display names are the
@@ -152,10 +158,12 @@ requires a joined cancellation and trusted terminal `INTERRUPTED`; that event ma
 be first after reservation and proves only the durable terminal state. Only
 `STARTED` updates `/inspect last`. An entered cancellation without trusted proof
 is fatal `operation_interrupted`; known attachment state is abandoned before
-ordered cleanup. An interrupted debate cannot resume; `/run` creates a new ID.
-Exact shell records are in the [terminal reference](../reference/interactive-terminal.md#exact-cancellation-records).
+ordered cleanup. An interrupted persisted debate cannot resume through the
+current public surface. There is no replacement command that creates a new
+attempt.
 
-Exact types are in [Runtime API](../reference/runtime-api.md); artifact and
+Retained result/progress types are in the [Package API](../reference/package-api.md);
+artifact and
 sidecar storage are in [Persistence](persistence.md), with the exact artifact
 contract in [Canonical writing artifacts](../reference/writing-artifacts.md);
 operator response is in

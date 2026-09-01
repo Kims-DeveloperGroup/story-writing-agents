@@ -212,23 +212,11 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
         array_source = '[{"b":2,"a":1}, "é"]'
         self.assertEqual(
             format_agent_reply_content(object_source),
-            '{\n'
-            '  "z": "界",\n'
-            '  "a": [\n'
-            '    1,\n'
-            '    true\n'
-            '  ]\n'
-            '}',
+            '{\n  "z": "界",\n  "a": [\n    1,\n    true\n  ]\n}',
         )
         self.assertEqual(
             format_agent_reply_content(array_source),
-            '[\n'
-            '  {\n'
-            '    "b": 2,\n'
-            '    "a": 1\n'
-            '  },\n'
-            '  "é"\n'
-            ']',
+            '[\n  {\n    "b": 2,\n    "a": 1\n  },\n  "é"\n]',
         )
 
         for source in (
@@ -239,7 +227,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
             "Infinity",
             "-Infinity",
             '{"a": 1, "a": 2}',
-            '{not json}',
+            "{not json}",
             'prefix {"a": 1}',
         ):
             with self.subTest(source=source):
@@ -402,10 +390,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
         self.assertEqual(unicode_frame.text, "u\n│ 界界界 \n│ e\u0301 🌊 x\n")
         self.assertNotIn("\n│ \u0301", unicode_frame.text)
         self.assertTrue(
-            all(
-                _physical_width(line) <= 10
-                for line in unicode_frame.text.split("\n")
-            )
+            all(_physical_width(line) <= 10 for line in unicode_frame.text.split("\n"))
         )
 
         json_message = _chat_block_message(
@@ -418,14 +403,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
         )
         self.assertEqual(
             render_plain(json_message, width=20).text,
-            "u\n"
-            "│ {\n"
-            '│   "z": "界",\n'
-            '│   "a": [\n'
-            "│     1,\n"
-            "│     true\n"
-            "│   ]\n"
-            "│ }\n",
+            'u\n│ {\n│   "z": "界",\n│   "a": [\n│     1,\n│     true\n│   ]\n│ }\n',
         )
 
         hostile = _chat_block_message(
@@ -439,9 +417,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
         hostile_plain = render_plain(hostile, width=80).text
         self.assertEqual(
             hostile_plain,
-            "u\\x1b\n"
-            "  m\\u202e\n"
-            "│ safe\\x07 \\x1b]8;;owned\\x07 \\u202e\n",
+            "u\\x1b\n  m\\u202e\n│ safe\\x07 \\x1b]8;;owned\\x07 \\u202e\n",
         )
         self.assertNotIn("\x1b", hostile_plain)
         self.assertNotIn("\x07", hostile_plain)
@@ -460,9 +436,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
         rendered = render_plain(message, width=80).text
         self.assertEqual(
             rendered,
-            "provider [completed]\n"
-            "  literal [completed]\n"
-            "│ body [completed]\n",
+            "provider [completed]\n  literal [completed]\n│ body [completed]\n",
         )
         self.assertEqual(rendered.count("[completed]"), 3)
 
@@ -499,10 +473,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     ansi.text,
-                    f"{sgr}you\x1b[0m\n"
-                    "  metadata\n"
-                    "│ first\n"
-                    "│ second\n",
+                    f"{sgr}you\x1b[0m\n  metadata\n│ first\n│ second\n",
                 )
                 self.assertEqual(strip_decorative_sgr(ansi.text), plain_text)
                 self.assertEqual(plain.text, plain_text)
@@ -520,10 +491,13 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
         wrapped_lines = wrapped.text.split("\n")
         body_index = wrapped_lines.index("│ body")
         self.assertEqual(wrapped_lines[0], "\x1b[1;33mplot\x1b[0m")
-        self.assertEqual(wrapped_lines[1:body_index], [
-            "  Plot & Structure ",
-            "  Architect",
-        ])
+        self.assertEqual(
+            wrapped_lines[1:body_index],
+            [
+                "  Plot & Structure ",
+                "  Architect",
+            ],
+        )
         body = "\n".join(wrapped_lines[body_index:])
         self.assertEqual(body, "│ body\n")
         self.assertNotIn("\x1b", body)
@@ -982,11 +956,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
                     )
                     self.assertEqual(
                         records[-1],
-                        f"{alias}\n"
-                        "│ {\n"
-                        '│   "answer": "界"\n'
-                        "│ }\n"
-                        "\n",
+                        f'{alias}\n│ {{\n│   "answer": "界"\n│ }}\n\n',
                     )
 
         self.assertEqual(render.call_count, 4)
@@ -1015,49 +985,47 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
                 state=ViewState.COMPLETED,
             ),
             *tuple(
-            Section(
-                group,
-                (
-                    ListView(
-                        "Commands",
-                        tuple(
-                            Record(
-                                "command",
-                                title=spec.syntax,
-                                fields=(
-                                    Field(
-                                        "Aliases",
-                                        ", ".join(spec.aliases)
-                                        if spec.aliases
-                                        else "none",
+                Section(
+                    group,
+                    (
+                        ListView(
+                            "Commands",
+                            tuple(
+                                Record(
+                                    "command",
+                                    title=spec.syntax,
+                                    fields=(
+                                        Field(
+                                            "Aliases",
+                                            ", ".join(spec.aliases)
+                                            if spec.aliases
+                                            else "none",
+                                        ),
+                                        Field(
+                                            "Calls provider",
+                                            "yes" if spec.may_call_provider else "no",
+                                        ),
+                                        Field(
+                                            "May write artifacts",
+                                            "yes" if spec.may_write_artifacts else "no",
+                                        ),
                                     ),
-                                    Field(
-                                        "Calls provider",
-                                        "yes" if spec.may_call_provider else "no",
-                                    ),
-                                    Field(
-                                        "May write artifacts",
-                                        "yes" if spec.may_write_artifacts else "no",
-                                    ),
-                                ),
-                                role=SemanticRole.COMMAND,
-                                state=ViewState.COMPLETED,
-                            )
-                            for spec in COMMANDS
-                            if spec.group == group
+                                    role=SemanticRole.COMMAND,
+                                    state=ViewState.COMPLETED,
+                                )
+                                for spec in COMMANDS
+                                if spec.group == group
+                            ),
+                            total_count=sum(spec.group == group for spec in COMMANDS),
+                            state=ViewState.COMPLETED,
                         ),
-                        total_count=sum(
-                            spec.group == group for spec in COMMANDS
-                        ),
-                        state=ViewState.COMPLETED,
                     ),
-                ),
-                state=ViewState.COMPLETED,
-            )
-            for group in dict.fromkeys(spec.group for spec in COMMANDS)
+                    state=ViewState.COMPLETED,
+                )
+                for group in dict.fromkeys(spec.group for spec in COMMANDS)
             ),
         )
-        agent_help = next(spec for spec in COMMANDS if spec.syntax == "/to NAME")
+        agent_help = next(spec for spec in COMMANDS if spec.syntax == "/agents")
         cases = (
             (
                 lambda: terminal.write_conversation_list_entry(
@@ -1142,7 +1110,7 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
                 Panel("Help", help_sections, state=ViewState.COMPLETED),
             ),
             (
-                lambda: terminal.write_help("/agent"),
+                lambda: terminal.write_help("/agents"),
                 Panel(
                     "Help",
                     (
@@ -1151,7 +1119,10 @@ class InteractiveSemanticOutputTests(unittest.TestCase):
                             fields=(
                                 Field("Group", agent_help.group),
                                 Field("Syntax", agent_help.syntax),
-                                Field("Aliases", ", ".join(agent_help.aliases)),
+                                Field(
+                                    "Aliases",
+                                    ", ".join(agent_help.aliases) or "none",
+                                ),
                                 Field("Calls provider", "no"),
                                 Field("May write artifacts", "no"),
                                 Field("Example", agent_help.example),

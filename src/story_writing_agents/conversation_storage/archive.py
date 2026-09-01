@@ -10,16 +10,19 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..conversations import (
-    ConversationEvent,
-    ConversationEventKind,
+    COLLABORATION_EVENT_SCHEMA_VERSION,
+    CONVERSATION_METADATA_SCHEMA_VERSION,
+    CollaborationEvent,
     ConversationMetadata,
     ConversationStatus,
-    select_bounded_conversation_context,
+    decode_collaboration_event,
+    encode_collaboration_event,
+    project_collaboration_history,
 )
 from ..errors import SessionIdError, StoryWritingAgentsError
 
 
-CONVERSATION_ARCHIVE_SCHEMA_VERSION = 1
+CONVERSATION_ARCHIVE_SCHEMA_VERSION = 2
 CONVERSATION_ARCHIVE_MAX_RAW_BYTES = 67_108_864
 CONVERSATION_ARCHIVE_MAX_SESSIONS = 1_024
 CONVERSATION_ARCHIVE_MAX_CONVERSATIONS = 65_536
@@ -40,20 +43,6 @@ _CONVERSATION_FIELDS = frozenset(
         "created_at",
         "updated_at",
         "events",
-    }
-)
-_EVENT_FIELDS = frozenset(
-    {
-        "schema_version",
-        "session_id",
-        "conversation_id",
-        "turn_id",
-        "sequence",
-        "timestamp",
-        "sender",
-        "recipient",
-        "kind",
-        "content",
     }
 )
 _DIGEST_FIELDS = frozenset({"algorithm", "value"})
@@ -163,6 +152,13 @@ def _validate_schema_version(value: object) -> None:
         raise ConversationArchiveVersionError()
 
 
+def _validate_catalog_schema_version(value: object) -> None:
+    if type(value) is not int:
+        raise ConversationArchiveFormatError()
+    if value != CONVERSATION_METADATA_SCHEMA_VERSION:
+        raise ConversationArchiveFormatError()
+
+
 def _utf8_size(value: object) -> int:
     if type(value) is not str:
         raise ConversationArchiveFormatError()
@@ -186,15 +182,22 @@ class _Utf8Budget:
             raise ConversationArchiveBoundsError()
         self._remaining -= size
 
+    def consume_bytes(self, value: object) -> None:
+        if type(value) is not bytes:
+            raise ConversationArchiveFormatError()
+        if len(value) > self._remaining:
+            raise ConversationArchiveBoundsError()
+        self._remaining -= len(value)
+
 
 def _require_events_tuple(
     value: object,
-) -> tuple[ConversationArchiveEvent, ...]:
+) -> tuple[CollaborationEvent, ...]:
     if type(value) is not tuple:
         raise ConversationArchiveFormatError()
     if len(value) > CONVERSATION_ARCHIVE_MAX_EVENTS:
         raise ConversationArchiveBoundsError()
-    if any(type(event) is not ConversationArchiveEvent for event in value):
+    if any(type(event) is not CollaborationEvent for event in value):
         raise ConversationArchiveFormatError()
     return value
 
@@ -237,7 +240,7 @@ def _checked_count(current: int, added: int, maximum: int) -> int:
 
 def _preflight_conversation_shape(
     conversation: ConversationArchiveConversation,
-) -> tuple[ConversationArchiveEvent, ...]:
+) -> tuple[CollaborationEvent, ...]:
     try:
         return _require_events_tuple(conversation.events)
     except AttributeError:
@@ -303,7 +306,7 @@ def _consume_conversations(
     for conversation in conversations:
         budget.consume(conversation.subject)
         for event in conversation.events:
-            budget.consume(event.content)
+            budget.consume_bytes(encode_collaboration_event(event))
 
 
 def _consume_sessions(
@@ -314,50 +317,12 @@ def _consume_sessions(
         for conversation in session.conversations:
             budget.consume(conversation.subject)
             for event in conversation.events:
-                budget.consume(event.content)
-
-
-@dataclass(frozen=True, slots=True)
-class ConversationArchiveEvent:
-    """One exact authoritative conversation event in an archive."""
-
-    schema_version: int
-    session_id: str
-    conversation_id: str
-    turn_id: str
-    sequence: int
-    timestamp: str
-    sender: str
-    recipient: str
-    kind: ConversationEventKind
-    content: str
-
-    def __post_init__(self) -> None:
-        _validate_schema_version(self.schema_version)
-        if type(self.kind) is not ConversationEventKind:
-            raise ConversationArchiveFormatError()
-        try:
-            ConversationEvent(
-                schema_version=self.schema_version,
-                session_id=self.session_id,
-                conversation_id=self.conversation_id,
-                turn_id=self.turn_id,
-                sequence=self.sequence,
-                timestamp=self.timestamp,
-                sender=self.sender,
-                recipient=self.recipient,
-                kind=self.kind,
-                content=self.content,
-            )
-        except (SessionIdError, TypeError, ValueError):
-            raise ConversationArchiveFormatError() from None
-        if _utf8_size(self.content) > CONVERSATION_ARCHIVE_MAX_AGGREGATE_UTF8_BYTES:
-            raise ConversationArchiveBoundsError()
+                budget.consume_bytes(encode_collaboration_event(event))
 
 
 @dataclass(frozen=True, slots=True)
 class ConversationArchiveConversation:
-    """One exact metadata record and its complete authoritative transcript."""
+    """One exact catalog record and its complete collaboration history."""
 
     schema_version: int
     session_id: str
@@ -367,10 +332,10 @@ class ConversationArchiveConversation:
     status: ConversationStatus
     created_at: str
     updated_at: str
-    events: tuple[ConversationArchiveEvent, ...]
+    events: tuple[CollaborationEvent, ...]
 
     def __post_init__(self) -> None:
-        _validate_schema_version(self.schema_version)
+        _validate_catalog_schema_version(self.schema_version)
         events = _require_events_tuple(self.events)
         if type(self.status) is not ConversationStatus:
             raise ConversationArchiveFormatError()
@@ -391,7 +356,7 @@ class ConversationArchiveConversation:
         aggregate = _Utf8Budget()
         aggregate.consume(self.subject)
         for event in events:
-            aggregate.consume(event.content)
+            aggregate.consume_bytes(encode_collaboration_event(event))
 
         canonical_events = tuple(sorted(events, key=lambda event: event.sequence))
         if any(
@@ -400,25 +365,15 @@ class ConversationArchiveConversation:
             for event in canonical_events
         ):
             raise ConversationArchiveFormatError()
-        domain_events = tuple(
-            ConversationEvent(
-                schema_version=event.schema_version,
-                session_id=event.session_id,
-                conversation_id=event.conversation_id,
-                turn_id=event.turn_id,
-                sequence=event.sequence,
-                timestamp=event.timestamp,
-                sender=event.sender,
-                recipient=event.recipient,
-                kind=event.kind,
-                content=event.content,
-            )
-            for event in canonical_events
-        )
         try:
-            select_bounded_conversation_context(domain_events)
-        except (SessionIdError, TypeError, ValueError):
+            projection = project_collaboration_history(canonical_events)
+        except (AssertionError, KeyError, SessionIdError, TypeError, ValueError):
             raise ConversationArchiveFormatError() from None
+        if canonical_events and (
+            projection.session_id != self.session_id
+            or projection.conversation_id != self.conversation_id
+        ):
+            raise ConversationArchiveFormatError()
         object.__setattr__(self, "events", canonical_events)
 
 
@@ -478,23 +433,12 @@ class ConversationArchive:
         object.__setattr__(self, "sessions", canonical_sessions)
 
 
-def _copy_event(event: object) -> ConversationArchiveEvent:
-    if type(event) is not ConversationArchiveEvent:
+def _copy_event(event: object) -> CollaborationEvent:
+    if type(event) is not CollaborationEvent:
         raise ConversationArchiveFormatError()
     try:
-        return ConversationArchiveEvent(
-            schema_version=event.schema_version,
-            session_id=event.session_id,
-            conversation_id=event.conversation_id,
-            turn_id=event.turn_id,
-            sequence=event.sequence,
-            timestamp=event.timestamp,
-            sender=event.sender,
-            recipient=event.recipient,
-            kind=event.kind,
-            content=event.content,
-        )
-    except AttributeError:
+        return decode_collaboration_event(encode_collaboration_event(event))
+    except (AssertionError, KeyError, SessionIdError, TypeError, ValueError):
         raise ConversationArchiveFormatError() from None
 
 
@@ -548,19 +492,14 @@ def _copy_archive(archive: object) -> ConversationArchive:
         raise ConversationArchiveFormatError() from None
 
 
-def _event_value(event: ConversationArchiveEvent) -> dict[str, object]:
-    return {
-        "schema_version": event.schema_version,
-        "session_id": event.session_id,
-        "conversation_id": event.conversation_id,
-        "turn_id": event.turn_id,
-        "sequence": event.sequence,
-        "timestamp": event.timestamp,
-        "sender": event.sender,
-        "recipient": event.recipient,
-        "kind": event.kind.value,
-        "content": event.content,
-    }
+def _event_value(event: CollaborationEvent) -> dict[str, object]:
+    try:
+        value = json.loads(encode_collaboration_event(event))
+    except (AssertionError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        raise ConversationArchiveFormatError() from None
+    if type(value) is not dict:
+        raise ConversationArchiveFormatError()
+    return value
 
 
 def _conversation_value(
@@ -615,7 +554,7 @@ def _digest_image(archive: ConversationArchive) -> bytes:
 
 
 def serialize_conversation_archive(archive: ConversationArchive, /) -> bytes:
-    """Return the exact canonical UTF-8 JSON version-1 archive image."""
+    """Return the exact canonical UTF-8 JSON version-2 archive image."""
 
     canonical = _copy_archive(archive)
     digest = hashlib.sha256(_digest_image(canonical)).hexdigest()
@@ -716,9 +655,7 @@ def _preflight_raw_archive(raw_sessions_value: object) -> list[Any]:
     for raw_events in raw_event_groups:
         if any(type(event) is not dict for event in raw_events):
             raise ConversationArchiveFormatError()
-        event_records_by_conversation.append(
-            [_require_object(event, _EVENT_FIELDS) for event in raw_events]
-        )
+        event_records_by_conversation.append(raw_events)
 
     aggregate = _Utf8Budget()
     for conversation, events in zip(
@@ -728,36 +665,36 @@ def _preflight_raw_archive(raw_sessions_value: object) -> list[Any]:
     ):
         aggregate.consume(conversation["subject"])
         for event in events:
-            aggregate.consume(event["content"])
+            aggregate.consume_bytes(_canonical_collaboration_event_bytes(event))
     return raw_sessions
 
 
-def _parse_event(value: object) -> ConversationArchiveEvent:
-    record = _require_object(value, _EVENT_FIELDS)
-    _validate_schema_version(record["schema_version"])
-    if type(record["kind"]) is not str:
-        raise ConversationArchiveFormatError()
+def _canonical_collaboration_event_bytes(value: object) -> bytes:
     try:
-        kind = ConversationEventKind(record["kind"])
-    except ValueError:
+        return json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8", errors="strict")
+    except (TypeError, UnicodeEncodeError, ValueError):
         raise ConversationArchiveFormatError() from None
-    return ConversationArchiveEvent(
-        schema_version=record["schema_version"],
-        session_id=record["session_id"],
-        conversation_id=record["conversation_id"],
-        turn_id=record["turn_id"],
-        sequence=record["sequence"],
-        timestamp=record["timestamp"],
-        sender=record["sender"],
-        recipient=record["recipient"],
-        kind=kind,
-        content=record["content"],
-    )
+
+
+def _parse_event(value: object) -> CollaborationEvent:
+    try:
+        event = decode_collaboration_event(_canonical_collaboration_event_bytes(value))
+    except (AssertionError, KeyError, SessionIdError, TypeError, ValueError):
+        raise ConversationArchiveFormatError() from None
+    if event.schema_version != COLLABORATION_EVENT_SCHEMA_VERSION:
+        raise ConversationArchiveFormatError()
+    return event
 
 
 def _parse_conversation(value: object) -> ConversationArchiveConversation:
     record = _require_object(value, _CONVERSATION_FIELDS)
-    _validate_schema_version(record["schema_version"])
+    _validate_catalog_schema_version(record["schema_version"])
     if type(record["status"]) is not str:
         raise ConversationArchiveFormatError()
     try:
@@ -837,7 +774,7 @@ def _deserialize_conversation_archive(data: bytes) -> ConversationArchive:
 
 
 def deserialize_conversation_archive(data: bytes, /) -> ConversationArchive:
-    """Parse only the exact canonical version-1 UTF-8 JSON archive image."""
+    """Parse only the exact canonical version-2 UTF-8 JSON archive image."""
 
     if type(data) is not bytes:
         raise ConversationArchiveFormatError()
@@ -859,7 +796,6 @@ __all__ = [
     "ConversationArchive",
     "ConversationArchiveSession",
     "ConversationArchiveConversation",
-    "ConversationArchiveEvent",
     "ConversationArchiveError",
     "ConversationArchiveFormatError",
     "ConversationArchiveVersionError",

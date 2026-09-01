@@ -8,17 +8,11 @@ import os
 import tempfile
 import unittest
 from dataclasses import FrozenInstanceError, fields, replace
-from pathlib import Path
 from unittest import mock
 
-from story_writing_agents import (
-    ConversationEventAppend,
-    ConversationEventKind,
-    Workspace,
-)
+from story_writing_agents import Workspace
 from story_writing_agents.agent_context.actions import (
     CONTEXT_ACTION_POLICY,
-    ContextActionPolicy,
     ContextSearchQuery,
     ContextSourceBoundary,
 )
@@ -52,10 +46,13 @@ from story_writing_agents.agents import EXECUTION_SPECIALIST, LEAD_ORCHESTRATOR,
 from story_writing_agents.conversation_storage import (
     compose_filesystem_conversation_storage,
 )
+from story_writing_agents.conversations import select_bounded_collaboration_context
 from story_writing_agents.models import AgentStateEntry, DebateMessage
 from story_writing_agents.writing_artifacts.repository import (
     WritingArtifactRepository,
 )
+
+from tests.collaboration_contract_fixture import contract_batches
 
 
 _PRIVATE_SOURCE = "PRIVATE_SOURCE_한🙂"
@@ -98,7 +95,9 @@ def _scope(
     )
 
 
-def _entry(descriptor: ContextSourceDescriptor, ordinal: int = 0) -> ContextManifestEntry:
+def _entry(
+    descriptor: ContextSourceDescriptor, ordinal: int = 0
+) -> ContextManifestEntry:
     priority = (
         ContextPriority.P3_OPTIONAL
         if descriptor.source_kind is ContextSourceKind.OWN_AGENT_STATE
@@ -185,7 +184,6 @@ class _SourceFixture(unittest.TestCase):
         *,
         conversation_id: str | None = None,
         debate_id: str | None = None,
-        excluded_turn_id: str | None = None,
     ) -> ContextSourceRegistry:
         services = compose_filesystem_conversation_storage(self.workspace)
         return ContextSourceRegistry(
@@ -195,7 +193,6 @@ class _SourceFixture(unittest.TestCase):
                 services.event_store,
                 scope,
                 conversation_id,
-                excluded_turn_id=excluded_turn_id,
             ),
             ActiveDebateSourceAdapter(self.workspace, scope, debate_id),
             OwnAgentStateSourceAdapter(self.workspace, scope),
@@ -242,8 +239,19 @@ class SourceSurfacePolicyAndValueTests(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            tuple(getattr(CONTEXT_SOURCE_POLICY, field.name) for field in fields(ContextSourcePolicy)),
-            (4096, 8192, 10000, 8 * 1024 * 1024, 64 * 1024 * 1024, 8 * 1024 * 1024, 32 * 1024 * 1024),
+            tuple(
+                getattr(CONTEXT_SOURCE_POLICY, field.name)
+                for field in fields(ContextSourcePolicy)
+            ),
+            (
+                4096,
+                8192,
+                10000,
+                8 * 1024 * 1024,
+                64 * 1024 * 1024,
+                8 * 1024 * 1024,
+                32 * 1024 * 1024,
+            ),
         )
         for code in ContextSourceErrorCode:
             error = ContextSourceError(code)
@@ -282,7 +290,9 @@ class SourceSurfacePolicyAndValueTests(unittest.TestCase):
                 with self.assertRaises(ContextSourceError):
                     replace(valid, **override)
 
-    def test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden(self) -> None:
+    def test_descriptor_snapshot_records_are_exact_immutable_and_content_hidden(
+        self,
+    ) -> None:
         snapshot = _artifact_snapshot(_scope())
         self.assertFalse(hasattr(snapshot, "__dict__"))
         self.assertNotIn("needle", repr(snapshot))
@@ -290,8 +300,16 @@ class SourceSurfacePolicyAndValueTests(unittest.TestCase):
         with self.assertRaises((FrozenInstanceError, TypeError)):
             snapshot.content = b"changed"  # type: ignore[misc]
         with self.assertRaises(ContextSourceError) as caught:
-            replace(snapshot.descriptor, provenance=ContextProvenance(ContextAuthorityKind.CONVERSATION_STORAGE, "core_documents/global_outline.md"))
-        self.assertEqual(caught.exception.code, ContextSourceErrorCode.AUTHORITY_MISMATCH)
+            replace(
+                snapshot.descriptor,
+                provenance=ContextProvenance(
+                    ContextAuthorityKind.CONVERSATION_STORAGE,
+                    "core_documents/global_outline.md",
+                ),
+            )
+        self.assertEqual(
+            caught.exception.code, ContextSourceErrorCode.AUTHORITY_MISMATCH
+        )
         with self.assertRaises(ContextSourceError):
             replace(snapshot.records[0], content_digest=_DIGEST)
         with self.assertRaises(ContextSourceError):
@@ -314,11 +332,17 @@ class RealAuthorityAdapterTests(_SourceFixture):
         )
         self.assertEqual(snapshot.descriptor.source_id, _artifact_id(path))
         for locator, code in (
-            ("../core_documents/global_outline.md", ContextSourceErrorCode.SOURCE_UNSAFE),
+            (
+                "../core_documents/global_outline.md",
+                ContextSourceErrorCode.SOURCE_UNSAFE,
+            ),
             ("core_documents\\global_outline.md", ContextSourceErrorCode.SOURCE_UNSAFE),
             ("/core_documents/global_outline.md", ContextSourceErrorCode.SOURCE_UNSAFE),
             ("discussion_logs/private.md", ContextSourceErrorCode.AUTHORITY_MISMATCH),
-            ("core_documents/character_sheets.md", ContextSourceErrorCode.SOURCE_MISSING),
+            (
+                "core_documents/character_sheets.md",
+                ContextSourceErrorCode.SOURCE_MISSING,
+            ),
         ):
             with self.subTest(locator=locator):
                 with self.assertRaises(ContextSourceError) as caught:
@@ -330,15 +354,28 @@ class RealAuthorityAdapterTests(_SourceFixture):
         first = _artifact_snapshot(_scope(), revision_seed=b"first")
         second = _artifact_snapshot(_scope(), revision_seed=b"second")
         stable = _artifact_snapshot(_scope(), revision_seed=b"stable")
-        with mock.patch.object(adapter, "_capture_once", side_effect=(first, second, stable, stable)) as capture:
-            self.assertEqual(adapter.capture("core_documents/global_outline.md", CONTEXT_SOURCE_POLICY), stable)
+        with mock.patch.object(
+            adapter, "_capture_once", side_effect=(first, second, stable, stable)
+        ) as capture:
+            self.assertEqual(
+                adapter.capture(
+                    "core_documents/global_outline.md", CONTEXT_SOURCE_POLICY
+                ),
+                stable,
+            )
         self.assertEqual(capture.call_count, 4)
-        with mock.patch.object(adapter, "_capture_once", side_effect=(first, second, first, second)):
+        with mock.patch.object(
+            adapter, "_capture_once", side_effect=(first, second, first, second)
+        ):
             with self.assertRaises(ContextSourceError) as caught:
-                adapter.capture("core_documents/global_outline.md", CONTEXT_SOURCE_POLICY)
+                adapter.capture(
+                    "core_documents/global_outline.md", CONTEXT_SOURCE_POLICY
+                )
         self.assertEqual(caught.exception.code, ContextSourceErrorCode.SOURCE_DRIFT)
 
-    def test_artifact_inventory_is_complete_or_fails_custom_traversal_and_eligible_caps(self) -> None:
+    def test_artifact_inventory_is_complete_or_fails_custom_traversal_and_eligible_caps(
+        self,
+    ) -> None:
         self.publish(
             core_updates={
                 "global_outline.md": "outline",
@@ -356,15 +393,24 @@ class RealAuthorityAdapterTests(_SourceFixture):
                 "manuscript/part-01/chapter-01.md",
             },
         )
-        self.assertNotIn("discussion_logs/internal.md", {item.provenance.locator for item in inventory})
+        self.assertNotIn(
+            "discussion_logs/internal.md",
+            {item.provenance.locator for item in inventory},
+        )
         with self.assertRaises(ContextSourceError) as eligible:
             adapter.inventory(replace(CONTEXT_SOURCE_POLICY, max_inventory_sources=2))
-        self.assertEqual(eligible.exception.code, ContextSourceErrorCode.INVENTORY_LIMIT_EXCEEDED)
+        self.assertEqual(
+            eligible.exception.code, ContextSourceErrorCode.INVENTORY_LIMIT_EXCEEDED
+        )
         with self.assertRaises(ContextSourceError) as traversal:
             adapter.inventory(replace(CONTEXT_SOURCE_POLICY, max_traversal_entries=1))
-        self.assertEqual(traversal.exception.code, ContextSourceErrorCode.INVENTORY_LIMIT_EXCEEDED)
+        self.assertEqual(
+            traversal.exception.code, ContextSourceErrorCode.INVENTORY_LIMIT_EXCEEDED
+        )
 
-    def test_artifact_inventory_relist_drift_and_nonregular_sources_fail_completely(self) -> None:
+    def test_artifact_inventory_relist_drift_and_nonregular_sources_fail_completely(
+        self,
+    ) -> None:
         adapter = WritingArtifactSourceAdapter(self.repository, _scope())
         with mock.patch.object(
             adapter,
@@ -379,7 +425,6 @@ class RealAuthorityAdapterTests(_SourceFixture):
             with self.assertRaises(ContextSourceError) as drift:
                 adapter.inventory(CONTEXT_SOURCE_POLICY)
         self.assertEqual(drift.exception.code, ContextSourceErrorCode.SOURCE_DRIFT)
-        manuscript = self.workspace.root / "manuscript"
         outside = self.workspace.root / "outside.md"
         outside.write_text("outside", encoding="utf-8")
         attacks = (
@@ -393,42 +438,62 @@ class RealAuthorityAdapterTests(_SourceFixture):
             with self.subTest(locator=locator):
                 with self.assertRaises(ContextSourceError) as caught:
                     adapter.capture(locator, CONTEXT_SOURCE_POLICY)
-                self.assertEqual(caught.exception.code, ContextSourceErrorCode.SOURCE_MISSING)
+                self.assertEqual(
+                    caught.exception.code, ContextSourceErrorCode.SOURCE_MISSING
+                )
 
-    def test_focused_conversation_includes_complete_replies_and_excludes_runtime_and_current_turn(self) -> None:
+    def test_focused_conversation_exposes_bounded_readable_v2_records(self) -> None:
         services = compose_filesystem_conversation_storage(self.workspace)
         metadata = services.catalog.create("session", "Focused conversation")
         conversation_id = metadata.conversation_id
-        def append(turn: str, kind: ConversationEventKind, content: str) -> None:
-            if kind is ConversationEventKind.USER_MESSAGE:
-                sender, recipient = "user", LEAD_ORCHESTRATOR
-            elif kind is ConversationEventKind.AGENT_REPLY:
-                sender, recipient = LEAD_ORCHESTRATOR, "user"
-            else:
-                sender, recipient = "runtime", "user"
-            services.event_store.append(ConversationEventAppend("session", conversation_id, turn, sender, recipient, kind, content))
-        append("visible", ConversationEventKind.USER_MESSAGE, "question needle")
-        append("visible", ConversationEventKind.AGENT_REPLY, "answer")
-        append("failed", ConversationEventKind.USER_MESSAGE, "failed question")
-        append("failed", ConversationEventKind.RUNTIME_ERROR, "PRIVATE_RUNTIME_ERROR")
-        append("current", ConversationEventKind.USER_MESSAGE, "current pending")
+        batch = contract_batches(conversation_id)["proposal"]
+        batch = replace(
+            batch,
+            events=tuple(
+                replace(event, session_id="session") for event in batch.events
+            ),
+        )
+        services.event_store.append_batch(batch)
+        history = services.event_store.read("session", conversation_id)
+        captured_context = select_bounded_collaboration_context(
+            history,
+            event_ids=("proposal_event", "request_event"),
+        )
         scope = _scope(subject_id=conversation_id)
-        adapter = FocusedConversationSourceAdapter(services.catalog, services.event_store, scope, conversation_id, excluded_turn_id="current")
-        snapshot = adapter.capture(f"conversation/{conversation_id}", CONTEXT_SOURCE_POLICY)
-        self.assertEqual(tuple(record.record_id for record in snapshot.records), ("visible",))
-        self.assertIn("question needle", snapshot.records[0].search_text)
-        self.assertNotIn("PRIVATE_RUNTIME_ERROR", snapshot.content.decode())
-        self.assertNotIn("current pending", snapshot.content.decode())
-        self.assertEqual(snapshot.descriptor.revision, snapshot.descriptor.content_digest)
-        self.assertEqual(snapshot.descriptor.source_id, f"conversation:{conversation_id}")
-        self.assertEqual(snapshot.descriptor.provenance.locator, f"conversation/{conversation_id}")
+        adapter = FocusedConversationSourceAdapter(
+            services.catalog,
+            services.event_store,
+            scope,
+            conversation_id,
+            captured_context=captured_context,
+        )
+        snapshot = adapter.capture(
+            f"conversation/{conversation_id}", CONTEXT_SOURCE_POLICY
+        )
+        self.assertEqual(
+            tuple(record.record_id for record in snapshot.records),
+            ("proposal_event", "request_event"),
+        )
+        self.assertIn("Consult specialists", snapshot.records[0].search_text)
+        self.assertNotIn("route_fingerprint", snapshot.records[0].search_text)
+        self.assertEqual(
+            snapshot.descriptor.revision, snapshot.descriptor.content_digest
+        )
+        self.assertEqual(
+            snapshot.descriptor.source_id, f"conversation:{conversation_id}"
+        )
+        self.assertEqual(
+            snapshot.descriptor.provenance.locator, f"conversation/{conversation_id}"
+        )
         with mock.patch.object(
             adapter,
             "_capture_once",
             side_effect=(snapshot, object(), snapshot, snapshot),
         ) as capture:
             self.assertEqual(
-                adapter.capture(f"conversation/{conversation_id}", CONTEXT_SOURCE_POLICY),
+                adapter.capture(
+                    f"conversation/{conversation_id}", CONTEXT_SOURCE_POLICY
+                ),
                 snapshot,
             )
         self.assertEqual(capture.call_count, 4)
@@ -438,33 +503,28 @@ class RealAuthorityAdapterTests(_SourceFixture):
             side_effect=(snapshot, object(), snapshot, object()),
         ):
             with self.assertRaises(ContextSourceError) as drift:
-                adapter.capture(f"conversation/{conversation_id}", CONTEXT_SOURCE_POLICY)
+                adapter.capture(
+                    f"conversation/{conversation_id}", CONTEXT_SOURCE_POLICY
+                )
         self.assertEqual(drift.exception.code, ContextSourceErrorCode.SOURCE_DRIFT)
         with self.assertRaises(ContextSourceError):
-            FocusedConversationSourceAdapter(services.catalog, services.event_store, _scope(subject_id="other"), conversation_id)
+            FocusedConversationSourceAdapter(
+                services.catalog,
+                services.event_store,
+                _scope(subject_id="other"),
+                conversation_id,
+            )
 
-    def test_zero_record_focused_conversation_exists_without_pending_turn(
+    def test_zero_record_focused_conversation_exists_with_explicit_bootstrap(
         self,
     ) -> None:
         services = compose_filesystem_conversation_storage(self.workspace)
         metadata = services.catalog.create("session", "Fresh conversation")
-        services.event_store.append(
-            ConversationEventAppend(
-                "session",
-                metadata.conversation_id,
-                "pending",
-                "user",
-                LEAD_ORCHESTRATOR,
-                ConversationEventKind.USER_MESSAGE,
-                "PRIVATE_PENDING_TURN",
-            )
-        )
         adapter = FocusedConversationSourceAdapter(
             services.catalog,
             services.event_store,
             _scope(subject_id=metadata.conversation_id),
             metadata.conversation_id,
-            excluded_turn_id="pending",
         )
 
         inventory = adapter.inventory(CONTEXT_SOURCE_POLICY)
@@ -475,34 +535,85 @@ class RealAuthorityAdapterTests(_SourceFixture):
         )
         self.assertEqual(snapshot.descriptor, inventory[0])
         self.assertEqual(snapshot.records, ())
-        self.assertEqual(json.loads(snapshot.content)["pairs"], [])
-        self.assertNotIn(b"PRIVATE_PENDING_TURN", snapshot.content)
+        value = json.loads(snapshot.content)
+        self.assertEqual(value["records"], [])
+        self.assertEqual(value["bootstrap"]["retained_records"], 0)
 
-    def test_active_debate_and_all_four_owner_states_are_public_exact_and_isolated(self) -> None:
+    def test_active_debate_and_all_four_owner_states_are_public_exact_and_isolated(
+        self,
+    ) -> None:
         debate_id = "debate"
-        self.workspace.reserve_debate("session", debate_id, input_kind="prompt", owner_token="PRIVATE_OWNER_TOKEN")
-        message = DebateMessage(LEAD_ORCHESTRATOR, "proposal", 1, "r1", "proposal", "public debate needle", "2026-08-28T00:00:00+00:00")
+        self.workspace.reserve_debate(
+            "session", debate_id, input_kind="prompt", owner_token="PRIVATE_OWNER_TOKEN"
+        )
+        message = DebateMessage(
+            LEAD_ORCHESTRATOR,
+            "proposal",
+            1,
+            "r1",
+            "proposal",
+            "public debate needle",
+            "2026-08-28T00:00:00+00:00",
+        )
         self.workspace.append_debate_message("session", debate_id, message)
-        debate_scope = _scope(subject_kind=ContextSubjectKind.DEBATE, subject_id=debate_id)
-        debate = ActiveDebateSourceAdapter(self.workspace, debate_scope, debate_id).capture(f"debate/{debate_id}", CONTEXT_SOURCE_POLICY)
-        self.assertEqual(tuple(record.record_id for record in debate.records), ("state", "message_1"))
+        debate_scope = _scope(
+            subject_kind=ContextSubjectKind.DEBATE, subject_id=debate_id
+        )
+        debate = ActiveDebateSourceAdapter(
+            self.workspace, debate_scope, debate_id
+        ).capture(f"debate/{debate_id}", CONTEXT_SOURCE_POLICY)
+        self.assertEqual(
+            tuple(record.record_id for record in debate.records), ("state", "message_1")
+        )
         self.assertNotIn("PRIVATE_OWNER_TOKEN", debate.content.decode())
         self.assertEqual(debate.records[1].search_text, "public debate needle")
         self.assertEqual(debate.descriptor.source_id, "active_debate:debate")
         self.assertEqual(debate.descriptor.provenance.locator, "debate/debate")
         self.assertEqual(debate.descriptor.revision, debate.descriptor.content_digest)
         for index, agent_id in enumerate(ROSTER):
-            self.workspace.append_agent_state(AgentStateEntry(agent_id, "session", "debate", "audit", index, "r1", "outcome", f"state {agent_id} needle", f"2026-08-28T00:00:0{index}+00:00"))
+            self.workspace.append_agent_state(
+                AgentStateEntry(
+                    agent_id,
+                    "session",
+                    "debate",
+                    "audit",
+                    index,
+                    "r1",
+                    "outcome",
+                    f"state {agent_id} needle",
+                    f"2026-08-28T00:00:0{index}+00:00",
+                )
+            )
         for agent_id in ROSTER:
             state_scope = _scope(agent_id=agent_id)
-            snapshot = OwnAgentStateSourceAdapter(self.workspace, state_scope).capture(f"agent-state/{agent_id}", CONTEXT_SOURCE_POLICY)
+            snapshot = OwnAgentStateSourceAdapter(self.workspace, state_scope).capture(
+                f"agent-state/{agent_id}", CONTEXT_SOURCE_POLICY
+            )
             self.assertTrue(snapshot.records)
-            self.assertEqual(snapshot.descriptor.source_id, f"own_agent_state:{agent_id}")
-            self.assertEqual(snapshot.descriptor.provenance.locator, f"agent-state/{agent_id}")
-            self.assertEqual(snapshot.descriptor.revision, snapshot.descriptor.content_digest)
-            self.assertTrue(all(agent_id in record.content for record in snapshot.records))
-            self.assertTrue(all(other not in snapshot.content.decode() for other in ROSTER if other != agent_id))
-        missing = ActiveDebateSourceAdapter(self.workspace, _scope(subject_kind=ContextSubjectKind.DEBATE, subject_id="missing"), "missing")
+            self.assertEqual(
+                snapshot.descriptor.source_id, f"own_agent_state:{agent_id}"
+            )
+            self.assertEqual(
+                snapshot.descriptor.provenance.locator, f"agent-state/{agent_id}"
+            )
+            self.assertEqual(
+                snapshot.descriptor.revision, snapshot.descriptor.content_digest
+            )
+            self.assertTrue(
+                all(agent_id in record.content for record in snapshot.records)
+            )
+            self.assertTrue(
+                all(
+                    other not in snapshot.content.decode()
+                    for other in ROSTER
+                    if other != agent_id
+                )
+            )
+        missing = ActiveDebateSourceAdapter(
+            self.workspace,
+            _scope(subject_kind=ContextSubjectKind.DEBATE, subject_id="missing"),
+            "missing",
+        )
         with self.assertRaises(ContextSourceError) as caught:
             missing.capture("debate/missing", CONTEXT_SOURCE_POLICY)
         self.assertEqual(caught.exception.code, ContextSourceErrorCode.SOURCE_MISSING)
@@ -520,13 +631,17 @@ class RegistrySearchTests(_SourceFixture):
         with self.assertRaises(ContextSourceError) as caught:
             ContextSourceRegistry(
                 WritingArtifactSourceAdapter(self.repository, scope),
-                FocusedConversationSourceAdapter(services.catalog, services.event_store, other, None),
+                FocusedConversationSourceAdapter(
+                    services.catalog, services.event_store, other, None
+                ),
                 ActiveDebateSourceAdapter(self.workspace, scope, None),
                 OwnAgentStateSourceAdapter(self.workspace, scope),
             )
         self.assertEqual(caught.exception.code, ContextSourceErrorCode.SCOPE_MISMATCH)
 
-    def test_search_normalizes_source_controls_orders_and_deduplicates_by_first_query(self) -> None:
+    def test_search_normalizes_source_controls_orders_and_deduplicates_by_first_query(
+        self,
+    ) -> None:
         scope = _scope()
         registry = self.registry(scope)
         snapshot = _artifact_snapshot(
@@ -535,9 +650,15 @@ class RegistrySearchTests(_SourceFixture):
         )
         manifest = ContextManifest(scope, (_entry(snapshot.descriptor),))
         calls: list[str] = []
-        def capture(_manifest: ContextManifest, entry: ContextManifestEntry, _policy: ContextSourcePolicy) -> ContextSourceSnapshot:
+
+        def capture(
+            _manifest: ContextManifest,
+            entry: ContextManifestEntry,
+            _policy: ContextSourcePolicy,
+        ) -> ContextSourceSnapshot:
             calls.append(entry.source_id)
             return snapshot
+
         registry.capture = capture  # type: ignore[method-assign]
         queries = (
             ContextSearchQuery("needle gap", (ContextSourceKind.WRITING_ARTIFACT,)),
@@ -549,27 +670,44 @@ class RegistrySearchTests(_SourceFixture):
         self.assertEqual(tuple(match.record.boundary.start for match in matches), (1,))
         self.assertIn("needle gap", matches[0].snippet)
         self.assertEqual(scanned, snapshot.descriptor.utf8_bytes)
-        self.assertEqual(calls, [snapshot.descriptor.source_id, snapshot.descriptor.source_id])
+        self.assertEqual(
+            calls, [snapshot.descriptor.source_id, snapshot.descriptor.source_id]
+        )
 
-    def test_search_expands_artifact_at_most_twelve_lines_and_shrinks_for_multibyte_cap(self) -> None:
+    def test_search_expands_artifact_at_most_twelve_lines_and_shrinks_for_multibyte_cap(
+        self,
+    ) -> None:
         scope = _scope()
         registry = self.registry(scope)
-        lines = tuple(("needle 한🙂\n" if index == 15 else f"{index}\n") for index in range(1, 31))
+        lines = tuple(
+            ("needle 한🙂\n" if index == 15 else f"{index}\n") for index in range(1, 31)
+        )
         snapshot = _artifact_snapshot(scope, lines=lines)
         manifest = ContextManifest(scope, (_entry(snapshot.descriptor),))
         registry.capture = lambda *_args: snapshot  # type: ignore[method-assign]
-        matches, _, _ = registry.search(manifest, (ContextSearchQuery("needle", (ContextSourceKind.WRITING_ARTIFACT,)),))
-        self.assertEqual((matches[0].record.boundary.start, matches[0].record.boundary.end), (3, 27))
+        matches, _, _ = registry.search(
+            manifest,
+            (ContextSearchQuery("needle", (ContextSourceKind.WRITING_ARTIFACT,)),),
+        )
+        self.assertEqual(
+            (matches[0].record.boundary.start, matches[0].record.boundary.end), (3, 27)
+        )
         lower = replace(
             CONTEXT_ACTION_POLICY,
             max_snippet_utf8_bytes=20,
             max_excerpt_utf8_bytes=20,
         )
-        matches, _, _ = registry.search(manifest, (ContextSearchQuery("needle", (ContextSourceKind.WRITING_ARTIFACT,)),), action_policy=lower)
+        matches, _, _ = registry.search(
+            manifest,
+            (ContextSearchQuery("needle", (ContextSourceKind.WRITING_ARTIFACT,)),),
+            action_policy=lower,
+        )
         self.assertLessEqual(matches[0].record.utf8_bytes, 20)
         self.assertIn("needle", matches[0].snippet)
 
-    def test_scan_preflight_skips_oversized_without_io_and_post_search_drift_fails(self) -> None:
+    def test_scan_preflight_skips_oversized_without_io_and_post_search_drift_fails(
+        self,
+    ) -> None:
         scope = _scope()
         registry = self.registry(scope)
         snapshot = _artifact_snapshot(scope)
@@ -585,10 +723,15 @@ class RegistrySearchTests(_SourceFixture):
         self.assertTrue(truncated)
         self.assertEqual(scanned, 0)
         capture.assert_not_called()
-        drifted = _artifact_snapshot(scope, lines=("needle changed\n",), revision_seed=b"changed")
+        drifted = _artifact_snapshot(
+            scope, lines=("needle changed\n",), revision_seed=b"changed"
+        )
         registry.capture = mock.Mock(side_effect=(snapshot, drifted))  # type: ignore[method-assign]
         with self.assertRaises(ContextSourceError) as caught:
-            registry.search(manifest, (ContextSearchQuery("needle", (ContextSourceKind.WRITING_ARTIFACT,)),))
+            registry.search(
+                manifest,
+                (ContextSearchQuery("needle", (ContextSourceKind.WRITING_ARTIFACT,)),),
+            )
         self.assertEqual(caught.exception.code, ContextSourceErrorCode.SOURCE_DRIFT)
 
 
