@@ -2251,7 +2251,7 @@ class LedgerBoundaryTests(LedgerTestCase):
     def test_facades_import_direction_compile_and_graph_contract_are_exact(self) -> None:
         self.assertEqual(len(story_writing_agents.__all__), 120)
         self.assertEqual(len(agent_context.__all__), 11)
-        self.assertEqual(len(writing_artifacts.__all__), 47)
+        self.assertEqual(len(writing_artifacts.__all__), 62)
         self.assertTrue(set(ledger_module.__all__).isdisjoint(story_writing_agents.__all__))
         self.assertTrue(set(ledger_module.__all__).isdisjoint(agent_context.__all__))
         source_path = _SOURCE_ROOT / "story_writing_agents/agent_context/ledger.py"
