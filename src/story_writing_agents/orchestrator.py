@@ -10,7 +10,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, AsyncContextManager, Mapping, cast
 
 from .agents import (
     CHARACTER_CUSTODIAN,
@@ -45,6 +45,7 @@ from .agent_context.service import (
     ContextProviderCallResult,
     ContextReferencePreludeRequest,
     ContextReferencePreludeResult,
+    ContextScope,
     context_provider_failure_facts,
 )
 from .agent_context.sources import (
@@ -73,6 +74,9 @@ from .conversations import (
     CollaborationActorKind,
     CollaborationAgentProfile,
     CollaborationAssignment,
+    CollaborationAssignmentDispatchPayload,
+    CollaborationAssignmentOutcome,
+    CollaborationAssignmentOutcomeKind,
     CollaborationBudget,
     CollaborationConfirmationDecision,
     CollaborationConfirmationPayload,
@@ -80,12 +84,15 @@ from .conversations import (
     CollaborationEventBatch,
     CollaborationEventDraft,
     CollaborationEventKind,
+    CollaborationExecutionOutcomeKind,
+    CollaborationExecutionResult,
     CollaborationHistoryProjection,
     CollaborationInputKind,
     CollaborationInputRevision,
     CollaborationInputState,
     CollaborationInterruptionPayload,
     CollaborationInvocationKind,
+    CollaborationLeadSynthesisPayload,
     CollaborationMessagePayload,
     CollaborationNextAction,
     CollaborationPayload,
@@ -95,9 +102,14 @@ from .conversations import (
     CollaborationProviderCallPayload,
     CollaborationProviderCallState,
     CollaborationSideEffect,
+    CollaborationSpecialistAssessment,
+    CollaborationSpecialistReplyPayload,
     CollaborationStepKind,
     CollaborationStepState,
     CollaborationStepStatePayload,
+    CollaborationSynthesisOutcomeKind,
+    CollaborationTerminalOutcomePayload,
+    CollaborationTerminalScope,
     ConversationStatus,
     LeadAssignmentIntent,
     LeadDecisionResult,
@@ -108,6 +120,7 @@ from .conversations import (
     LeadStepDecision,
     LeadTurnResult,
     project_collaboration_history,
+    select_bounded_collaboration_context,
 )
 from .debug_log import (
     DebugComponent,
@@ -153,6 +166,10 @@ _LEAD_PROPOSAL_USER_IMPACT = (
     "Specialist advice and durable collaboration records only. "
     "This step cannot change writing artifacts, the Git index, commits, "
     "remotes, or merges."
+)
+_ADVISORY_USER_IMPACT = (
+    "The selected specialist provides visible advice only. No lead synthesis, "
+    "chaining, artifact mutation, or Git operation occurs."
 )
 _CORE_REVIEWERS = {
     "core_documents/global_outline.md": PLOT_ARCHITECT,
@@ -239,6 +256,8 @@ class _AccountingContextProvider:
         turn_id: str,
         step_id: str,
         invocation_id: str,
+        role: str,
+        invocation_kind: CollaborationInvocationKind,
     ) -> None:
         self._runtime = runtime
         self._delegate = delegate
@@ -247,26 +266,30 @@ class _AccountingContextProvider:
         self._turn_id = turn_id
         self._step_id = step_id
         self._invocation_id = invocation_id
+        self._role = role
+        self._invocation_kind = invocation_kind
         self._ordinals: dict[str, int] = {}
+        self._submitted_call_ids: set[str] = set()
+        self.provider_id = cast(str, getattr(delegate, "provider_id"))
+        self.definition_fingerprint = cast(
+            str,
+            getattr(delegate, "definition_fingerprint"),
+        )
+        self.reference_operation_id = cast(
+            str | None,
+            getattr(delegate, "reference_operation_id"),
+        )
 
-    @property
-    def provider_id(self) -> str:
-        return getattr(self._delegate, "provider_id")
-
-    @property
-    def definition_fingerprint(self) -> str:
-        return getattr(self._delegate, "definition_fingerprint")
-
-    @property
-    def reference_operation_id(self) -> str | None:
-        return getattr(self._delegate, "reference_operation_id")
-
-    def invocation(self, scope: object, policy_fingerprint: str) -> object:
+    def invocation(
+        self,
+        scope: ContextScope,
+        policy_fingerprint: str,
+    ) -> AsyncContextManager[None]:
         return getattr(self._delegate, "invocation")(scope, policy_fingerprint)
 
     def inspect_context_thread(
         self,
-        scope: object,
+        scope: ContextScope,
         policy_fingerprint: str,
     ) -> str | None:
         return getattr(self._delegate, "inspect_context_thread")(
@@ -310,6 +333,7 @@ class _AccountingContextProvider:
             in {
                 ProviderCallKind.CONVERSATION,
                 ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL,
+                ProviderCallKind.COLLABORATION_INITIAL,
                 ProviderCallKind.DEBATE,
             }
             else CollaborationProviderCallKind.CONTINUATION
@@ -328,12 +352,16 @@ class _AccountingContextProvider:
         self._record_result_submission(result, request.call_id, ordinal, kind)
         return result
 
-    def complete_references(self, scope: object, policy_fingerprint: str) -> None:
+    def complete_references(
+        self,
+        scope: ContextScope,
+        policy_fingerprint: str,
+    ) -> None:
         getattr(self._delegate, "complete_references")(scope, policy_fingerprint)
 
     def abort_references(
         self,
-        scope: object,
+        scope: ContextScope,
         policy_fingerprint: str,
         *,
         cancelled: bool,
@@ -346,7 +374,11 @@ class _AccountingContextProvider:
             provider_failure=provider_failure,
         )
 
-    def taint_context_thread(self, scope: object, policy_fingerprint: str) -> None:
+    def taint_context_thread(
+        self,
+        scope: ContextScope,
+        policy_fingerprint: str,
+    ) -> None:
         getattr(self._delegate, "taint_context_thread")(scope, policy_fingerprint)
 
     def _prepare(self, call_id: str, kind: CollaborationProviderCallKind) -> int:
@@ -364,6 +396,8 @@ class _AccountingContextProvider:
             ordinal=ordinal,
             call_kind=kind,
             state=CollaborationProviderCallState.PREPARED,
+            role=self._role,
+            invocation_kind=self._invocation_kind,
         )
         return ordinal
 
@@ -403,8 +437,11 @@ class _AccountingContextProvider:
         kind: CollaborationProviderCallKind,
         accounting: ProviderCallAccounting,
     ) -> None:
+        if call_id in self._submitted_call_ids:
+            raise BackendProtocolError("provider call was submitted more than once")
         if accounting.payload.call_kind is ProviderCallKind.UNCLASSIFIED:
             raise BackendProtocolError("submitted provider call is unclassified")
+        self._submitted_call_ids.add(call_id)
         self._runtime._append_provider_call_fact(
             session_id=self._session_id,
             conversation_id=self._conversation_id,
@@ -415,7 +452,25 @@ class _AccountingContextProvider:
             ordinal=ordinal,
             call_kind=kind,
             state=CollaborationProviderCallState.SUBMITTED,
+            role=self._role,
+            invocation_kind=self._invocation_kind,
         )
+
+    @property
+    def submitted_physical_calls(self) -> int:
+        """Return exact submitted calls observed by this no-await wrapper."""
+
+        return len(self._submitted_call_ids)
+
+
+@dataclass(frozen=True, slots=True)
+class _CollaborationInvocationResult:
+    """One decoded public value plus provider-neutral terminal call facts."""
+
+    value: object | None
+    submitted_physical_calls: int
+    failure: BaseException | None = None
+    submission_uncertain: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -905,6 +960,192 @@ class StoryRuntime:
                 context_event_sink=context_event_sink,
             )
 
+    async def propose_specialist_advisory(
+        self,
+        session_id: str,
+        conversation_id: str,
+        specialist_id: str,
+        text: str,
+        context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
+    ) -> LeadTurnResult:
+        """Disclose one provider-free, separately confirmed direct advisory."""
+
+        self._validate_lead_identity(session_id, conversation_id)
+        if specialist_id not in SPECIALIST_IDS:
+            raise ValueError("specialist advisory requires a canonical specialist ID")
+        text = self._validate_visible_text(text, label="specialist advisory")
+        self._validate_context_event_sink(context_event_sink)
+        if self.backend is None:
+            raise BackendProtocolError("specialist advisory requires an AgentBackend")
+        async with self._conversation_lock(session_id, conversation_id):
+            events, projection, failure = self._read_lead_history(
+                session_id,
+                conversation_id,
+            )
+            if failure is not None:
+                return self._blocking_lead_result(
+                    session_id,
+                    conversation_id,
+                    CollaborationStepState.RECOVERY_REQUIRED,
+                    "Authoritative collaboration history is invalid; repair it before continuing.",
+                )
+            assert events is not None and projection is not None
+            normalized = self._normalize_lead_history(
+                session_id,
+                conversation_id,
+                events,
+                projection,
+            )
+            if normalized is not None:
+                return normalized
+            turn_id = self._new_id("t")
+            step_id = self._new_id("s")
+            inputs = self._provider_free_lead_inputs(turn_id, text)
+            required_reviewers = {
+                reviewer
+                for item in inputs
+                if item.kind is CollaborationInputKind.CORE_DOCUMENT
+                for reviewer in (self._core_reviewer(item.locator),)
+                if reviewer is not None
+            }
+            if required_reviewers.difference({specialist_id}):
+                raise ValueError(
+                    "specialist advisory references a core document owned by another reviewer"
+                )
+            call_limits, synthesis_calls, required_calls = (
+                self._proposal_call_reservations(
+                    inputs=inputs,
+                    assignment_input_ids=(tuple(item.input_id for item in inputs),),
+                    physical_calls_spent=projection.physical_calls_spent,
+                    synthesis_required=False,
+                )
+            )
+            assert synthesis_calls == 0
+            definition = self.prompts.build_contextual_definition(
+                session_id=session_id,
+                agent_id=specialist_id,
+            )
+            profile = self._collaboration_agent_profile(specialist_id, definition)
+            route = {
+                "participants": [specialist_id],
+                "profiles": [
+                    [
+                        profile.agent_id,
+                        profile.definition_fingerprint,
+                        profile.execution_fingerprint,
+                    ]
+                ],
+                "route": "specialist_advisory",
+            }
+            proposal = CollaborationProposal.create(
+                step_id=step_id,
+                proposal_id=self._new_id("p"),
+                proposal_revision=1,
+                step_kind=CollaborationStepKind.SPECIALIST_ADVISORY,
+                purpose=text,
+                assignments=(
+                    CollaborationAssignment(
+                        assignment_id=self._new_id("a"),
+                        specialist_id=specialist_id,
+                        round=projection.rounds_spent + 1,
+                        instruction=text,
+                        input_ids=tuple(item.input_id for item in inputs),
+                        max_physical_calls=call_limits[0],
+                    ),
+                ),
+                user_impact=_ADVISORY_USER_IMPACT,
+                side_effects=(CollaborationSideEffect.PROVIDER_INVOCATION,),
+                budget=CollaborationBudget(
+                    round_limit=COLLABORATION_ROUND_LIMIT,
+                    physical_call_limit=COLLABORATION_PHYSICAL_CALL_LIMIT,
+                    rounds_spent=projection.rounds_spent,
+                    rounds_added=1,
+                    physical_calls_spent=projection.physical_calls_spent,
+                    max_additional_physical_calls=required_calls,
+                    synthesis_max_physical_calls=0,
+                ),
+                basis=CollaborationProposalBasis(
+                    route="specialist_advisory",
+                    route_fingerprint=self._canonical_digest(route),
+                    agent_profiles=(profile,),
+                    context_policy_fingerprint=(
+                        self._agent_context_service.policy_fingerprint
+                    ),
+                    budget_policy_fingerprint=_BUDGET_POLICY_FINGERPRINT,
+                    inputs=inputs,
+                ),
+            )
+            request_id = self._new_id("c")
+            user_event = self._draft(
+                session_id=session_id,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                step_id=step_id,
+                kind=CollaborationEventKind.MESSAGE,
+                sender=_USER_ACTOR,
+                recipient=_LEAD_ACTOR,
+                payload=CollaborationMessagePayload(text),
+            )
+            message = (
+                f"I propose a direct advisory from {specialist_id}. Confirm, reject, "
+                "or revise this exact bounded request."
+            )
+            proposal_event = self._draft(
+                session_id=session_id,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                step_id=step_id,
+                kind=CollaborationEventKind.MESSAGE,
+                sender=_LEAD_ACTOR,
+                recipient=_USER_ACTOR,
+                payload=proposal,
+            )
+            self._append_drafts(
+                projection.last_sequence,
+                (
+                    user_event,
+                    self._draft(
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        step_id=step_id,
+                        kind=CollaborationEventKind.MESSAGE,
+                        sender=_LEAD_ACTOR,
+                        recipient=_USER_ACTOR,
+                        payload=CollaborationMessagePayload(message),
+                    ),
+                    proposal_event,
+                    self._draft(
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        step_id=step_id,
+                        kind=CollaborationEventKind.STEP_STATE,
+                        sender=_RUNTIME_ACTOR,
+                        recipient=_USER_ACTOR,
+                        payload=CollaborationStepStatePayload(
+                            state=CollaborationStepState.AWAITING_CONFIRMATION,
+                            proposal_id=proposal.proposal_id,
+                            proposal_revision=proposal.proposal_revision,
+                            proposal_digest=proposal.proposal_digest,
+                            confirmation_request_id=request_id,
+                        ),
+                    ),
+                ),
+            )
+            return LeadTurnResult(
+                session_id,
+                conversation_id,
+                turn_id,
+                step_id,
+                LeadOutcomeKind.PROPOSAL,
+                message,
+                proposal,
+                CollaborationStepState.AWAITING_CONFIRMATION,
+                request_id,
+                CollaborationNextAction.SUBMIT_CONFIRMATION,
+            )
+
     async def decide_lead_step(
         self,
         decision: LeadStepDecision,
@@ -1054,14 +1295,19 @@ class StoryRuntime:
                         decision.step_id,
                     )
                 ] = capability
+                completed_turn = await self._execute_confirmed_step_locked(
+                    session_id=decision.session_id,
+                    conversation_id=decision.conversation_id,
+                    proposal=proposal,
+                    capability=capability,
+                )
                 return LeadDecisionResult(
                     decision.session_id,
                     decision.conversation_id,
                     decision.step_id,
                     decision.kind,
                     proposal,
-                    resulting_state,
-                    CollaborationNextAction.START_OR_RECONFIRM,
+                    completed_turn,
                 )
             if decision.kind is CollaborationConfirmationDecision.REJECT:
                 self._confirmed_capabilities.pop(
@@ -1072,14 +1318,25 @@ class StoryRuntime:
                     ),
                     None,
                 )
+                rejected_turn = LeadTurnResult(
+                    decision.session_id,
+                    decision.conversation_id,
+                    turn_id,
+                    decision.step_id,
+                    LeadOutcomeKind.RECOMMENDATION,
+                    "The proposed collaboration was rejected. I will continue with you directly.",
+                    None,
+                    CollaborationStepState.REJECTED,
+                    None,
+                    CollaborationNextAction.CONTINUE_WITH_LEAD,
+                )
                 return LeadDecisionResult(
                     decision.session_id,
                     decision.conversation_id,
                     decision.step_id,
                     decision.kind,
                     proposal,
-                    resulting_state,
-                    CollaborationNextAction.CONTINUE_WITH_LEAD,
+                    rejected_turn,
                 )
 
             assert decision.revision_request is not None
@@ -1113,10 +1370,1570 @@ class StoryRuntime:
                 decision.step_id,
                 decision.kind,
                 proposal,
-                resulting_state,
-                CollaborationNextAction.CONTINUE_WITH_LEAD,
                 revised_turn,
             )
+
+    async def _execute_confirmed_step_locked(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+        proposal: CollaborationProposal,
+        capability: _ConfirmedStepCapability,
+    ) -> LeadTurnResult:
+        """Consume exact start authority and finish one confirmed provider round."""
+
+        events = self.conversation_storage_services.event_store.read(
+            session_id,
+            conversation_id,
+        )
+        projection = project_collaboration_history(events)
+        if (
+            projection.current_state is not CollaborationStepState.CONFIRMED
+            or projection.current_proposal != proposal
+            or not events
+            or not self._capability_matches(capability, proposal, events[-1])
+        ):
+            raise BackendProtocolError(
+                "confirmed collaboration authority no longer matches the durable tail"
+            )
+        self._validate_current_proposal_authority(
+            session_id=session_id,
+            events=events,
+            projection=projection,
+            proposal=proposal,
+        )
+        key = (session_id, conversation_id, proposal.step_id)
+        if self._confirmed_capabilities.get(key) is not capability:
+            raise BackendProtocolError("confirmed collaboration capability is absent")
+        capability.consume()
+        self._confirmed_capabilities.pop(key, None)
+
+        attempt_id = self._deterministic_id(
+            "x",
+            proposal.proposal_id,
+            str(proposal.proposal_revision),
+            proposal.proposal_digest,
+        )
+        turn_id = self._deterministic_id("t", attempt_id, "execution")
+        dispatches = tuple(
+            self._draft_with_id(
+                event_id=self._deterministic_id(
+                    "e", attempt_id, assignment.assignment_id, "dispatch"
+                ),
+                session_id=session_id,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                step_id=proposal.step_id,
+                kind=CollaborationEventKind.ASSIGNMENT_DISPATCH,
+                sender=_RUNTIME_ACTOR,
+                recipient=CollaborationActor(
+                    CollaborationActorKind.SPECIALIST,
+                    assignment.specialist_id,
+                ),
+                payload=CollaborationAssignmentDispatchPayload(
+                    proposal_id=proposal.proposal_id,
+                    proposal_revision=proposal.proposal_revision,
+                    proposal_digest=proposal.proposal_digest,
+                    execution_attempt_id=attempt_id,
+                    assignment=assignment,
+                ),
+            )
+            for assignment in proposal.assignments
+        )
+        running = self._draft_with_id(
+            event_id=self._deterministic_id("e", attempt_id, "running"),
+            session_id=session_id,
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            step_id=proposal.step_id,
+            kind=CollaborationEventKind.STEP_STATE,
+            sender=_RUNTIME_ACTOR,
+            recipient=_USER_ACTOR,
+            payload=CollaborationStepStatePayload(
+                state=CollaborationStepState.RUNNING,
+                proposal_id=proposal.proposal_id,
+                proposal_revision=proposal.proposal_revision,
+                proposal_digest=proposal.proposal_digest,
+                execution_attempt_id=attempt_id,
+            ),
+        )
+        self._append_drafts(
+            projection.last_sequence,
+            (running, *dispatches),
+            batch_id=self._deterministic_id("b", attempt_id, "start"),
+        )
+        marker = (session_id, conversation_id, proposal.step_id, attempt_id)
+        self._live_execution_markers.add(marker)
+        try:
+            tasks = tuple(
+                asyncio.create_task(
+                    self._run_specialist_assignment(
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        proposal=proposal,
+                        attempt_id=attempt_id,
+                        assignment=assignment,
+                        dispatch_event_id=dispatch.event_id,
+                        events=events,
+                    ),
+                    name=(
+                        f"collaboration:{assignment.specialist_id}:"
+                        f"{assignment.assignment_id}"
+                    ),
+                )
+                for assignment, dispatch in zip(
+                    proposal.assignments,
+                    dispatches,
+                    strict=True,
+                )
+            )
+            try:
+                joined = await asyncio.gather(*tasks, return_exceptions=True)
+            except asyncio.CancelledError as cancellation:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                joined = await asyncio.gather(*tasks, return_exceptions=True)
+                results = tuple(self._joined_invocation_result(item) for item in joined)
+                try:
+                    self._persist_collaboration_results_locked(
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        proposal=proposal,
+                        attempt_id=attempt_id,
+                        assignment_results=results,
+                        synthesis_result=None,
+                    )
+                except BaseException as persistence_failure:
+                    cancellation.add_note(
+                        "collaboration cancellation persistence failed: "
+                        f"{type(persistence_failure).__name__}"
+                    )
+                raise cancellation
+            results = tuple(self._joined_invocation_result(item) for item in joined)
+
+            synthesis_result: _CollaborationInvocationResult | None = None
+            if (
+                all(item.failure is None for item in results)
+                and proposal.step_kind
+                is CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
+            ):
+                replies = tuple(item.value for item in results)
+                if not all(
+                    type(item) is CollaborationSpecialistReplyPayload
+                    for item in replies
+                ):
+                    raise BackendProtocolError(
+                        "successful specialist result is not typed"
+                    )
+                try:
+                    synthesis_result = self._required_synthesis_result(
+                        await self._run_lead_synthesis(
+                            session_id=session_id,
+                            conversation_id=conversation_id,
+                            turn_id=turn_id,
+                            proposal=proposal,
+                            attempt_id=attempt_id,
+                            replies=cast(
+                                tuple[CollaborationSpecialistReplyPayload, ...],
+                                replies,
+                            ),
+                            events=events,
+                        )
+                    )
+                except Exception as failure:
+                    synthesis_result = self._required_synthesis_result(
+                        self._joined_invocation_result(failure)
+                    )
+            current_task = asyncio.current_task()
+            if current_task is not None and current_task.cancelling():
+                cancellation = asyncio.CancelledError()
+                try:
+                    self._persist_collaboration_results_locked(
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        proposal=proposal,
+                        attempt_id=attempt_id,
+                        assignment_results=results,
+                        synthesis_result=synthesis_result,
+                    )
+                except BaseException as persistence_failure:
+                    cancellation.add_note(
+                        "collaboration cancellation persistence failed: "
+                        f"{type(persistence_failure).__name__}"
+                    )
+                raise cancellation
+            self._persist_collaboration_results_locked(
+                session_id=session_id,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                proposal=proposal,
+                attempt_id=attempt_id,
+                assignment_results=results,
+                synthesis_result=synthesis_result,
+            )
+            persisted = self.conversation_storage_services.event_store.read(
+                session_id,
+                conversation_id,
+            )
+            finalized_projection = project_collaboration_history(persisted)
+            if finalized_projection.current_state is CollaborationStepState.RUNNING:
+                return self._finalize_known_result_locked(
+                    persisted,
+                    finalized_projection,
+                )
+            if finalized_projection.current_state is not (
+                CollaborationStepState.OUTCOME_UNKNOWN
+            ):
+                raise BackendProtocolError("execution did not reach a durable result")
+            return LeadTurnResult(
+                session_id,
+                conversation_id,
+                turn_id,
+                proposal.step_id,
+                LeadOutcomeKind.RECOMMENDATION,
+                "A submitted provider outcome is uncertain. Inspect and resolve it; "
+                "the runtime will not replay the attempt.",
+                None,
+                CollaborationStepState.OUTCOME_UNKNOWN,
+                None,
+                CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME,
+            )
+        finally:
+            self._live_execution_markers.discard(marker)
+
+    @staticmethod
+    def _joined_invocation_result(item: object) -> _CollaborationInvocationResult:
+        """Preserve safely knowable facts from one joined assignment task."""
+
+        if type(item) is _CollaborationInvocationResult:
+            return item
+        if not isinstance(item, BaseException):
+            item = BackendProtocolError(
+                "specialist task returned an invalid invocation result"
+            )
+        facts = context_provider_failure_facts(item)
+        return _CollaborationInvocationResult(
+            None,
+            len(facts.submitted_accountings),
+            item,
+            facts.submission_uncertain,
+        )
+
+    @staticmethod
+    def _required_synthesis_result(item: object) -> _CollaborationInvocationResult:
+        """Fail closed when mandatory synthesis has no exact typed result."""
+
+        if type(item) is not _CollaborationInvocationResult:
+            return _CollaborationInvocationResult(
+                None,
+                0,
+                BackendProtocolError(
+                    "mandatory consultation synthesis returned no invocation result"
+                ),
+            )
+        if item.failure is None and type(item.value) is not (
+            CollaborationLeadSynthesisPayload
+        ):
+            return _CollaborationInvocationResult(
+                None,
+                item.submitted_physical_calls,
+                BackendProtocolError(
+                    "mandatory consultation synthesis returned no typed payload"
+                ),
+                item.submission_uncertain,
+            )
+        return item
+
+    async def _run_specialist_assignment(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+        turn_id: str,
+        proposal: CollaborationProposal,
+        attempt_id: str,
+        assignment: CollaborationAssignment,
+        dispatch_event_id: str,
+        events: tuple[CollaborationEvent, ...],
+    ) -> _CollaborationInvocationResult:
+        inputs_by_id = {item.input_id: item for item in proposal.basis.inputs}
+        try:
+            selected = tuple(
+                inputs_by_id[input_id] for input_id in assignment.input_ids
+            )
+        except KeyError as exc:
+            raise BackendProtocolError(
+                "assignment contains an unknown input alias"
+            ) from exc
+        value = {
+            "answer_contract": {
+                "assessment": [
+                    item.value for item in CollaborationSpecialistAssessment
+                ],
+                "assignment_id": assignment.assignment_id,
+                "input_ids": list(assignment.input_ids),
+                "message": "nonempty visible specialist assessment",
+            },
+            "assignment": {
+                "assignment_id": assignment.assignment_id,
+                "instruction": assignment.instruction,
+                "input_ids": list(assignment.input_ids),
+                "round": assignment.round,
+            },
+            "inputs": [
+                self._collaboration_input_value(item, events) for item in selected
+            ],
+            "workflow": proposal.step_kind.value,
+        }
+
+        def decode(answer: str) -> CollaborationSpecialistReplyPayload:
+            return self._decode_specialist_reply(
+                answer,
+                proposal=proposal,
+                attempt_id=attempt_id,
+                assignment=assignment,
+                dispatch_event_id=dispatch_event_id,
+            )
+
+        invocation_kind = (
+            CollaborationInvocationKind.SPECIALIST_ADVISORY
+            if proposal.step_kind is CollaborationStepKind.SPECIALIST_ADVISORY
+            else CollaborationInvocationKind.SPECIALIST_ASSIGNMENT
+        )
+        context_kind = (
+            ContextInvocationKind.SPECIALIST_ADVISORY
+            if proposal.step_kind is CollaborationStepKind.SPECIALIST_ADVISORY
+            else ContextInvocationKind.SPECIALIST_ASSIGNMENT
+        )
+        return await self._run_collaboration_invocation(
+            session_id=session_id,
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            step_id=proposal.step_id,
+            agent_id=assignment.specialist_id,
+            operation_id=f"assignment_{assignment.assignment_id}",
+            result_correlation_id=f"reply_{assignment.assignment_id}",
+            inputs=selected,
+            material_value=value,
+            invocation_kind=invocation_kind,
+            context_invocation_kind=context_kind,
+            physical_call_limit=assignment.max_physical_calls,
+            round_number=assignment.round,
+            decoder=decode,
+        )
+
+    async def _run_lead_synthesis(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+        turn_id: str,
+        proposal: CollaborationProposal,
+        attempt_id: str,
+        replies: tuple[CollaborationSpecialistReplyPayload, ...],
+        events: tuple[CollaborationEvent, ...],
+    ) -> _CollaborationInvocationResult:
+        reply_event_ids = tuple(
+            self._deterministic_id("e", attempt_id, reply.assignment_id, "reply")
+            for reply in replies
+        )
+        required_unresolved_input_ids = self._required_unresolved_input_ids(replies)
+        value = {
+            "answer_contract": {
+                "message": "nonempty visible synthesis",
+                "next_intent": (
+                    "null or an exact same-lineage proposal intent"
+                    if proposal.budget.rounds_spent == 0
+                    else None
+                ),
+                "reply_event_ids": list(reply_event_ids),
+                "unresolved_input_ids": list(required_unresolved_input_ids),
+            },
+            "inputs": [
+                self._collaboration_input_value(item, events)
+                for item in proposal.basis.inputs
+            ],
+            "replies": [
+                {
+                    "assessment": reply.assessment.value,
+                    "assignment_id": reply.assignment_id,
+                    "input_ids": list(reply.input_ids),
+                    "message": reply.message,
+                    "reply_event_id": reply_event_id,
+                }
+                for reply, reply_event_id in zip(replies, reply_event_ids, strict=True)
+            ],
+            "workflow": "lead_synthesis",
+        }
+
+        def decode(answer: str) -> CollaborationLeadSynthesisPayload:
+            return self._decode_lead_synthesis(
+                answer,
+                proposal=proposal,
+                attempt_id=attempt_id,
+                reply_event_ids=reply_event_ids,
+                replies=replies,
+            )
+
+        return await self._run_collaboration_invocation(
+            session_id=session_id,
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            step_id=proposal.step_id,
+            agent_id=LEAD_ORCHESTRATOR,
+            operation_id=f"synthesis_{attempt_id}",
+            result_correlation_id=f"synthesis_result_{attempt_id}",
+            inputs=tuple(
+                item
+                for item in proposal.basis.inputs
+                if item.kind
+                in {
+                    CollaborationInputKind.CORE_DOCUMENT,
+                    CollaborationInputKind.MANUSCRIPT,
+                    CollaborationInputKind.WRITING_ARTIFACT,
+                }
+            ),
+            material_value=value,
+            invocation_kind=CollaborationInvocationKind.LEAD_SYNTHESIS,
+            context_invocation_kind=ContextInvocationKind.LEAD_SYNTHESIS,
+            physical_call_limit=proposal.budget.synthesis_max_physical_calls,
+            round_number=proposal.budget.rounds_spent + 1,
+            decoder=decode,
+        )
+
+    async def _run_collaboration_invocation(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+        turn_id: str,
+        step_id: str,
+        agent_id: str,
+        operation_id: str,
+        result_correlation_id: str,
+        inputs: tuple[CollaborationInputRevision, ...],
+        material_value: object,
+        invocation_kind: CollaborationInvocationKind,
+        context_invocation_kind: ContextInvocationKind,
+        physical_call_limit: int,
+        round_number: int,
+        decoder: Callable[[str], object],
+    ) -> _CollaborationInvocationResult:
+        artifact_inputs = tuple(
+            item
+            for item in inputs
+            if item.kind
+            in {
+                CollaborationInputKind.CORE_DOCUMENT,
+                CollaborationInputKind.MANUSCRIPT,
+                CollaborationInputKind.WRITING_ARTIFACT,
+            }
+        )
+        reference_operation: RuntimeReferenceOperation | None = None
+        bound_agent: BoundAgent | None = None
+        provider: _AccountingContextProvider | None = None
+        try:
+            reference_operation = prepare_runtime_reference_operation(
+                self.artifacts,
+                session_id=session_id,
+                text=" ".join(item.locator for item in artifact_inputs),
+            )
+            self._validate_assignment_reference_proofs(
+                artifact_inputs,
+                reference_operation,
+            )
+            definition = self.prompts.build_contextual_definition(
+                session_id=session_id,
+                agent_id=agent_id,
+            )
+            bound_agent = await self._acquire_bound_agent(definition)
+            reference_read = reference_operation.begin_invocation(
+                agent_id=agent_id,
+                phase=context_invocation_kind.value,
+                round_number=round_number,
+            )
+            factory = self._validated_context_provider_factory(bound_agent)
+            delegate = factory(reference_read)
+            if inspect.isawaitable(delegate):
+                raise BackendProtocolError(
+                    "bound context_provider() must be synchronous"
+                )
+            provider = _AccountingContextProvider(
+                self,
+                delegate,
+                session_id=session_id,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                step_id=step_id,
+                invocation_id=self._deterministic_id(
+                    "inv", step_id, operation_id, str(round_number)
+                ),
+                role=agent_id,
+                invocation_kind=invocation_kind,
+            )
+            scope = self._agent_context_service.scope(
+                session_id,
+                ContextSubjectKind.CONVERSATION,
+                conversation_id,
+                agent_id,
+            )
+            services = self.conversation_storage_services
+            captured_conversation = select_bounded_collaboration_context(
+                services.event_store.read(session_id, conversation_id)
+            )
+            allowed_paths = frozenset(
+                proof.reference.path for proof in reference_operation.reference_proofs
+            )
+            authorities = (
+                WritingArtifactSourceAdapter(
+                    self.artifacts,
+                    scope,
+                    allowed_paths=allowed_paths,
+                ),
+                FocusedConversationSourceAdapter(
+                    services.catalog,
+                    services.event_store,
+                    scope,
+                    conversation_id,
+                    captured_context=captured_conversation,
+                ),
+                ActiveDebateSourceAdapter(self.workspace, scope, None),
+                OwnAgentStateSourceAdapter(self.workspace, scope),
+            )
+            reference_operation_id, reservations = self._reference_reservations(
+                reference_operation
+            )
+            request = ContextInvocationRequest(
+                session_id=session_id,
+                subject_kind=ContextSubjectKind.CONVERSATION,
+                subject_id=conversation_id,
+                agent_id=agent_id,
+                operation_id=operation_id,
+                result_correlation_id=result_correlation_id,
+                materials=(
+                    self._context_material(
+                        source_id=f"runtime_input:{operation_id}",
+                        semantic_channel=ContextSemanticChannel.CURRENT_INPUT,
+                        ordinal=0,
+                        locator=f"request/{operation_id}",
+                        value=material_value,
+                    ),
+                ),
+                source_classifications=(),
+                reference_operation_id=reference_operation_id,
+                mandatory_references=reservations,
+                fresh=True,
+                invocation_kind=context_invocation_kind,
+                result_contract=_CONTEXT_RESULT_CONTRACT,
+                physical_call_limit=physical_call_limit,
+            )
+            decoded: object | None = None
+
+            def validate(answer: str, _authorization: object) -> None:
+                nonlocal decoded
+                decoded = decoder(answer)
+
+            result = await self._agent_context_service.invoke(
+                request,
+                provider,
+                writing_artifacts=authorities[0],
+                focused_conversation=authorities[1],
+                active_debate=authorities[2],
+                own_agent_state=authorities[3],
+                answer_validator=validate,
+            )
+            value = decoded if decoded is not None else decoder(result.answer)
+            reference_operation.finish()
+            return _CollaborationInvocationResult(
+                value,
+                provider.submitted_physical_calls,
+            )
+        except BaseException as failure:
+            if reference_operation is not None:
+                reference_operation.failure(failure)
+            facts = context_provider_failure_facts(failure)
+            submitted = (
+                provider.submitted_physical_calls
+                if provider is not None
+                else len(facts.submitted_accountings)
+            )
+            return _CollaborationInvocationResult(
+                None,
+                submitted,
+                failure,
+                facts.submission_uncertain,
+            )
+        finally:
+            if bound_agent is not None:
+                await self._release_bound_agent_use(bound_agent)
+
+    @staticmethod
+    def _validate_assignment_reference_proofs(
+        inputs: tuple[CollaborationInputRevision, ...],
+        operation: RuntimeReferenceOperation,
+    ) -> None:
+        proofs = operation.reference_proofs
+        if len(proofs) != len(inputs):
+            raise BackendProtocolError("assignment reference proof count changed")
+        for expected, proof in zip(inputs, proofs, strict=True):
+            line_range = proof.reference.line_range
+            if (
+                proof.reference.token != expected.locator
+                or f"sha256:{proof.selected_sha256}" != expected.revision_digest
+                or (None if line_range is None else line_range.start)
+                != expected.start_line
+                or (None if line_range is None else line_range.end) != expected.end_line
+            ):
+                raise BackendProtocolError(
+                    "assignment reference proof changed before provider submission"
+                )
+
+    def _collaboration_input_value(
+        self,
+        item: CollaborationInputRevision,
+        events: tuple[CollaborationEvent, ...],
+    ) -> dict[str, object]:
+        value: dict[str, object] = {
+            "end_line": item.end_line,
+            "input_id": item.input_id,
+            "kind": item.kind.value,
+            "locator": item.locator,
+            "revision_digest": item.revision_digest,
+            "start_line": item.start_line,
+        }
+        if item.kind is CollaborationInputKind.USER_INPUT:
+            turn_id = item.locator.removeprefix("conversation/").removesuffix(
+                "/user_input"
+            )
+            matches = tuple(
+                event
+                for event in events
+                if event.turn_id == turn_id
+                and event.sender == _USER_ACTOR
+                and type(event.payload) is CollaborationMessagePayload
+            )
+            if len(matches) != 1:
+                raise BackendProtocolError("assignment user input is not authoritative")
+            message_payload = cast(CollaborationMessagePayload, matches[0].payload)
+            value["text"] = message_payload.content
+        elif item.kind is CollaborationInputKind.CONVERSATION_EVENT:
+            event_id = item.locator.removeprefix("conversation/")
+            matches = tuple(event for event in events if event.event_id == event_id)
+            if len(matches) != 1 or type(matches[0].payload) is not (
+                CollaborationSpecialistReplyPayload
+            ):
+                raise BackendProtocolError(
+                    "assignment conversation input is not an authoritative reply"
+                )
+            payload = cast(CollaborationSpecialistReplyPayload, matches[0].payload)
+            value["reply"] = {
+                "assessment": payload.assessment.value,
+                "assignment_id": payload.assignment_id,
+                "input_ids": list(payload.input_ids),
+                "message": payload.message,
+            }
+        return value
+
+    def _persist_collaboration_results_locked(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+        turn_id: str,
+        proposal: CollaborationProposal,
+        attempt_id: str,
+        assignment_results: tuple[_CollaborationInvocationResult, ...],
+        synthesis_result: _CollaborationInvocationResult | None,
+    ) -> None:
+        if len(assignment_results) != len(proposal.assignments):
+            raise BackendProtocolError("assignment result count is not authoritative")
+        assignments_succeeded = all(item.failure is None for item in assignment_results)
+        if (
+            assignments_succeeded
+            and proposal.step_kind is CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
+            and proposal.budget.synthesis_max_physical_calls > 0
+        ):
+            synthesis_result = self._required_synthesis_result(synthesis_result)
+        uncertain = any(item.submission_uncertain for item in assignment_results) or (
+            synthesis_result is not None and synthesis_result.submission_uncertain
+        )
+        replies: list[CollaborationEventDraft] = []
+        assignment_outcomes: list[CollaborationAssignmentOutcome] = []
+        terminals: list[CollaborationEventDraft] = []
+        for assignment, invocation_result in zip(
+            proposal.assignments,
+            assignment_results,
+            strict=True,
+        ):
+            reply_event_id: str | None = None
+            if invocation_result.failure is None:
+                if (
+                    type(invocation_result.value)
+                    is not CollaborationSpecialistReplyPayload
+                ):
+                    raise BackendProtocolError("specialist success lacks a typed reply")
+                reply_event_id = self._deterministic_id(
+                    "e", attempt_id, assignment.assignment_id, "reply"
+                )
+                replies.append(
+                    self._draft_with_id(
+                        event_id=reply_event_id,
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        step_id=proposal.step_id,
+                        kind=CollaborationEventKind.SPECIALIST_REPLY,
+                        sender=CollaborationActor(
+                            CollaborationActorKind.SPECIALIST,
+                            assignment.specialist_id,
+                        ),
+                        recipient=(
+                            _USER_ACTOR
+                            if proposal.step_kind
+                            is CollaborationStepKind.SPECIALIST_ADVISORY
+                            else _LEAD_ACTOR
+                        ),
+                        payload=invocation_result.value,
+                    )
+                )
+                outcome = CollaborationAssignmentOutcomeKind.SUCCEEDED
+            elif isinstance(invocation_result.failure, asyncio.CancelledError):
+                outcome = CollaborationAssignmentOutcomeKind.CANCELLED
+            else:
+                outcome = CollaborationAssignmentOutcomeKind.FAILED
+            if not invocation_result.submission_uncertain:
+                assignment_outcomes.append(
+                    CollaborationAssignmentOutcome(
+                        assignment_id=assignment.assignment_id,
+                        outcome=outcome,
+                        submitted_physical_calls=(
+                            invocation_result.submitted_physical_calls
+                        ),
+                        reply_event_id=reply_event_id,
+                    )
+                )
+                terminals.append(
+                    self._terminal_outcome_draft(
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        step_id=proposal.step_id,
+                        attempt_id=attempt_id,
+                        scope=CollaborationTerminalScope.ASSIGNMENT,
+                        outcome=outcome,
+                        submitted_physical_calls=(
+                            invocation_result.submitted_physical_calls
+                        ),
+                        assignment_id=assignment.assignment_id,
+                    )
+                )
+
+        projection = self.conversation_storage_services.event_store.read_context(
+            session_id,
+            conversation_id,
+        )
+        if uncertain:
+            interruption = self._draft_with_id(
+                event_id=self._deterministic_id("e", attempt_id, "uncertain"),
+                session_id=session_id,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                step_id=proposal.step_id,
+                kind=CollaborationEventKind.INTERRUPTION,
+                sender=_RUNTIME_ACTOR,
+                recipient=_USER_ACTOR,
+                payload=CollaborationInterruptionPayload(
+                    attempt_id,
+                    "A submitted provider outcome is uncertain; known sibling facts "
+                    "were preserved and this attempt will not be replayed.",
+                ),
+            )
+            unknown = self._draft_with_id(
+                event_id=self._deterministic_id("e", attempt_id, "outcome_unknown"),
+                session_id=session_id,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                step_id=proposal.step_id,
+                kind=CollaborationEventKind.STEP_STATE,
+                sender=_RUNTIME_ACTOR,
+                recipient=_USER_ACTOR,
+                payload=CollaborationStepStatePayload(
+                    state=CollaborationStepState.OUTCOME_UNKNOWN,
+                    proposal_id=proposal.proposal_id,
+                    proposal_revision=proposal.proposal_revision,
+                    proposal_digest=proposal.proposal_digest,
+                    execution_attempt_id=attempt_id,
+                ),
+            )
+            self._append_drafts(
+                projection.last_sequence,
+                (*replies, *terminals, interruption, unknown),
+                batch_id=self._deterministic_id("b", attempt_id, "unknown"),
+            )
+            return
+
+        synthesis_draft: CollaborationEventDraft | None = None
+        synthesis_outcome = CollaborationSynthesisOutcomeKind.NOT_ATTEMPTED
+        synthesis_calls = 0
+        synthesis_event_id: str | None = None
+        all_assignments_succeeded = all(
+            item.outcome is CollaborationAssignmentOutcomeKind.SUCCEEDED
+            for item in assignment_outcomes
+        )
+        if synthesis_result is not None:
+            synthesis_calls = synthesis_result.submitted_physical_calls
+            if synthesis_result.failure is None:
+                if (
+                    type(synthesis_result.value)
+                    is not CollaborationLeadSynthesisPayload
+                ):
+                    raise BackendProtocolError("lead synthesis success is not typed")
+                synthesis_outcome = CollaborationSynthesisOutcomeKind.SUCCEEDED
+                synthesis_event_id = self._deterministic_id(
+                    "e", attempt_id, "synthesis"
+                )
+                synthesis_draft = self._draft_with_id(
+                    event_id=synthesis_event_id,
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    step_id=proposal.step_id,
+                    kind=CollaborationEventKind.LEAD_SYNTHESIS,
+                    sender=_LEAD_ACTOR,
+                    recipient=_USER_ACTOR,
+                    payload=synthesis_result.value,
+                )
+            elif isinstance(synthesis_result.failure, asyncio.CancelledError):
+                synthesis_outcome = CollaborationSynthesisOutcomeKind.CANCELLED
+            else:
+                synthesis_outcome = CollaborationSynthesisOutcomeKind.FAILED
+            terminals.append(
+                self._terminal_outcome_draft(
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    step_id=proposal.step_id,
+                    attempt_id=attempt_id,
+                    scope=CollaborationTerminalScope.SYNTHESIS,
+                    outcome=CollaborationAssignmentOutcomeKind(synthesis_outcome.value),
+                    submitted_physical_calls=synthesis_calls,
+                    assignment_id=None,
+                )
+            )
+
+        if (
+            any(
+                item.outcome is CollaborationAssignmentOutcomeKind.FAILED
+                for item in assignment_outcomes
+            )
+            or synthesis_outcome is CollaborationSynthesisOutcomeKind.FAILED
+        ):
+            overall = CollaborationExecutionOutcomeKind.FAILED
+        elif (
+            any(
+                item.outcome is CollaborationAssignmentOutcomeKind.CANCELLED
+                for item in assignment_outcomes
+            )
+            or synthesis_outcome is CollaborationSynthesisOutcomeKind.CANCELLED
+        ):
+            overall = CollaborationExecutionOutcomeKind.CANCELLED
+        elif all_assignments_succeeded and synthesis_outcome in {
+            CollaborationSynthesisOutcomeKind.SUCCEEDED,
+            CollaborationSynthesisOutcomeKind.NOT_ATTEMPTED,
+        }:
+            overall = CollaborationExecutionOutcomeKind.SUCCEEDED
+        else:
+            overall = CollaborationExecutionOutcomeKind.FAILED
+        visible = tuple(
+            draft.event_id
+            for draft in (
+                *replies,
+                *((synthesis_draft,) if synthesis_draft is not None else ()),
+                *terminals,
+            )
+        )
+        result_event_id = self._deterministic_id("e", attempt_id, "result")
+        result = self._draft_with_id(
+            event_id=result_event_id,
+            session_id=session_id,
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            step_id=proposal.step_id,
+            kind=CollaborationEventKind.EXECUTION_RESULT,
+            sender=_RUNTIME_ACTOR,
+            recipient=_USER_ACTOR,
+            payload=CollaborationExecutionResult(
+                proposal_id=proposal.proposal_id,
+                proposal_revision=proposal.proposal_revision,
+                proposal_digest=proposal.proposal_digest,
+                execution_attempt_id=attempt_id,
+                assignment_outcomes=tuple(assignment_outcomes),
+                synthesis_outcome=synthesis_outcome,
+                synthesis_submitted_physical_calls=synthesis_calls,
+                synthesis_result_event_id=synthesis_event_id,
+                overall_outcome=overall,
+                visible_exchange_event_ids=visible,
+            ),
+        )
+        self._append_drafts(
+            projection.last_sequence,
+            (
+                *replies,
+                *((synthesis_draft,) if synthesis_draft is not None else ()),
+                *terminals,
+                result,
+            ),
+            batch_id=self._deterministic_id("b", attempt_id, "result"),
+        )
+
+    def _terminal_outcome_draft(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+        turn_id: str,
+        step_id: str,
+        attempt_id: str,
+        scope: CollaborationTerminalScope,
+        outcome: CollaborationAssignmentOutcomeKind,
+        submitted_physical_calls: int,
+        assignment_id: str | None,
+    ) -> CollaborationEventDraft:
+        return self._draft_with_id(
+            event_id=self._deterministic_id(
+                "e", attempt_id, scope.value, assignment_id or "lead", "terminal"
+            ),
+            session_id=session_id,
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            step_id=step_id,
+            kind=CollaborationEventKind.TERMINAL_OUTCOME,
+            sender=_RUNTIME_ACTOR,
+            recipient=_USER_ACTOR,
+            payload=CollaborationTerminalOutcomePayload(
+                execution_attempt_id=attempt_id,
+                scope=scope,
+                outcome=outcome,
+                submitted_physical_calls=submitted_physical_calls,
+                assignment_id=assignment_id,
+            ),
+        )
+
+    def _finalize_known_result_locked(
+        self,
+        events: tuple[CollaborationEvent, ...],
+        projection: CollaborationHistoryProjection,
+    ) -> LeadTurnResult:
+        proposal = projection.current_proposal
+        result = projection.execution_result
+        result_event_id = projection.execution_result_event_id
+        if proposal is None or result is None or result_event_id is None:
+            raise BackendProtocolError("known result finalization lacks authority")
+        turn_id = self._deterministic_id("t", result_event_id, "finalize")
+        synthesis_event = next(
+            (
+                event
+                for event in events
+                if event.event_id == result.synthesis_result_event_id
+                and type(event.payload) is CollaborationLeadSynthesisPayload
+            ),
+            None,
+        )
+        synthesis_payload = (
+            cast(CollaborationLeadSynthesisPayload, synthesis_event.payload)
+            if synthesis_event is not None
+            else None
+        )
+        next_intent = (
+            synthesis_payload.next_intent if synthesis_payload is not None else None
+        )
+        if (
+            result.overall_outcome is CollaborationExecutionOutcomeKind.SUCCEEDED
+            and next_intent is not None
+        ):
+            next_proposal = self._build_continuation_proposal(
+                session_id=projection.session_id or events[-1].session_id,
+                proposal=proposal,
+                result=result,
+                next_intent=next_intent,
+                events=events,
+                projection=projection,
+            )
+            assert synthesis_event is not None
+            request_id = self._deterministic_id(
+                "c", next_proposal.proposal_id, next_proposal.proposal_digest
+            )
+            synthesis_message = cast(
+                CollaborationLeadSynthesisPayload,
+                synthesis_event.payload,
+            ).message
+            notice = (
+                f"{synthesis_message}\n\nA second specialist round is proposed for "
+                "the unresolved points. Confirm, reject, or revise it."
+            )
+            drafts = (
+                self._draft_with_id(
+                    event_id=self._deterministic_id("e", result_event_id, "notice"),
+                    session_id=events[-1].session_id,
+                    conversation_id=events[-1].conversation_id,
+                    turn_id=turn_id,
+                    step_id=proposal.step_id,
+                    kind=CollaborationEventKind.MESSAGE,
+                    sender=_LEAD_ACTOR,
+                    recipient=_USER_ACTOR,
+                    payload=CollaborationMessagePayload(notice),
+                ),
+                self._terminal_state_draft(
+                    events=events,
+                    turn_id=turn_id,
+                    proposal=proposal,
+                    result_event_id=result_event_id,
+                    state=CollaborationStepState.COMPLETED,
+                ),
+                self._draft_with_id(
+                    event_id=self._deterministic_id("e", result_event_id, "proposal"),
+                    session_id=events[-1].session_id,
+                    conversation_id=events[-1].conversation_id,
+                    turn_id=turn_id,
+                    step_id=proposal.step_id,
+                    kind=CollaborationEventKind.MESSAGE,
+                    sender=_LEAD_ACTOR,
+                    recipient=_USER_ACTOR,
+                    payload=next_proposal,
+                ),
+                self._draft_with_id(
+                    event_id=self._deterministic_id("e", result_event_id, "awaiting"),
+                    session_id=events[-1].session_id,
+                    conversation_id=events[-1].conversation_id,
+                    turn_id=turn_id,
+                    step_id=proposal.step_id,
+                    kind=CollaborationEventKind.STEP_STATE,
+                    sender=_RUNTIME_ACTOR,
+                    recipient=_USER_ACTOR,
+                    payload=CollaborationStepStatePayload(
+                        state=CollaborationStepState.AWAITING_CONFIRMATION,
+                        proposal_id=next_proposal.proposal_id,
+                        proposal_revision=next_proposal.proposal_revision,
+                        proposal_digest=next_proposal.proposal_digest,
+                        confirmation_request_id=request_id,
+                    ),
+                ),
+            )
+            self._append_drafts(
+                projection.last_sequence,
+                drafts,
+                batch_id=self._deterministic_id("b", result_event_id, "continue"),
+            )
+            return LeadTurnResult(
+                events[-1].session_id,
+                events[-1].conversation_id,
+                turn_id,
+                proposal.step_id,
+                LeadOutcomeKind.PROPOSAL,
+                notice,
+                next_proposal,
+                CollaborationStepState.AWAITING_CONFIRMATION,
+                request_id,
+                CollaborationNextAction.SUBMIT_CONFIRMATION,
+            )
+
+        state = {
+            CollaborationExecutionOutcomeKind.SUCCEEDED: CollaborationStepState.COMPLETED,
+            CollaborationExecutionOutcomeKind.FAILED: CollaborationStepState.FAILED,
+            CollaborationExecutionOutcomeKind.CANCELLED: CollaborationStepState.INTERRUPTED,
+        }[result.overall_outcome]
+        if synthesis_event is not None:
+            synthesis_payload = cast(
+                CollaborationLeadSynthesisPayload,
+                synthesis_event.payload,
+            )
+            message = synthesis_payload.message
+        elif result.overall_outcome is CollaborationExecutionOutcomeKind.SUCCEEDED:
+            reply = cast(
+                CollaborationSpecialistReplyPayload,
+                next(
+                    event.payload
+                    for event in events
+                    if event.event_id == result.assignment_outcomes[0].reply_event_id
+                    and type(event.payload) is CollaborationSpecialistReplyPayload
+                ),
+            )
+            message = reply.message
+        elif result.overall_outcome is CollaborationExecutionOutcomeKind.FAILED:
+            message = (
+                "The specialist consultation failed after preserving every known "
+                "sibling result. No semantic synthesis was attempted."
+            )
+        else:
+            message = (
+                "The specialist consultation was interrupted after preserving every "
+                "known result. Continue with the lead when ready."
+            )
+        final_drafts: list[CollaborationEventDraft] = [
+            self._draft_with_id(
+                event_id=self._deterministic_id("e", result_event_id, "notice"),
+                session_id=events[-1].session_id,
+                conversation_id=events[-1].conversation_id,
+                turn_id=turn_id,
+                step_id=proposal.step_id,
+                kind=CollaborationEventKind.MESSAGE,
+                sender=_LEAD_ACTOR,
+                recipient=_USER_ACTOR,
+                payload=CollaborationMessagePayload(message),
+            )
+        ]
+        if state is CollaborationStepState.INTERRUPTED:
+            final_drafts.append(
+                self._draft_with_id(
+                    event_id=self._deterministic_id(
+                        "e", result_event_id, "interruption"
+                    ),
+                    session_id=events[-1].session_id,
+                    conversation_id=events[-1].conversation_id,
+                    turn_id=turn_id,
+                    step_id=proposal.step_id,
+                    kind=CollaborationEventKind.INTERRUPTION,
+                    sender=_RUNTIME_ACTOR,
+                    recipient=_USER_ACTOR,
+                    payload=CollaborationInterruptionPayload(
+                        result.execution_attempt_id,
+                        message,
+                    ),
+                )
+            )
+        final_drafts.append(
+            self._terminal_state_draft(
+                events=events,
+                turn_id=turn_id,
+                proposal=proposal,
+                result_event_id=result_event_id,
+                state=state,
+            )
+        )
+        self._append_drafts(
+            projection.last_sequence,
+            tuple(final_drafts),
+            batch_id=self._deterministic_id("b", result_event_id, "finalize"),
+        )
+        return LeadTurnResult(
+            events[-1].session_id,
+            events[-1].conversation_id,
+            turn_id,
+            proposal.step_id,
+            LeadOutcomeKind.RECOMMENDATION,
+            message,
+            None,
+            state,
+            None,
+            CollaborationNextAction.CONTINUE_WITH_LEAD,
+        )
+
+    def _terminal_state_draft(
+        self,
+        *,
+        events: tuple[CollaborationEvent, ...],
+        turn_id: str,
+        proposal: CollaborationProposal,
+        result_event_id: str,
+        state: CollaborationStepState,
+    ) -> CollaborationEventDraft:
+        return self._draft_with_id(
+            event_id=self._deterministic_id("e", result_event_id, state.value),
+            session_id=events[-1].session_id,
+            conversation_id=events[-1].conversation_id,
+            turn_id=turn_id,
+            step_id=proposal.step_id,
+            kind=CollaborationEventKind.STEP_STATE,
+            sender=_RUNTIME_ACTOR,
+            recipient=_USER_ACTOR,
+            payload=CollaborationStepStatePayload(
+                state=state,
+                proposal_id=proposal.proposal_id,
+                proposal_revision=proposal.proposal_revision,
+                proposal_digest=proposal.proposal_digest,
+                execution_result_event_id=result_event_id,
+            ),
+        )
+
+    def _build_continuation_proposal(
+        self,
+        *,
+        session_id: str,
+        proposal: CollaborationProposal,
+        result: CollaborationExecutionResult,
+        next_intent: LeadProposalIntent,
+        events: tuple[CollaborationEvent, ...],
+        projection: CollaborationHistoryProjection,
+    ) -> CollaborationProposal:
+        if proposal.budget.rounds_spent != 0 or next_intent.relation is not (
+            LeadProposalRelation.CONTINUE_LINEAGE
+        ):
+            raise BackendProtocolError("a third specialist round is unreachable")
+        reply_events = tuple(
+            next(
+                event
+                for event in events
+                if event.event_id == outcome.reply_event_id
+                and type(event.payload) is CollaborationSpecialistReplyPayload
+            )
+            for outcome in result.assignment_outcomes
+        )
+        reply_inputs = tuple(
+            CollaborationInputRevision(
+                input_id=event.event_id,
+                kind=CollaborationInputKind.CONVERSATION_EVENT,
+                locator=f"conversation/{event.event_id}",
+                state=CollaborationInputState.PRESENT,
+                revision_digest=self._specialist_reply_digest(
+                    cast(CollaborationSpecialistReplyPayload, event.payload)
+                ),
+            )
+            for event in reply_events
+        )
+        inputs = (*proposal.basis.inputs, *reply_inputs)
+        known_ids = {item.input_id for item in inputs}
+        intent_ids = {
+            input_id
+            for assignment in next_intent.assignments
+            for input_id in assignment.input_ids
+        }
+        specialist_ids = tuple(
+            assignment.agent_id for assignment in next_intent.assignments
+        )
+        canonical = tuple(
+            agent_id for agent_id in SPECIALIST_IDS if agent_id in specialist_ids
+        )
+        if specialist_ids != canonical or intent_ids != known_ids:
+            raise BackendProtocolError(
+                "round-two intent is not canonical or input-complete"
+            )
+        self._validate_required_reviewers(
+            tuple(inputs),
+            tuple(
+                CollaborationAssignment(
+                    assignment_id=self._deterministic_id(
+                        "a",
+                        result.execution_attempt_id,
+                        assignment.agent_id,
+                        "continuation_validation",
+                    ),
+                    specialist_id=assignment.agent_id,
+                    round=2,
+                    instruction=assignment.instruction,
+                    input_ids=assignment.input_ids,
+                    max_physical_calls=1,
+                )
+                for assignment in next_intent.assignments
+            ),
+        )
+        call_limits, synthesis_calls, required_calls = self._proposal_call_reservations(
+            inputs=tuple(inputs),
+            assignment_input_ids=tuple(
+                assignment.input_ids for assignment in next_intent.assignments
+            ),
+            physical_calls_spent=projection.physical_calls_spent,
+        )
+        proposal_id = self._deterministic_id(
+            "p", result.execution_attempt_id, "continuation"
+        )
+        runtime_assignments = tuple(
+            CollaborationAssignment(
+                assignment_id=self._deterministic_id(
+                    "a", proposal_id, assignment.agent_id, str(index)
+                ),
+                specialist_id=assignment.agent_id,
+                round=2,
+                instruction=assignment.instruction,
+                input_ids=assignment.input_ids,
+                max_physical_calls=call_limit,
+            )
+            for index, (assignment, call_limit) in enumerate(
+                zip(next_intent.assignments, call_limits, strict=True),
+                start=1,
+            )
+        )
+        participant_ids = {LEAD_ORCHESTRATOR, *specialist_ids}
+        definitions = {
+            agent_id: self.prompts.build_contextual_definition(
+                session_id=session_id,
+                agent_id=agent_id,
+            )
+            for agent_id in participant_ids
+        }
+        profiles = tuple(
+            self._collaboration_agent_profile(agent_id, definitions[agent_id])
+            for agent_id in ROSTER
+            if agent_id in participant_ids
+        )
+        route_value = {
+            "participants": list(specialist_ids),
+            "profiles": [
+                [
+                    profile.agent_id,
+                    profile.definition_fingerprint,
+                    profile.execution_fingerprint,
+                ]
+                for profile in profiles
+            ],
+            "route": "lead_specialist_consultation",
+        }
+        return CollaborationProposal.create(
+            step_id=proposal.step_id,
+            proposal_id=proposal_id,
+            proposal_revision=proposal.proposal_revision + 1,
+            step_kind=CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION,
+            purpose=next_intent.purpose,
+            assignments=runtime_assignments,
+            user_impact=_LEAD_PROPOSAL_USER_IMPACT,
+            side_effects=(CollaborationSideEffect.PROVIDER_INVOCATION,),
+            budget=CollaborationBudget(
+                round_limit=COLLABORATION_ROUND_LIMIT,
+                physical_call_limit=COLLABORATION_PHYSICAL_CALL_LIMIT,
+                rounds_spent=projection.rounds_spent,
+                rounds_added=1,
+                physical_calls_spent=projection.physical_calls_spent,
+                max_additional_physical_calls=required_calls,
+                synthesis_max_physical_calls=synthesis_calls,
+            ),
+            basis=CollaborationProposalBasis(
+                route="lead_specialist_consultation",
+                route_fingerprint=self._canonical_digest(route_value),
+                agent_profiles=profiles,
+                context_policy_fingerprint=(
+                    self._agent_context_service.policy_fingerprint
+                ),
+                budget_policy_fingerprint=_BUDGET_POLICY_FINGERPRINT,
+                inputs=tuple(inputs),
+            ),
+        )
+
+    @classmethod
+    def _specialist_reply_digest(
+        cls,
+        payload: CollaborationSpecialistReplyPayload,
+    ) -> str:
+        return cls._canonical_digest(
+            {
+                "assessment": payload.assessment.value,
+                "assignment_id": payload.assignment_id,
+                "input_ids": list(payload.input_ids),
+                "message": payload.message,
+            }
+        )
+
+    @classmethod
+    def _decode_specialist_reply(
+        cls,
+        answer: str,
+        *,
+        proposal: CollaborationProposal,
+        attempt_id: str,
+        assignment: CollaborationAssignment,
+        dispatch_event_id: str,
+    ) -> CollaborationSpecialistReplyPayload:
+        try:
+            value = cls._strict_json_object(
+                answer,
+                {"assessment", "assignment_id", "input_ids", "message"},
+            )
+            input_ids = value["input_ids"]
+            assessment = value["assessment"]
+            message = value["message"]
+            if (
+                value["assignment_id"] != assignment.assignment_id
+                or type(input_ids) is not list
+                or tuple(input_ids) != assignment.input_ids
+                or type(assessment) is not str
+                or type(message) is not str
+            ):
+                raise ValueError
+            return CollaborationSpecialistReplyPayload(
+                proposal_id=proposal.proposal_id,
+                proposal_revision=proposal.proposal_revision,
+                proposal_digest=proposal.proposal_digest,
+                execution_attempt_id=attempt_id,
+                assignment_id=assignment.assignment_id,
+                dispatch_event_id=dispatch_event_id,
+                assessment=CollaborationSpecialistAssessment(assessment),
+                message=message,
+                input_ids=tuple(input_ids),
+            )
+        except (KeyError, TypeError, UnicodeError, ValueError) as exc:
+            raise BackendProtocolError(
+                "specialist returned a noncanonical assignment reply"
+            ) from exc
+
+    @classmethod
+    def _decode_lead_synthesis(
+        cls,
+        answer: str,
+        *,
+        proposal: CollaborationProposal,
+        attempt_id: str,
+        reply_event_ids: tuple[str, ...],
+        replies: tuple[CollaborationSpecialistReplyPayload, ...],
+    ) -> CollaborationLeadSynthesisPayload:
+        try:
+            value = cls._strict_json_object(
+                answer,
+                {
+                    "message",
+                    "next_intent",
+                    "reply_event_ids",
+                    "unresolved_input_ids",
+                },
+            )
+            raw_reply_ids = value["reply_event_ids"]
+            raw_unresolved = value["unresolved_input_ids"]
+            message = value["message"]
+            if (
+                type(raw_reply_ids) is not list
+                or tuple(raw_reply_ids) != reply_event_ids
+                or type(raw_unresolved) is not list
+                or any(type(item) is not str for item in raw_unresolved)
+                or type(message) is not str
+            ):
+                raise ValueError
+            known_input_order = tuple(item.input_id for item in proposal.basis.inputs)
+            unresolved = tuple(raw_unresolved)
+            required_unresolved = cls._required_unresolved_input_ids(replies)
+            required_set = set(required_unresolved)
+            unresolved_order = (
+                *required_unresolved,
+                *(
+                    input_id
+                    for input_id in known_input_order
+                    if input_id not in required_set
+                ),
+            )
+            if (
+                not required_set.issubset(unresolved)
+                or unresolved
+                != tuple(
+                    input_id for input_id in unresolved_order if input_id in unresolved
+                )
+                or len(set(unresolved)) != len(unresolved)
+            ):
+                raise ValueError
+            raw_intent = value["next_intent"]
+            if raw_intent is None:
+                intent = None
+            else:
+                if proposal.budget.rounds_spent != 0:
+                    raise ValueError
+                intent = cls._decode_continuation_intent(raw_intent)
+                actual_ids = {
+                    input_id
+                    for assignment in intent.assignments
+                    for input_id in assignment.input_ids
+                }
+                if actual_ids != set(known_input_order) | set(reply_event_ids):
+                    raise ValueError
+            return CollaborationLeadSynthesisPayload(
+                proposal_id=proposal.proposal_id,
+                proposal_revision=proposal.proposal_revision,
+                proposal_digest=proposal.proposal_digest,
+                execution_attempt_id=attempt_id,
+                message=message,
+                reply_event_ids=reply_event_ids,
+                unresolved_input_ids=unresolved,
+                next_intent=intent,
+            )
+        except (KeyError, TypeError, UnicodeError, ValueError) as exc:
+            raise BackendProtocolError(
+                "lead returned a noncanonical synthesis"
+            ) from exc
+
+    @staticmethod
+    def _required_unresolved_input_ids(
+        replies: tuple[CollaborationSpecialistReplyPayload, ...],
+    ) -> tuple[str, ...]:
+        """Return ordered unique inputs that non-supporting replies cannot erase."""
+
+        required: list[str] = []
+        seen: set[str] = set()
+        for reply in replies:
+            if reply.assessment is CollaborationSpecialistAssessment.SUPPORTS:
+                continue
+            for input_id in reply.input_ids:
+                if input_id not in seen:
+                    seen.add(input_id)
+                    required.append(input_id)
+        return tuple(required)
+
+    @classmethod
+    def _decode_continuation_intent(cls, value: object) -> LeadProposalIntent:
+        if type(value) is not dict or set(value) != {
+            "assignments",
+            "purpose",
+            "relation",
+        }:
+            raise ValueError
+        if value["relation"] != LeadProposalRelation.CONTINUE_LINEAGE.value:
+            raise ValueError
+        raw_assignments = value["assignments"]
+        if type(raw_assignments) is not list or not raw_assignments:
+            raise ValueError
+        assignments: list[LeadAssignmentIntent] = []
+        for item in raw_assignments:
+            if (
+                type(item) is not dict
+                or set(item)
+                != {
+                    "agent_id",
+                    "input_ids",
+                    "instruction",
+                }
+                or type(item["input_ids"]) is not list
+            ):
+                raise ValueError
+            assignments.append(
+                LeadAssignmentIntent(
+                    agent_id=item["agent_id"],
+                    instruction=item["instruction"],
+                    input_ids=tuple(item["input_ids"]),
+                )
+            )
+        specialist_ids = tuple(item.agent_id for item in assignments)
+        if specialist_ids != tuple(
+            agent_id for agent_id in SPECIALIST_IDS if agent_id in specialist_ids
+        ):
+            raise ValueError
+        return LeadProposalIntent(
+            relation=LeadProposalRelation.CONTINUE_LINEAGE,
+            purpose=value["purpose"],
+            assignments=tuple(assignments),
+        )
+
+    @staticmethod
+    def _strict_json_object(answer: str, keys: set[str]) -> dict[str, object]:
+        if type(answer) is not str:
+            raise TypeError
+
+        def unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
+            result: dict[str, object] = {}
+            for key, value in pairs:
+                if key in result:
+                    raise _DuplicateJsonKey
+                result[key] = value
+            return result
+
+        try:
+            value = json.loads(
+                answer,
+                object_pairs_hook=unique,
+                parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
+            )
+        except (_DuplicateJsonKey, json.JSONDecodeError, ValueError) as exc:
+            raise ValueError from exc
+        if type(value) is not dict or set(value) != keys:
+            raise ValueError
+        return value
 
     def _read_lead_history(
         self,
@@ -1250,19 +3067,7 @@ class StoryRuntime:
                 projection.execution_attempt_id,
             )
             if projection.execution_result is not None:
-                return LeadTurnResult(
-                    session_id,
-                    conversation_id,
-                    projection.current_turn_id or self._new_id("t"),
-                    proposal.step_id,
-                    LeadOutcomeKind.RECOMMENDATION,
-                    "A known execution result is durable and awaits deterministic "
-                    "local finalization.",
-                    None,
-                    CollaborationStepState.RUNNING,
-                    None,
-                    CollaborationNextAction.FINALIZE_RESULT,
-                )
+                return self._finalize_known_result_locked(events, projection)
             if marker in self._live_execution_markers:
                 return LeadTurnResult(
                     session_id,
@@ -1451,6 +3256,8 @@ class StoryRuntime:
                 turn_id=turn_id,
                 step_id=step_id,
                 invocation_id=invocation_id,
+                role=LEAD_ORCHESTRATOR,
+                invocation_kind=CollaborationInvocationKind.LEAD,
             )
             scope = self._agent_context_service.scope(
                 session_id,
@@ -1849,10 +3656,7 @@ class StoryRuntime:
             *specialist_ids,
         }
         profiles = tuple(
-            CollaborationAgentProfile(
-                agent_id,
-                f"sha256:{getattr(definitions[agent_id], 'fingerprint')}",
-            )
+            self._collaboration_agent_profile(agent_id, definitions[agent_id])
             for agent_id in ROSTER
             if agent_id in participant_ids
         )
@@ -1860,7 +3664,12 @@ class StoryRuntime:
             "route": "lead_specialist_consultation",
             "participants": list(specialist_ids),
             "profiles": [
-                [item.agent_id, item.profile_fingerprint] for item in profiles
+                [
+                    item.agent_id,
+                    item.definition_fingerprint,
+                    item.execution_fingerprint,
+                ]
+                for item in profiles
             ],
         }
         basis = CollaborationProposalBasis(
@@ -1923,6 +3732,10 @@ class StoryRuntime:
                         assignment.input_ids for assignment in proposal.assignments
                     ),
                     physical_calls_spent=projection.physical_calls_spent,
+                    synthesis_required=(
+                        proposal.step_kind
+                        is CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
+                    ),
                 )
             )
             runtime_assignments = tuple(
@@ -1940,31 +3753,40 @@ class StoryRuntime:
                     strict=True,
                 )
             )
+            participant_sequence = (
+                (LEAD_ORCHESTRATOR, *specialist_ids)
+                if proposal.step_kind
+                is CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
+                else specialist_ids
+            )
             definitions = {
                 agent_id: self.prompts.build_contextual_definition(
                     session_id=session_id,
                     agent_id=agent_id,
                 )
-                for agent_id in (LEAD_ORCHESTRATOR, *specialist_ids)
+                for agent_id in participant_sequence
             }
-            participant_ids = {LEAD_ORCHESTRATOR, *specialist_ids}
+            participant_ids = set(participant_sequence)
             profiles = tuple(
-                CollaborationAgentProfile(
-                    agent_id,
-                    f"sha256:{definitions[agent_id].fingerprint}",
-                )
+                self._collaboration_agent_profile(agent_id, definitions[agent_id])
                 for agent_id in ROSTER
                 if agent_id in participant_ids
             )
+            route_name = proposal.step_kind.value
             route_value = {
-                "route": "lead_specialist_consultation",
+                "route": route_name,
                 "participants": list(specialist_ids),
                 "profiles": [
-                    [item.agent_id, item.profile_fingerprint] for item in profiles
+                    [
+                        item.agent_id,
+                        item.definition_fingerprint,
+                        item.execution_fingerprint,
+                    ]
+                    for item in profiles
                 ],
             }
             basis = CollaborationProposalBasis(
-                route="lead_specialist_consultation",
+                route=route_name,
                 route_fingerprint=self._canonical_digest(route_value),
                 agent_profiles=profiles,
                 context_policy_fingerprint=(
@@ -1986,10 +3808,15 @@ class StoryRuntime:
                 step_id=proposal.step_id,
                 proposal_id=proposal.proposal_id,
                 proposal_revision=proposal.proposal_revision,
-                step_kind=CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION,
+                step_kind=proposal.step_kind,
                 purpose=proposal.purpose,
                 assignments=runtime_assignments,
-                user_impact=_LEAD_PROPOSAL_USER_IMPACT,
+                user_impact=(
+                    _LEAD_PROPOSAL_USER_IMPACT
+                    if proposal.step_kind
+                    is CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
+                    else _ADVISORY_USER_IMPACT
+                ),
                 side_effects=(CollaborationSideEffect.PROVIDER_INVOCATION,),
                 budget=budget,
                 basis=basis,
@@ -2018,35 +3845,15 @@ class StoryRuntime:
         )
         if len(proposal_events) != 1:
             raise ValueError("proposal event identity is not unique")
-        proposal_event = proposal_events[0]
-        user_events = tuple(
-            event
-            for event in events
-            if event.sequence < proposal_event.sequence
-            and event.turn_id == proposal_event.turn_id
-            and type(event.payload) is CollaborationMessagePayload
-            and event.sender == _USER_ACTOR
-            and event.recipient == _LEAD_ACTOR
-        )
-        if len(user_events) != 1:
-            raise ValueError("proposal user input identity is not unique")
-        user_content = user_events[0].payload.content
-        current: list[CollaborationInputRevision] = [
-            CollaborationInputRevision(
-                input_id="user_input",
-                kind=CollaborationInputKind.USER_INPUT,
-                locator=f"conversation/{proposal_event.turn_id}/user_input",
-                state=CollaborationInputState.PRESENT,
-                revision_digest=(
-                    "sha256:"
-                    + hashlib.sha256(
-                        user_content.encode("utf-8", errors="strict")
-                    ).hexdigest()
-                ),
-            )
-        ]
-        references = []
-        for expected in proposal.basis.inputs[1:]:
+        references: dict[str, Any] = {}
+        ordered_references: list[tuple[CollaborationInputRevision, Any]] = []
+        for expected in proposal.basis.inputs:
+            if expected.kind not in {
+                CollaborationInputKind.CORE_DOCUMENT,
+                CollaborationInputKind.MANUSCRIPT,
+                CollaborationInputKind.WRITING_ARTIFACT,
+            }:
+                continue
             batch = parse_artifact_references(expected.locator)
             if (
                 batch.source_text != expected.locator
@@ -2055,47 +3862,120 @@ class StoryRuntime:
                 or batch.references[0].token != expected.locator
             ):
                 raise ValueError("proposal reference locator is not canonical")
-            references.append(batch.references[0])
-        paths = tuple(dict.fromkeys(reference.path for reference in references))
+            reference = batch.references[0]
+            references[expected.input_id] = reference
+            ordered_references.append((expected, reference))
+        paths = tuple(
+            dict.fromkeys(reference.path for _expected, reference in ordered_references)
+        )
         snapshots = self.artifacts.read_current(paths)
         if tuple(snapshot.path for snapshot in snapshots) != paths:
             raise ValueError("proposal reference source is no longer readable")
         by_path = {snapshot.path: snapshot for snapshot in snapshots}
         selected_total = 0
-        for ordinal, reference in enumerate(references, start=1):
+        current: list[CollaborationInputRevision] = []
+        for expected in proposal.basis.inputs:
+            if expected.kind is CollaborationInputKind.USER_INPUT:
+                prefix = "conversation/"
+                suffix = "/user_input"
+                if not (
+                    expected.locator.startswith(prefix)
+                    and expected.locator.endswith(suffix)
+                ):
+                    raise ValueError("proposal user input locator is not canonical")
+                turn_id = expected.locator[len(prefix) : -len(suffix)]
+                user_events = tuple(
+                    event
+                    for event in events
+                    if event.turn_id == turn_id
+                    and type(event.payload) is CollaborationMessagePayload
+                    and event.sender == _USER_ACTOR
+                    and event.recipient == _LEAD_ACTOR
+                )
+                if len(user_events) != 1:
+                    raise ValueError("proposal user input identity is not unique")
+                digest = (
+                    "sha256:"
+                    + hashlib.sha256(
+                        cast(
+                            CollaborationMessagePayload,
+                            user_events[0].payload,
+                        ).content.encode("utf-8", errors="strict")
+                    ).hexdigest()
+                )
+                current.append(
+                    CollaborationInputRevision(
+                        input_id=expected.input_id,
+                        kind=expected.kind,
+                        locator=expected.locator,
+                        state=CollaborationInputState.PRESENT,
+                        revision_digest=digest,
+                    )
+                )
+                continue
+            if expected.kind is CollaborationInputKind.CONVERSATION_EVENT:
+                prefix = "conversation/"
+                if not expected.locator.startswith(prefix):
+                    raise ValueError("conversation input locator is not canonical")
+                event_id = expected.locator[len(prefix) :]
+                reply_events = tuple(
+                    event
+                    for event in events
+                    if event.event_id == event_id
+                    and type(event.payload) is CollaborationSpecialistReplyPayload
+                )
+                if len(reply_events) != 1:
+                    raise ValueError("conversation input reply is not authoritative")
+                current.append(
+                    CollaborationInputRevision(
+                        input_id=expected.input_id,
+                        kind=expected.kind,
+                        locator=expected.locator,
+                        state=CollaborationInputState.PRESENT,
+                        revision_digest=self._specialist_reply_digest(
+                            cast(
+                                CollaborationSpecialistReplyPayload,
+                                reply_events[0].payload,
+                            )
+                        ),
+                    )
+                )
+                continue
+            current_reference = references.get(expected.input_id)
+            if current_reference is None:
+                raise ValueError("proposal artifact input is not canonical")
             selected = self._select_current_reference_bytes(
-                by_path[reference.path].content,
-                None if reference.line_range is None else reference.line_range.start,
-                None if reference.line_range is None else reference.line_range.end,
+                by_path[current_reference.path].content,
+                (
+                    None
+                    if current_reference.line_range is None
+                    else current_reference.line_range.start
+                ),
+                (
+                    None
+                    if current_reference.line_range is None
+                    else current_reference.line_range.end
+                ),
             )
             selected_total += len(selected)
             if selected_total > MAX_REFERENCE_TOTAL_BYTES:
                 raise ValueError("proposal references exceed the aggregate read limit")
-            kind = (
-                CollaborationInputKind.CORE_DOCUMENT
-                if reference.path.startswith("core_documents/")
-                else (
-                    CollaborationInputKind.MANUSCRIPT
-                    if reference.path.startswith("manuscript/")
-                    else CollaborationInputKind.WRITING_ARTIFACT
-                )
-            )
             current.append(
                 CollaborationInputRevision(
-                    input_id=f"reference_{ordinal}",
-                    kind=kind,
-                    locator=reference.token,
+                    input_id=expected.input_id,
+                    kind=expected.kind,
+                    locator=current_reference.token,
                     state=CollaborationInputState.PRESENT,
-                    revision_digest=("sha256:" + hashlib.sha256(selected).hexdigest()),
+                    revision_digest="sha256:" + hashlib.sha256(selected).hexdigest(),
                     start_line=(
                         None
-                        if reference.line_range is None
-                        else reference.line_range.start
+                        if current_reference.line_range is None
+                        else current_reference.line_range.start
                     ),
                     end_line=(
                         None
-                        if reference.line_range is None
-                        else reference.line_range.end
+                        if current_reference.line_range is None
+                        else current_reference.line_range.end
                     ),
                 )
             )
@@ -2174,18 +4054,27 @@ class StoryRuntime:
         inputs: tuple[CollaborationInputRevision, ...],
         assignment_input_ids: tuple[tuple[str, ...], ...],
         physical_calls_spent: int,
+        synthesis_required: bool = True,
     ) -> tuple[tuple[int, ...], int, int]:
         reference_input_ids = {
             item.input_id
             for item in inputs
-            if item.kind is not CollaborationInputKind.USER_INPUT
+            if item.kind
+            in {
+                CollaborationInputKind.CORE_DOCUMENT,
+                CollaborationInputKind.MANUSCRIPT,
+                CollaborationInputKind.WRITING_ARTIFACT,
+            }
         }
         assignment_call_limits = tuple(
             1 + int(any(input_id in reference_input_ids for input_id in input_ids))
             for input_ids in assignment_input_ids
         )
         remaining = COLLABORATION_PHYSICAL_CALL_LIMIT - physical_calls_spent
-        minimum_required_calls = sum(assignment_call_limits) + 1
+        synthesis_minimum = (
+            1 + int(bool(reference_input_ids)) if synthesis_required else 0
+        )
+        minimum_required_calls = sum(assignment_call_limits) + synthesis_minimum
         if minimum_required_calls > remaining:
             raise BackendProtocolError(
                 "lead proposal cannot fit the remaining physical-call budget"
@@ -2201,18 +4090,32 @@ class StoryRuntime:
                 if limit < _CONTEXT_INVOCATION_CALL_LIMIT:
                     allocated_limits[index] += 1
                     unallocated -= 1
-        synthesis_calls = 1 + min(
-            _CONTEXT_INVOCATION_CALL_LIMIT - 1,
-            unallocated,
+        synthesis_calls = (
+            synthesis_minimum
+            + min(
+                _CONTEXT_INVOCATION_CALL_LIMIT - synthesis_minimum,
+                unallocated,
+            )
+            if synthesis_required
+            else 0
         )
         required_calls = sum(allocated_limits) + synthesis_calls
         return tuple(allocated_limits), synthesis_calls, required_calls
 
     @staticmethod
     def _core_reviewer(locator: str) -> str | None:
-        if not locator.startswith("${") or "}" not in locator:
+        try:
+            batch = parse_artifact_references(locator)
+        except Exception:
             return None
-        return _CORE_REVIEWERS.get(locator[2 : locator.index("}")])
+        if (
+            batch.source_text != locator
+            or batch.provider_text != locator
+            or len(batch.references) != 1
+            or batch.references[0].token != locator
+        ):
+            return None
+        return _CORE_REVIEWERS.get(batch.references[0].path)
 
     @staticmethod
     def _lead_inputs(
@@ -2254,6 +4157,76 @@ class StoryRuntime:
                     revision_digest=f"sha256:{proof.selected_sha256}",
                     start_line=(None if line_range is None else line_range.start),
                     end_line=(None if line_range is None else line_range.end),
+                )
+            )
+        return tuple(inputs)
+
+    def _provider_free_lead_inputs(
+        self,
+        turn_id: str,
+        text: str,
+    ) -> tuple[CollaborationInputRevision, ...]:
+        """Snapshot locator-only proposal evidence without opening provider work."""
+
+        batch = parse_artifact_references(text)
+        user_digest = (
+            "sha256:"
+            + hashlib.sha256(
+                batch.source_text.encode("utf-8", errors="strict")
+            ).hexdigest()
+        )
+        inputs: list[CollaborationInputRevision] = [
+            CollaborationInputRevision(
+                input_id="user_input",
+                kind=CollaborationInputKind.USER_INPUT,
+                locator=f"conversation/{turn_id}/user_input",
+                state=CollaborationInputState.PRESENT,
+                revision_digest=user_digest,
+            )
+        ]
+        paths = tuple(dict.fromkeys(reference.path for reference in batch.references))
+        snapshots = self.artifacts.read_current(paths)
+        if tuple(snapshot.path for snapshot in snapshots) != paths:
+            raise BackendProtocolError("advisory reference source is not readable")
+        by_path = {snapshot.path: snapshot for snapshot in snapshots}
+        selected_total = 0
+        for ordinal, reference in enumerate(batch.references, start=1):
+            selected = self._select_current_reference_bytes(
+                by_path[reference.path].content,
+                None if reference.line_range is None else reference.line_range.start,
+                None if reference.line_range is None else reference.line_range.end,
+            )
+            selected_total += len(selected)
+            if selected_total > MAX_REFERENCE_TOTAL_BYTES:
+                raise BackendProtocolError(
+                    "advisory references exceed the aggregate read limit"
+                )
+            kind = (
+                CollaborationInputKind.CORE_DOCUMENT
+                if reference.path.startswith("core_documents/")
+                else (
+                    CollaborationInputKind.MANUSCRIPT
+                    if reference.path.startswith("manuscript/")
+                    else CollaborationInputKind.WRITING_ARTIFACT
+                )
+            )
+            inputs.append(
+                CollaborationInputRevision(
+                    input_id=f"reference_{ordinal}",
+                    kind=kind,
+                    locator=reference.token,
+                    state=CollaborationInputState.PRESENT,
+                    revision_digest="sha256:" + hashlib.sha256(selected).hexdigest(),
+                    start_line=(
+                        None
+                        if reference.line_range is None
+                        else reference.line_range.start
+                    ),
+                    end_line=(
+                        None
+                        if reference.line_range is None
+                        else reference.line_range.end
+                    ),
                 )
             )
         return tuple(inputs)
@@ -2330,6 +4303,8 @@ class StoryRuntime:
         ordinal: int,
         call_kind: CollaborationProviderCallKind,
         state: CollaborationProviderCallState,
+        role: str,
+        invocation_kind: CollaborationInvocationKind,
     ) -> None:
         projection = self.conversation_storage_services.event_store.read_context(
             session_id,
@@ -2345,13 +4320,13 @@ class StoryRuntime:
                     step_id=step_id,
                     kind=CollaborationEventKind.PROVIDER_CALL_ACCOUNTING,
                     sender=_RUNTIME_ACTOR,
-                    recipient=_LEAD_ACTOR,
+                    recipient=self._actor_for_agent(role),
                     payload=CollaborationProviderCallPayload(
                         invocation_id=invocation_id,
                         call_id=call_id,
                         ordinal=ordinal,
-                        role=LEAD_ORCHESTRATOR,
-                        invocation_kind=CollaborationInvocationKind.LEAD,
+                        role=role,
+                        invocation_kind=invocation_kind,
                         call_kind=call_kind,
                         state=state,
                     ),
@@ -2359,13 +4334,23 @@ class StoryRuntime:
             ),
         )
 
+    @staticmethod
+    def _actor_for_agent(agent_id: str) -> CollaborationActor:
+        if agent_id == LEAD_ORCHESTRATOR:
+            return _LEAD_ACTOR
+        if agent_id in SPECIALIST_IDS:
+            return CollaborationActor(CollaborationActorKind.SPECIALIST, agent_id)
+        raise ValueError("provider call role must be canonical")
+
     def _append_drafts(
         self,
         expected_last_sequence: int,
         drafts: tuple[CollaborationEventDraft, ...],
+        *,
+        batch_id: str | None = None,
     ) -> object:
         batch = CollaborationEventBatch(
-            batch_id=self._new_id("b"),
+            batch_id=self._new_id("b") if batch_id is None else batch_id,
             expected_last_sequence=expected_last_sequence,
             events=drafts,
         )
@@ -2384,9 +4369,34 @@ class StoryRuntime:
         recipient: CollaborationActor,
         payload: CollaborationPayload,
     ) -> CollaborationEventDraft:
+        return cls._draft_with_id(
+            event_id=cls._new_id("e"),
+            session_id=session_id,
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            step_id=step_id,
+            kind=kind,
+            sender=sender,
+            recipient=recipient,
+            payload=payload,
+        )
+
+    @staticmethod
+    def _draft_with_id(
+        *,
+        event_id: str,
+        session_id: str,
+        conversation_id: str,
+        turn_id: str,
+        step_id: str,
+        kind: CollaborationEventKind,
+        sender: CollaborationActor,
+        recipient: CollaborationActor,
+        payload: CollaborationPayload,
+    ) -> CollaborationEventDraft:
         return CollaborationEventDraft(
             schema_version=COLLABORATION_EVENT_SCHEMA_VERSION,
-            event_id=cls._new_id("e"),
+            event_id=event_id,
             session_id=session_id,
             conversation_id=conversation_id,
             turn_id=turn_id,
@@ -2400,6 +4410,11 @@ class StoryRuntime:
     @staticmethod
     def _new_id(prefix: str) -> str:
         return f"{prefix}_{uuid.uuid4().hex}"
+
+    @staticmethod
+    def _deterministic_id(prefix: str, *parts: str) -> str:
+        value = "\x1f".join(parts).encode("utf-8", errors="strict")
+        return f"{prefix}_{hashlib.sha256(value).hexdigest()[:32]}"
 
     @staticmethod
     def _canonical_digest(value: object) -> str:
@@ -2434,11 +4449,31 @@ class StoryRuntime:
                     for item in proposal.basis.inputs
                 ],
                 "profiles": [
-                    [item.agent_id, item.profile_fingerprint]
+                    [
+                        item.agent_id,
+                        item.definition_fingerprint,
+                        item.execution_fingerprint,
+                    ]
                     for item in proposal.basis.agent_profiles
                 ],
                 "route": proposal.basis.route_fingerprint,
             }
+        )
+
+    def _collaboration_agent_profile(
+        self,
+        agent_id: str,
+        definition: object,
+    ) -> CollaborationAgentProfile:
+        if self.backend is None:
+            raise BackendProtocolError("collaboration profiles require an AgentBackend")
+        fingerprint = getattr(definition, "fingerprint", None)
+        if type(fingerprint) is not str:
+            raise BackendProtocolError("agent definition fingerprint is invalid")
+        return CollaborationAgentProfile(
+            agent_id=agent_id,
+            definition_fingerprint=f"sha256:{fingerprint}",
+            execution_fingerprint=self.backend.execution_profile_fingerprint(agent_id),
         )
 
     @classmethod
@@ -2861,6 +4896,23 @@ class RuntimeSession:
         return await self.runtime.lead_turn(
             self.session_id,
             conversation_id,
+            text,
+            context_event_sink,
+        )
+
+    async def propose_specialist_advisory(
+        self,
+        conversation_id: str,
+        specialist_id: str,
+        text: str,
+        context_event_sink: Callable[[ContextExecutionEvent], None] | None = None,
+    ) -> LeadTurnResult:
+        """Propose one provider-free direct advisory in this session."""
+
+        return await self.runtime.propose_specialist_advisory(
+            self.session_id,
+            conversation_id,
+            specialist_id,
             text,
             context_event_sink,
         )

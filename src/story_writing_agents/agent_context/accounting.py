@@ -43,6 +43,8 @@ class ProviderCallKind(StrEnum):
     CONVERSATION = "conversation"
     CONVERSATION_RETRIEVAL_INITIAL = "conversation_retrieval_initial"
     CONVERSATION_RETRIEVAL_CONTINUATION = "conversation_retrieval_continuation"
+    COLLABORATION_INITIAL = "collaboration_initial"
+    COLLABORATION_CONTINUATION = "collaboration_continuation"
     WRITING_ARTIFACT_REFERENCE_READ = "writing_artifact_reference_read"
 
 
@@ -106,8 +108,7 @@ class ContextComponentBytes:
             )
         if raw_reference > serialized:
             raise ValueError(
-                "raw mandatory-reference bytes cannot exceed serialized component "
-                "bytes"
+                "raw mandatory-reference bytes cannot exceed serialized component bytes"
             )
         if self.identity is not None:
             if type(self.identity) is not str or not self.identity:
@@ -228,9 +229,7 @@ class ProviderCallAccounting:
 
     def __post_init__(self) -> None:
         if type(self.payload) is not ProviderPayloadAccounting:
-            raise TypeError(
-                "provider call payload must be ProviderPayloadAccounting"
-            )
+            raise TypeError("provider call payload must be ProviderPayloadAccounting")
         if type(self.binding_components) is not tuple or any(
             type(component) is not ContextComponentBytes
             for component in self.binding_components
@@ -247,8 +246,7 @@ class ProviderCallAccounting:
             ContextComponentKind.PROVIDER_CONSTRAINTS,
         }
         if any(
-            component.kind not in binding_kinds
-            for component in self.binding_components
+            component.kind not in binding_kinds for component in self.binding_components
         ):
             raise ValueError(
                 "provider binding components must use binding component kinds"
@@ -280,8 +278,7 @@ class ProviderCallAccounting:
         """Return exact staged binding-instruction bytes."""
 
         return sum(
-            component.serialized_utf8_bytes
-            for component in self.binding_components
+            component.serialized_utf8_bytes for component in self.binding_components
         )
 
     @property

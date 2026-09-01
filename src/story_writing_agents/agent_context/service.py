@@ -207,6 +207,9 @@ class ContextInvocationKind(StrEnum):
     """Optional provider-neutral semantic phase for a contextual invocation."""
 
     LEAD = "lead"
+    SPECIALIST_ASSIGNMENT = "specialist_assignment"
+    LEAD_SYNTHESIS = "lead_synthesis"
+    SPECIALIST_ADVISORY = "specialist_advisory"
 
 
 @dataclass(frozen=True, slots=True)
@@ -992,6 +995,8 @@ class ContextProviderFailureFacts:
     accounting: ProviderCallAccounting | None = None
     timed_out: bool = False
     taint_existing_thread: bool = False
+    submitted_accountings: tuple[ProviderCallAccounting, ...] = ()
+    submission_uncertain: bool = False
 
     def __post_init__(self) -> None:
         if self.accounting is not None and type(self.accounting) is not (
@@ -1001,6 +1006,13 @@ class ContextProviderFailureFacts:
         if (
             type(self.timed_out) is not bool
             or type(self.taint_existing_thread) is not bool
+            or type(self.submission_uncertain) is not bool
+        ):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        if type(self.submitted_accountings) is not tuple or any(
+            type(item) is not ProviderCallAccounting
+            or item.state is not ProviderCallState.SUBMITTED
+            for item in self.submitted_accountings
         ):
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
 
@@ -4025,7 +4037,11 @@ class AgentContextService:
                     call_kind = (
                         ProviderCallKind.DEBATE
                         if scope.subject_kind is ContextSubjectKind.DEBATE
-                        else ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL
+                        else (
+                            ProviderCallKind.COLLABORATION_INITIAL
+                            if request.invocation_kind is not None
+                            else ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL
+                        )
                     )
                     reference_context = ()
                 else:
@@ -4041,7 +4057,11 @@ class AgentContextService:
                     call_kind = (
                         ProviderCallKind.DEBATE
                         if scope.subject_kind is ContextSubjectKind.DEBATE
-                        else ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION
+                        else (
+                            ProviderCallKind.COLLABORATION_CONTINUATION
+                            if request.invocation_kind is not None
+                            else ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION
+                        )
                     )
                 call_request = ContextProviderCallRequest(
                     scope=scope,
@@ -4512,6 +4532,31 @@ class AgentContextService:
                     ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED,
                     provider_input_tokens=_provider_input_token_total(
                         submitted_accountings
+                    ),
+                ),
+            )
+            existing_facts = context_provider_failure_facts(failure)
+            cumulative = list(submitted_accountings)
+            if (
+                existing_facts.accounting is not None
+                and existing_facts.accounting.state is ProviderCallState.SUBMITTED
+                and existing_facts.accounting not in cumulative
+            ):
+                cumulative.append(existing_facts.accounting)
+            record_context_provider_failure(
+                failure,
+                ContextProviderFailureFacts(
+                    accounting=existing_facts.accounting,
+                    timed_out=existing_facts.timed_out,
+                    taint_existing_thread=existing_facts.taint_existing_thread,
+                    submitted_accountings=tuple(cumulative),
+                    submission_uncertain=(
+                        existing_facts.submission_uncertain
+                        or (
+                            stage == "provider"
+                            and provider_failure
+                            and existing_facts.accounting is None
+                        )
                     ),
                 ),
             )

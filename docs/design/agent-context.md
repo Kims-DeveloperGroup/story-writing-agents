@@ -1,9 +1,9 @@
 # Agent-context design
 
 This document is the maintainer model for the bounded agent-context component.
-`StoryRuntime.lead_turn()` invokes it for the current Python lead workflow. The
-installed shell and specialist execution do not. References below distinguish
-that integration from direct low-level component use.
+`StoryRuntime.lead_turn()` and confirmed consultation execution invoke it for
+the current Python lead workflow. The installed shell does not. References
+below distinguish that integration from direct low-level component use.
 See [Agent-context progress](../guides/agent-context-progress.md).
 
 <a id="package-boundary-and-owners"></a>
@@ -24,8 +24,9 @@ cycle:
 | `agent_context.service` | Provider-neutral wire-v5 call loop, reference prelude, lifecycle authority, source/action orchestration, checkpoint commit, usage aggregation, and optional progress observer. |
 
 The retained execution entry points are backend/provider component interfaces,
-plus the runtime's lead-turn composition. `StoryRuntime.lead_turn()` and the
-bound `RuntimeSession.lead_turn()` accept optional context progress sinks.
+plus the runtime's lead-turn and confirmed-consultation composition.
+`StoryRuntime.lead_turn()`, `propose_specialist_advisory()`, and their bound
+session forms accept optional context progress sinks.
 Progress observer types are
 direct-module-only imports from `agent_context.service`; the root and
 `agent_context` facades do not export them.
@@ -42,6 +43,15 @@ runtime operation
   -> COMMIT: atomically publish READY checkpoint, then report checkpoint_advanced
      or FAIL: fixed failure facts, taint when required, checkpoint_not_advanced
 ```
+
+For confirmed collaboration, the runtime first commits `running` and all
+ordered assignment dispatches outside the context component. It then creates
+one context invocation per specialist with kind `specialist_assignment` or
+`specialist_advisory`. Normal assignments run concurrently. Only when all
+assignments return valid typed replies does a separate `lead_synthesis`
+invocation run. The runtime persists the result batch and performs terminal or
+round-two finalization locally; context checkpoints are not execution-result
+authority.
 
 PREPARE has no distinct public progress event. A normal PLAN starts with
 `bootstrap` or `delta`; a duplicate `omission` fact is callback-only in the
@@ -140,6 +150,14 @@ state. Operation routing further restricts which kinds may be searched.
 Canonical artifact inventory covers every eligible canonical directory
 descendant and excludes transcripts, discussion logs, agent states, ledgers,
 symlink escapes, and other internal files.
+
+Confirmed collaboration narrows the writing-artifact adapter again for each
+assignment. Runtime builds a fresh canonical reference operation from only that
+assignment's ordered artifact inputs and supplies an immutable allowed-path
+set. Inventory, SEARCH, and READ cannot expose a sibling assignment's
+artifact-only paths. Lead synthesis is a separate invocation over all direct
+story-artifact inputs and typed specialist replies; it does not inherit a
+specialist's read authority or receipt.
 
 `FocusedConversationSourceAdapter` reads canonical v2 events from the active
 store and applies `select_bounded_collaboration_context()`. Its default mode is

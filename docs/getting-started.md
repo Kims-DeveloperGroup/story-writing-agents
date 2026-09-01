@@ -1,8 +1,8 @@
 # Getting started
 
 This revision prepares and inspects writing workspaces and exposes a Python
-lead conversation/proposal API. It does not send shell input to the lead or
-execute specialist assignments.
+lead conversation and confirmed specialist-consultation API. It does not send
+shell input to the lead or modify story artifacts.
 
 ## 1. Install
 
@@ -107,11 +107,11 @@ form. Rejection occurs before provider binding, transcript append, RAG,
 artifact-reference work, progress, or artifact mutation.
 
 There is no noninteractive story-execution command and no public runtime method
-for a debate or specialist dispatch. Do not build automation around an earlier
-direct path. The selected filesystem or SQLite bundle uses the sole schema-v2
-collaboration event store for provider-free inspection and Python lead writes.
-#453 owns specialist execution/result writes, and #454 owns whole-workspace
-rejection of unsupported history.
+for a debate or raw/unconfirmed specialist dispatch. Do not build automation
+around an earlier direct path. The selected filesystem or SQLite bundle uses
+the sole schema-v2 collaboration event store for provider-free inspection and
+Python lead/consultation writes. #454 owns whole-workspace rejection of
+unsupported history.
 
 ## 6. Use the Python lead API
 
@@ -132,8 +132,9 @@ impact, side effects, and work limits. Only a matching structured
 `LeadStepDecision` can Confirm, Reject, or Revise it. Free-form `Yes` is an
 ordinary new lead turn and supersedes the pending proposal.
 
-Confirming records the exact decision but does not run a specialist in this
-stage. It also cannot authorize an artifact change or Git commit. See the
+Confirming records the exact decision, executes the disclosed one-to-three
+specialist consultation, and returns the authoritative terminal or round-two
+turn. It cannot authorize an artifact change or Git commit. See the
 [lead-agent guide](guides/lead-agent.md) for complete examples and the
 [runtime API](reference/runtime-api.md) for exact signatures.
 

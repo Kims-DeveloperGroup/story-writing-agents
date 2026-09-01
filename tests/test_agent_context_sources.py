@@ -349,6 +349,39 @@ class RealAuthorityAdapterTests(_SourceFixture):
                     adapter.capture(locator, CONTEXT_SOURCE_POLICY)
                 self.assertEqual(caught.exception.code, code)
 
+    def test_assignment_local_artifact_allowlist_filters_inventory_and_capture(
+        self,
+    ) -> None:
+        allowed = "core_documents/global_outline.md"
+        blocked = "core_documents/character_sheets.md"
+        self.publish(core_updates={"global_outline.md": "bounded outline"})
+        adapter = WritingArtifactSourceAdapter(
+            self.repository,
+            _scope(),
+            allowed_paths=frozenset({allowed}),
+        )
+
+        inventory = adapter.inventory(CONTEXT_SOURCE_POLICY)
+
+        self.assertEqual(
+            tuple(item.provenance.locator for item in inventory),
+            (allowed,),
+        )
+        self.assertEqual(
+            adapter.capture(allowed, CONTEXT_SOURCE_POLICY).descriptor,
+            inventory[0],
+        )
+        with self.assertRaises(ContextSourceError) as caught:
+            adapter.capture(blocked, CONTEXT_SOURCE_POLICY)
+        self.assertIs(caught.exception.code, ContextSourceErrorCode.AUTHORITY_MISMATCH)
+        for invalid in ({allowed}, frozenset({"../escape.md"})):
+            with self.subTest(invalid=invalid), self.assertRaises(ContextSourceError):
+                WritingArtifactSourceAdapter(
+                    self.repository,
+                    _scope(),
+                    allowed_paths=invalid,  # type: ignore[arg-type]
+                )
+
     def test_artifact_capture_retries_once_then_reports_persistent_drift(self) -> None:
         adapter = WritingArtifactSourceAdapter(self.repository, _scope())
         first = _artifact_snapshot(_scope(), revision_seed=b"first")

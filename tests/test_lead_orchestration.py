@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import pickle
 import tempfile
 import unittest
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from typing import Awaitable, Callable
@@ -31,6 +33,7 @@ from story_writing_agents.agent_context.service import (
 )
 from story_writing_agents.agents import (
     CHARACTER_CUSTODIAN,
+    EXECUTION_SPECIALIST,
     LEAD_ORCHESTRATOR,
     PLOT_ARCHITECT,
 )
@@ -98,6 +101,7 @@ class _Finalizer:
 class _SubmittedFailure:
     failure: BaseException
     timed_out: bool = False
+    submission_uncertain: bool = False
 
 
 class _LeadContextProvider:
@@ -108,11 +112,13 @@ class _LeadContextProvider:
     def __init__(
         self,
         backend: "_LeadBackend",
+        agent_id: str,
         definition_fingerprint: str,
         responses: tuple[_Response | _SubmittedFailure, ...],
         reference_read: object | None,
     ) -> None:
         self.backend = backend
+        self.agent_id = agent_id
         self.definition_fingerprint = definition_fingerprint
         self.responses = list(responses)
         self.reference_read = reference_read
@@ -199,6 +205,7 @@ class _LeadContextProvider:
         self._threads[(request.scope, request.policy_fingerprint)] = thread_id
         self._reference_prepared = True
         self.backend.reference_contexts.append(context)
+        self.backend.reference_records.append((self.agent_id, context))
         return ContextReferencePreludeResult(context, thread_id, accounting)
 
     async def invoke_context(
@@ -207,6 +214,7 @@ class _LeadContextProvider:
     ) -> ContextProviderCallResult:
         self._require_active(request.scope, request.policy_fingerprint)
         self.backend.calls.append(request)
+        self.backend.call_records.append((self.agent_id, request))
         if not self.responses:
             raise AssertionError("unexpected lead provider call")
         scripted = self.responses.pop(0)
@@ -224,6 +232,7 @@ class _LeadContextProvider:
                     accounting,
                     timed_out=scripted.timed_out,
                     taint_existing_thread=True,
+                    submission_uncertain=scripted.submission_uncertain,
                 ),
             )
             raise scripted.failure
@@ -231,7 +240,17 @@ class _LeadContextProvider:
         if callable(response):
             response = response(request, self)
             if inspect.isawaitable(response):
-                response = await response
+                try:
+                    response = await response
+                except asyncio.CancelledError as failure:
+                    record_context_provider_failure(
+                        failure,
+                        ContextProviderFailureFacts(
+                            accounting,
+                            taint_existing_thread=True,
+                        ),
+                    )
+                    raise
         if isinstance(response, BaseException):
             raise response
         thread_id = request.expected_thread_id or "thread-lead"
@@ -284,11 +303,17 @@ class _LeadBoundAgent:
         self.definition = definition
 
     def context_provider(self, reference_read: object | None) -> _LeadContextProvider:
-        if not self.backend.scripts:
-            raise AssertionError("no scripted lead invocation")
-        script = self.backend.scripts.pop(0)
+        agent_id = self.definition.agent_id
+        queue = self.backend.scripts_by_agent.get(agent_id)
+        if queue:
+            script = queue.pop(0)
+        elif self.backend.scripts:
+            script = self.backend.scripts.pop(0)
+        else:
+            raise AssertionError(f"no scripted invocation for {agent_id}")
         provider = _LeadContextProvider(
             self.backend,
+            agent_id,
             f"sha256:{self.definition.fingerprint}",
             script,
             reference_read,
@@ -305,14 +330,38 @@ class _LeadBackend:
     def __init__(self, *, bind_failure: BaseException | None = None) -> None:
         self.bind_failure = bind_failure
         self.scripts: list[tuple[_Response | _SubmittedFailure, ...]] = []
+        self.scripts_by_agent: dict[
+            str, list[tuple[_Response | _SubmittedFailure, ...]]
+        ] = {}
         self.calls: list[ContextProviderCallRequest] = []
+        self.call_records: list[tuple[str, ContextProviderCallRequest]] = []
         self.reference_contexts: list[tuple[dict[str, object], ...]] = []
+        self.reference_records: list[tuple[str, tuple[dict[str, object], ...]]] = []
         self.finalizers: list[_Finalizer] = []
         self.providers: list[_LeadContextProvider] = []
         self.definitions: list[object] = []
 
     def enqueue(self, *responses: _Response | _SubmittedFailure) -> None:
         self.scripts.append(tuple(responses))
+
+    def enqueue_for(
+        self,
+        agent_id: str,
+        *responses: _Response | _SubmittedFailure,
+    ) -> None:
+        self.scripts_by_agent.setdefault(agent_id, []).append(tuple(responses))
+
+    def execution_profile_fingerprint(self, agent_id: str) -> str:
+        return (
+            "sha256:"
+            + {
+                LEAD_ORCHESTRATOR: "1",
+                PLOT_ARCHITECT: "2",
+                CHARACTER_CUSTODIAN: "3",
+                EXECUTION_SPECIALIST: "4",
+            }.get(agent_id, "5")
+            * 64
+        )
 
     async def bind(self, definition: object) -> _LeadBoundAgent:
         if self.bind_failure is not None:
@@ -372,6 +421,76 @@ def _proposal_outcome(
                     "purpose": purpose,
                     "assignments": assignments,
                 },
+            },
+        )
+
+    return respond
+
+
+def _workflow_material(value: object) -> dict[str, object]:
+    if isinstance(value, Mapping):
+        if "answer_contract" in value and "workflow" in value:
+            return value
+        for item in value.values():
+            try:
+                return _workflow_material(item)
+            except LookupError:
+                pass
+    elif type(value) is list:
+        for item in value:
+            try:
+                return _workflow_material(item)
+            except LookupError:
+                pass
+    raise LookupError("workflow material is absent")
+
+
+def _specialist_outcome(
+    assessment: str = "supports",
+    message: str = "The assigned evidence supports the proposed direction.",
+):
+    def respond(
+        call: ContextProviderCallRequest,
+        _provider: _LeadContextProvider,
+    ) -> str:
+        material = _workflow_material(call.payload)
+        contract = material["answer_contract"]
+        assert type(contract) is dict
+        return _provider_envelope(
+            call,
+            {
+                "assessment": assessment,
+                "assignment_id": contract["assignment_id"],
+                "input_ids": contract["input_ids"],
+                "message": message,
+            },
+        )
+
+    return respond
+
+
+def _synthesis_outcome(
+    *,
+    message: str = "The specialist evidence supports proceeding.",
+    unresolved_input_ids: list[str] | None = None,
+    next_intent: object = None,
+):
+    def respond(
+        call: ContextProviderCallRequest,
+        _provider: _LeadContextProvider,
+    ) -> str:
+        material = _workflow_material(call.payload)
+        contract = material["answer_contract"]
+        assert type(contract) is dict
+        return _provider_envelope(
+            call,
+            {
+                "message": message,
+                "next_intent": next_intent,
+                "reply_event_ids": contract["reply_event_ids"],
+                "unresolved_input_ids": (
+                    [] if unresolved_input_ids is None else unresolved_input_ids
+                ),
             },
         )
 
@@ -856,12 +975,14 @@ class LeadOutcomeAndProposalTests(LeadOrchestrationTestCase):
 
 
 class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
-    async def test_confirm_is_exact_single_use_and_has_no_execution_side_effect(
+    async def test_confirm_is_exact_single_use_and_executes_without_artifact_effect(
         self,
     ) -> None:
         conversation_id = self.conversation("Confirm")
         proposed = await self.proposal(conversation_id)
         calls_before = len(self.backend.calls)
+        self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
         artifacts_before = {
             path: path.read_bytes() for path in self.workspace.root.rglob("*.md")
         }
@@ -870,28 +991,24 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
             _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
         )
 
-        self.assertIs(confirmed.state, CollaborationStepState.CONFIRMED)
+        self.assertIs(confirmed.turn.state, CollaborationStepState.COMPLETED)
         self.assertIs(
-            confirmed.next_action,
-            CollaborationNextAction.START_OR_RECONFIRM,
+            confirmed.turn.next_action,
+            CollaborationNextAction.CONTINUE_WITH_LEAD,
         )
-        self.assertEqual(len(self.backend.calls), calls_before)
+        self.assertEqual(len(self.backend.calls), calls_before + 2)
         self.assertEqual(
             {path: path.read_bytes() for path in artifacts_before},
             artifacts_before,
         )
         history = self.history(conversation_id)
-        forbidden = {
-            CollaborationEventKind.ASSIGNMENT_DISPATCH,
-            CollaborationEventKind.SPECIALIST_REPLY,
-            CollaborationEventKind.EXECUTION_RESULT,
-        }
-        self.assertFalse(any(event.kind in forbidden for event in history))
-        self.assertFalse(
-            any(
-                getattr(event.payload, "state", None) is CollaborationStepState.RUNNING
-                for event in history
-            )
+        self.assertTrue(
+            {
+                CollaborationEventKind.ASSIGNMENT_DISPATCH,
+                CollaborationEventKind.SPECIALIST_REPLY,
+                CollaborationEventKind.LEAD_SYNTHESIS,
+                CollaborationEventKind.EXECUTION_RESULT,
+            }.issubset({event.kind for event in history})
         )
         with self.assertRaises(ValueError):
             await self.runtime.decide_lead_step(
@@ -927,7 +1044,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         rejected = await self.runtime.decide_lead_step(
             _decision(rejected_proposal, CollaborationConfirmationDecision.REJECT)
         )
-        self.assertIs(rejected.state, CollaborationStepState.REJECTED)
+        self.assertIs(rejected.turn.state, CollaborationStepState.REJECTED)
         self.assertEqual(len(self.backend.calls), calls)
 
         revise_id = self.conversation("Revise")
@@ -947,8 +1064,7 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
         revised = await self.runtime.decide_lead_step(
             _decision(revised_source, CollaborationConfirmationDecision.REVISE)
         )
-        assert revised.revised_turn is not None
-        replacement = revised.revised_turn.proposal
+        replacement = revised.turn.proposal
         assert replacement is not None
         self.assertEqual(replacement.step_id, revised_source.step_id)
         self.assertEqual(
@@ -1021,34 +1137,64 @@ class LeadDecisionAuthorityTests(LeadOrchestrationTestCase):
             CollaborationStepState.AWAITING_CONFIRMATION,
         )
 
+    async def test_revise_can_return_each_direct_superseding_visible_outcome(
+        self,
+    ) -> None:
+        for kind in ("answer", "question", "critique", "recommendation"):
+            with self.subTest(kind=kind):
+                conversation_id = self.conversation(f"Direct {kind} revision outcome")
+                proposed = await self.proposal(conversation_id)
+                self.backend.enqueue(
+                    _visible_outcome(
+                        kind,
+                        "The revised direction is safe without another consultation.",
+                    )
+                )
+
+                revised = await self.runtime.decide_lead_step(
+                    _decision(proposed, CollaborationConfirmationDecision.REVISE)
+                )
+
+                self.assertIs(revised.turn.kind, LeadOutcomeKind(kind))
+                self.assertIs(
+                    revised.turn.state,
+                    CollaborationStepState.SUPERSEDED,
+                )
+                self.assertIsNone(revised.turn.proposal)
+                self.assertIn("safe without another consultation", revised.turn.message)
+                projection = project_collaboration_history(
+                    self.history(conversation_id)
+                )
+                self.assertIs(
+                    projection.current_state,
+                    CollaborationStepState.SUPERSEDED,
+                )
+
 
 class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
-    async def test_restart_from_confirmed_requires_fresh_reconfirmation(self) -> None:
-        conversation_id = self.conversation("Restart confirmed")
+    async def test_restart_after_completed_execution_accepts_a_new_lead_turn(
+        self,
+    ) -> None:
+        conversation_id = self.conversation("Restart completed")
         proposed = await self.proposal(conversation_id)
+        self.backend.enqueue_for(PLOT_ARCHITECT, _specialist_outcome())
+        self.backend.enqueue_for(LEAD_ORCHESTRATOR, _synthesis_outcome())
         await self.runtime.decide_lead_step(
             _decision(proposed, CollaborationConfirmationDecision.CONFIRM)
         )
         restart_backend = _LeadBackend()
+        restart_backend.enqueue(_visible_outcome("answer"))
         restarted = StoryRuntime(self.workspace, restart_backend)  # type: ignore[arg-type]
 
         result = await restarted.lead_turn(
             self.session_id,
             conversation_id,
-            "This text must not invoke the provider.",
+            "Continue after the completed consultation.",
         )
 
-        self.assertIs(result.state, CollaborationStepState.RECONFIRMATION_REQUIRED)
-        self.assertIs(
-            result.next_action,
-            CollaborationNextAction.SUBMIT_CONFIRMATION,
-        )
-        self.assertEqual(result.proposal, proposed.proposal)
-        self.assertNotEqual(
-            result.confirmation_request_id,
-            proposed.confirmation_request_id,
-        )
-        self.assertEqual(restart_backend.calls, [])
+        self.assertIs(result.kind, LeadOutcomeKind.ANSWER)
+        self.assertIsNone(result.state)
+        self.assertEqual(len(restart_backend.calls), 1)
 
     async def test_unstarted_prepared_and_submitted_requests_never_replay(self) -> None:
         unstarted_id = self.conversation("Unstarted")
@@ -1121,7 +1267,7 @@ class LeadRecoveryAndAccountingTests(LeadOrchestrationTestCase):
         conversation_id = self.conversation("Running restart")
         batches = contract_batches(conversation_id)
         store = self.runtime.conversation_storage_services.event_store
-        for name in ("proposal", "confirmation", "running"):
+        for name in ("proposal", "confirmation", "running", "calls"):
             batch = batches[name]
             store.append_batch(
                 replace(

@@ -39,15 +39,22 @@ def collaboration_history(
     *,
     terminal: str = "completed",
 ) -> tuple[CollaborationEvent, ...]:
-    """Return one deterministic history built from the shared six families."""
+    """Return one deterministic history built from the shared atomic families."""
 
     if terminal not in {"completed", "unknown"}:
         raise ValueError("terminal must be completed or unknown")
     batches = contract_batches(conversation_id)
     names = (
-        ("proposal", "confirmation", "running", "result", "completion")
+        (
+            "proposal",
+            "confirmation",
+            "running",
+            "calls",
+            "result",
+            "completion",
+        )
         if terminal == "completed"
-        else ("proposal", "confirmation", "running", "unknown")
+        else ("proposal", "confirmation", "running", "calls", "unknown")
     )
     history: tuple[CollaborationEvent, ...] = ()
     for name in names:

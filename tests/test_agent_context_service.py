@@ -357,7 +357,15 @@ class ServiceSurfaceAndBindingTests(unittest.TestCase):
             tuple(item.value for item in ContextInvocationState),
             ("open", "searching", "reading", "answer_authorized", "failed"),
         )
-        self.assertEqual(tuple(item.value for item in ContextInvocationKind), ("lead",))
+        self.assertEqual(
+            tuple(item.value for item in ContextInvocationKind),
+            (
+                "lead",
+                "specialist_assignment",
+                "lead_synthesis",
+                "specialist_advisory",
+            ),
+        )
         result_contract = ContextJsonObjectResultContract("outcome-v1")
         self.assertEqual(result_contract.contract_id, "outcome-v1")
         self.assertFalse(hasattr(result_contract, "__dict__"))

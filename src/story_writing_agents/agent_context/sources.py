@@ -800,13 +800,26 @@ class WritingArtifactSourceAdapter:
         self,
         repository: WritingArtifactRepository,
         scope: ContextScope,
+        allowed_paths: frozenset[str] | None = None,
     ) -> None:
         if not isinstance(repository, WritingArtifactRepository):
             raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
         if type(scope) is not ContextScope:
             raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
+        if allowed_paths is not None:
+            if type(allowed_paths) is not frozenset:
+                raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
+            try:
+                validated_paths = frozenset(
+                    self._validate_locator(path) for path in allowed_paths
+                )
+            except ContextSourceError:
+                raise
+            if validated_paths != allowed_paths:
+                raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
         self._repository = repository
         self.scope = scope
+        self._allowed_paths = allowed_paths
 
     def inventory(
         self,
@@ -850,7 +863,12 @@ class WritingArtifactSourceAdapter:
             pass
         if paths is None:
             raise _source_error(ContextSourceErrorCode.INVENTORY_LIMIT_EXCEEDED)
-        return paths
+        if self._allowed_paths is None:
+            return paths
+        missing = self._allowed_paths.difference(paths)
+        if missing:
+            raise _source_error(ContextSourceErrorCode.SOURCE_MISSING)
+        return tuple(path for path in paths if path in self._allowed_paths)
 
     @staticmethod
     def _validate_locator(locator: object) -> str:
@@ -952,6 +970,8 @@ class WritingArtifactSourceAdapter:
     ) -> ContextSourceSnapshot:
         policy = _require_source_policy(policy)
         locator = self._validate_locator(locator)
+        if self._allowed_paths is not None and locator not in self._allowed_paths:
+            raise _source_error(ContextSourceErrorCode.AUTHORITY_MISMATCH)
         for _attempt in range(2):
             first = self._capture_once(locator, policy)
             second = self._capture_once(locator, policy)

@@ -27,14 +27,18 @@ from .events import (
     CollaborationEventKind as CollaborationEventKindV2,
     CollaborationExecutionOutcomeKind,
     CollaborationExecutionResult,
+    CollaborationInputKind,
     CollaborationInterruptionPayload,
     CollaborationInvocationKind,
+    CollaborationLeadSynthesisPayload,
     CollaborationMessagePayload,
     CollaborationPayload,
     CollaborationProposal,
     CollaborationProviderCallPayload,
     CollaborationProviderCallState,
+    CollaborationSpecialistAssessment,
     CollaborationSpecialistReplyPayload,
+    CollaborationStepKind,
     CollaborationStepState,
     CollaborationStepStatePayload,
     CollaborationSynthesisOutcomeKind,
@@ -542,6 +546,10 @@ class LeadTurnResult:
             raise TypeError("lead result state must be CollaborationStepState or None")
         if self.kind is not LeadOutcomeKind.PROPOSAL and self.state not in {
             None,
+            CollaborationStepState.COMPLETED,
+            CollaborationStepState.FAILED,
+            CollaborationStepState.INTERRUPTED,
+            CollaborationStepState.REJECTED,
             CollaborationStepState.SUPERSEDED,
             CollaborationStepState.CONFIRMED,
             CollaborationStepState.RECONFIRMATION_REQUIRED,
@@ -606,16 +614,14 @@ class LeadTurnResult:
 
 @dataclass(frozen=True, slots=True)
 class LeadDecisionResult:
-    """Visible durable result of one accepted structured lead-step decision."""
+    """Decision evidence paired with the authoritative visible resulting turn."""
 
     session_id: str
     conversation_id: str
     step_id: str
     decision: CollaborationConfirmationDecision
     proposal: CollaborationProposal
-    state: CollaborationStepState
-    next_action: CollaborationNextAction
-    revised_turn: LeadTurnResult | None = None
+    turn: LeadTurnResult
 
     def __post_init__(self) -> None:
         for value, label in (
@@ -630,39 +636,115 @@ class LeadDecisionResult:
             raise TypeError("decision result kind is invalid")
         if type(self.proposal) is not CollaborationProposal:
             raise TypeError("decision result proposal is invalid")
-        if type(self.state) is not CollaborationStepState:
-            raise TypeError("decision result state is invalid")
-        if type(self.next_action) is not CollaborationNextAction:
-            raise TypeError("decision result next action is invalid")
+        if type(self.turn) is not LeadTurnResult:
+            raise TypeError("decision result turn is invalid")
         if self.proposal.step_id != self.step_id:
             raise ValueError("decision result proposal belongs to another step")
-        expected_state = {
-            CollaborationConfirmationDecision.CONFIRM: CollaborationStepState.CONFIRMED,
-            CollaborationConfirmationDecision.REJECT: CollaborationStepState.REJECTED,
-            CollaborationConfirmationDecision.REVISE: CollaborationStepState.SUPERSEDED,
-        }[self.decision]
-        if self.state is not expected_state:
-            raise ValueError("decision result state disagrees with its decision")
-        expected_action = {
-            CollaborationConfirmationDecision.CONFIRM: (
-                CollaborationNextAction.START_OR_RECONFIRM
-            ),
-            CollaborationConfirmationDecision.REJECT: (
-                CollaborationNextAction.CONTINUE_WITH_LEAD
-            ),
-            CollaborationConfirmationDecision.REVISE: (
-                CollaborationNextAction.CONTINUE_WITH_LEAD
-            ),
-        }[self.decision]
-        if self.next_action is not expected_action:
-            raise ValueError("decision result next action disagrees with its decision")
-        if self.decision is CollaborationConfirmationDecision.REVISE:
-            if type(self.revised_turn) is not LeadTurnResult:
-                raise TypeError("revise result requires the replacement lead turn")
-            if self.revised_turn.step_id != self.step_id:
-                raise ValueError("revised lead turn must retain the decision step")
-        elif self.revised_turn is not None:
-            raise ValueError("only revise may carry a replacement lead turn")
+        if (
+            self.turn.session_id != self.session_id
+            or self.turn.conversation_id != self.conversation_id
+            or self.turn.step_id != self.step_id
+        ):
+            raise ValueError("decision result turn belongs to another step")
+        if self.decision is CollaborationConfirmationDecision.CONFIRM:
+            self._validate_confirm_turn()
+        elif self.decision is CollaborationConfirmationDecision.REJECT:
+            if (
+                self.turn.state is not CollaborationStepState.REJECTED
+                or self.turn.kind is not LeadOutcomeKind.RECOMMENDATION
+                or self.turn.proposal is not None
+            ):
+                raise ValueError("reject result must expose the exact rejected turn")
+        else:
+            self._validate_revise_turn()
+
+    def _validate_confirm_turn(self) -> None:
+        terminal_states = {
+            CollaborationStepState.COMPLETED,
+            CollaborationStepState.FAILED,
+            CollaborationStepState.INTERRUPTED,
+            CollaborationStepState.OUTCOME_UNKNOWN,
+            CollaborationStepState.RECOVERY_REQUIRED,
+        }
+        if self.turn.state in terminal_states:
+            if (
+                self.turn.kind is not LeadOutcomeKind.RECOMMENDATION
+                or self.turn.proposal is not None
+            ):
+                raise ValueError(
+                    "confirm result must expose an authoritative execution turn"
+                )
+            return
+        replacement = self.turn.proposal
+        if (
+            self.turn.state is not CollaborationStepState.AWAITING_CONFIRMATION
+            or self.turn.kind is not LeadOutcomeKind.PROPOSAL
+            or type(replacement) is not CollaborationProposal
+            or self.proposal.step_kind
+            is not CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
+            or replacement.step_kind
+            is not CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
+            or replacement.proposal_id == self.proposal.proposal_id
+            or replacement.proposal_revision != self.proposal.proposal_revision + 1
+            or self.proposal.budget.rounds_spent != 0
+            or replacement.budget.rounds_spent != 1
+            or replacement.budget.physical_calls_spent
+            <= self.proposal.budget.physical_calls_spent
+            or replacement.basis.route != self.proposal.basis.route
+        ):
+            raise ValueError(
+                "confirm result must expose a terminal turn or exact round two"
+            )
+        original_inputs = self.proposal.basis.inputs
+        replacement_inputs = replacement.basis.inputs
+        added_inputs = replacement_inputs[len(original_inputs) :]
+        if (
+            replacement_inputs[: len(original_inputs)] != original_inputs
+            or len(added_inputs) != len(self.proposal.assignments)
+            or any(
+                item.kind is not CollaborationInputKind.CONVERSATION_EVENT
+                for item in added_inputs
+            )
+        ):
+            raise ValueError("round-two proposal does not continue exact input lineage")
+
+    def _validate_revise_turn(self) -> None:
+        replacement = self.turn.proposal
+        if self.turn.state is CollaborationStepState.SUPERSEDED:
+            expected_action = (
+                CollaborationNextAction.REPLY_TO_LEAD
+                if self.turn.kind is LeadOutcomeKind.QUESTION
+                else CollaborationNextAction.CONTINUE_WITH_LEAD
+            )
+            if (
+                self.turn.kind
+                not in {
+                    LeadOutcomeKind.ANSWER,
+                    LeadOutcomeKind.QUESTION,
+                    LeadOutcomeKind.CRITIQUE,
+                    LeadOutcomeKind.RECOMMENDATION,
+                }
+                or replacement is not None
+                or self.turn.confirmation_request_id is not None
+                or self.turn.next_action is not expected_action
+            ):
+                raise ValueError(
+                    "direct revise result must expose an exact superseded lead turn"
+                )
+            return
+        if (
+            self.turn.state is not CollaborationStepState.AWAITING_CONFIRMATION
+            or self.turn.kind is not LeadOutcomeKind.PROPOSAL
+            or type(replacement) is not CollaborationProposal
+            or replacement.step_kind
+            is not CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
+            or replacement.proposal_id == self.proposal.proposal_id
+            or replacement.proposal_revision != self.proposal.proposal_revision + 1
+            or replacement.budget.rounds_spent != self.proposal.budget.rounds_spent
+            or replacement.budget.physical_calls_spent
+            <= self.proposal.budget.physical_calls_spent
+        ):
+            raise ValueError("revise result must expose the exact replacement proposal")
 
 
 class CollaborationReadableFieldKey(StrEnum):
@@ -670,6 +752,8 @@ class CollaborationReadableFieldKey(StrEnum):
 
     MESSAGE_CONTENT = "message.content"
     SPECIALIST_REPLY_CONTENT = "specialist_reply.content"
+    SPECIALIST_REPLY_ASSESSMENT = "specialist_reply.assessment"
+    LEAD_SYNTHESIS_MESSAGE = "lead_synthesis.message"
     PROPOSAL_PURPOSE = "proposal.purpose"
     PROPOSAL_USER_IMPACT = "proposal.user_impact"
     PROPOSAL_ASSIGNMENT_INSTRUCTION = "proposal.assignment.instruction"
@@ -1338,6 +1422,7 @@ def _payload_proposal_key(payload: object) -> tuple[str, int, str] | None:
         (
             CollaborationAssignmentDispatchPayload,
             CollaborationSpecialistReplyPayload,
+            CollaborationLeadSynthesisPayload,
             CollaborationStepStatePayload,
             CollaborationConfirmationPayload,
             CollaborationExecutionResult,
@@ -1572,6 +1657,7 @@ def _project_validated_collaboration_history(
                         running_attempts.get(event.step_id, 0) + 1
                     )
                     running_sequences[event.step_id] = event.sequence
+                    results.pop(event.step_id, None)
                 if payload.state is CollaborationStepState.OUTCOME_UNKNOWN:
                     if payload.execution_attempt_id != attempts.get(event.step_id):
                         raise ValueError(
@@ -1698,8 +1784,92 @@ def _project_validated_collaboration_history(
                     )
                 if payload.assignment_id in replies:
                     raise ValueError("assignment may have at most one visible reply")
+                if payload.input_ids != dispatch_payload.assignment.input_ids:
+                    raise ValueError(
+                        "specialist reply input IDs must match its assignment exactly"
+                    )
                 replies[payload.assignment_id] = event
                 batch_replies.append((event, payload))
+                continue
+
+            if type(payload) is CollaborationLeadSynthesisPayload:
+                if states.get(event.step_id) is not CollaborationStepState.RUNNING:
+                    raise ValueError("lead synthesis requires the active running state")
+                if payload.execution_attempt_id != attempts.get(event.step_id):
+                    raise ValueError("lead synthesis attempt does not match running")
+                expected_reply_ids = tuple(
+                    replies[assignment.assignment_id].event_id
+                    for assignment in proposal.assignments
+                    if assignment.assignment_id in replies
+                )
+                if payload.reply_event_ids != expected_reply_ids or len(
+                    expected_reply_ids
+                ) != len(proposal.assignments):
+                    raise ValueError(
+                        "lead synthesis must attribute every specialist reply exactly"
+                    )
+                ordered_replies = tuple(
+                    replies[assignment.assignment_id].payload
+                    for assignment in proposal.assignments
+                )
+                if any(
+                    type(reply) is not CollaborationSpecialistReplyPayload
+                    for reply in ordered_replies
+                ):
+                    raise ValueError("lead synthesis reply attribution is not typed")
+                required_unresolved: list[str] = []
+                seen_required: set[str] = set()
+                for reply in ordered_replies:
+                    assert isinstance(reply, CollaborationSpecialistReplyPayload)
+                    if reply.assessment is CollaborationSpecialistAssessment.SUPPORTS:
+                        continue
+                    for input_id in reply.input_ids:
+                        if input_id not in seen_required:
+                            seen_required.add(input_id)
+                            required_unresolved.append(input_id)
+                known_input_order = tuple(
+                    item.input_id for item in proposal.basis.inputs
+                )
+                known_input_ids = set(known_input_order)
+                unresolved_order = (
+                    *required_unresolved,
+                    *(
+                        input_id
+                        for input_id in known_input_order
+                        if input_id not in seen_required
+                    ),
+                )
+                if (
+                    not seen_required.issubset(payload.unresolved_input_ids)
+                    or payload.unresolved_input_ids
+                    != tuple(
+                        input_id
+                        for input_id in unresolved_order
+                        if input_id in payload.unresolved_input_ids
+                    )
+                    or len(set(payload.unresolved_input_ids))
+                    != len(payload.unresolved_input_ids)
+                ):
+                    raise ValueError(
+                        "lead synthesis unresolved inputs violate required canonical order"
+                    )
+                if payload.next_intent is not None:
+                    if proposal.budget.rounds_spent + 1 >= proposal.budget.round_limit:
+                        raise ValueError(
+                            "round two synthesis cannot request round three"
+                        )
+                    expected_next_inputs = known_input_ids | set(
+                        payload.reply_event_ids
+                    )
+                    actual_next_inputs = {
+                        input_id
+                        for assignment in payload.next_intent.assignments
+                        for input_id in assignment.input_ids
+                    }
+                    if actual_next_inputs != expected_next_inputs:
+                        raise ValueError(
+                            "next-round intent must close over original and reply inputs"
+                        )
                 continue
 
             if type(payload) is CollaborationExecutionResult:
@@ -1733,7 +1903,11 @@ def _project_validated_collaboration_history(
                     strict=True,
                 ):
                     actual_calls = sum(
-                        call.invocation_kind is CollaborationInvocationKind.SPECIALIST
+                        call.invocation_kind
+                        in {
+                            CollaborationInvocationKind.SPECIALIST_ASSIGNMENT,
+                            CollaborationInvocationKind.SPECIALIST_ADVISORY,
+                        }
                         and call.role == assignment.specialist_id
                         for call in submitted_since_running
                     )
@@ -1743,7 +1917,7 @@ def _project_validated_collaboration_history(
                             "submitted calls"
                         )
                 synthesis_calls = sum(
-                    call.invocation_kind is CollaborationInvocationKind.SYNTHESIS
+                    call.invocation_kind is CollaborationInvocationKind.LEAD_SYNTHESIS
                     for call in submitted_since_running
                 )
                 if synthesis_calls != payload.synthesis_submitted_physical_calls:
@@ -1751,7 +1925,11 @@ def _project_validated_collaboration_history(
                         "synthesis result call total disagrees with durable "
                         "submitted calls"
                     )
-                if event.step_id in results:
+                if (
+                    event.step_id in results
+                    and results[event.step_id][1].execution_attempt_id
+                    == payload.execution_attempt_id
+                ):
                     raise ValueError("execution attempt may have at most one result")
                 results[event.step_id] = (event.event_id, payload)
                 result_events[event.event_id] = event
@@ -1777,12 +1955,15 @@ def _project_validated_collaboration_history(
                     raise ValueError("terminal outcome attempt does not match running")
                 if payload.scope is CollaborationTerminalScope.ASSIGNMENT:
                     assert payload.assignment_id is not None
-                    assignment = {
+                    terminal_assignment = {
                         item.assignment_id: item for item in proposal.assignments
                     }.get(payload.assignment_id)
-                    if assignment is None:
+                    if terminal_assignment is None:
                         raise ValueError("terminal outcome assignment is not proposed")
-                    if payload.submitted_physical_calls > assignment.max_physical_calls:
+                    if (
+                        payload.submitted_physical_calls
+                        > terminal_assignment.max_physical_calls
+                    ):
                         raise ValueError(
                             "assignment exceeded its physical-call allocation"
                         )
@@ -1909,13 +2090,25 @@ def _validate_collaboration_execution_result(
             or result.synthesis_submitted_physical_calls != 0
         ):
             raise ValueError("zero synthesis allocation forbids synthesis submission")
+    elif (
+        proposal.step_kind is CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
+        and all(
+            item.outcome is CollaborationAssignmentOutcomeKind.SUCCEEDED
+            for item in result.assignment_outcomes
+        )
+        and result.synthesis_outcome is CollaborationSynthesisOutcomeKind.NOT_ATTEMPTED
+    ):
+        raise ValueError(
+            "successful consultation assignments require synthesis outcome"
+        )
     if result.synthesis_result_event_id is not None:
         synthesis_event = event_by_id.get(result.synthesis_result_event_id)
         if (
             synthesis_event is None
-            or synthesis_event.kind is not CollaborationEventKindV2.MESSAGE
+            or synthesis_event.kind is not CollaborationEventKindV2.LEAD_SYNTHESIS
+            or type(synthesis_event.payload) is not CollaborationLeadSynthesisPayload
         ):
-            raise ValueError("synthesis result must reference a visible message event")
+            raise ValueError("synthesis result must reference a typed synthesis event")
         if result.synthesis_result_event_id not in batch_event_ids:
             raise ValueError(
                 "synthesis result must precede execution result in the same batch"
@@ -1970,16 +2163,11 @@ def _validate_collaboration_execution_result(
             if synthesis_event.sequence >= terminal_events[-1].sequence:
                 raise ValueError("synthesis message must precede its terminal outcome")
 
-    allowed_message_id = result.synthesis_result_event_id
     for item in preceding:
         if item.kind in (
             CollaborationEventKindV2.SPECIALIST_REPLY,
+            CollaborationEventKindV2.LEAD_SYNTHESIS,
             CollaborationEventKindV2.TERMINAL_OUTCOME,
-        ):
-            continue
-        if (
-            item.kind is CollaborationEventKindV2.MESSAGE
-            and item.event_id == allowed_message_id
         ):
             continue
         raise ValueError("result batch contains an unrelated external exchange")
@@ -2109,11 +2297,22 @@ def _validate_collaboration_co_batch(
         for event in batch
         if type(event.payload) is CollaborationTerminalOutcomePayload
     ]
+    outcome_unknown = any(
+        payload.state is CollaborationStepState.OUTCOME_UNKNOWN
+        for _event, payload in states
+    )
     if replies or terminal_outcomes:
-        if len(results) != 1:
+        if len(results) != 1 and not outcome_unknown:
             raise ValueError(
                 "external result exchanges require one co-batched execution result"
             )
+    syntheses = [
+        event
+        for event in batch
+        if type(event.payload) is CollaborationLeadSynthesisPayload
+    ]
+    if syntheses and len(results) != 1:
+        raise ValueError("lead synthesis requires one co-batched execution result")
     if len(results) > 1:
         raise ValueError("one batch may record only one execution result")
 
@@ -2288,8 +2487,19 @@ def _collaboration_readable_fields(
     if type(payload) is CollaborationSpecialistReplyPayload:
         return (
             CollaborationReadableField(
+                key=CollaborationReadableFieldKey.SPECIALIST_REPLY_ASSESSMENT,
+                text=payload.assessment.value,
+            ),
+            CollaborationReadableField(
                 key=CollaborationReadableFieldKey.SPECIALIST_REPLY_CONTENT,
-                text=payload.content,
+                text=payload.message,
+            ),
+        )
+    if type(payload) is CollaborationLeadSynthesisPayload:
+        return (
+            CollaborationReadableField(
+                key=CollaborationReadableFieldKey.LEAD_SYNTHESIS_MESSAGE,
+                text=payload.message,
             ),
         )
     if type(payload) is CollaborationStepStatePayload:

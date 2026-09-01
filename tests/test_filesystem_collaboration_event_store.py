@@ -308,7 +308,7 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
                     self.assertIs(raised.exception.failure, expected)
                     self.assertEqual(value.history_path.read_bytes(), committed)
 
-    def test_all_six_required_co_batches_append_and_split_forms_are_atomic(
+    def test_all_required_co_batches_append_and_split_forms_are_atomic(
         self,
     ) -> None:
         with _harness() as value:
@@ -316,7 +316,14 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
             _append_prefix(
                 value.store,
                 batches,
-                ("proposal", "confirmation", "running", "result", "completion"),
+                (
+                    "proposal",
+                    "confirmation",
+                    "running",
+                    "calls",
+                    "result",
+                    "completion",
+                ),
             )
             self.assertIs(
                 value.store.read_context(
@@ -330,7 +337,7 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
             _append_prefix(
                 value.store,
                 batches,
-                ("proposal", "confirmation", "running", "unknown"),
+                ("proposal", "confirmation", "running", "calls", "unknown"),
             )
             self.assertIs(
                 value.store.read_context(
@@ -343,13 +350,21 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
             ((), "proposal", slice(0, 1)),
             (("proposal",), "confirmation", slice(0, 1)),
             (("proposal", "confirmation"), "running", slice(0, -1)),
-            (("proposal", "confirmation", "running"), "result", slice(-1, None)),
             (
-                ("proposal", "confirmation", "running", "result"),
+                ("proposal", "confirmation", "running", "calls"),
+                "result",
+                slice(-1, None),
+            ),
+            (
+                ("proposal", "confirmation", "running", "calls", "result"),
                 "completion",
                 slice(-1, None),
             ),
-            (("proposal", "confirmation", "running"), "unknown", slice(-1, None)),
+            (
+                ("proposal", "confirmation", "running", "calls"),
+                "unknown",
+                slice(-1, None),
+            ),
         )
         for prefix, name, selected in split_cases:
             with self.subTest(batch=name), _harness() as value:

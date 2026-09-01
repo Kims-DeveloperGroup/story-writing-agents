@@ -5,8 +5,9 @@
 > one `CollaborationEventStore`; `/history`, `/search`, `/transcript`, and
 > `/status` use its provider-free readable projections. Concrete store adapters
 > are direct-module-only, while contracts and pure context/event projections
-> are available from their documented facades. Python lead turns and structured
-> decisions write the same contract. Specialist execution remains unavailable.
+> are available from their documented facades. Python lead turns, structured
+> decisions, confirmed specialist execution, and lead synthesis write the same
+> contract.
 
 Key terms: **proposal**—the complete disclosure for one possible step;
 **decision**—one structured `confirm`, `reject`, or `revise` response to the
@@ -29,9 +30,11 @@ closed public field set, resolve a hit to the exact original Unicode substring,
 page one unchanged snapshot, derive a stable lookup-document ID, and explicitly
 select bounded records for possible later provider context.
 
-The contract itself runs nothing. `StoryRuntime.lead_turn()` now uses it while
-binding the lead, and `decide_lead_step()` records exact decisions. Neither
-path runs a specialist, changes a story artifact, or mutates Git. The active
+The contract and its pure projections run nothing. `StoryRuntime.lead_turn()`
+uses it while binding the lead, and `decide_lead_step()` records exact
+decisions and executes a confirmed consultation through runtime-owned
+capabilities. This path can call specialists and the lead for read-only
+synthesis; it cannot change a story artifact or mutate Git. The active
 filesystem and SQLite compositions persist exact batches and
 read them after restart. They do not reinterpret free text as permission or
 turn a stored confirmation or projected `next_safe_action` into executable
@@ -84,7 +87,7 @@ It is not an installed shell UI or set of buttons.
 Lead proposal
 Purpose: Ask the plot architect to review outline lines 3-12.
 Assignment: plot_architect, round 1, at most 2 physical calls
-Input: ${core_documents/outline.md}, lines 3-12,
+Input: ${core_documents/global_outline.md}, lines 3-12,
        revision sha256:1111...1111 (content is not embedded)
 Impact: Read-only provider work; no artifact or Git mutation.
 Budget: round 1 of 2; at most 2 additional calls; 12-call lineage ceiling
@@ -116,10 +119,10 @@ message such as `Yes`, even when stored after the request, is non-authorizing
 and makes that older request ineligible because it is no longer the exact tail.
 
 Confirmation evidence proves only what was decided about a disclosed snapshot.
-Before execution, an application must reacquire its own live capabilities and
-validate current route, profile, policy, input, and resource facts. History
-decoding or projection never recreates a provider, filesystem lease, Git
-capability, credential, or other authority.
+Before execution, runtime revalidates current route, definition/execution
+profiles, policy, input, and resource facts, then creates and consumes one
+process-local start capability. History decoding or projection never recreates
+a provider, filesystem lease, Git capability, credential, or other authority.
 
 ## Proposal closure and limits
 
@@ -157,7 +160,7 @@ Every proposal input is content-free identity and revision evidence:
 ```text
 input_id = "input_outline"
 kind = "core_document"
-locator = "${core_documents/outline.md}"
+locator = "${core_documents/global_outline.md}"
 state = "present"
 revision_digest = "sha256:1111...1111"
 start_line = 3
@@ -200,9 +203,10 @@ Actors have one of the exact kinds `user`, `lead`, `specialist`, `runtime`,
 ID; other actor kinds cannot. Sender/recipient pairs derive one of the closed
 directions, so direction is not a second stored claim.
 
-The nine event kinds are `message`, `assignment_dispatch`,
-`specialist_reply`, `step_state`, `confirmation`, `execution_result`,
-`interruption`, `terminal_outcome`, and `provider_call_accounting`. Each stored
+The ten event kinds are `message`, `assignment_dispatch`,
+`specialist_reply`, `lead_synthesis`, `step_state`, `confirmation`,
+`execution_result`, `interruption`, `terminal_outcome`, and
+`provider_call_accounting`. Each stored
 event carries schema,
 event/session/conversation/turn/step identity, contiguous sequence, canonical
 UTC timestamp, atomic-batch metadata, typed actors, and its kind-specific
@@ -212,7 +216,8 @@ not hidden reasoning.
 
 `provider_call_accounting` contains no request or response content. It records
 one invocation/call identity, contiguous ordinal, canonical agent role,
-invocation kind (`lead`, `specialist`, or `synthesis`), physical-call position
+invocation kind (`lead`, `specialist_assignment`, `lead_synthesis`, or
+`specialist_advisory`), physical-call position
 (`reference_prelude`, `initial`, or `continuation`), and state (`prepared` or
 `submitted`). PREPARED records intent before a provider boundary; only the
 matching unique SUBMITTED record spends one of the twelve lineage calls.
@@ -221,9 +226,18 @@ Submitted failures, timeouts, and cancellations still count.
 A running attempt dispatches assignments in proposal order. Every reply binds
 the exact proposal ID/revision/digest, execution attempt, assignment, and
 dispatch event. Each provider-facing invocation records a terminal outcome with
-its scope, submitted-call count, and assignment ID where applicable. The
-execution result then correlates all proposal assignments in their original
-order and contains:
+its scope, submitted-call count, and assignment ID where applicable.
+
+A specialist reply also carries one closed assessment (`supports`, `concern`,
+`conflict`, or `insufficient_evidence`), a visible message, and the exact
+ordered assignment input IDs. A `lead_synthesis` payload binds every successful
+reply event in order, preserves required unresolved input IDs from every
+non-supporting reply, and optionally carries one strict same-lineage round-two
+intent. Synthesis is absent after any assignment failure and for direct
+advisories.
+
+The execution result then correlates all proposal assignments in their
+original order and contains:
 
 ```text
 proposal_id = "proposal_a"
@@ -275,6 +289,8 @@ order, are:
 ```text
 message.content
 specialist_reply.content
+specialist_reply.assessment
+lead_synthesis.message
 proposal.purpose
 proposal.user_impact
 proposal.assignment.instruction
@@ -375,7 +391,8 @@ separate, and the selected value still does not invoke a provider or establish
 retrieval authorization. The lead runtime explicitly opts its focused source
 adapter into a bounded searchable-history snapshot over active same-session
 conversations; it still sends zero eager history records and adds bodies only
-after SEARCH and READ. #453 owns specialist execution/results, and #454 owns
+after SEARCH and READ. Confirmed specialist and synthesis invocations use the
+same bounded component with assignment-local source restrictions. #454 owns
 whole-workspace unsupported-history rejection.
 
 ## Atomic batch flow
@@ -392,8 +409,11 @@ user message
     -> lead message + proposal + awaiting_confirmation (request is last)
     -> structured decision + confirmed/rejected/superseded
     -> running + every assignment_dispatch in proposal order
-    -> replies/messages + every terminal_outcome + execution_result (last)
+    -> replies + optional lead_synthesis + every terminal_outcome
+       + execution_result (last)
     -> visible terminal notice + completed/failed/interrupted
+       OR completed round-one notice + revision-2 proposal
+          + awaiting_confirmation
 
 running + interruption + outcome_unknown
 
@@ -623,7 +643,7 @@ application, never permission to perform the action.
 | --- | --- | --- | --- |
 | `awaiting_confirmation` | A complete proposal and fresh request are the durable tail | A proposal is waiting for your confirmation. | `submit_confirmation`: Review the proposal and submit a confirmation decision. |
 | `reconfirmation_required` | Previously confirmed proposal is retained, but fresh authority is required | The earlier confirmation is no longer sufficient; review and confirm the updated proposal. | `submit_confirmation`: Review the proposal and submit a confirmation decision. |
-| `confirmed` | One exact structured confirm decision is durable | You confirmed the proposal; execution has not started yet. | `start_or_reconfirm`: Start confirmed work, or reconfirm if its basis changed. |
+| `confirmed` | One exact structured confirm decision is durable; the live runtime normally crosses immediately into `running` | You confirmed the proposal; the runtime is starting the disclosed work. | `start_or_reconfirm`: Start with the live single-use authority, or reconfirm after that authority is lost. |
 | `running` | One execution attempt and every ordered dispatch are durable | The confirmed work is currently being executed. | `none` while no result exists; with a result, `finalize_result`: Record the terminal result for the running work. |
 | `completed` | Known successful result and visible terminal notice are durable | The confirmed work completed and its result is recorded. | `none`: No history-derived action is pending. |
 | `rejected` | Structured reject decision is durable; no work started | You rejected the proposal; that work will not execute. | `continue_with_lead`: Continue the conversation with the lead agent. |
@@ -945,12 +965,12 @@ not belong in any payload.
 
 The direct filesystem and SQLite adapters define their v2 persistence and
 durability boundaries above. Archive schema 2 and backend transfer consume
-their canonical histories, but this contract still defines no provider call or
-artifact/Git executor, credential model, complete
+their canonical histories. Runtime composes provider calls from these values,
+but this contract still defines no artifact/Git executor, credential model, complete
 workspace backup, or recovery tool. The installed shell wires only
 provider-free readable records, search, pages, and state inspection. The Python
-runtime owns lead proposal/confirmation behavior; #453 owns specialist
-execution/results, and #454 owns whole-workspace rejection. See the dedicated
+runtime owns lead proposal/confirmation and confirmed specialist/synthesis
+behavior; #454 owns whole-workspace rejection. See the dedicated
 [lead-agent guide](../guides/lead-agent.md),
 [conversation transcripts](conversation-transcripts.md) for the active readable
 path, [persistence](../design/persistence.md) for authority ownership,

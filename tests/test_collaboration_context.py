@@ -819,7 +819,7 @@ class CollaborationAtomicBatchTests(unittest.TestCase):
             CollaborationAppendFailure.CORRUPT_HISTORY,
         )
 
-    def test_all_six_required_co_batch_families_and_split_rejections(self) -> None:
+    def test_all_required_co_batch_families_and_split_rejections(self) -> None:
         awaiting, proposal = awaiting_history()
         self.assertEqual(
             tuple(event.kind for event in awaiting),
@@ -847,8 +847,14 @@ class CollaborationAtomicBatchTests(unittest.TestCase):
             for event in running_group
             if type(event.payload) is CollaborationProviderCallPayload
         )
+        self.assertEqual(call_states, ())
         self.assertEqual(
-            call_states,
+            tuple(
+                event.payload.state
+                for event in running
+                if event.batch_id == "batch_calls"
+                and type(event.payload) is CollaborationProviderCallPayload
+            ),
             (
                 CollaborationProviderCallState.PREPARED,
                 CollaborationProviderCallState.SUBMITTED,
@@ -865,7 +871,7 @@ class CollaborationAtomicBatchTests(unittest.TestCase):
                 event.kind
                 in {
                     CollaborationEventKind.SPECIALIST_REPLY,
-                    CollaborationEventKind.MESSAGE,
+                    CollaborationEventKind.LEAD_SYNTHESIS,
                     CollaborationEventKind.TERMINAL_OUTCOME,
                 }
                 for event in result_group[:-1]
@@ -1035,7 +1041,19 @@ class CollaborationReadableProjectionTests(unittest.TestCase):
                 ),
             ),
         )
-        all_records = records + project_collaboration_readable_history(unknown)
+        completed = store_batch(
+            history,
+            _terminal_state_batch(
+                history,
+                history[0].payload,
+                CollaborationStepState.COMPLETED,
+            ),
+        )
+        all_records = (
+            records
+            + project_collaboration_readable_history(unknown)
+            + project_collaboration_readable_history(completed)
+        )
         observed_keys = {field.key for record in all_records for field in record.fields}
         self.assertEqual(observed_keys, set(CollaborationReadableFieldKey))
         self.assertEqual(
@@ -1043,6 +1061,8 @@ class CollaborationReadableProjectionTests(unittest.TestCase):
             (
                 "message.content",
                 "specialist_reply.content",
+                "specialist_reply.assessment",
+                "lead_synthesis.message",
                 "proposal.purpose",
                 "proposal.user_impact",
                 "proposal.assignment.instruction",

@@ -1,8 +1,8 @@
 # Package API and exports
 
-The package exposes management, a Python lead-turn/decision workflow, generic
-backend/model contracts, and schema-v2 collaboration components. This does not
-create an installed shell story command or specialist-execution path.
+The package exposes management, a Python lead-turn/confirmed-consultation
+workflow, generic backend/model contracts, and schema-v2 collaboration
+components. This does not connect story execution to the installed shell.
 
 ## Facade inventory
 
@@ -11,14 +11,14 @@ The stable inventories in this revision are:
 | Import boundary | Exports | Purpose |
 | --- | ---: | --- |
 | `story_writing_agents` | 104 | Management runtime, workspace/catalog, backend/session, generic models, retrieval contracts, parser, and errors |
-| `story_writing_agents.conversations` | 93 | Catalog plus schema-v2 events, projection, lead values, readable context, and pure validation |
+| `story_writing_agents.conversations` | 95 | Catalog plus schema-v2 events, projection, lead/specialist values, readable context, and pure validation |
 | `story_writing_agents.conversation_search` | 18 | Schema-v2 search, exact citations, paging, and history service |
 | `story_writing_agents.conversation_retrieval` | 24 | Low-level provider search/read-history/answer contracts |
 | `story_writing_agents.conversation_storage` | 63 | Storage composition, provenance, activation, archive, and transfer contracts |
 | `story_writing_agents.workspace` | 3 | `Workspace`, `initialize_workspace`, and `FilesystemConversationCatalog` |
 
 The production graph has 97 modules, 369 dependency edges, no cycles, and 104
-package-root exports. The conversations facade contributes 63 event exports
+package-root exports. The conversations facade contributes 65 event exports
 and 23 context exports; its bindings are identical to the owner bindings.
 
 Import the management facade explicitly:
@@ -28,8 +28,10 @@ from story_writing_agents import StoryRuntime, RuntimeSession, Workspace
 ```
 
 There is no package-root `Runtime` or `Session` alias. `StoryRuntime` and
-`RuntimeSession` expose `lead_turn()` and `decide_lead_step()`; they expose no
-direct specialist, artifact-write, Git, or debate-start method.
+`RuntimeSession` expose `lead_turn()`, `propose_specialist_advisory()`, and
+`decide_lead_step()`. Confirmed proposals execute through the decision method;
+there is no public raw/unconfirmed specialist dispatch, artifact-write, Git,
+or debate-start method.
 
 The root still exposes generic backend, prompt/request/result, debate model,
 session lifecycle, catalog, parser, retrieval, and error contracts. Those are
@@ -49,8 +51,10 @@ from story_writing_agents.conversations import (
     CollaborationEventBatch,
     CollaborationEventStore,
     CollaborationHistoryProjection,
+    CollaborationLeadSynthesisPayload,
     CollaborationReadableContext,
     CollaborationReadableRecord,
+    CollaborationSpecialistAssessment,
     LeadDecisionResult,
     LeadOutcomeKind,
     LeadStepDecision,
@@ -61,11 +65,12 @@ from story_writing_agents.conversations import (
 )
 ```
 
-The lead values are strict public inputs and results. Construct a
+The lead and specialist values are strict public inputs and results. Construct a
 `LeadStepDecision` from the exact proposal identity, digest, revision, and
 confirmation-request ID returned by `lead_turn()`; conversational text is not
-confirmation. See [Runtime API](runtime-api.md) for signatures and state
-outcomes.
+confirmation. A confirmed consultation records typed specialist replies and a
+typed lead synthesis when all assignments succeed. See
+[Runtime API](runtime-api.md) for signatures and state outcomes.
 
 The selected `ConversationStorageServices` has same-provenance bindings for
 one catalog, one `CollaborationEventStore`, one aggregate
@@ -208,13 +213,18 @@ The root and direct retrieval module expose the generic bounded
 a direct component seam. It does not create/focus a conversation or append a
 collaboration event. The installed lead workflow does not invoke it.
 
-## Ownership of later writes
+## Ownership of collaboration and later story writes
 
 The public shell is inspection-only for collaboration history. The Python lead
-workflow owns proposal, confirmation, rejection, revision, supersession, and
-reconfirmation writes. #453 owns later specialist execution, result,
-finalization, and outcome-unknown writes. A confirmed #452 proposal therefore
-stops at `start_or_reconfirm`; it is not execution authority.
+workflow owns proposal, confirmation, rejection, revision, supersession,
+reconfirmation, confirmed specialist execution, typed synthesis, result,
+finalization, and outcome-unknown writes. Confirmation is authority only for
+the disclosed read-only consultation.
+
+Artifact Apply and Git Commit remain separate future operations with separate
+exact confirmations. The lead is their planned semantic trigger and
+user-facing coordinator; runtime code, not the provider, will execute the
+filesystem and Git effects.
 
 ## Reference map
 
