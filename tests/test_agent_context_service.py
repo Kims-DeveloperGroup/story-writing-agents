@@ -1885,9 +1885,10 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         search_serialized = session.serialize_observation(search)
         search_wire = json.loads(search_serialized)
         self.assertEqual(search_wire[:2], ["s", False])
-        self.assertEqual(len(search_wire[2]), 4)
+        self.assertIsNone(search_wire[2])
+        self.assertEqual(len(search_wire[3]), 4)
         for expected_index, (hit, expected) in enumerate(
-            zip(search_wire[2], cases, strict=True),
+            zip(search_wire[3], cases, strict=True),
             start=1,
         ):
             kind, authority, locator, boundary, content = expected
@@ -1963,14 +1964,13 @@ class SearchAndAnswerLifecycleTests(unittest.TestCase):
         read_wire = json.loads(read_serialized)
         self.assertEqual(read_wire[0], "r")
         self.assertEqual(len(read_wire[1]), 4)
-        for search_hit, evidence, expected in zip(
-            search_wire[2],
-            read_wire[1],
-            cases,
-            strict=True,
+        for expected_index, (search_hit, evidence, expected) in enumerate(
+            zip(search_wire[3], read_wire[1], cases, strict=True),
+            start=1,
         ):
             self.assertEqual(evidence[:5], search_hit[1:6])
-            self.assertEqual(evidence[5], expected[4])
+            self.assertEqual(evidence[5], f"read_2_{expected_index}")
+            self.assertEqual(evidence[6], expected[4])
         session.complete_read(receipt)
         authorization = session.authorize_answer(
             ContextAnswerAction(

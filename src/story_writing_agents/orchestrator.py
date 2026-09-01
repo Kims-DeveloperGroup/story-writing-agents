@@ -37,6 +37,8 @@ from .agent_context.manifest import (
 from .agent_context.planning import ContextMaterial, MandatoryReferenceReservation
 from .agent_context.service import (
     AgentContextService,
+    ContextAnswerAuthorization,
+    ContextEvidenceReceipt,
     ContextExecutionEvent,
     ContextInvocationKind,
     ContextInvocationRequest,
@@ -46,10 +48,16 @@ from .agent_context.service import (
     ContextReferencePreludeRequest,
     ContextReferencePreludeResult,
     ContextScope,
+    ContextSourceBoundaryKind,
+    ContextSourceStatusReceipt,
+    ContextZeroHitSearchReceipt,
     context_provider_failure_facts,
 )
 from .agent_context.sources import (
+    CONTEXT_SOURCE_POLICY,
     ActiveDebateSourceAdapter,
+    ContextSourceSnapshot,
+    ContextSourceStatusKind,
     FocusedConversationSourceAdapter,
     OwnAgentStateSourceAdapter,
     WritingArtifactSourceAdapter,
@@ -80,6 +88,8 @@ from .conversations import (
     CollaborationBudget,
     CollaborationConfirmationDecision,
     CollaborationConfirmationPayload,
+    CollaborationEvidenceAcquisition,
+    CollaborationEvidenceReceipt,
     CollaborationEvent,
     CollaborationEventBatch,
     CollaborationEventDraft,
@@ -93,6 +103,10 @@ from .conversations import (
     CollaborationInterruptionPayload,
     CollaborationInvocationKind,
     CollaborationLeadSynthesisPayload,
+    CollaborationLeadEvidence,
+    CollaborationLeadJudgmentPayload,
+    CollaborationLeadOutcomeFailureCode,
+    CollaborationLeadOutcomeFailurePayload,
     CollaborationMessagePayload,
     CollaborationNextAction,
     CollaborationPayload,
@@ -114,6 +128,8 @@ from .conversations import (
     LeadAssignmentIntent,
     LeadDecisionResult,
     LeadOutcomeKind,
+    LeadOutcomeScope,
+    LeadEvidenceStatus,
     LeadProposalIntent,
     LeadProposalRelation,
     LeadProviderOutcome,
@@ -181,6 +197,10 @@ _CORE_REVIEWERS = {
 
 class _DuplicateJsonKey(ValueError):
     pass
+
+
+class _LeadOutcomeValidationError(BackendProtocolError):
+    """Reject one submitted lead result without treating prose as evidence."""
 
 
 class _SupersededBindingSelection(Exception):
@@ -461,6 +481,25 @@ class _AccountingContextProvider:
         """Return exact submitted calls observed by this no-await wrapper."""
 
         return len(self._submitted_call_ids)
+
+    @property
+    def invocation_id(self) -> str:
+        """Return the durable invocation identity used by call facts."""
+
+        return self._invocation_id
+
+    @property
+    def last_submitted_call_id(self) -> str | None:
+        """Return the exact most recently prepared call that was submitted."""
+
+        return next(
+            (
+                call_id
+                for call_id in reversed(tuple(self._ordinals))
+                if call_id in self._submitted_call_ids
+            ),
+            None,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1073,6 +1112,7 @@ class StoryRuntime:
                     ),
                     budget_policy_fingerprint=_BUDGET_POLICY_FINGERPRINT,
                     inputs=inputs,
+                    evidence=None,
                 ),
             )
             request_id = self._new_id("c")
@@ -1745,6 +1785,17 @@ class StoryRuntime:
         required_unresolved_input_ids = self._required_unresolved_input_ids(replies)
         value = {
             "answer_contract": {
+                "evidence_ids": [
+                    item.evidence_id
+                    for item in cast(
+                        CollaborationLeadEvidence,
+                        proposal.basis.evidence,
+                    ).receipts
+                ],
+                "evidence_status": cast(
+                    CollaborationLeadEvidence,
+                    proposal.basis.evidence,
+                ).status.value,
                 "message": "nonempty visible synthesis",
                 "next_intent": (
                     "null or an exact same-lineage proposal intent"
@@ -1752,6 +1803,7 @@ class StoryRuntime:
                     else None
                 ),
                 "reply_event_ids": list(reply_event_ids),
+                "scope": LeadOutcomeScope.STORY_SPECIFIC.value,
                 "unresolved_input_ids": list(required_unresolved_input_ids),
             },
             "inputs": [
@@ -2440,6 +2492,7 @@ class StoryRuntime:
                 CollaborationStepState.AWAITING_CONFIRMATION,
                 request_id,
                 CollaborationNextAction.SUBMIT_CONFIRMATION,
+                next_proposal.basis.evidence,
             )
 
         state = {
@@ -2709,6 +2762,7 @@ class StoryRuntime:
                 ),
                 budget_policy_fingerprint=_BUDGET_POLICY_FINGERPRINT,
                 inputs=tuple(inputs),
+                evidence=proposal.basis.evidence,
             ),
         )
 
@@ -2782,17 +2836,28 @@ class StoryRuntime:
             value = cls._strict_json_object(
                 answer,
                 {
+                    "evidence_ids",
+                    "evidence_status",
                     "message",
                     "next_intent",
                     "reply_event_ids",
+                    "scope",
                     "unresolved_input_ids",
                 },
             )
             raw_reply_ids = value["reply_event_ids"]
             raw_unresolved = value["unresolved_input_ids"]
             message = value["message"]
+            evidence = proposal.basis.evidence
             if (
-                type(raw_reply_ids) is not list
+                type(evidence) is not CollaborationLeadEvidence
+                or value["scope"] != evidence.scope.value
+                or value["evidence_status"] != evidence.status.value
+                or type(value["evidence_ids"]) is not list
+                or tuple(value["evidence_ids"])
+                != tuple(item.evidence_id for item in evidence.receipts)
+                or evidence.scope is not LeadOutcomeScope.STORY_SPECIFIC
+                or type(raw_reply_ids) is not list
                 or tuple(raw_reply_ids) != reply_event_ids
                 or type(raw_unresolved) is not list
                 or any(type(item) is not str for item in raw_unresolved)
@@ -2842,6 +2907,7 @@ class StoryRuntime:
                 message=message,
                 reply_event_ids=reply_event_ids,
                 unresolved_input_ids=unresolved,
+                evidence=evidence,
                 next_intent=intent,
             )
         except (KeyError, TypeError, UnicodeError, ValueError) as exc:
@@ -3235,6 +3301,7 @@ class StoryRuntime:
         )
         bound_agent = await self._acquire_bound_agent(definition)
         reference_read: object | None = None
+        provider: _AccountingContextProvider | None = None
         try:
             reference_read = reference_operation.begin_invocation(
                 agent_id=LEAD_ORCHESTRATOR,
@@ -3296,6 +3363,12 @@ class StoryRuntime:
                         },
                         "kind": [item.value for item in LeadOutcomeKind],
                         "message": "nonempty user-visible text",
+                        "scope": "story_specific | workflow_meta",
+                        "evidence_status": (
+                            "not_applicable | verified | missing | empty | "
+                            "incomplete | conflicting"
+                        ),
+                        "evidence_ids": ("ordered runtime-issued evidence IDs only"),
                         "proposal": {
                             "assignments": "required only for proposal",
                             "purpose": "visible purpose",
@@ -3343,12 +3416,35 @@ class StoryRuntime:
                 invocation_kind=ContextInvocationKind.LEAD,
                 result_contract=_CONTEXT_RESULT_CONTRACT,
                 physical_call_limit=physical_call_limit,
+                include_core_statuses=True,
             )
             decoded: LeadProviderOutcome | None = None
+            decoded_evidence: CollaborationLeadEvidence | None = None
 
-            def validate(answer: str, _authorization: object) -> None:
-                nonlocal decoded
+            def validate(
+                answer: str,
+                authorization: ContextAnswerAuthorization,
+            ) -> None:
+                nonlocal decoded, decoded_evidence
                 decoded = self._decode_lead_outcome(answer)
+                decoded_evidence = self._durable_lead_evidence(
+                    decoded,
+                    authorization,
+                    inputs,
+                )
+                if decoded.kind is LeadOutcomeKind.PROPOSAL:
+                    assert decoded.proposal is not None
+                    if decoded.proposal.relation is not expected_relation:
+                        raise _LeadOutcomeValidationError(
+                            "lead proposal relation does not match the runtime request"
+                        )
+                    self._validate_lead_intent_evidence_inputs(
+                        decoded.proposal,
+                        self._materialize_lead_evidence_inputs(
+                            inputs,
+                            decoded_evidence,
+                        ),
+                    )
 
             result = await self._agent_context_service.invoke(
                 contextual_request,
@@ -3361,7 +3457,24 @@ class StoryRuntime:
                 event_sink=context_event_sink,
             )
             outcome = decoded or self._decode_lead_outcome(result.answer)
+            evidence = decoded_evidence or self._durable_lead_evidence(
+                outcome,
+                result.authorization,
+                inputs,
+            )
             reference_operation.finish()
+        except _LeadOutcomeValidationError as failure:
+            reference_operation.failure(failure)
+            if provider is None or provider.last_submitted_call_id is None:
+                raise
+            return self._lead_outcome_failure_result(
+                session_id=session_id,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                step_id=step_id,
+                invocation_id=provider.invocation_id,
+                call_id=provider.last_submitted_call_id,
+            )
         except BaseException as failure:
             reference_failure = reference_operation.failure(failure)
             if reference_failure is not None:
@@ -3373,10 +3486,6 @@ class StoryRuntime:
         if outcome.kind is LeadOutcomeKind.PROPOSAL:
             intent = outcome.proposal
             assert intent is not None
-            if intent.relation is not expected_relation:
-                raise BackendProtocolError(
-                    "lead proposal relation does not match the runtime request"
-                )
             refreshed = self.conversation_storage_services.event_store.read_context(
                 session_id,
                 conversation_id,
@@ -3385,10 +3494,11 @@ class StoryRuntime:
                 session_id=session_id,
                 step_id=step_id,
                 intent=intent,
-                inputs=inputs,
+                inputs=self._materialize_lead_evidence_inputs(inputs, evidence),
                 previous_proposal=previous_proposal,
                 projection=refreshed,
                 lead_definition=definition,
+                evidence=evidence,
             )
             request_id = self._new_id("c")
             message_event = self._draft(
@@ -3399,7 +3509,11 @@ class StoryRuntime:
                 kind=CollaborationEventKind.MESSAGE,
                 sender=_LEAD_ACTOR,
                 recipient=_USER_ACTOR,
-                payload=CollaborationMessagePayload(outcome.message),
+                payload=CollaborationLeadJudgmentPayload(
+                    outcome.kind,
+                    outcome.message,
+                    evidence,
+                ),
             )
             proposal_event = self._draft(
                 session_id=session_id,
@@ -3442,6 +3556,7 @@ class StoryRuntime:
                 CollaborationStepState.AWAITING_CONFIRMATION,
                 request_id,
                 CollaborationNextAction.SUBMIT_CONFIRMATION,
+                evidence,
             )
 
         refreshed = self.conversation_storage_services.event_store.read_context(
@@ -3459,7 +3574,11 @@ class StoryRuntime:
                     kind=CollaborationEventKind.MESSAGE,
                     sender=_LEAD_ACTOR,
                     recipient=_USER_ACTOR,
-                    payload=CollaborationMessagePayload(outcome.message),
+                    payload=CollaborationLeadJudgmentPayload(
+                        outcome.kind,
+                        outcome.message,
+                        evidence,
+                    ),
                 ),
             ),
         )
@@ -3482,6 +3601,73 @@ class StoryRuntime:
                 if outcome.kind is LeadOutcomeKind.QUESTION
                 else CollaborationNextAction.CONTINUE_WITH_LEAD
             ),
+            evidence,
+        )
+
+    def _lead_outcome_failure_result(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+        turn_id: str,
+        step_id: str,
+        invocation_id: str,
+        call_id: str,
+    ) -> LeadTurnResult:
+        """Durably close one rejected submitted outcome without replay authority."""
+
+        message = (
+            "The lead result failed runtime evidence validation. Retry the lead "
+            "turn; the rejected provider call will not be replayed."
+        )
+        try:
+            projection = self.conversation_storage_services.event_store.read_context(
+                session_id,
+                conversation_id,
+            )
+            self._append_drafts(
+                projection.last_sequence,
+                (
+                    self._draft(
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        step_id=step_id,
+                        kind=CollaborationEventKind.LEAD_OUTCOME_FAILURE,
+                        sender=_RUNTIME_ACTOR,
+                        recipient=_USER_ACTOR,
+                        payload=CollaborationLeadOutcomeFailurePayload(
+                            code=(
+                                CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED
+                            ),
+                            invocation_id=invocation_id,
+                            call_id=call_id,
+                        ),
+                    ),
+                ),
+            )
+        except BaseException:
+            return self._blocking_lead_result(
+                session_id,
+                conversation_id,
+                CollaborationStepState.RECOVERY_REQUIRED,
+                "The rejected lead result could not be closed in authoritative "
+                "history. Repair history before continuing.",
+                step_id=step_id,
+                turn_id=turn_id,
+            )
+        return LeadTurnResult(
+            session_id,
+            conversation_id,
+            turn_id,
+            step_id,
+            LeadOutcomeKind.RECOMMENDATION,
+            message,
+            None,
+            None,
+            None,
+            CollaborationNextAction.RETRY_LEAD_TURN,
+            None,
         )
 
     @staticmethod
@@ -3506,18 +3692,36 @@ class StoryRuntime:
                 parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
             )
             if type(value) is not dict or set(value) != {
+                "evidence_ids",
+                "evidence_status",
                 "kind",
                 "message",
                 "proposal",
+                "scope",
             }:
                 raise ValueError
             kind = LeadOutcomeKind(value["kind"])
             message = value["message"]
+            scope = LeadOutcomeScope(value["scope"])
+            evidence_status = LeadEvidenceStatus(value["evidence_status"])
+            raw_evidence_ids = value["evidence_ids"]
+            if type(raw_evidence_ids) is not list or any(
+                type(item) is not str for item in raw_evidence_ids
+            ):
+                raise ValueError
+            evidence_ids = tuple(raw_evidence_ids)
             proposal_value = value["proposal"]
             if kind is not LeadOutcomeKind.PROPOSAL:
                 if proposal_value is not None:
                     raise ValueError
-                return LeadProviderOutcome(kind, message, None)
+                return LeadProviderOutcome(
+                    kind,
+                    message,
+                    scope,
+                    evidence_status,
+                    evidence_ids,
+                    None,
+                )
             if type(proposal_value) is not dict or set(proposal_value) != {
                 "assignments",
                 "purpose",
@@ -3549,7 +3753,14 @@ class StoryRuntime:
                 purpose=proposal_value["purpose"],
                 assignments=tuple(assignments),
             )
-            return LeadProviderOutcome(kind, message, proposal)
+            return LeadProviderOutcome(
+                kind,
+                message,
+                scope,
+                evidence_status,
+                evidence_ids,
+                proposal,
+            )
         except (
             _DuplicateJsonKey,
             json.JSONDecodeError,
@@ -3558,7 +3769,9 @@ class StoryRuntime:
             UnicodeError,
             ValueError,
         ) as exc:
-            raise BackendProtocolError("lead returned a noncanonical outcome") from exc
+            raise _LeadOutcomeValidationError(
+                "lead returned a noncanonical evidence outcome"
+            ) from exc
 
     def _build_lead_proposal(
         self,
@@ -3570,6 +3783,7 @@ class StoryRuntime:
         previous_proposal: CollaborationProposal | None,
         projection: CollaborationHistoryProjection,
         lead_definition: object,
+        evidence: CollaborationLeadEvidence,
     ) -> CollaborationProposal:
         assignments = intent.assignments
         specialist_ids = tuple(item.agent_id for item in assignments)
@@ -3679,6 +3893,7 @@ class StoryRuntime:
             context_policy_fingerprint=(self._agent_context_service.policy_fingerprint),
             budget_policy_fingerprint=_BUDGET_POLICY_FINGERPRINT,
             inputs=inputs,
+            evidence=evidence,
         )
         budget = CollaborationBudget(
             round_limit=COLLABORATION_ROUND_LIMIT,
@@ -3713,7 +3928,16 @@ class StoryRuntime:
         """Re-derive every mutable runtime fact before minting start authority."""
 
         try:
-            inputs = self._current_lead_inputs(events, proposal)
+            evidence_inputs = self._validate_current_lead_evidence(
+                session_id=session_id,
+                events=events,
+                proposal=proposal,
+            )
+            inputs = self._current_lead_inputs(
+                events,
+                proposal,
+                evidence_inputs=evidence_inputs,
+            )
             specialist_ids = tuple(
                 assignment.specialist_id for assignment in proposal.assignments
             )
@@ -3794,6 +4018,7 @@ class StoryRuntime:
                 ),
                 budget_policy_fingerprint=_BUDGET_POLICY_FINGERPRINT,
                 inputs=inputs,
+                evidence=proposal.basis.evidence,
             )
             budget = CollaborationBudget(
                 round_limit=COLLABORATION_ROUND_LIMIT,
@@ -3830,11 +4055,296 @@ class StoryRuntime:
                 "lead proposal authority drift requires regeneration and confirmation"
             )
 
+    def _validate_current_lead_evidence(
+        self,
+        *,
+        session_id: str,
+        events: tuple[CollaborationEvent, ...],
+        proposal: CollaborationProposal,
+    ) -> dict[str, CollaborationInputRevision]:
+        """Re-derive selected evidence without replaying provider SEARCH text."""
+
+        evidence = proposal.basis.evidence
+        if evidence is None:
+            return {}
+        conversation_ids = {event.conversation_id for event in events}
+        if len(conversation_ids) != 1:
+            raise ValueError("lead evidence conversation identity is ambiguous")
+        conversation_id = next(iter(conversation_ids))
+        if not evidence.receipts:
+            raise ValueError("story-specific proposal evidence cannot be empty")
+        operation_id = evidence.receipts[0].operation_id
+        result_correlation_id = evidence.receipts[0].result_correlation_id
+        manifest_digest = evidence.receipts[0].manifest_digest
+        status_receipts = tuple(
+            item
+            for item in evidence.receipts
+            if item.acquisition is CollaborationEvidenceAcquisition.CORE_STATUS
+        )
+        scope = self._agent_context_service.scope(
+            session_id,
+            ContextSubjectKind.CONVERSATION,
+            conversation_id,
+            LEAD_ORCHESTRATOR,
+        )
+        writing_adapter = WritingArtifactSourceAdapter(self.artifacts, scope)
+        if status_receipts:
+            current_statuses = {
+                item.evidence_id: self._durable_core_status_receipt(
+                    item,
+                    operation_id=operation_id,
+                    result_correlation_id=result_correlation_id,
+                )
+                for item in writing_adapter.canonical_core_statuses(
+                    manifest_digest,
+                    CONTEXT_SOURCE_POLICY,
+                )
+            }
+            if any(
+                current_statuses.get(item.evidence_id) != item
+                for item in status_receipts
+            ):
+                raise ValueError("lead core-status evidence is no longer current")
+
+        zero_hits = tuple(
+            item
+            for item in evidence.receipts
+            if item.acquisition is CollaborationEvidenceAcquisition.ZERO_HIT_SEARCH
+        )
+        if zero_hits:
+            descriptors = writing_adapter.inventory(CONTEXT_SOURCE_POLICY)
+            for item in zero_hits:
+                current_descriptors: list[Any] = []
+                if (
+                    CollaborationInputKind.WRITING_ARTIFACT
+                    in item.authorized_source_kinds
+                ):
+                    current_descriptors.extend(
+                        descriptor
+                        for descriptor in descriptors
+                        if item.artifact_path_prefix is None
+                        or descriptor.provenance.locator.startswith(
+                            item.artifact_path_prefix
+                        )
+                    )
+                if (
+                    CollaborationInputKind.CONVERSATION_EVENT
+                    in item.authorized_source_kinds
+                ):
+                    services = self.conversation_storage_services
+                    current_descriptors.extend(
+                        descriptor
+                        for descriptor in FocusedConversationSourceAdapter(
+                            services.catalog,
+                            services.event_store,
+                            scope,
+                            conversation_id,
+                            include_same_session_active=True,
+                            include_searchable_history=True,
+                        ).inventory(CONTEXT_SOURCE_POLICY)
+                    )
+                if CollaborationInputKind.AGENT_STATE in item.authorized_source_kinds:
+                    current_descriptors.extend(
+                        descriptor
+                        for descriptor in OwnAgentStateSourceAdapter(
+                            self.workspace,
+                            scope,
+                        ).inventory(CONTEXT_SOURCE_POLICY)
+                    )
+                if (
+                    item.manifest_digest != manifest_digest
+                    or tuple(descriptor.source_id for descriptor in current_descriptors)
+                    != item.authorized_source_ids
+                    or self._lead_authorized_source_fingerprint(
+                        tuple(current_descriptors)
+                    )
+                    != item.authorized_source_fingerprint
+                ):
+                    raise ValueError(
+                        "lead zero-hit evidence source manifest has drifted"
+                    )
+
+        read_inputs: dict[str, CollaborationInputRevision] = {}
+        for receipt in evidence.receipts:
+            if receipt.acquisition is not CollaborationEvidenceAcquisition.READ:
+                continue
+            current_input = self._current_lead_read_input(
+                session_id=session_id,
+                conversation_id=conversation_id,
+                scope=scope,
+                receipt=receipt,
+                writing_adapter=writing_adapter,
+            )
+            if receipt.evidence_id in read_inputs:
+                raise ValueError("lead READ evidence identity is duplicated")
+            read_inputs[receipt.evidence_id] = current_input
+        return read_inputs
+
+    @classmethod
+    def _lead_authorized_source_fingerprint(
+        cls,
+        descriptors: tuple[Any, ...],
+    ) -> str:
+        """Rebuild stable identity and non-self-appending revision facts."""
+
+        return cls._canonical_digest(
+            [
+                "context-zero-hit-authorized-sources-v1",
+                [
+                    [
+                        item.source_id,
+                        item.source_kind.value,
+                        (
+                            None
+                            if item.source_kind is ContextSourceKind.CONVERSATION
+                            else item.revision
+                        ),
+                        (
+                            None
+                            if item.source_kind is ContextSourceKind.CONVERSATION
+                            else item.content_digest
+                        ),
+                        item.provenance.authority_kind.value,
+                        item.provenance.locator,
+                        (
+                            None
+                            if item.source_kind is ContextSourceKind.CONVERSATION
+                            else item.utf8_bytes
+                        ),
+                    ]
+                    for item in descriptors
+                ],
+            ]
+        )
+
+    def _current_lead_read_input(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+        scope: ContextScope,
+        receipt: CollaborationEvidenceReceipt,
+        writing_adapter: WritingArtifactSourceAdapter,
+    ) -> CollaborationInputRevision:
+        """Capture and compare one cited READ boundary through its source owner."""
+
+        if (
+            receipt.source_kind is None
+            or receipt.source_id is None
+            or receipt.locator is None
+            or receipt.content_digest is None
+            or receipt.revision_digest is None
+            or receipt.boundary_kind is None
+        ):
+            raise ValueError("lead READ evidence is incomplete")
+        if receipt.source_kind in {
+            CollaborationInputKind.CORE_DOCUMENT,
+            CollaborationInputKind.MANUSCRIPT,
+            CollaborationInputKind.WRITING_ARTIFACT,
+        }:
+            snapshot = writing_adapter.capture(
+                receipt.locator,
+                CONTEXT_SOURCE_POLICY,
+            )
+            locator = self._artifact_evidence_locator(receipt)
+        elif receipt.source_kind is CollaborationInputKind.CONVERSATION_EVENT:
+            services = self.conversation_storage_services
+            snapshot = FocusedConversationSourceAdapter(
+                services.catalog,
+                services.event_store,
+                scope,
+                conversation_id,
+                include_same_session_active=True,
+                include_searchable_history=True,
+            ).capture(receipt.locator, CONTEXT_SOURCE_POLICY)
+            locator = receipt.locator
+        elif (
+            receipt.source_kind is CollaborationInputKind.AGENT_STATE
+            and receipt.locator == f"agent-state/{LEAD_ORCHESTRATOR}"
+        ):
+            snapshot = OwnAgentStateSourceAdapter(
+                self.workspace,
+                scope,
+            ).capture(receipt.locator, CONTEXT_SOURCE_POLICY)
+            locator = receipt.locator
+        else:
+            raise ValueError("lead READ evidence source is not re-readable")
+        descriptor = snapshot.descriptor
+        current_kind = self._evidence_source_kind(
+            descriptor.source_kind,
+            descriptor.provenance.locator,
+        )
+        if (
+            descriptor.source_id != receipt.source_id
+            or current_kind is not receipt.source_kind
+            or descriptor.provenance.locator != receipt.locator
+            or (
+                receipt.source_kind is not CollaborationInputKind.CONVERSATION_EVENT
+                and descriptor.revision != receipt.revision_digest
+            )
+        ):
+            raise ValueError("lead READ evidence source identity has drifted")
+        selected = self._current_context_boundary_bytes(snapshot, receipt)
+        digest = "sha256:" + hashlib.sha256(selected).hexdigest()
+        if digest != receipt.content_digest or len(selected) != receipt.utf8_bytes:
+            raise ValueError("lead READ evidence content has drifted")
+        return CollaborationInputRevision(
+            input_id=receipt.evidence_id,
+            kind=receipt.source_kind,
+            locator=locator,
+            state=CollaborationInputState.PRESENT,
+            revision_digest=digest,
+            start_line=receipt.start_line,
+            end_line=receipt.end_line,
+        )
+
+    @staticmethod
+    def _current_context_boundary_bytes(
+        snapshot: ContextSourceSnapshot,
+        receipt: CollaborationEvidenceReceipt,
+    ) -> bytes:
+        if receipt.boundary_kind == ContextSourceBoundaryKind.WHOLE.value:
+            return snapshot.content
+        if receipt.boundary_kind not in {
+            ContextSourceBoundaryKind.ARTIFACT_LINES.value,
+            ContextSourceBoundaryKind.RECORDS.value,
+        }:
+            raise ValueError("lead READ evidence boundary is invalid")
+        assert receipt.boundary_start is not None
+        assert receipt.boundary_end is not None
+        selected = tuple(
+            record
+            for record in snapshot.records
+            if record.boundary.start is not None
+            and receipt.boundary_start <= record.boundary.start <= receipt.boundary_end
+        )
+        expected = tuple(range(receipt.boundary_start, receipt.boundary_end + 1))
+        if (
+            len(selected) != len(expected)
+            or tuple(record.boundary.start for record in selected) != expected
+        ):
+            raise ValueError("lead READ evidence boundary is no longer readable")
+        if receipt.boundary_kind == ContextSourceBoundaryKind.ARTIFACT_LINES.value:
+            return b"".join(item.content.encode("utf-8") for item in selected)
+        if len(selected) == 1:
+            return selected[0].content.encode("utf-8")
+        return json.dumps(
+            [json.loads(item.content) for item in selected],
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8", errors="strict")
+
     def _current_lead_inputs(
         self,
         events: tuple[CollaborationEvent, ...],
         proposal: CollaborationProposal,
+        *,
+        evidence_inputs: dict[str, CollaborationInputRevision] | None = None,
     ) -> tuple[CollaborationInputRevision, ...]:
+        if evidence_inputs is None:
+            evidence_inputs = {}
         proposal_events = tuple(
             event
             for event in events
@@ -3875,6 +4385,9 @@ class StoryRuntime:
         selected_total = 0
         current: list[CollaborationInputRevision] = []
         for expected in proposal.basis.inputs:
+            if expected.input_id in evidence_inputs:
+                current.append(evidence_inputs[expected.input_id])
+                continue
             if expected.kind is CollaborationInputKind.USER_INPUT:
                 prefix = "conversation/"
                 suffix = "/user_input"
@@ -4259,6 +4772,314 @@ class StoryRuntime:
         )
 
     @staticmethod
+    def _evidence_source_kind(
+        source_kind: ContextSourceKind,
+        locator: str,
+    ) -> CollaborationInputKind:
+        if source_kind is ContextSourceKind.WRITING_ARTIFACT:
+            if locator.startswith("core_documents/"):
+                return CollaborationInputKind.CORE_DOCUMENT
+            if locator.startswith("manuscript/"):
+                return CollaborationInputKind.MANUSCRIPT
+            return CollaborationInputKind.WRITING_ARTIFACT
+        if source_kind is ContextSourceKind.CONVERSATION:
+            return CollaborationInputKind.CONVERSATION_EVENT
+        return CollaborationInputKind.AGENT_STATE
+
+    @classmethod
+    def _durable_lead_evidence(
+        cls,
+        outcome: LeadProviderOutcome,
+        authorization: ContextAnswerAuthorization,
+        inputs: tuple[CollaborationInputRevision, ...],
+    ) -> CollaborationLeadEvidence:
+        """Map only invocation-local runtime facts named by the provider."""
+
+        operation_id = authorization.correlation.operation_id
+        result_correlation_id = authorization.correlation.result_correlation_id
+        manifest_digest = authorization.manifest_digest
+        inputs_by_id = {item.input_id: item for item in inputs}
+        available: list[CollaborationEvidenceReceipt] = []
+        for reference in authorization.mandatory_references:
+            input_revision = inputs_by_id.get(reference.reference_id)
+            if input_revision is None:
+                raise _LeadOutcomeValidationError(
+                    "lead reference evidence is not an authoritative input"
+                )
+            available.append(
+                CollaborationEvidenceReceipt(
+                    evidence_id=reference.reference_id,
+                    acquisition=(CollaborationEvidenceAcquisition.ATTACHED_REFERENCE),
+                    operation_id=operation_id,
+                    result_correlation_id=result_correlation_id,
+                    manifest_digest=manifest_digest,
+                    source_id=reference.source_id,
+                    source_kind=input_revision.kind,
+                    locator=input_revision.locator,
+                    source_state=CollaborationInputState.PRESENT,
+                    revision_digest=reference.revision,
+                    content_digest=reference.content_digest,
+                    utf8_bytes=reference.utf8_bytes,
+                    boundary_kind=(
+                        "whole"
+                        if input_revision.start_line is None
+                        else "artifact_lines"
+                    ),
+                    boundary_start=input_revision.start_line,
+                    boundary_end=input_revision.end_line,
+                    start_line=input_revision.start_line,
+                    end_line=input_revision.end_line,
+                    ordinal=reference.ordinal,
+                )
+            )
+        available.extend(
+            cls._durable_core_status_receipt(
+                item,
+                operation_id=operation_id,
+                result_correlation_id=result_correlation_id,
+            )
+            for item in authorization.core_statuses
+        )
+        action_receipts: list[CollaborationEvidenceReceipt] = []
+        action_receipts.extend(
+            cls._durable_zero_hit_receipt(item)
+            for item in authorization.zero_hit_searches
+        )
+        action_receipts.extend(
+            cls._durable_read_receipt(
+                item,
+                operation_id=operation_id,
+                result_correlation_id=result_correlation_id,
+                manifest_digest=manifest_digest,
+            )
+            for item in authorization.used_evidence
+        )
+        action_receipts.sort(
+            key=lambda item: (
+                item.action_index or 0,
+                0
+                if item.acquisition is CollaborationEvidenceAcquisition.ZERO_HIT_SEARCH
+                else 1,
+                item.evidence_id,
+            )
+        )
+        available.extend(action_receipts)
+        available_by_id = {item.evidence_id: item for item in available}
+        selected_ids = outcome.evidence_ids
+        selected_set = set(selected_ids)
+        canonical = tuple(
+            item.evidence_id for item in available if item.evidence_id in selected_set
+        )
+        if (
+            len(available_by_id) != len(available)
+            or len(selected_set) != len(selected_ids)
+            or canonical != selected_ids
+            or any(evidence_id not in available_by_id for evidence_id in selected_ids)
+        ):
+            raise _LeadOutcomeValidationError(
+                "lead evidence IDs are unknown, duplicate, or out of order"
+            )
+        evidence = CollaborationLeadEvidence(
+            scope=outcome.scope,
+            status=outcome.evidence_status,
+            receipts=tuple(available_by_id[item] for item in selected_ids),
+        )
+        try:
+            CollaborationLeadJudgmentPayload(outcome.kind, outcome.message, evidence)
+        except (TypeError, ValueError) as exc:
+            raise _LeadOutcomeValidationError(
+                "lead outcome violates the closed evidence matrix"
+            ) from exc
+        return evidence
+
+    @classmethod
+    def _durable_core_status_receipt(
+        cls,
+        receipt: ContextSourceStatusReceipt,
+        *,
+        operation_id: str,
+        result_correlation_id: str,
+    ) -> CollaborationEvidenceReceipt:
+        return CollaborationEvidenceReceipt(
+            evidence_id=receipt.evidence_id,
+            acquisition=CollaborationEvidenceAcquisition.CORE_STATUS,
+            operation_id=operation_id,
+            result_correlation_id=result_correlation_id,
+            manifest_digest=receipt.manifest_digest,
+            source_id=receipt.source_id,
+            source_kind=CollaborationInputKind.CORE_DOCUMENT,
+            locator=receipt.locator,
+            source_state=(
+                CollaborationInputState.ABSENT
+                if receipt.status is ContextSourceStatusKind.ABSENT
+                else CollaborationInputState.PRESENT
+            ),
+            revision_digest=receipt.revision,
+            content_digest=receipt.source_digest,
+            utf8_bytes=receipt.source_utf8_bytes,
+            ordinal=receipt.ordinal,
+        )
+
+    @classmethod
+    def _durable_zero_hit_receipt(
+        cls,
+        receipt: ContextZeroHitSearchReceipt,
+    ) -> CollaborationEvidenceReceipt:
+        mapped_kinds = tuple(
+            dict.fromkeys(
+                cls._evidence_source_kind(kind, "")
+                for kind in receipt.authorized_source_kinds
+            )
+        )
+        return CollaborationEvidenceReceipt(
+            evidence_id=receipt.evidence_id,
+            acquisition=CollaborationEvidenceAcquisition.ZERO_HIT_SEARCH,
+            operation_id=receipt.correlation.operation_id,
+            result_correlation_id=receipt.correlation.result_correlation_id,
+            manifest_digest=receipt.manifest_digest,
+            source_state=CollaborationInputState.ABSENT,
+            action_index=receipt.correlation.action_index,
+            query_digest=receipt.query_digest,
+            query_count=receipt.query_count,
+            authorized_source_ids=receipt.authorized_source_ids,
+            authorized_source_kinds=mapped_kinds,
+            authorized_source_fingerprint=(receipt.authorized_source_fingerprint),
+            artifact_path_prefix=receipt.artifact_path_prefix,
+        )
+
+    @classmethod
+    def _durable_read_receipt(
+        cls,
+        receipt: ContextEvidenceReceipt,
+        *,
+        operation_id: str,
+        result_correlation_id: str,
+        manifest_digest: str,
+    ) -> CollaborationEvidenceReceipt:
+        locator = receipt.provenance.locator
+        boundary = receipt.boundary
+        return CollaborationEvidenceReceipt(
+            evidence_id=receipt.evidence_id,
+            acquisition=CollaborationEvidenceAcquisition.READ,
+            operation_id=operation_id,
+            result_correlation_id=result_correlation_id,
+            manifest_digest=manifest_digest,
+            source_id=receipt.source_id,
+            source_kind=cls._evidence_source_kind(receipt.source_kind, locator),
+            locator=locator,
+            source_state=CollaborationInputState.PRESENT,
+            revision_digest=receipt.revision,
+            content_digest=receipt.boundary_digest,
+            utf8_bytes=receipt.boundary_utf8_bytes,
+            boundary_kind=boundary.kind.value,
+            boundary_start=boundary.start,
+            boundary_end=boundary.end,
+            start_line=(
+                boundary.start
+                if boundary.kind is ContextSourceBoundaryKind.ARTIFACT_LINES
+                else None
+            ),
+            end_line=(
+                boundary.end
+                if boundary.kind is ContextSourceBoundaryKind.ARTIFACT_LINES
+                else None
+            ),
+            action_index=receipt.completing_read_action_index,
+            origin_action_index=receipt.originating_search_action_index,
+        )
+
+    @classmethod
+    def _materialize_lead_evidence_inputs(
+        cls,
+        inputs: tuple[CollaborationInputRevision, ...],
+        evidence: CollaborationLeadEvidence,
+    ) -> tuple[CollaborationInputRevision, ...]:
+        """Materialize only cited READ content as exact proposal inputs."""
+
+        materialized = list(inputs)
+        known_ids = {item.input_id for item in materialized}
+        for receipt in evidence.receipts:
+            if receipt.acquisition is not CollaborationEvidenceAcquisition.READ:
+                continue
+            if (
+                receipt.evidence_id in known_ids
+                or receipt.source_kind is None
+                or receipt.locator is None
+                or receipt.content_digest is None
+            ):
+                raise _LeadOutcomeValidationError(
+                    "lead READ evidence cannot become an exact proposal input"
+                )
+            materialized.append(
+                CollaborationInputRevision(
+                    input_id=receipt.evidence_id,
+                    kind=receipt.source_kind,
+                    locator=(
+                        cls._artifact_evidence_locator(receipt)
+                        if receipt.source_kind
+                        in {
+                            CollaborationInputKind.CORE_DOCUMENT,
+                            CollaborationInputKind.MANUSCRIPT,
+                            CollaborationInputKind.WRITING_ARTIFACT,
+                        }
+                        else receipt.locator
+                    ),
+                    state=CollaborationInputState.PRESENT,
+                    revision_digest=receipt.content_digest,
+                    start_line=receipt.start_line,
+                    end_line=receipt.end_line,
+                )
+            )
+            known_ids.add(receipt.evidence_id)
+        return tuple(materialized)
+
+    @staticmethod
+    def _artifact_evidence_locator(receipt: CollaborationEvidenceReceipt) -> str:
+        """Project one authorized artifact READ as a canonical input indicator."""
+
+        assert receipt.locator is not None
+        if receipt.start_line is None:
+            return f"${{{receipt.locator}}}"
+        assert receipt.end_line is not None
+        return f"${{{receipt.locator}}}#L{receipt.start_line}-L{receipt.end_line}"
+
+    @classmethod
+    def _validate_lead_intent_evidence_inputs(
+        cls,
+        intent: LeadProposalIntent,
+        inputs: tuple[CollaborationInputRevision, ...],
+    ) -> None:
+        specialist_ids = tuple(item.agent_id for item in intent.assignments)
+        canonical = tuple(
+            agent_id for agent_id in SPECIALIST_IDS if agent_id in specialist_ids
+        )
+        assigned = {
+            input_id
+            for assignment in intent.assignments
+            for input_id in assignment.input_ids
+        }
+        if specialist_ids != canonical or assigned != {
+            item.input_id for item in inputs
+        }:
+            raise _LeadOutcomeValidationError(
+                "lead proposal routing is not canonical or input-complete"
+            )
+        assignment_inputs = {
+            item.agent_id: frozenset(item.input_ids) for item in intent.assignments
+        }
+        for item in inputs:
+            if item.kind is not CollaborationInputKind.CORE_DOCUMENT:
+                continue
+            reviewer = cls._core_reviewer(item.locator)
+            if reviewer is not None and (
+                reviewer not in assignment_inputs
+                or item.input_id not in assignment_inputs[reviewer]
+            ):
+                raise _LeadOutcomeValidationError(
+                    "lead proposal omits a mandatory core-document reviewer"
+                )
+
+    @staticmethod
     def _context_material(
         *,
         source_id: str,
@@ -4504,12 +5325,18 @@ class StoryRuntime:
         marked_turns: set[str] = set()
         for event in reversed(events):
             if (
-                type(event.payload) is CollaborationProviderCallPayload
-                and event.payload.invocation_kind is CollaborationInvocationKind.LEAD
-            ) or (
-                event.kind is CollaborationEventKind.MESSAGE
-                and event.sender == _LEAD_ACTOR
-                and event.recipient == _USER_ACTOR
+                (
+                    type(event.payload) is CollaborationProviderCallPayload
+                    and event.payload.invocation_kind
+                    is CollaborationInvocationKind.LEAD
+                )
+                or (
+                    event.kind is CollaborationEventKind.MESSAGE
+                    and event.sender == _LEAD_ACTOR
+                    and event.recipient == _USER_ACTOR
+                    and type(event.payload) is CollaborationLeadJudgmentPayload
+                )
+                or (type(event.payload) is CollaborationLeadOutcomeFailurePayload)
             ):
                 marked_turns.add(event.turn_id)
                 continue
@@ -4531,7 +5358,8 @@ class StoryRuntime:
                 event.kind is CollaborationEventKind.MESSAGE
                 and event.sender == _LEAD_ACTOR
                 and event.recipient == _USER_ACTOR
-            ):
+                and type(event.payload) is CollaborationLeadJudgmentPayload
+            ) or type(event.payload) is CollaborationLeadOutcomeFailurePayload:
                 completed_invocations.add(correlation)
                 continue
             if (

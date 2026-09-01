@@ -389,6 +389,30 @@ its context under their own policy. `StoryRuntime.lead_turn()`, confirmed
 consultation execution, and `propose_specialist_advisory()` construct this
 path; the interactive controller does not.
 
+### Lead-evidence retention
+
+Fresh lead judgments add content-free evidence to canonical collaboration
+history. A receipt can retain relative locator/source identity, state,
+revision/content/manifest digests, UTF-8 size, exact line or record boundary,
+and action ordinal. A zero-hit receipt retains a query digest and count,
+authorized source identities/kinds, optional artifact prefix, and a
+deterministic fingerprint of the authorized source snapshot. It does not
+retain the query, snippet, excerpt, or source body. The typed lead message and
+later specialist replies/synthesis remain visible plaintext story analysis.
+
+These receipts disclose topology and change facts even though they are
+content-free. Protect them like other workspace metadata. They prove only that
+runtime authorized and revalidated the cited acquisition. They do not prove
+provider comprehension, semantic relevance, exhaustive search outside the
+authorized scope, or story consistency. Runtime does not inspect prose to
+correct a provider's `story_specific`/`workflow_meta` classification.
+
+An evidence-validation rejection writes only a closed failure code plus the
+submitted invocation/call IDs to canonical history. The rejected response may
+still exist in the separate bounded provider-exchange or rejected-response
+diagnostic stores under their documented best-effort policies; the failure
+event does not copy that response into collaboration history.
+
 <a id="agent-context-progress-privacy"></a>
 
 ## Agent-context progress privacy
@@ -441,6 +465,12 @@ logical candidate or exact pointer/splice operation, selected role-relevant P2
 source bodies, focused record changes, content-free catalog facts, and
 applicable mandatory-reference bodies. Continuations expose only the newly
 authorized SEARCH/READ observation.
+
+The lead initial payload also exposes four content-free canonical-core status
+rows and the strict scope/status/evidence answer contract. Status inventory
+does not itself expose core bytes. With no explicit reference and no provider
+SEARCH/READ, a workflow/meta answer receives no story body through this
+evidence path.
 
 SEARCH/READ is route-restricted to canonical writing artifacts, focused
 same-session conversation, active debate, and the invoking agent's own state.

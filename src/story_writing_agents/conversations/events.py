@@ -38,6 +38,7 @@ class CollaborationEventKind(StrEnum):
     INTERRUPTION = "interruption"
     TERMINAL_OUTCOME = "terminal_outcome"
     PROVIDER_CALL_ACCOUNTING = "provider_call_accounting"
+    LEAD_OUTCOME_FAILURE = "lead_outcome_failure"
 
 
 class CollaborationActorKind(StrEnum):
@@ -107,6 +108,423 @@ class CollaborationInputState(StrEnum):
     ABSENT = "absent"
 
 
+@dataclass(frozen=True, slots=True)
+class CollaborationEvidenceReceipt:
+    """Content-free durable receipt for one runtime-authorized evidence fact."""
+
+    evidence_id: str
+    acquisition: CollaborationEvidenceAcquisition
+    operation_id: str
+    result_correlation_id: str
+    manifest_digest: str
+    source_id: str | None = None
+    source_kind: CollaborationInputKind | None = None
+    locator: str | None = None
+    source_state: CollaborationInputState | None = None
+    revision_digest: str | None = None
+    content_digest: str | None = None
+    utf8_bytes: int = 0
+    boundary_kind: str | None = None
+    boundary_start: int | None = None
+    boundary_end: int | None = None
+    start_line: int | None = None
+    end_line: int | None = None
+    ordinal: int | None = None
+    action_index: int | None = None
+    origin_action_index: int | None = None
+    query_digest: str | None = None
+    query_count: int = 0
+    authorized_source_ids: tuple[str, ...] = ()
+    authorized_source_kinds: tuple[CollaborationInputKind, ...] = ()
+    authorized_source_fingerprint: str | None = None
+    artifact_path_prefix: str | None = None
+
+    def __post_init__(self) -> None:
+        _validate_identifier(self.evidence_id, label="evidence ID")
+        _require_enum(
+            self.acquisition,
+            CollaborationEvidenceAcquisition,
+            "evidence acquisition",
+        )
+        _validate_identifier(self.operation_id, label="evidence operation ID")
+        _validate_identifier(
+            self.result_correlation_id,
+            label="evidence result correlation ID",
+        )
+        _validate_digest(self.manifest_digest, label="evidence manifest digest")
+        _validate_non_negative_integer(self.utf8_bytes, label="evidence UTF-8 bytes")
+        _validate_non_negative_integer(self.query_count, label="evidence query count")
+        if type(self.authorized_source_ids) is not tuple:
+            raise TypeError("authorized evidence source IDs must be an exact tuple")
+        for source_id in self.authorized_source_ids:
+            _validate_visible_text(
+                source_id,
+                label="authorized evidence source ID",
+                maximum=4_096,
+            )
+        _require_unique(
+            self.authorized_source_ids,
+            label="authorized evidence source IDs",
+        )
+        _validate_enum_tuple(
+            self.authorized_source_kinds,
+            CollaborationInputKind,
+            label="authorized evidence source kinds",
+        )
+        if self.artifact_path_prefix is not None:
+            _validate_visible_text(
+                self.artifact_path_prefix,
+                label="evidence artifact path prefix",
+                maximum=1_024,
+            )
+            if (
+                not self.artifact_path_prefix.endswith("/")
+                or self.artifact_path_prefix.startswith("/")
+                or "\\" in self.artifact_path_prefix
+                or ".." in self.artifact_path_prefix.split("/")
+            ):
+                raise ValueError("evidence artifact path prefix is invalid")
+        if (self.start_line is None) is not (self.end_line is None):
+            raise ValueError("evidence line range must provide both bounds or neither")
+        if self.start_line is not None and self.end_line is not None:
+            _validate_positive_integer(self.start_line, label="evidence start line")
+            _validate_positive_integer(self.end_line, label="evidence end line")
+            if self.end_line < self.start_line:
+                raise ValueError("evidence line range must be ordered")
+        if self.boundary_kind not in {None, "whole", "artifact_lines", "records"}:
+            raise ValueError("evidence boundary kind is invalid")
+        if (self.boundary_start is None) is not (self.boundary_end is None):
+            raise ValueError("evidence boundary must provide both bounds or neither")
+        if self.boundary_start is not None and self.boundary_end is not None:
+            _validate_positive_integer(
+                self.boundary_start,
+                label="evidence boundary start",
+            )
+            _validate_positive_integer(
+                self.boundary_end,
+                label="evidence boundary end",
+            )
+            if self.boundary_end < self.boundary_start:
+                raise ValueError("evidence boundary must be ordered")
+        if self.boundary_kind == "whole":
+            if self.boundary_start is not None:
+                raise ValueError("whole-source evidence cannot carry boundary bounds")
+        elif self.boundary_kind is not None and self.boundary_start is None:
+            raise ValueError("ranged evidence requires exact boundary bounds")
+        if self.boundary_kind == "artifact_lines" and (
+            self.start_line != self.boundary_start or self.end_line != self.boundary_end
+        ):
+            raise ValueError("artifact evidence line and boundary ranges must match")
+        if self.boundary_kind != "artifact_lines" and self.start_line is not None:
+            raise ValueError("only artifact-line evidence can carry a line range")
+        for value, label in (
+            (self.revision_digest, "evidence revision digest"),
+            (self.content_digest, "evidence content digest"),
+            (self.query_digest, "evidence query digest"),
+            (
+                self.authorized_source_fingerprint,
+                "authorized evidence source fingerprint",
+            ),
+        ):
+            if value is not None:
+                _validate_digest(value, label=label)
+        for value, label in (
+            (self.ordinal, "evidence ordinal"),
+            (self.action_index, "evidence action index"),
+            (self.origin_action_index, "evidence origin action index"),
+        ):
+            if value is not None:
+                _validate_positive_integer(value, label=label)
+        self._validate_shape()
+
+    def _validate_shape(self) -> None:
+        single_source = self.acquisition is not (
+            CollaborationEvidenceAcquisition.ZERO_HIT_SEARCH
+        )
+        if single_source:
+            if (
+                self.source_id is None
+                or self.source_kind is None
+                or self.locator is None
+                or self.source_state is None
+            ):
+                raise ValueError("source evidence must retain its exact identity")
+            _validate_visible_text(
+                self.source_id,
+                label="evidence source ID",
+                maximum=4_096,
+            )
+            _require_enum(
+                self.source_kind,
+                CollaborationInputKind,
+                "evidence source kind",
+            )
+            _validate_visible_text(
+                self.locator,
+                label="evidence locator",
+                maximum=4_096,
+            )
+            _require_enum(
+                self.source_state,
+                CollaborationInputState,
+                "evidence source state",
+            )
+            if self.authorized_source_ids or self.authorized_source_kinds:
+                raise ValueError("single-source evidence cannot carry search authority")
+            if self.artifact_path_prefix is not None:
+                raise ValueError("single-source evidence cannot carry a path prefix")
+            if self.authorized_source_fingerprint is not None:
+                raise ValueError(
+                    "single-source evidence cannot carry a source fingerprint"
+                )
+        elif (
+            any(
+                value is not None
+                for value in (
+                    self.source_id,
+                    self.source_kind,
+                    self.locator,
+                    self.revision_digest,
+                    self.content_digest,
+                    self.start_line,
+                    self.end_line,
+                    self.boundary_kind,
+                    self.boundary_start,
+                    self.boundary_end,
+                    self.ordinal,
+                    self.origin_action_index,
+                )
+            )
+            or self.source_state is not CollaborationInputState.ABSENT
+        ):
+            raise ValueError("zero-hit evidence cannot claim one source")
+
+        if self.acquisition is CollaborationEvidenceAcquisition.ATTACHED_REFERENCE:
+            if (
+                self.ordinal is None
+                or self.action_index is not None
+                or self.origin_action_index is not None
+                or self.query_digest is not None
+                or self.query_count
+                or self.source_state is not CollaborationInputState.PRESENT
+                or self.revision_digest is None
+                or self.content_digest is None
+            ):
+                raise ValueError("attached-reference evidence facts are incomplete")
+        elif self.acquisition is CollaborationEvidenceAcquisition.CORE_STATUS:
+            if (
+                self.ordinal is None
+                or self.action_index is not None
+                or self.origin_action_index is not None
+                or self.query_digest is not None
+                or self.query_count
+                or self.start_line is not None
+                or self.boundary_kind is not None
+            ):
+                raise ValueError("core-status evidence facts are inconsistent")
+            if self.source_state is CollaborationInputState.ABSENT:
+                if (
+                    self.revision_digest is not None
+                    or self.content_digest is not None
+                    or self.utf8_bytes
+                ):
+                    raise ValueError("absent core evidence cannot claim content")
+            elif self.revision_digest is None or self.content_digest is None:
+                raise ValueError("present core evidence requires exact digests")
+        elif self.acquisition is CollaborationEvidenceAcquisition.ZERO_HIT_SEARCH:
+            if (
+                self.action_index is None
+                or self.query_digest is None
+                or self.authorized_source_fingerprint is None
+                or self.query_count < 1
+                or not self.authorized_source_kinds
+                or self.utf8_bytes
+                or (
+                    self.artifact_path_prefix is not None
+                    and self.authorized_source_kinds
+                    != (CollaborationInputKind.WRITING_ARTIFACT,)
+                )
+            ):
+                raise ValueError("zero-hit SEARCH evidence facts are incomplete")
+        elif (
+            self.action_index is None
+            or self.origin_action_index is None
+            or self.origin_action_index >= self.action_index
+            or self.ordinal is not None
+            or self.query_digest is not None
+            or self.query_count
+            or self.source_state is not CollaborationInputState.PRESENT
+            or self.revision_digest is None
+            or self.content_digest is None
+            or self.boundary_kind is None
+        ):
+            raise ValueError("READ evidence facts are incomplete")
+
+
+@dataclass(frozen=True, slots=True)
+class CollaborationLeadEvidence:
+    """Exact ordered evidence classification for one lead judgment."""
+
+    scope: LeadOutcomeScope
+    status: LeadEvidenceStatus
+    receipts: tuple[CollaborationEvidenceReceipt, ...]
+
+    def __post_init__(self) -> None:
+        _require_enum(self.scope, LeadOutcomeScope, "lead evidence scope")
+        _require_enum(self.status, LeadEvidenceStatus, "lead evidence status")
+        _validate_exact_tuple(
+            self.receipts,
+            CollaborationEvidenceReceipt,
+            label="lead evidence receipts",
+        )
+        _require_unique(
+            tuple(item.evidence_id for item in self.receipts),
+            label="lead evidence receipt IDs",
+        )
+        correlations = {
+            (item.operation_id, item.result_correlation_id, item.manifest_digest)
+            for item in self.receipts
+        }
+        if len(correlations) > 1:
+            raise ValueError("lead evidence receipts must share one invocation")
+
+
+@dataclass(frozen=True, slots=True)
+class CollaborationLeadJudgmentPayload:
+    """Visible lead judgment bound to its exact runtime evidence."""
+
+    kind: LeadOutcomeKind
+    message: str
+    evidence: CollaborationLeadEvidence
+
+    def __post_init__(self) -> None:
+        _require_enum(self.kind, LeadOutcomeKind, "lead judgment kind")
+        _validate_visible_text(self.message, label="lead judgment message")
+        if type(self.evidence) is not CollaborationLeadEvidence:
+            raise TypeError("lead judgment evidence must be CollaborationLeadEvidence")
+        _validate_lead_evidence_matrix(self.kind, self.evidence)
+
+
+@dataclass(frozen=True, slots=True)
+class CollaborationLeadOutcomeFailurePayload:
+    """Content-free closure for one submitted lead outcome rejection."""
+
+    code: CollaborationLeadOutcomeFailureCode
+    invocation_id: str
+    call_id: str
+
+    def __post_init__(self) -> None:
+        _require_enum(
+            self.code,
+            CollaborationLeadOutcomeFailureCode,
+            "lead outcome failure code",
+        )
+        _validate_identifier(self.invocation_id, label="lead failure invocation ID")
+        _validate_identifier(self.call_id, label="lead failure call ID")
+
+
+def _validate_lead_evidence_matrix(
+    kind: LeadOutcomeKind,
+    evidence: CollaborationLeadEvidence,
+) -> None:
+    receipts = evidence.receipts
+    if evidence.scope is LeadOutcomeScope.WORKFLOW_META:
+        if (
+            evidence.status is not LeadEvidenceStatus.NOT_APPLICABLE
+            or receipts
+            or kind is LeadOutcomeKind.PROPOSAL
+        ):
+            raise ValueError("workflow/meta judgment evidence is inconsistent")
+        return
+    if evidence.status is LeadEvidenceStatus.NOT_APPLICABLE:
+        raise ValueError("story-specific judgment requires an evidence status")
+
+    content = tuple(
+        item
+        for item in receipts
+        if item.acquisition
+        in {
+            CollaborationEvidenceAcquisition.ATTACHED_REFERENCE,
+            CollaborationEvidenceAcquisition.READ,
+        }
+        and item.source_state is CollaborationInputState.PRESENT
+        and item.utf8_bytes > 0
+    )
+    statuses = tuple(
+        item
+        for item in receipts
+        if item.acquisition is CollaborationEvidenceAcquisition.CORE_STATUS
+    )
+    if evidence.status is LeadEvidenceStatus.VERIFIED:
+        valid = bool(content)
+        allowed = set(LeadOutcomeKind)
+    elif evidence.status is LeadEvidenceStatus.MISSING:
+        valid = any(
+            (
+                item.acquisition is CollaborationEvidenceAcquisition.ZERO_HIT_SEARCH
+                and CollaborationInputKind.WRITING_ARTIFACT
+                in item.authorized_source_kinds
+            )
+            or (
+                item.acquisition is CollaborationEvidenceAcquisition.CORE_STATUS
+                and item.source_state is CollaborationInputState.ABSENT
+            )
+            for item in receipts
+        )
+        allowed = {
+            LeadOutcomeKind.QUESTION,
+            LeadOutcomeKind.RECOMMENDATION,
+            LeadOutcomeKind.PROPOSAL,
+        }
+    elif evidence.status is LeadEvidenceStatus.EMPTY:
+        valid = any(
+            item.acquisition
+            in {
+                CollaborationEvidenceAcquisition.ATTACHED_REFERENCE,
+                CollaborationEvidenceAcquisition.CORE_STATUS,
+            }
+            and item.source_state is CollaborationInputState.PRESENT
+            and item.utf8_bytes == 0
+            for item in receipts
+        )
+        allowed = {
+            LeadOutcomeKind.QUESTION,
+            LeadOutcomeKind.RECOMMENDATION,
+            LeadOutcomeKind.PROPOSAL,
+        }
+    elif evidence.status is LeadEvidenceStatus.INCOMPLETE:
+        valid = bool(content or statuses)
+        allowed = {
+            LeadOutcomeKind.QUESTION,
+            LeadOutcomeKind.CRITIQUE,
+            LeadOutcomeKind.RECOMMENDATION,
+            LeadOutcomeKind.PROPOSAL,
+        }
+    else:
+        distinct = {
+            (
+                item.source_id,
+                item.locator,
+                item.boundary_kind,
+                item.boundary_start,
+                item.boundary_end,
+                item.start_line,
+                item.end_line,
+                item.content_digest,
+            )
+            for item in content
+        }
+        valid = len(distinct) >= 2
+        allowed = {
+            LeadOutcomeKind.QUESTION,
+            LeadOutcomeKind.CRITIQUE,
+            LeadOutcomeKind.RECOMMENDATION,
+            LeadOutcomeKind.PROPOSAL,
+        }
+    if not valid or kind not in allowed:
+        raise ValueError("lead judgment violates the closed evidence matrix")
+
+
 class CollaborationStepState(StrEnum):
     """Durable schema-v2 step states."""
 
@@ -139,6 +557,39 @@ class LeadOutcomeKind(StrEnum):
     CRITIQUE = "critique"
     RECOMMENDATION = "recommendation"
     PROPOSAL = "proposal"
+
+
+class LeadOutcomeScope(StrEnum):
+    """Provider-declared semantic scope of one visible lead judgment."""
+
+    STORY_SPECIFIC = "story_specific"
+    WORKFLOW_META = "workflow_meta"
+
+
+class LeadEvidenceStatus(StrEnum):
+    """Closed evidence assessment attached to one lead judgment."""
+
+    NOT_APPLICABLE = "not_applicable"
+    VERIFIED = "verified"
+    MISSING = "missing"
+    EMPTY = "empty"
+    INCOMPLETE = "incomplete"
+    CONFLICTING = "conflicting"
+
+
+class CollaborationEvidenceAcquisition(StrEnum):
+    """Runtime authority that produced one content-free evidence receipt."""
+
+    ATTACHED_REFERENCE = "attached_reference"
+    CORE_STATUS = "core_status"
+    ZERO_HIT_SEARCH = "zero_hit_search"
+    READ = "read"
+
+
+class CollaborationLeadOutcomeFailureCode(StrEnum):
+    """Closed reason a submitted lead result was rejected before persistence."""
+
+    EVIDENCE_VALIDATION_REJECTED = "evidence_validation_rejected"
 
 
 class LeadProposalRelation(StrEnum):
@@ -203,6 +654,9 @@ class LeadProviderOutcome:
 
     kind: LeadOutcomeKind
     message: str
+    scope: LeadOutcomeScope
+    evidence_status: LeadEvidenceStatus
+    evidence_ids: tuple[str, ...]
     proposal: LeadProposalIntent | None = None
 
     def __post_init__(self) -> None:
@@ -210,6 +664,16 @@ class LeadProviderOutcome:
         if type(self.message) is not str:
             raise TypeError("lead outcome message must be exact text")
         _validate_visible_text(self.message, label="lead outcome message")
+        _require_enum(self.scope, LeadOutcomeScope, "lead outcome scope")
+        _require_enum(
+            self.evidence_status,
+            LeadEvidenceStatus,
+            "lead outcome evidence status",
+        )
+        _validate_identifier_tuple(
+            self.evidence_ids,
+            label="lead outcome evidence IDs",
+        )
         if self.kind is LeadOutcomeKind.PROPOSAL:
             if type(self.proposal) is not LeadProposalIntent:
                 raise TypeError("proposal outcome requires one LeadProposalIntent")
@@ -476,6 +940,7 @@ class CollaborationProposalBasis:
     context_policy_fingerprint: str
     budget_policy_fingerprint: str
     inputs: tuple[CollaborationInputRevision, ...]
+    evidence: CollaborationLeadEvidence | None
 
     def __post_init__(self) -> None:
         _validate_visible_text(self.route, label="collaboration route", maximum=256)
@@ -506,6 +971,10 @@ class CollaborationProposalBasis:
             tuple(item.input_id for item in self.inputs),
             label="proposal input IDs",
         )
+        if self.evidence is not None and type(self.evidence) is not (
+            CollaborationLeadEvidence
+        ):
+            raise TypeError("proposal evidence must be CollaborationLeadEvidence")
 
 
 @dataclass(frozen=True, slots=True)
@@ -649,6 +1118,8 @@ class CollaborationProposal:
                 "proposal call allocations do not match the whole-step reservation"
             )
         if self.step_kind is CollaborationStepKind.SPECIALIST_ADVISORY:
+            if self.basis.evidence is not None:
+                raise ValueError("provider-free advisory cannot claim lead evidence")
             if len(self.assignments) != 1:
                 raise ValueError(
                     "specialist advisory must contain exactly one assignment"
@@ -669,6 +1140,16 @@ class CollaborationProposal:
             raise ValueError(
                 "lead-specialist consultation requires synthesis allocation"
             )
+        elif self.step_kind is CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION:
+            evidence = self.basis.evidence
+            if (
+                type(evidence) is not CollaborationLeadEvidence
+                or evidence.scope is not LeadOutcomeScope.STORY_SPECIFIC
+            ):
+                raise ValueError(
+                    "lead-specialist consultation requires story-specific evidence"
+                )
+            _validate_lead_evidence_matrix(LeadOutcomeKind.PROPOSAL, evidence)
         if self.proposal_digest != collaboration_proposal_digest(self):
             raise ValueError("proposal digest does not match canonical proposal fields")
 
@@ -932,6 +1413,7 @@ class CollaborationLeadSynthesisPayload:
     message: str
     reply_event_ids: tuple[str, ...]
     unresolved_input_ids: tuple[str, ...]
+    evidence: CollaborationLeadEvidence
     next_intent: LeadProposalIntent | None = None
 
     def __post_init__(self) -> None:
@@ -951,6 +1433,11 @@ class CollaborationLeadSynthesisPayload:
             self.unresolved_input_ids,
             label="synthesis unresolved input IDs",
         )
+        if type(self.evidence) is not CollaborationLeadEvidence:
+            raise TypeError("synthesis evidence must be CollaborationLeadEvidence")
+        if self.evidence.scope is not LeadOutcomeScope.STORY_SPECIFIC:
+            raise ValueError("lead synthesis must remain story-specific")
+        _validate_lead_evidence_matrix(LeadOutcomeKind.RECOMMENDATION, self.evidence)
         if self.next_intent is not None:
             if type(self.next_intent) is not LeadProposalIntent:
                 raise TypeError("synthesis next intent must be a LeadProposalIntent")
@@ -1137,6 +1624,7 @@ class CollaborationProviderCallPayload:
 CollaborationPayload = (
     CollaborationProposal
     | CollaborationMessagePayload
+    | CollaborationLeadJudgmentPayload
     | CollaborationAssignmentDispatchPayload
     | CollaborationSpecialistReplyPayload
     | CollaborationLeadSynthesisPayload
@@ -1146,6 +1634,7 @@ CollaborationPayload = (
     | CollaborationInterruptionPayload
     | CollaborationTerminalOutcomePayload
     | CollaborationProviderCallPayload
+    | CollaborationLeadOutcomeFailurePayload
 )
 
 
@@ -1511,11 +2000,61 @@ def _profile_value(profile: CollaborationAgentProfile) -> dict[str, object]:
     }
 
 
+def _evidence_receipt_value(
+    receipt: CollaborationEvidenceReceipt,
+) -> dict[str, object]:
+    return {
+        "acquisition": receipt.acquisition.value,
+        "action_index": receipt.action_index,
+        "authorized_source_ids": list(receipt.authorized_source_ids),
+        "authorized_source_fingerprint": receipt.authorized_source_fingerprint,
+        "authorized_source_kinds": [
+            item.value for item in receipt.authorized_source_kinds
+        ],
+        "artifact_path_prefix": receipt.artifact_path_prefix,
+        "boundary_end": receipt.boundary_end,
+        "boundary_kind": receipt.boundary_kind,
+        "boundary_start": receipt.boundary_start,
+        "content_digest": receipt.content_digest,
+        "end_line": receipt.end_line,
+        "evidence_id": receipt.evidence_id,
+        "locator": receipt.locator,
+        "manifest_digest": receipt.manifest_digest,
+        "operation_id": receipt.operation_id,
+        "ordinal": receipt.ordinal,
+        "origin_action_index": receipt.origin_action_index,
+        "query_count": receipt.query_count,
+        "query_digest": receipt.query_digest,
+        "result_correlation_id": receipt.result_correlation_id,
+        "revision_digest": receipt.revision_digest,
+        "source_id": receipt.source_id,
+        "source_kind": (
+            None if receipt.source_kind is None else receipt.source_kind.value
+        ),
+        "source_state": (
+            None if receipt.source_state is None else receipt.source_state.value
+        ),
+        "start_line": receipt.start_line,
+        "utf8_bytes": receipt.utf8_bytes,
+    }
+
+
+def _lead_evidence_value(evidence: CollaborationLeadEvidence) -> dict[str, object]:
+    return {
+        "receipts": [_evidence_receipt_value(item) for item in evidence.receipts],
+        "scope": evidence.scope.value,
+        "status": evidence.status.value,
+    }
+
+
 def _basis_value(basis: CollaborationProposalBasis) -> dict[str, object]:
     return {
         "agent_profiles": [_profile_value(item) for item in basis.agent_profiles],
         "budget_policy_fingerprint": basis.budget_policy_fingerprint,
         "context_policy_fingerprint": basis.context_policy_fingerprint,
+        "evidence": (
+            None if basis.evidence is None else _lead_evidence_value(basis.evidence)
+        ),
         "inputs": [_input_value(item) for item in basis.inputs],
         "route": basis.route,
         "route_fingerprint": basis.route_fingerprint,
@@ -1615,6 +2154,13 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
         return {"payload_type": "proposal", "proposal": _proposal_value(payload)}
     if type(payload) is CollaborationMessagePayload:
         return {"content": payload.content, "payload_type": "message"}
+    if type(payload) is CollaborationLeadJudgmentPayload:
+        return {
+            "evidence": _lead_evidence_value(payload.evidence),
+            "kind": payload.kind.value,
+            "message": payload.message,
+            "payload_type": "lead_judgment",
+        }
     if type(payload) is CollaborationAssignmentDispatchPayload:
         return {
             "assignment": _assignment_value(payload.assignment),
@@ -1639,6 +2185,7 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
         }
     if type(payload) is CollaborationLeadSynthesisPayload:
         return {
+            "evidence": _lead_evidence_value(payload.evidence),
             "execution_attempt_id": payload.execution_attempt_id,
             "message": payload.message,
             "next_intent": (
@@ -1701,6 +2248,13 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
             "payload_type": "provider_call",
             "role": payload.role,
             "state": payload.state.value,
+        }
+    if type(payload) is CollaborationLeadOutcomeFailurePayload:
+        return {
+            "call_id": payload.call_id,
+            "code": payload.code.value,
+            "invocation_id": payload.invocation_id,
+            "payload_type": "lead_outcome_failure",
         }
     raise TypeError("unsupported collaboration payload")
 
@@ -1796,6 +2350,158 @@ def _decode_profile(value: object) -> CollaborationAgentProfile:
     )
 
 
+def _decode_evidence_receipt(value: object) -> CollaborationEvidenceReceipt:
+    fields = {
+        "acquisition",
+        "action_index",
+        "authorized_source_ids",
+        "authorized_source_fingerprint",
+        "authorized_source_kinds",
+        "artifact_path_prefix",
+        "boundary_end",
+        "boundary_kind",
+        "boundary_start",
+        "content_digest",
+        "end_line",
+        "evidence_id",
+        "locator",
+        "manifest_digest",
+        "operation_id",
+        "ordinal",
+        "origin_action_index",
+        "query_count",
+        "query_digest",
+        "result_correlation_id",
+        "revision_digest",
+        "source_id",
+        "source_kind",
+        "source_state",
+        "start_line",
+        "utf8_bytes",
+    }
+    item = _object(value, fields, label="collaboration evidence receipt")
+    source_kind = item["source_kind"]
+    source_state = item["source_state"]
+    return CollaborationEvidenceReceipt(
+        evidence_id=_string(item["evidence_id"], label="evidence ID"),
+        acquisition=_enum(
+            CollaborationEvidenceAcquisition,
+            item["acquisition"],
+            label="evidence acquisition",
+        ),
+        operation_id=_string(item["operation_id"], label="evidence operation ID"),
+        result_correlation_id=_string(
+            item["result_correlation_id"],
+            label="evidence result correlation ID",
+        ),
+        manifest_digest=_string(
+            item["manifest_digest"],
+            label="evidence manifest digest",
+        ),
+        source_id=_optional_string(item["source_id"], label="evidence source ID"),
+        source_kind=(
+            None
+            if source_kind is None
+            else _enum(
+                CollaborationInputKind,
+                source_kind,
+                label="evidence source kind",
+            )
+        ),
+        locator=_optional_string(item["locator"], label="evidence locator"),
+        source_state=(
+            None
+            if source_state is None
+            else _enum(
+                CollaborationInputState,
+                source_state,
+                label="evidence source state",
+            )
+        ),
+        revision_digest=_optional_string(
+            item["revision_digest"],
+            label="evidence revision digest",
+        ),
+        content_digest=_optional_string(
+            item["content_digest"],
+            label="evidence content digest",
+        ),
+        utf8_bytes=_integer(item["utf8_bytes"], label="evidence UTF-8 bytes"),
+        boundary_kind=_optional_string(
+            item["boundary_kind"],
+            label="evidence boundary kind",
+        ),
+        boundary_start=_optional_integer(
+            item["boundary_start"],
+            label="evidence boundary start",
+        ),
+        boundary_end=_optional_integer(
+            item["boundary_end"],
+            label="evidence boundary end",
+        ),
+        start_line=_optional_integer(item["start_line"], label="evidence start line"),
+        end_line=_optional_integer(item["end_line"], label="evidence end line"),
+        ordinal=_optional_integer(item["ordinal"], label="evidence ordinal"),
+        action_index=_optional_integer(
+            item["action_index"], label="evidence action index"
+        ),
+        origin_action_index=_optional_integer(
+            item["origin_action_index"],
+            label="evidence origin action index",
+        ),
+        query_digest=_optional_string(
+            item["query_digest"], label="evidence query digest"
+        ),
+        query_count=_integer(item["query_count"], label="evidence query count"),
+        authorized_source_ids=tuple(
+            _string(source_id, label="authorized evidence source ID")
+            for source_id in _array(
+                item["authorized_source_ids"],
+                label="authorized evidence source IDs",
+            )
+        ),
+        authorized_source_fingerprint=_optional_string(
+            item["authorized_source_fingerprint"],
+            label="authorized evidence source fingerprint",
+        ),
+        authorized_source_kinds=tuple(
+            _enum(
+                CollaborationInputKind,
+                kind,
+                label="authorized evidence source kind",
+            )
+            for kind in _array(
+                item["authorized_source_kinds"],
+                label="authorized evidence source kinds",
+            )
+        ),
+        artifact_path_prefix=_optional_string(
+            item["artifact_path_prefix"],
+            label="evidence artifact path prefix",
+        ),
+    )
+
+
+def _decode_lead_evidence(value: object) -> CollaborationLeadEvidence:
+    item = _object(
+        value,
+        {"receipts", "scope", "status"},
+        label="lead evidence",
+    )
+    return CollaborationLeadEvidence(
+        scope=_enum(LeadOutcomeScope, item["scope"], label="lead evidence scope"),
+        status=_enum(
+            LeadEvidenceStatus,
+            item["status"],
+            label="lead evidence status",
+        ),
+        receipts=tuple(
+            _decode_evidence_receipt(receipt)
+            for receipt in _array(item["receipts"], label="lead evidence receipts")
+        ),
+    )
+
+
 def _decode_lead_proposal_intent(value: object) -> LeadProposalIntent:
     item = _object(
         value,
@@ -1843,6 +2549,7 @@ def _decode_basis(value: object) -> CollaborationProposalBasis:
             "agent_profiles",
             "budget_policy_fingerprint",
             "context_policy_fingerprint",
+            "evidence",
             "inputs",
             "route",
             "route_fingerprint",
@@ -1870,6 +2577,11 @@ def _decode_basis(value: object) -> CollaborationProposalBasis:
         inputs=tuple(
             _decode_input(source)
             for source in _array(item["inputs"], label="proposal inputs")
+        ),
+        evidence=(
+            None
+            if item["evidence"] is None
+            else _decode_lead_evidence(item["evidence"])
         ),
     )
 
@@ -2085,6 +2797,17 @@ def _decode_payload(value: object) -> CollaborationPayload:
         return CollaborationMessagePayload(
             content=_string(item["content"], label="message content")
         )
+    if payload_type == "lead_judgment":
+        item = _object(
+            value,
+            {"evidence", "kind", "message", "payload_type"},
+            label="lead judgment payload",
+        )
+        return CollaborationLeadJudgmentPayload(
+            kind=_enum(LeadOutcomeKind, item["kind"], label="lead judgment kind"),
+            message=_string(item["message"], label="lead judgment message"),
+            evidence=_decode_lead_evidence(item["evidence"]),
+        )
     if payload_type == "assignment_dispatch":
         item = _object(
             value,
@@ -2165,6 +2888,7 @@ def _decode_payload(value: object) -> CollaborationPayload:
         item = _object(
             value,
             {
+                "evidence",
                 "execution_attempt_id",
                 "message",
                 "next_intent",
@@ -2206,11 +2930,29 @@ def _decode_payload(value: object) -> CollaborationPayload:
                     label="synthesis unresolved input IDs",
                 )
             ),
+            evidence=_decode_lead_evidence(item["evidence"]),
             next_intent=(
                 None
                 if item["next_intent"] is None
                 else _decode_lead_proposal_intent(item["next_intent"])
             ),
+        )
+    if payload_type == "lead_outcome_failure":
+        item = _object(
+            value,
+            {"call_id", "code", "invocation_id", "payload_type"},
+            label="lead outcome failure payload",
+        )
+        return CollaborationLeadOutcomeFailurePayload(
+            code=_enum(
+                CollaborationLeadOutcomeFailureCode,
+                item["code"],
+                label="lead outcome failure code",
+            ),
+            invocation_id=_string(
+                item["invocation_id"], label="lead failure invocation ID"
+            ),
+            call_id=_string(item["call_id"], label="lead failure call ID"),
         )
     if payload_type == "step_state":
         item = _object(
@@ -2463,6 +3205,7 @@ def _validate_collaboration_payload(
     allowed: dict[CollaborationEventKind, tuple[type[object], ...]] = {
         CollaborationEventKind.MESSAGE: (
             CollaborationMessagePayload,
+            CollaborationLeadJudgmentPayload,
             CollaborationProposal,
         ),
         CollaborationEventKind.ASSIGNMENT_DISPATCH: (
@@ -2477,6 +3220,9 @@ def _validate_collaboration_payload(
         CollaborationEventKind.TERMINAL_OUTCOME: (CollaborationTerminalOutcomePayload,),
         CollaborationEventKind.PROVIDER_CALL_ACCOUNTING: (
             CollaborationProviderCallPayload,
+        ),
+        CollaborationEventKind.LEAD_OUTCOME_FAILURE: (
+            CollaborationLeadOutcomeFailurePayload,
         ),
     }
     if type(payload) not in allowed[kind]:
@@ -2607,6 +3353,9 @@ def _validate_collaboration_direction(
         CollaborationEventKind.PROVIDER_CALL_ACCOUNTING: {
             (CollaborationActorKind.RUNTIME, CollaborationActorKind.LEAD),
             (CollaborationActorKind.RUNTIME, CollaborationActorKind.SPECIALIST),
+        },
+        CollaborationEventKind.LEAD_OUTCOME_FAILURE: {
+            (CollaborationActorKind.RUNTIME, CollaborationActorKind.USER),
         },
     }
     if (sender_kind, recipient_kind) not in allowed[kind]:
@@ -2849,6 +3598,8 @@ __all__ = [
     "CollaborationConfirmationDecision",
     "CollaborationConfirmationPayload",
     "CollaborationDirection",
+    "CollaborationEvidenceAcquisition",
+    "CollaborationEvidenceReceipt",
     "CollaborationEvent",
     "CollaborationEventBatch",
     "CollaborationEventDraft",
@@ -2861,6 +3612,10 @@ __all__ = [
     "CollaborationInterruptionPayload",
     "CollaborationInvocationKind",
     "CollaborationLeadSynthesisPayload",
+    "CollaborationLeadEvidence",
+    "CollaborationLeadJudgmentPayload",
+    "CollaborationLeadOutcomeFailureCode",
+    "CollaborationLeadOutcomeFailurePayload",
     "CollaborationMessagePayload",
     "CollaborationPayload",
     "CollaborationProposal",
@@ -2881,6 +3636,8 @@ __all__ = [
     "ConversationEventKind",
     "LeadAssignmentIntent",
     "LeadOutcomeKind",
+    "LeadOutcomeScope",
+    "LeadEvidenceStatus",
     "LeadProposalIntent",
     "LeadProposalRelation",
     "LeadProviderOutcome",

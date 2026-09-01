@@ -580,7 +580,7 @@ class RealAuthorityAdapterTests(_SourceFixture):
         value = json.loads(snapshot.content)
         self.assertEqual(value["records"], [])
         self.assertEqual(value["bootstrap"]["retained_records"], 0)
-        self.assertEqual(value["bootstrap"]["total_records"], 2)
+        self.assertEqual(value["bootstrap"]["total_records"], 5)
 
     def test_searchable_history_is_opt_in_same_session_active_and_frozen(self) -> None:
         services = compose_filesystem_conversation_storage(self.workspace)
@@ -623,7 +623,13 @@ class RealAuthorityAdapterTests(_SourceFixture):
         )
         self.assertEqual(
             tuple(record.record_id for record in focused_snapshot.records),
-            ("proposal_event", "request_event"),
+            (
+                "prepared_call_lead",
+                "submitted_call_lead",
+                "judgment_event",
+                "proposal_event",
+                "request_event",
+            ),
         )
         self.assertIs(
             adapter.capture(

@@ -107,6 +107,51 @@ writing-artifact source adapter has an immutable allowed-path set, so inventory,
 SEARCH, and READ cannot borrow sibling-only evidence. Synthesis is a separate
 lead invocation with the direct story-artifact inputs and all typed replies.
 
+## Lead judgment and evidence contracts
+
+Import the public values from `story_writing_agents.conversations`:
+
+```python
+LeadOutcomeScope                 # story_specific | workflow_meta
+LeadEvidenceStatus               # not_applicable | verified | missing |
+                                 # empty | incomplete | conflicting
+CollaborationEvidenceAcquisition # attached_reference | core_status |
+                                 # zero_hit_search | read
+CollaborationEvidenceReceipt(...)
+CollaborationLeadEvidence(
+    scope: LeadOutcomeScope,
+    status: LeadEvidenceStatus,
+    receipts: tuple[CollaborationEvidenceReceipt, ...],
+)
+CollaborationLeadJudgmentPayload(
+    kind: LeadOutcomeKind,
+    message: str,
+    evidence: CollaborationLeadEvidence,
+)
+CollaborationLeadOutcomeFailurePayload(
+    code: CollaborationLeadOutcomeFailureCode,
+    invocation_id: str,
+    call_id: str,
+)
+```
+
+Receipts are content-free, invocation-local facts. An attached-reference or
+READ receipt retains source identity, locator, revision/content digest, size,
+and exact boundary. A core-status receipt records present, empty, or absent
+state for one canonical core path. A complete zero-hit SEARCH receipt records
+the query digest/count, authorized source identities/kinds, optional canonical
+path prefix, and an authorized-source fingerprint; it does not store query or
+source text. All receipts in one `CollaborationLeadEvidence` share the same
+operation, result correlation, and manifest.
+
+`CollaborationLeadJudgmentPayload` enforces the closed evidence matrix described
+in the [lead-agent guide](../guides/lead-agent.md#how-a-lead-judgment-is-grounded).
+Runtime does not perform semantic classification. It maps provider-selected
+IDs only when they are current, canonical, unique, ordered, and authorized.
+An evidence-validation rejection persists the content-free failure payload and
+returns `retry_lead_turn`; the rejected provider result is not a judgment and
+is not replay authority.
+
 ## Specialist reply and lead synthesis
 
 Import the public semantic values from `story_writing_agents.conversations`:
@@ -132,6 +177,7 @@ CollaborationLeadSynthesisPayload(
     message: str,
     reply_event_ids: tuple[str, ...],
     unresolved_input_ids: tuple[str, ...],
+    evidence: CollaborationLeadEvidence,
     next_intent: LeadProposalIntent | None = None,
 )
 ```
@@ -142,6 +188,8 @@ ordered input IDs. Synthesis must cite every successful reply event in order
 and cannot omit an input from a non-supporting reply. A non-null `next_intent`
 must be `continue_lineage`, cover the original and reply-event inputs exactly,
 and is accepted only after round one. Round two cannot continue again.
+Synthesis also preserves the proposal's exact story-specific evidence; reply
+events are attribution and cannot replace story evidence.
 
 ## Debate request
 

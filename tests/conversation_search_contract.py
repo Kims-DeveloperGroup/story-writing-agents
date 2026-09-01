@@ -260,4 +260,10 @@ class CollaborationSearchContractMixin:
         assert page.next_cursor is not None
         continued = self.service.continue_history(page.next_cursor)
         self.assertEqual(tuple(record.sequence for record in continued.records), (2,))
+        self.assertTrue(continued.truncated)
+        sequences = [1, 2]
+        while continued.next_cursor is not None:
+            continued = self.service.continue_history(continued.next_cursor)
+            sequences.extend(record.sequence for record in continued.records)
+        self.assertEqual(sequences, [1, 2, 3, 4, 5])
         self.assertFalse(continued.truncated)

@@ -22,7 +22,9 @@ which actor said or did what. It records typed user, lead, specialist, runtime,
 artifact, and Git actors; disclose the exact proposed work before it starts;
 bind a structured decision to that proposal; retain successful sibling results
 when another assignment fails; and expose a deterministic recovery state after
-a restart.
+a restart. A story-specific lead judgment is stored with its exact content-free
+runtime evidence. An invalid submitted judgment is closed by a typed failure,
+so the user can retry without replaying that provider result.
 
 The same exact v2 history is readable without weakening it. A Python caller or
 the current shell can project one complete typed record per event, search only the
@@ -135,7 +137,7 @@ a provider, filesystem lease, Git capability, credential, or other authority.
 | `assignments` | Ordered, unique specialist assignments |
 | `user_impact`, `side_effects` | Visible consequence and closed side-effect set |
 | `budget` | Whole-lineage and whole-next-step physical-call reservation |
-| `basis` | Route and policy fingerprints, participant profiles, and closed input revisions |
+| `basis` | Route and policy fingerprints, participant profiles, closed input revisions, and exact lead evidence when applicable |
 | `proposal_digest` | SHA-256 digest over every other proposal field, including order |
 
 The supported step kinds are `lead_specialist_consultation`,
@@ -203,16 +205,20 @@ Actors have one of the exact kinds `user`, `lead`, `specialist`, `runtime`,
 ID; other actor kinds cannot. Sender/recipient pairs derive one of the closed
 directions, so direction is not a second stored claim.
 
-The ten event kinds are `message`, `assignment_dispatch`,
-`specialist_reply`, `lead_synthesis`, `step_state`, `confirmation`,
-`execution_result`, `interruption`, `terminal_outcome`, and
+The eleven event kinds are `message`, `lead_outcome_failure`,
+`assignment_dispatch`, `specialist_reply`, `lead_synthesis`, `step_state`,
+`confirmation`, `execution_result`, `interruption`, `terminal_outcome`, and
 `provider_call_accounting`. Each stored
 event carries schema,
 event/session/conversation/turn/step identity, contiguous sequence, canonical
 UTC timestamp, atomic-batch metadata, typed actors, and its kind-specific
 payload. Visible message and reply content is capped at 32,768 strict-UTF-8
-bytes and cannot contain surrogate code points. Payloads contain visible facts,
-not hidden reasoning.
+bytes and cannot contain surrogate code points. A lead-authored message uses a
+typed visible kind/message plus exact `CollaborationLeadEvidence`. That
+evidence holds only ordered receipts for attached references, canonical-core
+statuses, complete zero-hit searches, or final-answer-used READs. A
+`lead_outcome_failure` instead stores the closed failure code and submitted
+invocation/call IDs. Payloads contain visible facts, not hidden reasoning.
 
 `provider_call_accounting` contains no request or response content. It records
 one invocation/call identity, contiguous ordinal, canonical agent role,
@@ -233,7 +239,9 @@ A specialist reply also carries one closed assessment (`supports`, `concern`,
 ordered assignment input IDs. A `lead_synthesis` payload binds every successful
 reply event in order, preserves required unresolved input IDs from every
 non-supporting reply, and optionally carries one strict same-lineage round-two
-intent. Synthesis is absent after any assignment failure and for direct
+intent. It separately preserves the proposal's story-specific evidence;
+specialist replies remain attribution rather than replacement story evidence.
+Synthesis is absent after any assignment failure and for direct
 advisories.
 
 The execution result then correlates all proposal assignments in their
@@ -288,6 +296,7 @@ order, are:
 
 ```text
 message.content
+lead_outcome.failure
 specialist_reply.content
 specialist_reply.assessment
 lead_synthesis.message
@@ -406,7 +415,9 @@ and the digest of the exact caller-owned batch.
 ```text
 user message
     -> provider_call_accounting PREPARED/SUBMITTED pairs
-    -> lead message + proposal + awaiting_confirmation (request is last)
+    -> evidence-bound lead message
+       + optional proposal + awaiting_confirmation (request is last)
+       OR lead_outcome_failure -> retry_lead_turn (no proposal state)
     -> structured decision + confirmed/rejected/superseded
     -> running + every assignment_dispatch in proposal order
     -> replies + optional lead_synthesis + every terminal_outcome
@@ -420,6 +431,12 @@ running + interruption + outcome_unknown
 pending proposal + ordinary user message + superseded (one batch)
     -> next lead provider call on a new step
 ```
+
+Evidence IDs are valid only for their deterministic lead operation/result
+correlation. Projection rejects a successful outcome from another invocation
+even when its receipts are internally consistent. The failure event closes the
+exact submitted call; later recovery starts a fresh turn rather than reusing
+its provider output.
 
 The paired facts above must be co-batched. An interrupted finalization also
 co-batches its interruption record. A store must expose only the entire batch
@@ -656,6 +673,12 @@ application, never permission to perform the action.
 Legal state transitions are deliberately narrower than conversational intent.
 In particular, only `confirmed` can enter `running`; `outcome_unknown` can only
 enter `recovery_required`; and `recovery_required` is terminal in this contract.
+
+`retry_lead_turn` is a next action without a durable step state. It appears
+when runtime rejected a submitted lead result's evidence and successfully
+appended `lead_outcome_failure`. The visible result is a recommendation with no
+proposal, confirmation request, or evidence. If failure closure itself cannot
+be appended safely, runtime returns `recovery_required` instead.
 
 ## Restart and no-replay cases
 

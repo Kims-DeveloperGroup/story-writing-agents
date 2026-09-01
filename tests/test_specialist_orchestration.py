@@ -775,7 +775,10 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
             return _provider_envelope(
                 call,
                 {
+                    "evidence_ids": contract["evidence_ids"],
+                    "evidence_status": contract["evidence_status"],
                     "message": "One issue needs a focused second review.",
+                    "scope": contract["scope"],
                     "reply_event_ids": reply_ids,
                     "unresolved_input_ids": known_ids,
                     "next_intent": {
@@ -829,6 +832,14 @@ class SpecialistExecutionAcceptanceTests(LeadOrchestrationTestCase):
         history = self.history(conversation_id)
         syntheses = _payloads(history, CollaborationLeadSynthesisPayload)
         self.assertEqual(len(syntheses), 2)
+        self.assertEqual(syntheses[0].evidence, first.proposal.basis.evidence)
+        self.assertEqual(syntheses[1].evidence, second.proposal.basis.evidence)
+        for synthesis in syntheses:
+            self.assertTrue(
+                set(synthesis.reply_event_ids).isdisjoint(
+                    item.evidence_id for item in synthesis.evidence.receipts
+                )
+            )
         self.assertIsNone(syntheses[-1].next_intent)
 
 

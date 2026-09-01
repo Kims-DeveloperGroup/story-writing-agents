@@ -197,6 +197,24 @@ mandatory unresolved IDs, and at most one same-lineage continuation contract.
 Provider output never supplies confirmation, runtime IDs/budgets, write/Git
 authority, or a call to another agent.
 
+`lead_front_channel` receives the current command, identity, content-free input
+aliases, a strict six-field semantic answer contract, and four canonical-core
+status rows. Inventory alone supplies no story body. The lead must classify the
+turn as `story_specific` or `workflow_meta`; runtime performs no NLP relabeling.
+For story-specific results the provider selects the minimum ordered current
+evidence IDs supporting `verified`, `missing`, `empty`, `incomplete`, or
+`conflicting`. For workflow/meta it must use `not_applicable`, no IDs, and no
+proposal. Ambiguous scope is handled by the role prompt—choose story-specific
+and ask a grounded question—not by runtime inference.
+
+The lead role prompt never grants tool or agent-dispatch authority. Provider
+SEARCH/READ/ANSWER values are requests to the context service. A proposal in
+the final answer is semantic intent; runtime validates evidence, creates the
+authoritative proposal, and waits for the user's exact structured decision.
+Only then does runtime call selected specialists. Synthesis receives the
+proposal's scope/status/evidence IDs as an unchanged answer contract and keeps
+them separate from specialist reply-event attribution.
+
 Established conversation retrieval remains responsible for its cited
 conversation observations. Optional `rag_context` is independent semantic RAG
 input. Contextual continuation frames carry only the newly authorized action
@@ -237,6 +255,12 @@ synthesis invocation performs its own prelude/read/receipt/revalidation. A
 checkpoint, previous provider copy, or another agent's receipt cannot satisfy
 the reference. See
 [Mandatory-reference separation](agent-context.md#mandatory-reference-separation).
+
+An explicit missing `${path}` fails the reference operation before the
+substantive lead call; it is not converted into provider-declared `missing`.
+Exploratory absence instead requires an absent canonical-core status or a
+complete non-truncated zero-hit SEARCH over a scope that includes writing
+artifacts.
 
 ## Debate context
 

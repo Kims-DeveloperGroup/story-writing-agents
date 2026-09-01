@@ -333,7 +333,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         modules = _module_inventory()
         edges = _internal_edges(modules)
         self.assertEqual(len(modules), 97)
-        self.assertEqual(len(edges), 369)
+        self.assertEqual(len(edges), 370)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
@@ -568,6 +568,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 "story_writing_agents.errors",
                 "story_writing_agents.models",
                 "story_writing_agents.workspace",
+                "story_writing_agents.writing_artifacts.catalog",
                 "story_writing_agents.writing_artifacts.filesystem_sources",
                 "story_writing_agents.writing_artifacts.references",
                 "story_writing_agents.writing_artifacts.repository",
@@ -1036,8 +1037,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.workspace.core as workspace_core
                 from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
                 assert len(story_writing_agents.__all__) == 104
-                assert len(conversations.__all__) == 95
-                assert len(conversation_events.__all__) == 65
+                assert len(conversations.__all__) == 103
+                assert len(conversation_events.__all__) == 73
                 assert len(conversation_context.__all__) == 23
                 assert conversations.CollaborationProposal is conversation_events.CollaborationProposal
                 assert conversations.CollaborationEventStore is conversation_context.CollaborationEventStore
@@ -1282,8 +1283,8 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.conversations.context as context
                 import story_writing_agents.conversations.events as events
                 assert len(story_writing_agents.__all__) == 104
-                assert len(conversations.__all__) == 95
-                assert len(events.__all__) == 65
+                assert len(conversations.__all__) == 103
+                assert len(events.__all__) == 73
                 assert len(context.__all__) == 23
                 assert catalog.ConversationCatalog is conversations.ConversationCatalog
                 assert events.ConversationEvent is conversations.ConversationEvent

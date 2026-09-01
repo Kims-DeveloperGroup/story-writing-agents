@@ -98,7 +98,10 @@ def _search_observation() -> ConversationRetrievalSearchObservation:
 
 
 def _read_observation() -> ConversationRetrievalReadObservation:
-    record = project_collaboration_readable_history(_history())[0]
+    source = _source()
+    record = project_collaboration_readable_history(_history())[
+        source.citation.sequence - 1
+    ]
     item = ConversationRetrievalHistoryRecord(
         record=record,
         field_citation_ids=tuple(
@@ -111,7 +114,7 @@ def _read_observation() -> ConversationRetrievalReadObservation:
         turn_id=TURN_ID,
         action_index=2,
         source_citation_id="s1h1",
-        source=_source(),
+        source=source,
         records=(item,),
         truncated=False,
     )
