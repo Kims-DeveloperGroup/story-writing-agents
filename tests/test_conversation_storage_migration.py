@@ -1,4 +1,4 @@
-"""Public planning, migration, checkpoint, and coordination tests."""
+"""Public planning, transfer, checkpoint, and coordination tests."""
 
 from __future__ import annotations
 
@@ -17,7 +17,10 @@ from unittest import mock
 
 import story_writing_agents
 import story_writing_agents.conversation_storage as storage_package
-from story_writing_agents import Workspace
+from story_writing_agents import (
+    FilesystemConversationCatalog,
+    Workspace,
+)
 from story_writing_agents.conversation_storage import (
     CONVERSATION_STORAGE_ACTIVATION_STATE_PATH,
     CONVERSATION_STORAGE_MUTATION_GUARD_PATH,
@@ -33,17 +36,18 @@ from story_writing_agents.conversation_storage import (
     migration as migration_module,
 )
 from story_writing_agents.conversation_storage.migration import (
-    CONVERSATION_STORAGE_MIGRATION_CHECKPOINT_DIRECTORY,
-    CONVERSATION_STORAGE_MIGRATION_SCHEMA_VERSION,
-    ConversationStorageMigrationOperation,
-    ConversationStorageMigrationOutcome,
-    ConversationStorageMigrationReport,
-    migrate_conversation_storage,
+    CONVERSATION_STORAGE_TRANSFER_CHECKPOINT_DIRECTORY,
+    CONVERSATION_STORAGE_TRANSFER_SCHEMA_VERSION,
+    ConversationStorageTransferOperation,
+    ConversationStorageTransferOutcome,
+    ConversationStorageTransferReport,
+    transfer_conversation_storage,
     verify_conversation_storage,
 )
 from story_writing_agents.conversation_storage.sqlite import (
     SQLITE_CONVERSATION_STORAGE_DATABASE_PATH,
     SQLiteConversationArchiveAdapter,
+    compose_sqlite_conversation_storage,
 )
 from story_writing_agents.conversation_storage import sqlite as sqlite_module
 
@@ -57,7 +61,7 @@ from tests.conversation_storage_migration_fixture import (
     checkpoint_relative,
     export_backend,
     import_backend,
-    migration_workspace,
+    transfer_workspace,
     namespace_snapshot,
     representative_archive,
 )
@@ -72,13 +76,13 @@ def _other_backend(backend: ConversationStorageBackend) -> ConversationStorageBa
     )
 
 
-def _migrate(
+def _transfer(
     workspace: Workspace,
     source: ConversationStorageBackend,
     *,
     dry_run: bool = False,
-) -> ConversationStorageMigrationReport:
-    return migrate_conversation_storage(
+) -> ConversationStorageTransferReport:
+    return transfer_conversation_storage(
         workspace,
         source_backend=source,
         destination_backend=_other_backend(source),
@@ -86,36 +90,81 @@ def _migrate(
     )
 
 
-class ConversationStorageMigrationSurfaceTests(unittest.TestCase):
+def _write_frozen_legacy_transcript(
+    workspace: Workspace,
+    *,
+    session_id: str,
+    conversation_id: str,
+) -> None:
+    workspace.write_text(
+        Path("discussion_logs")
+        / session_id
+        / "interactive"
+        / "conversations"
+        / conversation_id
+        / "transcript.jsonl",
+        '{"schema_version":1,"legacy":"transcript sentinel"}\n',
+    )
+
+
+def _insert_frozen_legacy_event(
+    connection: object,
+    *,
+    session_id: str,
+    conversation_id: str,
+) -> None:
+    connection.execute(  # type: ignore[attr-defined]
+        "INSERT INTO conversation_events "
+        "(session_id, conversation_id, sequence, schema_version, turn_id, "
+        "turn_slot, timestamp, sender, recipient, kind, content, "
+        "searchable_content) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            session_id,
+            conversation_id,
+            1,
+            1,
+            "legacy_turn",
+            0,
+            "2026-08-25T00:00:00+00:00",
+            "user",
+            "lead_orchestrator",
+            "user_message",
+            "legacy transcript row",
+            "legacy transcript row",
+        ),
+    )
+
+
+class ConversationStorageTransferSurfaceTests(unittest.TestCase):
     def test_direct_surface_report_and_facades_are_exact(self) -> None:
         expected = (
-            "CONVERSATION_STORAGE_MIGRATION_SCHEMA_VERSION",
-            "CONVERSATION_STORAGE_MIGRATION_CHECKPOINT_DIRECTORY",
-            "ConversationStorageMigrationOperation",
-            "ConversationStorageMigrationOutcome",
-            "ConversationStorageMigrationReport",
-            "migrate_conversation_storage",
+            "CONVERSATION_STORAGE_TRANSFER_SCHEMA_VERSION",
+            "CONVERSATION_STORAGE_TRANSFER_CHECKPOINT_DIRECTORY",
+            "ConversationStorageTransferOperation",
+            "ConversationStorageTransferOutcome",
+            "ConversationStorageTransferReport",
+            "transfer_conversation_storage",
             "verify_conversation_storage",
         )
         self.assertEqual(tuple(migration_module.__all__), expected)
-        self.assertEqual(CONVERSATION_STORAGE_MIGRATION_SCHEMA_VERSION, 1)
+        self.assertEqual(CONVERSATION_STORAGE_TRANSFER_SCHEMA_VERSION, 1)
         self.assertEqual(
-            CONVERSATION_STORAGE_MIGRATION_CHECKPOINT_DIRECTORY,
-            "agent_states/orchestrator_state/conversation_storage_migrations",
+            CONVERSATION_STORAGE_TRANSFER_CHECKPOINT_DIRECTORY,
+            "agent_states/orchestrator_state/conversation_storage_transfers",
         )
         self.assertEqual(
-            tuple(ConversationStorageMigrationOperation),
+            tuple(ConversationStorageTransferOperation),
             (
-                ConversationStorageMigrationOperation.MIGRATE,
-                ConversationStorageMigrationOperation.VERIFY,
+                ConversationStorageTransferOperation.TRANSFER,
+                ConversationStorageTransferOperation.VERIFY,
             ),
         )
         self.assertEqual(
-            tuple(ConversationStorageMigrationOutcome),
+            tuple(ConversationStorageTransferOutcome),
             (
-                ConversationStorageMigrationOutcome.COMPLETED,
-                ConversationStorageMigrationOutcome.WORK_REQUIRED,
-                ConversationStorageMigrationOutcome.FAILED,
+                ConversationStorageTransferOutcome.COMPLETED,
+                ConversationStorageTransferOutcome.WORK_REQUIRED,
+                ConversationStorageTransferOutcome.FAILED,
             ),
         )
         for name in expected:
@@ -124,12 +173,24 @@ class ConversationStorageMigrationSurfaceTests(unittest.TestCase):
                 self.assertNotIn(name, story_writing_agents.__all__)
                 self.assertFalse(hasattr(storage_package, name))
                 self.assertFalse(hasattr(story_writing_agents, name))
-        self.assertEqual(len(storage_package.__all__), 64)
-        self.assertEqual(len(story_writing_agents.__all__), 120)
+        for old_name in (
+            "CONVERSATION_STORAGE_MIGRATION_SCHEMA_VERSION",
+            "CONVERSATION_STORAGE_MIGRATION_CHECKPOINT_DIRECTORY",
+            "ConversationStorageMigrationOperation",
+            "ConversationStorageMigrationOutcome",
+            "ConversationStorageMigrationReport",
+            "migrate_conversation_storage",
+        ):
+            self.assertNotIn(old_name, migration_module.__all__)
+            self.assertFalse(hasattr(migration_module, old_name))
+            self.assertFalse(hasattr(storage_package, old_name))
+            self.assertFalse(hasattr(story_writing_agents, old_name))
+        self.assertEqual(len(storage_package.__all__), 63)
+        self.assertEqual(len(story_writing_agents.__all__), 104)
 
-        report = ConversationStorageMigrationReport(
-            operation=ConversationStorageMigrationOperation.MIGRATE,
-            outcome=ConversationStorageMigrationOutcome.WORK_REQUIRED,
+        report = ConversationStorageTransferReport(
+            operation=ConversationStorageTransferOperation.TRANSFER,
+            outcome=ConversationStorageTransferOutcome.WORK_REQUIRED,
             source_backend=ConversationStorageBackend.FILESYSTEM,
             destination_backend=ConversationStorageBackend.SQLITE,
             dry_run=True,
@@ -149,7 +210,7 @@ class ConversationStorageMigrationSurfaceTests(unittest.TestCase):
             report.to_dict(),
             {
                 "schema_version": 1,
-                "operation": "migrate",
+                "operation": "transfer",
                 "outcome": "work_required",
                 "from": "filesystem",
                 "to": "sqlite",
@@ -179,6 +240,12 @@ class ConversationStorageMigrationSurfaceTests(unittest.TestCase):
         with self.assertRaises(FrozenInstanceError):
             report.create = 9  # type: ignore[misc]
 
+        scoped_sources = (
+            Path(migration_module.__file__).read_text(encoding="utf-8"),
+            Path(sqlite_module.__file__).read_text(encoding="utf-8"),
+        )
+        self.assertTrue(all("ALTER TABLE" not in source for source in scoped_sources))
+
     def test_imports_are_lazy_dependency_exact_and_io_free(self) -> None:
         dependencies = {
             node.module
@@ -191,7 +258,7 @@ class ConversationStorageMigrationSurfaceTests(unittest.TestCase):
             dependencies,
             {
                 "errors",
-                "workspace",
+                "workspace.core",
                 "archive",
                 "composition",
                 "contracts",
@@ -212,12 +279,12 @@ import story_writing_agents.cli
 import story_writing_agents.conversation_storage
 assert 'story_writing_agents.conversation_storage.migration' not in sys.modules
 assert 'sqlite3' not in sys.modules
-import story_writing_agents.conversation_storage.migration as migration
-assert tuple(migration.__all__) == {tuple(migration_module.__all__)!r}
+import story_writing_agents.conversation_storage.migration as transfer
+assert tuple(transfer.__all__) == {tuple(migration_module.__all__)!r}
 assert 'sqlite3' not in sys.modules
 assert tuple(pathlib.Path.cwd().iterdir()) == before
 """
-        with tempfile.TemporaryDirectory(prefix="migration-import-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="transfer-import-") as temporary:
             completed = subprocess.run(
                 [sys.executable, "-I", "-B", "-c", script],
                 cwd=temporary,
@@ -229,11 +296,102 @@ assert tuple(pathlib.Path.cwd().iterdir()) == before
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
 
-class ConversationStorageMigrationPlanningTests(unittest.TestCase):
+class ConversationStorageTransferPlanningTests(unittest.TestCase):
+    def test_any_legacy_source_or_destination_rejects_before_transfer_mutation(
+        self,
+    ) -> None:
+        filesystem_source = transfer_workspace(self)
+        catalog = FilesystemConversationCatalog(filesystem_source)
+        metadata = catalog.create("legacy_session", "Legacy filesystem source")
+        _write_frozen_legacy_transcript(
+            filesystem_source,
+            session_id=metadata.session_id,
+            conversation_id=metadata.conversation_id,
+        )
+        with raw_connection(filesystem_source) as connection:
+            sqlite_before = (
+                tuple(connection.execute("SELECT * FROM conversations").fetchall()),
+                tuple(
+                    connection.execute("SELECT * FROM collaboration_events").fetchall()
+                ),
+            )
+        source_report = _transfer(
+            filesystem_source, ConversationStorageBackend.FILESYSTEM
+        )
+        self.assertEqual(source_report.failure, "source_invalid")
+        with raw_connection(filesystem_source) as connection:
+            self.assertEqual(
+                (
+                    tuple(connection.execute("SELECT * FROM conversations").fetchall()),
+                    tuple(
+                        connection.execute(
+                            "SELECT * FROM collaboration_events"
+                        ).fetchall()
+                    ),
+                ),
+                sqlite_before,
+            )
+        self.assertFalse(
+            checkpoint_path(
+                filesystem_source, ConversationStorageBackend.FILESYSTEM
+            ).exists()
+        )
+
+        sqlite_destination = transfer_workspace(self)
+        import_backend(
+            sqlite_destination,
+            ConversationStorageBackend.FILESYSTEM,
+            representative_archive(),
+        )
+        services = compose_sqlite_conversation_storage(sqlite_destination)
+        legacy = services.catalog.create("legacy_target", "Legacy SQLite target")
+        with raw_connection(sqlite_destination) as connection:
+            _insert_frozen_legacy_event(
+                connection,
+                session_id=legacy.session_id,
+                conversation_id=legacy.conversation_id,
+            )
+        with raw_connection(sqlite_destination) as connection:
+            destination_before = (
+                tuple(connection.execute("SELECT * FROM conversations").fetchall()),
+                tuple(
+                    connection.execute("SELECT * FROM conversation_events").fetchall()
+                ),
+                tuple(
+                    connection.execute("SELECT * FROM collaboration_events").fetchall()
+                ),
+            )
+        destination_report = _transfer(
+            sqlite_destination, ConversationStorageBackend.FILESYSTEM
+        )
+        self.assertEqual(destination_report.failure, "destination_invalid")
+        with raw_connection(sqlite_destination) as connection:
+            self.assertEqual(
+                (
+                    tuple(connection.execute("SELECT * FROM conversations").fetchall()),
+                    tuple(
+                        connection.execute(
+                            "SELECT * FROM conversation_events"
+                        ).fetchall()
+                    ),
+                    tuple(
+                        connection.execute(
+                            "SELECT * FROM collaboration_events"
+                        ).fetchall()
+                    ),
+                ),
+                destination_before,
+            )
+        self.assertFalse(
+            checkpoint_path(
+                sqlite_destination, ConversationStorageBackend.FILESYSTEM
+            ).exists()
+        )
+
     def test_mixed_valid_and_sqlite_unsupported_records_block_every_create(
         self,
     ) -> None:
-        workspace = migration_workspace(self)
+        workspace = transfer_workspace(self)
         payload = archive_from_conversations(
             archive_conversation(
                 session_id="session_a",
@@ -253,7 +411,7 @@ class ConversationStorageMigrationPlanningTests(unittest.TestCase):
 
         for dry_run in (True, False):
             with self.subTest(dry_run=dry_run):
-                report = _migrate(
+                report = _transfer(
                     workspace,
                     ConversationStorageBackend.FILESYSTEM,
                     dry_run=dry_run,
@@ -269,7 +427,7 @@ class ConversationStorageMigrationPlanningTests(unittest.TestCase):
                     (
                         1,
                         1,
-                        ConversationStorageMigrationOutcome.FAILED,
+                        ConversationStorageTransferOutcome.FAILED,
                         "unsupported",
                         2,
                     ),
@@ -328,13 +486,13 @@ class ConversationStorageMigrationPlanningTests(unittest.TestCase):
         )
         for source in ConversationStorageBackend:
             with self.subTest(source=source):
-                workspace = migration_workspace(self, active_backend=source)
+                workspace = transfer_workspace(self, active_backend=source)
                 import_backend(workspace, source, source_payload)
                 import_backend(workspace, _other_backend(source), destination_payload)
                 before = namespace_snapshot(workspace.root)
 
-                first = _migrate(workspace, source, dry_run=True)
-                second = _migrate(workspace, source, dry_run=True)
+                first = _transfer(workspace, source, dry_run=True)
+                second = _transfer(workspace, source, dry_run=True)
 
                 self.assertEqual(first, second)
                 self.assertEqual(
@@ -351,7 +509,7 @@ class ConversationStorageMigrationPlanningTests(unittest.TestCase):
                 self.assertEqual(first.exit_code, 2)
                 self.assertEqual(namespace_snapshot(workspace.root), before)
 
-    def test_destination_only_blocks_actual_migration_without_any_mutation(
+    def test_destination_only_blocks_actual_transfer_without_any_mutation(
         self,
     ) -> None:
         source = archive_conversation(
@@ -364,7 +522,7 @@ class ConversationStorageMigrationPlanningTests(unittest.TestCase):
             conversation_id="destination_only",
             subject="destination-only private sentinel",
         )
-        workspace = migration_workspace(self)
+        workspace = transfer_workspace(self)
         import_backend(
             workspace,
             ConversationStorageBackend.FILESYSTEM,
@@ -377,7 +535,7 @@ class ConversationStorageMigrationPlanningTests(unittest.TestCase):
         )
         before = namespace_snapshot(workspace.root)
 
-        report = _migrate(workspace, ConversationStorageBackend.FILESYSTEM)
+        report = _transfer(workspace, ConversationStorageBackend.FILESYSTEM)
 
         self.assertEqual(
             (
@@ -390,7 +548,7 @@ class ConversationStorageMigrationPlanningTests(unittest.TestCase):
             (
                 1,
                 1,
-                ConversationStorageMigrationOutcome.FAILED,
+                ConversationStorageTransferOutcome.FAILED,
                 "destination_only",
                 2,
             ),
@@ -407,27 +565,27 @@ class ConversationStorageMigrationPlanningTests(unittest.TestCase):
         payload = representative_archive()
         for source in ConversationStorageBackend:
             with self.subTest(source=source):
-                workspace = migration_workspace(self, active_backend=source)
-                empty = _migrate(workspace, source, dry_run=True)
+                workspace = transfer_workspace(self, active_backend=source)
+                empty = _transfer(workspace, source, dry_run=True)
                 self.assertEqual(
-                    empty.outcome, ConversationStorageMigrationOutcome.COMPLETED
+                    empty.outcome, ConversationStorageTransferOutcome.COMPLETED
                 )
                 self.assertEqual(empty.parity, ConversationStorageParity.VERIFIED)
                 self.assertEqual(empty.source_conversations, 0)
                 self.assertFalse(checkpoint_path(workspace, source).exists())
 
                 import_backend(workspace, source, payload)
-                create = _migrate(workspace, source, dry_run=True)
+                create = _transfer(workspace, source, dry_run=True)
                 self.assertEqual(create.create, 3)
                 self.assertEqual(create.identical, 0)
                 self.assertEqual(
-                    create.outcome, ConversationStorageMigrationOutcome.WORK_REQUIRED
+                    create.outcome, ConversationStorageTransferOutcome.WORK_REQUIRED
                 )
-                self.assertEqual(create.source_events, 4)
+                self.assertEqual(create.source_events, 25)
                 self.assertFalse(checkpoint_path(workspace, source).exists())
 
                 import_backend(workspace, _other_backend(source), payload)
-                identical = _migrate(workspace, source, dry_run=True)
+                identical = _transfer(workspace, source, dry_run=True)
                 self.assertEqual(identical.create, 0)
                 self.assertEqual(identical.identical, 3)
                 self.assertEqual(identical.parity, ConversationStorageParity.VERIFIED)
@@ -436,9 +594,9 @@ class ConversationStorageMigrationPlanningTests(unittest.TestCase):
     def test_preconditions_fail_without_provisioning_or_authoritative_mutation(
         self,
     ) -> None:
-        workspace = migration_workspace(self, sqlite_ready=False)
+        workspace = transfer_workspace(self, sqlite_ready=False)
         before = namespace_snapshot(workspace.root)
-        same = migrate_conversation_storage(
+        same = transfer_conversation_storage(
             workspace,
             source_backend="filesystem",
             destination_backend="filesystem",
@@ -446,7 +604,7 @@ class ConversationStorageMigrationPlanningTests(unittest.TestCase):
         self.assertEqual((same.failure, same.exit_code), ("invalid_request", 2))
         self.assertEqual(namespace_snapshot(workspace.root), before)
 
-        unavailable = _migrate(workspace, ConversationStorageBackend.FILESYSTEM)
+        unavailable = _transfer(workspace, ConversationStorageBackend.FILESYSTEM)
         self.assertEqual(unavailable.failure, "provisioning_needed")
         self.assertFalse(
             workspace.path(SQLITE_CONVERSATION_STORAGE_DATABASE_PATH).exists()
@@ -457,8 +615,8 @@ class ConversationStorageMigrationPlanningTests(unittest.TestCase):
         guard = workspace.path(CONVERSATION_STORAGE_MUTATION_GUARD_PATH)
         self.assertEqual(guard.read_bytes(), b"")
 
-        ready = migration_workspace(self)
-        mismatch = _migrate(ready, ConversationStorageBackend.SQLITE)
+        ready = transfer_workspace(self)
+        mismatch = _transfer(ready, ConversationStorageBackend.SQLITE)
         self.assertEqual(mismatch.failure, "activation_mismatch")
         self.assertFalse(
             checkpoint_path(ready, ConversationStorageBackend.SQLITE).exists()
@@ -467,20 +625,20 @@ class ConversationStorageMigrationPlanningTests(unittest.TestCase):
         marker = ready.path(CONVERSATION_STORAGE_ACTIVATION_STATE_PATH)
         marker.write_bytes(b"{malformed activation sentinel")
         malformed_before = namespace_snapshot(ready.root)
-        malformed = _migrate(ready, ConversationStorageBackend.FILESYSTEM)
+        malformed = _transfer(ready, ConversationStorageBackend.FILESYSTEM)
         self.assertEqual(malformed.failure, "activation_invalid")
         self.assertEqual(namespace_snapshot(ready.root), malformed_before)
         self.assertNotIn("sentinel", malformed.to_json())
 
 
-class ConversationStorageMigrationExecutionTests(unittest.TestCase):
+class ConversationStorageTransferExecutionTests(unittest.TestCase):
     def test_both_directions_preserve_exact_canonical_fields_and_retained_checkpoint(
         self,
     ) -> None:
         payload = representative_archive()
         for source in ConversationStorageBackend:
             with self.subTest(source=source):
-                workspace = migration_workspace(self, active_backend=source)
+                workspace = transfer_workspace(self, active_backend=source)
                 import_backend(workspace, source, payload)
                 activation = workspace.path(CONVERSATION_STORAGE_ACTIVATION_STATE_PATH)
                 activation_before = (
@@ -494,15 +652,15 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
                 opposite_bytes = b"unrelated direction checkpoint sentinel\n"
                 opposite_checkpoint.write_bytes(opposite_bytes)
 
-                report = _migrate(workspace, source)
+                report = _transfer(workspace, source)
 
                 self.assertEqual(
-                    report.outcome, ConversationStorageMigrationOutcome.COMPLETED
+                    report.outcome, ConversationStorageTransferOutcome.COMPLETED
                 )
                 self.assertEqual(report.parity, ConversationStorageParity.VERIFIED)
                 self.assertEqual(report.checkpoint, "completed")
                 self.assertEqual(report.create, 3)
-                self.assertEqual(report.source_events, 4)
+                self.assertEqual(report.source_events, 25)
                 self.assertEqual(
                     export_backend(workspace, _other_backend(source)), payload
                 )
@@ -524,7 +682,7 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
                     value["direction"],
                     f"{source.value}-to-{_other_backend(source).value}",
                 )
-                self.assertEqual(value["source"], {"conversations": 3, "events": 4})
+                self.assertEqual(value["source"], {"conversations": 3, "events": 25})
                 self.assertEqual(
                     value["progress"],
                     {"completed_conversations": 3, "total_conversations": 3},
@@ -533,9 +691,9 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
                 self.assertNotIn("Unicode", checkpoint_before.decode("utf-8"))
                 self.assertNotIn("runtime failure", checkpoint_before.decode("utf-8"))
 
-                retry = _migrate(workspace, source)
+                retry = _transfer(workspace, source)
                 self.assertEqual(
-                    retry.outcome, ConversationStorageMigrationOutcome.COMPLETED
+                    retry.outcome, ConversationStorageTransferOutcome.COMPLETED
                 )
                 self.assertEqual(retry.identical, 3)
                 self.assertEqual(checkpoint.read_bytes(), checkpoint_before)
@@ -550,7 +708,7 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
     def test_filesystem_to_sqlite_operational_failure_rolls_back_one_transaction(
         self,
     ) -> None:
-        workspace = migration_workspace(self)
+        workspace = transfer_workspace(self)
         import_backend(
             workspace,
             ConversationStorageBackend.FILESYSTEM,
@@ -571,7 +729,7 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
             )
 
         with mock.patch.object(sqlite_module, "_insert_metadata", new=fail_second):
-            report = _migrate(workspace, ConversationStorageBackend.FILESYSTEM)
+            report = _transfer(workspace, ConversationStorageBackend.FILESYSTEM)
 
         self.assertEqual(calls, 2)
         self.assertEqual(report.failure, "destination_invalid")
@@ -581,6 +739,10 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
             )
             self.assertEqual(
                 connection.execute("SELECT * FROM conversation_events").fetchall(), []
+            )
+            self.assertEqual(
+                connection.execute("SELECT * FROM collaboration_events").fetchall(),
+                [],
             )
         self.assertFalse(
             checkpoint_path(workspace, ConversationStorageBackend.FILESYSTEM).exists()
@@ -592,7 +754,7 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
         payload = representative_archive()
         for control_type in (KeyboardInterrupt, SystemExit):
             with self.subTest(control=control_type.__name__):
-                workspace = migration_workspace(self)
+                workspace = transfer_workspace(self)
                 import_backend(
                     workspace,
                     ConversationStorageBackend.FILESYSTEM,
@@ -610,7 +772,7 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
                     path.read_bytes() for path in configuration
                 )
                 before = namespace_snapshot(workspace.root)
-                original_insert = sqlite_module._insert_event
+                original_insert = sqlite_module._insert_collaboration_event
                 calls = 0
 
                 def interrupt_second_event(connection, event):  # type: ignore[no-untyped-def]
@@ -623,12 +785,12 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
                 with (
                     mock.patch.object(
                         sqlite_module,
-                        "_insert_event",
+                        "_insert_collaboration_event",
                         new=interrupt_second_event,
                     ),
                     self.assertRaises(control_type),
                 ):
-                    _migrate(workspace, ConversationStorageBackend.FILESYSTEM)
+                    _transfer(workspace, ConversationStorageBackend.FILESYSTEM)
 
                 self.assertEqual(calls, 2)
                 self.assertEqual(namespace_snapshot(workspace.root), before)
@@ -655,19 +817,25 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
                         ).fetchall(),
                         [],
                     )
+                    self.assertEqual(
+                        connection.execute(
+                            "SELECT * FROM collaboration_events"
+                        ).fetchall(),
+                        [],
+                    )
                 checkpoint = checkpoint_path(
                     workspace,
                     ConversationStorageBackend.FILESYSTEM,
                 )
                 self.assertFalse(checkpoint.exists())
 
-                retried = _migrate(
+                retried = _transfer(
                     workspace,
                     ConversationStorageBackend.FILESYSTEM,
                 )
                 self.assertIs(
                     retried.outcome,
-                    ConversationStorageMigrationOutcome.COMPLETED,
+                    ConversationStorageTransferOutcome.COMPLETED,
                 )
                 self.assertIs(retried.parity, ConversationStorageParity.VERIFIED)
                 self.assertEqual(retried.checkpoint, "completed")
@@ -707,7 +875,7 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
 
         for control_type in (KeyboardInterrupt, SystemExit):
             with self.subTest(control=control_type.__name__):
-                workspace = migration_workspace(
+                workspace = transfer_workspace(
                     self,
                     active_backend=ConversationStorageBackend.SQLITE,
                 )
@@ -737,9 +905,7 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
                     on_conversation_completed=None,  # type: ignore[no-untyped-def]
                 ):
                     if on_conversation_completed is None:
-                        raise AssertionError(
-                            "migration omitted its completion callback"
-                        )
+                        raise AssertionError("transfer omitted its completion callback")
 
                     def record_then_interrupt(
                         session_id: str,
@@ -765,7 +931,7 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
                     ),
                     self.assertRaises(control_type),
                 ):
-                    _migrate(workspace, ConversationStorageBackend.SQLITE)
+                    _transfer(workspace, ConversationStorageBackend.SQLITE)
 
                 self.assertEqual(
                     callbacks,
@@ -806,13 +972,13 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
                     ],
                 )
 
-                retried = _migrate(
+                retried = _transfer(
                     workspace,
                     ConversationStorageBackend.SQLITE,
                 )
                 self.assertIs(
                     retried.outcome,
-                    ConversationStorageMigrationOutcome.COMPLETED,
+                    ConversationStorageTransferOutcome.COMPLETED,
                 )
                 self.assertIs(retried.parity, ConversationStorageParity.VERIFIED)
                 self.assertEqual(retried.checkpoint, "completed")
@@ -836,7 +1002,7 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
                 )
 
     def test_fts_is_excluded_from_sqlite_source_transfer_and_reports(self) -> None:
-        workspace = migration_workspace(
+        workspace = transfer_workspace(
             self, active_backend=ConversationStorageBackend.SQLITE
         )
         payload = representative_archive()
@@ -849,7 +1015,7 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
         sentinel = b"private FTS-only sentinel\x00"
         companion.write_bytes(sentinel)
 
-        report = _migrate(workspace, ConversationStorageBackend.SQLITE)
+        report = _transfer(workspace, ConversationStorageBackend.SQLITE)
 
         self.assertEqual(report.parity, ConversationStorageParity.VERIFIED)
         self.assertEqual(companion.read_bytes(), sentinel)
@@ -870,7 +1036,7 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
         payload = representative_archive()
         for mode in ("prewrite", "postwrite"):
             with self.subTest(mode=mode):
-                workspace = migration_workspace(
+                workspace = transfer_workspace(
                     self, active_backend=ConversationStorageBackend.SQLITE
                 )
                 import_backend(workspace, ConversationStorageBackend.SQLITE, payload)
@@ -905,7 +1071,7 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
                     )
 
                 with mock.patch.object(Workspace, "write_json", new=fail_checkpoint):
-                    failed_report = _migrate(
+                    failed_report = _transfer(
                         workspace, ConversationStorageBackend.SQLITE
                     )
                 self.assertEqual(failed_report.failure, "checkpoint_invalid")
@@ -921,7 +1087,7 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
                     1,
                 )
 
-                resumed = _migrate(workspace, ConversationStorageBackend.SQLITE)
+                resumed = _transfer(workspace, ConversationStorageBackend.SQLITE)
                 self.assertEqual(resumed.parity, ConversationStorageParity.VERIFIED)
                 self.assertEqual(
                     export_backend(workspace, ConversationStorageBackend.FILESYSTEM),
@@ -931,7 +1097,7 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
     def test_verify_ignores_malformed_checkpoint_and_reports_mismatch_as_exit_one(
         self,
     ) -> None:
-        workspace = migration_workspace(self)
+        workspace = transfer_workspace(self)
         payload = representative_archive()
         import_backend(workspace, ConversationStorageBackend.FILESYSTEM, payload)
         import_backend(workspace, ConversationStorageBackend.SQLITE, payload)
@@ -971,7 +1137,7 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
     def test_source_change_after_destination_commit_is_reported_without_checkpoint(
         self,
     ) -> None:
-        workspace = migration_workspace(self)
+        workspace = transfer_workspace(self)
         payload = representative_archive()
         import_backend(workspace, ConversationStorageBackend.FILESYSTEM, payload)
         filesystem_archive = compose_filesystem_conversation_archive(workspace)
@@ -994,7 +1160,7 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
             "import_archive",
             new=import_then_change_source,
         ):
-            report = _migrate(workspace, ConversationStorageBackend.FILESYSTEM)
+            report = _transfer(workspace, ConversationStorageBackend.FILESYSTEM)
 
         self.assertEqual(report.failure, "source_changed")
         self.assertEqual(report.exit_code, 2)
@@ -1010,9 +1176,9 @@ class ConversationStorageMigrationExecutionTests(unittest.TestCase):
         )
 
 
-class ConversationStorageMigrationCheckpointTests(unittest.TestCase):
+class ConversationStorageTransferCheckpointTests(unittest.TestCase):
     def _workspace_with_source(self) -> Workspace:
-        workspace = migration_workspace(self)
+        workspace = transfer_workspace(self)
         import_backend(
             workspace,
             ConversationStorageBackend.FILESYSTEM,
@@ -1204,7 +1370,7 @@ class ConversationStorageMigrationCheckpointTests(unittest.TestCase):
                 checkpoint.parent.mkdir(parents=True, exist_ok=True)
                 checkpoint.write_bytes(encoded)
                 before = namespace_snapshot(workspace.root)
-                report = _migrate(
+                report = _transfer(
                     workspace,
                     ConversationStorageBackend.FILESYSTEM,
                     dry_run=True,
@@ -1221,7 +1387,7 @@ class ConversationStorageMigrationCheckpointTests(unittest.TestCase):
         with mock.patch.object(
             migration_module, "_CHECKPOINT_MAX_RAW_BYTES", len(encoded) - 1
         ):
-            bounded = _migrate(
+            bounded = _transfer(
                 workspace,
                 ConversationStorageBackend.FILESYSTEM,
                 dry_run=True,
@@ -1246,7 +1412,7 @@ class ConversationStorageMigrationCheckpointTests(unittest.TestCase):
                         os.link(outside, target)
                 except OSError as exc:
                     self.skipTest(f"{kind} creation unavailable: {exc}")
-                report = _migrate(
+                report = _transfer(
                     workspace,
                     ConversationStorageBackend.FILESYSTEM,
                     dry_run=True,
@@ -1262,7 +1428,7 @@ class ConversationStorageMigrationCheckpointTests(unittest.TestCase):
         self,
     ) -> None:
         workspace = self._workspace_with_source()
-        completed = _migrate(workspace, ConversationStorageBackend.FILESYSTEM)
+        completed = _transfer(workspace, ConversationStorageBackend.FILESYSTEM)
         self.assertEqual(completed.parity, ConversationStorageParity.VERIFIED)
         checkpoint = checkpoint_path(workspace, ConversationStorageBackend.FILESYSTEM)
         old_checkpoint = checkpoint.read_bytes()
@@ -1285,27 +1451,27 @@ class ConversationStorageMigrationCheckpointTests(unittest.TestCase):
                 new_record,
             ),
         )
-        rerun = _migrate(workspace, ConversationStorageBackend.FILESYSTEM)
+        rerun = _transfer(workspace, ConversationStorageBackend.FILESYSTEM)
         self.assertEqual(rerun.parity, ConversationStorageParity.VERIFIED)
         self.assertNotEqual(checkpoint.read_bytes(), old_checkpoint)
 
         retained = checkpoint.read_bytes()
         metadata = workspace.root / (
-            "discussion_logs/session_a/interactive/conversations/"
+            "discussion_logs/session_b/interactive/conversations/"
             "conversation_empty/metadata.json"
         )
         value = json.loads(metadata.read_text(encoding="utf-8"))
         value["subject"] = "source conflict sentinel"
         metadata.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
-        blocked = _migrate(workspace, ConversationStorageBackend.FILESYSTEM)
+        blocked = _transfer(workspace, ConversationStorageBackend.FILESYSTEM)
         self.assertEqual(blocked.failure, "conflict")
         self.assertEqual(checkpoint.read_bytes(), retained)
 
 
-class ConversationStorageMigrationCoordinationTests(unittest.TestCase):
+class ConversationStorageTransferCoordinationTests(unittest.TestCase):
     def test_wrong_root_lease_fails_before_activation_composition_or_io(self) -> None:
-        workspace = migration_workspace(self)
-        other = migration_workspace(self)
+        workspace = transfer_workspace(self)
+        other = transfer_workspace(self)
         other_coordinator = WorkspaceConversationStorageMutationCoordinator(other)
         fake_coordinator = mock.Mock(
             workspace_key=os.fspath(workspace.root),
@@ -1330,7 +1496,7 @@ class ConversationStorageMigrationCoordinationTests(unittest.TestCase):
                     side_effect=AssertionError("archive adapters composed"),
                 ) as compose,
             ):
-                report = _migrate(workspace, ConversationStorageBackend.FILESYSTEM)
+                report = _transfer(workspace, ConversationStorageBackend.FILESYSTEM)
 
         self.assertEqual(report.failure, "coordination_failed")
         self.assertEqual(report.exit_code, 2)
@@ -1339,7 +1505,7 @@ class ConversationStorageMigrationCoordinationTests(unittest.TestCase):
         compose.assert_not_called()
 
     def test_outer_lease_excludes_supported_writer_through_final_parity(self) -> None:
-        workspace = migration_workspace(self)
+        workspace = transfer_workspace(self)
         payload = representative_archive()
         import_backend(workspace, ConversationStorageBackend.FILESYSTEM, payload)
         services = compose_filesystem_conversation_storage(workspace)
@@ -1373,7 +1539,7 @@ class ConversationStorageMigrationCoordinationTests(unittest.TestCase):
             "import_archive",
             new=import_while_writer_waits,
         ):
-            report = _migrate(workspace, ConversationStorageBackend.FILESYSTEM)
+            report = _transfer(workspace, ConversationStorageBackend.FILESYSTEM)
         assert thread is not None
         thread.join(timeout=3.0)
         self.assertFalse(thread.is_alive())
@@ -1381,8 +1547,8 @@ class ConversationStorageMigrationCoordinationTests(unittest.TestCase):
         self.assertTrue(completed.is_set())
         self.assertEqual(report.parity, ConversationStorageParity.VERIFIED)
 
-    def test_caller_root_mutation_cannot_redirect_any_migration_io(self) -> None:
-        workspace = migration_workspace(self)
+    def test_caller_root_mutation_cannot_redirect_any_transfer_io(self) -> None:
+        workspace = transfer_workspace(self)
         root_a = workspace.root
         payload = representative_archive()
         import_backend(workspace, ConversationStorageBackend.FILESYSTEM, payload)
@@ -1393,7 +1559,7 @@ class ConversationStorageMigrationCoordinationTests(unittest.TestCase):
                 0,
             ).to_dict(),
         )
-        other = migration_workspace(self)
+        other = transfer_workspace(self)
         root_b = other.root
         other_before = namespace_snapshot(root_b)
         original_read = Workspace.read_text
@@ -1406,7 +1572,7 @@ class ConversationStorageMigrationCoordinationTests(unittest.TestCase):
             return original_read(operation_workspace, relative)
 
         with mock.patch.object(Workspace, "read_text", new=mutate_caller):
-            report = _migrate(workspace, ConversationStorageBackend.FILESYSTEM)
+            report = _transfer(workspace, ConversationStorageBackend.FILESYSTEM)
 
         self.assertEqual(report.parity, ConversationStorageParity.VERIFIED)
         self.assertEqual(

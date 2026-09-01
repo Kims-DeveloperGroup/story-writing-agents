@@ -102,7 +102,7 @@ record count or `No recorded exchanges`. Choosing an empty agent opens the
 bounded empty viewer; it does not create a diagnostic record.
 
 Cancel, Ctrl-C, or EOF at either picker returns without opening a view or
-changing session, conversation, debate, agent focus, or storage. If the chosen
+changing session, conversation, debate, or storage. If the chosen
 stream expires between inventory and snapshot, Story refreshes once and asks
 you to retry `/exchanges`; it never substitutes another scope or agent.
 

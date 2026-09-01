@@ -52,7 +52,6 @@ from story_writing_agents.agent_context.planning import (
     ContextPlanningPolicy,
     ContextProjectedUnit,
     ContextProjection,
-    ContextProjectionAccounting,
     ContextRecordCursor,
     ContextRecordMaterial,
     ContextReferenceBudgetUsage,
@@ -291,8 +290,7 @@ def _project(
         materials,
         policy=selected_policy,
         conditions=selected_conditions,
-        checkpoint=checkpoint
-        or ContextCheckpointView(ContextCheckpointState.MISSING),
+        checkpoint=checkpoint or ContextCheckpointView(ContextCheckpointState.MISSING),
         active_provider_thread_id=active_provider_thread_id,
         mandatory_references=mandatory_references,
         fresh=fresh,
@@ -341,14 +339,10 @@ def _decision_allowed(
             and decision is ContextDecisionKind.SELECTED
         )
     if priority is ContextPriority.P1_STABLE:
-        return (
-            channel is ContextSemanticChannel.STABLE_BEHAVIOR
-            and decision
-            in {
-                ContextDecisionKind.SELECTED,
-                ContextDecisionKind.CHECKPOINT_SUPPRESSED,
-            }
-        )
+        return channel is ContextSemanticChannel.STABLE_BEHAVIOR and decision in {
+            ContextDecisionKind.SELECTED,
+            ContextDecisionKind.CHECKPOINT_SUPPRESSED,
+        }
     if priority is ContextPriority.P2_WORKING:
         if channel not in {
             ContextSemanticChannel.HARD_CONSTRAINT,
@@ -365,15 +359,11 @@ def _decision_allowed(
                 ContextDecisionKind.OMITTED_MATERIAL,
             }
         )
-    return (
-        priority is ContextPriority.P3_OPTIONAL
-        and channel
-        in {
-            ContextSemanticChannel.OPTIONAL_BACKGROUND,
-            ContextSemanticChannel.RETRIEVED_EVIDENCE,
-            ContextSemanticChannel.HISTORY,
-        }
-    )
+    return priority is ContextPriority.P3_OPTIONAL and channel in {
+        ContextSemanticChannel.OPTIONAL_BACKGROUND,
+        ContextSemanticChannel.RETRIEVED_EVIDENCE,
+        ContextSemanticChannel.HISTORY,
+    }
 
 
 class PlanningTestCase(unittest.TestCase):
@@ -576,8 +566,7 @@ class PlanningPolicyTests(PlanningTestCase):
             (131_072, 73_728, 16_384, 32_768, 0, 262_144, 16),
         )
         serialized = (
-            b"total=131072;p0=73728;p1=16384;p2=32768;p3=0;"
-            b"references=262144;depth=16"
+            b"total=131072;p0=73728;p1=16384;p2=32768;p3=0;references=262144;depth=16"
         )
         self.assertEqual(policy.fingerprint, _digest(serialized))
         self.assertRegex(policy.fingerprint, r"\Asha256:[0-9a-f]{64}\Z")
@@ -695,7 +684,9 @@ class PlanningValueTests(PlanningTestCase):
         first = _entry("first", b"same")
         second = _entry("second", b"same", ordinal=1)
         unit = ContextProjectedUnit((second, first), b"same")
-        self.assertEqual(tuple(entry.source_id for entry in unit.entries), ("first", "second"))
+        self.assertEqual(
+            tuple(entry.source_id for entry in unit.entries), ("first", "second")
+        )
         self.assertNotIn("same", repr(unit))
         different_channel = _entry(
             "history",
@@ -942,14 +933,20 @@ class PlanningValueTests(PlanningTestCase):
             _entry("optional", b"x", source_kind=ContextSourceKind.OWN_AGENT_STATE),
         )
         for entry, decision in itertools.product(valid_entries, ContextDecisionKind):
-            represented = "representative" if decision is ContextDecisionKind.DEDUPLICATED else None
+            represented = (
+                "representative"
+                if decision is ContextDecisionKind.DEDUPLICATED
+                else None
+            )
             with self.subTest(entry=entry.source_id, decision=decision):
                 if _decision_allowed(entry.priority, entry.semantic_channel, decision):
                     value = ContextSourceDecision(entry, decision, represented)
                     self.assertIs(value.searchable, entry.searchable)
                 else:
                     self.assert_planning_error(
-                        lambda entry=entry, decision=decision, represented=represented: (
+                        lambda entry=entry,
+                        decision=decision,
+                        represented=represented: (
                             ContextSourceDecision(entry, decision, represented)
                         ),
                         ContextPlanningErrorCode.INVALID_VALUE,
@@ -993,7 +990,7 @@ class PlanningValueTests(PlanningTestCase):
         )
 
     def test_budget_and_searchable_accounting_are_self_validating(self) -> None:
-        valid_usage = ContextSourceBudgetUsage(4, 1, 3)
+        ContextSourceBudgetUsage(4, 1, 3)
         for args in ((4, 5, 0), (4, 1, 2), (-1, 0, 0), (4, True, 3)):
             with self.subTest(args=args):
                 self.assert_planning_error(
@@ -1531,7 +1528,9 @@ class RequiredAndStableSelectionTests(PlanningTestCase):
             decisions[stable.source_id].decision,
             ContextDecisionKind.CHECKPOINT_SUPPRESSED,
         )
-        self.assertEqual(tuple(unit.entries for unit in projection.units), ((required,),))
+        self.assertEqual(
+            tuple(unit.entries for unit in projection.units), ((required,),)
+        )
 
     def test_every_valid_p1_set_or_metadata_change_bootstraps(self) -> None:
         policy = _policy()
@@ -1622,7 +1621,9 @@ class RequiredAndStableSelectionTests(PlanningTestCase):
 class WorkingAndOptionalSelectionTests(PlanningTestCase):
     """Verify hard constraints and deterministic first-fit-with-skip selection."""
 
-    def test_hard_constraints_exact_fit_plus_one_and_missing_fail_atomically(self) -> None:
+    def test_hard_constraints_exact_fit_plus_one_and_missing_fail_atomically(
+        self,
+    ) -> None:
         policy = ContextPlanningPolicy(6, 1, 1, 4, 0, 0, 16)
         exact, material = _source(
             "hard",
@@ -1742,7 +1743,9 @@ class WorkingAndOptionalSelectionTests(PlanningTestCase):
             projection.decisions[0].decision,
             ContextDecisionKind.OMITTED_CLASS_BUDGET,
         )
-        self.assertEqual(projection.accounting.budgets.total.selected_unique_utf8_bytes, 0)
+        self.assertEqual(
+            projection.accounting.budgets.total.selected_unique_utf8_bytes, 0
+        )
         self.assertEqual(projection.accounting.budgets.p3.remaining_utf8_bytes, 7)
 
 
@@ -1855,8 +1858,12 @@ class DeltaAndReferencePlanningTests(PlanningTestCase):
             decisions[unchanged.source_id].decision,
             ContextDecisionKind.CHECKPOINT_SUPPRESSED,
         )
-        self.assertIs(decisions[changed.source_id].decision, ContextDecisionKind.SELECTED)
-        self.assertIs(decisions[optional.source_id].decision, ContextDecisionKind.SELECTED)
+        self.assertIs(
+            decisions[changed.source_id].decision, ContextDecisionKind.SELECTED
+        )
+        self.assertIs(
+            decisions[optional.source_id].decision, ContextDecisionKind.SELECTED
+        )
         self.assertEqual(projection.checkpoint_proposal.delta_depth, 4)
         self.assertEqual(
             tuple(source.entry for source in projection.removed_checkpoint_sources),
@@ -1904,7 +1911,9 @@ class DeltaAndReferencePlanningTests(PlanningTestCase):
             ),
             (("record-one", 1),),
         )
-        self.assertEqual(first.catalog_updates, first.checkpoint_proposal.catalog_sources)
+        self.assertEqual(
+            first.catalog_updates, first.checkpoint_proposal.catalog_sources
+        )
 
         changed_record = _record("record-one", b"one-v2", 1)
         new_record = _record("record-two", b"two", 2)
@@ -2067,7 +2076,10 @@ class DeltaAndReferencePlanningTests(PlanningTestCase):
         )
         self.assertEqual(omitted.removed_catalog_sources, ())
         self.assertEqual(
-            tuple(item.source_alias for item in omitted.checkpoint_proposal.catalog_sources),
+            tuple(
+                item.source_alias
+                for item in omitted.checkpoint_proposal.catalog_sources
+            ),
             ("s1",),
         )
         self.assertEqual(
@@ -2143,8 +2155,12 @@ class DeltaAndReferencePlanningTests(PlanningTestCase):
         self.assertEqual(projection.checkpoint_proposal.sources, ())
         self.assertEqual(projection.accounting.mandatory_reference_count, 3)
         self.assertEqual(projection.accounting.mandatory_reference_utf8_bytes, 9)
-        self.assertEqual(projection.accounting.budgets.total.selected_unique_utf8_bytes, 0)
-        self.assertEqual(projection.accounting.budgets.mandatory_references.used_utf8_bytes, 9)
+        self.assertEqual(
+            projection.accounting.budgets.total.selected_unique_utf8_bytes, 0
+        )
+        self.assertEqual(
+            projection.accounting.budgets.mandatory_references.used_utf8_bytes, 9
+        )
 
     def test_reference_constructor_sequence_identity_and_budget_failures(self) -> None:
         self.assert_planning_error(
@@ -2289,7 +2305,10 @@ class ProjectionAccountingTests(PlanningTestCase):
             expected,
         )
         self.assertTrue(
-            all(decision.searchable is decision.entry.searchable for decision in projection.decisions)
+            all(
+                decision.searchable is decision.entry.searchable
+                for decision in projection.decisions
+            )
         )
         searchable = projection.accounting.searchable
         self.assertEqual(
@@ -2358,7 +2377,9 @@ class ProjectionInvariantTests(PlanningTestCase):
             (second_material, first_material),
         )
 
-    def test_accounting_depth_bucket_order_uniqueness_and_selected_relations(self) -> None:
+    def test_accounting_depth_bucket_order_uniqueness_and_selected_relations(
+        self,
+    ) -> None:
         projection = self._deduplicated_projection()
         accounting = projection.accounting
         mutations = (
@@ -2366,7 +2387,10 @@ class ProjectionInvariantTests(PlanningTestCase):
             {"projected_unit_count": accounting.projected_unit_count + 1},
             {"projected_unique_utf8_bytes": accounting.projected_unique_utf8_bytes + 1},
             {"saved_duplicate_utf8_bytes": accounting.saved_duplicate_utf8_bytes + 1},
-            {"selected_logical_source_count": accounting.selected_logical_source_count + 1},
+            {
+                "selected_logical_source_count": accounting.selected_logical_source_count
+                + 1
+            },
             {"selected_logical_utf8_bytes": accounting.selected_logical_utf8_bytes + 1},
             {"decision_buckets": tuple(reversed(accounting.decision_buckets))},
         )
@@ -2389,9 +2413,7 @@ class ProjectionInvariantTests(PlanningTestCase):
             if item.decision is ContextDecisionKind.SELECTED
         )
         duplicate_buckets = tuple(
-            item
-            for item in two_selected.decision_buckets
-            if item is not bucket
+            item for item in two_selected.decision_buckets if item is not bucket
         ) + (
             replace(bucket, source_count=1, raw_source_utf8_bytes=1),
             replace(bucket, source_count=1, raw_source_utf8_bytes=1),
@@ -2421,7 +2443,9 @@ class ProjectionInvariantTests(PlanningTestCase):
             ContextPlanningErrorCode.INVALID_VALUE,
         )
 
-    def test_unit_decision_mapping_and_same_id_metadata_substitutions_fail(self) -> None:
+    def test_unit_decision_mapping_and_same_id_metadata_substitutions_fail(
+        self,
+    ) -> None:
         projection = self._deduplicated_projection()
         decisions = list(projection.decisions)
         alias_index = next(
@@ -2610,9 +2634,7 @@ class ProjectionInvariantTests(PlanningTestCase):
                         mixed,
                         accounting=replace(
                             mixed.accounting,
-                            **{
-                                field_name: getattr(mixed.accounting, field_name) + 1
-                            },
+                            **{field_name: getattr(mixed.accounting, field_name) + 1},
                         ),
                     ),
                     ContextPlanningErrorCode.INVALID_VALUE,
@@ -2702,7 +2724,7 @@ class PlanningBoundaryAndPurityTests(PlanningTestCase):
         compile(manifest_path.read_text(encoding="utf-8"), str(manifest_path), "exec")
 
     def test_facades_remain_exact_and_clean_direct_import_works(self) -> None:
-        self.assertEqual(len(story_writing_agents.__all__), 120)
+        self.assertEqual(len(story_writing_agents.__all__), 104)
         self.assertEqual(len(agent_context.__all__), 11)
         self.assertEqual(len(writing_artifacts.__all__), 62)
         self.assertFalse(hasattr(agent_context, "ContextManifest"))
@@ -2745,7 +2767,9 @@ class PlanningBoundaryAndPurityTests(PlanningTestCase):
             )
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
-    def test_planning_performs_no_filesystem_network_process_clock_or_state_io(self) -> None:
+    def test_planning_performs_no_filesystem_network_process_clock_or_state_io(
+        self,
+    ) -> None:
         entry, material = _source("focused", "문맥🙂".encode("utf-8"))
         forbidden = AssertionError("pure planner attempted external access")
         with (

@@ -561,14 +561,9 @@ def _seed_debug_storage(directory: Path, *, prefix: str) -> None:
     for filename in (
         _GUARD_NAME,
         _ACTIVE_NAME,
-        *(
-            f"{_ACTIVE_NAME}.{index}"
-            for index in range(1, DEBUG_LOG_BACKUP_COUNT + 1)
-        ),
+        *(f"{_ACTIVE_NAME}.{index}" for index in range(1, DEBUG_LOG_BACKUP_COUNT + 1)),
     ):
-        (directory / filename).write_bytes(
-            f"{prefix}:{filename}".encode("ascii")
-        )
+        (directory / filename).write_bytes(f"{prefix}:{filename}".encode("ascii"))
 
 
 def _hard_link_or_skip(
@@ -758,7 +753,9 @@ class DebugLogContractTests(unittest.TestCase):
         for enum_type, members in expected_members.items():
             with self.subTest(enum_type=enum_type.__name__):
                 self.assertTrue(issubclass(enum_type, StrEnum))
-                self.assertEqual(tuple((item.name, item.value) for item in enum_type), members)
+                self.assertEqual(
+                    tuple((item.name, item.value) for item in enum_type), members
+                )
 
         self.assertEqual(
             tuple(inspect.signature(WorkspaceDebugLog.trace).parameters),
@@ -791,9 +788,7 @@ class DebugLogContractTests(unittest.TestCase):
         )
         self.assertEqual(
             tuple(
-                inspect.signature(
-                    WorkspaceDebugLog.execution_profile_event
-                ).parameters
+                inspect.signature(WorkspaceDebugLog.execution_profile_event).parameters
             ),
             (
                 "self",
@@ -945,7 +940,9 @@ class DebugLogContractTests(unittest.TestCase):
             )
 
         records = _records(self.workspace)
-        self.assertEqual([record["schema_version"] for record in records], [1, 2, 2, 2, 2])
+        self.assertEqual(
+            [record["schema_version"] for record in records], [1, 2, 2, 2, 2]
+        )
         transitions = records[1:4]
         profile_projection = {
             "provider": "antigravity",
@@ -978,16 +975,14 @@ class DebugLogContractTests(unittest.TestCase):
                     "timestamp": "2026-08-20T01:02:03.456+00:00",
                     "level": (
                         "error"
-                        if record["operation"]
-                        == "execution_profile_recovery_required"
+                        if record["operation"] == "execution_profile_recovery_required"
                         else "trace"
                     ),
                     "component": "backend",
                     "operation": record["operation"],
                     "phase": (
                         "failed"
-                        if record["operation"]
-                        == "execution_profile_recovery_required"
+                        if record["operation"] == "execution_profile_recovery_required"
                         else "succeeded"
                     ),
                     "correlation_id": "settings_save_7",
@@ -1083,9 +1078,15 @@ class DebugLogContractTests(unittest.TestCase):
 
     def test_invalid_inputs_drop_only_the_record(self) -> None:
         calls = (
-            lambda: self.log.trace("cli", DebugOperation.CLI_COMMAND, DebugPhase.STARTED),
-            lambda: self.log.trace(DebugComponent.CLI, "cli_command", DebugPhase.STARTED),
-            lambda: self.log.trace(DebugComponent.CLI, DebugOperation.CLI_COMMAND, "started"),
+            lambda: self.log.trace(
+                "cli", DebugOperation.CLI_COMMAND, DebugPhase.STARTED
+            ),
+            lambda: self.log.trace(
+                DebugComponent.CLI, "cli_command", DebugPhase.STARTED
+            ),
+            lambda: self.log.trace(
+                DebugComponent.CLI, DebugOperation.CLI_COMMAND, "started"
+            ),
             lambda: self.log.trace(
                 DebugComponent.CLI,
                 DebugOperation.CLI_COMMAND,
@@ -1229,7 +1230,9 @@ class DebugLogContractTests(unittest.TestCase):
         )
         for label, owner, attribute in failures:
             with self.subTest(label=label):
-                with mock.patch.object(owner, attribute, side_effect=OSError(label)) as failed:
+                with mock.patch.object(
+                    owner, attribute, side_effect=OSError(label)
+                ) as failed:
                     _trace(self.log)
                 failed.assert_called_once()
         self.assertFalse(self.log.path.exists())
@@ -1269,11 +1272,58 @@ class DebugLogContractTests(unittest.TestCase):
             if isinstance(node, ast.ImportFrom) and node.level == 1
         }
         self.assertEqual(dependencies, {"agents", "provider_adapter", "workspace"})
-        for dependency in dependencies:
-            dependency_source = (
-                Path(debug_module.__file__).with_name(f"{dependency}.py")
-            ).read_text(encoding="utf-8")
-            self.assertNotIn("from .debug_log import", dependency_source)
+        source_root = Path(debug_module.__file__).parent
+        workspace_package = source_root / "workspace"
+        filesystem_owner = source_root / "conversation_storage" / "filesystem.py"
+        dependency_paths = {
+            "agents": (source_root / "agents.py",),
+            "provider_adapter": (source_root / "provider_adapter.py",),
+            "workspace": (
+                workspace_package / "__init__.py",
+                workspace_package / "core.py",
+                filesystem_owner,
+            ),
+        }
+        self.assertFalse((source_root / "workspace.py").exists())
+        for dependency, paths in dependency_paths.items():
+            with self.subTest(dependency=dependency):
+                for path in paths:
+                    self.assertTrue(path.is_file(), path)
+                    dependency_source = path.read_text(encoding="utf-8")
+                    self.assertNotIn("from .debug_log import", dependency_source)
+                    self.assertNotIn("from ..debug_log import", dependency_source)
+
+        facade_tree = ast.parse(
+            (workspace_package / "__init__.py").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            {
+                (node.level, node.module)
+                for node in ast.walk(facade_tree)
+                if isinstance(node, ast.ImportFrom) and node.level > 0
+            },
+            {(1, "core"), (2, "conversation_storage.filesystem")},
+        )
+        core_tree = ast.parse(
+            (workspace_package / "core.py").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            {
+                node.module
+                for node in ast.walk(core_tree)
+                if isinstance(node, ast.ImportFrom) and node.level == 2
+            },
+            {"agents", "conversations", "errors", "models", "writing_artifacts"},
+        )
+        owner_tree = ast.parse(filesystem_owner.read_text(encoding="utf-8"))
+        self.assertEqual(
+            {
+                node.module
+                for node in ast.walk(owner_tree)
+                if isinstance(node, ast.ImportFrom) and node.level == 2
+            },
+            {"conversations", "conversations.events", "errors", "workspace.core"},
+        )
 
         repository_root = Path(__file__).resolve().parents[1]
         environment = os.environ.copy()
@@ -1283,7 +1333,19 @@ class DebugLogContractTests(unittest.TestCase):
             "from pathlib import Path; "
             "import story_writing_agents as facade; "
             "from story_writing_agents import debug_log as module; "
+            "from story_writing_agents import workspace; "
+            "from story_writing_agents.workspace import core; "
+            "from story_writing_agents.conversation_storage import filesystem; "
             "assert all(name not in facade.__all__ for name in module.__all__); "
+            "assert module.Workspace is workspace.Workspace is core.Workspace; "
+            "assert workspace.FilesystemConversationCatalog is "
+            "filesystem.FilesystemConversationCatalog; "
+            "assert not hasattr(workspace, 'FilesystemConversationEventStore'); "
+            "assert not hasattr(filesystem, 'FilesystemConversationEventStore'); "
+            "assert module.open_workspace_root_directory is "
+            "workspace.open_workspace_root_directory; "
+            "assert module.verify_workspace_root_directory is "
+            "workspace.verify_workspace_root_directory; "
             "assert module.DEBUG_LOG_RELATIVE_PATH == 'debug_logs/runtime.jsonl'; "
             "assert list(Path.cwd().iterdir()) == []; print('ok')"
         )
@@ -1376,17 +1438,19 @@ class DebugLogStorageTests(unittest.TestCase):
             )
         artifacts = [
             active,
-            *(self.workspace.path(f"{DEBUG_LOG_RELATIVE_PATH}.{index}") for index in range(1, 6)),
+            *(
+                self.workspace.path(f"{DEBUG_LOG_RELATIVE_PATH}.{index}")
+                for index in range(1, 6)
+            ),
         ]
         active_identity = (active.stat().st_dev, active.stat().st_ino)
         self.assertNotIn(
             active_identity,
-            {
-                (path.stat().st_dev, path.stat().st_ino)
-                for path in artifacts[1:]
-            },
+            {(path.stat().st_dev, path.stat().st_ino) for path in artifacts[1:]},
         )
-        self.assertTrue(all(path.stat().st_size <= DEBUG_LOG_MAX_BYTES for path in artifacts))
+        self.assertTrue(
+            all(path.stat().st_size <= DEBUG_LOG_MAX_BYTES for path in artifacts)
+        )
         self.assertLessEqual(
             sum(path.stat().st_size for path in artifacts),
             6 * DEBUG_LOG_MAX_BYTES,
@@ -1418,18 +1482,16 @@ class DebugLogStorageTests(unittest.TestCase):
                 workspace = initialized_workspace(self)
                 log = WorkspaceDebugLog(workspace)
                 payload = _trace_payload(log)
-                workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH).write_bytes(
-                    b"safe guard"
-                )
+                workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH).write_bytes(b"safe guard")
                 workspace.path(DEBUG_LOG_RELATIVE_PATH).write_bytes(
                     b"a" * (DEBUG_LOG_MAX_BYTES - len(payload) + 1)
                 )
                 for index in range(1, DEBUG_LOG_BACKUP_COUNT + 1):
                     if index == DEBUG_LOG_BACKUP_COUNT and not seed_oldest:
                         continue
-                    workspace.path(
-                        f"{DEBUG_LOG_RELATIVE_PATH}.{index}"
-                    ).write_bytes(f"backup-{index}".encode("ascii"))
+                    workspace.path(f"{DEBUG_LOG_RELATIVE_PATH}.{index}").write_bytes(
+                        f"backup-{index}".encode("ascii")
+                    )
 
                 process_lock = debug_module._process_lock_for(workspace)
                 real_append = debug_module._append_under_guard
@@ -1461,9 +1523,7 @@ class DebugLogStorageTests(unittest.TestCase):
                             target_path.write_bytes(
                                 f"unexpected:{label}".encode("ascii")
                             )
-                        raced_snapshot.update(
-                            _debug_namespace_snapshot(workspace)
-                        )
+                        raced_snapshot.update(_debug_namespace_snapshot(workspace))
                     return real_validate(directory, filename)
 
                 def append_with_race(
@@ -1491,15 +1551,14 @@ class DebugLogStorageTests(unittest.TestCase):
                 )
                 self.assertNotIn(
                     b"rotation_cas_dropped",
-                    b"".join(
-                        value[-1] or b""
-                        for value in raced_snapshot.values()
-                    ),
+                    b"".join(value[-1] or b"" for value in raced_snapshot.values()),
                 )
                 self.assertTrue(process_lock.lock.acquire(blocking=False))
                 process_lock.lock.release()
 
-    def test_preexisting_oversized_active_or_backup_drops_without_mutation(self) -> None:
+    def test_preexisting_oversized_active_or_backup_drops_without_mutation(
+        self,
+    ) -> None:
         for relative in (
             DEBUG_LOG_RELATIVE_PATH,
             f"{DEBUG_LOG_RELATIVE_PATH}.3",
@@ -1563,9 +1622,7 @@ class DebugLogStorageTests(unittest.TestCase):
             object,
         ] = {}
 
-        with tempfile.TemporaryDirectory(
-            dir=self.workspace.root.parent
-        ) as temporary:
+        with tempfile.TemporaryDirectory(dir=self.workspace.root.parent) as temporary:
             outside = Path(temporary) / "outside-race"
             outside.write_bytes(b"outside race bytes")
             _hard_link_or_skip(self, outside, active)
@@ -1587,9 +1644,7 @@ class DebugLogStorageTests(unittest.TestCase):
                 )
                 opened.append(filename)
                 if filename == _GUARD_NAME:
-                    snapshots["namespace"] = _debug_namespace_snapshot(
-                        self.workspace
-                    )
+                    snapshots["namespace"] = _debug_namespace_snapshot(self.workspace)
                 return descriptor
 
             with mock.patch.object(
@@ -1712,25 +1767,24 @@ class DebugLogStorageTests(unittest.TestCase):
                 ):
                     workspace = initialized_workspace(self)
                     log = WorkspaceDebugLog(workspace) if logger_before_swap else None
-                    with tempfile.TemporaryDirectory(
-                        dir=workspace.root.parent
-                    ) as temporary, _WorkspaceRootSwap(
-                        self,
-                        workspace,
-                        Path(temporary),
-                        replacement_kind=replacement_kind,
-                    ) as swap:
+                    with (
+                        tempfile.TemporaryDirectory(
+                            dir=workspace.root.parent
+                        ) as temporary,
+                        _WorkspaceRootSwap(
+                            self,
+                            workspace,
+                            Path(temporary),
+                            replacement_kind=replacement_kind,
+                        ) as swap,
+                    ):
                         swap.activate()
                         if log is None:
                             log = WorkspaceDebugLog(workspace)
                         canonical_before = swap.canonical_snapshot()
                         parked_before = _root_storage_snapshot(swap.parked)
-                        replacement_before = _root_storage_snapshot(
-                            swap.replacement
-                        )
-                        outside_before = _directory_namespace_snapshot(
-                            swap.outside
-                        )
+                        replacement_before = _root_storage_snapshot(swap.replacement)
+                        outside_before = _directory_namespace_snapshot(swap.outside)
 
                         _trace(log, session_id="root_replacement_dropped")
 
@@ -1757,8 +1811,7 @@ class DebugLogStorageTests(unittest.TestCase):
                             self.assertNotIn(
                                 b"root_replacement_dropped",
                                 b"".join(
-                                    value[-1] or b""
-                                    for value in snapshot.values()
+                                    value[-1] or b"" for value in snapshot.values()
                                 ),
                             )
 
@@ -1790,21 +1843,22 @@ class DebugLogStorageTests(unittest.TestCase):
                         closed.append(descriptor)
                         real_close(descriptor)
 
-                    with tempfile.TemporaryDirectory(
-                        dir=workspace.root.parent
-                    ) as temporary, _WorkspaceRootSwap(
-                        self,
-                        workspace,
-                        Path(temporary),
-                        replacement_kind=replacement_kind,
-                    ) as swap:
+                    with (
+                        tempfile.TemporaryDirectory(
+                            dir=workspace.root.parent
+                        ) as temporary,
+                        _WorkspaceRootSwap(
+                            self,
+                            workspace,
+                            Path(temporary),
+                            replacement_kind=replacement_kind,
+                        ) as swap,
+                    ):
 
                         def activate_and_capture() -> None:
                             swap.activate()
                             captured["canonical"] = swap.canonical_snapshot()
-                            captured["parked"] = _root_storage_snapshot(
-                                swap.parked
-                            )
+                            captured["parked"] = _root_storage_snapshot(swap.parked)
                             captured["replacement"] = _root_storage_snapshot(
                                 swap.replacement
                             )
@@ -1902,12 +1956,13 @@ class DebugLogStorageTests(unittest.TestCase):
             closed.append(descriptor)
             real_close(descriptor)
 
-        with tempfile.TemporaryDirectory(
-            dir=self.workspace.root.parent
-        ) as temporary, _DebugDirectorySwap(
-            self.workspace,
-            Path(temporary),
-        ) as swap:
+        with (
+            tempfile.TemporaryDirectory(dir=self.workspace.root.parent) as temporary,
+            _DebugDirectorySwap(
+                self.workspace,
+                Path(temporary),
+            ) as swap,
+        ):
             _seed_debug_storage(swap.outside, prefix="outside-before-guard")
             outside_before = _directory_namespace_snapshot(swap.outside)
 
@@ -1916,9 +1971,7 @@ class DebugLogStorageTests(unittest.TestCase):
                 held.append(directory)
                 swap.activate()
                 captured["canonical"] = swap.canonical_snapshot()
-                captured["parked"] = _directory_namespace_snapshot(
-                    swap.parked
-                )
+                captured["parked"] = _directory_namespace_snapshot(swap.parked)
                 return directory
 
             with (
@@ -1930,9 +1983,7 @@ class DebugLogStorageTests(unittest.TestCase):
                 mock.patch.object(
                     debug_module,
                     "_open_verified_regular_file",
-                    side_effect=AssertionError(
-                        "swapped parent reached guard mutation"
-                    ),
+                    side_effect=AssertionError("swapped parent reached guard mutation"),
                 ) as opened,
                 mock.patch.object(
                     debug_module.os,
@@ -1985,9 +2036,7 @@ class DebugLogStorageTests(unittest.TestCase):
                 workspace = initialized_workspace(self)
                 log = WorkspaceDebugLog(workspace)
                 payload = _trace_payload(log)
-                workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH).write_bytes(
-                    b"safe guard"
-                )
+                workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH).write_bytes(b"safe guard")
                 if rotates:
                     workspace.path(DEBUG_LOG_RELATIVE_PATH).write_bytes(
                         b"a" * (DEBUG_LOG_MAX_BYTES - len(payload) + 1)
@@ -2026,19 +2075,18 @@ class DebugLogStorageTests(unittest.TestCase):
                     closed.append(descriptor)
                     real_close(descriptor)
 
-                with tempfile.TemporaryDirectory(
-                    dir=workspace.root.parent
-                ) as temporary, _DebugDirectorySwap(
-                    workspace,
-                    Path(temporary),
-                ) as swap:
+                with (
+                    tempfile.TemporaryDirectory(dir=workspace.root.parent) as temporary,
+                    _DebugDirectorySwap(
+                        workspace,
+                        Path(temporary),
+                    ) as swap,
+                ):
                     _seed_debug_storage(
                         swap.outside,
                         prefix=f"outside-rotation-{rotates}",
                     )
-                    outside_before = _directory_namespace_snapshot(
-                        swap.outside
-                    )
+                    outside_before = _directory_namespace_snapshot(swap.outside)
 
                     def swap_then_append(
                         directory: object,
@@ -2046,9 +2094,7 @@ class DebugLogStorageTests(unittest.TestCase):
                     ) -> None:
                         swap.activate()
                         captured["canonical"] = swap.canonical_snapshot()
-                        captured["parked"] = _directory_namespace_snapshot(
-                            swap.parked
-                        )
+                        captured["parked"] = _directory_namespace_snapshot(swap.parked)
                         real_append(directory, append_payload)
 
                     with (
@@ -2202,9 +2248,7 @@ class DebugLogStorageTests(unittest.TestCase):
     )
     def test_raced_fifo_active_leaf_returns_promptly_without_record(self) -> None:
         active = self.workspace.path(DEBUG_LOG_RELATIVE_PATH)
-        with tempfile.TemporaryDirectory(
-            dir=self.workspace.root.parent
-        ) as temporary:
+        with tempfile.TemporaryDirectory(dir=self.workspace.root.parent) as temporary:
             probe = Path(temporary) / "fifo-probe"
             _fifo_or_skip(self, probe)
             probe.unlink()
@@ -2226,9 +2270,7 @@ class DebugLogStorageTests(unittest.TestCase):
                 active_validations += 1
                 if active_validations == 2:
                     os.mkfifo(active, 0o600)
-                    raced_snapshot.update(
-                        _debug_namespace_snapshot(self.workspace)
-                    )
+                    raced_snapshot.update(_debug_namespace_snapshot(self.workspace))
             return result
 
         worker = threading.Thread(
@@ -2261,9 +2303,10 @@ class DebugLogStorageTests(unittest.TestCase):
             raced_snapshot,
         )
         self.assertTrue(active.is_fifo())
-        self.assertNotIn(b"raced_fifo", b"".join(
-            value[-1] or b"" for value in raced_snapshot.values()
-        ))
+        self.assertNotIn(
+            b"raced_fifo",
+            b"".join(value[-1] or b"" for value in raced_snapshot.values()),
+        )
 
     def test_open_verification_rejects_each_unsafe_link_count(self) -> None:
         candidate = self.workspace.path(DEBUG_LOG_RELATIVE_PATH)
@@ -2343,9 +2386,7 @@ class DebugLogStorageTests(unittest.TestCase):
         self,
     ) -> None:
         guard = self.workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH)
-        with tempfile.TemporaryDirectory(
-            dir=self.workspace.root.parent
-        ) as temporary:
+        with tempfile.TemporaryDirectory(dir=self.workspace.root.parent) as temporary:
             outside = Path(temporary) / "outside-guard"
             outside.write_bytes(b"outside guard bytes")
             _hard_link_or_skip(self, outside, guard)
@@ -2504,13 +2545,9 @@ class DebugLogStorageTests(unittest.TestCase):
                 workspace = initialized_workspace(self)
                 log = WorkspaceDebugLog(workspace)
                 payload = _trace_payload(log)
-                workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH).write_bytes(
-                    b"safe guard"
-                )
+                workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH).write_bytes(b"safe guard")
                 if rotates:
-                    outside_bytes = b"a" * (
-                        DEBUG_LOG_MAX_BYTES - len(payload) + 1
-                    )
+                    outside_bytes = b"a" * (DEBUG_LOG_MAX_BYTES - len(payload) + 1)
                     for index in range(1, DEBUG_LOG_BACKUP_COUNT + 1):
                         workspace.path(
                             f"{DEBUG_LOG_RELATIVE_PATH}.{index}"
@@ -2551,13 +2588,9 @@ class DebugLogStorageTests(unittest.TestCase):
                 workspace = initialized_workspace(self)
                 log = WorkspaceDebugLog(workspace)
                 payload = _trace_payload(log)
-                workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH).write_bytes(
-                    b"safe guard"
-                )
+                workspace.path(DEBUG_LOG_GUARD_RELATIVE_PATH).write_bytes(b"safe guard")
                 active = workspace.path(DEBUG_LOG_RELATIVE_PATH)
-                active.write_bytes(
-                    b"a" * (DEBUG_LOG_MAX_BYTES - len(payload) + 1)
-                )
+                active.write_bytes(b"a" * (DEBUG_LOG_MAX_BYTES - len(payload) + 1))
                 with tempfile.TemporaryDirectory(
                     dir=workspace.root.parent
                 ) as temporary:
@@ -2566,15 +2599,11 @@ class DebugLogStorageTests(unittest.TestCase):
                         f"outside backup {linked_index}".encode("ascii")
                     )
                     for index in range(1, DEBUG_LOG_BACKUP_COUNT + 1):
-                        backup = workspace.path(
-                            f"{DEBUG_LOG_RELATIVE_PATH}.{index}"
-                        )
+                        backup = workspace.path(f"{DEBUG_LOG_RELATIVE_PATH}.{index}")
                         if index == linked_index:
                             _hard_link_or_skip(self, outside, backup)
                         else:
-                            backup.write_bytes(
-                                f"backup-{index}".encode("ascii")
-                            )
+                            backup.write_bytes(f"backup-{index}".encode("ascii"))
                     outside_before = _file_link_snapshot(outside)
                     namespace_before = _debug_namespace_snapshot(workspace)
 
@@ -2603,9 +2632,7 @@ class DebugLogStorageTests(unittest.TestCase):
                 with mock.patch.object(
                     debug_module,
                     "_open_verified_regular_file",
-                    side_effect=AssertionError(
-                        "nonregular path reached open"
-                    ),
+                    side_effect=AssertionError("nonregular path reached open"),
                 ) as opened:
                     _trace(WorkspaceDebugLog(workspace))
                 opened.assert_not_called()
@@ -2614,7 +2641,9 @@ class DebugLogStorageTests(unittest.TestCase):
                 if relative != DEBUG_LOG_GUARD_RELATIVE_PATH:
                     self.assertFalse(guard.exists())
 
-    def test_threads_using_independent_handles_leave_complete_unique_lines(self) -> None:
+    def test_threads_using_independent_handles_leave_complete_unique_lines(
+        self,
+    ) -> None:
         ready = threading.Barrier(9)
         attempted = {f"thread_{index}" for index in range(8)}
 
@@ -2622,7 +2651,9 @@ class DebugLogStorageTests(unittest.TestCase):
             ready.wait(timeout=5)
             _trace(WorkspaceDebugLog(self.workspace), session_id=session_id)
 
-        threads = [threading.Thread(target=write, args=(session,)) for session in attempted]
+        threads = [
+            threading.Thread(target=write, args=(session,)) for session in attempted
+        ]
         for thread in threads:
             thread.start()
         ready.wait(timeout=5)
@@ -2822,9 +2853,7 @@ class DebugLogStorageTests(unittest.TestCase):
                         and event == "line"
                     ):
                         trace_state["armed"] = False
-                        trace_state["injections"] = int(
-                            trace_state["injections"]
-                        ) + 1
+                        trace_state["injections"] = int(trace_state["injections"]) + 1
                         try:
                             raise body
                         except BaseException as caught:
@@ -2916,7 +2945,9 @@ class DebugLogStorageTests(unittest.TestCase):
         holder = mock.Mock(lock=fake_lock)
         with (
             mock.patch.object(debug_module, "_process_lock_for", return_value=holder),
-            mock.patch.object(debug_module.time, "monotonic", side_effect=(10.0, 10.075)),
+            mock.patch.object(
+                debug_module.time, "monotonic", side_effect=(10.0, 10.075)
+            ),
             mock.patch.object(
                 debug_module,
                 "_open_verified_regular_file",
@@ -2974,14 +3005,18 @@ class DebugLogStorageTests(unittest.TestCase):
         process.stdin.write("x")
         process.stdin.flush()
         process.wait(timeout=5)
-        self.assertEqual(process.returncode, 0, process.stderr.read() if process.stderr else "")
+        self.assertEqual(
+            process.returncode, 0, process.stderr.read() if process.stderr else ""
+        )
         _trace(self.log, session_id="after")
         self.assertEqual(
             [record["session_id"] for record in _records(self.workspace)],
             ["before", "after"],
         )
 
-    def test_partial_write_and_fsync_failures_restore_bytes_and_release_lock(self) -> None:
+    def test_partial_write_and_fsync_failures_restore_bytes_and_release_lock(
+        self,
+    ) -> None:
         _trace(self.log, session_id="baseline")
         baseline = self.log.path.read_bytes()
         real_write = os.write
@@ -2991,7 +3026,9 @@ class DebugLogStorageTests(unittest.TestCase):
             real_write(descriptor, payload[:5])
             raise OSError("simulated partial append")
 
-        with mock.patch.object(debug_module.os, "write", side_effect=write_prefix_then_fail):
+        with mock.patch.object(
+            debug_module.os, "write", side_effect=write_prefix_then_fail
+        ):
             _trace(self.log, session_id="partial")
         self.assertEqual(self.log.path.read_bytes(), baseline)
 
@@ -3045,12 +3082,13 @@ class DebugLogStorageTests(unittest.TestCase):
             closed.append(descriptor)
             real_close(descriptor)
 
-        with tempfile.TemporaryDirectory(
-            dir=self.workspace.root.parent
-        ) as temporary, _DebugDirectorySwap(
-            self.workspace,
-            Path(temporary),
-        ) as swap:
+        with (
+            tempfile.TemporaryDirectory(dir=self.workspace.root.parent) as temporary,
+            _DebugDirectorySwap(
+                self.workspace,
+                Path(temporary),
+            ) as swap,
+        ):
             _seed_debug_storage(swap.outside, prefix="outside-partial")
             outside_before = _directory_namespace_snapshot(swap.outside)
             captured: dict[str, object] = {}
@@ -3063,9 +3101,7 @@ class DebugLogStorageTests(unittest.TestCase):
                 swap.activate()
                 swapped = True
                 captured["canonical"] = swap.canonical_snapshot()
-                captured["partial"] = _directory_namespace_snapshot(
-                    swap.parked
-                )
+                captured["partial"] = _directory_namespace_snapshot(swap.parked)
                 return written
 
             with (
@@ -3155,10 +3191,7 @@ class DebugLogStorageTests(unittest.TestCase):
 
         def fail_active_size(descriptor: int) -> os.stat_result:
             nonlocal active_size_failed
-            if (
-                descriptor == opened.get(_ACTIVE_NAME)
-                and not active_size_failed
-            ):
+            if descriptor == opened.get(_ACTIVE_NAME) and not active_size_failed:
                 active_size_failed = True
                 raise OSError("post-open active size unavailable")
             return real_verify(descriptor)
@@ -3251,9 +3284,7 @@ class DebugLogStorageTests(unittest.TestCase):
                         else harness.injection_tracebacks[role]
                     )
                     assert injected is not None
-                    self.assertTrue(
-                        _traceback_contains(final_traceback, injected)
-                    )
+                    self.assertTrue(_traceback_contains(final_traceback, injected))
                     harness.assert_closed(self)
                     self.assertEqual(harness.release_attempts, 1)
                     self.assertEqual(process_lock.release_attempts, 1)
@@ -3290,9 +3321,7 @@ class DebugLogStorageTests(unittest.TestCase):
                 _trace(log, session_id="baseline")
                 baseline = log.path.read_bytes()
                 body = body_type(f"PRIVATE_BODY_{body_type.__name__}")
-                cleanup = cleanup_type(
-                    f"PRIVATE_CLEANUP_{cleanup_type.__name__}"
-                )
+                cleanup = cleanup_type(f"PRIVATE_CLEANUP_{cleanup_type.__name__}")
                 harness = _AttemptCleanupHarness({"release": cleanup})
                 process_lock = _ControlledProcessLock()
                 body_traceback: TracebackType | None = None
@@ -3568,7 +3597,9 @@ class DebugLogStorageTests(unittest.TestCase):
         payload = _trace_payload(self.log)
         active = self.workspace.path(DEBUG_LOG_RELATIVE_PATH)
         active.write_bytes(b"x" * (DEBUG_LOG_MAX_BYTES - len(payload) + 1))
-        with mock.patch.object(debug_module.os, "rename", side_effect=OSError("rotate")):
+        with mock.patch.object(
+            debug_module.os, "rename", side_effect=OSError("rotate")
+        ):
             _trace(self.log)
         self.assertFalse(self.workspace.path(f"{DEBUG_LOG_RELATIVE_PATH}.1").exists())
 
@@ -3587,7 +3618,9 @@ class DebugLogStorageTests(unittest.TestCase):
 
         with (
             mock.patch.object(debug_module.os, "write", side_effect=partial_then_fail),
-            mock.patch.object(debug_module.os, "ftruncate", side_effect=OSError("rollback")),
+            mock.patch.object(
+                debug_module.os, "ftruncate", side_effect=OSError("rollback")
+            ),
         ):
             _trace(self.log)
 

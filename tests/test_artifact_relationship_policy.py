@@ -302,7 +302,7 @@ class ArtifactRelationshipSurfaceTests(RelationshipTestCase):
                 )
                 self.assertNotIn(name, story_writing_agents.__all__)
                 self.assertFalse(hasattr(story_writing_agents, name))
-        self.assertEqual(len(story_writing_agents.__all__), 120)
+        self.assertEqual(len(story_writing_agents.__all__), 104)
         self.assertEqual(
             tuple(code.value for code in ArtifactRelationshipErrorCode),
             tuple(code.value for code in _ERROR_MESSAGES),
@@ -1716,8 +1716,8 @@ assert tuple(relationship_policy.__all__) == tuple(sys.argv[2].split(','))
                     resolved = resolve(target)
                     if resolved is not None and resolved != module:
                         edges.add((module, resolved))
-        self.assertEqual(len(modules), 94)
-        self.assertEqual(len(edges), 377)
+        self.assertEqual(len(modules), 99)
+        self.assertEqual(len(edges), 367)
         relationship_name = "story_writing_agents.writing_artifacts.relationship_policy"
         self.assertEqual(
             {target for source, target in edges if source == relationship_name},
@@ -1751,8 +1751,8 @@ assert tuple(relationship_policy.__all__) == tuple(sys.argv[2].split(','))
         for module in modules:
             visit(module)
         index = (_ROOT / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8")
-        self.assertIn("Importable production units indexed: 94.", index)
-        self.assertIn("Direct internal dependency edges indexed: 377.", index)
+        self.assertIn("Importable production units indexed: 99.", index)
+        self.assertIn("Direct internal dependency edges indexed: 367.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         self.assertIn(
             "### `story_writing_agents.writing_artifacts.relationship_policy`",

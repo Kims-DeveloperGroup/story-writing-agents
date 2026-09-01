@@ -36,6 +36,20 @@ normalize_conversation_subject(subject: str) -> str
 FilesystemConversationCatalog(workspace: Workspace | str | os.PathLike[str])
 ```
 
+The established root and workspace-facade imports remain supported:
+
+```python
+from story_writing_agents import FilesystemConversationCatalog
+# Equivalent supported facade:
+from story_writing_agents.workspace import FilesystemConversationCatalog
+```
+
+Both names are aliases of the same class defined by
+`story_writing_agents.conversation_storage.filesystem`. Importing from that
+owner module directly is available for internal or advanced ownership clarity.
+The `story_writing_agents.conversation_storage` package facade deliberately
+does not export the class.
+
 `ConversationMetadata` is frozen and slotted. `to_dict()` returns exactly its
 eight JSON-compatible fields and converts status to `active` or `archived`.
 The storage-neutral `ConversationCatalog` protocol and filesystem adapter share
@@ -74,7 +88,7 @@ that complete bundle through the separate
 
 ## Filesystem metadata representation
 
-Each identity is stored at
+The owner module stores and serializes each identity at
 `discussion_logs/<session_id>/interactive/conversations/<conversation_id>/metadata.json`:
 
 ```json

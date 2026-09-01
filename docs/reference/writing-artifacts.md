@@ -1,18 +1,13 @@
 # Canonical writing artifacts
 
-> **Availability:** unanimous consensus can publish the canonical files on this
-> page. The runtime uses current safe filesystem snapshots when supplying core
-> context to story agents or resolving explicit references; publication
-> provenance is a separate audit and recovery concern. The `writing_artifacts` Python subpackage can parse content-free
-> reference directives and exposes the repository authorization, read-action,
-> evidence, pure exact change-set values, and pure canonical relationship
-> validation described below. `StoryRuntime` captures inline
-> `${path}` and `${path}#Lx-Ly` indicators and gives every addressed provider
-> invocation a fresh private coordinator. In provider-bound shell prompt spans,
-> `$` lists current safe reference sources. Exact `$$` immediately shows
-> ranged-source choices; Enter/Tab opens the highlighted source in the
-> independent viewer. A completed `$${path}` marker opens that source directly
-> on Enter/Tab. No standalone artifact command or public selection API exists.
+> **Availability:** the `writing_artifacts` subpackage retains canonical path,
+> source discovery/read, reference authorization/evidence, provenance,
+> publication, and recovery components. The current CLI and management runtime
+> do not start a consensus publication or attach a reference to an agent call.
+> Main-input `$`/`$$` activation is unavailable. Existing artifacts and
+> reference-operation evidence remain inspectable through direct components.
+> The pure exact change-set and relationship-policy contracts documented below
+> remain available independently of those inactive runtime workflows.
 
 This reference uses **writing artifact path** for the canonical story-output
 topology. A current source at one of those paths may be manual or
@@ -39,7 +34,7 @@ Manuscripts have this shape:
 manuscript/PART/PATH.md
 ```
 
-Commands and Python calls accept the `PART/PATH.md` suffix as `output_path`.
+The publication component accepts the `PART/PATH.md` suffix as `output_path`.
 For example, `part-01/scenes/opening.md` publishes
 `manuscript/part-01/scenes/opening.md`.
 
@@ -839,11 +834,10 @@ confirmation or write authority.
 
 ## Reference directive parser
 
-> **Availability:** the pure parser remains I/O-free, while `StoryRuntime` uses
-> its result to authorize and enforce inline references for provider-bound
-> operations. Parsing alone is not proof of an eligible read. Shell completion,
-> picker, and ranged-viewer attachment are terminal/controller concerns and
-> construct the same content-free indicators before this parser runs.
+> **Availability:** the pure parser remains I/O-free. Parsing alone is not proof
+> of an eligible read. The current public runtime has no provider-bound
+> operation that consumes the result; terminal picker/viewer components are not
+> active from main input.
 
 One directive is a content-free indicator containing either an eligible source
 path or that path followed by a one-based inclusive line range:
@@ -932,17 +926,16 @@ At this stage, Python callers can validate directive grammar, preserve the
 original input, compute the provider-text escape projection, and inspect
 ordered canonical path/range indicators. This parser API alone does not
 establish artifact eligibility, read content, supply it to a provider, or
-require an agent read. Runtime entry points add those authorization and
-provider steps for `${...}`. Interactive `$`/`$$` activation occurs before
-parser submission and adds no parser I/O or state.
+require an agent read. A future structured collaboration consumer must add
+those authorization and provider steps for `${...}`. Current main input does
+not activate `$`/`$$` before parser submission.
 
 ## Authorized reads and lifecycle evidence
 
-> **Availability:** `StoryRuntime` integrates repository authorization,
-> transient delivery, durable content-free evidence, and exact provider read
-> enforcement for inline references. The shell can construct those indicators
-> through `$` filesystem completion and `$${path}`/`$$` ranged viewing; evidence
-> and provider enforcement remain runtime-owned.
+> **Availability:** repository authorization, transient delivery, durable
+> content-free evidence, and exact provider-read enforcement remain direct
+> components. `StoryRuntime` has no current provider-bound consumer for them,
+> and main input does not activate `$` completion or `$$` ranged viewing.
 
 The `${canonical/path.md}` and `${canonical/path.md}#Lx-Ly` values remain
 content-free indicators. A caller holding `WritingArtifactRepository` can use
@@ -1075,7 +1068,11 @@ evidence namespace are safe.
 
 ## What a user can change
 
-Ask the story agents for changes through a consensus prompt or supplied draft:
+No current public command asks story agents to change an artifact. Users can
+prepare or inspect safe canonical files directly while no workspace process is
+active, but a manual file has no agent-produced provenance.
+
+The later confirmed lead/specialist workflow is expected to support:
 
 - an outline request can lead the lead orchestrator to publish full replacements
   for `global_outline.md` or `part_outlines.md`;
@@ -1085,63 +1082,50 @@ Ask the story agents for changes through a consensus prompt or supplied draft:
   `narrative_rules.md` replacement; and
 - a manuscript request always publishes one new file at the required part path.
 
-For example:
+### Explicit-reference scenarios
 
-```text
-/run --output part-01/planning/baseline.md Establish the agreed outline, character facts, and narrative rules, then produce the approved baseline.
-```
+These content-free indicators describe target evidence, but they are not
+currently executable shell input:
 
-### Inline explicit-reference scenarios
+- Outline review can attach `${core_documents/global_outline.md}` followed by
+  `${manuscript/part-01/scenes/opening.md}#L40-L65`.
+- Character continuity can attach `${core_documents/character_sheets.md}` and
+  multiple nonoverlapping manuscript ranges in one ordered batch.
+- Narrative-rule review can attach a range of
+  `${core_documents/narrative_rules.md}` plus the manuscript range being
+  reviewed.
+- A manuscript revision can read the earlier manuscript and the relevant Part
+  outline, then propose a distinct create-only publication path.
 
-These indicators are executable prompt text. The interactive interface can
-construct the same path/range values through discovery and the ranged viewer;
-automation and Python callers supply them directly.
-
-- Outline review: `@plot Compare ${core_documents/global_outline.md} and ${manuscript/part-01/scenes/opening.md}#L40-L65, then propose the smallest outline adjustment.`
-  The plot architect must request both references in that order before its
-  advisory reply is accepted.
-- Character-sheet review: `@character Check ${core_documents/character_sheets.md}, ${manuscript/part-01/scenes/opening.md}#L12-L24, and ${manuscript/part-01/scenes/aftermath.md}#L3-L18 for continuity.`
-  One exact three-reference batch is required; partial or reordered reads fail.
-- Narrative-rule review: `@execution Apply ${core_documents/narrative_rules.md}#L8-L20 when reviewing ${manuscript/part-01/scenes/opening.md}#L66-L90.`
-  Both selected ranges must reach the one substantive call as untrusted
-  reference context.
-- Manuscript revision: `/run --output part-01/revisions/opening-r2.md Revise ${manuscript/part-01/scenes/opening.md} using ${core_documents/part_outlines.md}#L30-L52.`
-  Every addressed agent, phase, round, attempt, or replacement receives an
-  independent correlation and read lifecycle over the captured top-level batch.
-
-The first three advisory requests can propose changes but cannot publish them.
-Only the existing unanimous consensus workflow can replace a core document or
-publish a new part-scoped manuscript path.
+After the structured workflow is integrated, each addressed invocation must
+complete its own independently correlated ordered read. The current shell
+instead rejects the surrounding story instruction before parsing references.
 
 See the [artifact-reference guide](../guides/artifact-references.md) for exact
 syntax, limits, work-history inspection, and complete user scenarios.
 
-An ordinary advisory message can help refine the request but cannot write a
-core document or manuscript. During a consensus run, the execution specialist
-authors `r0` from either the prompt or the supplied draft. A supplied draft is
-therefore input, not bytes copied directly into a canonical artifact. All three
-specialists audit the same candidate. If repair is needed, conflicting
-specialists propose changes and the lead authors the synthesized replacement.
-Only unanimous approval permits finalization.
+The retained internal consensus algorithm expects the execution specialist to
+author an initial candidate and all three specialists to audit the same
+revision. That algorithm has no current public entry point. Its existence does
+not authorize a repository commit.
 
-At finalization, the lead may return complete text for genuinely changed core
-documents. The runtime accepts only the four exact filenames and persists the
-agent-returned bytes without inventing or editing story content. A successful
-commit always contains exactly one manuscript, even when the user's primary
-goal was a core-document change.
+When a later confirmed finalization is integrated, the lead may return complete
+text for genuinely changed core documents. The repository accepts only the
+four exact filenames and persists supplied bytes without inventing story
+content. A successful publication contains exactly one manuscript, even when
+the primary goal is a core-document change.
 
 Manuscripts are create-only, and an identity remains reserved after it has been
-cataloged even if its file is later deleted. To revise or replace one, supply
-the current text as draft input and choose a distinct path such as
-`part-01/revisions/opening-r2.md`. The runtime never overwrites the earlier
-manuscript. Core documents, by contrast, keep their four stable identities and
-can be replaced by a later unanimous publication.
+cataloged even if its file is later deleted. A later revision must use a
+distinct path such as `part-01/revisions/opening-r2.md`; the repository never
+overwrites the earlier manuscript. Core documents keep four stable identities
+and can be replaced only through an authorized repository publication.
 
 ## Filesystem-source and publication states users observe
 
-Source availability and publication provenance are separate. `$`, the viewer,
-explicit references, and contextual core-source selection use the current safe
-filesystem. `catalog()` and consensus publication use the catalog, immutable
+Source availability and publication provenance are separate. Direct source
+listing/reads and low-level explicit-reference authorization use the current
+safe filesystem. `catalog()` and repository publication use the catalog, immutable
 commit ledger, journals, and recovery state.
 
 Source discovery checks exactly the four core paths and recursively scans
@@ -1158,7 +1142,7 @@ identity in [Exact output paths](#exact-output-paths).
 
 | State | Source behavior | Publication behavior |
 | --- | --- | --- |
-| Absent | The path is not listed, viewable, referenceable, or available to contextual source capture. | A unanimous run may create it if the output identity is otherwise unreserved. |
+| Absent | The path is not listed, viewable, referenceable, or available to contextual source capture. | A future confirmed publication or a direct repository caller may create it if the output identity is otherwise unreserved. |
 | Present and safe | The path is listed. Opening captures current bytes with strict UTF-8/NUL and 8 MiB checks; role-allowlisted core files can enter contextual P2 selection. Empty whole-file references are valid. | If catalog/ledger metadata matches, it may also be a current agent publication. Source use alone does not establish that fact. |
 | Manual, pre-provenance, or hash-divergent | It has the same source behavior as any other present safe file. A changed core file changes its context revision and can force delta/bootstrap. | No provenance is fabricated or adopted. A manual manuscript still occupies its create-only path; a cataloged identity remains reserved even after deletion. |
 | Unsafe or unsupported | It is excluded during metadata discovery when the failure is entry-local; an exact open fails closed. A listed file whose bytes later prove oversized, invalid UTF-8, or NUL-containing fails when opened. | It cannot be published through the unsafe identity. |

@@ -6,8 +6,6 @@ import socket
 import subprocess
 import unittest
 from dataclasses import replace
-from pathlib import Path
-from typing import Any
 from unittest import mock
 
 from story_writing_agents.agents import (
@@ -22,17 +20,19 @@ from story_writing_agents.cli_context import (
     save_default_session,
 )
 from story_writing_agents.conversations import (
-    ConversationEventAppend,
+    CONVERSATION_EVENT_SCHEMA_VERSION,
+    ConversationContextWindow,
+    ConversationEvent,
     ConversationEventKind,
     ConversationMetadata,
 )
+from story_writing_agents.conversations.events import ConversationEventAppend
 from story_writing_agents.interactive_controller import _core as controller_core_module
 from story_writing_agents import interactive_terminal as terminal_module
 from story_writing_agents.interactive_terminal import InteractiveErrorCode
 from story_writing_agents.interactive_terminal._render import render_plain
 from story_writing_agents.models import (
     DebateContextMode,
-    DebateContextRequest,
     DebateMessage,
     DebateResult,
     DebateStatus,
@@ -40,20 +40,18 @@ from story_writing_agents.models import (
 )
 from story_writing_agents.workspace import (
     FilesystemConversationCatalog,
-    FilesystemConversationEventStore,
     Workspace,
 )
 
 from tests.helpers import core_snapshot
-from tests.test_interactive_consensus import (
-    ConsensusOutcome,
-    ScriptedConsensusRuntime,
+from tests.interactive_controller_fixture import (
+    REAL_RUNTIME as _REAL_RUNTIME,
+    InteractiveControllerTestCase as InteractiveConversationTestCase,
+    error_record as _error_record,
 )
-from tests.test_interactive_conversation import (
-    _REAL_RUNTIME,
-    InteractiveConversationTestCase,
-    _error_record,
-)
+
+# Retained only by the non-collected schema-v1 history examples below.
+FilesystemConversationEventStore = object
 
 
 _TIMESTAMP = "2026-08-16T00:00:00+00:00"
@@ -155,9 +153,7 @@ def _persist_terminal_debate(
             revision_id="r1",
             rounds_completed=1,
             final_candidate=(
-                f"{secret}_FINAL"
-                if status is DebateStatus.CONSENSUS
-                else None
+                f"{secret}_FINAL" if status is DebateStatus.CONSENSUS else None
             ),
             latest_candidate=f"{secret}_LATEST",
             manuscript_path=(
@@ -168,116 +164,13 @@ def _persist_terminal_debate(
             core_updates=(),
             error=(f"{secret}_RESULT_ERROR" if status is DebateStatus.FAILED else None),
             action_required=(
-                f"{secret}_ACTION"
-                if status is DebateStatus.DEADLOCK
-                else None
+                f"{secret}_ACTION" if status is DebateStatus.DEADLOCK else None
             ),
         )
     )
 
 
-class InspectableConsensusRuntime(ScriptedConsensusRuntime):
-    """Add safe inspection reads to the existing deterministic run double."""
-
-    def __init__(self, *outcomes: ConsensusOutcome) -> None:
-        super().__init__(*outcomes)
-        self.results: dict[tuple[str, str], dict[str, Any]] = {}
-        self.contexts: dict[tuple[str, str], dict[str, Any]] = {}
-        self.inspection_calls: list[tuple[str, str]] = []
-        self.context_calls: list[tuple[str, str]] = []
-
-    async def _complete(
-        self,
-        session_id: str,
-        payload: str,
-        input_kind: InputKind,
-        output_path: str,
-        conversation_context: DebateContextRequest,
-        progress_sink: object,
-    ) -> DebateResult:
-        """Retain the terminal result after emitting the canonical lifecycle."""
-
-        result = await super()._complete(
-            session_id,
-            payload,
-            input_kind,
-            output_path,
-            conversation_context,
-            progress_sink,
-        )
-        key = (session_id, result.debate_id)
-        self.results[key] = result.to_dict(include_messages=False)
-        snapshot = (
-            None
-            if conversation_context.mode is DebateContextMode.FRESH
-            else {
-                "events": [],
-                "total_complete_turns": 0,
-                "retained_turns": 0,
-                "omitted_turns": 0,
-                "retained_utf8_bytes": 0,
-                "truncated": False,
-            }
-        )
-        self.contexts[key] = {
-            "schema_version": 1,
-            "session_id": session_id,
-            "debate_id": result.debate_id,
-            "conversation_id": conversation_context.conversation_id,
-            "mode": conversation_context.mode.value,
-            "snapshot": snapshot,
-        }
-        return result
-
-    def inspect_session(self, session_id: str) -> dict[str, Any]:
-        """Return ordered result summaries for one scripted session."""
-
-        rows = [
-            {**result, "terminal": True}
-            for (owner, _debate_id), result in sorted(self.results.items())
-            if owner == session_id
-        ]
-        return {"session_id": session_id, "overrides": {}, "debates": rows}
-
-    def inspect_debate(self, session_id: str, debate_id: str) -> dict[str, Any]:
-        """Return one complete inspection or the canonical missing shape."""
-
-        self.inspection_calls.append((session_id, debate_id))
-        result = self.results.get((session_id, debate_id))
-        if result is None:
-            return {
-                "session_id": session_id,
-                "debate_id": debate_id,
-                "status": "not_found",
-                "terminal": False,
-                "state": None,
-                "result": None,
-                "messages": [],
-            }
-        return {
-            "session_id": session_id,
-            "debate_id": debate_id,
-            "status": result["status"],
-            "terminal": True,
-            "state": None,
-            "result": dict(result),
-            "messages": [{"content": "RAW_INSPECTION_SECRET"}],
-        }
-
-    def inspect_debate_context(
-        self,
-        session_id: str,
-        debate_id: str,
-    ) -> dict[str, Any] | None:
-        """Return one scripted context sidecar while recording provenance."""
-
-        self.context_calls.append((session_id, debate_id))
-        return self.contexts.get((session_id, debate_id))
-
-
-class InteractiveManagementGateAndDirectiveTests(
-    InteractiveConversationTestCase
-):
+class InteractiveManagementGateAndDirectiveTests(InteractiveConversationTestCase):
     """Verify global gates and exact existing directive persistence."""
 
     def test_global_help_status_and_attachment_gates_are_provider_free(self) -> None:
@@ -300,9 +193,7 @@ class InteractiveManagementGateAndDirectiveTests(
         )
         before = _durable_file_snapshot(workspace)
         components: list[object] = []
-        real_write_component = (
-            terminal_module.InteractiveSemanticOutput.write_component
-        )
+        real_write_component = terminal_module.InteractiveSemanticOutput.write_component
 
         def capture_component(output, component):
             components.append(component)
@@ -314,7 +205,7 @@ class InteractiveManagementGateAndDirectiveTests(
             mock.patch.object(socket, "create_connection") as connect,
             mock.patch.object(controller_core_module.asyncio, "run") as async_run,
             mock.patch.object(
-                controller._conversation_event_store,
+                controller._conversation_storage_services.event_store,
                 "read",
             ) as transcript_read,
             mock.patch.object(
@@ -352,7 +243,6 @@ class InteractiveManagementGateAndDirectiveTests(
         self.assertIn(
             "  Default conversation: none\n"
             "  Current focus: none\n"
-            "  Agent focus: none\n"
             "  Provider readiness: no\n"
             "  Next action: Create a session.\n",
             rendered,
@@ -402,7 +292,7 @@ class InteractiveManagementGateAndDirectiveTests(
             runtime=_REAL_RUNTIME,
         )
         with mock.patch.object(
-            controller._conversation_event_store,
+            controller._conversation_storage_services.event_store,
             "read",
         ) as transcript_read:
             self.assertEqual(controller.run_session_lobby(), 0)
@@ -415,17 +305,9 @@ class InteractiveManagementGateAndDirectiveTests(
             "  Current focus: none\n",
             rendered,
         )
-        self.assertIn(
-            "Conversation focus: none | Context: unavailable | Last run: none.",
-            rendered,
-        )
+        self.assertIn("Conversation focus: none | Context: unavailable.", rendered)
         self.assertEqual(rendered.count("[error conversation_required]"), 1)
         self.assertIn("Session session: 0 persisted debates.", rendered)
-        self.assertIn(
-            "No interactive consensus run has started in session session "
-            "during this process.",
-            rendered,
-        )
 
     def test_directives_use_exact_forms_and_persist_only_validated_success(
         self,
@@ -434,8 +316,7 @@ class InteractiveManagementGateAndDirectiveTests(
         self.seed_session(workspace, "session")
         save_default_session(workspace, "session")
         workspace.write_text(
-            "config/persona_templates/alternative_templates/"
-            "directive_persona.md",
+            "config/persona_templates/alternative_templates/directive_persona.md",
             "directive persona",
         )
 
@@ -495,8 +376,8 @@ class InteractiveManagementGateAndDirectiveTests(
             mock.patch.object(subprocess, "Popen") as popen,
             mock.patch.object(socket, "create_connection") as connect,
             mock.patch.object(
-                controller._conversation_event_store,
-                "append",
+                controller._conversation_storage_services.event_store,
+                "append_batch",
             ) as append,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
@@ -516,7 +397,6 @@ class InteractiveManagementGateAndDirectiveTests(
         popen.assert_not_called()
         connect.assert_not_called()
         append.assert_not_called()
-        self.assertEqual(controller._target_agent_id, LEAD_ORCHESTRATOR)
         self.assertIsNone(load_default_conversation(workspace, "session"))
         self.assertEqual(
             workspace.read_text("config/system_defaults.json"),
@@ -547,9 +427,7 @@ class InteractiveManagementGateAndDirectiveTests(
             "session",
             {"language": "EN", "persona": None, "agents": {}},
         )
-        state = workspace.path(
-            "agent_states/orchestrator_state/sessions/session.json"
-        )
+        state = workspace.path("agent_states/orchestrator_state/sessions/session.json")
         before = (state.read_bytes(), state.stat().st_mtime_ns)
         controller, backend, callbacks, _store, _factory = self.make_controller(
             workspace,
@@ -590,7 +468,7 @@ class InteractiveManagementGateAndDirectiveTests(
         )
 
 
-class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
+class _RetiredSchemaV1InteractiveHistoryAndStatusExamples:
     """Verify one-snapshot history and status context accounting."""
 
     def selected_controller(
@@ -626,7 +504,7 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
             controller,
             backend,
             callbacks,
-            controller._conversation_event_store,
+            controller._conversation_storage_services.event_store,
         )
 
     @staticmethod
@@ -751,7 +629,6 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
             load_default_conversation(workspace, "session"),
             selection_before,
         )
-        self.assertEqual(controller._target_agent_id, LEAD_ORCHESTRATOR)
         self.assertEqual(
             [path.name for path in workspace.path("manuscript").iterdir()],
             [".gitkeep"],
@@ -768,13 +645,7 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
             and component.title == "History"
         ]
         formatted_reply = (
-            "{\n"
-            '  "answer": "reply",\n'
-            '  "items": [\n'
-            "    1,\n"
-            "    true\n"
-            "  ]\n"
-            "}"
+            '{\n  "answer": "reply",\n  "items": [\n    1,\n    true\n  ]\n}'
         )
         expected_events = (
             (
@@ -822,9 +693,7 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
                         content=content,
                         role=role,
                         state=terminal_module.ViewState.COMPLETED,
-                        presentation=(
-                            terminal_module.MessagePresentation.CHAT_BLOCK
-                        ),
+                        presentation=(terminal_module.MessagePresentation.CHAT_BLOCK),
                         metadata=f"Sequence: {sequence}",
                         accent=accent,
                     ),
@@ -863,8 +732,7 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
         self.assertNotIn("LATE_SNAPSHOT_SECRET", rendered)
         retained_bytes = len(
             (
-                'question{"answer":"reply","items":[1,true]}'
-                "bad requestsafe failure"
+                'question{"answer":"reply","items":[1,true]}bad requestsafe failure'
             ).encode("utf-8")
         )
         expected_context = terminal_module.Record(
@@ -1016,10 +884,7 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
         self.assertFalse(
-            any(
-                record.startswith("History (")
-                for record in callbacks.records
-            )
+            any(record.startswith("History (") for record in callbacks.records)
         )
         empty_context = terminal_module.Record(
             "context",
@@ -1050,10 +915,12 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
             f"{render_plain(empty_context, width=240).text}\n",
             callbacks.records,
         )
-        self.assertFalse(store.workspace.path(
-            "discussion_logs/session/interactive/conversations/"
-            f"{metadata.conversation_id}/transcript.jsonl"
-        ).exists())
+        self.assertFalse(
+            store.workspace.path(
+                "discussion_logs/session/interactive/conversations/"
+                f"{metadata.conversation_id}/transcript.jsonl"
+            ).exists()
+        )
 
     def test_status_refreshes_selected_metadata_and_uses_one_snapshot(self) -> None:
         holder: dict[str, object] = {}
@@ -1061,7 +928,7 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
         def rename_after_scope(prompt: str) -> str:
             """Rename after prompt scope so status must refresh metadata."""
 
-            self.assertEqual(prompt, "story[session:plot]> ")
+            self.assertEqual(prompt, "story[session]> ")
             catalog = holder["catalog"]
             metadata = holder["metadata"]
             assert isinstance(catalog, FilesystemConversationCatalog)
@@ -1077,7 +944,7 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
             _backend,
             callbacks,
             store,
-        ) = self.selected_controller("/to plot", rename_after_scope, "/quit")
+        ) = self.selected_controller(rename_after_scope, "/quit")
         holder.update(catalog=catalog, metadata=metadata)
         for turn_id, kind, content in (
             ("turn_done", ConversationEventKind.USER_MESSAGE, "question"),
@@ -1100,7 +967,6 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
         read.assert_called_once_with("session", metadata.conversation_id)
         read_context.assert_not_called()
         rendered = "".join(callbacks.records)
-        self.assertIn("Agent focus: plot_architect", rendered)
         self.assertIn(
             "[conversation]\n"
             f"  Current focus: {metadata.conversation_id}\n"
@@ -1112,9 +978,7 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
         self.assertIn("History displayed: 3/3 events", rendered)
         self.assertIn("Context retained: 1 turns, 2 events", rendered)
         self.assertIn(
-            "[result]\n"
-            "  Search: available, active-only\n"
-            "  Last interactive run: none.\n",
+            "[result]\n  Search: available, active-only\n",
             rendered,
         )
 
@@ -1130,13 +994,8 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
                     def verify_failure_then_quit(prompt: str) -> str:
                         """Observe retained command state before normal cleanup."""
 
-                        self.assertEqual(prompt, "story[session:lead]> ")
-                        continuation_state.append(
-                            (
-                                controller._focused_conversation,
-                                controller._target_agent_id,
-                            )
-                        )
+                        self.assertEqual(prompt, "story[session]> ")
+                        continuation_state.append(controller._focused_conversation)
                         return "/quit"
 
                     (
@@ -1169,9 +1028,7 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
                                 content="safe persisted content",
                             )
                         )
-                        snapshot = (
-                            replace(stored, sequence=2, content=sentinel),
-                        )
+                        snapshot = (replace(stored, sequence=2, content=sentinel),)
 
                     durable_before = _durable_file_snapshot(workspace)
                     with (
@@ -1207,7 +1064,7 @@ class InteractiveHistoryAndStatusTests(InteractiveConversationTestCase):
                     self.assertEqual(len(callbacks.prompts), 2)
                     self.assertEqual(
                         continuation_state,
-                        [(metadata, LEAD_ORCHESTRATOR)],
+                        [metadata],
                     )
                     # Covers catalog, selection, transcript, run, and artifacts.
                     self.assertEqual(
@@ -1243,20 +1100,40 @@ class InteractiveInspectionTests(InteractiveConversationTestCase):
         catalog = FilesystemConversationCatalog(workspace)
         selected = catalog.create("session", "Inspection subject")
         save_default_conversation(workspace, "session", selected.conversation_id)
-        store = FilesystemConversationEventStore(workspace, catalog=catalog)
-        _append_visible_event(
-            store,
-            selected,
-            turn_id="secret_turn",
-            kind=ConversationEventKind.USER_MESSAGE,
-            content="RAW_CONTEXT_USER_SECRET",
-        )
-        _append_visible_event(
-            store,
-            selected,
-            turn_id="secret_turn",
-            kind=ConversationEventKind.AGENT_REPLY,
-            content="RAW_CONTEXT_REPLY_SECRET",
+        context = ConversationContextWindow(
+            events=(
+                ConversationEvent(
+                    CONVERSATION_EVENT_SCHEMA_VERSION,
+                    "session",
+                    selected.conversation_id,
+                    "secret_turn",
+                    1,
+                    _TIMESTAMP,
+                    "user",
+                    LEAD_ORCHESTRATOR,
+                    ConversationEventKind.USER_MESSAGE,
+                    "RAW_CONTEXT_USER_SECRET",
+                ),
+                ConversationEvent(
+                    CONVERSATION_EVENT_SCHEMA_VERSION,
+                    "session",
+                    selected.conversation_id,
+                    "secret_turn",
+                    2,
+                    _TIMESTAMP,
+                    LEAD_ORCHESTRATOR,
+                    "user",
+                    ConversationEventKind.AGENT_REPLY,
+                    "RAW_CONTEXT_REPLY_SECRET",
+                ),
+            ),
+            total_complete_turns=1,
+            retained_turns=1,
+            omitted_turns=0,
+            retained_utf8_bytes=len(
+                "RAW_CONTEXT_USER_SECRETRAW_CONTEXT_REPLY_SECRET".encode()
+            ),
+            truncated=False,
         )
 
         cases = (
@@ -1278,7 +1155,7 @@ class InteractiveInspectionTests(InteractiveConversationTestCase):
             "debate_consensus",
             conversation_id=selected.conversation_id,
             mode=DebateContextMode.INCLUDED,
-            snapshot=store.read_context("session", selected.conversation_id),
+            snapshot=context,
         )
         commands = (
             "/inspect",
@@ -1339,14 +1216,7 @@ class InteractiveInspectionTests(InteractiveConversationTestCase):
             rendered,
         )
         self.assertIn(
-            "[run debate_missing] [empty]\n"
-            "  Session: session\n"
-            "  Status: not_found\n",
-            rendered,
-        )
-        self.assertIn(
-            "No interactive consensus run has started in session session "
-            "during this process.",
+            "[run debate_missing] [empty]\n  Session: session\n  Status: not_found\n",
             rendered,
         )
         for secret in (
@@ -1358,95 +1228,6 @@ class InteractiveInspectionTests(InteractiveConversationTestCase):
             "RAW_CONTEXT_REPLY_SECRET",
         ):
             self.assertNotIn(secret, rendered)
-
-    def test_last_started_provenance_is_retained_per_session_across_switches(
-        self,
-    ) -> None:
-        workspace = self.make_workspace()
-        catalog = FilesystemConversationCatalog(workspace)
-        entries: dict[str, ConversationMetadata] = {}
-        for session_id in ("session_a", "session_b"):
-            self.seed_session(workspace, session_id)
-            entries[session_id] = catalog.create(
-                session_id,
-                f"Subject {session_id}",
-            )
-            save_default_conversation(
-                workspace,
-                session_id,
-                entries[session_id].conversation_id,
-            )
-        save_default_session(workspace, "session_a")
-        runtime = InspectableConsensusRuntime(
-            ConsensusOutcome(DebateStatus.CONSENSUS),
-            ConsensusOutcome(DebateStatus.DEADLOCK),
-        )
-        controller, backend, callbacks, store, _factory = self.make_controller(
-            workspace,
-            "/run first",
-            "/status",
-            "/session resume session_b",
-            "/run second",
-            "/inspect last",
-            "/session resume session_a",
-            "/inspect last",
-            "/quit",
-            catalog=catalog,
-            runtime=runtime,
-        )
-        assert store is not None
-        core_before = core_snapshot(workspace)
-        with (
-            mock.patch.object(store, "append") as append,
-            mock.patch.object(backend, "bind") as bind,
-            mock.patch.object(subprocess, "Popen") as popen,
-            mock.patch.object(socket, "create_connection") as connect,
-        ):
-            self.assertEqual(controller.run_session_lobby(), 0)
-
-        append.assert_not_called()
-        bind.assert_not_called()
-        popen.assert_not_called()
-        connect.assert_not_called()
-        self.assertEqual(core_snapshot(workspace), core_before)
-        self.assertEqual(
-            controller._last_started_debate_by_session,
-            {"session_a": "debate_1", "session_b": "debate_2"},
-        )
-        self.assertEqual(
-            runtime.inspection_calls,
-            [
-                ("session_a", "debate_1"),
-                ("session_b", "debate_2"),
-                ("session_a", "debate_1"),
-            ],
-        )
-        self.assertEqual(runtime.context_calls, runtime.inspection_calls)
-        self.assertEqual(
-            [(call["session_id"], call["payload"]) for call in runtime.calls],
-            [("session_a", "first"), ("session_b", "second")],
-        )
-        rendered = "".join(callbacks.records)
-        self.assertIn(
-            "Last interactive run\n"
-            "    [run debate_1] [success]\n",
-            rendered,
-        )
-        self.assertIn(
-            "[run debate_2] [error]\n  Session: session_b\n",
-            rendered,
-        )
-        self.assertIn(
-            "[run debate_1] [success]\n"
-            "  Session: session_a\n",
-            rendered,
-        )
-        self.assertNotIn("RAW_RESULT_SECRET", rendered)
-        self.assertNotIn("RAW_INSPECTION_SECRET", rendered)
-        self.assertEqual(
-            [path.name for path in workspace.path("manuscript").iterdir()],
-            [".gitkeep"],
-        )
 
     def test_malformed_inspection_and_context_fail_closed_without_echo(self) -> None:
         for case in ("debate", "context"):

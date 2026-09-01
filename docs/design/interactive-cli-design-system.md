@@ -1,5 +1,16 @@
 # Interactive CLI design system contract
 
+> **Historical design record:** this long-form record preserves the terminal
+> behavior delivered across earlier issues, including the retired schema-v1
+> advisory, routing, composition, consensus, and artifact-picker consumers.
+> Those execution examples and acceptance rows are not current runnable
+> instructions. Issue #478 retains the generic terminal models, renderer,
+> driver, settings/management pickers, independent text-viewer component, and
+> `/exchanges` host, but main input has no provider-text span. Use the
+> [current terminal reference](../reference/interactive-terminal.md) and
+> [parser reference](../reference/interactive-command-parser.md) for callable
+> behavior.
+
 > **Status:** #82 delivered the import-compatible package, closed semantic
 > models, pure foundation controls, responsive plain/fixed-ANSI renderer,
 > capability profiles, unified raw driver and CLI factory, line-editor
@@ -1354,7 +1365,7 @@ Discard Changes, only while dirty
 | Language | The picker candidates are exactly `KO`, `EN`, `JA`, `ZH`, `ES`, `FR`, `DE`, `PT`, `IT`, `RU`, in that order. A schema-valid existing value outside this UI catalog remains visible and may be preserved, but is not synthesized as a candidate. |
 | Persona | Candidates come only from the existing safe persona-template catalog. Duplicate identifiers resolve with the top-level template taking precedence over `alternative_templates`; the resulting identifiers are ordered lexically. The picker does not read, preview, create, or edit template content. |
 | Maximum debate rounds | A numeric `Prompt` accepts a pending nonnegative integer under the existing validation rule. Blank, negative, fractional, and nonnumeric values produce an inline error `Notice` and retain focus without changing the pending value. `0` remains valid and means audit-only consensus. |
-| Conversation storage | A nested picker offers Filesystem and SQLite. It changes only pending desired storage for the next shell and remains independent from Agents and provider routing. Selection performs no live switch or migration. |
+| Conversation storage | A nested picker offers Filesystem and SQLite. It changes only pending desired storage for the next shell and remains independent from Agents and provider routing. Selection performs no live switch or transfer. |
 | Conversation RAG | A nested picker exposes Provider Disabled/Local and Automatic Off/On with independent Current/Pending values. Disabled canonicalizes the provider to null and forces Off; selecting Local leaves Off; On requires pending Local. Editing and RAG-only Apply perform no authentication, storage selection/readiness, backend/runtime prepare, commit, discard, or activation, route/thread work, composition, optional-package probe/install, provider catalog, subprocess, socket, or network work. The persisted policy applies to the next shell. |
 | Message details | A nested picker offers Off and On. Off is the default compact presentation and never deletes or truncates stored content. On reveals only the documented execution, citation, event-identity, and debate handoff/kind diagnostics. |
 | Agents | A nested agent picker follows canonical `ROSTER` order. Each choice shows the pending effective `(Provider/model/effort)` tuple labeled `Current` when it matches the active runtime profile or `Pending` when it differs. An Agent settings picker then exposes Provider/Model/Effort, each with its independently compared effective Current/Pending value, and edits only that agent's pending `agent_configs` values. Codex and Antigravity are selectable Provider values; nullable routes inherit the workspace default and final Codex fallback. Provider authentication is subordinate to this editor and returns to Provider; the route and any missing workspace default remain pending in memory until confirmed Apply Changes. Changing the route preserves the inactive provider's model/effort settings. Unsupported legacy provider names are not selectable or valid backends. The UI neither invents providers nor changes roster identity. |

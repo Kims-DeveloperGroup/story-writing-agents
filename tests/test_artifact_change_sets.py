@@ -299,7 +299,7 @@ class ArtifactChangeSetSurfaceTests(ChangeSetTestCase):
             )
             self.assertNotIn(name, story_writing_agents.__all__)
             self.assertFalse(hasattr(story_writing_agents, name))
-        self.assertEqual(len(story_writing_agents.__all__), 120)
+        self.assertEqual(len(story_writing_agents.__all__), 104)
         self.assertEqual(
             tuple(item.value for item in ArtifactChangeOperationKind),
             ("create", "patch", "replace", "rename", "delete"),

@@ -32,16 +32,10 @@ from story_writing_agents.interactive_terminal._model import MainInputHistorySta
 
 
 EXPECTED_SUGGESTIONS = (
-    "/say",
-    "/rag",
-    "/to",
-    "/agent",
     "/agents",
     "/auth",
     "/settings",
     "/override",
-    "/run",
-    "/draft-file",
     "/session",
     "/conversation",
     "/search",
@@ -292,11 +286,7 @@ class SuggestionContractTests(unittest.TestCase):
             ("buffer",),
         )
         self.assertEqual(
-            tuple(
-                inspect.signature(
-                    composition_slash_command_suggestions
-                ).parameters
-            ),
+            tuple(inspect.signature(composition_slash_command_suggestions).parameters),
             ("buffer",),
         )
         self.assertEqual(
@@ -364,10 +354,7 @@ class SuggestionContractTests(unittest.TestCase):
             tuple(suggestion.token for suggestion in suggestions),
             EXPECTED_SUGGESTIONS,
         )
-        expected_identities = {
-            "/agent": "/to",
-            "/?": "/help",
-        }
+        expected_identities = {"/?": "/help"}
         for suggestion in suggestions:
             with self.subTest(token=suggestion.token):
                 self.assertEqual(
@@ -385,8 +372,8 @@ class SuggestionContractTests(unittest.TestCase):
 
     def test_matching_uses_the_exact_case_sensitive_whole_buffer_prefix(self) -> None:
         cases = {
-            "/a": ("/agent", "/agents", "/auth"),
-            "/agent": ("/agent", "/agents"),
+            "/a": ("/agents", "/auth"),
+            "/agent": ("/agents",),
             "/agents": ("/agents",),
             "/he": ("/help",),
             "/set": ("/settings",),
@@ -465,10 +452,7 @@ class SuggestionContractTests(unittest.TestCase):
                     expected,
                 )
                 self.assertEqual(
-                    tuple(
-                        suggestion.canonical_token
-                        for suggestion in suggestions
-                    ),
+                    tuple(suggestion.canonical_token for suggestion in suggestions),
                     expected,
                 )
         with self.assertRaises(TypeError):
@@ -568,16 +552,16 @@ class LiveEditingTests(unittest.TestCase):
                 ("first", "second", "draft-Xtail", "saved!", "abx", "/")
             ),
         )
-        self.assertTrue(any("Suggestions [open]" in record for record in output.records))
+        self.assertTrue(
+            any("Suggestions [open]" in record for record in output.records)
+        )
         fallback.assert_not_called()
 
     def test_composition_history_isolated_and_stores_are_per_editor(self) -> None:
         editor, _input, _output, fallback = make_editor(
             "alpha\n\x1b[Acontext\n\x1b[A\n"
         )
-        other, _other_input, _other_output, other_fallback = make_editor(
-            "\x1b[A\n"
-        )
+        other, _other_input, _other_output, other_fallback = make_editor("\x1b[A\n")
         with capable_terminal(FakeTermios()):
             self.assertEqual(editor.read_line("main[1]> "), "alpha")
             self.assertEqual(
@@ -634,9 +618,7 @@ class LiveEditingTests(unittest.TestCase):
             (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
         )
         editor_attributes = termios_double.set_calls[0][2]
-        self.assertFalse(
-            editor_attributes[3] & (FakeTermios.ICANON | FakeTermios.ECHO)
-        )
+        self.assertFalse(editor_attributes[3] & (FakeTermios.ICANON | FakeTermios.ECHO))
         self.assertEqual(
             editor_attributes[6][FakeTermios.VMIN],  # type: ignore[index]
             1,
@@ -782,9 +764,7 @@ class LiveEditingTests(unittest.TestCase):
         for characters, expected, expected_buffers in cases:
             with self.subTest(characters=repr(characters)):
                 editor, _input, output, fallback = make_editor(characters)
-                provider = mock.Mock(
-                    wraps=composition_slash_command_suggestions
-                )
+                provider = mock.Mock(wraps=composition_slash_command_suggestions)
                 reader = bind_suggestion_reader(editor, provider)
                 with capable_terminal(FakeTermios(), width=20):
                     self.assertEqual(reader("compose[run:1]> "), expected)
@@ -814,15 +794,11 @@ class LiveEditingTests(unittest.TestCase):
         for characters, error_type in cases:
             with self.subTest(characters=repr(characters)):
                 editor, _input, output, fallback = make_editor(characters)
-                provider = mock.Mock(
-                    wraps=composition_slash_command_suggestions
-                )
+                provider = mock.Mock(wraps=composition_slash_command_suggestions)
                 termios_double = FakeTermios()
                 with capable_terminal(termios_double):
                     with self.assertRaises(error_type):
-                        bind_suggestion_reader(editor, provider)(
-                            "compose[run:1]> "
-                        )
+                        bind_suggestion_reader(editor, provider)("compose[run:1]> ")
                 self.assertEqual(
                     output.records[-1],
                     "\r\r\x1b[J\n",
@@ -855,9 +831,7 @@ class LiveEditingTests(unittest.TestCase):
         fallback.assert_not_called()
 
         unsafe_provider = mock.Mock(
-            return_value=(
-                SlashCommandSuggestion("/unsafe\x1b[31m界界界", "/unsafe"),
-            )
+            return_value=(SlashCommandSuggestion("/unsafe\x1b[31m界界界", "/unsafe"),)
         )
         editor, _input, output, fallback = make_editor("/\n")
         with capable_terminal(FakeTermios(), width=20):
@@ -1249,9 +1223,7 @@ class CapabilityAndFailureTests(unittest.TestCase):
                     input_stream,  # type: ignore[arg-type]
                     output,  # type: ignore[arg-type]
                 )
-                provider = mock.Mock(
-                    wraps=composition_slash_command_suggestions
-                )
+                provider = mock.Mock(wraps=composition_slash_command_suggestions)
                 with (
                     mock.patch.object(editor_module, "_termios", FakeTermios()),
                     mock.patch.object(editor_module.os, "name", platform_name),

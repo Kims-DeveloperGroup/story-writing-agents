@@ -8,6 +8,7 @@ import inspect
 import json
 import multiprocessing
 import os
+import re
 import socket
 import stat
 import subprocess
@@ -149,8 +150,7 @@ def _tree_snapshot(directory: Path) -> dict[str, tuple[bytes, int]]:
     return {
         str(path.relative_to(directory)): (path.read_bytes(), path.stat().st_mtime_ns)
         for path in sorted(directory.rglob("*"))
-        if path.is_file()
-        and "debug_logs" not in path.relative_to(directory).parts
+        if path.is_file() and "debug_logs" not in path.relative_to(directory).parts
     }
 
 
@@ -177,8 +177,7 @@ def _cleanup_rows_since(
             record.get("session_id"),
         )
         for record in _debug_records(workspace)[mark:]
-        if record["component"] == "backend"
-        and record["operation"] == "cleanup"
+        if record["component"] == "backend" and record["operation"] == "cleanup"
     ]
 
 
@@ -240,7 +239,12 @@ class SessionLifecycleContractTests(unittest.TestCase):
             ],
         )
         signature = inspect.signature(SessionLifecycleState)
-        self.assertTrue(all(item.kind is inspect.Parameter.KEYWORD_ONLY for item in signature.parameters.values()))
+        self.assertTrue(
+            all(
+                item.kind is inspect.Parameter.KEYWORD_ONLY
+                for item in signature.parameters.values()
+            )
+        )
         self.assertEqual(SessionLifecycleState.__match_args__, ())
         self.assertEqual(
             lifecycle_module.__all__,
@@ -252,7 +256,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             ],
         )
         self.assertIs(story_writing_agents.SessionLifecycleState, SessionLifecycleState)
-        self.assertEqual(len(story_writing_agents.__all__), 120)
+        self.assertEqual(len(story_writing_agents.__all__), 104)
 
         expected = {
             "get_session_lifecycle": ("self", "session_id"),
@@ -267,7 +271,9 @@ class SessionLifecycleContractTests(unittest.TestCase):
         for method_name, parameters in expected.items():
             with self.subTest(method=method_name):
                 method = getattr(AgentBackend, method_name)
-                self.assertEqual(tuple(inspect.signature(method).parameters), parameters)
+                self.assertEqual(
+                    tuple(inspect.signature(method).parameters), parameters
+                )
 
     def test_old_lifecycle_surface_is_absent_without_aliases(self) -> None:
         old_names = (
@@ -369,11 +375,18 @@ class SessionLifecycleContractTests(unittest.TestCase):
             mock.patch("builtins.open", side_effect=AssertionError("I/O")),
             mock.patch.object(os, "kill", side_effect=AssertionError("probe")),
         ):
-            self.assertTrue(provider_work_is_ready(before, provider_configuration_ready=True))
-            self.assertFalse(provider_work_is_ready(before, provider_configuration_ready=False))
+            self.assertTrue(
+                provider_work_is_ready(before, provider_configuration_ready=True)
+            )
+            self.assertFalse(
+                provider_work_is_ready(before, provider_configuration_ready=False)
+            )
             for durable in SessionDurableState:
                 for access in SessionAccessState:
-                    if durable is SessionDurableState.ABSENT and access is not SessionAccessState.CLAIMABLE:
+                    if (
+                        durable is SessionDurableState.ABSENT
+                        and access is not SessionAccessState.CLAIMABLE
+                    ):
                         continue
                     owner = access is not SessionAccessState.CLAIMABLE
                     state = _state(
@@ -381,35 +394,68 @@ class SessionLifecycleContractTests(unittest.TestCase):
                         access_state=access,
                         owner_hostname="owner" if owner else None,
                         owner_pid=1 if owner else None,
-                        created_at=None if durable is SessionDurableState.ABSENT else _CREATED,
-                        updated_at=None if durable is SessionDurableState.ABSENT else _UPDATED,
+                        created_at=None
+                        if durable is SessionDurableState.ABSENT
+                        else _CREATED,
+                        updated_at=None
+                        if durable is SessionDurableState.ABSENT
+                        else _UPDATED,
                     )
-                    expected = durable is SessionDurableState.READY and access is SessionAccessState.HELD_HERE
-                    self.assertEqual(provider_work_is_ready(state, provider_configuration_ready=True), expected)
-        self.assertEqual(before, _state(access_state=SessionAccessState.HELD_HERE, owner_hostname="owner.example", owner_pid=123))
+                    expected = (
+                        durable is SessionDurableState.READY
+                        and access is SessionAccessState.HELD_HERE
+                    )
+                    self.assertEqual(
+                        provider_work_is_ready(
+                            state, provider_configuration_ready=True
+                        ),
+                        expected,
+                    )
+        self.assertEqual(
+            before,
+            _state(
+                access_state=SessionAccessState.HELD_HERE,
+                owner_hostname="owner.example",
+                owner_pid=123,
+            ),
+        )
         for value in (1, "yes", None):
             with self.subTest(value=value), self.assertRaises(TypeError):
                 provider_work_is_ready(before, provider_configuration_ready=value)  # type: ignore[arg-type]
 
     def test_lifecycle_module_is_leaf_and_clean_imports_work(self) -> None:
         source_root = Path(__file__).parents[1] / "src" / "story_writing_agents"
-        tree = ast.parse((source_root / "session_lifecycle.py").read_text(encoding="utf-8"))
+        tree = ast.parse(
+            (source_root / "session_lifecycle.py").read_text(encoding="utf-8")
+        )
         self.assertFalse(
-            [node for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.level]
+            [
+                node
+                for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom) and node.level
+            ]
         )
         models_tree = ast.parse((source_root / "models.py").read_text(encoding="utf-8"))
         self.assertFalse(
             [
                 node
                 for node in ast.walk(models_tree)
-                if isinstance(node, ast.ImportFrom) and node.module == "session_lifecycle"
+                if isinstance(node, ast.ImportFrom)
+                and node.module == "session_lifecycle"
             ]
         )
         source_files = tuple(source_root.rglob("*.py"))
-        self.assertEqual(len(source_files), 94)
+        self.assertEqual(len(source_files), 99)
         self.assertTrue(
             {
+                source_root / "conversations" / "__init__.py",
+                source_root / "conversations" / "catalog.py",
+                source_root / "conversations" / "context.py",
+                source_root / "conversations" / "events.py",
+                source_root / "workspace" / "__init__.py",
+                source_root / "workspace" / "core.py",
                 source_root / "conversation_storage" / "archive.py",
+                source_root / "conversation_storage" / "filesystem.py",
                 source_root / "conversation_storage" / "filesystem_archive.py",
                 source_root / "conversation_storage" / "migration.py",
                 source_root / "conversation_storage" / "provisioning.py",
@@ -426,8 +472,46 @@ class SessionLifecycleContractTests(unittest.TestCase):
             }
             <= set(source_files)
         )
-        index = (source_root.parents[1] / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8")
-        self.assertIn("Importable production units indexed: 94.", index)
+        self.assertNotIn(source_root / "conversations.py", source_files)
+        self.assertNotIn(source_root / "workspace.py", source_files)
+        index = (source_root.parents[1] / "PYTHON_MODULE_INDEX.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Importable production units indexed: 99.", index)
+        self.assertIn("Direct internal dependency edges indexed: 367.", index)
+        self.assertIn("Directed internal dependency cycles indexed: 0.", index)
+        headings = tuple(re.findall(r"^### `([^`]+)`$", index, flags=re.MULTILINE))
+        expected_modules: set[str] = set()
+        for path in source_files:
+            relative = path.relative_to(source_root).with_suffix("")
+            parts = relative.parts
+            if parts[-1] == "__init__":
+                parts = parts[:-1]
+            expected_modules.add(".".join(("story_writing_agents", *parts)))
+        self.assertEqual(len(headings), 99)
+        self.assertEqual(len(set(headings)), 99)
+        self.assertEqual(set(headings), expected_modules)
+        self.assertIn("Exactly 81 names in `__all__`", index)
+        self.assertIn("Exactly 20 owning-module names in `__all__`", index)
+        self.assertIn("Exactly 54 owning-module names in `__all__`", index)
+        self.assertIn(
+            "project-root facade retains only its immutable conversation-",
+            index,
+        )
+        self.assertIn("exports no schema-v2 collaboration name", index)
+        self.assertIn("Exactly 62 names in `__all__`", index)
+        for module_name in (
+            "story_writing_agents.conversations",
+            "story_writing_agents.conversations.catalog",
+            "story_writing_agents.conversations.context",
+            "story_writing_agents.conversations.events",
+            "story_writing_agents.conversation_storage.filesystem",
+            "story_writing_agents.workspace",
+            "story_writing_agents.workspace.core",
+            "story_writing_agents.writing_artifacts.change_sets",
+            "story_writing_agents.writing_artifacts.relationship_policy",
+        ):
+            self.assertIn(f"### `{module_name}`", index)
         environment = dict(os.environ, PYTHONPATH=str(source_root.parent))
         result = subprocess.run(
             [
@@ -505,7 +589,9 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         self.workspace.write_json(_access_relative(path_session_id), value)
         return value
 
-    def test_absence_listing_order_and_configuration_validation_are_read_only(self) -> None:
+    def test_absence_listing_order_and_configuration_validation_are_read_only(
+        self,
+    ) -> None:
         backend = self.backend()
         directory = self.workspace.path(_SESSION_DIRECTORY)
         before = _tree_snapshot(self.workspace.root)
@@ -524,7 +610,9 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         )
         self.assertEqual(backend.list_session_lifecycles(), ())
         with (
-            mock.patch.object(backend, "acquire_session_access", side_effect=AssertionError),
+            mock.patch.object(
+                backend, "acquire_session_access", side_effect=AssertionError
+            ),
             mock.patch.object(backend, "_write_manifest", side_effect=AssertionError),
         ):
             self.assertIs(backend.validate_provider_configuration("missing"), True)
@@ -657,7 +745,9 @@ class AgentBackendLifecycleTests(unittest.TestCase):
             ),
             (
                 "missing_pause",
-                lambda: backend.pause_session_and_release_access("record_missing_pause"),
+                lambda: backend.pause_session_and_release_access(
+                    "record_missing_pause"
+                ),
                 SessionNotFoundError,
                 "record_missing_pause",
                 True,
@@ -715,7 +805,14 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         claim = self.workspace.read_json(_access_relative("created"))
         self.assertEqual(
             set(manifest),
-            {"schema_version", "session_id", "durable_state", "created_at", "updated_at", "provider_threads"},
+            {
+                "schema_version",
+                "session_id",
+                "durable_state",
+                "created_at",
+                "updated_at",
+                "provider_threads",
+            },
         )
         self.assertEqual(manifest["schema_version"], 2)
         self.assertEqual(manifest["durable_state"], "ready")
@@ -723,18 +820,33 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         self.assertEqual(manifest["created_at"], manifest["updated_at"])
         self.assertEqual(
             set(claim),
-            {"schema_version", "session_id", "owner_hostname", "owner_pid", "claim_token", "claimed_at"},
+            {
+                "schema_version",
+                "session_id",
+                "owner_hostname",
+                "owner_pid",
+                "claim_token",
+                "claimed_at",
+            },
         )
         self.assertEqual(claim["schema_version"], 2)
         self.assertNotIn(claim["claim_token"], repr(state))
-        manifest_before = _artifact_snapshot(self.workspace.path(_manifest_relative("created")))
+        manifest_before = _artifact_snapshot(
+            self.workspace.path(_manifest_relative("created"))
+        )
         released = backend.release_session_access("created")
         self.assertEqual(released.access_state, SessionAccessState.CLAIMABLE)
         self.assertFalse(self.workspace.path(_access_relative("created")).exists())
-        self.assertEqual(_artifact_snapshot(self.workspace.path(_manifest_relative("created"))), manifest_before)
+        self.assertEqual(
+            _artifact_snapshot(self.workspace.path(_manifest_relative("created"))),
+            manifest_before,
+        )
         with self.assertRaises(SessionExistsError):
             backend.create_session_with_access("created")
-        self.assertEqual(_artifact_snapshot(self.workspace.path(_manifest_relative("created"))), manifest_before)
+        self.assertEqual(
+            _artifact_snapshot(self.workspace.path(_manifest_relative("created"))),
+            manifest_before,
+        )
 
     def test_manifest_schema_is_strict_and_v1_is_rejected_unchanged(self) -> None:
         backend = self.backend()
@@ -754,7 +866,9 @@ class AgentBackendLifecycleTests(unittest.TestCase):
             with self.subTest(session=session), self.assertRaises(exception):
                 backend.get_session_lifecycle(session)
             self.assertEqual(_artifact_snapshot(path), before)
-            self.assertEqual(self.workspace.read_json(_manifest_relative(session)), value)
+            self.assertEqual(
+                self.workspace.read_json(_manifest_relative(session)), value
+            )
 
     def test_access_schema_duplicate_json_and_orphans_fail_closed(self) -> None:
         backend = self.backend()
@@ -763,7 +877,11 @@ class AgentBackendLifecycleTests(unittest.TestCase):
             ("bool_pid", {"owner_pid": True}, WorkspaceFormatError),
             ("extra_access", {"extra": "field"}, WorkspaceFormatError),
             ("mismatch_access", {"session_id": "other"}, WorkspaceFormatError),
-            ("naive_access", {"claimed_at": "2026-01-01T00:00:00"}, WorkspaceFormatError),
+            (
+                "naive_access",
+                {"claimed_at": "2026-01-01T00:00:00"},
+                WorkspaceFormatError,
+            ),
         )
         for session, changes, exception in invalid_rows:
             self.write_manifest(session)
@@ -785,7 +903,10 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         before = _artifact_snapshot(self.workspace.path(_manifest_relative(duplicate)))
         with self.assertRaises(WorkspaceFormatError):
             backend.get_session_lifecycle(duplicate)
-        self.assertEqual(_artifact_snapshot(self.workspace.path(_manifest_relative(duplicate))), before)
+        self.assertEqual(
+            _artifact_snapshot(self.workspace.path(_manifest_relative(duplicate))),
+            before,
+        )
 
         orphan = "orphan"
         self.write_access(orphan, owner_hostname="remote.example", owner_pid=999)
@@ -794,7 +915,9 @@ class AgentBackendLifecycleTests(unittest.TestCase):
             backend.get_session_lifecycle(orphan)
         with self.assertRaises(WorkspaceFormatError):
             backend.list_session_lifecycles()
-        self.assertEqual(_artifact_snapshot(self.workspace.path(_access_relative(orphan))), before)
+        self.assertEqual(
+            _artifact_snapshot(self.workspace.path(_access_relative(orphan))), before
+        )
 
     def test_v1_sidecar_and_guard_are_typed_rejections_without_migration(self) -> None:
         backend = self.backend()
@@ -809,52 +932,83 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         self.assertEqual(_artifact_snapshot(sidecar), before)
         sidecar.unlink()
 
-        guard = self.workspace.write_text(f"{_SESSION_DIRECTORY}/.lease-claims.lock", "v1")
+        guard = self.workspace.write_text(
+            f"{_SESSION_DIRECTORY}/.lease-claims.lock", "v1"
+        )
         before = _artifact_snapshot(guard)
         with self.assertRaises(WorkspaceVersionUnsupportedError):
             backend.list_session_lifecycles()
         self.assertEqual(_artifact_snapshot(guard), before)
 
-    def test_reopen_and_pause_transitions_preserve_provider_state_and_noops(self) -> None:
+    def test_reopen_and_pause_transitions_preserve_provider_state_and_noops(
+        self,
+    ) -> None:
         backend = self.backend()
         threads = {"codex:plot_architect": _thread()}
         self.write_manifest("paused", durable_state="paused", provider_threads=threads)
         before = self.workspace.read_json(_manifest_relative("paused"))
         reopened = backend.reopen_session_with_access("paused")
         after = self.workspace.read_json(_manifest_relative("paused"))
-        self.assertEqual((reopened.durable_state, reopened.access_state), (SessionDurableState.READY, SessionAccessState.HELD_HERE))
+        self.assertEqual(
+            (reopened.durable_state, reopened.access_state),
+            (SessionDurableState.READY, SessionAccessState.HELD_HERE),
+        )
         self.assertEqual(after["created_at"], before["created_at"])
         self.assertEqual(after["provider_threads"], threads)
         self.assertGreater(after["updated_at"], before["updated_at"])
 
-        ready_before = _artifact_snapshot(self.workspace.path(_manifest_relative("paused")))
-        self.assertEqual(backend.reopen_session_with_access("paused").access_state, SessionAccessState.HELD_HERE)
-        self.assertEqual(_artifact_snapshot(self.workspace.path(_manifest_relative("paused"))), ready_before)
+        ready_before = _artifact_snapshot(
+            self.workspace.path(_manifest_relative("paused"))
+        )
+        self.assertEqual(
+            backend.reopen_session_with_access("paused").access_state,
+            SessionAccessState.HELD_HERE,
+        )
+        self.assertEqual(
+            _artifact_snapshot(self.workspace.path(_manifest_relative("paused"))),
+            ready_before,
+        )
 
         paused = backend.pause_session_and_release_access("paused")
         paused_manifest = self.workspace.read_json(_manifest_relative("paused"))
-        self.assertEqual((paused.durable_state, paused.access_state), (SessionDurableState.PAUSED, SessionAccessState.CLAIMABLE))
+        self.assertEqual(
+            (paused.durable_state, paused.access_state),
+            (SessionDurableState.PAUSED, SessionAccessState.CLAIMABLE),
+        )
         self.assertEqual(paused_manifest["provider_threads"], threads)
         self.assertFalse(self.workspace.path(_access_relative("paused")).exists())
-        noop_before = _artifact_snapshot(self.workspace.path(_manifest_relative("paused")))
+        noop_before = _artifact_snapshot(
+            self.workspace.path(_manifest_relative("paused"))
+        )
         backend.pause_session_and_release_access("paused")
-        self.assertEqual(_artifact_snapshot(self.workspace.path(_manifest_relative("paused"))), noop_before)
+        self.assertEqual(
+            _artifact_snapshot(self.workspace.path(_manifest_relative("paused"))),
+            noop_before,
+        )
 
         for operation in (
             backend.acquire_session_access,
             backend.reopen_session_with_access,
             backend.pause_session_and_release_access,
         ):
-            with self.subTest(operation=operation.__name__), self.assertRaises(SessionNotFoundError):
+            with (
+                self.subTest(operation=operation.__name__),
+                self.assertRaises(SessionNotFoundError),
+            ):
                 operation("missing")
 
-    def test_access_liveness_is_conservative_and_dead_local_claim_is_reclaimed(self) -> None:
+    def test_access_liveness_is_conservative_and_dead_local_claim_is_reclaimed(
+        self,
+    ) -> None:
         backend = self.backend()
         self.write_manifest("live")
         live = self.write_access("live", claim_token="live-secret")
         live_path = self.workspace.path(_access_relative("live"))
         before = _artifact_snapshot(live_path)
-        self.assertEqual(backend.get_session_lifecycle("live").access_state, SessionAccessState.BLOCKED_BY_LIVE_LOCAL_OWNER)
+        self.assertEqual(
+            backend.get_session_lifecycle("live").access_state,
+            SessionAccessState.BLOCKED_BY_LIVE_LOCAL_OWNER,
+        )
         with self.assertRaises(SessionAccessBlockedError) as caught:
             backend.acquire_session_access("live")
         self.assertNotIn(live["claim_token"], str(caught.exception))
@@ -862,7 +1016,10 @@ class AgentBackendLifecycleTests(unittest.TestCase):
 
         self.write_manifest("remote")
         self.write_access("remote", owner_hostname="remote.example", owner_pid=4321)
-        self.assertEqual(backend.get_session_lifecycle("remote").access_state, SessionAccessState.OWNERSHIP_UNKNOWN)
+        self.assertEqual(
+            backend.get_session_lifecycle("remote").access_state,
+            SessionAccessState.OWNERSHIP_UNKNOWN,
+        )
         with self.assertRaises(SessionOwnershipUnknownError):
             backend.acquire_session_access("remote")
 
@@ -874,10 +1031,15 @@ class AgentBackendLifecycleTests(unittest.TestCase):
         )
         dead_path = self.workspace.path(_access_relative("dead"))
         before = _artifact_snapshot(dead_path)
-        with mock.patch.object(backend_module.os, "kill", side_effect=ProcessLookupError):
+        with mock.patch.object(
+            backend_module.os, "kill", side_effect=ProcessLookupError
+        ):
             observed = backend.get_session_lifecycle("dead")
             self.assertEqual(observed.access_state, SessionAccessState.CLAIMABLE)
-            self.assertEqual((observed.owner_hostname, observed.owner_pid), (original["owner_hostname"], original["owner_pid"]))
+            self.assertEqual(
+                (observed.owner_hostname, observed.owner_pid),
+                (original["owner_hostname"], original["owner_pid"]),
+            )
             self.assertEqual(_artifact_snapshot(dead_path), before)
             held = backend.acquire_session_access("dead")
         replacement = self.workspace.read_json(_access_relative("dead"))
@@ -896,7 +1058,10 @@ class AgentBackendLifecycleTests(unittest.TestCase):
             path = self.workspace.path(_access_relative(session))
             before = _artifact_snapshot(path)
             with mock.patch.object(backend_module.os, "kill", side_effect=error):
-                self.assertEqual(backend.get_session_lifecycle(session).access_state, SessionAccessState.OWNERSHIP_UNKNOWN)
+                self.assertEqual(
+                    backend.get_session_lifecycle(session).access_state,
+                    SessionAccessState.OWNERSHIP_UNKNOWN,
+                )
                 with self.assertRaises(SessionOwnershipUnknownError):
                     backend.acquire_session_access(session)
             self.assertEqual(_artifact_snapshot(path), before)
@@ -977,9 +1142,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
                 ("trace", "succeeded", "completed", None),
             ],
         )
-        raw = self.workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(
-            encoding="utf-8"
-        )
+        raw = self.workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(encoding="utf-8")
         for private in (*tokens.values(), str(staging), str(self.workspace.root)):
             self.assertNotIn(private, raw)
 
@@ -1010,8 +1173,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
                     for session_id in failed_sessions
                 }
                 failure_messages = {
-                    session_id: str(failure)
-                    for session_id, failure in failures.items()
+                    session_id: str(failure) for session_id, failure in failures.items()
                 }
                 attempts: list[tuple[str, str]] = []
 
@@ -1155,9 +1317,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
             _cleanup_rows_since(self.workspace, trace_mark),
             [("error", "failed", "failed", "trace_sink_alpha")],
         )
-        raw = self.workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(
-            encoding="utf-8"
-        )
+        raw = self.workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(encoding="utf-8")
         for private in (
             *error_tokens.values(),
             *trace_tokens.values(),
@@ -1209,9 +1369,7 @@ class AgentBackendLifecycleTests(unittest.TestCase):
             _cleanup_rows_since(self.workspace, mark),
             [("trace", "started", None, None)],
         )
-        raw = self.workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(
-            encoding="utf-8"
-        )
+        raw = self.workspace.path(DEBUG_LOG_RELATIVE_PATH).read_text(encoding="utf-8")
         for private in (
             *tokens.values(),
             failure_message,
@@ -1228,25 +1386,40 @@ class AgentBackendLifecycleTests(unittest.TestCase):
 
     def test_write_failures_compensate_only_newly_acquired_access(self) -> None:
         backend = self.backend()
-        with mock.patch.object(backend, "_write_manifest", side_effect=OSError("create write")):
+        with mock.patch.object(
+            backend, "_write_manifest", side_effect=OSError("create write")
+        ):
             with self.assertRaisesRegex(OSError, "create write"):
                 backend.create_session_with_access("create_failure")
-        self.assertFalse(self.workspace.path(_manifest_relative("create_failure")).exists())
-        self.assertFalse(self.workspace.path(_access_relative("create_failure")).exists())
+        self.assertFalse(
+            self.workspace.path(_manifest_relative("create_failure")).exists()
+        )
+        self.assertFalse(
+            self.workspace.path(_access_relative("create_failure")).exists()
+        )
 
         self.write_manifest("new_claim", durable_state="paused")
-        with mock.patch.object(backend, "_write_manifest", side_effect=OSError("reopen write")):
+        with mock.patch.object(
+            backend, "_write_manifest", side_effect=OSError("reopen write")
+        ):
             with self.assertRaisesRegex(OSError, "reopen write"):
                 backend.reopen_session_with_access("new_claim")
         self.assertFalse(self.workspace.path(_access_relative("new_claim")).exists())
 
         self.write_manifest("preowned", durable_state="paused")
         backend.acquire_session_access("preowned")
-        claim_before = _artifact_snapshot(self.workspace.path(_access_relative("preowned")))
-        with mock.patch.object(backend, "_write_manifest", side_effect=OSError("owned write")):
+        claim_before = _artifact_snapshot(
+            self.workspace.path(_access_relative("preowned"))
+        )
+        with mock.patch.object(
+            backend, "_write_manifest", side_effect=OSError("owned write")
+        ):
             with self.assertRaisesRegex(OSError, "owned write"):
                 backend.reopen_session_with_access("preowned")
-        self.assertEqual(_artifact_snapshot(self.workspace.path(_access_relative("preowned"))), claim_before)
+        self.assertEqual(
+            _artifact_snapshot(self.workspace.path(_access_relative("preowned"))),
+            claim_before,
+        )
         self.assertIn("preowned", backend._access_claim_tokens)
 
     def test_guard_is_lazy_persistent_secure_and_ignored_by_listing(self) -> None:
@@ -1260,7 +1433,10 @@ class AgentBackendLifecycleTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(guard.stat().st_mode), 0o600)
         backend.release_session_access("guarded")
         self.assertTrue(guard.is_file())
-        self.assertEqual([state.session_id for state in backend.list_session_lifecycles()], ["guarded"])
+        self.assertEqual(
+            [state.session_id for state in backend.list_session_lifecycles()],
+            ["guarded"],
+        )
 
     def test_windows_guard_branch_initializes_retries_and_unlocks(self) -> None:
         backend = self.backend()

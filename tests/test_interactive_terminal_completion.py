@@ -13,8 +13,7 @@ from unittest import mock
 
 import story_writing_agents
 from story_writing_agents import interactive_terminal as terminal_facade
-from story_writing_agents.interactive_commands import project_provider_text_span
-from story_writing_agents.interactive_terminal import _controls, _core, _driver, _model
+from story_writing_agents.interactive_terminal import _core, _driver, _model
 from story_writing_agents.interactive_terminal._controls import (
     append_main_input_history,
     completion_candidate_matches,
@@ -38,9 +37,6 @@ from story_writing_agents.interactive_terminal._reference_activation import (
     ReferenceInputFailureKind,
     ReferenceInputProjection,
     ReferenceInputScope,
-    replace_reference_completion,
-    replace_reference_range,
-    selected_reference_request,
 )
 from story_writing_agents.interactive_terminal._model import (
     EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX,
@@ -68,7 +64,6 @@ from story_writing_agents.interactive_terminal._model import (
 from story_writing_agents.interactive_terminal._render import (
     render_component,
     render_picker_fallback,
-    render_picker_viewport,
     strip_decorative_sgr,
 )
 
@@ -412,17 +407,17 @@ class CompletionControlTests(unittest.TestCase):
         assert state.palette is not None
         self.assertEqual(
             tuple(item.replacement for item in state.palette.projection.candidates),
-            ("/say", "/settings", "/session", "/search", "/status"),
+            ("/settings", "/session", "/search", "/status"),
         )
 
         self.assertEqual(
             state.palette.highlighted.replacement,  # type: ignore[union-attr]
-            "/say",
+            "/settings",
         )
         moved, _ = self.apply(state, KeyEvent(KeyKind.DOWN))
         self.assertEqual(
             moved.palette.highlighted.replacement,  # type: ignore[union-attr]
-            "/settings",
+            "/session",
         )
         for _ in range(10):
             moved, _ = self.apply(moved, KeyEvent(KeyKind.DOWN))
@@ -435,7 +430,7 @@ class CompletionControlTests(unittest.TestCase):
             moved, _ = self.apply(moved, KeyEvent(KeyKind.UP))
         self.assertEqual(
             moved.palette.highlighted.replacement,  # type: ignore[union-attr]
-            "/say",
+            "/settings",
         )
         self.assertIs(self.apply(moved, KeyEvent(KeyKind.UP))[0], moved)
 
@@ -447,14 +442,13 @@ class CompletionControlTests(unittest.TestCase):
                 tuple(
                     Choice(f"root.command:{replacement}", replacement)
                     for replacement in (
-                        "/say",
                         "/settings",
                         "/session",
                         "/search",
                         "/status",
                     )
                 ),
-                highlighted_id="root.command:/say",
+                highlighted_id="root.command:/settings",
                 state=ViewState.OPEN,
             ),
         )
@@ -484,9 +478,7 @@ class CompletionControlTests(unittest.TestCase):
                 instruction=(
                     "Up/Down selects; Enter/Tab inserts a whole-file reference."
                 ),
-                empty_text=(
-                    "No matching writing artifacts. Change the path fragment."
-                ),
+                empty_text=("No matching writing artifacts. Change the path fragment."),
             ),
         )
 
@@ -521,8 +513,7 @@ class CompletionControlTests(unittest.TestCase):
             "manuscript/root.md",
         )
         ranged_candidates = tuple(
-            CommandCompletionCandidate(ranged_position, path)
-            for path in ranged_paths
+            CommandCompletionCandidate(ranged_position, path) for path in ranged_paths
         )
         ranged_state = MainCommandControlState(
             MainInputControlState(LineInputState("$$", 2), overlay_open=True),
@@ -541,21 +532,16 @@ class CompletionControlTests(unittest.TestCase):
             SuggestionPalette(
                 "$$",
                 tuple(
-                    Choice(f"{ranged_position}:{path}", path)
-                    for path in ranged_paths
+                    Choice(f"{ranged_position}:{path}", path) for path in ranged_paths
                 ),
                 highlighted_id=f"{ranged_position}:{ranged_paths[0]}",
                 title="Writing artifact selection",
                 instruction="Up/Down selects; Enter/Tab opens the ranged viewer.",
-                empty_text=(
-                    "No matching writing artifacts. Change the path fragment."
-                ),
+                empty_text=("No matching writing artifacts. Change the path fragment."),
             ),
         )
 
-        empty_ranged_position = (
-            f"{EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX}0"
-        )
+        empty_ranged_position = f"{EMPTY_RANGED_ARTIFACT_REFERENCE_POSITION_PREFIX}0"
         empty_ranged_state = MainCommandControlState(
             MainInputControlState(LineInputState("$$", 2), overlay_open=True),
             MainCommandPaletteState(
@@ -862,63 +848,8 @@ class CompletionControlTests(unittest.TestCase):
         self.assertIsNone(committed.palette)
         choice_provider.assert_called_once_with("/", 1)
 
-    def test_routed_agent_palette_order_filter_case_and_aliases_are_exact(
-        self,
-    ) -> None:
-        replacements = ("@lead", "@plot", "@character", "@execution")
-        initial = self.type_text("@")
-        assert initial.palette is not None
-        self.assertEqual(
-            tuple(
-                item.replacement for item in initial.palette.projection.candidates
-            ),
-            replacements,
-        )
-        self.assertEqual(
-            initial.palette.highlighted.replacement,  # type: ignore[union-attr]
-            "@lead",
-        )
-        self.assertEqual(
-            project_main_suggestion_palette(initial),
-            SuggestionPalette(
-                "@",
-                tuple(
-                    Choice(f"routed.agent:{replacement}", replacement)
-                    for replacement in replacements
-                ),
-                highlighted_id="routed.agent:@lead",
-                state=ViewState.OPEN,
-            ),
-        )
-
-        partial = self.type_text("@pl")
-        assert partial.palette is not None
-        self.assertEqual(
-            tuple(
-                item.replacement for item in partial.palette.projection.candidates
-            ),
-            ("@plot",),
-        )
-        for buffer in ("@Pl", "@or", "@plot_"):
-            with self.subTest(buffer=buffer):
-                unmatched = self.type_text(buffer)
-                self.assertIsNotNone(unmatched.palette)
-                self.assertEqual(
-                    unmatched.palette.projection.candidates,  # type: ignore[union-attr]
-                    (),
-                )
-                self.assertIsNone(
-                    unmatched.palette.highlighted  # type: ignore[union-attr]
-                )
-
-    def test_routed_agent_completion_is_isolated_to_the_leading_token(
-        self,
-    ) -> None:
-        for buffer in (
-            "message @pl",
-            "@plot message @pl",
-            "/say @pl",
-        ):
+    def test_removed_agent_route_syntax_has_no_completion_palette(self) -> None:
+        for buffer in ("@", "@pl", "@plot message", "message @pl"):
             with self.subTest(buffer=buffer):
                 state = self.type_text(buffer)
                 self.assertIsNone(state.palette)
@@ -950,31 +881,39 @@ class CompletionControlTests(unittest.TestCase):
         initial = self.type_text("/s")
         completed, outcome = self.apply(initial, KeyEvent(KeyKind.ENTER))
         self.assertIsNone(outcome)
-        self.assertEqual(completed.main_input.line_state, LineInputState("/say ", 5))
+        self.assertEqual(
+            completed.main_input.line_state,
+            LineInputState("/settings ", 10),
+        )
         self.assertIsNone(completed.palette)
-        self.assertEqual(completed.dismissal_latch, LineInputState("/say ", 5))
+        self.assertEqual(
+            completed.dismissal_latch,
+            LineInputState("/settings ", 10),
+        )
 
         escaped, outcome = self.apply(completed, KeyEvent(KeyKind.ESCAPE))
         self.assertIs(escaped, completed)
         self.assertIsNone(outcome)
 
         submitted, outcome = self.apply(escaped, KeyEvent(KeyKind.ENTER))
-        self.assertEqual(submitted.main_input.line_state, LineInputState("/say ", 5))
+        self.assertEqual(
+            submitted.main_input.line_state,
+            LineInputState("/settings ", 10),
+        )
         self.assertIsNone(submitted.palette)
         self.assertEqual(
             outcome.kind,  # type: ignore[union-attr]
             ControlOutcomeKind.COMMIT,
         )
-        self.assertEqual(outcome.text, "/say ")  # type: ignore[union-attr]
+        self.assertEqual(outcome.text, "/settings ")  # type: ignore[union-attr]
 
     def test_enter_and_tab_share_exact_trailing_space_completion(self) -> None:
         cases = (
-            ("/s", "/say "),
-            ("@pl", "@plot "),
+            ("/s", "/settings "),
             ("/status", "/status "),
             ("/session li", "/session list "),
             ("/override la", "/override language "),
-            ("/override persona pl", "/override persona plot "),
+            ("/override persona pl", "/override persona plot_architect "),
         )
         for kind in (KeyKind.ENTER, KeyKind.TAB):
             for buffer, expected in cases:
@@ -988,7 +927,7 @@ class CompletionControlTests(unittest.TestCase):
                     )
 
     def test_enter_and_tab_preserve_ascii_delimiter_suffix_and_cursor(self) -> None:
-        for source, replacement in (("/s", "/say"), ("@pl", "@plot")):
+        for source, replacement in (("/s", "/settings"),):
             for kind in (KeyKind.ENTER, KeyKind.TAB):
                 for delimiter in (" ", "\t"):
                     with self.subTest(
@@ -1098,25 +1037,7 @@ class CompletionControlTests(unittest.TestCase):
         self.assertEqual(outcome.text, "/session list ")  # type: ignore[union-attr]
         self.assertIsNone(committed.palette)
 
-    def test_agent_alias_completion_uses_preferred_candidate_and_tab_span(self) -> None:
-        state = self.type_text("/to pl")
-        self.assertIsNotNone(state.palette)
-        assert state.palette is not None
-        self.assertEqual(
-            (state.palette.projection.start, state.palette.projection.end),
-            (4, 6),
-        )
-        self.assertEqual(
-            tuple(item.replacement for item in state.palette.projection.candidates),
-            ("plot",),
-        )
-        selected, outcome = self.apply(state, KeyEvent(KeyKind.TAB))
-        self.assertIsNone(outcome)
-        self.assertEqual(
-            selected.main_input.line_state,
-            LineInputState("/to plot ", 9),
-        )
-
+    def test_override_persona_completion_uses_canonical_agent_id(self) -> None:
         canonical = self.type_text("/override persona pl")
         self.assertIsNotNone(canonical.palette)
         assert canonical.palette is not None
@@ -1128,17 +1049,14 @@ class CompletionControlTests(unittest.TestCase):
             (18, 20),
         )
         self.assertEqual(
-            tuple(
-                item.replacement
-                for item in canonical.palette.projection.candidates
-            ),
-            ("plot",),
+            tuple(item.replacement for item in canonical.palette.projection.candidates),
+            ("plot_architect",),
         )
         canonical, outcome = self.apply(canonical, KeyEvent(KeyKind.TAB))
         self.assertIsNone(outcome)
         self.assertEqual(
             canonical.main_input.line_state,
-            LineInputState("/override persona plot ", 23),
+            LineInputState("/override persona plot_architect ", 33),
         )
 
     def test_provider_validation_is_eager_and_has_no_hidden_retry(self) -> None:
@@ -1294,9 +1212,7 @@ class CompletionRenderingTests(unittest.TestCase):
     def test_untrusted_labels_are_sanitized_before_style_and_width(self) -> None:
         hostile = SuggestionPalette(
             "buffer\x1b]0;title\x07",
-            (
-                Choice("safe", "/한글 e\u0301 🌊\x1b[31m\u202e"),
-            ),
+            (Choice("safe", "/한글 e\u0301 🌊\x1b[31m\u202e"),),
             highlighted_id="safe",
         )
         plain = render_component(hostile, capabilities(CapabilityProfile.PLAIN, 20))
@@ -1522,97 +1438,19 @@ class CompletionDriverTests(unittest.TestCase):
                 scope_provider.assert_called_once_with(buffer, len(buffer))
                 paths_provider.assert_called_once_with()
 
-    def test_run_output_prefix_is_excluded_from_prompt_reference_validation(
-        self,
-    ) -> None:
-        path = "core_documents/global_outline.md"
-        prefix = "/run --output ${draft "
-
-        def scope(buffer: str, cursor: int) -> ReferenceInputScope | None:
-            span = project_provider_text_span(buffer, cursor)
-            if span is None:
-                return None
-            return ReferenceInputScope(span.start, span.end)
-
-        for marker, kind in (("$", "completion"), ("$$", "range")):
-            line = f"{prefix}{marker}"
-            for fallback in (False, True):
-                with self.subTest(marker=marker, fallback=fallback):
-                    scope_provider = mock.Mock(side_effect=scope)
-                    paths_provider = mock.Mock(return_value=(path,))
-                    provider = _core._reference_projection_provider(
-                        scope_provider,
-                        paths_provider,
-                    )
-                    if fallback:
-                        projected = _driver._fallback_reference_projection(
-                            line,
-                            _core._reference_input_bindings(
-                                provider,
-                                mock.Mock(),
-                                mock.Mock(),
-                            ),
-                        )
-                    else:
-                        projected = provider(line, len(line))
-
-                    assert projected is not None
-                    self.assertEqual(
-                        scope_provider.call_args_list,
-                        [mock.call(line, len(line))],
-                    )
-                    paths_provider.assert_called_once_with()
-                    state = MainCommandControlState(
-                        MainInputControlState(LineInputState(line, len(line)))
-                    )
-                    if kind == "completion":
-                        assert projected.completion is not None
-                        replacement = projected.completion.candidates[0].replacement
-                        updated = replace_reference_completion(
-                            state,
-                            projected,
-                            replacement,
-                        )
-                    else:
-                        assert projected.request is not None
-                        selected = selected_reference_request(
-                            projected.request,
-                            path,
-                        )
-                        updated = replace_reference_range(state, selected, 2, 3)
-                        replacement = f"${{{path}}}#L2-L3"
-                    self.assertEqual(
-                        updated.main_input.line_state.buffer,
-                        f"{prefix}{replacement}",
-                    )
-
-        invalid = f"{prefix}$${{{path}"
-        invalid_paths = mock.Mock(
-            side_effect=AssertionError("invalid eligible marker read catalog")
-        )
-        invalid_provider = _core._reference_projection_provider(scope, invalid_paths)
-        invalid_scope = scope(invalid, len(invalid))
-        assert invalid_scope is not None
-        self.assertEqual(
-            invalid_provider(invalid, len(invalid)),
-            ReferenceInputProjection(
-                failure=ReferenceInputFailureKind.INVALID,
-                scope=invalid_scope,
-            ),
-        )
-        invalid_paths.assert_not_called()
-
     def test_supported_live_read_selects_commits_appends_and_restores_once(
         self,
     ) -> None:
         driver, _input, output, fallback, termios, os_module = make_driver(
-            "/s\x1b[B\t\n"
+            "/s\x1b[A\t\n"
         )
         with mock.patch.object(
             _driver._select,
             "select",
             side_effect=lambda readable, writable, exceptional, _timeout: (
-                readable, writable, exceptional
+                readable,
+                writable,
+                exceptional,
             ),
         ) as readiness:
             self.assertEqual(self.read(driver), "/settings ")
@@ -1853,9 +1691,7 @@ class CompletionDriverTests(unittest.TestCase):
                     (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
                 )
 
-        driver, _input, output, fallback, _termios, os_module = make_driver(
-            "$C\t\x03"
-        )
+        driver, _input, output, fallback, _termios, os_module = make_driver("$C\t\x03")
         os_module.get_terminal_size = lambda _descriptor: SimpleNamespace(
             columns=160,
             lines=24,
@@ -1886,8 +1722,7 @@ class CompletionDriverTests(unittest.TestCase):
             strip_decorative_sgr(record)
             for record in output.records
             if "main> $C" in strip_decorative_sgr(record)
-            and "Writing artifact selection [open]"
-            in strip_decorative_sgr(record)
+            and "Writing artifact selection [open]" in strip_decorative_sgr(record)
         )
         self.assertIn(
             "[empty] No matching writing artifacts. Change the path fragment.",
@@ -2560,9 +2395,7 @@ class CompletionDriverTests(unittest.TestCase):
                         len(buffer),
                     )
                 )
-                paths_provider = mock.Mock(
-                    return_value=(path, "manuscript/root.md")
-                )
+                paths_provider = mock.Mock(return_value=(path, "manuscript/root.md"))
                 projection_provider = _core._reference_projection_provider(
                     scope_provider,
                     paths_provider,
@@ -2759,7 +2592,7 @@ class CompletionDriverTests(unittest.TestCase):
         self.assertNotIn("Suggestions [open]", output.records[-1])
 
     def test_csi_application_and_ordinary_escape_bytes_reprocess_exactly(self) -> None:
-        for sequence in ("\x1b[B", "\x1bOB"):
+        for sequence in ("\x1b[A", "\x1bOA"):
             with self.subTest(sequence=repr(sequence)):
                 driver, _input, _output, fallback, _termios, _os = make_driver(
                     "/s" + sequence + "\t\n"
@@ -2784,7 +2617,7 @@ class CompletionDriverTests(unittest.TestCase):
     def test_post_introducer_controls_never_become_main_line_actions(self) -> None:
         cases = (
             ("enter", "", "\n", "typed\n", "typed"),
-            ("tab", "/s", "\t", "\n\n", "/say "),
+            ("tab", "/s", "\t", "\n\n", "/settings "),
             ("backspace", "ab", "\x08", "\n", "ab"),
             ("delete", "ab", "\x7f", "\n", "ab"),
         )
@@ -2924,11 +2757,14 @@ class CompletionDriverTests(unittest.TestCase):
         driver, input_stream, output, fallback, termios, os_module = make_driver(
             "/s\n\n"
         )
-        self.assertEqual(self.read(driver), "/say ")
+        self.assertEqual(self.read(driver), "/settings ")
 
         fallback.assert_not_called()
         self.assertEqual(input_stream.reads, [])
-        self.assertEqual(driver._history_state, MainInputHistoryState(("/say ",)))
+        self.assertEqual(
+            driver._history_state,
+            MainInputHistoryState(("/settings ",)),
+        )
         self.assertEqual(os_module.observed_widths, [8, 8])
         self.assertEqual(
             tuple(call[1] for call in termios.set_calls),
@@ -2958,9 +2794,7 @@ class CompletionDriverTests(unittest.TestCase):
     def test_dynamic_choice_live_commit_clears_restores_then_appends_identity(
         self,
     ) -> None:
-        driver, _input, output, fallback, termios, _os = make_driver(
-            "/\x1b[B\n"
-        )
+        driver, _input, output, fallback, termios, _os = make_driver("/\x1b[B\n")
         events: list[tuple[str, object]] = []
         original_write = output.write
         original_set = termios.tcsetattr
@@ -3213,29 +3047,6 @@ class CompletionDriverTests(unittest.TestCase):
             (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
         )
 
-    def test_routed_enter_completion_waits_for_message_and_second_enter(
-        self,
-    ) -> None:
-        driver, input_stream, output, fallback, termios, os_module = make_driver(
-            "@pl\nmessage\n"
-        )
-        self.assertEqual(self.read(driver), "@plot message")
-
-        fallback.assert_not_called()
-        self.assertEqual(input_stream.reads, [])
-        self.assertEqual(
-            driver._history_state,
-            MainInputHistoryState(("@plot message",)),
-        )
-        self.assertEqual(os_module.observed_widths, [8, 8])
-        self.assertEqual(
-            tuple(call[1] for call in termios.set_calls),
-            (FakeTermios.TCSANOW, FakeTermios.TCSADRAIN),
-        )
-        rendered = "".join(output.records)
-        self.assertIn("[highlighted] @plot", rendered)
-        self.assertNotIn("Suggestions [open]", output.records[-1])
-
     def test_completion_provider_is_call_local_across_reads_on_one_driver(self) -> None:
         driver, _input, _output, fallback, _termios, _os = make_driver("x\n/\t\n")
         first = mock.Mock(return_value=None)
@@ -3253,14 +3064,14 @@ class CompletionDriverTests(unittest.TestCase):
                 ),
                 "x",
             )
-            self.assertEqual(self.read(driver), "/say ")
+            self.assertEqual(self.read(driver), "/agents ")
         self.assertEqual(
             tuple(call.args for call in first.call_args_list),
             (("x", 1),),
         )
         self.assertEqual(
             driver._history_state,
-            MainInputHistoryState(("x", "/say ")),
+            MainInputHistoryState(("x", "/agents ")),
         )
         fallback.assert_not_called()
 
@@ -3457,7 +3268,8 @@ class CompletionDriverTests(unittest.TestCase):
             collaborators[index] = None
             with self.assertRaisesRegex(TypeError, f"^{expected} must be callable$"):
                 driver.read_main_command_line(
-                    "main> ", *collaborators  # type: ignore[arg-type]
+                    "main> ",
+                    *collaborators,  # type: ignore[arg-type]
                 )
             self.assertEqual(input_stream.calls, [])
             self.assertEqual(output.records, [])
