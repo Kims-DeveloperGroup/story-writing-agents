@@ -6,6 +6,8 @@
 > do not start a consensus publication or attach a reference to an agent call.
 > Main-input `$`/`$$` activation is unavailable. Existing artifacts and
 > reference-operation evidence remain inspectable through direct components.
+> The pure exact change-set and relationship-policy contracts documented below
+> remain available independently of those inactive runtime workflows.
 
 This reference uses **writing artifact path** for the canonical story-output
 topology. A current source at one of those paths may be manual or
@@ -51,6 +53,784 @@ For example, `part-01/scenes/opening.md` publishes
 the part grammar, so `output_path=manuscript/chapter.md` is legal and publishes
 `manuscript/manuscript/chapter.md`. The first `manuscript` is the canonical
 directory; the second is the user-selected part ID.
+
+## Exact in-memory artifact change sets
+
+> **Availability:** schema-v1 artifact change sets are an implemented, pure
+> Python value contract. They validate and project proposed bytes in memory.
+> They do not read or write a workspace, ask a provider or lead agent for a
+> decision, record confirmation, apply a proposal, or create a Git commit.
+
+This API gives a caller one exact, reviewable description of how a complete
+canonical artifact state would change. It is useful for building and checking
+a proposal before any component with write authority acts.
+
+| A caller can | A caller cannot |
+| --- | --- |
+| Describe creation, byte-exact patching, full replacement, rename, or deletion of canonical core documents and manuscripts. | Infer the current files from a workspace or mutate any file. The caller must supply the complete base mapping. |
+| Verify the exact base state and inspect a read-only projected mapping. | Treat projection as approval, user confirmation, provider output, publication, or Git authority. |
+| Serialize the complete review content to one canonical JSON byte sequence and restore it exactly. | Expect ordinary representations or errors to reveal story text. Explicit serialization is the content-bearing review surface. |
+| Represent a core-document rename or deletion as a pure value. | Assume that operation is permitted by artifact policy. The implemented relationship policy rejects those operations before a proposal can be considered valid. |
+
+Relationship validation is also outside this change-set layer. For example,
+renaming a manuscript does not find or repair Markdown links. The caller must
+describe each inbound-reference patch separately, then pass the complete
+change set to the implemented
+[relationship validator](#canonical-artifact-relationship-validation). Later
+lead-review and apply workflows may consume these values, but this API itself
+grants none of their authority.
+
+### Public Python surface
+
+Import the 16 change-set symbols from the writing-artifacts facade, not the
+project-root facade:
+
+```python
+from story_writing_agents.writing_artifacts import (
+    ARTIFACT_CHANGE_SET_SCHEMA_VERSION,
+    ArtifactChangeOperation,
+    ArtifactChangeOperationKind,
+    ArtifactChangeSet,
+    ArtifactChangeSetError,
+    ArtifactChangeSetErrorCode,
+    ArtifactCreateOperation,
+    ArtifactDeleteOperation,
+    ArtifactPatchOperation,
+    ArtifactRenameOperation,
+    ArtifactReplaceOperation,
+    ArtifactTextHunk,
+    build_artifact_change_set,
+    deserialize_artifact_change_set,
+    project_artifact_change_set,
+    serialize_artifact_change_set,
+)
+```
+
+The schema version is exactly `1`. The value types are frozen, slotted
+dataclasses with these exact fields:
+
+```text
+ArtifactTextHunk(base_digest, start_utf8_byte, end_utf8_byte, old_text, new_text)
+ArtifactCreateOperation(path, artifact_kind, content, projected_digest)
+ArtifactPatchOperation(path, artifact_kind, base_digest, hunks, projected_digest)
+ArtifactReplaceOperation(path, artifact_kind, base_digest, content, projected_digest)
+ArtifactRenameOperation(source_path, destination_path, artifact_kind, base_digest, projected_digest)
+ArtifactDeleteOperation(path, artifact_kind, base_digest)
+ArtifactChangeSet(schema_version, base_state_digest, operations, projected_state_digest, change_set_digest)
+```
+
+`ArtifactChangeOperation` is the union of the five operation values. Each
+operation's `operation_kind` is the corresponding `create`, `patch`, `replace`,
+`rename`, or `delete` enum member. The four functions have these signatures:
+
+```python
+build_artifact_change_set(
+    base_state: Mapping[str, bytes],
+    operations: tuple[ArtifactChangeOperation, ...],
+) -> ArtifactChangeSet
+
+project_artifact_change_set(
+    base_state: Mapping[str, bytes],
+    change_set: ArtifactChangeSet,
+) -> Mapping[str, bytes]
+
+serialize_artifact_change_set(change_set: ArtifactChangeSet) -> bytes
+deserialize_artifact_change_set(data: bytes) -> ArtifactChangeSet
+```
+
+The returned projection is a `MappingProxyType` ordered by path UTF-8 bytes.
+The functions do not mutate either the caller's base mapping or the contained
+byte values.
+
+### Exact matching and ordering rules
+
+A hunk uses zero-based, half-open `[start_utf8_byte, end_utf8_byte)` offsets
+over the **original base bytes**. Both offsets must be UTF-8 code-point
+boundaries, `old_text` must equal that exact byte slice, and every hunk must
+carry the operation's exact lowercase SHA-256 `base_digest`. All text values
+are strict UTF-8 bytes. There is no fuzzy matching or newline, Unicode, BOM, or
+NUL normalization; CRLF versus LF and composed versus decomposed characters
+remain different bytes.
+
+Hunks are caller-canonical in ascending `(start_utf8_byte, end_utf8_byte)`
+order and are all evaluated against the same original base. Adjacent hunks are
+valid. One zero-width insertion immediately before a consuming hunk at the
+same offset is valid. Overlap, a second insertion at the same anchor, an empty
+hunk list, or any hunk whose old and new bytes are equal fails closed.
+
+| Operation | Exact base rule | Projected result |
+| --- | --- | --- |
+| `create` | The path is absent from the original base. | Adds the supplied content whose digest is `projected_digest`. |
+| `patch` | The path is present and its content digest equals `base_digest`. | Applies the ordered original-base hunks; the result must equal `projected_digest`. |
+| `replace` | The path is present and its content digest equals `base_digest`. | Replaces it with different supplied bytes whose digest is `projected_digest`. |
+| `rename` | The source is present; the distinct destination is absent; both paths have the same `ArtifactKind`; and `base_digest == projected_digest`. | Moves the source bytes unchanged. |
+| `delete` | The path is present and its content digest equals `base_digest`. | Removes the path. |
+
+Operations must be a nonempty tuple ordered by each operation's primary path
+(the rename source) as UTF-8 bytes. A path may participate in only one
+operation, including either side of a rename. Rename chains, swaps, and cycles
+are invalid because a rename source may not also be a rename destination.
+Every operation is evaluated against the original base rather than against a
+preceding operation's projection. No individual operation or complete change
+set may be a no-op.
+
+### Scenario: patch a character sheet exactly
+
+This minimal fixture changes only `scout` to `captain`. The byte offsets are
+17 through 22 in the original UTF-8 bytes:
+
+```python
+import hashlib
+
+from story_writing_agents.writing_artifacts import (
+    ArtifactKind,
+    ArtifactCreateOperation,
+    ArtifactPatchOperation,
+    ArtifactRenameOperation,
+    ArtifactTextHunk,
+    build_artifact_change_set,
+    deserialize_artifact_change_set,
+    project_artifact_change_set,
+    serialize_artifact_change_set,
+)
+
+sha256 = lambda value: hashlib.sha256(value).hexdigest()
+path = "core_documents/character_sheets.md"
+before = b"Name: Mara\nRole: scout\n"
+after = b"Name: Mara\nRole: captain\n"
+base = {path: before}
+base_digest = sha256(before)
+
+hunk = ArtifactTextHunk(
+    base_digest=base_digest,
+    start_utf8_byte=17,
+    end_utf8_byte=22,
+    old_text=b"scout",
+    new_text=b"captain",
+)
+operation = ArtifactPatchOperation(
+    path=path,
+    artifact_kind=ArtifactKind.CORE_DOCUMENT,
+    base_digest=base_digest,
+    hunks=(hunk,),
+    projected_digest=sha256(after),
+)
+change_set = build_artifact_change_set(base, (operation,))
+wire = serialize_artifact_change_set(change_set)
+restored = deserialize_artifact_change_set(wire)
+projected = project_artifact_change_set(base, restored)
+
+print(base_digest)
+print(change_set.base_state_digest)
+print(change_set.projected_state_digest)
+print(change_set.change_set_digest)
+print(dict(projected))
+print(restored == change_set, wire.endswith(b"\n"))
+```
+
+Output:
+
+```text
+99570638f3e420feb6978de30a17c2cacd90072ee55277f3a6becebe68482f7d
+76d6735233da0c88f361e50fd6fe27e240ecb3405657c0ec67474d57e6273cfa
+a25050ae167f12dad6f3c620542586a10490fb7502e5a87efb1154df8f936c8b
+de78ee07ff0f501ebba7c86cf453d0cffef468c752a2bab5a41da715ba6d26f1
+{'core_documents/character_sheets.md': b'Name: Mara\nRole: captain\n'}
+True False
+```
+
+The exact canonical `wire` value is one UTF-8 line with sorted object keys,
+compact separators, and no trailing newline:
+
+```json
+{"base_state_digest":"76d6735233da0c88f361e50fd6fe27e240ecb3405657c0ec67474d57e6273cfa","change_set_digest":"de78ee07ff0f501ebba7c86cf453d0cffef468c752a2bab5a41da715ba6d26f1","operations":[{"base_digest":"99570638f3e420feb6978de30a17c2cacd90072ee55277f3a6becebe68482f7d","hunks":[{"base_digest":"99570638f3e420feb6978de30a17c2cacd90072ee55277f3a6becebe68482f7d","end_utf8_byte":22,"new_text":"captain","old_text":"scout","start_utf8_byte":17}],"kind":"core_document","operation":"patch","path":"core_documents/character_sheets.md","projected_digest":"6bc9739b048a6b54c61a23642f1736cdf13fdee1a8475ecceb590eae459f6022"}],"projected_state_digest":"a25050ae167f12dad6f3c620542586a10490fb7502e5a87efb1154df8f936c8b","schema_version":1}
+```
+
+This output is only an in-memory proposal. The character-sheet file is still
+unchanged on disk, and no user confirmation has been requested or granted.
+
+### Scenario: create a manuscript
+
+Creation binds both the required absence and the new bytes. This and the next
+scenario reuse the imports and `sha256` helper above:
+
+```python
+content = b"Scene placeholder.\n"
+path = "manuscript/part-02/opening.md"
+create = ArtifactCreateOperation(
+    path=path,
+    artifact_kind=ArtifactKind.MANUSCRIPT,
+    content=content,
+    projected_digest=sha256(content),
+)
+creation = build_artifact_change_set({}, (create,))
+print(dict(project_artifact_change_set({}, creation)))
+```
+
+```text
+{'manuscript/part-02/opening.md': b'Scene placeholder.\n'}
+```
+
+If that path is present in the supplied base, building fails with
+`base_artifact_mismatch`. Projection still does not create the file.
+
+### Scenario: rename a manuscript and patch an inbound link
+
+A rename preserves bytes but does not discover relationships. Here the caller
+supplies a separate patch to the index that names the manuscript:
+
+```python
+index_path = "manuscript/part-01/index.md"
+source_path = "manuscript/part-01/opening.md"
+destination_path = "manuscript/part-01/arrival.md"
+index_before = b"[Opening](opening.md)\n"
+index_after = b"[Opening](arrival.md)\n"
+scene = b"# Opening\n"
+index_digest = sha256(index_before)
+scene_digest = sha256(scene)
+
+link_patch = ArtifactPatchOperation(
+    path=index_path,
+    artifact_kind=ArtifactKind.MANUSCRIPT,
+    base_digest=index_digest,
+    hunks=(ArtifactTextHunk(
+        base_digest=index_digest,
+        start_utf8_byte=10,
+        end_utf8_byte=20,
+        old_text=b"opening.md",
+        new_text=b"arrival.md",
+    ),),
+    projected_digest=sha256(index_after),
+)
+rename = ArtifactRenameOperation(
+    source_path=source_path,
+    destination_path=destination_path,
+    artifact_kind=ArtifactKind.MANUSCRIPT,
+    base_digest=scene_digest,
+    projected_digest=scene_digest,
+)
+base = {index_path: index_before, source_path: scene}
+proposal = build_artifact_change_set(base, (link_patch, rename))
+print(dict(project_artifact_change_set(base, proposal)))
+```
+
+```text
+{'manuscript/part-01/arrival.md': b'# Opening\n', 'manuscript/part-01/index.md': b'[Opening](arrival.md)\n'}
+```
+
+The operation order is `index.md` then `opening.md`, the UTF-8 ordering of the
+primary paths. The pure change-set layer also accepts the rename without the
+link patch. The relationship validator below distinguishes the dangling
+rename from this repaired proposal. Nothing in this scenario changes either
+file on disk.
+
+### Complete-state digests, serialization, and failures
+
+The base and projected state digests cover the complete supplied mapping, not
+only changed paths. Their canonical manifest has this shape, with artifacts
+sorted by path UTF-8 bytes:
+
+```json
+{"artifacts":[{"content_digest":"<lowercase SHA-256>","kind":"core_document","path":"core_documents/character_sheets.md","utf8_bytes":23}],"schema_version":1}
+```
+
+The digest is the SHA-256 of those canonical JSON bytes. An unrelated path
+addition, removal, or byte change therefore causes `base_state_mismatch` at
+projection. `change_set_digest` is the SHA-256 of the canonical change-set
+object without its own `change_set_digest` field. It is content identity only:
+it carries no user, agent, session, confirmation, authority, timestamp, or Git
+metadata.
+
+`serialize_artifact_change_set()` is intentionally the explicit review
+surface: it includes create/replace content and patch old/new text. Ordinary
+dataclass representations omit those direct content fields, and every
+`ArtifactChangeSetError` has a fixed content-free message. Do not place
+serialized bytes in an ordinary diagnostic channel. Deserialization requires
+exact `bytes`, strict UTF-8, unique keys at every nesting level, exact fields,
+and byte-identical canonical JSON. Pretty printing, a trailing newline,
+duplicate or unknown fields, noncanonical key/spacing/escape forms, and
+`NaN`/`Infinity` are rejected.
+
+Typical closed failures are:
+
+| Input | Observable result |
+| --- | --- |
+| Project the character-sheet change set over a mapping with changed or extra bytes. | `error.code is ArtifactChangeSetErrorCode.BASE_STATE_MISMATCH` |
+| Build a patch after its target bytes drift, or give a hunk the wrong exact `old_text`. | `BASE_ARTIFACT_MISMATCH`, with the operation and, when applicable, hunk index |
+| Supply consuming ranges `[0, 5)` and `[4, 7)`. | `HUNK_OVERLAP`, `hunk_index == 1` |
+| Patch and replace the same path in one operation tuple. | `PATH_COLLISION`, `operation_index == 1` |
+| Rename onto an existing base path, create an existing path, or use a missing source. | `RENAME_CONFLICT` or `BASE_ARTIFACT_MISMATCH`, according to the violated rule |
+
+The stable error-code values are:
+
+```text
+invalid_schema, invalid_serialization, invalid_utf8, invalid_path,
+invalid_kind, invalid_digest, invalid_hunk, invalid_byte_boundary, no_op,
+hunk_order, hunk_overlap, duplicate_insertion, operation_order,
+base_state_mismatch, base_artifact_mismatch, projected_digest_mismatch,
+path_collision, rename_conflict, change_set_digest_mismatch
+```
+
+`ArtifactChangeSetError` is a `RuntimeError` with the exact constructor
+`ArtifactChangeSetError(code, *, operation_index=None, hunk_index=None)`. It
+exposes the enum `code`, optional zero-based `operation_index`, and optional
+zero-based `hunk_index`. A failed build or projection has no partial result and
+performs no recovery or retry. The caller must acquire current bytes and build
+a new exact proposal; this pure API does not read those bytes itself.
+
+## Canonical artifact relationship validation
+
+> **Availability:** schema-v1 relationship validation is an implemented, pure
+> in-memory Python contract over a complete base mapping and one exact change
+> set. It does not read or write files, invoke an agent or provider, select a
+> specialist, request or record confirmation, apply or stage a proposal, or
+> create a Git commit.
+
+The relationship policy answers two artifact-only questions: whether the
+projected canonical graph has any links to absent canonical artifacts, and
+which story-review domains the proposed operations and supplied core-evidence
+facts affect. It returns immutable facts for a later workflow to interpret;
+it does not produce a user-facing answer itself.
+
+| Internal mechanism | User-side meaning |
+| --- | --- |
+| Project the exact change set over the caller-supplied complete base state. | The result describes what the artifacts would look like; no workspace changed. |
+| Parse the base and projected canonical link graphs and compare them. | A caller can show every added, removed, retained, or still-dangling link instead of silently accepting a broken rename or delete. |
+| Reject rename/delete operations on the four permanent core identities. | A missing core document may be created and a present one may be patched or replaced, but its canonical identity cannot be moved or removed. |
+| Derive content-free domain/reason facts. | A future lead workflow can explain which kinds of review are relevant, but this layer names no agent and dispatches nobody. |
+
+### Public Python surface and limits
+
+The relationship module exports exactly 15 symbols, all re-exported from the
+writing-artifacts facade and absent from the project-root facade:
+
+```python
+from story_writing_agents.writing_artifacts import (
+    ARTIFACT_RELATIONSHIP_COMPANION_RULES,
+    ARTIFACT_RELATIONSHIP_SCHEMA_VERSION,
+    MAX_RELATIONSHIP_ARTIFACTS,
+    MAX_RELATIONSHIP_ARTIFACT_UTF8_BYTES,
+    MAX_RELATIONSHIP_EDGES,
+    MAX_RELATIONSHIP_STATE_UTF8_BYTES,
+    ArtifactRelationshipEdge,
+    ArtifactRelationshipError,
+    ArtifactRelationshipErrorCode,
+    ArtifactRelationshipKind,
+    ArtifactRelationshipValidation,
+    ArtifactReviewDomain,
+    ArtifactReviewFact,
+    ArtifactReviewReason,
+    validate_artifact_relationships,
+)
+```
+
+The schema version is `1`, and the companion-rule set is the exact empty tuple
+`()`. The fixed inclusive limits apply independently to both the base and
+projected state:
+
+| Limit | Exact value |
+| --- | ---: |
+| Canonical artifacts | 4,096 |
+| Strict-UTF-8 bytes in one artifact | 8 MiB |
+| Strict-UTF-8 bytes across one complete state | 64 MiB |
+| Parsed canonical relationship edges in one state | 65,536 |
+
+The three result values are frozen, slotted dataclasses with these exact
+fields:
+
+```text
+ArtifactRelationshipEdge(
+    source_path, target_path,
+    destination_start_utf8_byte, destination_end_utf8_byte,
+    fragment, relationship_kind,
+)
+ArtifactReviewFact(domain, reason, artifact_path, operation_index)
+ArtifactRelationshipValidation(
+    schema_version, base_state_digest, projected_state_digest,
+    change_set_digest, added_edges, removed_edges, retained_edges,
+    projected_dangling_edges, review_facts,
+)
+```
+
+`ArtifactRelationshipValidation.is_valid` is `True` exactly when
+`projected_dangling_edges` is empty. The validation entry point is:
+
+```python
+validate_artifact_relationships(
+    base_state: Mapping[str, bytes],
+    change_set: ArtifactChangeSet,
+    *,
+    attached_core_paths: tuple[str, ...],
+) -> ArtifactRelationshipValidation
+```
+
+`attached_core_paths` must be an exact, duplicate-free tuple containing zero or
+more of the four core identities in ascending UTF-8 path order. It is a
+caller-supplied evidence fact, not proof that this function read, authorized,
+or understood a file.
+
+The returned values contain paths, digests, relationship kinds, byte spans,
+review facts, and an optional fragment. They contain no artifact bytes, link
+labels, surrounding prose, agent IDs, provider result, confirmation, or Git
+metadata. `fragment` is available by explicit field access but omitted from
+ordinary representations. Fixed errors and their exception graphs do not
+include paths, fragments, labels, or prose; validation emits no log records.
+The input mappings and change set are not mutated or retained by the result.
+
+### Exact link subset
+
+The one recognized relationship kind is `inline_markdown_link`. Its source
+syntax is the exact inline subset:
+
+```text
+[nonempty label](destination)
+[nonempty label](destination#optional-fragment)
+```
+
+The first `]` closes the nonempty label; before it, the label may not contain a
+line break, `[`, backslash, or an ASCII control. The opening `[` may not be
+escaped or immediately form an unescaped image marker `![`. The destination
+must be nonempty strict UTF-8 with no ASCII space
+or control, backslash, parentheses, `?`, or `%`. It may contain at most one
+`#`; when present, the fragment must be nonempty and additionally cannot
+contain `#`. Scheme-like targets such as `https:`, network-path targets that
+start with `//`, titled links, reference links/definitions, autolinks, HTML,
+images, nested-parenthesis destinations, empty targets, and noncanonical forms
+are not relationships.
+
+Inline links inside matching backtick code spans are ignored. Fenced regions
+opened by at least three backticks or tildes after zero to three spaces are
+also ignored through a matching same-marker close of at least the opening
+length; an unclosed fence is ignored through end of content.
+
+A relative destination is resolved from the source artifact's directory. A
+single leading `/` resolves from the workspace root. Empty and `.` path
+segments are ignored, while `..` removes one component. An attempt to move
+above the workspace root raises `PATH_ESCAPE`; this is a hard failure even if
+the eventual spelling would not be a canonical artifact. A resolved target
+enters the graph only if it is one of the four exact core identities or a
+canonical `manuscript/PART/PATH.md` identity. Safe noncanonical and internal
+targets such as `transcripts/`, `discussion_logs/`, `agent_states/`, or a
+Unicode manuscript filename are treated as ordinary prose, not as edges or
+dangling blockers.
+
+The edge records the zero-based half-open UTF-8 byte span of the destination's
+**path only** in the source content. The optional fragment is recorded
+separately and does not participate in target existence or anchor validation.
+The parser does not normalize case, percent escapes, Unicode, or path spelling.
+
+### Graph delta and review facts
+
+Validation first checks the bounded complete base, projects the exact change
+set, rejects protected core operations, then checks the bounded projection.
+It parses both complete graphs and returns deterministic UTF-8-ordered tuples:
+
+- `added_edges` exist only after projection;
+- `removed_edges` exist only in the base;
+- `retained_edges` are byte-span-, source-, target-, fragment-, and
+  kind-identical in both states; and
+- `projected_dangling_edges` contains **every** added or retained edge whose
+  canonical target is absent from the projected state.
+
+A dangling graph returns a validation value with `is_valid == False`; it is
+not reduced to the first blocker and is not raised as an exception. A change
+may repair a pre-existing dangling edge by creating its missing target. When a
+linked manuscript is renamed, every inbound source must be changed separately.
+When a source manuscript moves, its unchanged relative outbound links are
+resolved again from the destination directory, so the old edge is removed and
+the newly resolved edge is added. Finite cycles and self-links are valid when
+all targets exist; validation does not recurse through the graph.
+
+Schema v1 has no companion inference:
+`ARTIFACT_RELATIONSHIP_COMPANION_RULES == ()`. Similar filenames, part
+membership, ordinary prose, search words, `${...}` references, and `$$`
+markers never create edges.
+
+Review facts are exact artifact facts, not routing decisions:
+
+| Reason | Domain and artifact fact |
+| --- | --- |
+| `touched_core` | A core create, patch, or replace maps `global_outline.md` and `part_outlines.md` to `plot_structure`, `character_sheets.md` to `character_world`, and `narrative_rules.md` to `tone_execution`; it carries the operation index. |
+| `manuscript_operation` | Every manuscript create, patch, replace, rename, or delete adds `tone_execution` for the primary path and operation index. |
+| `attached_core_evidence` | Each exact caller-attached core path adds its mapped domain with `operation_index=None`. |
+| `relationship_core_evidence` | A directly incident base or projected edge between a participating operation path and a core endpoint adds that core's domain and operation index. |
+
+Facts are deduplicated and deterministically sorted. Relevance is direct only:
+the policy performs no transitive graph walk and no natural-language inference.
+The later proposal-mapping workflow planned in Issue #490 may map these domains
+to specialist consultation choices. This API deliberately exposes no agent ID
+and cannot silently choose, trigger, or attribute a specialist.
+
+### Provider-free scenario harness
+
+Run this helper once before the seven workflows below. It builds exact change
+sets and validates them without a provider, repository, or workspace:
+
+```python
+import hashlib
+
+from story_writing_agents.writing_artifacts import (
+    ArtifactCreateOperation,
+    ArtifactDeleteOperation,
+    ArtifactKind,
+    ArtifactPatchOperation,
+    ArtifactRelationshipError,
+    ArtifactRenameOperation,
+    ArtifactReplaceOperation,
+    ArtifactTextHunk,
+    build_artifact_change_set,
+    validate_artifact_relationships,
+)
+
+sha256 = lambda content: hashlib.sha256(content).hexdigest()
+
+def create(path, content, kind=ArtifactKind.MANUSCRIPT):
+    return ArtifactCreateOperation(path, kind, content, sha256(content))
+
+def patch(path, before, after, kind=ArtifactKind.MANUSCRIPT):
+    digest = sha256(before)
+    hunk = ArtifactTextHunk(digest, 0, len(before), before, after)
+    return ArtifactPatchOperation(path, kind, digest, (hunk,), sha256(after))
+
+def replace(path, before, after, kind=ArtifactKind.MANUSCRIPT):
+    return ArtifactReplaceOperation(
+        path, kind, sha256(before), after, sha256(after)
+    )
+
+def rename(source, destination, content):
+    digest = sha256(content)
+    return ArtifactRenameOperation(
+        source, destination, ArtifactKind.MANUSCRIPT, digest, digest
+    )
+
+def validate(base, operations, attached=()):
+    change_set = build_artifact_change_set(base, operations)
+    return validate_artifact_relationships(
+        base, change_set, attached_core_paths=attached
+    )
+```
+
+These are library examples. The quoted lead replies are illustrative outputs
+for the future lead workflow, not strings returned by this validator.
+
+#### 1. Create a missing core document
+
+User input: “The global outline is empty because its file is missing. Propose
+the minimum initial structure.”
+
+```python
+core = "core_documents/global_outline.md"
+content = b"Outline placeholder.\n"
+result = validate(
+    {},
+    (create(core, content, ArtifactKind.CORE_DOCUMENT),),
+)
+print(result.is_valid)
+print([
+    (fact.domain.value, fact.reason.value, fact.artifact_path,
+     fact.operation_index)
+    for fact in result.review_facts
+])
+```
+
+```text
+True
+[('plot_structure', 'touched_core', 'core_documents/global_outline.md', 0)]
+```
+
+The same absent/create rule applies to each of the four core identities;
+patch and replace are valid only when that identity is present and exact. A
+future lead can say, “The missing global outline can be created, and the
+proposal requires plot/structure review. Shall I proceed to that review?” The
+file is still absent: no write or confirmation occurred.
+
+#### 2. Reject a protected-core rename or delete
+
+User input: “Delete the global outline; we no longer need it.”
+
+```python
+base = {core: content}
+delete = ArtifactDeleteOperation(
+    core, ArtifactKind.CORE_DOCUMENT, sha256(content)
+)
+change_set = build_artifact_change_set(base, (delete,))
+try:
+    validate_artifact_relationships(base, change_set, attached_core_paths=())
+except ArtifactRelationshipError as error:
+    print(error.code.value, error.operation_index)
+```
+
+```text
+protected_core_operation 0
+```
+
+All four core identities have the same permanent rule, including rename. A
+future lead can reject the destructive form and offer an exact patch or
+replacement instead. The current core bytes remain unchanged.
+
+#### 3. Detect every blocker in a broken manuscript rename
+
+User input: “Rename `opening.md` to `arrival.md`.”
+
+```python
+opening = "manuscript/part-01/opening.md"
+arrival = "manuscript/part-01/arrival.md"
+chapter_list = "manuscript/part-01/chapter-list.md"
+index = "manuscript/part-01/index.md"
+before = b"[Opening](opening.md)"
+after = b"[Arrival](arrival.md)"
+scene = b"chapter"
+base = {chapter_list: before, index: before, opening: scene}
+
+broken = validate(base, (rename(opening, arrival, scene),))
+print(broken.is_valid, len(broken.projected_dangling_edges))
+print([
+    (edge.source_path, edge.target_path)
+    for edge in broken.projected_dangling_edges
+])
+```
+
+```text
+False 2
+[('manuscript/part-01/chapter-list.md', 'manuscript/part-01/opening.md'), ('manuscript/part-01/index.md', 'manuscript/part-01/opening.md')]
+```
+
+A future lead can say, “I cannot advance this rename as proposed: both
+`chapter-list.md` and `index.md` would still point to the removed identity.”
+That is a proposal critique only; the source file has not moved.
+
+#### 4. Validate the rename with all inbound repairs
+
+User input: “Include both inbound-link repairs in the same rename proposal.”
+
+```python
+repaired = validate(
+    base,
+    (
+        patch(chapter_list, before, after),
+        patch(index, before, after),
+        rename(opening, arrival, scene),
+    ),
+)
+print(
+    repaired.is_valid,
+    len(repaired.removed_edges),
+    len(repaired.added_edges),
+    len(repaired.projected_dangling_edges),
+)
+```
+
+```text
+True 2 2 0
+```
+
+This is the relationship-checked form of the exact change-set workflow above.
+A future lead can say, “The atomic proposal removes both old links, adds both
+new links, and has no dangling target. It is ready for the later review step.”
+Validation still did not apply or confirm any operation.
+
+#### 5. Edit a manuscript with attached and linked core evidence
+
+User input: “Revise the review scene using the character sheet I attached and
+add its narrative-rule link.”
+
+```python
+manuscript = "manuscript/part-01/review.md"
+characters = "core_documents/character_sheets.md"
+rules = "core_documents/narrative_rules.md"
+before = b"[Characters](/core_documents/character_sheets.md)"
+after = before + b"\n[Rules](/core_documents/narrative_rules.md)"
+base = {
+    characters: b"Characters.\n",
+    rules: b"Rules.\n",
+    manuscript: before,
+}
+reviewed = validate(
+    base,
+    (replace(manuscript, before, after),),
+    attached=(characters,),
+)
+print(reviewed.is_valid)
+for fact in reviewed.review_facts:
+    print(
+        fact.domain.value, fact.reason.value,
+        fact.artifact_path, fact.operation_index,
+    )
+```
+
+```text
+True
+character_world attached_core_evidence core_documents/character_sheets.md None
+character_world relationship_core_evidence core_documents/character_sheets.md 0
+tone_execution manuscript_operation manuscript/part-01/review.md 0
+tone_execution relationship_core_evidence core_documents/narrative_rules.md 0
+```
+
+A future lead can say, “The artifact facts indicate character/world and
+tone/execution review. May I dispatch those consultations?” The fact list does
+not choose agents, prove that the attachment was read, or authorize a write.
+
+#### 6. Allow a finite manuscript cycle
+
+User input: “Create the three cross-linked manuscript notes, including the
+self-link.”
+
+```python
+cycle = validate(
+    {},
+    (
+        create("manuscript/part-01/a.md", b"[B](b.md)"),
+        create("manuscript/part-01/b.md", b"[C](c.md)"),
+        create("manuscript/part-01/c.md", b"[A](a.md) [Self](c.md)"),
+    ),
+)
+print(cycle.is_valid, len(cycle.added_edges), cycle.projected_dangling_edges)
+```
+
+```text
+True 4 ()
+```
+
+A future lead can report that every canonical target exists and the cycle is
+structurally valid. That is not a judgment about story quality and does not
+create the three files.
+
+#### 7. Keep ordinary discussion outside change validation
+
+User input: “Would a quieter opening better fit this story?”
+
+There is no proposed artifact operation, so the application should not invent
+a no-op change set or call relationship validation. There is no validation
+value and no review fact to display. Plain words such as “opening,” a filename,
+or a core-document name do not create relationships or select a specialist.
+A future lead can clarify the question, answer directly, or separately propose
+a consultation according to the later orchestration workflow. Nothing is
+written, staged, or committed.
+
+### Relationship failures and retry
+
+The stable relationship error-code values are:
+
+```text
+invalid_schema, invalid_attached_core_paths, protected_core_operation,
+path_escape, artifact_count_limit, artifact_size_limit, state_size_limit,
+edge_count_limit
+```
+
+`ArtifactRelationshipError` has the exact constructor
+`ArtifactRelationshipError(code, *, operation_index=None,
+artifact_index=None, link_index=None)`. Its optional indices are zero-based:
+operations follow change-set order, artifacts follow canonical UTF-8 path
+order, and links follow source scan order. A malformed or noncanonical input,
+invalid attachment tuple, protected-core operation, escaping target, or limit
+failure raises without a partial validation value. Exact change-set failures,
+such as base-state drift, propagate as `ArtifactChangeSetError` rather than
+being wrapped.
+
+A retry must use current complete base bytes and a newly rebuilt exact change
+set when those bytes changed. For `is_valid == False`, the caller can use every
+returned dangling edge to construct one revised proposal. Neither path grants
+confirmation or write authority.
 
 ## Reference directive parser
 

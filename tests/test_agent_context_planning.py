@@ -2726,7 +2726,7 @@ class PlanningBoundaryAndPurityTests(PlanningTestCase):
     def test_facades_remain_exact_and_clean_direct_import_works(self) -> None:
         self.assertEqual(len(story_writing_agents.__all__), 104)
         self.assertEqual(len(agent_context.__all__), 11)
-        self.assertEqual(len(writing_artifacts.__all__), 31)
+        self.assertEqual(len(writing_artifacts.__all__), 62)
         self.assertFalse(hasattr(agent_context, "ContextManifest"))
         self.assertFalse(hasattr(agent_context, "ContextPlanningPolicy"))
         self.assertFalse(hasattr(story_writing_agents, "ContextManifest"))
