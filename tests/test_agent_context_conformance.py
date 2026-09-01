@@ -117,7 +117,8 @@ class AgentContextConformanceTests(unittest.TestCase):
         )
         self.assertIn("The controller uses that schema-v2 service for", overview)
         self.assertIn(
-            "#452 owns the later lead proposal/confirmation/reconfirmation workflow",
+            "The current #452 layer owns lead "
+            "proposal/confirmation/reconfirmation behavior",
             overview,
         )
         self.assertIn(

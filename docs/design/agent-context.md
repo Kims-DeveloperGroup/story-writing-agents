@@ -1,9 +1,9 @@
 # Agent-context design
 
-This document is the maintainer model for the retained bounded agent-context
-component. The current public runtime has no provider-bound story entry that
-invokes it. References below to provider calls describe low-level component
-behavior and future integration, not a callable `StoryRuntime` or shell path.
+This document is the maintainer model for the bounded agent-context component.
+`StoryRuntime.lead_turn()` invokes it for the current Python lead workflow. The
+installed shell and specialist execution do not. References below distinguish
+that integration from direct low-level component use.
 See [Agent-context progress](../guides/agent-context-progress.md).
 
 <a id="package-boundary-and-owners"></a>
@@ -23,9 +23,10 @@ cycle:
 | `agent_context.sources` | Bounded current capture of canonical artifacts, focused conversation, active debate, and invoking-agent state; lexical search/read and drift checks. |
 | `agent_context.service` | Provider-neutral wire-v5 call loop, reference prelude, lifecycle authority, source/action orchestration, checkpoint commit, usage aggregation, and optional progress observer. |
 
-The retained execution entry points are backend/provider component interfaces.
-`StoryRuntime` and `RuntimeSession` are management/inspection facades and do not
-accept context-execution requests. Progress observer types are
+The retained execution entry points are backend/provider component interfaces,
+plus the runtime's lead-turn composition. `StoryRuntime.lead_turn()` and the
+bound `RuntimeSession.lead_turn()` accept optional context progress sinks.
+Progress observer types are
 direct-module-only imports from `agent_context.service`; the root and
 `agent_context` facades do not export them.
 
@@ -141,11 +142,13 @@ descendant and excludes transcripts, discussion logs, agent states, ledgers,
 symlink escapes, and other internal files.
 
 `FocusedConversationSourceAdapter` reads canonical v2 events from the active
-store and applies `select_bounded_collaboration_context()`. With no explicit
-event IDs, the source is a content-free bootstrap with no provider-readable
-record body. Explicit selections preserve whole readable records under the
-24-record/32,768-byte bound and use `ContextSourceBoundaryKind.RECORDS`.
-Private payload fields and automatic full-history injection are excluded.
+store and applies `select_bounded_collaboration_context()`. Its default mode is
+a content-free bootstrap with no provider-readable record body. The lead
+runtime explicitly enables bounded searchable history across active
+same-session conversations: it still sends zero eager bodies, then SEARCH and
+READ add only authorized selected records under the 24-record/32,768-byte
+bound. Private payload fields and automatic full-history injection are
+excluded.
 
 The default action policy permits four nonterminal actions and five provider
 calls: at most two SEARCH, two READ, four queries per SEARCH/eight cumulative,
@@ -235,8 +238,8 @@ earlier agent or invocation read it.
 `ContextExecutionEvent`, `ContextExecutionEventKind`, and
 `ContextExecutionEventSink` are available only from
 `story_writing_agents.agent_context.service`. A low-level contextual executor
-can accept the synchronous callback; it must return exactly `None`. Neither
-public runtime facade currently exposes an observer-bearing provider method.
+and `lead_turn()` can accept the synchronous callback; it must return exactly
+`None`.
 
 Noncallable, declared async/async-generator, asynchronously callable, or
 noncontextual observers fail before contextual effects. A callback exception,
@@ -246,7 +249,7 @@ cannot be rolled back, though the outer operation reports observer failure. If
 an independent runtime failure is primary, terminal-observer failure is
 suppressed. No observer preserves calls, results, schemas, and persistence.
 
-A later shell integration can validate each correlated event stream and render
+A Python application can validate each correlated event stream and render
 compact content-free lines. The current management-only shell emits none. The
 component has no lifecycle replay or durable observer store.
 

@@ -18,7 +18,7 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 97.
 
-Direct internal dependency edges indexed: 362.
+Direct internal dependency edges indexed: 369.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -37,7 +37,9 @@ __main__ -> cli -> conversation_rag_cli
                  -> provider_auth -> (standard library only)
                  -> provider_catalog -> (standard library only)
                  -> debug_log -> agents/provider_adapter/workspace
-                 -> orchestrator -> backend/config/debug_log/directives
+                 -> orchestrator -> agents/agent_context.accounting
+                 |               -> agent_context.manifest/planning/service/sources
+                 |               -> backend/config/conversations/debug_log/directives
                  |               -> conversation_rag_runtime
                  |               -> conversation_storage.composition/contracts
                  |               -> errors/prompts/workspace
@@ -560,13 +562,16 @@ every intermediate arrow. The current runtime graph is acyclic.
   explicit retrieval mode inventories all active conversations in the same
   session through the borrowed public catalog/`CollaborationEventStore` ports,
   while its captured-context mode projects one already-validated immutable
-  `CollaborationReadableContext` without widening authority. It owns content-free
-  identities and revisions, exact physical artifact lines, canonical structured
-  readable-event/debate/owner-state bodies, and repr-hidden strict-UTF-8
-  captures. Each retained conversation event becomes one bounded source record
-  whose revision binds the canonical event-derived body; the bootstrap remains
-  content-free, hidden/private fields are excluded, and no full-history default
-  is implied.
+  `CollaborationReadableContext` without widening authority. Its separate
+  `include_searchable_history` mode explicitly selects the bounded readable
+  event window for those authorized conversations so SEARCH and READ can
+  discover stored v2 history; the default still selects no event body. It owns
+  content-free identities and revisions, exact physical artifact lines,
+  canonical structured readable-event/debate/owner-state bodies, and
+  repr-hidden strict-UTF-8 captures. Each retained conversation event becomes
+  one bounded source record whose revision binds the canonical event-derived
+  body; the bootstrap remains content-free, hidden/private fields are excluded,
+  and no full-history default is implied.
   Active-debate records expose canonical public state first and durable messages
   afterward, keeping state independently searchable/readable even when the
   whole source exceeds the whole-handle cap. The module also owns record
@@ -577,8 +582,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `agent_context.manifest`, `conversations`, `errors`, `models`, `workspace`,
   `writing_artifacts.filesystem_sources`, `writing_artifacts.references`, and
   `writing_artifacts.repository`.
-- **State, resources, and side effects:** Adapters retain only borrowed public
-  owner collaborators and immutable scope identities. The registry owns no
+- **State, resources, and side effects:** Adapters retain borrowed public owner
+  collaborators and immutable scope identities. The explicit searchable-history
+  conversation adapter additionally freezes its authorized conversation-ID
+  inventory and bounded snapshots in an adapter-local cache for its lifetime;
+  ordinary and captured-context modes remain uncached. The registry owns no
   cache, descriptor, lock, or file handle. Inventory performs stable
   list/capture/re-list validation; capture double-reads mutable owners, while
   captured immutable readable contexts are identity-validated once; search
@@ -605,9 +613,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   `AgentContextService`, `ContextExecutionError`,
   `ContextExecutionErrorCode`, `ContextExecutionEvent`,
   `ContextExecutionEventKind`, `ContextExecutionEventSink`,
-  `ContextInvocationBinding`,
+  `ContextInvocationBinding`, `ContextInvocationKind`,
   `ContextInvocationRequest`, `ContextInvocationResult`,
-  `ContextInvocationSession`, `ContextInvocationState`, `ContextProvider`,
+  `ContextInvocationSession`, `ContextInvocationState`,
+  `ContextJsonObjectResultContract`, `ContextProvider`,
   `ContextProviderCallFinalizer`, `ContextProviderCallRequest`,
   `ContextProviderCallResult`, `ContextProviderFailureFacts`,
   `ContextProviderTerminalCode`, `ContextReferencePreludeRequest`,
@@ -634,7 +643,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   authoritative phase, dynamically available action, route-specific searchable
   kind, remaining-limit, and result-shape contract, and the strict decoder and
   session enforce that same tuple and canonicalize accepted structured results
-  into the existing internal answer string before domain validation. SEARCH
+  into the existing internal answer string before domain validation. An
+  optional provider-neutral invocation kind and strict JSON-object result
+  contract extend that same tuple for lead execution without importing a story
+  domain, while an optional positive physical-call limit bounds the whole
+  invocation including its mandatory-reference prelude and restricts the final
+  substantive slot to ANSWER. The service exposes its immutable composite
+  policy fingerprint for runtime proposal facts. SEARCH
   decodes one optional action-scoped artifact prefix, projects it across every
   internal query, filters the authorized manifest, and performs one shared
   bounded registry scan. Numeric source/record aliases and compact structured
@@ -651,8 +666,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   while the pure planner still receives its planning-policy fingerprint. The
   synchronized call-local session retains exact reconstructed action
   correlation, route authorization, fresh HMAC search handles and safe
-  locators, bounded counters, atomic one-use reads, delivery receipts, final
-  source revalidation, and answer authorization. Mandatory-reference
+  locators, per-request physical-call and action counters, atomic one-use reads,
+  delivery receipts, final source revalidation, and answer authorization.
+  Mandatory-reference
   reservations stay
   separate from source search/read, use the unchanged provider prelude before
   the substantive action budget, and must complete before verified ledger
@@ -2953,12 +2969,12 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/conversations/__init__.py`
 - **Responsibility:** Provide the stable subject-conversation and schema-v2
   collaboration contract import boundary.
-- **Supported surface:** Exactly 81 names in `__all__`: the retained immutable
+- **Supported surface:** Exactly 93 names in `__all__`: the retained immutable
   conversation metadata, visible-event, and bounded-context value contracts;
-  the immutable schema-v2 event, proposal, state,
-  readable-field/record/context, error, projection, and store contracts defined
-  by the two owning leaves; `CollaborationPayload`; the five
-  `COLLABORATION_*` constants; the
+  the immutable schema-v2 lead intent/result/decision, provider-call accounting,
+  event, proposal, state, readable-field/record/context, error, projection, and
+  store contracts defined by the two owning leaves; `CollaborationPayload`; the
+  five `COLLABORATION_*` constants; the
   two digest functions; the eight strict canonical proposal/event/draft/batch
   encode/decode functions; and the five pure collaboration readable/history,
   bounded-context, candidate, and transition functions. Every binding is the object
@@ -3011,11 +3027,12 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.conversations.context`
 
 - **Source:** `src/story_writing_agents/conversations/context.py`
-- **Responsibility:** Define pure bounded projections over conversation
-  histories.
-- **Supported surface:** Exactly 20 owning-module names in `__all__`: the five
+- **Responsibility:** Define pure collaboration interaction and history-
+  projection contracts.
+- **Supported surface:** Exactly 23 owning-module names in `__all__`: the five
   retained immutable context names plus `CollaborationEventStore`,
   `CollaborationHistoryProjection`, `CollaborationNextAction`,
+  `LeadDecisionResult`, `LeadStepDecision`, `LeadTurnResult`,
   `project_collaboration_history`, `validate_collaboration_candidate_batch`,
   and `validate_collaboration_transition`; plus
   `COLLABORATION_READABLE_CONTEXT_POLICY`,
@@ -3039,7 +3056,13 @@ every intermediate arrow. The current runtime graph is acyclic.
   candidate validation deterministically returns the original
   `ALREADY_COMMITTED` receipt for an exact retry and raises the fixed append
   failure taxonomy for batch/event conflicts, stale sequence, invalid
-  candidates, or corrupt existing history. The conversations facade exposes
+  candidates, or corrupt existing history. The lead values carry an exact
+  structured confirmation decision and the visible persisted outcome of an
+  ordinary or decision turn without exposing runtime capability authority. The
+  projection derives rounds and unique submitted physical calls from v2
+  history, and candidate validation admits the exact ordinary-message plus
+  pending-step supersession batch while preserving structured confirmation for
+  confirm, reject, and revise. The conversations facade exposes
   the same defining objects, while the project-root facade exposes only the
   retained immutable value subset.
 - **Direct internal dependencies:** `conversations.events` and `errors`.
@@ -3048,7 +3071,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   the immutable legacy context values and active v2 storage-neutral port; pure
   fixed-policy
   selection; and deterministic full-history, candidate,
-  transition, correlation, budget-lineage, and atomic co-batch validation
+  transition, correlation, provider-call PREPARED/SUBMITTED pairing,
+  budget-lineage, exact-tail lead-decision, and atomic co-batch validation
   including exact external-exchange/result closure and rejection of every late
   provider/execution event outside the exact active running attempt. Owns no
   mutable state or external resource and performs no import-time I/O.
@@ -3065,22 +3089,24 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.conversations.events`
 
 - **Source:** `src/story_writing_agents/conversations/events.py`
-- **Responsibility:** Define immutable visible conversation and collaboration
-  event schemas.
-- **Supported surface:** Exactly 54 owning-module names in `__all__`: the three
+- **Responsibility:** Define immutable visible conversation, lead-intent, and
+  collaboration event schemas.
+- **Supported surface:** Exactly 63 owning-module names in `__all__`: the three
   retained immutable visible-event names; four schema-v2 constants; the closed
-  `Collaboration*` actors, kinds, directions, inputs, profiles, basis, budget,
-  assignments, proposal, outcomes, payloads, events, batches, receipts,
-  failures, and errors; `CollaborationPayload`; two canonical digest
+  `Lead*` semantic outcome/proposal-intent values; the closed `Collaboration*`
+  actors, kinds, directions, inputs, profiles, basis, budget, assignments,
+  proposal, provider-call lifecycle, outcomes, payloads, events, batches,
+  receipts, failures, and errors; `CollaborationPayload`; two canonical digest
   functions; and eight strict proposal/event/draft/batch encode/decode
   functions. The conversations facade exposes every defining object, while
   the project-root facade retains only the three immutable visible-event names.
 - **Direct internal dependencies:** `agents` and `errors`.
 - **State, resources, and side effects:** Immutable v1 and v2 values plus
   deterministic identifier, strict UTF-8/size/privacy, actor direction,
-  proposal closure, 2-round/12-call reservation, payload, outcome, canonical
-  JSON, digest, batch, sequence, and timestamp validation only. Owns no mutable
-  state or external resource and performs no import-time I/O.
+  lead-result closure, proposal closure, 2-round/12-call reservation,
+  content-free provider-call role/kind/state accounting, payload, outcome,
+  canonical JSON, digest, batch, sequence, and timestamp validation only. Owns
+  no mutable state or external resource and performs no import-time I/O.
 - **Primary verification/documentation:**
   `tests/collaboration_contract_fixture.py`,
   `tests/test_collaboration_events.py`,
@@ -4662,15 +4688,32 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.orchestrator`
 
 - **Source:** `src/story_writing_agents/orchestrator.py`
-- **Responsibility:** Own runtime management, configuration activation, session
-  binding, and persisted-state inspection.
+- **Responsibility:** Own the story runtime lifecycle and lead-front-channel
+  orchestration.
 - **Supported surface:** Package-supported `StoryRuntime` and
   `RuntimeSession`; package-internal `RuntimeConfigurationCandidate`.
   Directive/override management, async prepare/commit/discard, session/debate/
   context/reference inspection, and quiescent provider-binding release remain.
+  Both runtime facades add async `lead_turn` and `decide_lead_step` without an
+  agent selector. Ordinary turns persist user input before the lead invocation,
+  can supersede an exact pending request, and return one strict visible lead
+  outcome; exact structured decisions confirm, reject, or revise the
+  authoritative proposal tail. The runtime decodes provider-neutral lead
+  intent, derives required specialist reviewers, authoritative input/profile/
+  route/context/budget facts, complete user impact and side effects, then
+  constructs and persists the canonical proposal and confirmation request.
+  Mandatory attached references retain submitted order and precede optional
+  bounded SEARCH/READ discovery. Provider-call PREPARED/SUBMITTED facts are
+  durably appended around the backend context seam. Restart normalization
+  converts capability-less CONFIRMED state to reconfirmation and unresolved
+  RUNNING state to outcome unknown without replay; corrupt history returns a
+  blocking recovery result. Confirmation creates only a private process-local,
+  nonserializable, single-use start capability for the later execution owner.
   `converse`, `converse_with_retrieval`, `run_prompt`, `run_draft`,
   and the `Runtime`/`Session` aliases are absent.
-- **Direct internal dependencies:** `backend`, `config`,
+- **Direct internal dependencies:** `agent_context.accounting`,
+  `agent_context.manifest`, `agent_context.planning`, `agent_context.service`,
+  `agent_context.sources`, `agents`, `backend`, `config`, `conversations`,
   `conversation_rag_runtime`, `conversation_storage.composition`,
   `conversation_storage.contracts`, `debug_log`, `directives`, `errors`,
   `prompts`, `workspace`,
@@ -4678,12 +4721,17 @@ every intermediate arrow. The current runtime graph is acyclic.
   `writing_artifacts.runtime_references`.
 - **State, resources, and side effects:** Retains workspace, prompt/config, one
   composed v2 `ConversationStorageServices` bundle, optional RAG service,
-  artifact repository, backend snapshot, and quiescent binding state. Runtime
-  and bound sessions expose that same storage bundle; no raw schema-v1 event-
-  store injection or property remains. It performs only explicit management/
-  inspection I/O and no story provider request, history append, debate, or
-  publication.
-- **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
+  artifact repository, backend snapshot, one workspace-scoped
+  `AgentContextService`, quiescent binding state, per-conversation async locks,
+  private confirmed-step capabilities, and the reserved live-execution marker
+  seam. Runtime and bound sessions expose the same storage bundle; no raw
+  schema-v1 event-store injection or property remains. Explicit lead turns may
+  bind the lead, authorize ordered references, invoke its provider-neutral
+  context lifecycle, append schema-v2 user/lead/proposal/state/accounting events,
+  and retain or retire provider bindings. They never dispatch a specialist,
+  create RUNNING/results, mutate a writing artifact, or publish content.
+- **Primary verification/documentation:** `tests/test_lead_orchestration.py`,
+  `tests/test_public_api_and_cli.py`,
   `tests/test_runtime_reference_integration.py`,
   `tests/test_interactive_management.py`,
   `tests/test_interactive_cancellation.py`, and
@@ -5475,19 +5523,21 @@ every intermediate arrow. The current runtime graph is acyclic.
 ## Consistency Notes
 
 - The inventory remains 97 modules. Static AST derivation over every module-
-  level and function-local import yields 362 unique direct internal edges and
-  no directed cycle. Relative to the 360-edge pre-cutover graph, filesystem and
-  SQLite storage each add one direct dependency on `conversations.events` for
-  private legacy-row/file rejection values, smoke adds one dependency on
-  `conversation_storage.contracts`, and orchestrator removes its dependency on
-  the `conversations` facade: three additions minus one removal.
+  level and function-local import yields 369 unique direct internal edges and
+  no directed cycle. Relative to the prior 362-edge graph, `orchestrator` adds
+  exactly seven dependencies: `agents`, `agent_context.accounting`,
+  `agent_context.manifest`, `agent_context.planning`, `agent_context.service`,
+  `agent_context.sources`, and the `conversations` facade. No edge is removed.
 - The project-root facade contains exactly 104 unique exports. It removes the
   active schema-v1 store, search/page/service, and transcript-retrieval surface;
   adds only `ConversationRetrievalHistoryRecord`; and exports no concrete v2
   storage adapter. The workspace facade contains exactly `Workspace`,
   `initialize_workspace`, and `FilesystemConversationCatalog`. The 63-name
   conversation-storage facade exports contracts/composition/archive workflow
-  only and no concrete filesystem or SQLite adapter.
+  only and no concrete filesystem or SQLite adapter. The conversations facade
+  now contains exactly 93 exports; its context and events owners contain 23 and
+  63 respectively, while `agent_context.service` contains 26 direct-module-only
+  exports and the project-root surface remains unchanged.
 - `models.py` remains a provider-neutral value-contract owner with direct
   dependencies on `agents`, `conversations`, and `errors`.
   `run_inputs.py` remains the strict input-loading helper with its sole direct

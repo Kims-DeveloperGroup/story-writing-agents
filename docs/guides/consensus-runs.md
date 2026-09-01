@@ -1,7 +1,7 @@
 # Collaboration execution transition
 
-Public prompt/draft consensus execution is intentionally unavailable in this
-integration stage.
+Public prompt/draft consensus execution is intentionally unavailable. Python
+lead advice and proposal confirmation are available, but stop before execution.
 
 ## Before and now
 
@@ -9,9 +9,10 @@ Before issue #478, the project exposed several independent schema-v1 routes to
 an advisory turn or debate. They duplicated orchestration and persistence
 decisions. Those public consumers have been removed rather than forwarded.
 
-Now there is no installed CLI command, interactive command, or
-`StoryRuntime`/`RuntimeSession` method that starts a story turn or consensus
-run. The underlying provider, prompt, context, lifecycle, result, and storage
+There is no installed CLI/interactive command or runtime method that starts a
+consensus run. `lead_turn()` starts only a lead front-channel turn, and
+`decide_lead_step()` records only a proposal decision. The underlying provider,
+prompt, context, lifecycle, result, and storage
 components remain internal building blocks; their presence does not make a
 public run path available.
 
@@ -20,8 +21,8 @@ public run path available.
 You can prepare sessions, conversations, directives, provider settings,
 storage, and canonical artifact files. You can inspect existing state and use
 schema-v2 collaboration contracts directly. You cannot ask the installed
-runtime to draft, critique, debate, modify a core document, or publish a new
-manuscript in this revision.
+runtime to debate, modify a core document, or publish a new manuscript. A
+Python caller can ask the lead for a critique or proposal.
 
 Attempted shell execution receives:
 
@@ -35,9 +36,9 @@ side effect.
 ## Replacement path
 
 Issues #466 and #474-#479 delivered the schema-v2 values, projections,
-storage/archive/transfer, and sole active storage/inspection service. Open
-#452 owns later lead-facing proposal/confirmation/reconfirmation behavior,
-#453 owns specialist execution/result/finalization/outcome-unknown behavior,
+storage/archive/transfer, and sole active storage/inspection service. The #452
+layer owns lead-facing proposal/confirmation/reconfirmation behavior. #453
+owns specialist execution/result/finalization/outcome-unknown behavior,
 and #454 owns whole-workspace rejection of unsupported history.
 
 Do not restore or wrap an earlier direct path. During this transition, use

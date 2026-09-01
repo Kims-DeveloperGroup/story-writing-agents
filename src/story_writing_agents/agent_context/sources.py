@@ -1056,6 +1056,7 @@ class FocusedConversationSourceAdapter:
         conversation_id: str | None,
         *,
         include_same_session_active: bool = False,
+        include_searchable_history: bool = False,
         captured_context: CollaborationReadableContext | None = None,
     ) -> None:
         if type(scope) is not ContextScope:
@@ -1066,7 +1067,10 @@ class FocusedConversationSourceAdapter:
                 scope.subject_id != conversation_id
             ):
                 raise _source_error(ContextSourceErrorCode.SCOPE_MISMATCH)
-        if type(include_same_session_active) is not bool:
+        if (
+            type(include_same_session_active) is not bool
+            or type(include_searchable_history) is not bool
+        ):
             raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
         if include_same_session_active and conversation_id is None:
             raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
@@ -1075,6 +1079,7 @@ class FocusedConversationSourceAdapter:
                 type(captured_context) is not CollaborationReadableContext
                 or conversation_id is None
                 or include_same_session_active
+                or include_searchable_history
             ):
                 raise _source_error(ContextSourceErrorCode.INVALID_VALUE)
             bootstrap = captured_context.bootstrap
@@ -1095,7 +1100,12 @@ class FocusedConversationSourceAdapter:
         self.scope = scope
         self._conversation_id = conversation_id
         self._include_same_session_active = include_same_session_active
+        self._include_searchable_history = include_searchable_history
         self._captured_context = captured_context
+        self._snapshot_conversation_ids: tuple[str, ...] | None = None
+        self._snapshots: dict[
+            tuple[str, ContextSourcePolicy], ContextSourceSnapshot
+        ] = {}
 
     def inventory(
         self, policy: ContextSourcePolicy
@@ -1111,8 +1121,17 @@ class FocusedConversationSourceAdapter:
         return f"conversation/{conversation_id}"
 
     def _active_conversation_ids(self) -> tuple[str, ...]:
+        if self._include_searchable_history and (
+            self._snapshot_conversation_ids is not None
+        ):
+            return self._snapshot_conversation_ids
         if self._captured_context is not None or not self._include_same_session_active:
-            return () if self._conversation_id is None else (self._conversation_id,)
+            identifiers = (
+                () if self._conversation_id is None else (self._conversation_id,)
+            )
+            if self._include_searchable_history:
+                self._snapshot_conversation_ids = identifiers
+            return identifiers
         try:
             raw = self._catalog.list(self.scope.session_id, include_archived=False)
         except (StoryWritingAgentsError, OSError, TypeError, ValueError):
@@ -1132,7 +1151,10 @@ class FocusedConversationSourceAdapter:
             raise _source_error(ContextSourceErrorCode.ADAPTER_CONTRACT_VIOLATION)
         if self._conversation_id not in identifiers:
             raise _source_error(ContextSourceErrorCode.SOURCE_MISSING)
-        return tuple(identifiers)
+        captured = tuple(identifiers)
+        if self._include_searchable_history:
+            self._snapshot_conversation_ids = captured
+        return captured
 
     def _authorized_conversation_id(self, locator: str) -> str:
         prefix = "conversation/"
@@ -1158,7 +1180,14 @@ class FocusedConversationSourceAdapter:
             metadata = self._catalog.get(self.scope.session_id, conversation_id)
             if self._captured_context is None:
                 events = self._event_store.read(self.scope.session_id, conversation_id)
-                context = select_bounded_collaboration_context(events)
+                context = select_bounded_collaboration_context(
+                    events,
+                    event_ids=(
+                        tuple(event.event_id for event in events)
+                        if self._include_searchable_history
+                        else ()
+                    ),
+                )
             else:
                 context = self._captured_context
         except ConversationNotFoundError:
@@ -1224,10 +1253,17 @@ class FocusedConversationSourceAdapter:
     ) -> ContextSourceSnapshot:
         policy = _require_source_policy(policy)
         self._authorized_conversation_id(locator)
+        cache_key = (locator, policy)
+        if self._include_searchable_history:
+            cached = self._snapshots.get(cache_key)
+            if cached is not None:
+                return cached
         for _attempt in range(2):
             first = self._capture_once(locator, policy)
             second = self._capture_once(locator, policy)
             if first == second:
+                if self._include_searchable_history:
+                    self._snapshots[cache_key] = second
                 return second
         raise _source_error(ContextSourceErrorCode.SOURCE_DRIFT)
 

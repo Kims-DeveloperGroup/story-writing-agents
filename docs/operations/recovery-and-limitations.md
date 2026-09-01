@@ -3,7 +3,8 @@
 > **Available:** guarded access recovery, shell workflows, and process-level
 > POSIX PTY verification, including the package-internal ranged viewer.
 > The current shell has no provider-bound prompt span, so main-input `$`/`$$`
-> artifact discovery and selection are inactive. Direct Python conversation archive operations
+> artifact discovery and selection are inactive. Python lead-turn and decision
+> recovery is available through `StoryRuntime`. Direct Python conversation archive operations
 > have content-free failures and recognized additive-import recovery. Optional
 > SQLite conversation storage also fails closed. Explicit `/settings` or
 > provider-free `story storage use` can prepare and save desired storage for the
@@ -37,6 +38,24 @@ preserves foreign/changed ownership. No remote probe occurs.
 A same-host missing PID needs no deletion: acquisition replaces its unchanged
 claim under the guard. If ownership is unknown, back up and investigate before
 retrying. Never manufacture `claimable` by removing files.
+
+## Lead proposal and decision recovery
+
+The collaboration tail determines the only safe next action. A caller must not
+infer authority from visible text or replay incomplete work.
+
+| Runtime result | User meaning | Safe response |
+| --- | --- | --- |
+| `reply_to_lead` or `continue_with_lead` | Continue the conversation; no work is authorized. | Send a new lead turn. Ordinary text while a proposal is pending supersedes it first. |
+| `submit_confirmation` | One exact proposal is waiting. | Submit `confirm`, `reject`, or `revise` with every returned identity/digest field. Text such as `Yes` is not confirmation. |
+| `start_or_reconfirm` | A confirmation was recorded. #452 did not execute it. | Wait for the separate specialist-execution layer; do not dispatch or mutate from this projection alone. |
+| `reconfirmation_required` | A confirmed proposal survived restart but its live execution capability did not. | Present the same proposal/digest with the fresh request and collect another exact decision. No provider call is needed. |
+| `outcome_unknown` | A running attempt has no authoritative terminal result. | Preserve it and investigate; never replay automatically. |
+| `recovery_required` | History is corrupt, dangling, or otherwise unsafe to interpret. | Stop mutation, preserve the workspace, and inspect canonical collaboration history. |
+
+The current Python layer creates no `running` attempt; those execution-owned
+states become reachable only with #453. See [Lead agent](../guides/lead-agent.md)
+for the complete state table.
 
 <a id="conversation-archive-recovery"></a>
 
@@ -837,9 +856,10 @@ workflow](privacy-and-provider.md#rejected-provider-response-artifacts).
   [Bounded agent context](../guides/agent-context.md#c20-decisions-limits-and-user-impact).
 - Artifact publication is recoverable and catalog-last, but does not share one
   transaction with debate logs, lifecycle, results, or provider state.
-- Public story input is unavailable. Ordinary/routed/removed execution input
+- Public shell story input is unavailable. Ordinary/routed/removed shell input
   is rejected before provider, history, RAG, reference, progress, or artifact
-  work. Management and inspection remain available.
+  work. Python lead turns and structured decisions are available; they stop
+  before specialist execution, artifact mutation, consensus, or Git work.
 - Conversation search is active-only; transcript reads retain no cursor.
 - Filesystem remains the missing/legacy conversation-storage default.
   `/settings` and provider-free `story storage use` save a desired filesystem
@@ -856,9 +876,9 @@ workflow](privacy-and-provider.md#rejected-provider-response-artifacts).
   or network RAG providers and MySQL coupling remain unavailable. Literal
   `/search` is unchanged.
 - Artifact parsing, repository authorization/evidence, provider read actions,
-  and the independent supplied-text viewer remain generic components. No
-  current public input activates `$`/`$$`, propagates an inline reference to an
-  agent, or exposes a selection API.
+  and the independent supplied-text viewer remain generic components. Python
+  lead input accepts `${path}` and `${path}#Lx-Ly`; no shell input activates
+  `$`/`$$` or exposes a selection API.
 
 See [Session lifecycle](../design/session-lifecycle.md),
 [Troubleshooting](../guides/troubleshooting.md), and

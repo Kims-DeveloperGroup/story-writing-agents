@@ -12,8 +12,8 @@ not available in this integration stage.
 | Available | Not available now |
 | --- | --- |
 | Inspect, enable, rebuild, search, disable, or purge a local index with `story rag`. | Arm a one-turn RAG query in the shell. |
-| Configure Local/Disabled and Automatic policy in `/settings` for future integration. | Apply Automatic policy to ordinary or routed shell text. |
-| Compose and call direct local service/search/projection APIs. | Send retrieved excerpts to a story agent through `StoryRuntime`. |
+| Configure Local/Disabled and Automatic policy in `/settings` for later integration. | Apply Automatic policy to ordinary or routed shell text. |
+| Compose and call direct local service/search/projection APIs. | Inject retrieved excerpts through `StoryRuntime.lead_turn()`; it does not consume the RAG collaborator. |
 | Use filesystem or SQLite as the authoritative source. | Treat derived fragments/vectors as transcript truth. |
 
 The current shell parser rejects the removed one-turn form with the fixed
@@ -101,9 +101,9 @@ RAG-only apply writes configuration without provider authentication, storage
 activation, optional-package probing, network, or agent work. It affects a
 future shell construction, not the current shell.
 
-In this revision, even a later shell does not have an eligible provider-bound
-story input. Automatic therefore has no interactive turn to act on. The field
-is preserved configuration for the later lead/specialist integration.
+The shell has no eligible provider-bound story input. Automatic therefore has
+no interactive turn to act on. `lead_turn()` does not consume it either; the
+field is preserved configuration for later explicit integration.
 
 ## Direct service composition
 
@@ -130,8 +130,8 @@ inspection, projection, and forced bounded search. Direct applications own the
 workspace, complete `ConversationStorageServices` authority bundle, generation
 store/state, and optional dependency lifecycle.
 
-`StoryRuntime` can still receive a `conversation_rag_service` as configuration,
-but its public management API has no story-turn method that consumes it. Direct
+`StoryRuntime` can receive a `conversation_rag_service`, but `lead_turn()` does
+not consume it. Direct
 applications that need local search call the direct service rather than
 recreating a removed runtime execution method.
 
@@ -163,6 +163,6 @@ semantic-quality guarantee.
 
 ## Relationship to collaboration cutover
 
-The sole schema-v2 storage/inspection service is active. This does not make
-interactive RAG a provider turn. Open #452/#453 own later lead/specialist
-workflows; any future RAG preflight must be authorized within those workflows.
+The sole schema-v2 storage/inspection service and Python lead workflow are
+active. This does not make interactive RAG a provider turn. Any later RAG
+preflight must be explicitly authorized within the lead/specialist workflow.

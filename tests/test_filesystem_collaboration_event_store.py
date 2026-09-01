@@ -361,10 +361,17 @@ class FilesystemCollaborationEventStorePersistenceTests(unittest.TestCase):
                     else None
                 )
                 source = batches[name]
+                partial_events = source.events[selected]
+                if name == "running":
+                    partial_events = tuple(
+                        event
+                        for event in source.events
+                        if event.event_id != "dispatch_assignment_character"
+                    )
                 partial = CollaborationEventBatch(
                     f"partial_{name}",
                     source.expected_last_sequence,
-                    source.events[selected],
+                    partial_events,
                 )
                 with self.assertRaises(CollaborationAppendError) as raised:
                     value.store.append_batch(partial)

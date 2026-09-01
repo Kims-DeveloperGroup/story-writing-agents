@@ -110,10 +110,12 @@ __all__ = [
     "ContextExecutionEventKind",
     "ContextExecutionEventSink",
     "ContextInvocationBinding",
+    "ContextInvocationKind",
     "ContextInvocationRequest",
     "ContextInvocationResult",
     "ContextInvocationSession",
     "ContextInvocationState",
+    "ContextJsonObjectResultContract",
     "ContextProvider",
     "ContextProviderCallFinalizer",
     "ContextProviderCallRequest",
@@ -199,6 +201,22 @@ class ContextInvocationState(StrEnum):
     READING = "reading"
     ANSWER_AUTHORIZED = "answer_authorized"
     FAILED = "failed"
+
+
+class ContextInvocationKind(StrEnum):
+    """Optional provider-neutral semantic phase for a contextual invocation."""
+
+    LEAD = "lead"
+
+
+@dataclass(frozen=True, slots=True)
+class ContextJsonObjectResultContract:
+    """Require one strict JSON-object answer under a stable contract identity."""
+
+    contract_id: str
+
+    def __post_init__(self) -> None:
+        _safe_identity(self.contract_id)
 
 
 class ContextExecutionEventKind(StrEnum):
@@ -886,6 +904,9 @@ class ContextInvocationRequest:
     allowed_search_source_kinds: tuple[ContextSourceKind, ...] = (
         _SEARCH_SOURCE_KIND_ORDER
     )
+    invocation_kind: ContextInvocationKind | None = None
+    result_contract: ContextJsonObjectResultContract | None = None
+    physical_call_limit: int | None = None
 
     def __post_init__(self) -> None:
         _safe_identity(self.session_id)
@@ -947,6 +968,19 @@ class ContextInvocationRequest:
                 for kind in _SEARCH_SOURCE_KIND_ORDER
                 if kind in self.allowed_search_source_kinds
             )
+        ):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        if (self.invocation_kind is None) is not (self.result_contract is None):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        if self.invocation_kind is not None and (
+            type(self.invocation_kind) is not ContextInvocationKind
+            or type(self.result_contract) is not ContextJsonObjectResultContract
+        ):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        if self.physical_call_limit is not None and (
+            type(self.physical_call_limit) is not int
+            or self.physical_call_limit < 1
+            or self.physical_call_limit > CONTEXT_ACTION_POLICY.max_provider_calls
         ):
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
 
@@ -1367,6 +1401,7 @@ class ContextInvocationSession:
         allowed_search_source_kinds: tuple[ContextSourceKind, ...] = (
             _SEARCH_SOURCE_KIND_ORDER
         ),
+        physical_call_limit: int | None = None,
     ) -> None:
         if (
             type(binding) is not ContextInvocationBinding
@@ -1386,6 +1421,14 @@ class ContextInvocationSession:
                 kind
                 for kind in _SEARCH_SOURCE_KIND_ORDER
                 if kind in allowed_search_source_kinds
+            )
+            or (
+                physical_call_limit is not None
+                and (
+                    type(physical_call_limit) is not int
+                    or physical_call_limit < 1
+                    or physical_call_limit > action_policy.max_provider_calls
+                )
             )
         ):
             raise _action_error(ContextActionErrorCode.INVALID_VALUE)
@@ -1412,6 +1455,11 @@ class ContextInvocationSession:
         else:
             self._source_aliases = None
         self._allowed_search_source_kinds = allowed_search_source_kinds
+        self._physical_call_limit = (
+            action_policy.max_provider_calls
+            if physical_call_limit is None
+            else physical_call_limit
+        )
         self.binding = binding
         self._sources = sources
         self._action_policy = action_policy
@@ -1636,7 +1684,7 @@ class ContextInvocationSession:
             or correlation.action_index != self._next_action_index
         ):
             raise _action_error(ContextActionErrorCode.CORRELATION_MISMATCH)
-        if correlation.action_index > self._action_policy.max_provider_calls:
+        if correlation.action_index > self._physical_call_limit:
             raise _action_error(ContextActionErrorCode.ACTION_LIMIT_EXCEEDED)
 
     def _require_nonterminal_capacity(self) -> None:
@@ -1674,7 +1722,7 @@ class ContextInvocationSession:
             ):
                 raise _action_error(ContextActionErrorCode.INVALID_VALUE)
             nonterminal_capacity = (
-                self._next_action_index < self._action_policy.max_provider_calls
+                self._next_action_index < self._physical_call_limit
                 and self._nonterminal_actions
                 < self._action_policy.max_nonterminal_actions
             )
@@ -1707,8 +1755,11 @@ class ContextInvocationSession:
             return [
                 max(
                     0,
-                    self._action_policy.max_nonterminal_actions
-                    - self._nonterminal_actions,
+                    min(
+                        self._action_policy.max_nonterminal_actions
+                        - self._nonterminal_actions,
+                        self._physical_call_limit - self._next_action_index,
+                    ),
                 ),
                 max(
                     0,
@@ -2374,6 +2425,10 @@ def _correlation_token_matches(
 def _answer_text_for_contract(value: object, contract: object) -> str:
     """Validate one advertised result shape and restore internal answer text."""
 
+    if type(contract) is ContextJsonObjectResultContract:
+        if type(value) is not dict:
+            raise ValueError
+        return _canonical_bytes(value).decode("utf-8", errors="strict")
     if contract == "text":
         if type(value) is not str or not value:
             raise ValueError
@@ -2877,6 +2932,9 @@ def _invocation_phase_contract(
 ) -> tuple[str, object]:
     """Derive the compact established phase and result shape from route identity."""
 
+    if request.invocation_kind is not None:
+        assert request.result_contract is not None
+        return request.invocation_kind.value, request.result_contract
     if request.subject_kind is ContextSubjectKind.CONVERSATION:
         if request.allowed_search_source_kinds == (ContextSourceKind.CONVERSATION,):
             return "retrieval", ["retrieval", "text", "citations"]
@@ -2916,7 +2974,10 @@ def _action_query(
     """Build the authoritative phase, action, kind, limit, and result tuple."""
 
     phase, contract = phase_contract
-    wire_contract = list(contract) if type(contract) is list else contract
+    if type(contract) is ContextJsonObjectResultContract:
+        wire_contract: object = [phase, contract.contract_id]
+    else:
+        wire_contract = list(contract) if type(contract) is list else contract
     return [
         phase,
         "".join(_ACTION_WIRE_CODES[action] for action in allowed_actions),
@@ -3257,6 +3318,12 @@ class AgentContextService:
 
         return self._workspace_id
 
+    @property
+    def policy_fingerprint(self) -> str:
+        """Return the exact provider-neutral execution-policy fingerprint."""
+
+        return self._execution_policy_fingerprint
+
     def scope(
         self,
         session_id: str,
@@ -3549,6 +3616,16 @@ class AgentContextService:
 
         if type(request) is not ContextInvocationRequest:
             raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
+        physical_call_limit = (
+            self._action_policy.max_provider_calls
+            if request.physical_call_limit is None
+            else request.physical_call_limit
+        )
+        if (
+            physical_call_limit > self._action_policy.max_provider_calls
+            or physical_call_limit <= int(bool(request.mandatory_references))
+        ):
+            raise _execution_error(ContextExecutionErrorCode.INVALID_VALUE)
         _validate_sync_callback(answer_validator)
         _validate_sync_callback(event_sink)
         if request.subject_kind is ContextSubjectKind.DEBATE:
@@ -3587,6 +3664,7 @@ class AgentContextService:
                     focused_conversation=focused_conversation,
                     active_debate=active_debate,
                     own_agent_state=own_agent_state,
+                    physical_call_limit=physical_call_limit,
                     answer_validator=answer_validator,
                     event_sink=event_sink,
                     phase=phase,
@@ -3605,6 +3683,7 @@ class AgentContextService:
         focused_conversation: FocusedConversationSourceAdapter,
         active_debate: ActiveDebateSourceAdapter,
         own_agent_state: OwnAgentStateSourceAdapter,
+        physical_call_limit: int,
         answer_validator: Callable[[str, ContextAnswerAuthorization], object] | None,
         event_sink: ContextExecutionEventSink | None,
         phase: str | None,
@@ -3802,6 +3881,9 @@ class AgentContextService:
                     projection,
                 ),
                 allowed_search_source_kinds=(request.allowed_search_source_kinds),
+                physical_call_limit=(
+                    physical_call_limit - int(bool(request.mandatory_references))
+                ),
             )
 
             current_thread_id = active_thread_id
@@ -3916,7 +3998,10 @@ class AgentContextService:
             previous_action: str | None = None
             previous_search_had_hits = False
             phase_contract = _invocation_phase_contract(request)
-            for _round in range(self._action_policy.max_provider_calls):
+            substantive_call_limit = physical_call_limit - int(
+                bool(request.mandatory_references)
+            )
+            for _round in range(substantive_call_limit):
                 action_index = action_session.next_action_index
                 allowed_actions = action_session.allowed_actions(
                     after=previous_action,
@@ -4112,7 +4197,7 @@ class AgentContextService:
                     if (
                         decode_failure.code
                         is ContextExecutionErrorCode.MALFORMED_ACTION
-                        and action_index == self._action_policy.max_provider_calls
+                        and action_index == substantive_call_limit
                     ):
                         try:
                             exhausted_action = _decode_context_action(

@@ -36,6 +36,7 @@ class CollaborationEventKind(StrEnum):
     EXECUTION_RESULT = "execution_result"
     INTERRUPTION = "interruption"
     TERMINAL_OUTCOME = "terminal_outcome"
+    PROVIDER_CALL_ACCOUNTING = "provider_call_accounting"
 
 
 class CollaborationActorKind(StrEnum):
@@ -127,6 +128,114 @@ class CollaborationConfirmationDecision(StrEnum):
     CONFIRM = "confirm"
     REJECT = "reject"
     REVISE = "revise"
+
+
+class LeadOutcomeKind(StrEnum):
+    """Closed visible semantic outcomes returned by the lead provider."""
+
+    ANSWER = "answer"
+    QUESTION = "question"
+    CRITIQUE = "critique"
+    RECOMMENDATION = "recommendation"
+    PROPOSAL = "proposal"
+
+
+class LeadProposalRelation(StrEnum):
+    """Whether provider intent starts a lineage or revises its pending proposal."""
+
+    NEW_STEP = "new_step"
+    REVISE_PENDING = "revise_pending"
+
+
+@dataclass(frozen=True, slots=True)
+class LeadAssignmentIntent:
+    """One visible, non-authoritative specialist assignment requested by the lead."""
+
+    agent_id: str
+    instruction: str
+    input_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.agent_id) is not str or self.agent_id not in SPECIALIST_IDS:
+            raise ValueError("lead assignment agent ID must be a canonical specialist")
+        if type(self.instruction) is not str:
+            raise TypeError("lead assignment instruction must be exact text")
+        _validate_visible_text(self.instruction, label="lead assignment instruction")
+        if type(self.input_ids) is not tuple or not self.input_ids:
+            raise TypeError("lead assignment input IDs must be a nonempty exact tuple")
+        for input_id in self.input_ids:
+            if type(input_id) is not str:
+                raise TypeError("lead assignment input IDs must be exact text")
+            _validate_identifier(input_id, label="lead assignment input ID")
+        _require_unique(self.input_ids, label="lead assignment input IDs")
+
+
+@dataclass(frozen=True, slots=True)
+class LeadProposalIntent:
+    """Visible semantic proposal intent; durable authority remains runtime-owned."""
+
+    relation: LeadProposalRelation
+    purpose: str
+    assignments: tuple[LeadAssignmentIntent, ...]
+
+    def __post_init__(self) -> None:
+        _require_enum(self.relation, LeadProposalRelation, "lead proposal relation")
+        if type(self.purpose) is not str:
+            raise TypeError("lead proposal purpose must be exact text")
+        _validate_visible_text(self.purpose, label="lead proposal purpose")
+        _validate_exact_tuple(
+            self.assignments,
+            LeadAssignmentIntent,
+            label="lead proposal assignments",
+            nonempty=True,
+        )
+        _require_unique(
+            tuple(item.agent_id for item in self.assignments),
+            label="lead proposal specialist IDs",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class LeadProviderOutcome:
+    """Exactly one strict visible lead outcome decoded from a provider result."""
+
+    kind: LeadOutcomeKind
+    message: str
+    proposal: LeadProposalIntent | None = None
+
+    def __post_init__(self) -> None:
+        _require_enum(self.kind, LeadOutcomeKind, "lead outcome kind")
+        if type(self.message) is not str:
+            raise TypeError("lead outcome message must be exact text")
+        _validate_visible_text(self.message, label="lead outcome message")
+        if self.kind is LeadOutcomeKind.PROPOSAL:
+            if type(self.proposal) is not LeadProposalIntent:
+                raise TypeError("proposal outcome requires one LeadProposalIntent")
+        elif self.proposal is not None:
+            raise ValueError("non-proposal lead outcome cannot carry proposal intent")
+
+
+class CollaborationInvocationKind(StrEnum):
+    """Closed semantic role of one provider-call lineage."""
+
+    LEAD = "lead"
+    SPECIALIST = "specialist"
+    SYNTHESIS = "synthesis"
+
+
+class CollaborationProviderCallKind(StrEnum):
+    """Closed physical-call positions without provider input or output content."""
+
+    REFERENCE_PRELUDE = "reference_prelude"
+    INITIAL = "initial"
+    CONTINUATION = "continuation"
+
+
+class CollaborationProviderCallState(StrEnum):
+    """Whether a physical call was prepared or crossed the provider boundary."""
+
+    PREPARED = "prepared"
+    SUBMITTED = "submitted"
 
 
 class CollaborationAssignmentOutcomeKind(StrEnum):
@@ -903,6 +1012,51 @@ class CollaborationTerminalOutcomePayload:
             raise ValueError("synthesis terminal outcome cannot carry assignment ID")
 
 
+@dataclass(frozen=True, slots=True)
+class CollaborationProviderCallPayload:
+    """Content-free durable lifecycle fact for one physical provider call."""
+
+    invocation_id: str
+    call_id: str
+    ordinal: int
+    role: str
+    invocation_kind: CollaborationInvocationKind
+    call_kind: CollaborationProviderCallKind
+    state: CollaborationProviderCallState
+
+    def __post_init__(self) -> None:
+        if type(self.invocation_id) is not str or type(self.call_id) is not str:
+            raise TypeError("provider invocation and call IDs must be exact text")
+        _validate_identifier(self.invocation_id, label="provider invocation ID")
+        _validate_identifier(self.call_id, label="provider call ID")
+        _validate_positive_integer(self.ordinal, label="provider call ordinal")
+        if type(self.role) is not str or self.role not in ROSTER:
+            raise ValueError("provider call role must be a canonical agent ID")
+        _require_enum(
+            self.invocation_kind,
+            CollaborationInvocationKind,
+            "provider invocation kind",
+        )
+        _require_enum(
+            self.call_kind,
+            CollaborationProviderCallKind,
+            "provider call kind",
+        )
+        _require_enum(
+            self.state,
+            CollaborationProviderCallState,
+            "provider call state",
+        )
+        if self.invocation_kind in {
+            CollaborationInvocationKind.LEAD,
+            CollaborationInvocationKind.SYNTHESIS,
+        }:
+            if self.role != LEAD_ORCHESTRATOR:
+                raise ValueError("lead and synthesis calls require the lead role")
+        elif self.role not in SPECIALIST_IDS:
+            raise ValueError("specialist calls require a canonical specialist role")
+
+
 CollaborationPayload = (
     CollaborationProposal
     | CollaborationMessagePayload
@@ -913,6 +1067,7 @@ CollaborationPayload = (
     | CollaborationExecutionResult
     | CollaborationInterruptionPayload
     | CollaborationTerminalOutcomePayload
+    | CollaborationProviderCallPayload
 )
 
 
@@ -1423,6 +1578,17 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
             "payload_type": "terminal_outcome",
             "scope": payload.scope.value,
             "submitted_physical_calls": payload.submitted_physical_calls,
+        }
+    if type(payload) is CollaborationProviderCallPayload:
+        return {
+            "call_id": payload.call_id,
+            "call_kind": payload.call_kind.value,
+            "invocation_id": payload.invocation_id,
+            "invocation_kind": payload.invocation_kind.value,
+            "ordinal": payload.ordinal,
+            "payload_type": "provider_call",
+            "role": payload.role,
+            "state": payload.state.value,
         }
     raise TypeError("unsupported collaboration payload")
 
@@ -1963,6 +2129,45 @@ def _decode_payload(value: object) -> CollaborationPayload:
                 label="terminal assignment ID",
             ),
         )
+    if payload_type == "provider_call":
+        item = _object(
+            value,
+            {
+                "call_id",
+                "call_kind",
+                "invocation_id",
+                "invocation_kind",
+                "ordinal",
+                "payload_type",
+                "role",
+                "state",
+            },
+            label="provider-call payload",
+        )
+        return CollaborationProviderCallPayload(
+            invocation_id=_string(
+                item["invocation_id"],
+                label="provider invocation ID",
+            ),
+            call_id=_string(item["call_id"], label="provider call ID"),
+            ordinal=_integer(item["ordinal"], label="provider call ordinal"),
+            role=_string(item["role"], label="provider call role"),
+            invocation_kind=_enum(
+                CollaborationInvocationKind,
+                item["invocation_kind"],
+                label="provider invocation kind",
+            ),
+            call_kind=_enum(
+                CollaborationProviderCallKind,
+                item["call_kind"],
+                label="provider call kind",
+            ),
+            state=_enum(
+                CollaborationProviderCallState,
+                item["state"],
+                label="provider call state",
+            ),
+        )
     raise ValueError("unknown collaboration payload type")
 
 
@@ -2051,6 +2256,9 @@ def _validate_collaboration_payload(
         CollaborationEventKind.EXECUTION_RESULT: (CollaborationExecutionResult,),
         CollaborationEventKind.INTERRUPTION: (CollaborationInterruptionPayload,),
         CollaborationEventKind.TERMINAL_OUTCOME: (CollaborationTerminalOutcomePayload,),
+        CollaborationEventKind.PROVIDER_CALL_ACCOUNTING: (
+            CollaborationProviderCallPayload,
+        ),
     }
     if type(payload) not in allowed[kind]:
         raise TypeError(f"payload does not match event kind {kind.value!r}")
@@ -2174,6 +2382,10 @@ def _validate_collaboration_direction(
             (CollaborationActorKind.RUNTIME, CollaborationActorKind.LEAD),
             (CollaborationActorKind.RUNTIME, CollaborationActorKind.USER),
         },
+        CollaborationEventKind.PROVIDER_CALL_ACCOUNTING: {
+            (CollaborationActorKind.RUNTIME, CollaborationActorKind.LEAD),
+            (CollaborationActorKind.RUNTIME, CollaborationActorKind.SPECIALIST),
+        },
     }
     if (sender_kind, recipient_kind) not in allowed[kind]:
         raise ValueError(
@@ -2187,6 +2399,10 @@ def _validate_collaboration_direction(
         assert isinstance(payload, CollaborationSpecialistReplyPayload)
         if sender.agent_id is None:
             raise ValueError("specialist reply sender requires a specialist ID")
+    if kind is CollaborationEventKind.PROVIDER_CALL_ACCOUNTING:
+        assert isinstance(payload, CollaborationProviderCallPayload)
+        if recipient.agent_id != payload.role:
+            raise ValueError("provider-call recipient must match its exact role")
 
 
 def _validate_schema_version(value: object) -> None:
@@ -2421,10 +2637,14 @@ __all__ = [
     "CollaborationInputRevision",
     "CollaborationInputState",
     "CollaborationInterruptionPayload",
+    "CollaborationInvocationKind",
     "CollaborationMessagePayload",
     "CollaborationPayload",
     "CollaborationProposal",
     "CollaborationProposalBasis",
+    "CollaborationProviderCallKind",
+    "CollaborationProviderCallPayload",
+    "CollaborationProviderCallState",
     "CollaborationSideEffect",
     "CollaborationSpecialistReplyPayload",
     "CollaborationStepKind",
@@ -2435,6 +2655,11 @@ __all__ = [
     "CollaborationTerminalScope",
     "ConversationEvent",
     "ConversationEventKind",
+    "LeadAssignmentIntent",
+    "LeadOutcomeKind",
+    "LeadProposalIntent",
+    "LeadProposalRelation",
+    "LeadProviderOutcome",
     "collaboration_batch_digest",
     "collaboration_proposal_digest",
     "decode_collaboration_batch",

@@ -65,7 +65,8 @@ Next action meaning: No history-derived action is pending.
 
 `/status` reports the same current state and next-safe-action meanings for the
 focus. These are observations, not executable buttons or proof that the
-provider-bound lead workflow is installed.
+shell invoked a lead turn. The Python lead workflow writes these facts, but
+presentation never creates execution authority.
 
 ## State and next-action meanings
 

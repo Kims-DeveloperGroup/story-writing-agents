@@ -46,8 +46,12 @@ from story_writing_agents.conversations import (
     CollaborationInputKind,
     CollaborationInputState,
     CollaborationInterruptionPayload,
+    CollaborationInvocationKind,
     CollaborationMessagePayload,
     CollaborationProposal,
+    CollaborationProviderCallKind,
+    CollaborationProviderCallPayload,
+    CollaborationProviderCallState,
     CollaborationSideEffect,
     CollaborationSpecialistReplyPayload,
     CollaborationStepKind,
@@ -56,6 +60,11 @@ from story_writing_agents.conversations import (
     CollaborationSynthesisOutcomeKind,
     CollaborationTerminalOutcomePayload,
     CollaborationTerminalScope,
+    LeadAssignmentIntent,
+    LeadOutcomeKind,
+    LeadProposalIntent,
+    LeadProposalRelation,
+    LeadProviderOutcome,
     collaboration_batch_digest,
     collaboration_proposal_digest,
     decode_collaboration_batch,
@@ -120,6 +129,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "execution_result",
                 "interruption",
                 "terminal_outcome",
+                "provider_call_accounting",
             ),
             CollaborationActorKind: (
                 "user",
@@ -198,6 +208,21 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "cancelled",
             ),
             CollaborationTerminalScope: ("assignment", "synthesis"),
+            CollaborationInvocationKind: ("lead", "specialist", "synthesis"),
+            CollaborationProviderCallKind: (
+                "reference_prelude",
+                "initial",
+                "continuation",
+            ),
+            CollaborationProviderCallState: ("prepared", "submitted"),
+            LeadOutcomeKind: (
+                "answer",
+                "question",
+                "critique",
+                "recommendation",
+                "proposal",
+            ),
+            LeadProposalRelation: ("new_step", "revise_pending"),
             CollaborationAppendStatus: ("APPENDED", "ALREADY_COMMITTED"),
             CollaborationAppendFailure: (
                 "stale_sequence",
@@ -216,6 +241,30 @@ class CollaborationValueContractTests(unittest.TestCase):
     ) -> None:
         history, proposal, result = executed_history()
         batch = batch_from_history(history, "batch_result")
+        lead_assignment = LeadAssignmentIntent(
+            PLOT_ARCHITECT,
+            "Review the outline causality.",
+            ("input_outline",),
+        )
+        lead_intent = LeadProposalIntent(
+            LeadProposalRelation.NEW_STEP,
+            "Check outline causality.",
+            (lead_assignment,),
+        )
+        lead_outcome = LeadProviderOutcome(
+            LeadOutcomeKind.PROPOSAL,
+            "A plot review would resolve the open question.",
+            lead_intent,
+        )
+        provider_call = CollaborationProviderCallPayload(
+            "invocation_a",
+            "call_a",
+            1,
+            LEAD_ORCHESTRATOR,
+            CollaborationInvocationKind.LEAD,
+            CollaborationProviderCallKind.INITIAL,
+            CollaborationProviderCallState.SUBMITTED,
+        )
         values_and_fields = (
             (USER, ("kind", "agent_id")),
             (
@@ -342,6 +391,27 @@ class CollaborationValueContractTests(unittest.TestCase):
                 ),
             ),
             (batch, ("batch_id", "expected_last_sequence", "events")),
+            (
+                lead_assignment,
+                ("agent_id", "instruction", "input_ids"),
+            ),
+            (
+                lead_intent,
+                ("relation", "purpose", "assignments"),
+            ),
+            (lead_outcome, ("kind", "message", "proposal")),
+            (
+                provider_call,
+                (
+                    "invocation_id",
+                    "call_id",
+                    "ordinal",
+                    "role",
+                    "invocation_kind",
+                    "call_kind",
+                    "state",
+                ),
+            ),
         )
         for value, expected_fields in values_and_fields:
             with self.subTest(value=type(value).__name__):
@@ -365,6 +435,8 @@ class CollaborationValueContractTests(unittest.TestCase):
             result.assignment_outcomes,
             result.visible_exchange_event_ids,
             batch.events,
+            lead_assignment.input_ids,
+            lead_intent.assignments,
         ):
             self.assertIs(type(nested), tuple)
 
@@ -860,7 +932,7 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
     ) -> None:
         self.assertEqual(tuple(events_owner.__all__), COLLABORATION_EVENT_EXPORTS)
         self.assertEqual(tuple(context_owner.__all__), COLLABORATION_CONTEXT_EXPORTS)
-        self.assertEqual(len(conversations.__all__), 81)
+        self.assertEqual(len(conversations.__all__), 93)
         self.assertNotIn("__getattr__", vars(events_owner))
         self.assertNotIn("__getattr__", vars(context_owner))
         self.assertNotIn("__getattr__", vars(conversations))
@@ -869,7 +941,7 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
             for name in conversations.__all__
             if name.startswith("Collaboration") or name.startswith("COLLABORATION_")
         }
-        self.assertEqual(len(collaboration_names), 51)
+        self.assertEqual(len(collaboration_names), 55)
         for owner in (events_owner, context_owner):
             for name in owner.__all__:
                 if name.startswith("Collaboration") or name.startswith(
@@ -979,9 +1051,9 @@ import story_writing_agents
 import story_writing_agents.conversations as facade
 import story_writing_agents.conversations.context as context
 import story_writing_agents.conversations.events as events
-assert len(facade.__all__) == 81
-assert len(events.__all__) == 54
-assert len(context.__all__) == 20
+assert len(facade.__all__) == 93
+assert len(events.__all__) == 63
+assert len(context.__all__) == 23
 assert facade.CollaborationProposal is events.CollaborationProposal
 assert facade.CollaborationEventStore is context.CollaborationEventStore
 assert not hasattr(story_writing_agents, "CollaborationProposal")

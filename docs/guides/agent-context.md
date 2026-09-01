@@ -1,10 +1,9 @@
 # Bounded agent context
 
-Bounded agent context is a retained provider-neutral component for assembling
-small, authoritative inputs and letting an agent request additional evidence.
-The current public shell and `StoryRuntime` do not expose a provider-bound story
-operation, so users cannot invoke this component through ordinary input, a
-debate command, or an artifact-reference picker in this integration stage.
+Bounded agent context assembles small, authoritative inputs and lets an agent
+request additional evidence. `StoryRuntime.lead_turn()` uses it for the Python
+lead workflow. The public shell, debate commands, reference picker, and
+specialist execution do not invoke it in this integration stage.
 
 ## Why the component exists
 
@@ -17,7 +16,7 @@ every physical provider call. It separates context by purpose:
 | Stable identity | Agent role, persona, language, and protocol | Reused only while its fingerprint remains compatible. |
 | Working knowledge | Current constraints and focused records | Selected within explicit byte budgets. |
 | Additive knowledge | Older conversation, manuscript passage, debate record, or the invoking agent's state | Remains available through bounded lexical search and exact read actions. |
-| Mandatory references | `${path}` and `${path}#Lx-Ly` | Must be read independently and in order when a future caller authorizes them. |
+| Mandatory references | `${path}` and `${path}#Lx-Ly` | A Python lead turn must read them independently and in order. |
 
 Optimization never grants arbitrary file access, treats provider memory as
 authority, or lets optional search satisfy a mandatory reference.
@@ -45,11 +44,12 @@ most four nonterminal actions across five provider calls, with at most two
 searches and two reads. Mandatory references have a separate limit of 16
 references, 128 KiB each, and 256 KiB in aggregate.
 
-Focused conversation history follows an additional rule: the default
+Focused conversation history follows an additional rule: the adapter's default
 `CollaborationReadableContext` bootstrap is content-free and contains zero
-records. A caller must explicitly select event IDs. Retained records stay whole
-under the fixed 24-record/32,768-byte bound and cross the source adapter as a
-`RECORDS` boundary. The adapter never auto-loads the full transcript and never
+records. The lead runtime explicitly enables bounded searchable history across
+active same-session conversations, but still sends no eager record bodies.
+SEARCH and READ add only authorized whole records under the fixed
+24-record/32,768-byte bound. The adapter never loads the full transcript or
 exposes private typed payload fields.
 
 Search returns invocation-bound handles rather than permanent authority. Read
@@ -73,9 +73,8 @@ reports an exact count; the component does not estimate missing usage.
 
 ## Reference enforcement
 
-The artifact-reference parser and repository components still support
-content-free indicators and ordered authorization evidence. A future caller
-must, for every addressed agent:
+The artifact-reference parser and repository support content-free indicators
+and ordered authorization evidence. A Python lead call must:
 
 1. send only the ordered indicators first;
 2. require the matching ordered read actions;
@@ -87,23 +86,23 @@ Another agent's read, provider history, a checkpoint, or an optional search
 cannot satisfy that obligation. In the current shell, the surrounding story
 instruction is rejected before parsing or reading references.
 
-## What users observe now
+## What users observe
 
-Ordinary or routed story input receives:
+An ordinary shell story line still receives:
 
 ```text
 Direct story execution is unavailable in this integration stage. Session, conversation, history, search, and inspection remain available.
 ```
 
-No provider call, context plan, search/read action, progress event, transcript
-append, or artifact write occurs. Users can still manage sessions and
-conversations and inspect existing records. See
-[Story sessions](story-sessions.md) for current commands.
+That shell path makes no provider call. A Python application can call
+`lead_turn(..., context_event_sink=callback)` and receive content-free lifecycle
+events while the lead searches/reads authorized context. It may append
+conversation/proposal records, but never writes an artifact or runs a
+specialist. See [Lead agent](lead-agent.md).
 
-## Target observability
+## Python observability
 
-When the structured lead/specialist workflow later connects the component, a
-consumer can render content-free progress such as:
+A Python caller can render content-free progress such as:
 
 ```text
 [context] bootstrap: 2 selected / 1,024 bytes; 1 searchable
@@ -113,7 +112,7 @@ consumer can render content-free progress such as:
 [context] checkpoint advanced
 ```
 
-This is a component projection, not current shell output. Counts depend on the
+This is application output, not current shell output. Counts depend on the
 authorized workspace and no line exposes queries, excerpts, paths, provider
 responses, credentials, or private agent state.
 

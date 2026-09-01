@@ -11,6 +11,7 @@ from typing import Mapping, Protocol
 from ..errors import SessionIdError
 from .events import (
     COLLABORATION_EVENT_SCHEMA_VERSION,
+    COLLABORATION_PHYSICAL_CALL_LIMIT,
     CollaborationActor,
     CollaborationAppendError,
     CollaborationAppendFailure,
@@ -27,15 +28,19 @@ from .events import (
     CollaborationExecutionOutcomeKind,
     CollaborationExecutionResult,
     CollaborationInterruptionPayload,
+    CollaborationInvocationKind,
     CollaborationMessagePayload,
     CollaborationPayload,
     CollaborationProposal,
+    CollaborationProviderCallPayload,
+    CollaborationProviderCallState,
     CollaborationSpecialistReplyPayload,
     CollaborationStepState,
     CollaborationStepStatePayload,
     CollaborationSynthesisOutcomeKind,
     CollaborationTerminalOutcomePayload,
     CollaborationTerminalScope,
+    LeadOutcomeKind,
     collaboration_batch_digest,
     ConversationEvent,
     ConversationEventKind,
@@ -381,6 +386,7 @@ class CollaborationNextAction(StrEnum):
     CONTINUE_WITH_LEAD = "continue_with_lead"
     INSPECT_AND_RESOLVE_OUTCOME = "inspect_and_resolve_outcome"
     REPAIR_AUTHORITATIVE_HISTORY = "repair_authoritative_history"
+    REPLY_TO_LEAD = "reply_to_lead"
 
 
 @dataclass(frozen=True, slots=True)
@@ -400,6 +406,8 @@ class CollaborationHistoryProjection:
     execution_result_event_id: str | None
     execution_result: CollaborationExecutionResult | None
     next_safe_action: CollaborationNextAction
+    rounds_spent: int = 0
+    physical_calls_spent: int = 0
 
     def __post_init__(self) -> None:
         _validate_non_negative_integer(self.last_sequence, label="last sequence")
@@ -417,6 +425,244 @@ class CollaborationHistoryProjection:
             _validate_identifier(self.current_step_id, label="step ID")
         if not isinstance(self.next_safe_action, CollaborationNextAction):
             raise TypeError("next safe action must be a CollaborationNextAction")
+        _validate_non_negative_integer(self.rounds_spent, label="rounds spent")
+        _validate_non_negative_integer(
+            self.physical_calls_spent,
+            label="physical calls spent",
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class LeadStepDecision:
+    """One exact structured decision for the authoritative confirmation tail."""
+
+    confirmation_request_id: str
+    session_id: str
+    conversation_id: str
+    step_id: str
+    proposal_id: str
+    proposal_revision: int
+    proposal_digest: str
+    kind: CollaborationConfirmationDecision
+    revision_request: str | None = None
+
+    def __post_init__(self) -> None:
+        for value, label in (
+            (self.confirmation_request_id, "confirmation request ID"),
+            (self.session_id, "session ID"),
+            (self.conversation_id, "conversation ID"),
+            (self.step_id, "step ID"),
+            (self.proposal_id, "proposal ID"),
+        ):
+            if type(value) is not str:
+                raise TypeError(f"{label} must be exact text")
+            _validate_identifier(value, label=label)
+        _validate_positive_integer(self.proposal_revision, label="proposal revision")
+        if type(self.proposal_digest) is not str:
+            raise TypeError("proposal digest must be exact text")
+        if _SHA256_DIGEST.fullmatch(self.proposal_digest) is None:
+            raise ValueError("proposal digest is invalid")
+        if type(self.kind) is not CollaborationConfirmationDecision:
+            raise TypeError("decision kind must be CollaborationConfirmationDecision")
+        if self.kind is CollaborationConfirmationDecision.REVISE:
+            if type(self.revision_request) is not str or not self.revision_request:
+                raise ValueError("revise decision requires a nonempty revision request")
+            try:
+                encoded = self.revision_request.encode("utf-8", errors="strict")
+            except UnicodeEncodeError as exc:
+                raise ValueError("revision request must be strict UTF-8") from exc
+            if len(encoded) > 32_768:
+                raise ValueError("revision request exceeds the visible text limit")
+        elif self.revision_request is not None:
+            raise ValueError("only revise may carry a revision request")
+
+
+@dataclass(frozen=True, slots=True)
+class LeadTurnResult:
+    """Visible result of one lead turn after runtime validation and persistence."""
+
+    session_id: str
+    conversation_id: str
+    turn_id: str
+    step_id: str
+    kind: LeadOutcomeKind
+    message: str
+    proposal: CollaborationProposal | None
+    state: CollaborationStepState | None
+    confirmation_request_id: str | None
+    next_action: CollaborationNextAction
+
+    def __post_init__(self) -> None:
+        for value, label in (
+            (self.session_id, "session ID"),
+            (self.conversation_id, "conversation ID"),
+            (self.turn_id, "turn ID"),
+            (self.step_id, "step ID"),
+        ):
+            if type(value) is not str:
+                raise TypeError(f"{label} must be exact text")
+            _validate_identifier(value, label=label)
+        if type(self.kind) is not LeadOutcomeKind:
+            raise TypeError("lead result kind must be LeadOutcomeKind")
+        if type(self.message) is not str or not self.message:
+            raise ValueError("lead result message must be nonempty text")
+        try:
+            message_bytes = self.message.encode("utf-8", errors="strict")
+        except UnicodeEncodeError as exc:
+            raise ValueError("lead result message must be strict UTF-8") from exc
+        if len(message_bytes) > 32_768:
+            raise ValueError("lead result message exceeds the visible text limit")
+        if self.proposal is not None and self.proposal.step_id != self.step_id:
+            raise ValueError("lead result proposal belongs to another step")
+        if self.kind is LeadOutcomeKind.PROPOSAL:
+            if type(self.proposal) is not CollaborationProposal:
+                raise TypeError("proposal lead result requires a canonical proposal")
+            if self.state is not CollaborationStepState.AWAITING_CONFIRMATION:
+                raise ValueError("proposal lead result must await confirmation")
+            if self.confirmation_request_id is None:
+                raise ValueError("proposal lead result requires a confirmation request")
+            if self.next_action is not CollaborationNextAction.SUBMIT_CONFIRMATION:
+                raise ValueError("proposal lead result must request confirmation")
+        elif self.state is CollaborationStepState.RECONFIRMATION_REQUIRED:
+            if (
+                type(self.proposal) is not CollaborationProposal
+                or self.confirmation_request_id is None
+            ):
+                raise ValueError(
+                    "reconfirmation result requires its unchanged proposal and request"
+                )
+        elif self.state is CollaborationStepState.CONFIRMED:
+            if type(self.proposal) is not CollaborationProposal:
+                raise ValueError("confirmed result requires its exact proposal")
+            if self.confirmation_request_id is not None:
+                raise ValueError("confirmed result cannot carry an active request")
+        elif self.proposal is not None or self.confirmation_request_id is not None:
+            raise ValueError("lead result carries authority outside a proposal state")
+        if self.state is not None and type(self.state) is not CollaborationStepState:
+            raise TypeError("lead result state must be CollaborationStepState or None")
+        if self.kind is not LeadOutcomeKind.PROPOSAL and self.state not in {
+            None,
+            CollaborationStepState.SUPERSEDED,
+            CollaborationStepState.CONFIRMED,
+            CollaborationStepState.RECONFIRMATION_REQUIRED,
+            CollaborationStepState.RUNNING,
+            CollaborationStepState.OUTCOME_UNKNOWN,
+            CollaborationStepState.RECOVERY_REQUIRED,
+        }:
+            raise ValueError("lead result carries a non-visible workflow state")
+        if (
+            self.state
+            in {
+                CollaborationStepState.CONFIRMED,
+                CollaborationStepState.RECONFIRMATION_REQUIRED,
+                CollaborationStepState.RUNNING,
+                CollaborationStepState.OUTCOME_UNKNOWN,
+                CollaborationStepState.RECOVERY_REQUIRED,
+            }
+            and self.kind is not LeadOutcomeKind.RECOMMENDATION
+        ):
+            raise ValueError("workflow-state lead result must be a recommendation")
+        if self.confirmation_request_id is not None:
+            _validate_identifier(
+                self.confirmation_request_id,
+                label="confirmation request ID",
+            )
+        if type(self.next_action) is not CollaborationNextAction:
+            raise TypeError("lead result next action must be CollaborationNextAction")
+        if self.kind is LeadOutcomeKind.QUESTION:
+            if self.next_action is not CollaborationNextAction.REPLY_TO_LEAD:
+                raise ValueError("question result must expose reply-to-lead")
+        elif self.state is CollaborationStepState.RECONFIRMATION_REQUIRED:
+            if self.next_action is not CollaborationNextAction.SUBMIT_CONFIRMATION:
+                raise ValueError("reconfirmation result must request confirmation")
+        elif self.state is CollaborationStepState.CONFIRMED:
+            if self.next_action is not CollaborationNextAction.START_OR_RECONFIRM:
+                raise ValueError("confirmed result must expose start-or-reconfirm")
+        elif self.state is CollaborationStepState.RECOVERY_REQUIRED:
+            if (
+                self.next_action
+                is not CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY
+            ):
+                raise ValueError("recovery result must require history repair")
+        elif self.state is CollaborationStepState.OUTCOME_UNKNOWN:
+            if (
+                self.next_action
+                is not CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME
+            ):
+                raise ValueError("unknown outcome must require inspection")
+        elif self.state is CollaborationStepState.RUNNING:
+            if self.next_action not in {
+                CollaborationNextAction.NONE,
+                CollaborationNextAction.FINALIZE_RESULT,
+            }:
+                raise ValueError(
+                    "running result must wait or require known-result finalization"
+                )
+        elif self.kind is not LeadOutcomeKind.PROPOSAL and (
+            self.next_action is not CollaborationNextAction.CONTINUE_WITH_LEAD
+        ):
+            raise ValueError("completed lead result must continue with the lead")
+
+
+@dataclass(frozen=True, slots=True)
+class LeadDecisionResult:
+    """Visible durable result of one accepted structured lead-step decision."""
+
+    session_id: str
+    conversation_id: str
+    step_id: str
+    decision: CollaborationConfirmationDecision
+    proposal: CollaborationProposal
+    state: CollaborationStepState
+    next_action: CollaborationNextAction
+    revised_turn: LeadTurnResult | None = None
+
+    def __post_init__(self) -> None:
+        for value, label in (
+            (self.session_id, "session ID"),
+            (self.conversation_id, "conversation ID"),
+            (self.step_id, "step ID"),
+        ):
+            if type(value) is not str:
+                raise TypeError(f"{label} must be exact text")
+            _validate_identifier(value, label=label)
+        if type(self.decision) is not CollaborationConfirmationDecision:
+            raise TypeError("decision result kind is invalid")
+        if type(self.proposal) is not CollaborationProposal:
+            raise TypeError("decision result proposal is invalid")
+        if type(self.state) is not CollaborationStepState:
+            raise TypeError("decision result state is invalid")
+        if type(self.next_action) is not CollaborationNextAction:
+            raise TypeError("decision result next action is invalid")
+        if self.proposal.step_id != self.step_id:
+            raise ValueError("decision result proposal belongs to another step")
+        expected_state = {
+            CollaborationConfirmationDecision.CONFIRM: CollaborationStepState.CONFIRMED,
+            CollaborationConfirmationDecision.REJECT: CollaborationStepState.REJECTED,
+            CollaborationConfirmationDecision.REVISE: CollaborationStepState.SUPERSEDED,
+        }[self.decision]
+        if self.state is not expected_state:
+            raise ValueError("decision result state disagrees with its decision")
+        expected_action = {
+            CollaborationConfirmationDecision.CONFIRM: (
+                CollaborationNextAction.START_OR_RECONFIRM
+            ),
+            CollaborationConfirmationDecision.REJECT: (
+                CollaborationNextAction.CONTINUE_WITH_LEAD
+            ),
+            CollaborationConfirmationDecision.REVISE: (
+                CollaborationNextAction.CONTINUE_WITH_LEAD
+            ),
+        }[self.decision]
+        if self.next_action is not expected_action:
+            raise ValueError("decision result next action disagrees with its decision")
+        if self.decision is CollaborationConfirmationDecision.REVISE:
+            if type(self.revised_turn) is not LeadTurnResult:
+                raise TypeError("revise result requires the replacement lead turn")
+            if self.revised_turn.step_id != self.step_id:
+                raise ValueError("revised lead turn must retain the decision step")
+        elif self.revised_turn is not None:
+            raise ValueError("only revise may carry a replacement lead turn")
 
 
 class CollaborationReadableFieldKey(StrEnum):
@@ -1147,7 +1393,15 @@ def _project_validated_collaboration_history(
     results: dict[str, tuple[str, CollaborationExecutionResult]] = {}
     result_events: dict[str, CollaborationEventV2] = {}
     running_attempts: dict[str, int] = {}
+    running_sequences: dict[str, int] = {}
     spent_calls: dict[str, int] = {}
+    prepared_calls: dict[str, tuple[str, CollaborationProviderCallPayload]] = {}
+    submitted_call_ids: set[str] = set()
+    invocation_ordinals: dict[str, int] = {}
+    invocation_facts: dict[str, tuple[str, str, str, CollaborationInvocationKind]] = {}
+    provider_call_events: list[
+        tuple[CollaborationEventV2, CollaborationProviderCallPayload]
+    ] = []
     blocked_lineages: set[str] = set()
     event_by_id: dict[str, CollaborationEventV2] = {}
     current_step_id: str | None = None
@@ -1220,6 +1474,65 @@ def _project_validated_collaboration_history(
             if type(payload) is CollaborationMessagePayload:
                 continue
 
+            if type(payload) is CollaborationProviderCallPayload:
+                if event.step_id in blocked_lineages:
+                    raise ValueError("provider calls cannot continue a blocked lineage")
+                prepared = prepared_calls.get(payload.call_id)
+                if payload.state is CollaborationProviderCallState.PREPARED:
+                    if prepared is not None or payload.call_id in submitted_call_ids:
+                        raise ValueError("provider call ID must be globally fresh")
+                    facts = (
+                        event.step_id,
+                        event.turn_id,
+                        payload.role,
+                        payload.invocation_kind,
+                    )
+                    stable_facts = invocation_facts.setdefault(
+                        payload.invocation_id,
+                        facts,
+                    )
+                    if stable_facts != facts:
+                        raise ValueError(
+                            "provider invocation identity facts must remain stable"
+                        )
+                    expected_ordinal = (
+                        invocation_ordinals.get(payload.invocation_id, 0) + 1
+                    )
+                    if payload.ordinal != expected_ordinal:
+                        raise ValueError(
+                            "provider call ordinals must be contiguous per invocation"
+                        )
+                    invocation_ordinals[payload.invocation_id] = payload.ordinal
+                    prepared_calls[payload.call_id] = (event.step_id, payload)
+                else:
+                    if prepared is None or payload.call_id in submitted_call_ids:
+                        raise ValueError(
+                            "submitted provider call requires one unmatched preparation"
+                        )
+                    prepared_step_id, prepared_payload = prepared
+                    if prepared_step_id != event.step_id or prepared_payload != (
+                        CollaborationProviderCallPayload(
+                            invocation_id=payload.invocation_id,
+                            call_id=payload.call_id,
+                            ordinal=payload.ordinal,
+                            role=payload.role,
+                            invocation_kind=payload.invocation_kind,
+                            call_kind=payload.call_kind,
+                            state=CollaborationProviderCallState.PREPARED,
+                        )
+                    ):
+                        raise ValueError(
+                            "submitted provider call drifts from its preparation"
+                        )
+                    submitted_call_ids.add(payload.call_id)
+                    spent_calls[event.step_id] = spent_calls.get(event.step_id, 0) + 1
+                    if spent_calls[event.step_id] > COLLABORATION_PHYSICAL_CALL_LIMIT:
+                        raise ValueError(
+                            "provider call lineage exceeds the physical-call limit"
+                        )
+                provider_call_events.append((event, payload))
+                continue
+
             if proposal is None:
                 raise ValueError(
                     "collaboration work appears before proposal disclosure"
@@ -1258,6 +1571,7 @@ def _project_validated_collaboration_history(
                     running_attempts[event.step_id] = (
                         running_attempts.get(event.step_id, 0) + 1
                     )
+                    running_sequences[event.step_id] = event.sequence
                 if payload.state is CollaborationStepState.OUTCOME_UNKNOWN:
                     if payload.execution_attempt_id != attempts.get(event.step_id):
                         raise ValueError(
@@ -1403,18 +1717,44 @@ def _project_validated_collaboration_history(
                     event_by_id=event_by_id,
                     batch=batch,
                 )
+                running_sequence = running_sequences.get(event.step_id)
+                assert running_sequence is not None
+                submitted_since_running = tuple(
+                    call
+                    for call_event, call in provider_call_events
+                    if call_event.step_id == event.step_id
+                    and call_event.sequence > running_sequence
+                    and call_event.sequence < event.sequence
+                    and call.state is CollaborationProviderCallState.SUBMITTED
+                )
+                for assignment, outcome in zip(
+                    proposal.assignments,
+                    payload.assignment_outcomes,
+                    strict=True,
+                ):
+                    actual_calls = sum(
+                        call.invocation_kind is CollaborationInvocationKind.SPECIALIST
+                        and call.role == assignment.specialist_id
+                        for call in submitted_since_running
+                    )
+                    if actual_calls != outcome.submitted_physical_calls:
+                        raise ValueError(
+                            "assignment result call total disagrees with durable "
+                            "submitted calls"
+                        )
+                synthesis_calls = sum(
+                    call.invocation_kind is CollaborationInvocationKind.SYNTHESIS
+                    for call in submitted_since_running
+                )
+                if synthesis_calls != payload.synthesis_submitted_physical_calls:
+                    raise ValueError(
+                        "synthesis result call total disagrees with durable "
+                        "submitted calls"
+                    )
                 if event.step_id in results:
                     raise ValueError("execution attempt may have at most one result")
                 results[event.step_id] = (event.event_id, payload)
                 result_events[event.event_id] = event
-                used = (
-                    sum(
-                        outcome.submitted_physical_calls
-                        for outcome in payload.assignment_outcomes
-                    )
-                    + payload.synthesis_submitted_physical_calls
-                )
-                spent_calls[event.step_id] = spent_calls.get(event.step_id, 0) + used
                 batch_results.append((event, payload))
                 continue
 
@@ -1457,6 +1797,7 @@ def _project_validated_collaboration_history(
 
         _validate_collaboration_co_batch(
             batch=batch,
+            prior_tail=prior_tail,
             proposals=batch_proposals,
             states=batch_states,
             confirmations=batch_confirmations,
@@ -1499,6 +1840,8 @@ def _project_validated_collaboration_history(
         execution_result_event_id=result_event_id,
         execution_result=projection_result,
         next_safe_action=_next_action(state, projection_result),
+        rounds_spent=running_attempts.get(current_step_id, 0),
+        physical_calls_spent=spent_calls.get(current_step_id, 0),
     )
 
 
@@ -1661,6 +2004,7 @@ def _validate_collaboration_execution_result(
 def _validate_collaboration_co_batch(
     *,
     batch: tuple[CollaborationEventV2, ...],
+    prior_tail: CollaborationEventV2 | None,
     proposals: list[CollaborationProposal],
     states: list[tuple[CollaborationEventV2, CollaborationStepStatePayload]],
     confirmations: list[tuple[CollaborationEventV2, CollaborationConfirmationPayload]],
@@ -1702,16 +2046,42 @@ def _validate_collaboration_co_batch(
         matching = [item for item in states if item[1].state is expected_state]
         if len(matching) != 1:
             raise ValueError("decision and resulting state must be co-batched")
-    elif any(
-        payload.state
-        in (
-            CollaborationStepState.CONFIRMED,
-            CollaborationStepState.REJECTED,
-            CollaborationStepState.SUPERSEDED,
+    else:
+        decision_states = [
+            (event, payload)
+            for event, payload in states
+            if payload.state
+            in (
+                CollaborationStepState.CONFIRMED,
+                CollaborationStepState.REJECTED,
+                CollaborationStepState.SUPERSEDED,
+            )
+        ]
+        ordinary_supersession = bool(
+            len(batch) == 2
+            and len(decision_states) == 1
+            and decision_states[0][1].state is CollaborationStepState.SUPERSEDED
+            and type(batch[0].payload) is CollaborationMessagePayload
+            and batch[0].sender.kind.value == "user"
+            and batch[0].recipient.kind.value == "lead"
+            and batch[1] is decision_states[0][0]
+            and batch[1].sender.kind.value == "runtime"
+            and batch[1].recipient.kind.value == "user"
+            and batch[0].step_id == batch[1].step_id
+            and batch[0].turn_id == batch[1].turn_id
+            and prior_tail is not None
+            and prior_tail.step_id == batch[0].step_id
+            and type(prior_tail.payload) is CollaborationStepStatePayload
+            and prior_tail.payload.state
+            in {
+                CollaborationStepState.AWAITING_CONFIRMATION,
+                CollaborationStepState.RECONFIRMATION_REQUIRED,
+            }
         )
-        for _event, payload in states
-    ):
-        raise ValueError("decision-derived state requires a co-batched confirmation")
+        if decision_states and not ordinary_supersession:
+            raise ValueError(
+                "decision-derived state requires a co-batched confirmation"
+            )
 
     running = [
         (event, payload)
@@ -1999,6 +2369,8 @@ def _collaboration_readable_fields(
                 text=(f"submitted_physical_calls={payload.submitted_physical_calls}"),
             ),
         )
+    if type(payload) is CollaborationProviderCallPayload:
+        return ()
     raise TypeError("unsupported collaboration payload")
 
 
@@ -2022,6 +2394,9 @@ __all__ = [
     "CollaborationReadableField",
     "CollaborationReadableFieldKey",
     "CollaborationReadableRecord",
+    "LeadDecisionResult",
+    "LeadStepDecision",
+    "LeadTurnResult",
     "ConversationContextPolicy",
     "ConversationContextWindow",
     "project_collaboration_history",

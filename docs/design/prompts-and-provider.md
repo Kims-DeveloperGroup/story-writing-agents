@@ -1,10 +1,9 @@
 # Prompts and provider boundary
 
-> **Status:** this page documents retained prompt/provider/context components
-> and historical execution accounting. Codex and Antigravity bindings, thread
-> continuity, reference coordinators, and exchange capture remain implemented,
-> but the current `StoryRuntime` and shell expose no provider-bound story call.
-> `$`/`$$` activation has no current main-input scope.
+> **Status:** this page documents prompt/provider/context components and
+> historical execution accounting. `StoryRuntime.lead_turn()` uses the current
+> Codex/Antigravity binding, context, reference, and exchange-capture path. The
+> shell has no provider-bound story call, and `$`/`$$` has no main-input scope.
 
 Key terms: **definition**—stable context for one role; **fingerprint**—its
 hash-derived identity; **binding**—the provider object for a definition;
@@ -178,12 +177,13 @@ may accelerate a call but is not authoritative context.
 
 ## Provider-context component
 
-A future structured workflow can pass focused identity, route, input, optional
-conversation-RAG context, and current storage authorities into the
-provider-neutral context service. The service captures current source material,
+A Python lead turn passes focused identity, route, input, and current storage
+authorities into the provider-neutral context service. It does not consume the
+optional conversation-RAG collaborator. The service captures current material,
 builds a content-free manifest, and plans bootstrap/delta. If selected material
 is insufficient, wire-v5 SEARCH/READ actions can add exact authorized evidence
-from route-permitted sources. The current shell does not enter this flow.
+from route-permitted sources. The current shell and specialists do not enter
+this flow.
 
 Established conversation retrieval remains responsible for its cited
 conversation observations. Optional `rag_context` is independent semantic RAG

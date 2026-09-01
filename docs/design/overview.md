@@ -1,11 +1,12 @@
 # System design overview
 
-The current integration separates management/inspection from the forthcoming
-lead-led execution workflow. Public schema-v1 direct-run consumers are absent;
-generic provider, prompt, context, lifecycle, artifact, and terminal components
-remain available behind explicit module boundaries.
+The current integration separates the Python lead conversation/proposal layer
+from the shell's management/inspection layer and the later specialist-execution
+layer. Public schema-v1 direct-run consumers are absent; generic provider,
+prompt, context, lifecycle, artifact, and terminal components remain behind
+explicit module boundaries.
 
-The production graph contains 97 modules, 362 dependency edges, no cycles, and
+The production graph contains 97 modules, 369 dependency edges, no cycles, and
 104 package-root exports.
 
 ## Current user flow
@@ -13,6 +14,7 @@ The production graph contains 97 modules, 362 dependency edges, no cycles, and
 ```mermaid
 flowchart LR
     U[User] --> CLI[CLI / TTY controller]
+    U --> APP[Python application]
     CLI --> M[Session and conversation management]
     CLI --> I[History, search, transcript, status, inspection]
     CLI --> S[Settings and authentication]
@@ -23,6 +25,12 @@ flowchart LR
     X -. no call .-> P[Provider components]
     X -. no append .-> CS
     X -. no read/write .-> A[Writing artifacts]
+    APP --> LT[StoryRuntime.lead_turn]
+    LT --> CTX[Bounded context and provider]
+    CTX --> L[Lead answer, question, critique, recommendation, or proposal]
+    L --> D[Structured confirm / reject / revise]
+    D -. confirmed proposal stops here .-> E[#453 specialist execution]
+    LT -. read-only mandatory references .-> A
 ```
 
 The controller reads ordinary main input with the terminal's plain management
@@ -30,18 +38,27 @@ scope. The parser returns a typed rejection for ordinary/routed/removed
 execution forms. The controller does not bind an agent, append an event, run
 RAG/reference handling, report provider progress, or publish an artifact.
 
+A Python application can instead call `lead_turn()`. The lead is the sole
+user-facing agent, may search/read bounded authorized context, and either
+answers directly or discloses one proposal. `decide_lead_step()` records an
+exact structured decision. Confirmation does not yet dispatch a specialist or
+modify an artifact.
+
 ## Management runtime
 
-`StoryRuntime` is a management/configuration/inspection facade. It owns:
+`StoryRuntime` is the management/configuration/inspection and lead-workflow
+facade. It owns:
 
 - workspace-bound configuration and prompt snapshots;
 - session-bound directives and overrides;
 - quiescent settings prepare/commit coordination with `AgentBackend`;
-- persisted session/debate/context inspection; and
-- content-free artifact-reference operation inspection.
+- persisted session/debate/context inspection;
+- content-free artifact-reference operation inspection; and
+- lead provider turns, proposal construction, structured decisions,
+  supersession, and restart-safe confirmation recovery.
 
 `RuntimeSession` binds the same operations to one validated session ID. Neither
-class starts a story turn or debate. Broad root aliases are absent.
+class starts specialist execution or a debate. Broad root aliases are absent.
 
 `session_lifecycle` owns provider-neutral durable/access facts and pure
 readiness. `AgentBackend` still owns claims, manifests, provider routes,
@@ -114,12 +131,14 @@ provider call.
 ## Lead/specialist target
 
 The fixed roster remains Lead Orchestrator, Plot Architect, Character
-Custodian, and Execution Specialist. The lead is the intended user-facing
-channel; specialists are lead-routed collaborators. That target behavior is
-not a current CLI dispatch claim.
+Custodian, and Execution Specialist. The lead is the Python workflow's sole
+user-facing channel. It critiques, recommends the next action, watches
+artifact/workflow constraints, and routes a proposed assignment by subject.
+Specialists remain lead-routed collaborators, but they are not yet dispatched.
+None of this is a CLI dispatch claim.
 
-Open #452 owns the later lead proposal/confirmation/reconfirmation workflow
-and open #453 owns specialist execution/result/finalization/outcome-unknown
+The current #452 layer owns lead proposal/confirmation/reconfirmation behavior,
+and #453 owns specialist execution/result/finalization/outcome-unknown
 behavior. #454 owns whole-workspace rejection of unsupported history. Those
 provider-bound integrations must use the sole v2 store.
 
@@ -129,7 +148,7 @@ High-level composition flows downward:
 
 ```text
 CLI -> controller -> policies/runtime/storage/terminal
-runtime -> configuration/workspace/artifact inspection/backend coordination
+runtime -> conversations/context/backend/configuration/workspace/artifact reads
 backend -> provider adapters/process/context seams
 conversation services -> filesystem or SQLite ports
 RAG runtime -> conversation-service contracts

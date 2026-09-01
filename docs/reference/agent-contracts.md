@@ -3,8 +3,9 @@
 > **Availability:** these models are Python APIs. Debate requests can carry an
 > optional conversation snapshot; one-step and retrieval turns use separate,
 > compatible request families. Content-free explicit-reference read contracts
-> remain available at the direct repository/backend boundary. The current
-> `StoryRuntime` does not construct them for a public provider call.
+> remain available at the direct repository/backend boundary. Python
+> `StoryRuntime.lead_turn()` constructs them for lead references; specialist
+> execution remains unavailable.
 
 Key terms: **definition**—stable context bound to one agent; **request**—dynamic
 data for one provider call; **blackboard**—public debate messages;

@@ -3,8 +3,8 @@
 > **Availability:** the Antigravity adapter and persistent provider-session
 > components remain implemented. The current shell uses `agy` for native
 > authentication, model discovery, and configuration, but has no public story
-> turn or debate that invokes the adapter. Codex remains the final configured
-> route fallback.
+> turn or debate. Python `StoryRuntime.lead_turn()` can invoke the configured
+> lead route. Codex remains the final configured route fallback.
 > Settings Model/Effort editors also use bounded `agy models` discovery for a
 > pending Antigravity route without persisting the catalog.
 
@@ -277,9 +277,9 @@ Generation zero preserves the legacy definition fingerprint.
 
 A fresh Antigravity or Codex thread is not a new story session. The retained
 context engine starts a new epoch by bootstrapping current role-relevant
-authoritative sources; compatible later low-level calls can use exact deltas.
+authoritative sources; compatible later calls can use exact deltas.
 Provider-private hidden history is optional acceleration and never correctness
-authority. The current public shell has no story call that enters this path.
+authority. Python lead turns enter this path; the public shell does not.
 See [Story sessions](story-sessions.md) and
 [Agent-context design](../design/agent-context.md).
 
