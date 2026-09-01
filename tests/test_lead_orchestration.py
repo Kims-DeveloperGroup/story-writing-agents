@@ -403,6 +403,7 @@ def _visible_outcome(kind: str, message: str = "Visible lead response."):
                 "scope": "workflow_meta",
                 "evidence_status": "not_applicable",
                 "evidence_ids": [],
+                "artifact_intent": None,
                 "proposal": None,
             },
         )
@@ -428,6 +429,7 @@ def _proposal_outcome(
                 "scope": "story_specific",
                 "evidence_status": "incomplete",
                 "evidence_ids": [call.payload["core_statuses"][0]["evidence_id"]],
+                "artifact_intent": None,
                 "proposal": {
                     "relation": relation,
                     "purpose": purpose,
@@ -560,6 +562,7 @@ def _answer_from_history(
             "scope": "story_specific",
             "evidence_status": "verified",
             "evidence_ids": [observation[1][0][5]],
+            "artifact_intent": None,
             "proposal": None,
         },
         used_handles=provider.used_handles,

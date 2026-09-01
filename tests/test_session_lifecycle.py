@@ -445,9 +445,10 @@ class SessionLifecycleContractTests(unittest.TestCase):
             ]
         )
         source_files = tuple(source_root.rglob("*.py"))
-        self.assertEqual(len(source_files), 99)
+        self.assertEqual(len(source_files), 100)
         self.assertTrue(
             {
+                source_root / "artifact_proposals.py",
                 source_root / "conversations" / "__init__.py",
                 source_root / "conversations" / "catalog.py",
                 source_root / "conversations" / "context.py",
@@ -477,8 +478,8 @@ class SessionLifecycleContractTests(unittest.TestCase):
         index = (source_root.parents[1] / "PYTHON_MODULE_INDEX.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("Importable production units indexed: 99.", index)
-        self.assertIn("Direct internal dependency edges indexed: 375.", index)
+        self.assertIn("Importable production units indexed: 100.", index)
+        self.assertIn("Direct internal dependency edges indexed: 379.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         headings = tuple(re.findall(r"^### `([^`]+)`$", index, flags=re.MULTILINE))
         expected_modules: set[str] = set()
@@ -488,13 +489,17 @@ class SessionLifecycleContractTests(unittest.TestCase):
             if parts[-1] == "__init__":
                 parts = parts[:-1]
             expected_modules.add(".".join(("story_writing_agents", *parts)))
-        self.assertEqual(len(headings), 99)
-        self.assertEqual(len(set(headings)), 99)
+        self.assertEqual(len(headings), 100)
+        self.assertEqual(len(set(headings)), 100)
         self.assertEqual(set(headings), expected_modules)
-        self.assertIn("facade\n  now contains exactly 103 exports", index)
-        self.assertIn("events owners contain 23\n  and 73 respectively", index)
-        self.assertIn("Exactly 23 owning-module names in `__all__`", index)
-        self.assertIn("Exactly 73 owning-module names in `__all__`", index)
+        self.assertIn("facade now contains exactly 117 exports", index)
+        self.assertIn("context and events owners contain 24 and 86 respectively", index)
+        self.assertIn("Exactly 24 owning-module names in `__all__`", index)
+        self.assertIn("Exactly 86 owning-module names in `__all__`", index)
+        self.assertIn(
+            "`artifact_proposals` owner contains exactly 16 exports",
+            index,
+        )
         self.assertIn(
             "project-root facade retains only its immutable conversation-",
             index,
@@ -506,6 +511,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             "story_writing_agents.conversations.catalog",
             "story_writing_agents.conversations.context",
             "story_writing_agents.conversations.events",
+            "story_writing_agents.artifact_proposals",
             "story_writing_agents.conversation_storage.filesystem",
             "story_writing_agents.workspace",
             "story_writing_agents.workspace.core",

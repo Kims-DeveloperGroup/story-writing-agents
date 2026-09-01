@@ -314,6 +314,7 @@ def _missing_outcome(*, proposal: bool = False):
             "scope": "story_specific",
             "evidence_status": "missing",
             "evidence_ids": [observation[2]["evidence_id"]],
+            "artifact_intent": None,
             "proposal": (
                 {
                     "relation": "new_step",
@@ -346,6 +347,7 @@ def _referenced_outcome(*, status: str, evidence_ids: list[str]):
                 "scope": "story_specific",
                 "evidence_status": status,
                 "evidence_ids": evidence_ids,
+                "artifact_intent": None,
                 "proposal": {
                     "relation": "new_step",
                     "purpose": "Review the exact attached evidence.",
@@ -587,6 +589,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                         "scope": "story_specific",
                         "evidence_status": "missing",
                         "evidence_ids": ids,
+                        "artifact_intent": None,
                         "proposal": None,
                     },
                 )
@@ -651,6 +654,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                     "scope": "story_specific",
                     "evidence_status": "verified",
                     "evidence_ids": [evidence_id],
+                    "artifact_intent": None,
                     "proposal": None,
                 },
                 used_handles=provider.used_handles,
@@ -699,6 +703,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                     "scope": "story_specific",
                     "evidence_status": "verified",
                     "evidence_ids": ["search_1"],
+                    "artifact_intent": None,
                     "proposal": None,
                 },
             )
@@ -728,6 +733,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                     "scope": "story_specific",
                     "evidence_status": "verified",
                     "evidence_ids": [observation[1][0][5]],
+                    "artifact_intent": None,
                     "proposal": None,
                 },
                 used_handles=(),
@@ -782,6 +788,7 @@ class RuntimeLeadEvidenceGroundingTests(LeadOrchestrationTestCase):
                     "scope": "story_specific",
                     "evidence_status": "verified",
                     "evidence_ids": ["invented"],
+                    "artifact_intent": None,
                     "proposal": None,
                 },
             )

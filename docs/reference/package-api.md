@@ -1,8 +1,9 @@
 # Package API and exports
 
-The package exposes management, a Python lead-turn/confirmed-consultation
-workflow, generic backend/model contracts, and schema-v2 collaboration
-components. This does not connect story execution to the installed shell.
+The package exposes management, a Python lead-turn/confirmed-consultation and
+reviewed-artifact-proposal workflow, generic backend/model contracts, and
+schema-v2 collaboration components. This does not connect story execution to
+the installed shell or grant artifact Apply or Git authority.
 
 ## Facade inventory
 
@@ -11,16 +12,17 @@ The stable inventories in this revision are:
 | Import boundary | Exports | Purpose |
 | --- | ---: | --- |
 | `story_writing_agents` | 104 | Management runtime, workspace/catalog, backend/session, generic models, retrieval contracts, parser, and errors |
-| `story_writing_agents.conversations` | 103 | Catalog plus schema-v2 events, projection, evidence-grounded lead/specialist values, readable context, and pure validation |
+| `story_writing_agents.conversations` | 117 | Catalog plus schema-v2 events, projection, evidence-grounded lead/specialist/artifact-review values, readable context, and pure validation |
 | `story_writing_agents.conversation_search` | 18 | Schema-v2 search, exact citations, paging, and history service |
 | `story_writing_agents.conversation_retrieval` | 24 | Low-level provider search/read-history/answer contracts |
 | `story_writing_agents.conversation_storage` | 63 | Storage composition, provenance, activation, archive, and transfer contracts |
 | `story_writing_agents.workspace` | 3 | `Workspace`, `initialize_workspace`, and `FilesystemConversationCatalog` |
 | `story_writing_agents.writing_artifacts` | 62 | Canonical artifact/reference values plus pure exact change-set and relationship-policy contracts |
+| `story_writing_agents.artifact_proposals` | 16 | Direct-only pure intent, evidence, exact candidate, reviewer-map, and strict candidate-codec contracts |
 
-The production graph has 99 modules, 375 dependency edges, no cycles, and 104
-package-root exports. The conversations facade contributes 73 event exports
-and 23 context exports; its bindings are identical to the owner bindings.
+The production graph has 100 modules, 379 dependency edges, no cycles, and 104
+package-root exports. The conversations facade contributes 86 event exports
+and 24 context exports; its bindings are identical to the owner bindings.
 
 Import the management facade explicitly:
 
@@ -113,6 +115,30 @@ apply, publication, or Git behavior. Exact fields, limits, grammar, graph
 deltas, review domains, errors, and all seven user workflows are documented
 under [Canonical artifact relationship validation](writing-artifacts.md#canonical-artifact-relationship-validation).
 
+The reviewed-candidate construction boundary is direct-only:
+
+```python
+from story_writing_agents.artifact_proposals import (
+    ArtifactIntentEvidence,
+    ArtifactPatchIntent,
+    ArtifactProposalIntent,
+    ArtifactReviewCandidate,
+    artifact_review_specialists,
+    build_artifact_review_candidate,
+    deserialize_artifact_review_candidate,
+    serialize_artifact_review_candidate,
+)
+```
+
+The exact 16-name module API also includes create, replace, rename, and delete
+intent values plus closed proposal errors/schema version. It consumes pure
+writing-artifact change-set and relationship-policy contracts and maps closed
+review domains to canonical specialists. It has no package-root or
+`writing_artifacts` facade export and performs no I/O, provider call,
+confirmation, Apply, write, publication, or Git operation. Runtime owns
+complete-state capture and passes it into candidate construction. See
+[Agent contracts](agent-contracts.md#reviewed-artifact-proposal-contracts).
+
 <a id="structured-collaboration-history-boundary"></a>
 
 ## Structured collaboration history boundary
@@ -121,6 +147,11 @@ Use the static conversations facade for schema-v2 event and context contracts:
 
 ```python
 from story_writing_agents.conversations import (
+    ArtifactProposalResult,
+    ArtifactProposalState,
+    ArtifactReviewCandidatePayload,
+    ArtifactReviewDecision,
+    ArtifactReviewedProposal,
     CollaborationContextBootstrap,
     CollaborationEvidenceAcquisition,
     CollaborationEvidenceReceipt,
@@ -156,6 +187,13 @@ returned by `lead_turn()`; conversational text is not confirmation. A confirmed
 consultation records typed specialist replies and a typed, evidence-preserving
 lead synthesis when all assignments succeed. See
 [Runtime API](runtime-api.md) for signatures and state outcomes.
+
+For artifact intent, runtime creates an exact candidate and a normal
+specialist-consultation proposal. Confirm authorizes only review of that
+candidate. All reviewers receive the same candidate, and a successful lead
+`propose` synthesis creates `ArtifactReviewedProposal` with all Apply/write/Git
+flags false. The result survives restart and storage transfer as collaboration
+history; it is not executable authority.
 
 The selected `ConversationStorageServices` has same-provenance bindings for
 one catalog, one `CollaborationEventStore`, one aggregate
@@ -302,9 +340,10 @@ collaboration event. The installed lead workflow does not invoke it.
 
 The public shell is inspection-only for collaboration history. The Python lead
 workflow owns proposal, confirmation, rejection, revision, supersession,
-reconfirmation, confirmed specialist execution, typed synthesis, result,
-finalization, and outcome-unknown writes. Confirmation is authority only for
-the disclosed read-only consultation.
+reconfirmation, confirmed specialist execution, typed synthesis,
+artifact-candidate/review records, result, finalization, and outcome-unknown
+history writes. Confirmation is authority only for the disclosed read-only
+consultation.
 
 Artifact Apply and Git Commit remain separate future operations with separate
 exact confirmations. The lead is their planned semantic trigger and

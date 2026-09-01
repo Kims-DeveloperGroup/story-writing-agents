@@ -136,6 +136,24 @@ class WritingArtifactRepository:
         with self._locked_sources():
             return self._sources.read_current(paths)
 
+    def capture_complete_state(self) -> tuple[ArtifactContentSnapshot, ...]:
+        """Capture one complete bounded canonical state under the source lease."""
+
+        with self._locked_sources():
+            paths = self._sources.list_paths()
+            snapshots = self._sources.read_current(paths)
+            if tuple(item.path for item in snapshots) != paths:
+                raise WorkspaceFormatError(
+                    "complete writing-artifact state changed during capture"
+                )
+            if self._sources.list_paths() != paths or any(
+                not self._sources.matches(item.source) for item in snapshots
+            ):
+                raise WorkspaceFormatError(
+                    "complete writing-artifact state changed during capture"
+                )
+            return snapshots
+
     def read_text(self, path: str, *, max_bytes: int | None = None) -> str:
         """Read one safe current canonical filesystem source."""
 

@@ -16,3 +16,8 @@ Return only one strict JSON object with exactly these fields:
 
 Do not add private reasoning, unknown fields, invented IDs, or mutation and
 delegation requests.
+
+When an `artifact_candidate` input is present, review that exact immutable
+candidate for plot structure, outline consistency, pacing, and projected link
+effects. Do not rewrite the candidate or assume it will be applied. Preserve a
+concern, conflict, or insufficiency in the required assessment and message.

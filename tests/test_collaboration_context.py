@@ -240,6 +240,9 @@ class CollaborationTransitionTests(unittest.TestCase):
                 "next_safe_action",
                 "rounds_spent",
                 "physical_calls_spent",
+                "current_artifact_candidate",
+                "current_artifact_state",
+                "current_reviewed_artifact_proposal",
             ),
         )
 
@@ -1105,7 +1108,16 @@ class CollaborationReadableProjectionTests(unittest.TestCase):
         )
         all_records += project_collaboration_readable_history(failure_history)
         observed_keys = {field.key for record in all_records for field in record.fields}
-        self.assertEqual(observed_keys, set(CollaborationReadableFieldKey))
+        artifact_keys = {
+            CollaborationReadableFieldKey.ARTIFACT_REVIEW_MESSAGE,
+            CollaborationReadableFieldKey.ARTIFACT_REVIEW_DECISION,
+            CollaborationReadableFieldKey.ARTIFACT_PROPOSAL_STATE,
+            CollaborationReadableFieldKey.ARTIFACT_REVIEW_FAILURE,
+        }
+        self.assertEqual(
+            observed_keys,
+            set(CollaborationReadableFieldKey).difference(artifact_keys),
+        )
         self.assertEqual(
             tuple(item.value for item in CollaborationReadableFieldKey),
             (
@@ -1139,6 +1151,10 @@ class CollaborationReadableProjectionTests(unittest.TestCase):
                 "terminal.scope",
                 "terminal.outcome",
                 "terminal.call_usage",
+                "artifact_review.message",
+                "artifact_review.decision",
+                "artifact_proposal.state",
+                "artifact_review.failure",
             ),
         )
         searchable_names = " ".join(item.value for item in observed_keys)

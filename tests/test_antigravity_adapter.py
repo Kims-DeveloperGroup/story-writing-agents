@@ -462,7 +462,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(definition.context_document_files, ())
         self.assertEqual(
             definition.fingerprint,
-            "503ba714375ac989ec9907afa4f407855933e2f61f8628131a87b923cb0446c2",
+            "d7f333503daa743ffacfadab668b65f093634c636af41009d636e036a7c705c9",
         )
 
         codex_bytes, codex_components = CodexAdapter._definition_file(definition)
@@ -471,10 +471,10 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(antigravity_bytes, codex_bytes)
         self.assertEqual(antigravity_components, codex_components)
-        self.assertEqual(len(codex_bytes), 1299)
+        self.assertEqual(len(codex_bytes), 1608)
         self.assertEqual(
             hashlib.sha256(codex_bytes).hexdigest(),
-            "5e97e21d3d8864fbffd6828ce48cab89bcbca4136efd6172f1415b8181e7f000",
+            "6b9001f1e01186485a23f8fc723bda0f6b18fdeac73e9e9779e326b07eff8ea2",
         )
         self.assertEqual(
             tuple(
@@ -487,7 +487,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             ),
             (
                 (ContextComponentKind.BINDING_STRUCTURE, None, 4),
-                (ContextComponentKind.ROLE_SYSTEM_PROMPT, None, 857),
+                (ContextComponentKind.ROLE_SYSTEM_PROMPT, None, 1166),
                 (ContextComponentKind.PERSONA, None, 251),
                 (ContextComponentKind.RESPONSE_LANGUAGE, None, 10),
                 (ContextComponentKind.PROVIDER_CONSTRAINTS, None, 177),

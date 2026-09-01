@@ -47,6 +47,13 @@ from .events import (
     CollaborationSynthesisOutcomeKind,
     CollaborationTerminalOutcomePayload,
     CollaborationTerminalScope,
+    ArtifactProposalState,
+    ArtifactProposalStatePayload,
+    ArtifactReviewCandidatePayload,
+    ArtifactReviewDecision,
+    ArtifactReviewFailurePayload,
+    ArtifactReviewedProposal,
+    ArtifactReviewSynthesisPayload,
     LeadOutcomeKind,
     collaboration_batch_digest,
     ConversationEvent,
@@ -416,6 +423,9 @@ class CollaborationHistoryProjection:
     next_safe_action: CollaborationNextAction
     rounds_spent: int = 0
     physical_calls_spent: int = 0
+    current_artifact_candidate: ArtifactReviewCandidatePayload | None = None
+    current_artifact_state: ArtifactProposalState | None = None
+    current_reviewed_artifact_proposal: ArtifactReviewedProposal | None = None
 
     def __post_init__(self) -> None:
         _validate_non_negative_integer(self.last_sequence, label="last sequence")
@@ -438,6 +448,23 @@ class CollaborationHistoryProjection:
             self.physical_calls_spent,
             label="physical calls spent",
         )
+        if (
+            self.current_artifact_candidate is not None
+            and type(self.current_artifact_candidate)
+            is not ArtifactReviewCandidatePayload
+        ):
+            raise TypeError("projected artifact candidate is invalid")
+        if (
+            self.current_artifact_state is not None
+            and type(self.current_artifact_state) is not ArtifactProposalState
+        ):
+            raise TypeError("projected artifact state is invalid")
+        if (
+            self.current_reviewed_artifact_proposal is not None
+            and type(self.current_reviewed_artifact_proposal)
+            is not ArtifactReviewedProposal
+        ):
+            raise TypeError("projected reviewed artifact proposal is invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -486,6 +513,34 @@ class LeadStepDecision:
 
 
 @dataclass(frozen=True, slots=True)
+class ArtifactProposalResult:
+    """Public artifact-review identity paired with one lead turn."""
+
+    state: ArtifactProposalState
+    candidate: ArtifactReviewCandidatePayload
+    reviewed_proposal: ArtifactReviewedProposal | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.state) is not ArtifactProposalState:
+            raise TypeError("artifact proposal result state is invalid")
+        if type(self.candidate) is not ArtifactReviewCandidatePayload:
+            raise TypeError("artifact proposal result candidate is invalid")
+        if (
+            self.reviewed_proposal is not None
+            and type(self.reviewed_proposal) is not ArtifactReviewedProposal
+        ):
+            raise TypeError("artifact proposal result reviewed proposal is invalid")
+        if (self.state is ArtifactProposalState.REVIEWED) is not (
+            self.reviewed_proposal is not None
+        ):
+            raise ValueError("artifact proposal result review identity is inconsistent")
+        if self.reviewed_proposal is not None and (
+            self.reviewed_proposal.candidate != self.candidate.candidate
+        ):
+            raise ValueError("artifact proposal result candidate drifted")
+
+
+@dataclass(frozen=True, slots=True)
 class LeadTurnResult:
     """Visible result of one lead turn after runtime validation and persistence."""
 
@@ -500,6 +555,7 @@ class LeadTurnResult:
     confirmation_request_id: str | None
     next_action: CollaborationNextAction
     evidence: CollaborationLeadEvidence | None = None
+    artifact_proposal: ArtifactProposalResult | None = None
 
     def __post_init__(self) -> None:
         for value, label in (
@@ -586,6 +642,30 @@ class LeadTurnResult:
             CollaborationLeadEvidence
         ):
             raise TypeError("lead result evidence must be CollaborationLeadEvidence")
+        if (
+            self.artifact_proposal is not None
+            and type(self.artifact_proposal) is not ArtifactProposalResult
+        ):
+            raise TypeError("lead result artifact proposal is invalid")
+        if self.artifact_proposal is not None:
+            candidate = self.artifact_proposal.candidate
+            if (
+                self.proposal is not None
+                and self.artifact_proposal.state is not ArtifactProposalState.SUPERSEDED
+                and (
+                    candidate.consultation_proposal_id != self.proposal.proposal_id
+                    or candidate.consultation_proposal_revision
+                    != self.proposal.proposal_revision
+                    or candidate.consultation_proposal_digest
+                    != self.proposal.proposal_digest
+                )
+            ):
+                raise ValueError("lead result artifact consultation identity drifted")
+            if self.proposal is None and self.artifact_proposal.state in {
+                ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION,
+                ArtifactProposalState.REVIEWING,
+            }:
+                raise ValueError("active artifact result requires its consultation")
         provider_judgment = (
             self.proposal is not None
             and self.proposal.step_kind
@@ -705,6 +785,14 @@ class LeadDecisionResult:
             self._validate_revise_turn()
 
     def _validate_confirm_turn(self) -> None:
+        if (
+            self.turn.state is CollaborationStepState.SUPERSEDED
+            and self.turn.kind is LeadOutcomeKind.RECOMMENDATION
+            and self.turn.proposal is None
+            and self.turn.artifact_proposal is not None
+            and self.turn.artifact_proposal.state is ArtifactProposalState.STALE
+        ):
+            return
         terminal_states = {
             CollaborationStepState.COMPLETED,
             CollaborationStepState.FAILED,
@@ -773,6 +861,11 @@ class LeadDecisionResult:
                 or replacement is not None
                 or self.turn.confirmation_request_id is not None
                 or self.turn.next_action is not expected_action
+                or (
+                    self.turn.artifact_proposal is not None
+                    and self.turn.artifact_proposal.state
+                    is not ArtifactProposalState.SUPERSEDED
+                )
             ):
                 raise ValueError(
                     "direct revise result must expose an exact superseded lead turn"
@@ -789,6 +882,14 @@ class LeadDecisionResult:
             or replacement.budget.rounds_spent != self.proposal.budget.rounds_spent
             or replacement.budget.physical_calls_spent
             <= self.proposal.budget.physical_calls_spent
+            or (
+                self.turn.artifact_proposal is not None
+                and self.turn.artifact_proposal.state
+                not in {
+                    ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION,
+                    ArtifactProposalState.SUPERSEDED,
+                }
+            )
         ):
             raise ValueError("revise result must expose the exact replacement proposal")
 
@@ -826,6 +927,10 @@ class CollaborationReadableFieldKey(StrEnum):
     TERMINAL_SCOPE = "terminal.scope"
     TERMINAL_OUTCOME = "terminal.outcome"
     TERMINAL_CALL_USAGE = "terminal.call_usage"
+    ARTIFACT_REVIEW_MESSAGE = "artifact_review.message"
+    ARTIFACT_REVIEW_DECISION = "artifact_review.decision"
+    ARTIFACT_PROPOSAL_STATE = "artifact_proposal.state"
+    ARTIFACT_REVIEW_FAILURE = "artifact_review.failure"
 
 
 _ASSIGNMENT_ORDINAL_FIELD_KEYS = frozenset(
@@ -1514,9 +1619,328 @@ def _next_action(
     return CollaborationNextAction.NONE
 
 
+_ARTIFACT_STATE_TRANSITIONS: Mapping[
+    ArtifactProposalState | None, frozenset[ArtifactProposalState]
+] = MappingProxyType(
+    {
+        None: frozenset({ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION}),
+        ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION: frozenset(
+            {
+                ArtifactProposalState.REVIEWING,
+                ArtifactProposalState.REJECTED,
+                ArtifactProposalState.SUPERSEDED,
+                ArtifactProposalState.STALE,
+                ArtifactProposalState.FAILED,
+                ArtifactProposalState.RECOVERY_REQUIRED,
+            }
+        ),
+        ArtifactProposalState.REVIEWING: frozenset(
+            {
+                ArtifactProposalState.REVISION_REQUIRED,
+                ArtifactProposalState.REJECTED,
+                ArtifactProposalState.REVIEWED,
+                ArtifactProposalState.STALE,
+                ArtifactProposalState.FAILED,
+                ArtifactProposalState.RECOVERY_REQUIRED,
+            }
+        ),
+        ArtifactProposalState.REVISION_REQUIRED: frozenset(),
+        ArtifactProposalState.REJECTED: frozenset(),
+        ArtifactProposalState.REVIEWED: frozenset(),
+        ArtifactProposalState.SUPERSEDED: frozenset(),
+        ArtifactProposalState.STALE: frozenset(),
+        ArtifactProposalState.FAILED: frozenset(),
+        ArtifactProposalState.RECOVERY_REQUIRED: frozenset(),
+    }
+)
+
+
+def _project_artifact_review_history(
+    events: tuple[CollaborationEventV2, ...],
+) -> tuple[
+    dict[str, ArtifactReviewCandidatePayload],
+    dict[str, ArtifactProposalState],
+    dict[str, ArtifactReviewedProposal],
+]:
+    """Validate artifact-review lineage without owning consultation mechanics."""
+
+    candidates: dict[str, ArtifactReviewCandidatePayload] = {}
+    states: dict[str, ArtifactProposalState] = {}
+    reviewed: dict[str, ArtifactReviewedProposal] = {}
+    synthesis_by_id: dict[str, ArtifactReviewSynthesisPayload] = {}
+    all_events = {event.event_id: event for event in events}
+    offset = 0
+    while offset < len(events):
+        batch = events[offset : offset + events[offset].batch_size]
+        candidate_events = tuple(
+            event
+            for event in batch
+            if type(event.payload) is ArtifactReviewCandidatePayload
+        )
+        artifact_states = tuple(
+            event
+            for event in batch
+            if type(event.payload) is ArtifactProposalStatePayload
+        )
+        artifact_syntheses = tuple(
+            event
+            for event in batch
+            if type(event.payload) is ArtifactReviewSynthesisPayload
+        )
+        reviewed_events = tuple(
+            event for event in batch if type(event.payload) is ArtifactReviewedProposal
+        )
+        failure_events = tuple(
+            event
+            for event in batch
+            if type(event.payload) is ArtifactReviewFailurePayload
+        )
+        if any(
+            len(group) > 1
+            for group in (
+                candidate_events,
+                artifact_states,
+                artifact_syntheses,
+                reviewed_events,
+                failure_events,
+            )
+        ):
+            raise ValueError("artifact review batch contains duplicate authority")
+
+        if candidate_events:
+            event = candidate_events[0]
+            payload = event.payload
+            assert isinstance(payload, ArtifactReviewCandidatePayload)
+            proposals = tuple(
+                item.payload
+                for item in batch
+                if type(item.payload) is CollaborationProposal
+            )
+            judgments = tuple(
+                item
+                for item in batch
+                if type(item.payload) is CollaborationLeadJudgmentPayload
+            )
+            core_awaiting = tuple(
+                item.payload
+                for item in batch
+                if type(item.payload) is CollaborationStepStatePayload
+                and item.payload.state is CollaborationStepState.AWAITING_CONFIRMATION
+            )
+            artifact_awaiting = tuple(
+                item.payload
+                for item in artifact_states
+                if isinstance(item.payload, ArtifactProposalStatePayload)
+                and item.payload.state
+                is ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION
+            )
+            previous_candidate = candidates.get(event.step_id)
+            if (
+                (
+                    previous_candidate is not None
+                    and states.get(event.step_id)
+                    is not ArtifactProposalState.SUPERSEDED
+                )
+                or len(proposals) != 1
+                or len(judgments) != 1
+                or len(core_awaiting) != 1
+                or len(artifact_awaiting) != 1
+            ):
+                raise ValueError("artifact candidate must be disclosed atomically")
+            proposal = proposals[0]
+            judgment = judgments[0]
+            if (
+                proposal.step_kind
+                is not CollaborationStepKind.LEAD_SPECIALIST_CONSULTATION
+                or payload.lead_judgment_event_id != judgment.event_id
+                or payload.consultation_proposal_id != proposal.proposal_id
+                or payload.consultation_proposal_revision != proposal.proposal_revision
+                or payload.consultation_proposal_digest != proposal.proposal_digest
+                or payload.candidate.grounding_evidence_ids
+                != tuple(
+                    item.evidence_id for item in judgment.payload.evidence.receipts
+                )
+                or tuple(item.specialist_id for item in proposal.assignments)
+                != payload.disclosed_specialist_ids
+            ):
+                raise ValueError("artifact candidate disclosure drifted")
+            candidate_inputs = tuple(
+                item
+                for item in proposal.basis.inputs
+                if item.kind is CollaborationInputKind.ARTIFACT_CANDIDATE
+            )
+            if (
+                len(candidate_inputs) != 1
+                or candidate_inputs[0].revision_digest
+                != payload.candidate.candidate_digest
+            ):
+                raise ValueError("artifact candidate input identity drifted")
+            required_assignment_inputs = {
+                candidate_inputs[0].input_id,
+                *(
+                    item.input_id
+                    for item in proposal.basis.inputs
+                    if item.input_id in payload.candidate.grounding_evidence_ids
+                ),
+            }
+            if any(
+                not required_assignment_inputs.issubset(assignment.input_ids)
+                for assignment in proposal.assignments
+            ):
+                raise ValueError("artifact reviewer lacks candidate evidence")
+            state = artifact_awaiting[0]
+            if state.confirmation_request_id != core_awaiting[
+                0
+            ].confirmation_request_id or _artifact_candidate_key(
+                state
+            ) != _artifact_candidate_key(payload):
+                raise ValueError("artifact confirmation identity drifted")
+            if previous_candidate is not None:
+                states.pop(event.step_id)
+                reviewed.pop(event.step_id, None)
+            candidates[event.step_id] = payload
+
+        for state_event in artifact_states:
+            state = state_event.payload
+            assert isinstance(state, ArtifactProposalStatePayload)
+            candidate = candidates.get(state_event.step_id)
+            if candidate is None or _artifact_candidate_key(state) != (
+                candidate.candidate.candidate_id,
+                candidate.candidate.candidate_revision,
+                candidate.candidate.candidate_digest,
+                candidate.consultation_proposal_id,
+                candidate.consultation_proposal_revision,
+                candidate.consultation_proposal_digest,
+            ):
+                raise ValueError("artifact state does not match its candidate")
+            previous = states.get(state_event.step_id)
+            if state.state not in _ARTIFACT_STATE_TRANSITIONS[previous]:
+                raise ValueError("illegal artifact proposal state transition")
+            if state.state is ArtifactProposalState.REVIEWING:
+                core_running = tuple(
+                    item.payload
+                    for item in batch
+                    if type(item.payload) is CollaborationStepStatePayload
+                    and item.payload.state is CollaborationStepState.RUNNING
+                )
+                if (
+                    len(core_running) != 1
+                    or state.execution_attempt_id
+                    != core_running[0].execution_attempt_id
+                ):
+                    raise ValueError("artifact review must start with consultation")
+            if state.state is ArtifactProposalState.REVIEWED:
+                if len(reviewed_events) != 1:
+                    raise ValueError("reviewed state requires exact reviewed proposal")
+                proposal = reviewed_events[0].payload
+                assert isinstance(proposal, ArtifactReviewedProposal)
+                if (
+                    state.reviewed_proposal_id != proposal.proposal_id
+                    or state.reviewed_proposal_digest != proposal.proposal_digest
+                ):
+                    raise ValueError("reviewed artifact state identity drifted")
+            elif reviewed_events:
+                raise ValueError("reviewed proposal requires reviewed state")
+            states[state_event.step_id] = state.state
+
+        if artifact_syntheses:
+            event = artifact_syntheses[0]
+            payload = event.payload
+            assert isinstance(payload, ArtifactReviewSynthesisPayload)
+            candidate = candidates.get(event.step_id)
+            normal = tuple(
+                item.payload
+                for item in batch
+                if type(item.payload) is CollaborationLeadSynthesisPayload
+            )
+            if (
+                candidate is None
+                or len(normal) != 1
+                or _artifact_candidate_key(payload)
+                != _artifact_candidate_key(candidate)
+                or payload.execution_attempt_id != normal[0].execution_attempt_id
+                or payload.reply_event_ids != normal[0].reply_event_ids
+                or payload.unresolved_input_ids != normal[0].unresolved_input_ids
+                or payload.message != normal[0].message
+            ):
+                raise ValueError("artifact synthesis does not match consultation")
+            replies = tuple(all_events[item] for item in payload.reply_event_ids)
+            if (
+                len(replies) != len(candidate.disclosed_specialist_ids)
+                or any(
+                    type(item.payload) is not CollaborationSpecialistReplyPayload
+                    for item in replies
+                )
+                or tuple(item.sender.agent_id for item in replies)
+                != candidate.disclosed_specialist_ids
+            ):
+                raise ValueError("artifact synthesis review attribution drifted")
+            synthesis_by_id[event.event_id] = payload
+
+        if reviewed_events:
+            event = reviewed_events[0]
+            payload = event.payload
+            assert isinstance(payload, ArtifactReviewedProposal)
+            candidate = candidates.get(event.step_id)
+            synthesis = synthesis_by_id.get(payload.synthesis_event_id)
+            if (
+                candidate is None
+                or payload.candidate != candidate.candidate
+                or synthesis is None
+                or synthesis.decision is not ArtifactReviewDecision.PROPOSE
+                or payload.consultation_proposal_id
+                != candidate.consultation_proposal_id
+                or payload.consultation_proposal_revision
+                != candidate.consultation_proposal_revision
+                or payload.consultation_proposal_digest
+                != candidate.consultation_proposal_digest
+                or payload.lead_judgment_event_id != candidate.lead_judgment_event_id
+                or payload.unresolved_input_ids != synthesis.unresolved_input_ids
+                or payload.rationale != synthesis.rationale
+                or payload.user_impact != synthesis.user_impact
+                or payload.limitations != synthesis.limitations
+                or tuple(item.reply_event_id for item in payload.reviews)
+                != synthesis.reply_event_ids
+            ):
+                raise ValueError("reviewed artifact proposal is not fully derived")
+            reviewed[event.step_id] = payload
+
+        if failure_events and reviewed_events:
+            raise ValueError("artifact review failure cannot coexist with success")
+        offset += len(batch)
+    return candidates, states, reviewed
+
+
+def _artifact_candidate_key(
+    value: ArtifactReviewCandidatePayload
+    | ArtifactReviewSynthesisPayload
+    | ArtifactProposalStatePayload,
+) -> tuple[str, int, str, str, int, str]:
+    if type(value) is ArtifactReviewCandidatePayload:
+        return (
+            value.candidate.candidate_id,
+            value.candidate.candidate_revision,
+            value.candidate.candidate_digest,
+            value.consultation_proposal_id,
+            value.consultation_proposal_revision,
+            value.consultation_proposal_digest,
+        )
+    return (
+        value.candidate_id,
+        value.candidate_revision,
+        value.candidate_digest,
+        value.consultation_proposal_id,
+        value.consultation_proposal_revision,
+        value.consultation_proposal_digest,
+    )
+
+
 def _project_validated_collaboration_history(
     events: tuple[CollaborationEventV2, ...],
 ) -> CollaborationHistoryProjection:
+    artifact_candidates, artifact_states, artifact_reviewed = (
+        _project_artifact_review_history(events)
+    )
     proposals: dict[str, CollaborationProposal] = {}
     states: dict[str, CollaborationStepState] = {}
     request_ids: set[str] = set()
@@ -1742,6 +2166,15 @@ def _project_validated_collaboration_history(
                     )
                 completed_lead_invocations.add(payload.invocation_id)
                 batch_lead_failures.append((event, payload))
+                continue
+
+            if type(payload) in {
+                ArtifactReviewCandidatePayload,
+                ArtifactReviewSynthesisPayload,
+                ArtifactReviewedProposal,
+                ArtifactProposalStatePayload,
+                ArtifactReviewFailurePayload,
+            }:
                 continue
 
             if proposal is None:
@@ -2185,6 +2618,9 @@ def _project_validated_collaboration_history(
         next_safe_action=_next_action(state, projection_result),
         rounds_spent=running_attempts.get(current_step_id, 0),
         physical_calls_spent=spent_calls.get(current_step_id, 0),
+        current_artifact_candidate=artifact_candidates.get(current_step_id),
+        current_artifact_state=artifact_states.get(current_step_id),
+        current_reviewed_artifact_proposal=artifact_reviewed.get(current_step_id),
     )
 
 
@@ -2329,6 +2765,7 @@ def _validate_collaboration_execution_result(
         if item.kind in (
             CollaborationEventKindV2.SPECIALIST_REPLY,
             CollaborationEventKindV2.LEAD_SYNTHESIS,
+            CollaborationEventKindV2.ARTIFACT_REVIEW_SYNTHESIS,
             CollaborationEventKindV2.TERMINAL_OUTCOME,
         ):
             continue
@@ -2394,6 +2831,20 @@ def _validate_collaboration_co_batch(
             CollaborationConfirmationDecision.REVISE: CollaborationStepState.SUPERSEDED,
         }[confirmation.decision]
         matching = [item for item in states if item[1].state is expected_state]
+        artifact_stale = any(
+            type(item.payload) is ArtifactProposalStatePayload
+            and item.payload.state is ArtifactProposalState.STALE
+            for item in batch
+        )
+        if (
+            confirmation.decision is CollaborationConfirmationDecision.CONFIRM
+            and artifact_stale
+        ):
+            matching = [
+                item
+                for item in states
+                if item[1].state is CollaborationStepState.SUPERSEDED
+            ]
         if len(matching) != 1:
             raise ValueError("decision and resulting state must be co-batched")
     else:
@@ -2777,6 +3228,35 @@ def _collaboration_readable_fields(
                 text=payload.code.value,
             ),
         )
+    if type(payload) is ArtifactReviewCandidatePayload:
+        return ()
+    if type(payload) is ArtifactReviewSynthesisPayload:
+        return (
+            CollaborationReadableField(
+                key=CollaborationReadableFieldKey.ARTIFACT_REVIEW_DECISION,
+                text=payload.decision.value,
+            ),
+            CollaborationReadableField(
+                key=CollaborationReadableFieldKey.ARTIFACT_REVIEW_MESSAGE,
+                text=payload.message,
+            ),
+        )
+    if type(payload) is ArtifactReviewedProposal:
+        return ()
+    if type(payload) is ArtifactProposalStatePayload:
+        return (
+            CollaborationReadableField(
+                key=CollaborationReadableFieldKey.ARTIFACT_PROPOSAL_STATE,
+                text=payload.state.value,
+            ),
+        )
+    if type(payload) is ArtifactReviewFailurePayload:
+        return (
+            CollaborationReadableField(
+                key=CollaborationReadableFieldKey.ARTIFACT_REVIEW_FAILURE,
+                text=payload.code.value,
+            ),
+        )
     raise TypeError("unsupported collaboration payload")
 
 
@@ -2805,6 +3285,7 @@ __all__ = [
     "LeadTurnResult",
     "ConversationContextPolicy",
     "ConversationContextWindow",
+    "ArtifactProposalResult",
     "project_collaboration_history",
     "project_collaboration_readable_history",
     "select_bounded_collaboration_context",

@@ -167,6 +167,7 @@ For `lead_front_channel`, use:
   "evidence_ids": ["ordered runtime-issued evidence ID"],
   "kind": "answer | question | critique | recommendation | proposal",
   "message": "nonempty user-visible text",
+  "artifact_intent": null,
   "proposal": {
     "relation": "new_step | revise_pending",
     "purpose": "nonempty user-visible purpose",
@@ -181,8 +182,14 @@ For `lead_front_channel`, use:
 }
 ```
 
-For answer, question, critique, and recommendation, set `proposal` to `null`.
-For proposal, populate it and use the relation supplied by the runtime. Do not add
+For answer, question, critique, and recommendation, set both proposal fields to
+`null`. For a consultation proposal, populate `proposal` and use the relation
+supplied by the runtime. For an artifact proposal, set `proposal` to `null` and
+populate `artifact_intent` with `additional_review_domains` and one or more
+provider-neutral operations: `create` (`suggested_path`, `new_text`), `patch`
+(`evidence_id`, `replacement_text`), `replace` (`evidence_id`, `new_text`),
+`rename` (`evidence_id`, `suggested_destination`), or `delete` (`evidence_id`).
+An evidence ID describes intent only; it never grants write authority. Do not add
 unknown or duplicate fields, private notes, chain-of-thought, hidden state,
 provider identifiers, capabilities, or invented input aliases.
 
@@ -241,6 +248,13 @@ IDs. Every synthesis belongs to the story-specific proposal lineage: preserve
 its scope, status, and evidence IDs exactly. `workflow_meta` and
 `not_applicable` are invalid for synthesis.
 
+When the runtime supplies an exact artifact candidate, review the candidate
+unchanged and do not request a continuation round. Add exactly `decision`
+(`propose | revise | reject`), `rationale`, `user_impact`, and `limitations` to
+the synthesis object. Preserve every non-supporting reviewer input in
+`unresolved_input_ids`. A `propose` decision creates only a durable reviewed
+proposal; it does not apply, stage, commit, or otherwise mutate anything.
+
 You recommend, propose, and synthesize visible advice; you do not execute.
 Never invoke a specialist, tool, provider subagent, or another model yourself.
 Never create, edit, or delete an artifact, confirm on the user's behalf, or
@@ -268,6 +282,11 @@ Return only one strict JSON object with exactly these fields:
 
 Do not add private reasoning, unknown fields, invented IDs, or mutation and
 delegation requests.
+
+When an `artifact_candidate` input is present, review that exact immutable
+candidate for plot structure, outline consistency, pacing, and projected link
+effects. Do not rewrite the candidate or assume it will be applied. Preserve a
+concern, conflict, or insufficiency in the required assessment and message.
 """,
     CHARACTER_CUSTODIAN: """# Character & World Custodian
 
@@ -287,6 +306,11 @@ Return only one strict JSON object with exactly these fields:
 
 Do not add private reasoning, unknown fields, invented IDs, or mutation and
 delegation requests.
+
+When an `artifact_candidate` input is present, review that exact immutable
+candidate for character, relationship, and world-continuity effects. Do not
+rewrite the candidate or assume it will be applied. Preserve a concern,
+conflict, or insufficiency in the required assessment and message.
 """,
     EXECUTION_SPECIALIST: """# Tone & Execution Specialist
 
@@ -307,6 +331,12 @@ Return only one strict JSON object with exactly these fields:
 
 Do not add private reasoning, unknown fields, invented IDs, or mutation and
 delegation requests.
+
+When an `artifact_candidate` input is present, review that exact immutable
+candidate for narrative rules, prose execution, formatting, and manuscript
+lifecycle effects. Do not rewrite the candidate or assume it will be applied.
+Preserve a concern, conflict, or insufficiency in the required assessment and
+message.
 """,
 }
 

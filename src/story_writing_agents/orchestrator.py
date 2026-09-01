@@ -8,7 +8,7 @@ import inspect
 import json
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, AsyncContextManager, Mapping, cast
 
@@ -70,6 +70,20 @@ from .backend import (
     backend_configuration_snapshot,
     release_bound_agent,
 )
+from .artifact_proposals import (
+    ArtifactCreateIntent,
+    ArtifactDeleteIntent,
+    ArtifactIntentEvidence,
+    ArtifactPatchIntent,
+    ArtifactProposalError,
+    ArtifactProposalIntent,
+    ArtifactReviewCandidate,
+    ArtifactRenameIntent,
+    ArtifactReplaceIntent,
+    artifact_review_specialists,
+    build_artifact_review_candidate,
+    serialize_artifact_review_candidate,
+)
 from .config import ConfigurationSnapshot, ConfigManager
 from .conversation_rag_runtime import ConversationRagRuntimeService
 from .conversation_storage.composition import compose_filesystem_conversation_storage
@@ -124,6 +138,16 @@ from .conversations import (
     CollaborationSynthesisOutcomeKind,
     CollaborationTerminalOutcomePayload,
     CollaborationTerminalScope,
+    ArtifactProposalResult,
+    ArtifactProposalState,
+    ArtifactProposalStatePayload,
+    ArtifactReviewCandidatePayload,
+    ArtifactReviewDecision,
+    ArtifactReviewFailureCode,
+    ArtifactReviewFailurePayload,
+    ArtifactReviewReply,
+    ArtifactReviewSynthesisPayload,
+    ArtifactReviewedProposal,
     ConversationStatus,
     LeadAssignmentIntent,
     LeadDecisionResult,
@@ -152,8 +176,11 @@ from .workspace import Workspace
 from .writing_artifacts import (
     MAX_REFERENCE_TOTAL_BYTES,
     MAX_REFERENCE_UTF8_BYTES,
+    ArtifactChangeSetError,
+    ArtifactReviewDomain,
     ReferenceOperationHistory,
     parse_artifact_references,
+    project_artifact_change_set,
 )
 from .writing_artifacts.repository import WritingArtifactRepository
 from .writing_artifacts.runtime_references import (
@@ -510,6 +537,14 @@ class _CollaborationInvocationResult:
     submitted_physical_calls: int
     failure: BaseException | None = None
     submission_uncertain: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _ArtifactSynthesisResult:
+    """One provider result decoded into consultation and artifact authorities."""
+
+    collaboration: CollaborationLeadSynthesisPayload
+    artifact: ArtifactReviewSynthesisPayload
 
 
 @dataclass(frozen=True, slots=True)
@@ -1238,13 +1273,96 @@ class StoryRuntime:
             )
             if not exact:
                 raise ValueError("lead decision does not match the authoritative tail")
+            artifact_candidate = projection.current_artifact_candidate
             if decision.kind is CollaborationConfirmationDecision.CONFIRM:
-                self._validate_current_proposal_authority(
-                    session_id=decision.session_id,
-                    events=events,
-                    projection=projection,
-                    proposal=proposal,
-                )
+                try:
+                    self._validate_current_proposal_authority(
+                        session_id=decision.session_id,
+                        events=events,
+                        projection=projection,
+                        proposal=proposal,
+                    )
+                except BackendProtocolError:
+                    if artifact_candidate is None:
+                        raise
+                    turn_id = self._new_id("t")
+                    confirmation = self._draft(
+                        session_id=decision.session_id,
+                        conversation_id=decision.conversation_id,
+                        turn_id=turn_id,
+                        step_id=decision.step_id,
+                        kind=CollaborationEventKind.CONFIRMATION,
+                        sender=_USER_ACTOR,
+                        recipient=_RUNTIME_ACTOR,
+                        payload=CollaborationConfirmationPayload(
+                            confirmation_request_id=(decision.confirmation_request_id),
+                            confirmation_request_event_id=request_event.event_id,
+                            proposal_id=proposal.proposal_id,
+                            proposal_revision=proposal.proposal_revision,
+                            proposal_digest=proposal.proposal_digest,
+                            decision=decision.kind,
+                        ),
+                    )
+                    self._append_drafts(
+                        projection.last_sequence,
+                        (
+                            confirmation,
+                            self._draft(
+                                session_id=decision.session_id,
+                                conversation_id=decision.conversation_id,
+                                turn_id=turn_id,
+                                step_id=decision.step_id,
+                                kind=(CollaborationEventKind.ARTIFACT_PROPOSAL_STATE),
+                                sender=_RUNTIME_ACTOR,
+                                recipient=_USER_ACTOR,
+                                payload=self._artifact_state_payload(
+                                    artifact_candidate,
+                                    ArtifactProposalState.STALE,
+                                ),
+                            ),
+                            self._draft(
+                                session_id=decision.session_id,
+                                conversation_id=decision.conversation_id,
+                                turn_id=turn_id,
+                                step_id=decision.step_id,
+                                kind=CollaborationEventKind.STEP_STATE,
+                                sender=_RUNTIME_ACTOR,
+                                recipient=_USER_ACTOR,
+                                payload=CollaborationStepStatePayload(
+                                    state=CollaborationStepState.SUPERSEDED,
+                                    proposal_id=proposal.proposal_id,
+                                    proposal_revision=proposal.proposal_revision,
+                                    proposal_digest=proposal.proposal_digest,
+                                ),
+                            ),
+                        ),
+                    )
+                    stale_turn = LeadTurnResult(
+                        decision.session_id,
+                        decision.conversation_id,
+                        turn_id,
+                        decision.step_id,
+                        LeadOutcomeKind.RECOMMENDATION,
+                        "The exact artifact candidate became stale before review. "
+                        "No provider was called and no artifact was changed.",
+                        None,
+                        CollaborationStepState.SUPERSEDED,
+                        None,
+                        CollaborationNextAction.CONTINUE_WITH_LEAD,
+                        proposal.basis.evidence,
+                        ArtifactProposalResult(
+                            ArtifactProposalState.STALE,
+                            artifact_candidate,
+                        ),
+                    )
+                    return LeadDecisionResult(
+                        decision.session_id,
+                        decision.conversation_id,
+                        decision.step_id,
+                        decision.kind,
+                        proposal,
+                        stale_turn,
+                    )
 
             turn_id = self._new_id("t")
             confirmation = self._draft(
@@ -1291,6 +1409,27 @@ class StoryRuntime:
                 ),
             )
             drafts: tuple[CollaborationEventDraft, ...]
+            artifact_decision: CollaborationEventDraft | None = None
+            if artifact_candidate is not None and decision.kind is not (
+                CollaborationConfirmationDecision.CONFIRM
+            ):
+                artifact_decision = self._draft(
+                    session_id=decision.session_id,
+                    conversation_id=decision.conversation_id,
+                    turn_id=turn_id,
+                    step_id=decision.step_id,
+                    kind=CollaborationEventKind.ARTIFACT_PROPOSAL_STATE,
+                    sender=_RUNTIME_ACTOR,
+                    recipient=_USER_ACTOR,
+                    payload=self._artifact_state_payload(
+                        artifact_candidate,
+                        (
+                            ArtifactProposalState.REJECTED
+                            if decision.kind is CollaborationConfirmationDecision.REJECT
+                            else ArtifactProposalState.SUPERSEDED
+                        ),
+                    ),
+                )
             if decision.kind is CollaborationConfirmationDecision.REVISE:
                 assert decision.revision_request is not None
                 drafts = (
@@ -1305,10 +1444,15 @@ class StoryRuntime:
                         recipient=_LEAD_ACTOR,
                         payload=CollaborationMessagePayload(decision.revision_request),
                     ),
+                    *((artifact_decision,) if artifact_decision is not None else ()),
                     state_event,
                 )
             else:
-                drafts = (confirmation, state_event)
+                drafts = (
+                    confirmation,
+                    *((artifact_decision,) if artifact_decision is not None else ()),
+                    state_event,
+                )
             self._append_drafts(projection.last_sequence, drafts)
 
             if decision.kind is CollaborationConfirmationDecision.CONFIRM:
@@ -1369,6 +1513,15 @@ class StoryRuntime:
                     CollaborationStepState.REJECTED,
                     None,
                     CollaborationNextAction.CONTINUE_WITH_LEAD,
+                    None,
+                    (
+                        None
+                        if artifact_candidate is None
+                        else ArtifactProposalResult(
+                            ArtifactProposalState.REJECTED,
+                            artifact_candidate,
+                        )
+                    ),
                 )
                 return LeadDecisionResult(
                     decision.session_id,
@@ -1404,6 +1557,17 @@ class StoryRuntime:
                 context_event_sink=None,
                 user_source_text=decision.revision_request,
             )
+            if (
+                artifact_candidate is not None
+                and revised_turn.artifact_proposal is None
+            ):
+                revised_turn = replace(
+                    revised_turn,
+                    artifact_proposal=ArtifactProposalResult(
+                        ArtifactProposalState.SUPERSEDED,
+                        artifact_candidate,
+                    ),
+                )
             return LeadDecisionResult(
                 decision.session_id,
                 decision.conversation_id,
@@ -1498,9 +1662,33 @@ class StoryRuntime:
                 execution_attempt_id=attempt_id,
             ),
         )
+        artifact_candidate = self._artifact_candidate_for_proposal(events, proposal)
+        artifact_running = (
+            ()
+            if artifact_candidate is None
+            else (
+                self._draft_with_id(
+                    event_id=self._deterministic_id(
+                        "e", attempt_id, "artifact_reviewing"
+                    ),
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    step_id=proposal.step_id,
+                    kind=CollaborationEventKind.ARTIFACT_PROPOSAL_STATE,
+                    sender=_RUNTIME_ACTOR,
+                    recipient=_USER_ACTOR,
+                    payload=self._artifact_state_payload(
+                        artifact_candidate,
+                        ArtifactProposalState.REVIEWING,
+                        execution_attempt_id=attempt_id,
+                    ),
+                ),
+            )
+        )
         self._append_drafts(
             projection.last_sequence,
-            (running, *dispatches),
+            (*artifact_running, running, *dispatches),
             batch_id=self._deterministic_id("b", attempt_id, "start"),
         )
         marker = (session_id, conversation_id, proposal.step_id, attempt_id)
@@ -1676,9 +1864,10 @@ class StoryRuntime:
                     "mandatory consultation synthesis returned no invocation result"
                 ),
             )
-        if item.failure is None and type(item.value) is not (
-            CollaborationLeadSynthesisPayload
-        ):
+        if item.failure is None and type(item.value) not in {
+            CollaborationLeadSynthesisPayload,
+            _ArtifactSynthesisResult,
+        }:
             return _CollaborationInvocationResult(
                 None,
                 item.submitted_physical_calls,
@@ -1778,6 +1967,7 @@ class StoryRuntime:
         replies: tuple[CollaborationSpecialistReplyPayload, ...],
         events: tuple[CollaborationEvent, ...],
     ) -> _CollaborationInvocationResult:
+        artifact_candidate = self._artifact_candidate_for_proposal(events, proposal)
         reply_event_ids = tuple(
             self._deterministic_id("e", attempt_id, reply.assignment_id, "reply")
             for reply in replies
@@ -1822,8 +2012,29 @@ class StoryRuntime:
             ],
             "workflow": "lead_synthesis",
         }
+        if artifact_candidate is not None:
+            value["answer_contract"] = {
+                **cast(dict[str, object], value["answer_contract"]),
+                "decision": [item.value for item in ArtifactReviewDecision],
+                "limitations": "nonempty visible limitations",
+                "next_intent": None,
+                "rationale": "nonempty visible review rationale",
+                "user_impact": "nonempty visible user impact",
+            }
+            value["artifact_candidate"] = json.loads(
+                serialize_artifact_review_candidate(artifact_candidate.candidate)
+            )
 
-        def decode(answer: str) -> CollaborationLeadSynthesisPayload:
+        def decode(answer: str) -> object:
+            if artifact_candidate is not None:
+                return self._decode_artifact_synthesis(
+                    answer,
+                    proposal=proposal,
+                    attempt_id=attempt_id,
+                    reply_event_ids=reply_event_ids,
+                    replies=replies,
+                    candidate=artifact_candidate,
+                )
             return self._decode_lead_synthesis(
                 answer,
                 proposal=proposal,
@@ -1857,6 +2068,103 @@ class StoryRuntime:
             round_number=proposal.budget.rounds_spent + 1,
             decoder=decode,
         )
+
+    @staticmethod
+    def _artifact_candidate_for_proposal(
+        events: tuple[CollaborationEvent, ...],
+        proposal: CollaborationProposal,
+    ) -> ArtifactReviewCandidatePayload | None:
+        matches = tuple(
+            event.payload
+            for event in events
+            if type(event.payload) is ArtifactReviewCandidatePayload
+            and event.payload.consultation_proposal_id == proposal.proposal_id
+            and event.payload.consultation_proposal_revision
+            == proposal.proposal_revision
+            and event.payload.consultation_proposal_digest == proposal.proposal_digest
+        )
+        if not matches:
+            return None
+        if len(matches) != 1:
+            raise BackendProtocolError("artifact candidate identity is ambiguous")
+        return cast(ArtifactReviewCandidatePayload, matches[0])
+
+    @classmethod
+    def _decode_artifact_synthesis(
+        cls,
+        answer: str,
+        *,
+        proposal: CollaborationProposal,
+        attempt_id: str,
+        reply_event_ids: tuple[str, ...],
+        replies: tuple[CollaborationSpecialistReplyPayload, ...],
+        candidate: ArtifactReviewCandidatePayload,
+    ) -> _ArtifactSynthesisResult:
+        keys = {
+            "decision",
+            "evidence_ids",
+            "evidence_status",
+            "limitations",
+            "message",
+            "next_intent",
+            "rationale",
+            "reply_event_ids",
+            "scope",
+            "unresolved_input_ids",
+            "user_impact",
+        }
+        try:
+            value = cls._strict_json_object(answer, keys)
+            if value["next_intent"] is not None:
+                raise ValueError
+            collaboration_value = {
+                key: value[key]
+                for key in {
+                    "evidence_ids",
+                    "evidence_status",
+                    "message",
+                    "next_intent",
+                    "reply_event_ids",
+                    "scope",
+                    "unresolved_input_ids",
+                }
+            }
+            collaboration = cls._decode_lead_synthesis(
+                json.dumps(
+                    collaboration_value,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
+                proposal=proposal,
+                attempt_id=attempt_id,
+                reply_event_ids=reply_event_ids,
+                replies=replies,
+            )
+            for field in ("rationale", "user_impact", "limitations"):
+                if type(value[field]) is not str:
+                    raise ValueError
+            artifact = ArtifactReviewSynthesisPayload(
+                candidate_id=candidate.candidate.candidate_id,
+                candidate_revision=candidate.candidate.candidate_revision,
+                candidate_digest=candidate.candidate.candidate_digest,
+                consultation_proposal_id=proposal.proposal_id,
+                consultation_proposal_revision=proposal.proposal_revision,
+                consultation_proposal_digest=proposal.proposal_digest,
+                execution_attempt_id=attempt_id,
+                decision=ArtifactReviewDecision(value["decision"]),
+                message=collaboration.message,
+                rationale=cast(str, value["rationale"]),
+                user_impact=cast(str, value["user_impact"]),
+                limitations=cast(str, value["limitations"]),
+                reply_event_ids=reply_event_ids,
+                unresolved_input_ids=collaboration.unresolved_input_ids,
+            )
+            return _ArtifactSynthesisResult(collaboration, artifact)
+        except (KeyError, TypeError, UnicodeError, ValueError) as exc:
+            raise BackendProtocolError(
+                "lead returned a noncanonical artifact review synthesis"
+            ) from exc
 
     async def _run_collaboration_invocation(
         self,
@@ -2089,6 +2397,23 @@ class StoryRuntime:
                 "input_ids": list(payload.input_ids),
                 "message": payload.message,
             }
+        elif item.kind is CollaborationInputKind.ARTIFACT_CANDIDATE:
+            candidate_id = item.locator.removeprefix("artifact-candidate/")
+            matches = tuple(
+                event
+                for event in events
+                if type(event.payload) is ArtifactReviewCandidatePayload
+                and event.payload.candidate.candidate_id == candidate_id
+                and event.payload.candidate.candidate_digest == item.revision_digest
+            )
+            if len(matches) != 1:
+                raise BackendProtocolError(
+                    "assignment artifact candidate is not authoritative"
+                )
+            candidate = cast(ArtifactReviewCandidatePayload, matches[0].payload)
+            value["candidate"] = json.loads(
+                serialize_artifact_review_candidate(candidate.candidate)
+            )
         return value
 
     def _persist_collaboration_results_locked(
@@ -2185,9 +2510,13 @@ class StoryRuntime:
                     )
                 )
 
-        projection = self.conversation_storage_services.event_store.read_context(
+        current_events = self.conversation_storage_services.event_store.read(
             session_id,
             conversation_id,
+        )
+        projection = project_collaboration_history(current_events)
+        artifact_candidate = self._artifact_candidate_for_proposal(
+            current_events, proposal
         )
         if uncertain:
             interruption = self._draft_with_id(
@@ -2222,14 +2551,38 @@ class StoryRuntime:
                     execution_attempt_id=attempt_id,
                 ),
             )
+            artifact_unknown = (
+                ()
+                if artifact_candidate is None
+                else (
+                    self._draft_with_id(
+                        event_id=self._deterministic_id(
+                            "e", attempt_id, "artifact_recovery"
+                        ),
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        step_id=proposal.step_id,
+                        kind=CollaborationEventKind.ARTIFACT_PROPOSAL_STATE,
+                        sender=_RUNTIME_ACTOR,
+                        recipient=_USER_ACTOR,
+                        payload=self._artifact_state_payload(
+                            artifact_candidate,
+                            ArtifactProposalState.RECOVERY_REQUIRED,
+                            execution_attempt_id=attempt_id,
+                        ),
+                    ),
+                )
+            )
             self._append_drafts(
                 projection.last_sequence,
-                (*replies, *terminals, interruption, unknown),
+                (*replies, *terminals, interruption, *artifact_unknown, unknown),
                 batch_id=self._deterministic_id("b", attempt_id, "unknown"),
             )
             return
 
         synthesis_draft: CollaborationEventDraft | None = None
+        artifact_synthesis_draft: CollaborationEventDraft | None = None
         synthesis_outcome = CollaborationSynthesisOutcomeKind.NOT_ATTEMPTED
         synthesis_calls = 0
         synthesis_event_id: str | None = None
@@ -2240,10 +2593,14 @@ class StoryRuntime:
         if synthesis_result is not None:
             synthesis_calls = synthesis_result.submitted_physical_calls
             if synthesis_result.failure is None:
-                if (
-                    type(synthesis_result.value)
-                    is not CollaborationLeadSynthesisPayload
-                ):
+                value = synthesis_result.value
+                if type(value) is _ArtifactSynthesisResult:
+                    collaboration_value = value.collaboration
+                    artifact_value = value.artifact
+                elif type(value) is CollaborationLeadSynthesisPayload:
+                    collaboration_value = value
+                    artifact_value = None
+                else:
                     raise BackendProtocolError("lead synthesis success is not typed")
                 synthesis_outcome = CollaborationSynthesisOutcomeKind.SUCCEEDED
                 synthesis_event_id = self._deterministic_id(
@@ -2258,8 +2615,22 @@ class StoryRuntime:
                     kind=CollaborationEventKind.LEAD_SYNTHESIS,
                     sender=_LEAD_ACTOR,
                     recipient=_USER_ACTOR,
-                    payload=synthesis_result.value,
+                    payload=collaboration_value,
                 )
+                if artifact_value is not None:
+                    artifact_synthesis_draft = self._draft_with_id(
+                        event_id=self._deterministic_id(
+                            "e", attempt_id, "artifact_synthesis"
+                        ),
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        step_id=proposal.step_id,
+                        kind=CollaborationEventKind.ARTIFACT_REVIEW_SYNTHESIS,
+                        sender=_LEAD_ACTOR,
+                        recipient=_USER_ACTOR,
+                        payload=artifact_value,
+                    )
             elif isinstance(synthesis_result.failure, asyncio.CancelledError):
                 synthesis_outcome = CollaborationSynthesisOutcomeKind.CANCELLED
             else:
@@ -2306,6 +2677,11 @@ class StoryRuntime:
             for draft in (
                 *replies,
                 *((synthesis_draft,) if synthesis_draft is not None else ()),
+                *(
+                    (artifact_synthesis_draft,)
+                    if artifact_synthesis_draft is not None
+                    else ()
+                ),
                 *terminals,
             )
         )
@@ -2337,6 +2713,11 @@ class StoryRuntime:
             (
                 *replies,
                 *((synthesis_draft,) if synthesis_draft is not None else ()),
+                *(
+                    (artifact_synthesis_draft,)
+                    if artifact_synthesis_draft is not None
+                    else ()
+                ),
                 *terminals,
                 result,
             ),
@@ -2404,6 +2785,17 @@ class StoryRuntime:
         next_intent = (
             synthesis_payload.next_intent if synthesis_payload is not None else None
         )
+        artifact_candidate = self._artifact_candidate_for_proposal(events, proposal)
+        if artifact_candidate is not None:
+            return self._finalize_artifact_result_locked(
+                events=events,
+                projection=projection,
+                proposal=proposal,
+                result=result,
+                result_event_id=result_event_id,
+                candidate=artifact_candidate,
+                turn_id=turn_id,
+            )
         if (
             result.overall_outcome is CollaborationExecutionOutcomeKind.SUCCEEDED
             and next_intent is not None
@@ -2584,6 +2976,229 @@ class StoryRuntime:
             state,
             None,
             CollaborationNextAction.CONTINUE_WITH_LEAD,
+        )
+
+    def _finalize_artifact_result_locked(
+        self,
+        *,
+        events: tuple[CollaborationEvent, ...],
+        projection: CollaborationHistoryProjection,
+        proposal: CollaborationProposal,
+        result: CollaborationExecutionResult,
+        result_event_id: str,
+        candidate: ArtifactReviewCandidatePayload,
+        turn_id: str,
+    ) -> LeadTurnResult:
+        """Finalize known review facts without granting artifact-write authority."""
+
+        artifact_synthesis_event = next(
+            (
+                event
+                for event in events
+                if type(event.payload) is ArtifactReviewSynthesisPayload
+                and event.payload.execution_attempt_id == result.execution_attempt_id
+                and event.payload.candidate_digest
+                == candidate.candidate.candidate_digest
+            ),
+            None,
+        )
+        artifact_synthesis = (
+            None
+            if artifact_synthesis_event is None
+            else cast(ArtifactReviewSynthesisPayload, artifact_synthesis_event.payload)
+        )
+        state = ArtifactProposalState.FAILED
+        reviewed_proposal: ArtifactReviewedProposal | None = None
+        message = (
+            "Artifact review did not complete. Every knowable reviewer result was "
+            "preserved and no artifact was changed."
+        )
+        if (
+            result.overall_outcome is CollaborationExecutionOutcomeKind.SUCCEEDED
+            and artifact_synthesis is not None
+        ):
+            message = artifact_synthesis.message
+            state = {
+                ArtifactReviewDecision.PROPOSE: ArtifactProposalState.REVIEWED,
+                ArtifactReviewDecision.REVISE: ArtifactProposalState.REVISION_REQUIRED,
+                ArtifactReviewDecision.REJECT: ArtifactProposalState.REJECTED,
+            }[artifact_synthesis.decision]
+            if state is ArtifactProposalState.REVIEWED:
+                try:
+                    snapshots = self.artifacts.capture_complete_state()
+                    project_artifact_change_set(
+                        {item.path: item.content for item in snapshots},
+                        candidate.candidate.change_set,
+                    )
+                except ArtifactChangeSetError:
+                    state = ArtifactProposalState.STALE
+                    message = (
+                        "The reviewed candidate became stale before finalization. "
+                        "No artifact was changed; request a new candidate."
+                    )
+                else:
+                    reply_events = tuple(
+                        next(
+                            event
+                            for event in events
+                            if event.event_id == outcome.reply_event_id
+                            and type(event.payload)
+                            is CollaborationSpecialistReplyPayload
+                        )
+                        for outcome in result.assignment_outcomes
+                    )
+                    reviews = tuple(
+                        ArtifactReviewReply(
+                            specialist_id=cast(str, event.sender.agent_id),
+                            assignment_id=cast(
+                                CollaborationSpecialistReplyPayload,
+                                event.payload,
+                            ).assignment_id,
+                            reply_event_id=event.event_id,
+                            assessment=cast(
+                                CollaborationSpecialistReplyPayload,
+                                event.payload,
+                            ).assessment,
+                        )
+                        for event in reply_events
+                    )
+                    candidate_event = next(
+                        event
+                        for event in events
+                        if type(event.payload) is ArtifactReviewCandidatePayload
+                        and event.payload == candidate
+                    )
+                    assert artifact_synthesis_event is not None
+                    reviewed_proposal = ArtifactReviewedProposal.create(
+                        proposal_id=self._deterministic_id(
+                            "ap", candidate.candidate.candidate_id, "reviewed"
+                        ),
+                        proposal_revision=1,
+                        candidate=candidate.candidate,
+                        session_id=events[-1].session_id,
+                        conversation_id=events[-1].conversation_id,
+                        turn_id=turn_id,
+                        step_id=proposal.step_id,
+                        base_tail_sequence=candidate_event.sequence,
+                        reviewed_tail_sequence=artifact_synthesis_event.sequence,
+                        lead_judgment_event_id=candidate.lead_judgment_event_id,
+                        synthesis_event_id=artifact_synthesis_event.event_id,
+                        consultation_proposal_id=proposal.proposal_id,
+                        consultation_proposal_revision=proposal.proposal_revision,
+                        consultation_proposal_digest=proposal.proposal_digest,
+                        mandatory_specialist_ids=candidate.mandatory_specialist_ids,
+                        disclosed_specialist_ids=candidate.disclosed_specialist_ids,
+                        reviews=reviews,
+                        unresolved_input_ids=artifact_synthesis.unresolved_input_ids,
+                        rationale=artifact_synthesis.rationale,
+                        user_impact=artifact_synthesis.user_impact,
+                        limitations=artifact_synthesis.limitations,
+                        grounding_evidence_ids=(
+                            candidate.candidate.grounding_evidence_ids
+                        ),
+                    )
+
+        final_drafts: list[CollaborationEventDraft] = [
+            self._draft_with_id(
+                event_id=self._deterministic_id("e", result_event_id, "notice"),
+                session_id=events[-1].session_id,
+                conversation_id=events[-1].conversation_id,
+                turn_id=turn_id,
+                step_id=proposal.step_id,
+                kind=CollaborationEventKind.MESSAGE,
+                sender=_LEAD_ACTOR,
+                recipient=_USER_ACTOR,
+                payload=CollaborationMessagePayload(message),
+            )
+        ]
+        if reviewed_proposal is not None:
+            final_drafts.append(
+                self._draft_with_id(
+                    event_id=self._deterministic_id(
+                        "e", result_event_id, "reviewed_artifact"
+                    ),
+                    session_id=events[-1].session_id,
+                    conversation_id=events[-1].conversation_id,
+                    turn_id=turn_id,
+                    step_id=proposal.step_id,
+                    kind=CollaborationEventKind.ARTIFACT_REVIEWED_PROPOSAL,
+                    sender=_RUNTIME_ACTOR,
+                    recipient=_USER_ACTOR,
+                    payload=reviewed_proposal,
+                )
+            )
+        elif state is ArtifactProposalState.FAILED:
+            final_drafts.append(
+                self._draft_with_id(
+                    event_id=self._deterministic_id(
+                        "e", result_event_id, "artifact_failure"
+                    ),
+                    session_id=events[-1].session_id,
+                    conversation_id=events[-1].conversation_id,
+                    turn_id=turn_id,
+                    step_id=proposal.step_id,
+                    kind=CollaborationEventKind.ARTIFACT_REVIEW_FAILURE,
+                    sender=_RUNTIME_ACTOR,
+                    recipient=_USER_ACTOR,
+                    payload=ArtifactReviewFailurePayload(
+                        code=ArtifactReviewFailureCode.REVIEW_INCOMPLETE,
+                        candidate_id=candidate.candidate.candidate_id,
+                        candidate_digest=candidate.candidate.candidate_digest,
+                    ),
+                )
+            )
+        final_drafts.append(
+            self._draft_with_id(
+                event_id=self._deterministic_id(
+                    "e", result_event_id, "artifact_state", state.value
+                ),
+                session_id=events[-1].session_id,
+                conversation_id=events[-1].conversation_id,
+                turn_id=turn_id,
+                step_id=proposal.step_id,
+                kind=CollaborationEventKind.ARTIFACT_PROPOSAL_STATE,
+                sender=_RUNTIME_ACTOR,
+                recipient=_USER_ACTOR,
+                payload=self._artifact_state_payload(
+                    candidate,
+                    state,
+                    execution_attempt_id=result.execution_attempt_id,
+                    reviewed_proposal=reviewed_proposal,
+                ),
+            )
+        )
+        core_state = {
+            CollaborationExecutionOutcomeKind.SUCCEEDED: CollaborationStepState.COMPLETED,
+            CollaborationExecutionOutcomeKind.FAILED: CollaborationStepState.FAILED,
+            CollaborationExecutionOutcomeKind.CANCELLED: CollaborationStepState.INTERRUPTED,
+        }[result.overall_outcome]
+        final_drafts.append(
+            self._terminal_state_draft(
+                events=events,
+                turn_id=turn_id,
+                proposal=proposal,
+                result_event_id=result_event_id,
+                state=core_state,
+            )
+        )
+        self._append_drafts(
+            projection.last_sequence,
+            tuple(final_drafts),
+            batch_id=self._deterministic_id("b", result_event_id, "finalize"),
+        )
+        return LeadTurnResult(
+            events[-1].session_id,
+            events[-1].conversation_id,
+            turn_id,
+            proposal.step_id,
+            LeadOutcomeKind.RECOMMENDATION,
+            message,
+            None,
+            core_state,
+            None,
+            CollaborationNextAction.CONTINUE_WITH_LEAD,
+            None,
+            ArtifactProposalResult(state, candidate, reviewed_proposal),
         )
 
     def _terminal_state_draft(
@@ -3374,6 +3989,10 @@ class StoryRuntime:
                             "purpose": "visible purpose",
                             "relation": expected_relation.value,
                         },
+                        "artifact_intent": (
+                            "null or provider-neutral create/patch/replace/rename/"
+                            "delete operations with optional review domains"
+                        ),
                     },
                     "command": reference_operation.provider_text,
                     "identity": {
@@ -3420,12 +4039,16 @@ class StoryRuntime:
             )
             decoded: LeadProviderOutcome | None = None
             decoded_evidence: CollaborationLeadEvidence | None = None
+            decoded_artifact_candidate: ArtifactReviewCandidate | None = None
+            declared_artifact_intent = False
 
             def validate(
                 answer: str,
                 authorization: ContextAnswerAuthorization,
             ) -> None:
-                nonlocal decoded, decoded_evidence
+                nonlocal decoded, decoded_artifact_candidate, decoded_evidence
+                nonlocal declared_artifact_intent
+                declared_artifact_intent = self._declares_artifact_intent(answer)
                 decoded = self._decode_lead_outcome(answer)
                 decoded_evidence = self._durable_lead_evidence(
                     decoded,
@@ -3433,18 +4056,44 @@ class StoryRuntime:
                     inputs,
                 )
                 if decoded.kind is LeadOutcomeKind.PROPOSAL:
-                    assert decoded.proposal is not None
-                    if decoded.proposal.relation is not expected_relation:
-                        raise _LeadOutcomeValidationError(
-                            "lead proposal relation does not match the runtime request"
+                    if decoded.proposal is not None:
+                        if decoded.proposal.relation is not expected_relation:
+                            raise _LeadOutcomeValidationError(
+                                "lead proposal relation does not match the runtime request"
+                            )
+                        self._validate_lead_intent_evidence_inputs(
+                            decoded.proposal,
+                            self._materialize_lead_evidence_inputs(
+                                inputs,
+                                decoded_evidence,
+                            ),
                         )
-                    self._validate_lead_intent_evidence_inputs(
-                        decoded.proposal,
-                        self._materialize_lead_evidence_inputs(
-                            inputs,
-                            decoded_evidence,
-                        ),
-                    )
+                    elif expected_relation not in {
+                        LeadProposalRelation.NEW_STEP,
+                        LeadProposalRelation.REVISE_PENDING,
+                    }:
+                        raise _LeadOutcomeValidationError(
+                            "artifact proposals require a fresh lead turn"
+                        )
+                    else:
+                        if type(decoded.artifact_intent) is not ArtifactProposalIntent:
+                            raise _LeadOutcomeValidationError(
+                                "artifact proposal intent is missing"
+                            )
+                        try:
+                            decoded_artifact_candidate = (
+                                self._construct_artifact_review_candidate(
+                                    turn_id=turn_id,
+                                    step_id=step_id,
+                                    intent=decoded.artifact_intent,
+                                    evidence=decoded_evidence,
+                                )
+                            )
+                        except ArtifactProposalError:
+                            raise _LeadOutcomeValidationError(
+                                "artifact intent could not form an exact review "
+                                "candidate"
+                            ) from None
 
             result = await self._agent_context_service.invoke(
                 contextual_request,
@@ -3474,6 +4123,10 @@ class StoryRuntime:
                 step_id=step_id,
                 invocation_id=provider.invocation_id,
                 call_id=provider.last_submitted_call_id,
+                artifact_intent=(
+                    declared_artifact_intent
+                    or (decoded is not None and decoded.artifact_intent is not None)
+                ),
             )
         except BaseException as failure:
             reference_failure = reference_operation.failure(failure)
@@ -3484,6 +4137,37 @@ class StoryRuntime:
             await self._release_bound_agent_use(bound_agent)
 
         if outcome.kind is LeadOutcomeKind.PROPOSAL:
+            if outcome.artifact_intent is not None:
+                assert decoded_artifact_candidate is not None
+                try:
+                    return self._build_artifact_proposal_result(
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        step_id=step_id,
+                        outcome=outcome,
+                        evidence=evidence,
+                        inputs=inputs,
+                        candidate=decoded_artifact_candidate,
+                        previous_proposal=previous_proposal,
+                        projection=self.conversation_storage_services.event_store.read_context(
+                            session_id,
+                            conversation_id,
+                        ),
+                        lead_definition=definition,
+                    )
+                except _LeadOutcomeValidationError:
+                    assert provider is not None
+                    assert provider.last_submitted_call_id is not None
+                    return self._lead_outcome_failure_result(
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        step_id=step_id,
+                        invocation_id=provider.invocation_id,
+                        call_id=provider.last_submitted_call_id,
+                        artifact_intent=True,
+                    )
             intent = outcome.proposal
             assert intent is not None
             refreshed = self.conversation_storage_services.event_store.read_context(
@@ -3604,6 +4288,280 @@ class StoryRuntime:
             evidence,
         )
 
+    def _build_artifact_proposal_result(
+        self,
+        *,
+        session_id: str,
+        conversation_id: str,
+        turn_id: str,
+        step_id: str,
+        outcome: LeadProviderOutcome,
+        evidence: CollaborationLeadEvidence,
+        inputs: tuple[CollaborationInputRevision, ...],
+        candidate: ArtifactReviewCandidate,
+        previous_proposal: CollaborationProposal | None,
+        projection: CollaborationHistoryProjection,
+        lead_definition: object,
+    ) -> LeadTurnResult:
+        """Construct and disclose one exact candidate without mutating artifacts."""
+
+        intent = outcome.artifact_intent
+        if type(intent) is not ArtifactProposalIntent:
+            raise _LeadOutcomeValidationError("artifact proposal intent is missing")
+        if type(candidate) is not ArtifactReviewCandidate:
+            raise _LeadOutcomeValidationError("artifact review candidate is missing")
+        snapshots = self.artifacts.capture_complete_state()
+        base_state = {item.path: item.content for item in snapshots}
+        try:
+            project_artifact_change_set(base_state, candidate.change_set)
+        except ArtifactChangeSetError:
+            raise _LeadOutcomeValidationError(
+                "artifact review candidate base is no longer current"
+            ) from None
+        candidate_input = CollaborationInputRevision(
+            input_id="artifact_candidate",
+            kind=CollaborationInputKind.ARTIFACT_CANDIDATE,
+            locator=f"artifact-candidate/{candidate.candidate_id}",
+            state=CollaborationInputState.PRESENT,
+            revision_digest=candidate.candidate_digest,
+        )
+        materialized = (
+            *self._materialize_lead_evidence_inputs(inputs, evidence),
+            candidate_input,
+        )
+        reviewers = artifact_review_specialists(candidate.disclosed_review_domains)
+        assignment_ids = tuple(item.input_id for item in materialized)
+        proposal_intent = LeadProposalIntent(
+            relation=LeadProposalRelation.NEW_STEP,
+            purpose="Review the exact proposed writing-artifact change candidate.",
+            assignments=tuple(
+                LeadAssignmentIntent(
+                    agent_id=reviewer,
+                    instruction=(
+                        "Review the exact candidate for your specialty. Preserve "
+                        "concerns, conflicts, insufficiencies, and affected inputs."
+                    ),
+                    input_ids=assignment_ids,
+                )
+                for reviewer in reviewers
+            ),
+        )
+        proposal = self._build_lead_proposal(
+            session_id=session_id,
+            step_id=step_id,
+            intent=proposal_intent,
+            inputs=tuple(materialized),
+            previous_proposal=previous_proposal,
+            projection=projection,
+            lead_definition=lead_definition,
+            evidence=evidence,
+        )
+        request_id = self._new_id("c")
+        judgment = self._draft(
+            session_id=session_id,
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            step_id=step_id,
+            kind=CollaborationEventKind.MESSAGE,
+            sender=_LEAD_ACTOR,
+            recipient=_USER_ACTOR,
+            payload=CollaborationLeadJudgmentPayload(
+                outcome.kind,
+                outcome.message,
+                evidence,
+            ),
+        )
+        candidate_payload = ArtifactReviewCandidatePayload(
+            candidate=candidate,
+            lead_judgment_event_id=judgment.event_id,
+            consultation_proposal_id=proposal.proposal_id,
+            consultation_proposal_revision=proposal.proposal_revision,
+            consultation_proposal_digest=proposal.proposal_digest,
+            mandatory_specialist_ids=artifact_review_specialists(
+                candidate.mandatory_review_domains
+            ),
+            disclosed_specialist_ids=reviewers,
+        )
+        self._append_drafts(
+            projection.last_sequence,
+            (
+                judgment,
+                self._draft(
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    step_id=step_id,
+                    kind=CollaborationEventKind.ARTIFACT_REVIEW_CANDIDATE,
+                    sender=_RUNTIME_ACTOR,
+                    recipient=_USER_ACTOR,
+                    payload=candidate_payload,
+                ),
+                self._draft(
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    step_id=step_id,
+                    kind=CollaborationEventKind.MESSAGE,
+                    sender=_LEAD_ACTOR,
+                    recipient=_USER_ACTOR,
+                    payload=proposal,
+                ),
+                self._draft(
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    step_id=step_id,
+                    kind=CollaborationEventKind.ARTIFACT_PROPOSAL_STATE,
+                    sender=_RUNTIME_ACTOR,
+                    recipient=_USER_ACTOR,
+                    payload=self._artifact_state_payload(
+                        candidate_payload,
+                        ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION,
+                        confirmation_request_id=request_id,
+                    ),
+                ),
+                self._draft(
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    step_id=step_id,
+                    kind=CollaborationEventKind.STEP_STATE,
+                    sender=_RUNTIME_ACTOR,
+                    recipient=_USER_ACTOR,
+                    payload=CollaborationStepStatePayload(
+                        state=CollaborationStepState.AWAITING_CONFIRMATION,
+                        proposal_id=proposal.proposal_id,
+                        proposal_revision=proposal.proposal_revision,
+                        proposal_digest=proposal.proposal_digest,
+                        confirmation_request_id=request_id,
+                    ),
+                ),
+            ),
+        )
+        return LeadTurnResult(
+            session_id,
+            conversation_id,
+            turn_id,
+            step_id,
+            LeadOutcomeKind.PROPOSAL,
+            outcome.message,
+            proposal,
+            CollaborationStepState.AWAITING_CONFIRMATION,
+            request_id,
+            CollaborationNextAction.SUBMIT_CONFIRMATION,
+            evidence,
+            ArtifactProposalResult(
+                ArtifactProposalState.AWAITING_CONSULTATION_CONFIRMATION,
+                candidate_payload,
+            ),
+        )
+
+    def _construct_artifact_review_candidate(
+        self,
+        *,
+        turn_id: str,
+        step_id: str,
+        intent: ArtifactProposalIntent,
+        evidence: CollaborationLeadEvidence,
+    ) -> ArtifactReviewCandidate:
+        """Build one exact candidate while a submitted lead answer is validated."""
+
+        snapshots = self.artifacts.capture_complete_state()
+        base_state = {item.path: item.content for item in snapshots}
+        artifact_evidence = self._artifact_intent_evidence(evidence)
+        attached_core_paths = tuple(
+            item.path
+            for item in artifact_evidence
+            if item.evidence_id.startswith("reference_")
+            and item.path.startswith("core_documents/")
+        )
+        return build_artifact_review_candidate(
+            candidate_id=self._deterministic_id("ac", turn_id, step_id),
+            candidate_revision=1,
+            intent=intent,
+            evidence=artifact_evidence,
+            grounding_evidence_ids=tuple(
+                item.evidence_id for item in evidence.receipts
+            ),
+            base_state=base_state,
+            attached_core_paths=attached_core_paths,
+        )
+
+    @staticmethod
+    def _artifact_intent_evidence(
+        evidence: CollaborationLeadEvidence,
+    ) -> tuple[ArtifactIntentEvidence, ...]:
+        result: list[ArtifactIntentEvidence] = []
+        for receipt in evidence.receipts:
+            if receipt.source_kind not in {
+                CollaborationInputKind.CORE_DOCUMENT,
+                CollaborationInputKind.MANUSCRIPT,
+                CollaborationInputKind.WRITING_ARTIFACT,
+            } or receipt.acquisition not in {
+                CollaborationEvidenceAcquisition.ATTACHED_REFERENCE,
+                CollaborationEvidenceAcquisition.READ,
+            }:
+                continue
+            if (
+                receipt.locator is None
+                or receipt.revision_digest is None
+                or receipt.content_digest is None
+            ):
+                raise _LeadOutcomeValidationError(
+                    "artifact evidence is missing runtime identity"
+                )
+            locator = receipt.locator
+            if (
+                receipt.acquisition
+                is CollaborationEvidenceAcquisition.ATTACHED_REFERENCE
+            ):
+                batch = parse_artifact_references(locator)
+                if len(batch.references) != 1:
+                    raise _LeadOutcomeValidationError(
+                        "artifact reference evidence is ambiguous"
+                    )
+                path = batch.references[0].path
+            else:
+                path = locator
+            result.append(
+                ArtifactIntentEvidence(
+                    evidence_id=receipt.evidence_id,
+                    path=path,
+                    source_digest=receipt.revision_digest,
+                    boundary_digest=receipt.content_digest,
+                    start_line=receipt.start_line,
+                    end_line=receipt.end_line,
+                )
+            )
+        return tuple(result)
+
+    @staticmethod
+    def _artifact_state_payload(
+        candidate: ArtifactReviewCandidatePayload,
+        state: ArtifactProposalState,
+        *,
+        confirmation_request_id: str | None = None,
+        execution_attempt_id: str | None = None,
+        reviewed_proposal: ArtifactReviewedProposal | None = None,
+    ) -> ArtifactProposalStatePayload:
+        return ArtifactProposalStatePayload(
+            state=state,
+            candidate_id=candidate.candidate.candidate_id,
+            candidate_revision=candidate.candidate.candidate_revision,
+            candidate_digest=candidate.candidate.candidate_digest,
+            consultation_proposal_id=candidate.consultation_proposal_id,
+            consultation_proposal_revision=candidate.consultation_proposal_revision,
+            consultation_proposal_digest=candidate.consultation_proposal_digest,
+            confirmation_request_id=confirmation_request_id,
+            execution_attempt_id=execution_attempt_id,
+            reviewed_proposal_id=(
+                None if reviewed_proposal is None else reviewed_proposal.proposal_id
+            ),
+            reviewed_proposal_digest=(
+                None if reviewed_proposal is None else reviewed_proposal.proposal_digest
+            ),
+        )
+
     def _lead_outcome_failure_result(
         self,
         *,
@@ -3613,6 +4571,7 @@ class StoryRuntime:
         step_id: str,
         invocation_id: str,
         call_id: str,
+        artifact_intent: bool = False,
     ) -> LeadTurnResult:
         """Durably close one rejected submitted outcome without replay authority."""
 
@@ -3625,26 +4584,46 @@ class StoryRuntime:
                 session_id,
                 conversation_id,
             )
-            self._append_drafts(
-                projection.last_sequence,
-                (
+            failure_drafts: tuple[CollaborationEventDraft, ...] = (
+                self._draft(
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    step_id=step_id,
+                    kind=CollaborationEventKind.LEAD_OUTCOME_FAILURE,
+                    sender=_RUNTIME_ACTOR,
+                    recipient=_USER_ACTOR,
+                    payload=CollaborationLeadOutcomeFailurePayload(
+                        code=(
+                            CollaborationLeadOutcomeFailureCode.ARTIFACT_INTENT_REJECTED
+                            if artifact_intent
+                            else CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED
+                        ),
+                        invocation_id=invocation_id,
+                        call_id=call_id,
+                    ),
+                ),
+            )
+            if artifact_intent:
+                failure_drafts += (
                     self._draft(
                         session_id=session_id,
                         conversation_id=conversation_id,
                         turn_id=turn_id,
                         step_id=step_id,
-                        kind=CollaborationEventKind.LEAD_OUTCOME_FAILURE,
+                        kind=CollaborationEventKind.ARTIFACT_REVIEW_FAILURE,
                         sender=_RUNTIME_ACTOR,
                         recipient=_USER_ACTOR,
-                        payload=CollaborationLeadOutcomeFailurePayload(
-                            code=(
-                                CollaborationLeadOutcomeFailureCode.EVIDENCE_VALIDATION_REJECTED
-                            ),
+                        payload=ArtifactReviewFailurePayload(
+                            code=ArtifactReviewFailureCode.INTENT_REJECTED,
                             invocation_id=invocation_id,
                             call_id=call_id,
                         ),
                     ),
-                ),
+                )
+            self._append_drafts(
+                projection.last_sequence,
+                failure_drafts,
             )
         except BaseException:
             return self._blocking_lead_result(
@@ -3671,6 +4650,35 @@ class StoryRuntime:
         )
 
     @staticmethod
+    def _declares_artifact_intent(answer: object) -> bool:
+        """Return only whether one unique top-level artifact intent is non-null."""
+
+        if type(answer) is not str:
+            return False
+
+        def unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
+            result: dict[str, object] = {}
+            for key, value in pairs:
+                if key in result:
+                    raise _DuplicateJsonKey
+                result[key] = value
+            return result
+
+        try:
+            value = json.loads(
+                answer,
+                object_pairs_hook=unique,
+                parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
+            )
+        except (_DuplicateJsonKey, json.JSONDecodeError, TypeError, ValueError):
+            return False
+        return (
+            type(value) is dict
+            and "artifact_intent" in value
+            and value["artifact_intent"] is not None
+        )
+
+    @staticmethod
     def _decode_lead_outcome(answer: str) -> LeadProviderOutcome:
         """Strictly decode the neutral JSON-object result into closed lead intent."""
 
@@ -3692,6 +4700,7 @@ class StoryRuntime:
                 parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
             )
             if type(value) is not dict or set(value) != {
+                "artifact_intent",
                 "evidence_ids",
                 "evidence_status",
                 "kind",
@@ -3711,8 +4720,9 @@ class StoryRuntime:
                 raise ValueError
             evidence_ids = tuple(raw_evidence_ids)
             proposal_value = value["proposal"]
+            artifact_value = value["artifact_intent"]
             if kind is not LeadOutcomeKind.PROPOSAL:
-                if proposal_value is not None:
+                if proposal_value is not None or artifact_value is not None:
                     raise ValueError
                 return LeadProviderOutcome(
                     kind,
@@ -3721,6 +4731,20 @@ class StoryRuntime:
                     evidence_status,
                     evidence_ids,
                     None,
+                    None,
+                )
+            if (proposal_value is None) is (artifact_value is None):
+                raise ValueError
+            if artifact_value is not None:
+                artifact_intent = StoryRuntime._decode_artifact_intent(artifact_value)
+                return LeadProviderOutcome(
+                    kind,
+                    message,
+                    scope,
+                    evidence_status,
+                    evidence_ids,
+                    None,
+                    artifact_intent,
                 )
             if type(proposal_value) is not dict or set(proposal_value) != {
                 "assignments",
@@ -3760,8 +4784,10 @@ class StoryRuntime:
                 evidence_status,
                 evidence_ids,
                 proposal,
+                None,
             )
         except (
+            ArtifactProposalError,
             _DuplicateJsonKey,
             json.JSONDecodeError,
             KeyError,
@@ -3772,6 +4798,63 @@ class StoryRuntime:
             raise _LeadOutcomeValidationError(
                 "lead returned a noncanonical evidence outcome"
             ) from exc
+
+    @staticmethod
+    def _decode_artifact_intent(value: object) -> ArtifactProposalIntent:
+        if type(value) is not dict or set(value) != {
+            "additional_review_domains",
+            "operations",
+        }:
+            raise ValueError
+        raw_operations = value["operations"]
+        raw_domains = value["additional_review_domains"]
+        if type(raw_operations) is not list or type(raw_domains) is not list:
+            raise ValueError
+        operations: list[object] = []
+        for item in raw_operations:
+            if type(item) is not dict or type(item.get("kind")) is not str:
+                raise ValueError
+            kind = item["kind"]
+            if kind == "create" and set(item) == {"kind", "new_text", "suggested_path"}:
+                operations.append(
+                    ArtifactCreateIntent(item["suggested_path"], item["new_text"])
+                )
+            elif kind == "patch" and set(item) == {
+                "evidence_id",
+                "kind",
+                "replacement_text",
+            }:
+                operations.append(
+                    ArtifactPatchIntent(item["evidence_id"], item["replacement_text"])
+                )
+            elif kind == "replace" and set(item) == {
+                "evidence_id",
+                "kind",
+                "new_text",
+            }:
+                operations.append(
+                    ArtifactReplaceIntent(item["evidence_id"], item["new_text"])
+                )
+            elif kind == "rename" and set(item) == {
+                "evidence_id",
+                "kind",
+                "suggested_destination",
+            }:
+                operations.append(
+                    ArtifactRenameIntent(
+                        item["evidence_id"], item["suggested_destination"]
+                    )
+                )
+            elif kind == "delete" and set(item) == {"evidence_id", "kind"}:
+                operations.append(ArtifactDeleteIntent(item["evidence_id"]))
+            else:
+                raise ValueError
+        return ArtifactProposalIntent(
+            operations=tuple(operations),
+            additional_review_domains=tuple(
+                ArtifactReviewDomain(item) for item in raw_domains
+            ),
+        )
 
     def _build_lead_proposal(
         self,
@@ -4453,6 +5536,32 @@ class StoryRuntime:
                         ),
                     )
                 )
+                continue
+            if expected.kind is CollaborationInputKind.ARTIFACT_CANDIDATE:
+                prefix = "artifact-candidate/"
+                if not expected.locator.startswith(prefix):
+                    raise ValueError("artifact candidate locator is not canonical")
+                candidate_id = expected.locator[len(prefix) :]
+                candidate_events = tuple(
+                    event
+                    for event in events
+                    if type(event.payload) is ArtifactReviewCandidatePayload
+                    and event.payload.candidate.candidate_id == candidate_id
+                )
+                if len(candidate_events) != 1:
+                    raise ValueError("artifact candidate identity is not unique")
+                candidate = cast(
+                    ArtifactReviewCandidatePayload,
+                    candidate_events[0].payload,
+                ).candidate
+                snapshots = self.artifacts.capture_complete_state()
+                project_artifact_change_set(
+                    {item.path: item.content for item in snapshots},
+                    candidate.change_set,
+                )
+                if expected.revision_digest != candidate.candidate_digest:
+                    raise ValueError("artifact candidate base state has drifted")
+                current.append(expected)
                 continue
             current_reference = references.get(expected.input_id)
             if current_reference is None:

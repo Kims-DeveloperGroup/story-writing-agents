@@ -413,6 +413,41 @@ still exist in the separate bounded provider-exchange or rejected-response
 diagnostic stores under their documented best-effort policies; the failure
 event does not copy that response into collaboration history.
 
+### Artifact-candidate and review retention
+
+A valid non-null lead `artifact_intent` contains proposed story text. Runtime
+resolves it against a complete in-process capture of all canonical artifacts.
+That capture is used to build and validate the candidate; it is not copied as
+a second complete-workspace blob into collaboration history. The resulting
+`ArtifactReviewCandidate`, however, deliberately contains the exact proposed
+change set and projected relationship facts and is stored in the typed
+`artifact_review_candidate` event. A successful `propose` synthesis stores the
+same candidate inside `ArtifactReviewedProposal` so restart and storage
+transfer can prove what every reviewer assessed.
+
+After exact confirmation, each disclosed specialist and the lead synthesis
+provider receive the same content-bearing candidate in their runtime input.
+They may also receive separately authorized reference bytes through the
+ordinary reference boundary. Candidate text can therefore be retained by the
+configured provider under its policy and by local provider-exchange diagnostics
+under their documented limits. The candidate is hidden from `repr`, but that
+is only accidental-display reduction, not encryption or erasure.
+
+Readable collaboration projection exposes only artifact review message,
+decision, state, and closed failure code. Candidate and reviewed-proposal bytes
+are not searchable readable fields and are not automatically selected into
+bounded agent context. Direct event-store/API readers and canonical
+filesystem/SQLite/archive/transfer bytes can still access them; protect those
+stores as story content.
+
+If non-null artifact intent is malformed or claims Apply/Git authority,
+canonical collaboration history records only content-free
+`artifact_intent_rejected` and `intent_rejected` failures. The rejected raw
+provider response may still appear in the separate rejected-response or
+provider-exchange diagnostic boundary. No artifact write, Apply authority, or
+Git action occurs for candidate construction, review, or reviewed-proposal
+finalization.
+
 <a id="agent-context-progress-privacy"></a>
 
 ## Agent-context progress privacy

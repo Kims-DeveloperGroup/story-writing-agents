@@ -1,10 +1,14 @@
-# Lead agent: conversation and specialist consultation
+# Lead agent: story workflows and reviewed artifact proposals
 
 The Lead Orchestrator is the normal user-facing story agent in the Python
 runtime. Users discuss story work with the lead; they do not need to choose an
 agent for every turn. The lead can answer directly, ask a focused question,
 critique or recommend, or propose a bounded consultation with one to three
-specialists. An exact user confirmation starts the disclosed consultation.
+specialists. For a requested story-file change, the lead can also describe a
+provider-neutral edit intent. Runtime code—not the lead provider—resolves that
+intent against the complete current artifact state, derives the required
+reviewers, and returns one exact candidate. An exact user confirmation starts
+review of that candidate.
 
 The lead makes the semantic choice: whether a turn is about the story or only
 the workflow, what evidence matters, whether specialist help is useful, which
@@ -17,11 +21,15 @@ boundary that inventories sources, performs authorized SEARCH/READ operations,
 validates results, constructs proposals, records confirmation, calls providers,
 persists results, and recovers interrupted work.
 
-This distinction will also govern later story changes: the lead will propose
-and trigger a write or Git commit only after the user confirms that exact
-operation, while runtime code will perform the filesystem or Git operation.
-The current implementation is read-only. It can recommend a change, but it
-cannot apply an artifact change, stage files, or create a commit.
+This distinction also governs story changes. The lead is the semantic trigger
+and front channel: it can recommend an edit and request construction and review
+of an exact candidate. Runtime code captures current files, constructs and
+records the candidate, calls confirmed reviewers, and creates an immutable
+reviewed proposal. This implementation remains story-artifact-read-only:
+neither the lead nor
+the runtime path described here applies the proposal, stages files, or creates
+a commit. A later Apply or Commit operation requires its own exact user
+confirmation, and runtime code—not the lead provider—must execute it.
 
 The installed `story` shell has not connected this workflow. Applications use
 the async Python methods described below.
@@ -37,6 +45,8 @@ The lead is expected to:
   current invocation has the required runtime receipt;
 - recommend how user input, core documents, and manuscripts can be brought
   back into sync;
+- express an exact create, patch, replace, rename, or delete intent when the
+  cited evidence is sufficient for runtime to construct a candidate;
 - answer directly when available evidence is sufficient;
 - select only the specialist domains that add value;
 - synthesize every successful specialist reply with exact attribution and keep
@@ -66,7 +76,8 @@ and cannot override these rules.
 | Attach several ordered whole-file or ranged `${path}` references and inspect the result's content-free evidence. | Treat an explicit missing `${path}` as proof of absence; it fails before the substantive lead call. |
 | Receive an evidence-grounded answer, question, critique, recommendation, or consultation proposal. | Assume runtime performed semantic conflict detection or proved that every relevant artifact was selected. |
 | Confirm, reject, or revise the exact current proposal. | Confirm with free text such as `Yes`, or replay stale confirmation fields. |
-| Run one to three specialists in parallel after confirmation and receive a typed lead synthesis. | Apply a proposed core-document or manuscript edit. |
+| Receive an exact runtime-built artifact candidate, confirm review by every disclosed specialist, and receive a reviewed/revise/reject result. | Treat a candidate or reviewed proposal as Apply, write, stage, commit, or Git authority. |
+| Run one to three specialists in parallel after confirmation and receive a typed lead synthesis. | Apply a proposed core-document or manuscript edit through this API. |
 | Request one direct specialist advisory without a lead planning call. | Stage or commit files, push, merge, or mutate a remote. |
 | Reconfirm safe pre-start work after restart and locally finalize known results without replay. | Automatically retry an uncertain submitted provider call. |
 
@@ -86,7 +97,14 @@ user -> lead_turn(text + optional ${references})
   lead returns scope + evidence status + ordered evidence IDs
   runtime validates the closed evidence matrix and current receipts
   lead answers directly
-    OR runtime discloses a proposal -> awaiting_confirmation
+    OR requests an ordinary consultation
+       -> runtime discloses consultation -> awaiting_confirmation
+    OR returns provider-neutral artifact intent
+       -> runtime captures the complete canonical artifact state
+       -> runtime constructs and relationship-validates one exact candidate
+       -> runtime derives mandatory + explicitly added review domains
+       -> runtime discloses candidate review
+       -> artifact state awaiting_consultation_confirmation
 
 invalid/stale/invented evidence
   -> lead_outcome_failure -> retry_lead_turn
@@ -98,8 +116,16 @@ user -> decide_lead_step(exact Confirm)
   runtime calls 1-3 specialists concurrently with isolated evidence
   if all succeed: runtime calls the lead for synthesis
   runtime atomically records replies/outcomes/result
-  runtime locally finalizes -> completed / failed / interrupted
+  runtime locally finalizes ordinary consultation
+    -> completed / failed / interrupted
     OR proposes same-step revision+1 -> awaiting_confirmation
+
+  for an artifact candidate, every reviewer receives the same immutable
+  candidate and the lead synthesizes all replies without voting
+    propose -> artifact reviewed (still no write/Apply/Git authority)
+    revise  -> artifact revision_required
+    reject  -> artifact rejected
+    incomplete review or invalid synthesis -> artifact failed
 ```
 
 `confirmed` is normally a transient durable boundary inside
@@ -161,6 +187,16 @@ declared `scope`, `status`, and ordered content-free receipts. A workflow/meta
 judgment also has an evidence value, but it is exactly
 `workflow_meta`/`not_applicable` with no receipts. Runtime-generated recovery
 notices instead have `evidence=None`.
+
+An artifact-intent outcome is still `kind=proposal` and carries the ordinary
+consultation proposal, state, confirmation request, and evidence. It also
+carries `artifact_proposal`. Before confirmation, that value contains state
+`awaiting_consultation_confirmation` and the exact runtime-built candidate;
+after a successful `propose` synthesis it contains state `reviewed` and an
+immutable `reviewed_proposal`. Inspect the candidate change set, relationship
+facts, reviewer IDs, and digest before constructing the exact decision. The
+reviewed proposal always records `artifact_write_occurred=false`,
+`apply_authority_granted=false`, and `git_action_occurred=false`.
 
 For a proposal, copy the exact returned authority into a structured decision:
 
@@ -285,47 +321,49 @@ range into that file fails as out of bounds.
 
 ## Explicit story-writing scenarios
 
-These scenarios define the lead behavior that the current read-only
-consultation supports and the later write workflow must preserve.
-
-Each scenario separates what the user sees from what runtime enforces. The
-word “proposes” below means a consultation proposal only. It never means that
-an artifact edit or commit has been authorized.
+These scenarios define the implemented behavior. Each separates the visible
+conversation from provider intent and runtime enforcement. “Candidate” means
+exact proposed bytes and paths. “Reviewed proposal” means every disclosed
+specialist assessed that same candidate and the lead selected `propose`; it
+never means the files changed.
 
 ### 1. Incomplete or conflicting core evidence
 
 ```text
 User input
-The part outline names the antagonist, but the character sheet has no entry.
-Check ${core_documents/part_outlines.md} and
-${core_documents/character_sheets.md}. What should we fix?
+The narrative rules file is missing. Propose a minimal close-third rule.
 
-Lead proposal
-- plot_architect: assess the outline dependency
-- character_custodian: assess missing character evidence
-State: awaiting_confirmation
-User action: Confirm
+Lead output
+I prepared an exact candidate for review. It creates
+core_documents/narrative_rules.md. Review requires execution_specialist.
+Artifact state: awaiting_consultation_confirmation
+User impact now: no file has changed
+User choices: Confirm review, Reject, or Revise
 
-Specialist replies
-- plot_architect / concern: the part outline depends on an undefined actor
-- character_custodian / insufficient_evidence: motivation and continuity cannot
-  be verified from the character sheet
+User action
+Confirm the exact request/proposal revision/digest.
 
-Lead synthesis
-The character evidence is incomplete. Define the antagonist in the character
-sheet or revise the part outline; do not treat the current manuscript direction
-as consistent yet.
-Unresolved inputs: both referenced core documents
-Final state: completed
+Specialist output
+execution_specialist / supports: the proposed rule is internally usable and
+does not contradict the supplied evidence.
+
+Lead review synthesis
+decision: propose
+message: The exact candidate review is complete.
+user_impact: No artifact changed; the user may review the proposal.
+limitations: Review is advisory and grants no Apply or Git authority.
+
+Final artifact state: reviewed
+Final collaboration state: completed
 ```
 
-Internally, both mandatory references are read before the substantive call;
-the lead returns `story_specific`/`incomplete` or `conflicting` plus their
-ordered `reference_*` IDs. Runtime validates the status, binds the same
-evidence into the proposal, and revalidates both files after Confirm before it
-calls either specialist. Externally, the user sees the gap, exact read-only
-consultation impact, confirmation state, attributed replies, and synthesis.
-The lead recommends a correction but does not change either file.
+Internally, the lead cites the absent canonical-core status and returns a
+strict `create` intent. Runtime captures every canonical artifact, constructs
+and relationship-validates the candidate against that complete state, derives
+the tone/execution review domain, and discloses its reviewer. Confirm authorizes
+only that review. Runtime revalidates the candidate before calling the
+specialist and again before finalizing the reviewed proposal. The missing file
+still does not exist afterward.
 
 The other core-gap cases differ deliberately:
 
@@ -336,35 +374,61 @@ Relevant canonical search has no hit -> complete zero-hit SEARCH -> missing
 Explicit ${missing/path.md} -> ReferenceOperationFailure, not a lead judgment
 ```
 
+The lead does not force every gap into the same operation:
+
+| Current evidence | Valid lead behavior | Candidate example |
+| --- | --- | --- |
+| Canonical core absent | Ask what minimum content is intended, recommend a direction, propose consultation, or form a `create` intent. | Create the missing core path. |
+| Existing core is zero bytes | Use the zero-byte whole reference, not an invented body; clarify or form a whole-file `replace` intent. | Replace the exact empty file. |
+| One core source is incomplete | Critique/recommend from that current source, consult its specialist, or propose an evidence-bound patch/replace. | Fill the exact missing section. |
+| Two nonempty core sources conflict | Cite both sources, preserve both interpretations, and consult every affected domain before choosing a candidate. | Revise one source, or atomically revise both when consistency requires it. |
+
+For example, if `${core_documents/part_outlines.md}` schedules a reveal before
+the trust condition in `${core_documents/character_sheets.md}`, the lead may
+first disclose plot and character consultation. After Confirm, it must
+synthesize both assessments without a majority shortcut. It can reject the
+user's requested timing, ask which rule should govern, or return a separately
+confirmable exact artifact candidate on the next lead turn. Consultation
+confirmation is not reused as candidate-review confirmation.
+
 ### 2. Writing or revising core documents
 
 ```text
 User input
-Add a rule that every scene uses Mara's close third-person POV.
+Replace the current POV rule with “Mara-led scenes use close third person.”
 Check ${core_documents/character_sheets.md} and
 ${core_documents/narrative_rules.md} first.
 
-Lead proposal
-- character_custodian: verify whether the POV rule conflicts with character use
-- execution_specialist: verify prose/POV consequences
-User action: Confirm
+Lead output
+Exact replace candidate, grounded by both references.
+Runtime-derived required reviewers: character_custodian and
+execution_specialist.
+Artifact state: awaiting_consultation_confirmation.
 
-Runtime calls
-Both specialists run concurrently with their own input subsets. Only after both
-succeed does the runtime call lead_orchestrator for synthesis.
+User action: Confirm exact candidate review.
 
-Visible result
-The lead recommends a narrower rule for Mara-led scenes and explains the
-character/narrative-rule conflict. State: completed.
+Specialist outputs against the same candidate
+- character_custodian / concern: the sheet includes scenes without Mara;
+  preserve an explicit rule for their viewpoint.
+- execution_specialist / supports: the replacement is precise for Mara-led
+  scenes.
+
+Lead synthesis
+decision: revise
+rationale: the candidate leaves non-Mara scenes undefined.
+user_impact: no file changed; request a replacement candidate that closes the
+gap.
+Artifact state: revision_required.
 ```
 
-Internally, the lead selects the specialists, but runtime constructs the exact
-assignments, route, participant profiles, budgets, impact, and proposal digest.
-The consultation begins only after the exact structured Confirm. Externally,
-the lead may reject the requested direction semantically or recommend revised
-wording. It cannot yet construct or apply the actual document change. The
-planned flow will require a new exact artifact-change proposal and confirmation;
-it will not reuse the consultation confirmation.
+The lead supplies semantic intent and may request any additional affected
+review domain. Runtime owns exact change-set construction, relationship validation,
+mandatory reviewer derivation, reviewer order, assignment/profile/budget
+facts, and digests. Every reviewer sees the identical serialized candidate;
+their views are evidence, not votes. One `supports` result cannot outvote one
+material concern. `revision_required` carries no reviewed proposal and grants
+no authority. The user can ask for a new candidate; the old candidate becomes
+`superseded` and cannot be confirmed again.
 
 ### 3. Reviewing a manuscript edit against core documents
 
@@ -375,11 +439,10 @@ Verify it against ${core_documents/global_outline.md},
 ${core_documents/character_sheets.md}, and
 ${core_documents/narrative_rules.md}.
 
-Lead proposal
-- plot_architect: check plot timing
-- character_custodian: check motivation/continuity
-- execution_specialist: check POV and scene execution
-User action: Confirm
+Lead output
+Exact range patch candidate. The three attached core documents plus the
+manuscript operation make all three specialist domains mandatory.
+User action: Confirm the exact candidate review.
 
 Specialist replies
 - plot_architect / conflict: the reveal is scheduled for a later turning point
@@ -388,20 +451,20 @@ Specialist replies
 
 Lead synthesis
 The prose technique is compatible, but the event timing and motivation are
-not. Revise the request or first update the governing outline and character
-evidence. The unresolved input IDs for every conflict/concern remain visible.
-Final state: completed.
+not. decision: reject. The unresolved input IDs for every conflict/concern
+remain visible.
+Final artifact state: rejected; final collaboration state: completed.
 ```
 
 Internally, runtime revalidates the referenced outline, character sheet,
 narrative rules, and manuscript range at confirmation, then gives each
-specialist only its disclosed inputs. Externally, the user receives one lead
-synthesis that preserves the plot and character objections rather than
-averaging them away. No manuscript bytes are changed. A future artifact Apply
-step must disclose the exact patch/effect and receive separate confirmation; a
-later Git Commit step must receive another separate confirmation. The lead
-triggers those semantic steps, while runtime code performs the write and Git
-operations.
+specialist the same exact candidate and disclosed evidence. Externally, the
+user receives one lead synthesis that preserves the plot and character
+objections rather than averaging them away. No manuscript bytes are changed.
+A later artifact Apply step must disclose the exact effect and receive separate
+confirmation; a later Git Commit step must receive another separate
+confirmation. The lead triggers those semantic steps, while runtime code
+performs the write and Git operations.
 
 ### 4. Ordinary discussion
 
@@ -412,8 +475,9 @@ User: What does Reject do?
 Lead: Direct workflow/meta answer. No story evidence, proposal, or specialist.
 
 User: Is this beat structurally too early?
-Lead: May propose one plot_architect consultation; after confirmation, returns
-      that reply through a lead synthesis.
+Lead: Must first use current story evidence. It may answer directly when that
+      evidence is sufficient, or propose one plot_architect consultation;
+      after confirmation, it returns that reply through a lead synthesis.
 
 User: Would this reveal hurt both pacing and character credibility?
 Lead: May propose plot_architect + character_custodian in parallel; after all
@@ -432,6 +496,12 @@ declares the turn meta. An explicit reference or provider action would be
 separate. Runtime does not make that semantic decision for the lead.
 Clarification comes before a proposal when a missing user choice would
 materially change the work.
+
+Ordinary discussion does not construct an artifact candidate. A story-specific
+opinion still needs current evidence; a workflow/meta answer does not. The lead
+selects a specialist only when the domain adds value. If no specialist fits,
+runtime calls only the lead. In all cases the lead owns the final user-facing
+answer; specialists never become a competing front channel.
 
 ## Additional execution scenarios
 
@@ -460,6 +530,11 @@ typed replies are preserved. The runtime does not call the lead for semantic
 synthesis, because the evidence set is incomplete. The user receives a
 `failed` recommendation explaining that known sibling results were retained;
 `next_action` is `continue_with_lead`.
+
+For an artifact candidate, the artifact state is also `failed`, an
+`artifact_review.failure=review_incomplete` fact is durable, and no reviewed
+proposal exists. A successful sibling reply is retained as evidence; it is not
+enough to approve the candidate.
 
 ### Stale evidence and a rejected provider result
 
@@ -494,6 +569,14 @@ Durable fact: one lead_outcome_failure for the exact invocation and call
 The retry is a new turn and a new provider call. If the failure event itself
 cannot be appended, runtime returns `recovery_required` and normal
 collaboration must stop for history repair.
+
+Artifact candidates add two separate staleness checks. Before review starts,
+Confirm revalidates the candidate's evidence and complete base state; drift
+returns artifact state `stale`, makes zero reviewer calls, and changes no file.
+After successful review, runtime projects the change set over a fresh complete
+state before creating `ArtifactReviewedProposal`; drift there also returns
+`stale` rather than publishing obsolete review authority. Ask the lead for a
+new candidate in either case.
 
 ### A focused second round
 
@@ -562,7 +645,16 @@ evidence merely because runtime inventoried the status facts.
     "command": "Does the planned reveal conflict with the current opening?",
     "identity": {"agent_id": "lead_orchestrator", "session_id": "novel", "conversation_id": "<conversation-id>", "turn_id": "<turn-id>", "step_id": "<step-id>"},
     "input_aliases": [{"input_id": "user_input", "kind": "user_input", "locator": "conversation/<turn-id>/user_input", "revision_digest": "sha256:<digest>", "start_line": null, "end_line": null}],
-    "answer_contract": {"scope": "story_specific | workflow_meta", "evidence_status": "not_applicable | verified | missing | empty | incomplete | conflicting", "evidence_ids": "ordered runtime-issued evidence IDs only", "kind": ["answer", "question", "critique", "recommendation", "proposal"], "proposal": {"relation": "new_step", "purpose": "visible purpose", "assignments": "required only for proposal"}}
+    "answer_contract": {
+      "assignments": {"agent_id": "canonical specialist ID", "input_ids": "nonempty runtime-supplied aliases", "instruction": "complete visible assignment"},
+      "scope": "story_specific | workflow_meta",
+      "evidence_status": "not_applicable | verified | missing | empty | incomplete | conflicting",
+      "evidence_ids": "ordered runtime-issued evidence IDs only",
+      "kind": ["answer", "question", "critique", "recommendation", "proposal"],
+      "message": "nonempty user-visible text",
+      "proposal": {"relation": "new_step", "purpose": "visible purpose", "assignments": "required only for ordinary consultation"},
+      "artifact_intent": "null or create/patch/replace/rename/delete operations plus optional review domains"
+    }
   },
   "core_statuses": [
     {"evidence_id": "status_1", "locator": "core_documents/global_outline.md", "status": "present", "utf8_bytes": 428, "source_id": "<source-id>", "manifest_digest": "sha256:<digest>", "revision": "sha256:<digest>", "source_digest": "sha256:<digest>"},
@@ -600,7 +692,8 @@ and cite the evidence ID in its strict semantic result:
     "evidence_ids": ["read_2_1", "read_2_2"],
     "kind": "critique",
     "message": "The opening reveals the secret before the outline's turning point.",
-    "proposal": null
+    "proposal": null,
+    "artifact_intent": null
   }],
   "u": ["<handle-1>", "<handle-2>"]
 }
@@ -616,6 +709,44 @@ A complete, non-truncated zero-hit SEARCH instead includes a content-free
 `missing` only when the searched scope includes canonical writing artifacts.
 A conversation-only zero hit, a truncated search, a hit that was never READ,
 or a READ omitted from final `u` cannot ground the claim.
+
+For a story-file change, the lead ANSWER uses the same envelope but chooses
+`kind=proposal`, sets the ordinary `proposal` to `null`, and returns one strict
+provider-neutral `artifact_intent`. For example, a range reference might be
+resolved to `reference_1` by runtime:
+
+```json
+{
+  "a": "a",
+  "c": "<correlation-3>",
+  "d": [{
+    "scope": "story_specific",
+    "evidence_status": "verified",
+    "evidence_ids": ["reference_1", "reference_2"],
+    "kind": "proposal",
+    "message": "I prepared an exact manuscript patch candidate for review.",
+    "proposal": null,
+    "artifact_intent": {
+      "operations": [{
+        "kind": "patch",
+        "evidence_id": "reference_1",
+        "replacement_text": "<proposed replacement>"
+      }],
+      "additional_review_domains": ["plot_structure", "character_world"]
+    }
+  }],
+  "u": []
+}
+```
+
+The provider does not supply a candidate ID, path authority, reviewer ID,
+digest, Apply flag, or Git flag. Runtime resolves `reference_1` to its current
+canonical path/range, captures the complete artifact state, builds an exact
+change set, validates projected relationships, derives mandatory review
+domains, unions the explicitly requested additional domains in canonical
+order, and computes the candidate digest. Invalid or authority-bearing intent
+is closed as `artifact_intent_rejected` and returns `retry_lead_turn` without a
+candidate.
 
 ### Specialist assignment: initial input
 
@@ -653,6 +784,39 @@ strict answer contract. Authorized reference bytes are added separately under
   ]
 }
 ```
+
+For artifact review, every disclosed specialist receives all disclosed
+evidence plus one identical `artifact_candidate` input. The content-bearing
+candidate is a strict canonical object, not a path to reread and not write
+authority. This abbreviated rendering replaces the two nested canonical
+objects with labels:
+
+```json
+{
+  "input_id": "artifact_candidate",
+  "kind": "artifact_candidate",
+  "locator": "artifact-candidate/<candidate-id>",
+  "revision_digest": "sha256:<candidate-digest>",
+  "start_line": null,
+  "end_line": null,
+  "candidate": {
+    "schema_version": 1,
+    "candidate_id": "<candidate-id>",
+    "candidate_revision": 1,
+    "candidate_digest": "sha256:<candidate-digest>",
+    "change_set": "<exact canonical change-set object>",
+    "relationship_validation": "<exact projected relationship facts>",
+    "grounding_evidence_ids": ["reference_1", "reference_2"],
+    "mandatory_review_domains": ["tone_execution"],
+    "disclosed_review_domains": ["plot_structure", "character_world", "tone_execution"]
+  }
+}
+```
+
+Runtime derives `plot_architect`, `character_custodian`, and
+`execution_specialist` from those canonical domains. Reviewers cannot modify
+the candidate or delegate. Each returns only its exact assignment ID, exact
+input IDs, assessment, and visible message.
 
 ### Specialist SEARCH, READ, and ANSWER
 
@@ -750,7 +914,43 @@ reads do not replace the proposal evidence lineage. It cannot dispatch another
 agent, write an artifact, or authorize Git. A strict `next_intent` is only a
 semantic request for runtime to construct a fresh round-two proposal.
 
+For artifact review, the synthesis input additionally includes the same exact
+`artifact_candidate`. Its answer contract adds `decision`, `rationale`,
+`user_impact`, and `limitations`, and requires `next_intent=null`:
+
+```json
+{
+  "a": "a",
+  "c": "<synthesis-correlation>",
+  "d": [{
+    "scope": "story_specific",
+    "evidence_status": "verified",
+    "evidence_ids": ["reference_1", "reference_2"],
+    "message": "The candidate is coherent after preserving the stated concern.",
+    "reply_event_ids": ["<reply-event-1>", "<reply-event-2>"],
+    "unresolved_input_ids": ["user_input", "reference_1", "reference_2", "artifact_candidate"],
+    "next_intent": null,
+    "decision": "propose",
+    "rationale": "Every disclosed review is attributed and the candidate remains exact.",
+    "user_impact": "No artifact changed; the user may inspect the reviewed proposal.",
+    "limitations": "This result grants no Apply, write, commit, or Git authority."
+  }],
+  "u": []
+}
+```
+
+`decision=propose` is not a majority tally: the lead must account for every
+reply and retain every input from a `concern`, `conflict`, or
+`insufficient_evidence` reply in `unresolved_input_ids`. `revise` returns
+`revision_required`; `reject` returns `rejected`; neither creates an immutable
+reviewed proposal.
+
 ## State meanings and next actions
+
+Collaboration step state describes confirmed provider work. Artifact proposal
+state separately describes the exact change candidate carried by that step.
+Applications should show both when `LeadTurnResult.artifact_proposal` is
+present.
 
 | State | External meaning | Allowed next action |
 | --- | --- | --- |
@@ -765,6 +965,20 @@ semantic request for runtime to construct a fresh round-two proposal.
 | `failed` | A known assignment or synthesis failure is durable. | Continue with the lead using preserved facts; no automatic semantic synthesis. |
 | `outcome_unknown` | A submitted call may have completed, but no authoritative outcome proves it. | Inspect and resolve; runtime never replays it. |
 | `recovery_required` | History or call-boundary authority is invalid or uncertain. | Repair authoritative history before normal collaboration. |
+
+Artifact proposal states mean:
+
+| Artifact state | External meaning | Safe user response |
+| --- | --- | --- |
+| `awaiting_consultation_confirmation` | One exact candidate and its reviewers are disclosed; review has not started. | Confirm, Reject, or Revise the exact consultation. |
+| `reviewing` | Confirmed reviewers are assessing the immutable candidate. | Wait for the live owner or recovery result. |
+| `reviewed` | Every reviewer returned and the lead selected `propose`; an immutable reviewed proposal exists. No write or Git authority exists. | Inspect it; a later Apply operation needs separate confirmation. |
+| `revision_required` | Review completed and the lead selected `revise`; no reviewed proposal exists. | Ask the lead for a fresh candidate. |
+| `rejected` | The user rejected review or the lead rejected the reviewed candidate. | Continue with the lead; no file changed. |
+| `superseded` | A revision or ordinary new turn replaced this candidate. | Use only the fresh candidate, if any. |
+| `stale` | Evidence or complete base state changed before review/finalization. | Ask the lead to rebuild from current artifacts. |
+| `failed` | Review or synthesis was incomplete/invalid. | Use preserved facts and ask the lead how to continue. |
+| `recovery_required` | Authoritative artifact-review history cannot safely continue. | Repair history before normal collaboration. |
 
 Evidence rejection is not a proposal state. The returned turn has `state=None`,
 `evidence=None`, kind `recommendation`, and next action `retry_lead_turn`. The
@@ -796,6 +1010,15 @@ The confirmation path enforces this order:
 7. Deterministically append the visible notice and terminal state, or the
    completed round-one notice plus a fresh round-two proposal.
 8. Release bound-agent resources and remove the live execution marker.
+
+For an artifact candidate, the same order is tightened: candidate freshness is
+checked before the confirmation batch; `reviewing` is correlated to the one
+execution attempt; each derived reviewer receives the identical serialized
+candidate; the artifact synthesis must add `propose`, `revise`, or `reject`
+plus rationale, user impact, and limitations; and successful `propose`
+finalization reprojects the exact change set against a fresh complete-state
+capture. Only then does runtime persist `ArtifactReviewedProposal`, still with
+zero Apply/write/Git authority.
 
 Restart behavior follows durable facts:
 
@@ -830,21 +1053,24 @@ lineage has fewer calls left. Runtime constructs feasible allocations before
 confirmation, carries actual spend into round two, and makes round three and
 physical call thirteen unreachable.
 
-## Current versus planned change authority
+## Reviewed now versus Apply and Commit later
 
-The implemented consultation ends with feedback, a recommendation, or a fresh
-consultation proposal. It never constructs or applies an artifact patch and
-never stages or commits Git.
+The implemented workflow constructs an exact complete-state-bound candidate,
+reviews it, and can persist an immutable `ArtifactReviewedProposal`. It never
+applies that candidate and never stages or commits Git. The immutable value
+contains exact candidate/reviewer/evidence/synthesis identity plus rationale,
+user impact, limitations, and unresolved inputs; it hard-codes all side-effect
+and authority flags to false.
 
 The planned story-change workflow has two additional, independently confirmed
 operations:
 
 ```text
-consultation result
-  -> lead proposes exact Artifact Apply
+reviewed artifact proposal
+  -> lead semantically triggers a separately disclosed Artifact Apply
   -> user confirms Apply
   -> runtime writes the artifact and verifies the result
-  -> lead proposes exact Git Commit
+  -> lead semantically triggers a separately disclosed Git Commit
   -> user confirms Commit
   -> runtime stages and commits the disclosed files
 ```
@@ -853,10 +1079,10 @@ The lead is the semantic trigger and user-facing coordinator at every step;
 runtime code is the only executor. Consultation confirmation never doubles as
 Apply or Commit confirmation.
 
-The planned responsibilities are recorded separately:
+The staged responsibilities are recorded separately:
 
 - [#489 grounds lead judgments in canonical artifact evidence](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/489);
-- [#490 constructs exact lead-reviewed artifact change proposals](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/490);
+- [#490 constructs exact lead-reviewed artifact change proposals](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/490) (this implemented stage);
 - [#491 applies a lead-triggered artifact change after exact confirmation](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/491); and
 - [#492 triggers a separately confirmed commit after lead-directed edits](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/492).
 

@@ -11,7 +11,7 @@ Start with the page that matches your task.
 - [Project status and quick start](../README.md)
 - [Getting started](getting-started.md)
 - [Story sessions and conversations](guides/story-sessions.md)
-- [Lead agent and collaboration status](guides/lead-agent.md)
+- [Lead story workflows and reviewed artifact proposals](guides/lead-agent.md)
 - [Glossary](glossary.md)
 - [Core concepts](concepts.md)
 
@@ -22,7 +22,7 @@ Start with the page that matches your task.
 | Initialize and inspect a workspace | [Workspaces](guides/workspaces.md) |
 | Manage sessions and conversations | [Story sessions](guides/story-sessions.md) |
 | Understand why shell story instructions are unavailable | [Collaboration transition](guides/consensus-runs.md) |
-| Converse with the Python lead, consult specialists, and decide proposals | [Lead agent](guides/lead-agent.md) |
+| Converse with the Python lead, review story-file candidates, consult specialists, and decide proposals | [Lead agent workflows](guides/lead-agent.md) |
 | Run the local management/storage check | [Provider-free smoke](guides/smoke-test.md) |
 | Apply session directives | [Directives](guides/directives.md) |
 | Inspect and recover local state | [Inspection and recovery](guides/inspection-and-recovery.md) |

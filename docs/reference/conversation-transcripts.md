@@ -40,6 +40,22 @@ Exact decoration varies by terminal. Private event payload fields, provider
 instructions, route fingerprints, credentials, and arbitrary workspace bytes
 are not part of the readable record.
 
+Artifact-review events add only their closed public display fields to the
+readable rows:
+
+```text
+artifact_review.decision: propose
+artifact_review.message: The exact candidate review is complete.
+artifact_proposal.state: reviewed
+```
+
+Candidate and reviewed-proposal payloads intentionally contain the exact
+proposed change, but their content is not a readable/search field and is not
+printed merely because history is projected. Python callers inspect the typed
+`LeadTurnResult.artifact_proposal` or canonical event payload when they need the
+candidate itself. `reviewed` still means no Apply, write, commit, or Git
+authority.
+
 After the rows, `/history` explains durable workflow state:
 
 ```text
@@ -84,6 +100,21 @@ presentation never creates execution authority.
 | `failed` | Execution failed and the failure outcome is recorded. | `continue_with_lead` |
 | `outcome_unknown` | Execution may have occurred, but its outcome cannot be proven. | `inspect_and_resolve_outcome` |
 | `recovery_required` | History requires operator inspection before any safe continuation. | `repair_authoritative_history` |
+
+When a lead turn carries an artifact candidate, its independent artifact state
+is one of:
+
+| Artifact state | User meaning |
+| --- | --- |
+| `awaiting_consultation_confirmation` | The exact candidate and reviewers are disclosed; review has not started. |
+| `reviewing` | Confirmed review of that exact candidate is in progress. |
+| `reviewed` | Complete attributed review is durable; no file changed and no Apply/Git authority exists. |
+| `revision_required` | The lead requires a replacement candidate. |
+| `rejected` | The candidate was rejected by the user or lead. |
+| `superseded` | A newer turn/candidate retired it. |
+| `stale` | Evidence or base state changed; rebuild from current files. |
+| `failed` | Review or synthesis failed or was incomplete. |
+| `recovery_required` | Repair authoritative review history before continuing. |
 
 Next-action labels mean:
 
@@ -130,6 +161,26 @@ flowchart LR
     F --> X
     U --> X
 ```
+
+The artifact candidate has a correlated but separate flow:
+
+```mermaid
+flowchart LR
+    A[awaiting_consultation_confirmation] -->|Confirm, still current| V[reviewing]
+    A -->|Reject| J[rejected]
+    A -->|Revise or replacement text| S[superseded]
+    A -->|Confirm after drift| T[stale]
+    V -->|lead: propose| D[reviewed]
+    V -->|lead: revise| Q[revision_required]
+    V -->|lead: reject| J
+    V -->|incomplete review or invalid synthesis| F[failed]
+    V -->|base drift before finalization| T
+    V --> X[recovery_required]
+```
+
+Only `reviewed` carries an `ArtifactReviewedProposal`, and even that value is
+non-executable review evidence. A new candidate starts a new
+`awaiting_consultation_confirmation` flow with fresh identity and digest.
 
 `recovery_required` is terminal. An illegal transition, identity mismatch,
 noncanonical field, partial batch, corrupt byte stream, or inconsistent
