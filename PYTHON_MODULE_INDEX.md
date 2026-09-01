@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 92.
+Importable production units indexed: 93.
 
-Direct internal dependency edges indexed: 372.
+Direct internal dependency edges indexed: 374.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -208,8 +208,10 @@ provider_process -> (standard library only)
 session_lifecycle -> (standard library only)
 workspace -> conversations -> agents/errors
           -> models/writing_artifacts
-writing_artifacts -> writing_artifacts.authorization/catalog/directives/read_actions/references
+writing_artifacts -> writing_artifacts.authorization/catalog/change_sets/directives
+                  -> writing_artifacts.read_actions/references
 writing_artifacts.authorization -> writing_artifacts.catalog/references
+writing_artifacts.change_sets -> writing_artifacts.catalog
 writing_artifacts.directives -> writing_artifacts.references
 writing_artifacts.read_actions -> writing_artifacts.authorization/references
 writing_artifacts.runtime_references -> writing_artifacts.authorization/directives
@@ -5575,7 +5577,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/writing_artifacts/__init__.py`
 - **Responsibility:** Provide the side-effect-free canonical writing-artifact
   value facade.
-- **Supported surface:** Exactly 31 names in `__all__`: canonical core and
+- **Supported surface:** Exactly 47 names in `__all__`: canonical core and
   resource-limit constants; `ArtifactKind`, `ArtifactCatalogEntry`,
   `ArtifactCatalog`, `ArtifactSourceIdentity`, `ArtifactContentSnapshot`,
   `ArtifactLineRange`, and `ArtifactReference`; immutable
@@ -5587,7 +5589,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ReferenceInvocationCorrelation`,
   `ReferenceInvocationState`, `ReferenceEvidence`, and
   `ReferenceOperationHistory`; content-free `ReferenceReadActionKind`,
-  `ReferenceReadRequest`, and `ReferenceReadAction`; plus
+  `ReferenceReadRequest`, and `ReferenceReadAction`; the change-set schema
+  constant, closed operation/error enums, content-free error, immutable exact
+  byte hunk, five operation values and their union, immutable change-set value,
+  and the four pure build, project, serialize, and deserialize functions owned
+  by `change_sets`; plus
   `canonical_artifact_kind`, `manuscript_artifact_path`, and
   `parse_artifact_references`. `canonical_artifact_kind` and
   `manuscript_artifact_path` retain strict publication grammar; public
@@ -5598,18 +5604,59 @@ every intermediate arrow. The current runtime graph is acyclic.
   capability, delivery, and read-result values are intentionally not
   re-exported.
 - **Direct internal dependencies:** `writing_artifacts.authorization`,
-  `writing_artifacts.catalog`, `writing_artifacts.directives`,
+  `writing_artifacts.catalog`, `writing_artifacts.change_sets`,
+  `writing_artifacts.directives`,
   `writing_artifacts.read_actions`, and `writing_artifacts.references`.
 - **State, resources, and side effects:** Owns no state or resource. Importing
   the facade constructs only immutable metadata and performs no filesystem,
   provider, process, environment, or application-startup operation.
-- **Primary verification/documentation:** `tests/test_writing_artifacts.py`,
+- **Primary verification/documentation:** `tests/test_artifact_change_sets.py`,
+  `tests/test_writing_artifacts.py`,
   `tests/test_artifact_reference_directives.py`,
   `tests/test_artifact_reference_authorization.py`,
   `tests/test_artifact_reference_read_actions.py`,
   `tests/test_public_api_and_cli.py`, `tests/test_orchestration_workflow.py`,
   `docs/guides/artifact-references.md`, `docs/reference/writing-artifacts.md`,
   `docs/reference/workspace-api.md`, and `docs/design/persistence.md`.
+
+### `story_writing_agents.writing_artifacts.change_sets`
+
+- **Source:** `src/story_writing_agents/writing_artifacts/change_sets.py`
+- **Responsibility:** Define immutable exact canonical artifact change-set
+  identities and pure projection.
+- **Supported surface:** Exactly 16 names in module `__all__`, all re-exported
+  by the writing-artifact facade and absent from the project-root facade:
+  `ARTIFACT_CHANGE_SET_SCHEMA_VERSION`, `ArtifactChangeSetErrorCode`,
+  `ArtifactChangeSetError`, `ArtifactChangeOperationKind`,
+  `ArtifactTextHunk`, `ArtifactCreateOperation`, `ArtifactPatchOperation`,
+  `ArtifactReplaceOperation`, `ArtifactRenameOperation`,
+  `ArtifactDeleteOperation`, the closed `ArtifactChangeOperation` union,
+  `ArtifactChangeSet`, `build_artifact_change_set`,
+  `project_artifact_change_set`, `serialize_artifact_change_set`, and
+  `deserialize_artifact_change_set`. Hunks use exact zero-based half-open
+  strict-UTF-8 byte spans against one original base digest and project in one
+  pass without normalization, fuzzy matching, or reordering. The five closed
+  operation shapes enforce canonical path/kind identity, exact base and
+  projected content digests, canonical operation order, single path
+  participation, and conservative rename topology. Change sets bind the exact
+  content-free canonical base/projected state manifests and their ordered
+  reviewable operations into one SHA-256 content identity; that digest grants
+  no review, confirmation, application, repository, or Git authority. The
+  strict no-trailing-newline canonical JSON serializer is the only intentional
+  content-revealing representation and the deserializer rejects recursive
+  duplicate keys, alternate encodings, and every noncanonical byte form.
+- **Direct internal dependencies:** `writing_artifacts.catalog`.
+- **State, resources, and side effects:** Frozen values and pure call-local
+  validation, hashing, canonical JSON encoding/decoding, and copied read-only
+  mapping projection only. Content bytes remain hidden from ordinary value
+  representations and complete deterministic error graphs; state digest
+  manifests retain only path, kind, byte length, and content digest. Importing
+  and every operation perform no filesystem, repository, provider, process,
+  environment, thread, clock, entropy, persistence, or application-startup
+  work.
+- **Primary verification/documentation:** `tests/test_artifact_change_sets.py`,
+  `tests/test_rag_module_and_packaging_boundary.py`, and
+  `docs/reference/writing-artifacts.md`.
 
 ### `story_writing_agents.writing_artifacts.catalog`
 
@@ -6102,8 +6149,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   the generic `interactive_terminal._external_view` host contract. Terminal
   `_core` and `_driver` also depend inward on that contract, while the driver
   remains the sole stream, input-latch, raw-mode, alternate-screen, geometry,
-  signal, presentation, and restoration owner. These three new modules and ten
-  internal edges produce 92 modules and 372 edges without a cycle. Root,
+  signal, presentation, and restoration owner. These three modules retain ten
+  internal edges within the current 93-module, 374-edge acyclic graph. Root,
   `agent_exchanges`, and `interactive_terminal` facades remain exactly 120, 15,
   and 12 names. `jsonl-viewer` is installed from the unconditional exact VCS
   requirement at `1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec`, but is loaded
@@ -6138,7 +6185,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   projection. The sole new edge is
   `interactive_controller._runtime_policy -> agent_context.service`; the root,
   `agent_context`, and `writing_artifacts` facades remain exactly 120, 11, and
-  31 names.
+  47 names.
 
 - Optional conversation RAG has three one-way direct-module boundaries.
   `conversation_rag` is the standard-library-only story contract and policy

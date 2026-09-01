@@ -85,16 +85,46 @@ of `RuntimeSession`. They do not provide different behavior.
 
 Canonical artifact value contracts live in
 `story_writing_agents.writing_artifacts`, but are intentionally absent from the
-120-name package-root facade. In addition to immutable path, catalog, kind,
-reference, and filesystem `ArtifactSourceIdentity` values, the subpackage
-exports content-free authorization, operation
-history/state, read-request/action, `ReferenceOperationFailure`, and parser
-contracts. Filesystem-backed `WritingArtifactRepository`, content-bearing read
-results, private capabilities, runtime coordinators, the ranged viewer, and
-interactive activation values remain internal. The installed controller uses
-that private UI boundary for `$`/`$$` prompt editing without adding a public
-selection API or standalone artifact command. See
+120-name package-root facade. Its exact 47-name facade includes immutable path,
+catalog, kind, reference, and filesystem `ArtifactSourceIdentity` values;
+content-free authorization, operation history/state, read-request/action,
+`ReferenceOperationFailure`, and parser contracts; and the 16 pure exact
+change-set symbols below. Filesystem-backed `WritingArtifactRepository`,
+content-bearing read results, private capabilities, runtime coordinators, the
+ranged viewer, and interactive activation values remain internal. The
+installed controller uses that private UI boundary for `$`/`$$` prompt editing
+without adding a public selection API or standalone artifact command. See
 [Canonical writing artifacts](writing-artifacts.md).
+
+The supported change-set imports are:
+
+```python
+from story_writing_agents.writing_artifacts import (
+    ARTIFACT_CHANGE_SET_SCHEMA_VERSION,
+    ArtifactChangeOperation,
+    ArtifactChangeOperationKind,
+    ArtifactChangeSet,
+    ArtifactChangeSetError,
+    ArtifactChangeSetErrorCode,
+    ArtifactCreateOperation,
+    ArtifactDeleteOperation,
+    ArtifactPatchOperation,
+    ArtifactRenameOperation,
+    ArtifactReplaceOperation,
+    ArtifactTextHunk,
+    build_artifact_change_set,
+    deserialize_artifact_change_set,
+    project_artifact_change_set,
+    serialize_artifact_change_set,
+)
+```
+
+These frozen values and pure functions build, project, and byte-canonically
+serialize complete-state-bound proposals. They perform no filesystem,
+provider, lead-agent, relationship-policy, confirmation, apply, publication,
+or Git operation. Their exact fields, byte-offset rules, signatures, digest
+model, failure codes, and core/manuscript examples are documented under
+[Exact in-memory artifact change sets](writing-artifacts.md#exact-in-memory-artifact-change-sets).
 
 <a id="conversation-literal-search-mechanics"></a>
 
@@ -1340,5 +1370,5 @@ The exact current inventories are package root `120`, conversation storage
 migration `7`, provisioning `4`, selection `8`, conversation RAG contracts
 `35`, generic RAG adapter `3`, local RAG provider `5`, RAG generation store `8`,
 RAG composition `10`, RAG runtime `10`, and RAG CLI `7`. The production module
-inventory is `84`, with 346 dependency edges, zero cycles, and facade counts
-120/11/31 (root / agent-context accounting / writing artifacts).
+inventory is `93`, with 374 dependency edges, zero cycles, and facade counts
+120/11/47 (root / agent-context accounting / writing artifacts).
