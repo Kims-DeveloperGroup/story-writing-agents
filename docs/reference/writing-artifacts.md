@@ -5,7 +5,8 @@
 > context to story agents or resolving explicit references; publication
 > provenance is a separate audit and recovery concern. The `writing_artifacts` Python subpackage can parse content-free
 > reference directives and exposes the repository authorization, read-action,
-> evidence, and pure exact change-set values described below. `StoryRuntime` captures inline
+> evidence, pure exact change-set values, and pure canonical relationship
+> validation described below. `StoryRuntime` captures inline
 > `${path}` and `${path}#Lx-Ly` indicators and gives every addressed provider
 > invocation a fresh private coordinator. In provider-bound shell prompt spans,
 > `$` lists current safe reference sources. Exact `$$` immediately shows
@@ -74,14 +75,15 @@ a proposal before any component with write authority acts.
 | Describe creation, byte-exact patching, full replacement, rename, or deletion of canonical core documents and manuscripts. | Infer the current files from a workspace or mutate any file. The caller must supply the complete base mapping. |
 | Verify the exact base state and inspect a read-only projected mapping. | Treat projection as approval, user confirmation, provider output, publication, or Git authority. |
 | Serialize the complete review content to one canonical JSON byte sequence and restore it exactly. | Expect ordinary representations or errors to reveal story text. Explicit serialization is the content-bearing review surface. |
-| Represent a core-document rename or deletion as a pure value. | Assume that operation is permitted by artifact policy. This contract does not implement the separate fixed-core policy that is expected to reject those operations later. |
+| Represent a core-document rename or deletion as a pure value. | Assume that operation is permitted by artifact policy. The implemented relationship policy rejects those operations before a proposal can be considered valid. |
 
-Relationship validation is also outside this layer. For example, renaming a
-manuscript does not find or repair Markdown links. The caller must describe
-each inbound-reference patch separately, and a later relationship-policy layer
-must decide whether the complete proposal is valid. Later lead-review and apply
-workflows may consume these values, but this API itself grants none of their
-authority.
+Relationship validation is also outside this change-set layer. For example,
+renaming a manuscript does not find or repair Markdown links. The caller must
+describe each inbound-reference patch separately, then pass the complete
+change set to the implemented
+[relationship validator](#canonical-artifact-relationship-validation). Later
+lead-review and apply workflows may consume these values, but this API itself
+grants none of their authority.
 
 ### Public Python surface
 
@@ -322,9 +324,10 @@ print(dict(project_artifact_change_set(base, proposal)))
 ```
 
 The operation order is `index.md` then `opening.md`, the UTF-8 ordering of the
-primary paths. The pure layer would also accept the rename without the link
-patch; only a later relationship validator can require that patch. Nothing in
-this scenario changes either file on disk.
+primary paths. The pure change-set layer also accepts the rename without the
+link patch. The relationship validator below distinguishes the dangling
+rename from this repaired proposal. Nothing in this scenario changes either
+file on disk.
 
 ### Complete-state digests, serialization, and failures
 
@@ -379,6 +382,460 @@ exposes the enum `code`, optional zero-based `operation_index`, and optional
 zero-based `hunk_index`. A failed build or projection has no partial result and
 performs no recovery or retry. The caller must acquire current bytes and build
 a new exact proposal; this pure API does not read those bytes itself.
+
+## Canonical artifact relationship validation
+
+> **Availability:** schema-v1 relationship validation is an implemented, pure
+> in-memory Python contract over a complete base mapping and one exact change
+> set. It does not read or write files, invoke an agent or provider, select a
+> specialist, request or record confirmation, apply or stage a proposal, or
+> create a Git commit.
+
+The relationship policy answers two artifact-only questions: whether the
+projected canonical graph has any links to absent canonical artifacts, and
+which story-review domains the proposed operations and supplied core-evidence
+facts affect. It returns immutable facts for a later workflow to interpret;
+it does not produce a user-facing answer itself.
+
+| Internal mechanism | User-side meaning |
+| --- | --- |
+| Project the exact change set over the caller-supplied complete base state. | The result describes what the artifacts would look like; no workspace changed. |
+| Parse the base and projected canonical link graphs and compare them. | A caller can show every added, removed, retained, or still-dangling link instead of silently accepting a broken rename or delete. |
+| Reject rename/delete operations on the four permanent core identities. | A missing core document may be created and a present one may be patched or replaced, but its canonical identity cannot be moved or removed. |
+| Derive content-free domain/reason facts. | A future lead workflow can explain which kinds of review are relevant, but this layer names no agent and dispatches nobody. |
+
+### Public Python surface and limits
+
+The relationship module exports exactly 15 symbols, all re-exported from the
+writing-artifacts facade and absent from the project-root facade:
+
+```python
+from story_writing_agents.writing_artifacts import (
+    ARTIFACT_RELATIONSHIP_COMPANION_RULES,
+    ARTIFACT_RELATIONSHIP_SCHEMA_VERSION,
+    MAX_RELATIONSHIP_ARTIFACTS,
+    MAX_RELATIONSHIP_ARTIFACT_UTF8_BYTES,
+    MAX_RELATIONSHIP_EDGES,
+    MAX_RELATIONSHIP_STATE_UTF8_BYTES,
+    ArtifactRelationshipEdge,
+    ArtifactRelationshipError,
+    ArtifactRelationshipErrorCode,
+    ArtifactRelationshipKind,
+    ArtifactRelationshipValidation,
+    ArtifactReviewDomain,
+    ArtifactReviewFact,
+    ArtifactReviewReason,
+    validate_artifact_relationships,
+)
+```
+
+The schema version is `1`, and the companion-rule set is the exact empty tuple
+`()`. The fixed inclusive limits apply independently to both the base and
+projected state:
+
+| Limit | Exact value |
+| --- | ---: |
+| Canonical artifacts | 4,096 |
+| Strict-UTF-8 bytes in one artifact | 8 MiB |
+| Strict-UTF-8 bytes across one complete state | 64 MiB |
+| Parsed canonical relationship edges in one state | 65,536 |
+
+The three result values are frozen, slotted dataclasses with these exact
+fields:
+
+```text
+ArtifactRelationshipEdge(
+    source_path, target_path,
+    destination_start_utf8_byte, destination_end_utf8_byte,
+    fragment, relationship_kind,
+)
+ArtifactReviewFact(domain, reason, artifact_path, operation_index)
+ArtifactRelationshipValidation(
+    schema_version, base_state_digest, projected_state_digest,
+    change_set_digest, added_edges, removed_edges, retained_edges,
+    projected_dangling_edges, review_facts,
+)
+```
+
+`ArtifactRelationshipValidation.is_valid` is `True` exactly when
+`projected_dangling_edges` is empty. The validation entry point is:
+
+```python
+validate_artifact_relationships(
+    base_state: Mapping[str, bytes],
+    change_set: ArtifactChangeSet,
+    *,
+    attached_core_paths: tuple[str, ...],
+) -> ArtifactRelationshipValidation
+```
+
+`attached_core_paths` must be an exact, duplicate-free tuple containing zero or
+more of the four core identities in ascending UTF-8 path order. It is a
+caller-supplied evidence fact, not proof that this function read, authorized,
+or understood a file.
+
+The returned values contain paths, digests, relationship kinds, byte spans,
+review facts, and an optional fragment. They contain no artifact bytes, link
+labels, surrounding prose, agent IDs, provider result, confirmation, or Git
+metadata. `fragment` is available by explicit field access but omitted from
+ordinary representations. Fixed errors and their exception graphs do not
+include paths, fragments, labels, or prose; validation emits no log records.
+The input mappings and change set are not mutated or retained by the result.
+
+### Exact link subset
+
+The one recognized relationship kind is `inline_markdown_link`. Its source
+syntax is the exact inline subset:
+
+```text
+[nonempty label](destination)
+[nonempty label](destination#optional-fragment)
+```
+
+The first `]` closes the nonempty label; before it, the label may not contain a
+line break, `[`, backslash, or an ASCII control. The opening `[` may not be
+escaped or immediately form an unescaped image marker `![`. The destination
+must be nonempty strict UTF-8 with no ASCII space
+or control, backslash, parentheses, `?`, or `%`. It may contain at most one
+`#`; when present, the fragment must be nonempty and additionally cannot
+contain `#`. Scheme-like targets such as `https:`, network-path targets that
+start with `//`, titled links, reference links/definitions, autolinks, HTML,
+images, nested-parenthesis destinations, empty targets, and noncanonical forms
+are not relationships.
+
+Inline links inside matching backtick code spans are ignored. Fenced regions
+opened by at least three backticks or tildes after zero to three spaces are
+also ignored through a matching same-marker close of at least the opening
+length; an unclosed fence is ignored through end of content.
+
+A relative destination is resolved from the source artifact's directory. A
+single leading `/` resolves from the workspace root. Empty and `.` path
+segments are ignored, while `..` removes one component. An attempt to move
+above the workspace root raises `PATH_ESCAPE`; this is a hard failure even if
+the eventual spelling would not be a canonical artifact. A resolved target
+enters the graph only if it is one of the four exact core identities or a
+canonical `manuscript/PART/PATH.md` identity. Safe noncanonical and internal
+targets such as `transcripts/`, `discussion_logs/`, `agent_states/`, or a
+Unicode manuscript filename are treated as ordinary prose, not as edges or
+dangling blockers.
+
+The edge records the zero-based half-open UTF-8 byte span of the destination's
+**path only** in the source content. The optional fragment is recorded
+separately and does not participate in target existence or anchor validation.
+The parser does not normalize case, percent escapes, Unicode, or path spelling.
+
+### Graph delta and review facts
+
+Validation first checks the bounded complete base, projects the exact change
+set, rejects protected core operations, then checks the bounded projection.
+It parses both complete graphs and returns deterministic UTF-8-ordered tuples:
+
+- `added_edges` exist only after projection;
+- `removed_edges` exist only in the base;
+- `retained_edges` are byte-span-, source-, target-, fragment-, and
+  kind-identical in both states; and
+- `projected_dangling_edges` contains **every** added or retained edge whose
+  canonical target is absent from the projected state.
+
+A dangling graph returns a validation value with `is_valid == False`; it is
+not reduced to the first blocker and is not raised as an exception. A change
+may repair a pre-existing dangling edge by creating its missing target. When a
+linked manuscript is renamed, every inbound source must be changed separately.
+When a source manuscript moves, its unchanged relative outbound links are
+resolved again from the destination directory, so the old edge is removed and
+the newly resolved edge is added. Finite cycles and self-links are valid when
+all targets exist; validation does not recurse through the graph.
+
+Schema v1 has no companion inference:
+`ARTIFACT_RELATIONSHIP_COMPANION_RULES == ()`. Similar filenames, part
+membership, ordinary prose, search words, `${...}` references, and `$$`
+markers never create edges.
+
+Review facts are exact artifact facts, not routing decisions:
+
+| Reason | Domain and artifact fact |
+| --- | --- |
+| `touched_core` | A core create, patch, or replace maps `global_outline.md` and `part_outlines.md` to `plot_structure`, `character_sheets.md` to `character_world`, and `narrative_rules.md` to `tone_execution`; it carries the operation index. |
+| `manuscript_operation` | Every manuscript create, patch, replace, rename, or delete adds `tone_execution` for the primary path and operation index. |
+| `attached_core_evidence` | Each exact caller-attached core path adds its mapped domain with `operation_index=None`. |
+| `relationship_core_evidence` | A directly incident base or projected edge between a participating operation path and a core endpoint adds that core's domain and operation index. |
+
+Facts are deduplicated and deterministically sorted. Relevance is direct only:
+the policy performs no transitive graph walk and no natural-language inference.
+The later proposal-mapping workflow planned in Issue #490 may map these domains
+to specialist consultation choices. This API deliberately exposes no agent ID
+and cannot silently choose, trigger, or attribute a specialist.
+
+### Provider-free scenario harness
+
+Run this helper once before the seven workflows below. It builds exact change
+sets and validates them without a provider, repository, or workspace:
+
+```python
+import hashlib
+
+from story_writing_agents.writing_artifacts import (
+    ArtifactCreateOperation,
+    ArtifactDeleteOperation,
+    ArtifactKind,
+    ArtifactPatchOperation,
+    ArtifactRelationshipError,
+    ArtifactRenameOperation,
+    ArtifactReplaceOperation,
+    ArtifactTextHunk,
+    build_artifact_change_set,
+    validate_artifact_relationships,
+)
+
+sha256 = lambda content: hashlib.sha256(content).hexdigest()
+
+def create(path, content, kind=ArtifactKind.MANUSCRIPT):
+    return ArtifactCreateOperation(path, kind, content, sha256(content))
+
+def patch(path, before, after, kind=ArtifactKind.MANUSCRIPT):
+    digest = sha256(before)
+    hunk = ArtifactTextHunk(digest, 0, len(before), before, after)
+    return ArtifactPatchOperation(path, kind, digest, (hunk,), sha256(after))
+
+def replace(path, before, after, kind=ArtifactKind.MANUSCRIPT):
+    return ArtifactReplaceOperation(
+        path, kind, sha256(before), after, sha256(after)
+    )
+
+def rename(source, destination, content):
+    digest = sha256(content)
+    return ArtifactRenameOperation(
+        source, destination, ArtifactKind.MANUSCRIPT, digest, digest
+    )
+
+def validate(base, operations, attached=()):
+    change_set = build_artifact_change_set(base, operations)
+    return validate_artifact_relationships(
+        base, change_set, attached_core_paths=attached
+    )
+```
+
+These are library examples. The quoted lead replies are illustrative outputs
+for the future lead workflow, not strings returned by this validator.
+
+#### 1. Create a missing core document
+
+User input: “The global outline is empty because its file is missing. Propose
+the minimum initial structure.”
+
+```python
+core = "core_documents/global_outline.md"
+content = b"Outline placeholder.\n"
+result = validate(
+    {},
+    (create(core, content, ArtifactKind.CORE_DOCUMENT),),
+)
+print(result.is_valid)
+print([
+    (fact.domain.value, fact.reason.value, fact.artifact_path,
+     fact.operation_index)
+    for fact in result.review_facts
+])
+```
+
+```text
+True
+[('plot_structure', 'touched_core', 'core_documents/global_outline.md', 0)]
+```
+
+The same absent/create rule applies to each of the four core identities;
+patch and replace are valid only when that identity is present and exact. A
+future lead can say, “The missing global outline can be created, and the
+proposal requires plot/structure review. Shall I proceed to that review?” The
+file is still absent: no write or confirmation occurred.
+
+#### 2. Reject a protected-core rename or delete
+
+User input: “Delete the global outline; we no longer need it.”
+
+```python
+base = {core: content}
+delete = ArtifactDeleteOperation(
+    core, ArtifactKind.CORE_DOCUMENT, sha256(content)
+)
+change_set = build_artifact_change_set(base, (delete,))
+try:
+    validate_artifact_relationships(base, change_set, attached_core_paths=())
+except ArtifactRelationshipError as error:
+    print(error.code.value, error.operation_index)
+```
+
+```text
+protected_core_operation 0
+```
+
+All four core identities have the same permanent rule, including rename. A
+future lead can reject the destructive form and offer an exact patch or
+replacement instead. The current core bytes remain unchanged.
+
+#### 3. Detect every blocker in a broken manuscript rename
+
+User input: “Rename `opening.md` to `arrival.md`.”
+
+```python
+opening = "manuscript/part-01/opening.md"
+arrival = "manuscript/part-01/arrival.md"
+chapter_list = "manuscript/part-01/chapter-list.md"
+index = "manuscript/part-01/index.md"
+before = b"[Opening](opening.md)"
+after = b"[Arrival](arrival.md)"
+scene = b"chapter"
+base = {chapter_list: before, index: before, opening: scene}
+
+broken = validate(base, (rename(opening, arrival, scene),))
+print(broken.is_valid, len(broken.projected_dangling_edges))
+print([
+    (edge.source_path, edge.target_path)
+    for edge in broken.projected_dangling_edges
+])
+```
+
+```text
+False 2
+[('manuscript/part-01/chapter-list.md', 'manuscript/part-01/opening.md'), ('manuscript/part-01/index.md', 'manuscript/part-01/opening.md')]
+```
+
+A future lead can say, “I cannot advance this rename as proposed: both
+`chapter-list.md` and `index.md` would still point to the removed identity.”
+That is a proposal critique only; the source file has not moved.
+
+#### 4. Validate the rename with all inbound repairs
+
+User input: “Include both inbound-link repairs in the same rename proposal.”
+
+```python
+repaired = validate(
+    base,
+    (
+        patch(chapter_list, before, after),
+        patch(index, before, after),
+        rename(opening, arrival, scene),
+    ),
+)
+print(
+    repaired.is_valid,
+    len(repaired.removed_edges),
+    len(repaired.added_edges),
+    len(repaired.projected_dangling_edges),
+)
+```
+
+```text
+True 2 2 0
+```
+
+This is the relationship-checked form of the exact change-set workflow above.
+A future lead can say, “The atomic proposal removes both old links, adds both
+new links, and has no dangling target. It is ready for the later review step.”
+Validation still did not apply or confirm any operation.
+
+#### 5. Edit a manuscript with attached and linked core evidence
+
+User input: “Revise the review scene using the character sheet I attached and
+add its narrative-rule link.”
+
+```python
+manuscript = "manuscript/part-01/review.md"
+characters = "core_documents/character_sheets.md"
+rules = "core_documents/narrative_rules.md"
+before = b"[Characters](/core_documents/character_sheets.md)"
+after = before + b"\n[Rules](/core_documents/narrative_rules.md)"
+base = {
+    characters: b"Characters.\n",
+    rules: b"Rules.\n",
+    manuscript: before,
+}
+reviewed = validate(
+    base,
+    (replace(manuscript, before, after),),
+    attached=(characters,),
+)
+print(reviewed.is_valid)
+for fact in reviewed.review_facts:
+    print(
+        fact.domain.value, fact.reason.value,
+        fact.artifact_path, fact.operation_index,
+    )
+```
+
+```text
+True
+character_world attached_core_evidence core_documents/character_sheets.md None
+character_world relationship_core_evidence core_documents/character_sheets.md 0
+tone_execution manuscript_operation manuscript/part-01/review.md 0
+tone_execution relationship_core_evidence core_documents/narrative_rules.md 0
+```
+
+A future lead can say, “The artifact facts indicate character/world and
+tone/execution review. May I dispatch those consultations?” The fact list does
+not choose agents, prove that the attachment was read, or authorize a write.
+
+#### 6. Allow a finite manuscript cycle
+
+User input: “Create the three cross-linked manuscript notes, including the
+self-link.”
+
+```python
+cycle = validate(
+    {},
+    (
+        create("manuscript/part-01/a.md", b"[B](b.md)"),
+        create("manuscript/part-01/b.md", b"[C](c.md)"),
+        create("manuscript/part-01/c.md", b"[A](a.md) [Self](c.md)"),
+    ),
+)
+print(cycle.is_valid, len(cycle.added_edges), cycle.projected_dangling_edges)
+```
+
+```text
+True 4 ()
+```
+
+A future lead can report that every canonical target exists and the cycle is
+structurally valid. That is not a judgment about story quality and does not
+create the three files.
+
+#### 7. Keep ordinary discussion outside change validation
+
+User input: “Would a quieter opening better fit this story?”
+
+There is no proposed artifact operation, so the application should not invent
+a no-op change set or call relationship validation. There is no validation
+value and no review fact to display. Plain words such as “opening,” a filename,
+or a core-document name do not create relationships or select a specialist.
+A future lead can clarify the question, answer directly, or separately propose
+a consultation according to the later orchestration workflow. Nothing is
+written, staged, or committed.
+
+### Relationship failures and retry
+
+The stable relationship error-code values are:
+
+```text
+invalid_schema, invalid_attached_core_paths, protected_core_operation,
+path_escape, artifact_count_limit, artifact_size_limit, state_size_limit,
+edge_count_limit
+```
+
+`ArtifactRelationshipError` has the exact constructor
+`ArtifactRelationshipError(code, *, operation_index=None,
+artifact_index=None, link_index=None)`. Its optional indices are zero-based:
+operations follow change-set order, artifacts follow canonical UTF-8 path
+order, and links follow source scan order. A malformed or noncanonical input,
+invalid attachment tuple, protected-core operation, escaping target, or limit
+failure raises without a partial validation value. Exact change-set failures,
+such as base-state drift, propagate as `ArtifactChangeSetError` rather than
+being wrapped.
+
+A retry must use current complete base bytes and a newly rebuilt exact change
+set when those bytes changed. For `is_valid == False`, the caller can use every
+returned dangling edge to construct one revised proposal. Neither path grants
+confirmation or write authority.
 
 ## Reference directive parser
 

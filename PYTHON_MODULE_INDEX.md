@@ -16,9 +16,9 @@ Source root: `src/`
 
 Package root: `src/story_writing_agents/`
 
-Importable production units indexed: 93.
+Importable production units indexed: 94.
 
-Direct internal dependency edges indexed: 374.
+Direct internal dependency edges indexed: 377.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -209,9 +209,10 @@ session_lifecycle -> (standard library only)
 workspace -> conversations -> agents/errors
           -> models/writing_artifacts
 writing_artifacts -> writing_artifacts.authorization/catalog/change_sets/directives
-                  -> writing_artifacts.read_actions/references
+                  -> writing_artifacts.read_actions/references/relationship_policy
 writing_artifacts.authorization -> writing_artifacts.catalog/references
 writing_artifacts.change_sets -> writing_artifacts.catalog
+writing_artifacts.relationship_policy -> writing_artifacts.catalog/change_sets
 writing_artifacts.directives -> writing_artifacts.references
 writing_artifacts.read_actions -> writing_artifacts.authorization/references
 writing_artifacts.runtime_references -> writing_artifacts.authorization/directives
@@ -5577,7 +5578,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/writing_artifacts/__init__.py`
 - **Responsibility:** Provide the side-effect-free canonical writing-artifact
   value facade.
-- **Supported surface:** Exactly 47 names in `__all__`: canonical core and
+- **Supported surface:** Exactly 62 names in `__all__`: canonical core and
   resource-limit constants; `ArtifactKind`, `ArtifactCatalogEntry`,
   `ArtifactCatalog`, `ArtifactSourceIdentity`, `ArtifactContentSnapshot`,
   `ArtifactLineRange`, and `ArtifactReference`; immutable
@@ -5593,7 +5594,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   constant, closed operation/error enums, content-free error, immutable exact
   byte hunk, five operation values and their union, immutable change-set value,
   and the four pure build, project, serialize, and deserialize functions owned
-  by `change_sets`; plus
+  by `change_sets`; the relationship-policy schema, empty companion set, four
+  exact resource-limit constants, closed relationship/error/review enums,
+  content-free error, immutable edge/review/complete-validation values, and
+  pure projected relationship validator owned by `relationship_policy`; plus
   `canonical_artifact_kind`, `manuscript_artifact_path`, and
   `parse_artifact_references`. `canonical_artifact_kind` and
   `manuscript_artifact_path` retain strict publication grammar; public
@@ -5606,11 +5610,13 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `writing_artifacts.authorization`,
   `writing_artifacts.catalog`, `writing_artifacts.change_sets`,
   `writing_artifacts.directives`,
-  `writing_artifacts.read_actions`, and `writing_artifacts.references`.
+  `writing_artifacts.read_actions`, `writing_artifacts.references`, and
+  `writing_artifacts.relationship_policy`.
 - **State, resources, and side effects:** Owns no state or resource. Importing
   the facade constructs only immutable metadata and performs no filesystem,
   provider, process, environment, or application-startup operation.
 - **Primary verification/documentation:** `tests/test_artifact_change_sets.py`,
+  `tests/test_artifact_relationship_policy.py`,
   `tests/test_writing_artifacts.py`,
   `tests/test_artifact_reference_directives.py`,
   `tests/test_artifact_reference_authorization.py`,
@@ -5655,6 +5661,43 @@ every intermediate arrow. The current runtime graph is acyclic.
   environment, thread, clock, entropy, persistence, or application-startup
   work.
 - **Primary verification/documentation:** `tests/test_artifact_change_sets.py`,
+  `tests/test_rag_module_and_packaging_boundary.py`, and
+  `docs/reference/writing-artifacts.md`.
+
+### `story_writing_agents.writing_artifacts.relationship_policy`
+
+- **Source:**
+  `src/story_writing_agents/writing_artifacts/relationship_policy.py`
+- **Responsibility:** Validate the complete canonical artifact relationship
+  graph projected by one exact change set.
+- **Supported surface:** Exactly 15 names in module `__all__`, all re-exported
+  by the writing-artifact facade and absent from the project-root facade:
+  `ARTIFACT_RELATIONSHIP_SCHEMA_VERSION`, the explicitly empty
+  `ARTIFACT_RELATIONSHIP_COMPANION_RULES`, four exact artifact/state/edge bound
+  constants, `ArtifactRelationshipErrorCode`, content-free
+  `ArtifactRelationshipError`, `ArtifactRelationshipKind`, immutable
+  `ArtifactRelationshipEdge`, `ArtifactReviewDomain`, `ArtifactReviewReason`,
+  `ArtifactReviewFact`, complete `ArtifactRelationshipValidation`, and
+  `validate_artifact_relationships`. The validator consumes one complete base
+  mapping, an exact `change_sets` value, and a caller-verified ordered core-path
+  tuple. It projects first, scans only the closed inline-Markdown-link subset
+  outside code, resolves root- or source-relative canonical identities, and
+  returns canonical added, removed, retained, and projected-dangling edges plus
+  direct operation/relationship/core-derived review-domain facts. Core rename
+  and delete fail, every finite existence cycle is allowed, and only projected
+  dangling edges block validity. The result is bound to base, projected, and
+  change-set digests but grants no proposal, reviewer, confirmation, apply,
+  repository, provider, agent, or Git authority.
+- **Direct internal dependencies:** `writing_artifacts.catalog` and
+  `writing_artifacts.change_sets`.
+- **State, resources, and side effects:** Frozen content-free values and pure
+  call-local bounded byte scanning, lexical resolution, graph differencing,
+  and reviewer-fact derivation only. The module borrows complete mappings and
+  change-set values, returns no partial result on failure, recursively follows
+  no edge, and owns no filesystem, repository, provider, process, environment,
+  thread, clock, entropy, persistence, or application-startup resource.
+- **Primary verification/documentation:**
+  `tests/test_artifact_relationship_policy.py`,
   `tests/test_rag_module_and_packaging_boundary.py`, and
   `docs/reference/writing-artifacts.md`.
 
@@ -6150,7 +6193,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `_core` and `_driver` also depend inward on that contract, while the driver
   remains the sole stream, input-latch, raw-mode, alternate-screen, geometry,
   signal, presentation, and restoration owner. These three modules retain ten
-  internal edges within the current 93-module, 374-edge acyclic graph. Root,
+  internal edges within the current 94-module, 377-edge acyclic graph. Root,
   `agent_exchanges`, and `interactive_terminal` facades remain exactly 120, 15,
   and 12 names. `jsonl-viewer` is installed from the unconditional exact VCS
   requirement at `1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec`, but is loaded
@@ -6185,7 +6228,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   projection. The sole new edge is
   `interactive_controller._runtime_policy -> agent_context.service`; the root,
   `agent_context`, and `writing_artifacts` facades remain exactly 120, 11, and
-  47 names.
+  62 names.
 
 - Optional conversation RAG has three one-way direct-module boundaries.
   `conversation_rag` is the standard-library-only story contract and policy
