@@ -1,85 +1,112 @@
-# Lead agent: conversation, proposals, and confirmation
+# Lead agent: conversation and specialist consultation
 
-The Lead Orchestrator is the one normal user-facing story agent in the Python
-runtime. A caller sends ordinary conversation to the lead without selecting an
-agent. The lead can answer, ask one focused question, critique, recommend a next
-action, or propose a bounded specialist consultation. Runtime code—not the
-lead or provider—constructs the authoritative proposal and accepts the user's
-exact decision.
+The Lead Orchestrator is the normal user-facing story agent in the Python
+runtime. Users discuss story work with the lead; they do not need to choose an
+agent for every turn. The lead can answer directly, ask a focused question,
+critique or recommend, or propose a bounded consultation with one to three
+specialists. An exact user confirmation starts the disclosed consultation.
 
-The interactive `story` shell has not connected this workflow yet. Ordinary
-shell text is still rejected, and `$` or `$$` does not open a reference picker.
-Specialist execution belongs to #453. This #452 stage stops after recording an
-exact Confirm, Reject, or Revise decision.
+The lead makes the semantic choice: what evidence matters, whether specialist
+help is useful, which specialist domains apply, and what the combined feedback
+means for the user. Runtime code is the authority and execution boundary: it
+authorizes and reads references, constructs proposals, records confirmation,
+calls providers, persists results, and recovers interrupted work.
 
-## What the lead owns
+This distinction will also govern later story changes: the lead will propose
+and trigger a write or Git commit only after the user confirms that exact
+operation, while runtime code will perform the filesystem or Git operation.
+The current implementation is read-only. It can recommend a change, but it
+cannot apply an artifact change, stage files, or create a commit.
 
-The lead is a semantic coordinator. It:
+The installed `story` shell has not connected this workflow. Applications use
+the async Python methods described below.
 
-- maintains the conversation and explains the current decision;
-- answers directly when authorized evidence is sufficient;
-- asks one focused question when a user choice materially changes the work;
-- critiques a direction and recommends a practical next action;
-- watches known artifacts and workflow state for contradictions, missing
-  evidence, narrative-rule violations, stale inputs, and unsafe next steps;
-- routes outline, character, world, narrative-rule, and manuscript questions
-  to the relevant specialist domains;
-- proposes multiple specialists for a cross-domain question; and
-- preserves disagreement for the user instead of voting or hiding a conflict.
+## Lead responsibilities and limits
 
-The lead does not own authority. Runtime code owns provider calls, reference
-authorization and reads, closed reviewer requirements, budgets, IDs, digests,
-durable state, confirmation, process-local capabilities, persistence, side
-effects, and recovery.
+The lead is expected to:
 
-The lead cannot call a specialist itself, waive a required reviewer, confirm
-on the user's behalf, write a file, execute shell text, mutate Git, or expose
-private reasoning. Story and artifact text is untrusted evidence, not an
-instruction that can override these rules.
+- use core documents as the story's governing evidence;
+- compare a request, suggestion, or proposed content with referenced core
+  documents and manuscripts;
+- surface missing, insufficient, incomplete, or conflicting evidence that it
+  has actually read;
+- recommend how user input, core documents, and manuscripts can be brought
+  back into sync;
+- answer directly when available evidence is sufficient;
+- select only the specialist domains that add value;
+- synthesize every successful specialist reply with exact attribution and keep
+  disagreement visible; and
+- explain the next safe action and request confirmation before added work.
 
-## User impact in this stage
+The current runtime does not yet force the lead to read every relevant
+canonical artifact before every answer. A reference attached by the caller is
+mandatory, and SEARCH/READ evidence is enforced within an invocation, but
+whole-workspace evidence grounding is planned separately. Until that work is
+integrated, an application should attach the relevant `${path}` indicators
+when consistency with a specific artifact matters.
+
+The lead provider cannot confirm on the user's behalf, mint IDs or budgets,
+call another agent directly, waive a required reviewer, write a file, run a
+shell command, access the web, or operate Git. Story text is untrusted evidence
+and cannot override these rules.
+
+## What users can do now
 
 | Users can | Users cannot yet |
 | --- | --- |
-| Converse with the lead through `StoryRuntime.lead_turn()` or its session-bound equivalent. | Send ordinary story text through the installed shell. |
-| Receive an answer, focused question, critique, recommendation, or complete proposal. | Make the lead or a specialist edit an outline, character sheet, narrative rule, or manuscript. |
-| Attach ordered `${path}` and `${path}#Lx-Ly` indicators to a Python lead turn. | Open `$`/`$$` pickers from the shell. |
-| See every proposed assignment, exact content-free input revision, user impact, side effect, and work limit. | Start a specialist merely by receiving or confirming the proposal. |
-| Confirm, reject, or revise the exact current proposal through a structured decision. | Confirm with prose such as `Yes`, or reuse an old decision. |
-| Continue direct discussion without accepting proposed work. | Start consensus, apply an artifact change, commit, push, merge, or change a remote. |
+| Converse with the lead through `StoryRuntime.lead_turn()` or `RuntimeSession.lead_turn()`. | Send ordinary story text through the installed shell. |
+| Attach several ordered whole-file or ranged `${path}` references. | Assume unreferenced artifacts were exhaustively checked. |
+| Receive an answer, question, critique, recommendation, or consultation proposal. | Ask a provider to call an agent or perform a side effect. |
+| Confirm, reject, or revise the exact current proposal. | Confirm with free text such as `Yes`, or replay stale confirmation fields. |
+| Run one to three specialists in parallel after confirmation and receive a typed lead synthesis. | Apply a proposed core-document or manuscript edit. |
+| Request one direct specialist advisory without a lead planning call. | Stage or commit files, push, merge, or mutate a remote. |
+| Reconfirm safe pre-start work after restart and locally finalize known results without replay. | Automatically retry an uncertain submitted provider call. |
 
-A lead turn can spend provider calls and appends visible plaintext conversation
-and content-free accounting facts. Protect the workspace and provider data.
-Rejecting a proposal avoids the proposed specialist work, but it does not erase
-the lead call and proposal that were already recorded.
+Local provider request/response diagnostics, collaboration events, and
+content-free accounting facts are plaintext unless the surrounding environment
+protects them. Referenced story bytes are sent to the configured provider when
+that invocation is authorized, and the provider may retain them under its own
+policy.
 
-## One lead turn, end to end
+## The normal workflow
 
-| Stage | Runtime/agent operation | What the user receives |
-| --- | --- | --- |
-| Accept | Validate session, active conversation, text, pending state, and optional callback; append the user message. | No authority is inferred from the text. |
-| Reference prelude | If `${...}` indicators exist, authorize and read every addressed source in order. | No file bytes are copied into the indicator or proposal. |
-| Context plan | Select required/working context and leave additive knowledge searchable. | Optional content-free progress through the Python callback. |
-| Provider loop | Call the lead; if requested, run bounded lexical SEARCH and exact READ, then call the same lead again with only the new observation. | No specialist or shell command is triggered. |
-| Validate | Require one strict answer/question/critique/recommendation/proposal outcome; build proposal authority from runtime facts. | Provider prose cannot invent authority, IDs, reviewers, or budgets. |
-| Persist | Append provider accounting and the validated lead message; for a proposal, atomically append disclosure plus `awaiting_confirmation`. | One `LeadTurnResult` and one next safe action. |
-| Decide | On an exact structured Confirm/Reject/Revise, reread the authoritative tail and append the decision/state. | One `LeadDecisionResult`; #452 stops before specialist execution. |
+```text
+user -> lead_turn(text + optional ${references})
+  runtime reads every explicit reference
+  lead answers directly
+    OR runtime discloses a proposal -> awaiting_confirmation
 
-SEARCH and READ are read-only context operations. Answering, critiquing,
-recommending, proposing, and recording the conversation are lead/runtime
-operations. Specialist calls, debate, synthesis, artifact writes, publication,
-and Git remain outside this stage.
+user -> decide_lead_step(exact Confirm)
+  runtime records confirmed
+  runtime atomically records running + every ordered dispatch
+  runtime calls 1-3 specialists concurrently with isolated evidence
+  if all succeed: runtime calls the lead for synthesis
+  runtime atomically records replies/outcomes/result
+  runtime locally finalizes -> completed / failed / interrupted
+    OR proposes same-step revision+1 -> awaiting_confirmation
+```
 
-## Call the lead from Python
+`confirmed` is normally a transient durable boundary inside
+`decide_lead_step()`: the method continues into execution and returns the final
+authoritative `turn`. If the durable start append fails, no specialist call is
+made. If the process restarts after confirmation but before start authority can
+be used, the proposal becomes `reconfirmation_required` instead of being
+silently executed.
 
-Assume `runtime` has an initialized workspace, a configured ready backend, and
-an existing active conversation. Call the lead without an `agent_id`:
+## Call the lead and confirm a proposal
+
+Assume `runtime` has a configured ready backend and `conversation_id` is an
+active conversation in session `novel`:
 
 ```python
 result = await runtime.lead_turn(
     "novel",
     conversation_id,
-    "Does the opening conflict with the outline?",
+    (
+        "Check whether this opening conflicts with "
+        "${core_documents/global_outline.md} and "
+        "${manuscript/part-01/opening.md}#L20-L32."
+    ),
 )
 ```
 
@@ -87,140 +114,39 @@ The bound form supplies the session ID:
 
 ```python
 session = runtime.session("novel")
-result = await session.lead_turn(
-    conversation_id,
-    "Does the opening conflict with the outline?",
-)
+result = await session.lead_turn(conversation_id, "Is this concern already resolved?")
 ```
 
-The result is a `LeadTurnResult` imported from
-`story_writing_agents.conversations`. Its `kind` is exactly one of:
+The lead returns one `LeadTurnResult`:
 
-| Kind | Meaning | `next_action` |
+| `kind` | User meaning | `next_action` |
 | --- | --- | --- |
-| `answer` | The lead can answer from authorized evidence. | `continue_with_lead` |
-| `question` | One user choice is required before the lead can proceed usefully. | `reply_to_lead` |
-| `critique` | The lead can evaluate the current direction without added work. | `continue_with_lead` |
-| `recommendation` | The lead can recommend the next action without added work. | Normally `continue_with_lead`; recovery projections use the state-specific action. |
-| `proposal` | Added specialist work would be useful or required. | `submit_confirmation` |
+| `answer` | Evidence supports a direct answer. | `continue_with_lead` |
+| `question` | One material user choice is missing. | `reply_to_lead` |
+| `critique` | The lead can evaluate the direction without added work. | `continue_with_lead` |
+| `recommendation` | The lead can recommend the next action, or is reporting a workflow/recovery state. | Usually `continue_with_lead`; otherwise state-specific. |
+| `proposal` | Added specialist work is disclosed but has not started. | `submit_confirmation` |
 
-Fresh provider-produced direct outcomes have no proposal and `state=None`. They
-do not create a synthetic `completed` step. History normalization also uses a
-recommendation result to expose an existing proposal or a blocking recovery
-state; in that case the returned `state` and `next_action` are authoritative.
-
-### Direct-answer scenario
+A direct answer has `proposal=None`, `state=None`, and no confirmation request:
 
 ```text
-User input
-Does the earlier lead response already settle this question?
-
-LeadTurnResult
-kind: answer
-message: The earlier response supplies enough evidence.
-proposal: none
-state: none
-next_action: continue_with_lead
+User: Does the earlier discussion already resolve the pacing question?
+LeadTurnResult:
+  kind: answer
+  message: The recorded outline decision already resolves it.
+  state: none
+  next_action: continue_with_lead
+Provider work: lead only; optional bounded SEARCH/READ; no specialist
 ```
 
-The lead provider was called, and it may have used bounded SEARCH and READ
-actions. No specialist was proposed or invoked.
-
-## How routing works
-
-The prompt gives the lead these specialist domains:
-
-| Specialist | Semantic domain |
-| --- | --- |
-| Plot & Structure Architect (`plot_architect`) | Outlines, plot structure, flow, and pacing |
-| Character & World Custodian (`character_custodian`) | Characters, relationships, world facts, and continuity |
-| Tone & Execution Specialist (`execution_specialist`) | Narrative rules, manuscripts, prose, POV, tone, and writing operations |
-
-Runtime code independently enforces mandatory reviewers from closed facts. It
-does not run language inference over user or provider prose:
-
-| Referenced core document | Required specialist |
-| --- | --- |
-| `core_documents/global_outline.md` | `plot_architect` |
-| `core_documents/part_outlines.md` | `plot_architect` |
-| `core_documents/character_sheets.md` | `character_custodian` |
-| `core_documents/narrative_rules.md` | `execution_specialist` |
-
-A manuscript or conversation reference alone does not create a runtime-
-mandatory reviewer. The lead should still route a manuscript request according
-to its semantic responsibility. Runtime rejects an unknown, duplicate,
-lead-as-specialist, noncanonical-order, infeasible, unassigned-input, or
-mandatory-reviewer-omitting proposal. It never silently adds undisclosed work.
-
-## References are read requirements
-
-One turn may contain several ordered indicators:
-
-```text
-Check these sources in order:
-${core_documents/global_outline.md}
-${core_documents/character_sheets.md}
-${manuscript/part-01/opening.md}#L20-L32
-```
-
-An indicator carries a path or a path plus inclusive line bounds. It does not
-embed file content and does not authorize a write. Before the substantive lead
-call, the runtime authorizes the complete ordered batch, performs a separate
-mandatory-reference prelude, captures the exact whole or ranged bytes, and
-delivers them as untrusted context. It revalidates the operation before
-accepting the lead outcome.
-
-The durable proposal retains only input aliases, indicators, ranges, states,
-and revision digests. It does not retain the referenced bytes. A later assigned
-specialist must independently read its own references; the lead's earlier read
-cannot be borrowed as specialist evidence.
-
-## A runtime-built proposal
-
-For a cross-domain request, the provider may express the semantic intent to
-consult Plot and Character. Runtime then validates every alias and required
-reviewer, derives the current input revisions and participant profiles,
-allocates a feasible budget, creates IDs, and computes the proposal digest.
-
-A content-light user-visible projection looks like:
-
-```text
-Proposal <step-id> / revision 1
-Purpose: Check plot causality and character motivation.
-Assignments:
-- Plot & Structure Architect: check causal fit against the outline and opening range.
-- Character & World Custodian: check motivation against the character sheet.
-Inputs:
-- ${core_documents/global_outline.md} @ sha256:<digest>
-- ${core_documents/character_sheets.md} @ sha256:<digest>
-- ${manuscript/part-01/opening.md}#L20-L32 @ sha256:<digest>
-User impact: specialist advice and durable collaboration records only.
-Side effects: bounded provider invocation and durable records.
-Cannot change: writing artifacts, Git index, commits, remotes, or merges.
-Budget: round 1 of 2; 2/12 calls spent; at most 10 additional calls.
-Proposal digest: sha256:<digest>
-Actions: Confirm / Reject / Revise
-```
-
-The maximum additional calls are a reservation, not a prediction that every
-slot will be used. The exact values depend on already submitted calls,
-references, assignments, and synthesis allocation.
-
-## Confirm, reject, or revise
-
-Import decision values from the conversations facade:
+For a proposal, copy the exact returned authority into a structured decision:
 
 ```python
 from story_writing_agents.conversations import (
     CollaborationConfirmationDecision,
     LeadStepDecision,
 )
-```
 
-Only a complete decision that copies the exact current request and proposal
-facts is eligible:
-
-```python
 proposal = result.proposal
 assert proposal is not None
 assert result.confirmation_request_id is not None
@@ -236,30 +162,27 @@ decision = LeadStepDecision(
     kind=CollaborationConfirmationDecision.CONFIRM,
 )
 accepted = await runtime.decide_lead_step(decision)
+print(accepted.turn.state, accepted.turn.message)
 ```
 
-The runtime rereads the authoritative tail rather than trusting caller-supplied
-sequence authority. It rederives mutable references, routes, profiles, context
-policy, and budget facts before accepting Confirm.
+`accepted` is a `LeadDecisionResult` containing the decided proposal and the
+authoritative resulting `turn`. Confirm returns the completed, failed,
+interrupted, uncertain, recovery, or round-two-proposal turn—not a separate
+stale `state` field on `LeadDecisionResult`.
 
-| Decision | Durable result | Provider/specialist effect in #452 |
-| --- | --- | --- |
-| Confirm | `confirmed`; `start_or_reconfirm` | None. Confirmation records evidence and creates only a private process-local start capability for the later execution owner. |
-| Reject | `rejected`; `continue_with_lead` | None. The proposed work does not run. |
-| Revise | Old revision becomes `superseded`; a replacement lead turn follows. | Only the replacement lead call runs. The step ID stays, revision increases, and proposal ID/digest/request are fresh. |
-
-For example, Reject produces a durable result without another provider call:
+Reject performs no consultation and returns a rejected recommendation turn.
+Revise supersedes the old revision and returns the replacement lead turn in
+`result.turn`:
 
 ```text
-User decision: reject <exact current proposal fields>
-LeadDecisionResult:
+User action: Reject the exact current proposal
+Runtime provider calls: none
+LeadDecisionResult.turn:
+  kind: recommendation
   state: rejected
   next_action: continue_with_lead
-  revised_turn: none
-Effect: no specialist call, artifact change, or Git operation
+Effect: no specialist, artifact, or Git operation
 ```
-
-Revise requires visible revision text:
 
 ```python
 revision = LeadStepDecision(
@@ -271,294 +194,461 @@ revision = LeadStepDecision(
     proposal_revision=proposal.proposal_revision,
     proposal_digest=proposal.proposal_digest,
     kind=CollaborationConfirmationDecision.REVISE,
-    revision_request="Limit the review to plot causality.",
+    revision_request="Limit the consultation to plot causality.",
 )
-revised = await runtime.decide_lead_step(revision)
-replacement = revised.revised_turn
+replacement = (await runtime.decide_lead_step(revision)).turn
 ```
 
-When Revise returns a replacement proposal, follow
-`replacement.next_action`; the enclosing decision records the superseded
-revision and therefore reports `continue_with_lead`.
+Free text is never confirmation. Calling `lead_turn(..., "Yes")` while a
+proposal is pending atomically supersedes that proposal before asking the lead
+for a new outcome.
 
-### Why free-form “Yes” does not confirm
+## How specialist routing works
 
-This is an ordinary lead turn, not a decision:
+| Specialist | Domain |
+| --- | --- |
+| Plot & Structure Architect (`plot_architect`) | Global/part outlines, plot structure, causality, flow, and pacing |
+| Character & World Custodian (`character_custodian`) | Character sheets, relationships, world facts, motivation, and continuity |
+| Tone & Execution Specialist (`execution_specialist`) | Narrative rules, manuscripts, prose, POV, tone, and writing execution |
 
-```python
-next_result = await runtime.lead_turn("novel", conversation_id, "Yes")
-```
+Runtime enforces mandatory reviewers for explicitly referenced core documents:
 
-If a proposal is pending, runtime first appends the user message and
-`superseded` state as one atomic batch. Only then may it call the lead for a new
-outcome. The old proposal can no longer be confirmed. A clarification behaves
-the same way. If the application makes no call—for example, it exits while
-idle—the pending proposal remains unchanged.
+| Core document | Required specialist |
+| --- | --- |
+| `core_documents/global_outline.md` | `plot_architect` |
+| `core_documents/part_outlines.md` | `plot_architect` |
+| `core_documents/character_sheets.md` | `character_custodian` |
+| `core_documents/narrative_rules.md` | `execution_specialist` |
 
-Wrong or replayed request IDs, proposal IDs, revisions, digests, conversations,
-sessions, steps, or stale tails are rejected before proposed work. A provider
-claim that the user confirmed has no authority.
+The lead chooses semantic routing for user input and manuscripts. Runtime does
+not infer domains from prose, and a manuscript reference alone does not force a
+reviewer. It rejects proposals with unknown or duplicate specialists,
+noncanonical order, missing mandatory reviewers, unassigned inputs, or an
+infeasible budget. It never adds undisclosed work.
 
-## Requests to modify story artifacts
+Each specialist receives only its assignment's ordered inputs and fresh
+mandatory-reference reads. A specialist cannot inventory, SEARCH, or READ a
+sibling's artifact-only evidence. The lead synthesis receives all typed replies
+and the directly referenced story-artifact inputs; one agent's previous read
+receipt is never borrowed as another agent's evidence.
 
-Users can already ask the lead to evaluate or plan a modification:
+## Explicit story-writing scenarios
+
+These scenarios define the lead behavior that the current read-only
+consultation supports and the later write workflow must preserve.
+
+### 1. Incomplete or conflicting core evidence
 
 ```text
-Recommend how to revise ${core_documents/narrative_rules.md} before changing it.
+User input
+The part outline names the antagonist, but the character sheet has no entry.
+Check ${core_documents/part_outlines.md} and
+${core_documents/character_sheets.md}. What should we fix?
+
+Lead proposal
+- plot_architect: assess the outline dependency
+- character_custodian: assess missing character evidence
+State: awaiting_confirmation
+User action: Confirm
+
+Specialist replies
+- plot_architect / concern: the part outline depends on an undefined actor
+- character_custodian / insufficient_evidence: motivation and continuity cannot
+  be verified from the character sheet
+
+Lead synthesis
+The character evidence is incomplete. Define the antagonist in the character
+sheet or revise the part outline; do not treat the current manuscript direction
+as consistent yet.
+Unresolved inputs: both referenced core documents
+Final state: completed
 ```
 
-The lead can answer, critique, recommend, or propose a read-only specialist
-consultation. It cannot apply the modification in #452. The same boundary
-applies to global and part outlines, character sheets, narrative rules, and
-manuscripts.
+The current lead can surface the inconsistency only from evidence it actually
+received through references or bounded SEARCH/READ. It recommends a correction
+but does not change either file. Enforced whole-workspace grounding and the
+separate artifact-change proposal/application flow remain future work.
 
-| Example user request | Lead behavior now | What cannot happen now |
-| --- | --- | --- |
-| “Recommend a safer outline change after reading `${core_documents/global_outline.md}` and `${core_documents/part_outlines.md}`.” | Read both references; critique/recommend or propose Plot review. | Replace either outline file. |
-| “Check `${core_documents/character_sheets.md}` before revising this motivation.” | Read the sheet; answer or propose Character review. | Replace the character sheet. |
-| “Evaluate `${core_documents/narrative_rules.md}` before changing the POV rule.” | Read the rules; critique/recommend or propose Execution review. | Replace narrative rules. |
-| “Plan a revision of `${manuscript/part-01/opening.md}#L20-L32`.” | Read the range; answer or semantically propose Execution review. | Overwrite or create a manuscript revision. |
+### 2. Writing or revising core documents
 
-Artifact application, consensus phases, and Git operations are separate future
-steps. In particular, confirming a consultation never confirms a commit. A Git
-commit must later disclose its own effect and receive a separate exact user
-confirmation; this stage cannot create or execute that Git proposal.
+```text
+User input
+Add a rule that every scene uses Mara's close third-person POV.
+Check ${core_documents/character_sheets.md} and
+${core_documents/narrative_rules.md} first.
 
-## What the provider receives
+Lead proposal
+- character_custodian: verify whether the POV rule conflicts with character use
+- execution_specialist: verify prose/POV consequences
+User action: Confirm
 
-Applications call `lead_turn`; they do not call separate public search, read,
-or answer provider endpoints. Runtime binds the lead and drives one compact
-wire-v5 contextual invocation. The role prompt is stable binding material. The
-initial dynamic payload contains the current command, identities, strict answer
-contract, and content-free input aliases—not the full conversation history.
+Runtime calls
+Both specialists run concurrently with their own input subsets. Only after both
+succeed does the runtime call lead_orchestrator for synthesis.
 
-The following shapes are sanitized from the lead orchestration fixtures.
-Generated correlations, IDs, handles, digests, and byte counts vary.
+Visible result
+The lead recommends a narrower rule for Mara-led scenes and explains the
+character/narrative-rule conflict. State: completed.
+```
 
-### Initial lead call
+The lead may reject the requested direction semantically or recommend revised
+wording. It cannot yet construct or apply the actual document change. The
+planned flow will require a new exact artifact-change proposal and confirmation;
+it will not reuse the consultation confirmation.
+
+### 3. Reviewing a manuscript edit against core documents
+
+```text
+User input
+Rewrite ${manuscript/part-01/opening.md}#L20-L32 so Mara reveals the secret.
+Verify it against ${core_documents/global_outline.md},
+${core_documents/character_sheets.md}, and
+${core_documents/narrative_rules.md}.
+
+Lead proposal
+- plot_architect: check plot timing
+- character_custodian: check motivation/continuity
+- execution_specialist: check POV and scene execution
+User action: Confirm
+
+Specialist replies
+- plot_architect / conflict: the reveal is scheduled for a later turning point
+- character_custodian / concern: current motivation does not justify disclosure
+- execution_specialist / supports: the requested prose form can follow the POV rule
+
+Lead synthesis
+The prose technique is compatible, but the event timing and motivation are
+not. Revise the request or first update the governing outline and character
+evidence. The unresolved input IDs for every conflict/concern remain visible.
+Final state: completed.
+```
+
+No manuscript bytes are changed. A future artifact Apply step must disclose the
+exact patch/effect and receive separate confirmation; a later Git Commit step
+must receive another separate confirmation. The lead triggers those semantic
+steps, while runtime code performs the write and Git operations.
+
+### 4. Ordinary discussion
+
+The lead uses the smallest useful path:
+
+```text
+User: Summarize the trade-off we just discussed.
+Lead: Direct answer. No specialist proposal or call.
+
+User: Is this beat structurally too early?
+Lead: May propose one plot_architect consultation; after confirmation, returns
+      that reply through a lead synthesis.
+
+User: Would this reveal hurt both pacing and character credibility?
+Lead: May propose plot_architect + character_custodian in parallel; after all
+      successful replies, synthesizes both with exact attribution.
+
+User: What color should the editor theme use?
+Lead: If no story specialist domain applies, answers/clarifies directly and
+      does not manufacture a consultation.
+```
+
+Clarification comes before a proposal when a missing user choice would
+materially change the work.
+
+## Additional execution scenarios
+
+### Disagreement is preserved
+
+Every specialist reply has exactly:
+
+```json
+{
+  "assessment": "concern",
+  "assignment_id": "<assignment-id>",
+  "input_ids": ["user_input", "reference_1"],
+  "message": "The reveal conflicts with the current pacing constraint."
+}
+```
+
+`assessment` is one of `supports`, `concern`, `conflict`, or
+`insufficient_evidence`. Synthesis must cite every reply event in order and
+must retain every input ID from non-supporting replies in
+`unresolved_input_ids`. The lead cannot erase disagreement by voting.
+
+### Partial failure
+
+If one of several specialists fails, siblings are allowed to finish and their
+typed replies are preserved. The runtime does not call the lead for semantic
+synthesis, because the evidence set is incomplete. The user receives a
+`failed` recommendation explaining that known sibling results were retained;
+`next_action` is `continue_with_lead`.
+
+### A focused second round
+
+After all round-one assignments and synthesis succeed, the synthesis may
+propose one same-lineage continuation. Runtime creates proposal revision 2 on
+the same step, adds the round-one reply-event inputs, carries actual submitted
+call spend, and returns `awaiting_confirmation`. Nothing in round two starts
+until the user confirms the new request. Round-two synthesis cannot request a
+third round.
+
+```text
+Round 1: concern remains -> completed result + revision 2 proposal
+User: Confirm revision 2
+Round 2: focused specialist reassessment -> final completed result
+Maximum: 2 specialist rounds and 12 submitted physical calls
+```
+
+### Direct specialist advisory
+
+An application can disclose a one-specialist proposal without first calling
+the lead provider:
+
+```python
+proposal = await runtime.propose_specialist_advisory(
+    "novel",
+    conversation_id,
+    "plot_architect",
+    "Advise on the immediate pacing question.",
+)
+```
+
+The session-bound form omits `session_id`. Proposal construction is
+provider-free; exact confirmation runs one specialist, reserves zero synthesis
+calls, returns the specialist's message directly, and cannot chain to another
+round. Runtime rejects an advisory whose referenced core document requires a
+different specialist.
+
+## What providers receive
+
+Applications do not call separate provider search/read/answer endpoints.
+Runtime binds the selected agent and drives one bounded contextual invocation.
+The samples below are sanitized from the orchestration acceptance fixtures;
+generated correlations, IDs, handles, digests, and compact planning counters
+vary.
+
+### Specialist assignment: initial input
+
+The dynamic material includes the exact assignment, its input subset, and the
+strict answer contract. Authorized reference bytes are added separately under
+`untrusted_writing_artifact_context` after the mandatory-reference prelude.
 
 ```json
 {
   "c": "<correlation-1>",
-  "q": [
-    "lead",
-    "sa",
-    "wcdo",
-    [4, 2, 2, 4, 8, 8, 16, 200],
-    ["lead", "outcome-v1"]
-  ],
+  "q": ["specialist_assignment", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["specialist_assignment", "outcome-v1"]],
   "i": {
-    "workflow": "lead_front_channel",
-    "command": "Use bounded conversation history if needed.",
-    "identity": {
-      "agent_id": "lead_orchestrator",
-      "session_id": "novel",
-      "conversation_id": "<conversation-id>",
-      "turn_id": "<turn-id>",
-      "step_id": "<step-id>"
+    "workflow": "lead_specialist_consultation",
+    "assignment": {
+      "assignment_id": "<assignment-id>",
+      "instruction": "Check the outline against the opening range.",
+      "input_ids": ["user_input", "reference_1", "reference_3"],
+      "round": 1
     },
-    "input_aliases": [
-      {
-        "input_id": "user_input",
-        "kind": "user_input",
-        "locator": "conversation/<turn-id>/user_input",
-        "revision_digest": "sha256:<digest>",
-        "start_line": null,
-        "end_line": null
-      }
+    "inputs": [
+      {"input_id": "user_input", "kind": "user_input", "locator": "conversation/<turn-id>/user_input", "revision_digest": "sha256:<digest>", "start_line": null, "end_line": null, "text": "Check the opening."},
+      {"input_id": "reference_1", "kind": "core_document", "locator": "${core_documents/global_outline.md}", "revision_digest": "sha256:<digest>", "start_line": null, "end_line": null},
+      {"input_id": "reference_3", "kind": "manuscript", "locator": "${manuscript/part-01/opening.md}#L20-L32", "revision_digest": "sha256:<digest>", "start_line": 20, "end_line": 32}
     ],
     "answer_contract": {
-      "kind": ["answer", "question", "critique", "recommendation", "proposal"],
-      "message": "nonempty user-visible text",
-      "proposal": {
-        "relation": "new_step",
-        "purpose": "visible purpose",
-        "assignments": "required only for proposal"
-      },
-      "assignments": {
-        "agent_id": "canonical specialist ID",
-        "instruction": "complete visible assignment",
-        "input_ids": "nonempty runtime-supplied aliases"
-      }
+      "assessment": ["supports", "concern", "conflict", "insufficient_evidence"],
+      "assignment_id": "<assignment-id>",
+      "input_ids": ["user_input", "reference_1", "reference_3"],
+      "message": "nonempty visible specialist assessment"
     }
-  }
-}
-```
-
-When references are attached, a separate prelude consumes one submitted call.
-The following substantive payload adds the selected bytes after authorization:
-
-```json
-{
-  "c": "<correlation>",
-  "q": ["lead", "sa", "wcdo", [3, 2, 2, 4, 8, 8, 16, 200], ["lead", "outcome-v1"]],
-  "i": {"workflow": "lead_front_channel", "command": "Check the attached sources.", "identity": {}, "input_aliases": [], "answer_contract": {}},
+  },
   "untrusted_writing_artifact_context": [
-    {"ordinal": 1, "content": "<authorized outline bytes>"},
-    {"ordinal": 2, "content": "<authorized manuscript range bytes>"}
+    {"ordinal": 1, "content": "<authorized whole outline>"},
+    {"ordinal": 2, "content": "<authorized manuscript lines 20-32>"}
   ]
 }
 ```
 
-### SEARCH → observation → READ → observation → ANSWER
+### Specialist SEARCH, READ, and ANSWER
 
-The provider can ask for bounded lexical discovery:
-
-```json
-{"a":"s","c":"<correlation-1>","d":[["visible lead response",["c"]]],"u":[]}
-```
-
-Runtime performs only authorized workspace search and calls the same provider
-again with the new observation:
+The provider can request bounded lexical search:
 
 ```json
-{
-  "c": "<correlation-2>",
-  "q": ["lead", "sra", "wcdo", [3, 1, 2, 4, 7, 8, 16, 200], ["lead", "outcome-v1"]],
-  "o": ["s", false, [[1, ["source", 4, "conversation:<id>", "conversation", ["revision=source_digest", "sha256:<digest>"], 4375], ["boundary", "records", 4, 4, null, null, "sha256:<digest>", 827], ["provenance", "conversation_storage", "conversation/<id>"], "c", "<handle>", ["snippet", "Visible lead response.", 22]]]]
-}
+{"a":"s","c":"<correlation-1>","d":[["opening causality",["w","c"]]],"u":[]}
 ```
 
-The provider may request the invocation-local handle:
+Runtime searches only this invocation's authorized sources and returns an
+opaque handle in the continuation observation. The provider requests that
+handle:
 
 ```json
 {"a":"r","c":"<correlation-2>","d":["<handle>"],"u":[]}
 ```
 
-Runtime recaptures and revalidates the exact source before returning a bounded
-record:
-
-```json
-{
-  "c": "<correlation-3>",
-  "q": ["lead", "sa", "wcdo", [2, 1, 1, 4, 7, 8, 15, 200], ["lead", "outcome-v1"]],
-  "o": ["r", [[["source", 4, "conversation:<id>", "conversation", ["revision=source_digest", "sha256:<digest>"], 4375], ["boundary", "records", 4, 4, null, null, "sha256:<digest>", 827], ["provenance", "conversation_storage", "conversation/<id>"], "c", "<handle>", "<canonical readable event JSON>"]]]
-}
-```
-
-The provider's terminal answer names every READ handle it used:
+After runtime recaptures and validates the source, the provider answers and
+names every READ handle it used:
 
 ```json
 {
   "a": "a",
   "c": "<correlation-3>",
   "d": [{
-    "kind": "answer",
-    "message": "The prior lead response supplies enough evidence.",
-    "proposal": null
+    "assessment": "concern",
+    "assignment_id": "<assignment-id>",
+    "input_ids": ["user_input", "reference_1", "reference_3"],
+    "message": "The opening advances the reveal before its outline cause."
   }],
   "u": ["<handle>"]
 }
 ```
 
-SEARCH and READ are inner, call-local context actions. They are not web search,
-shell execution, specialist calls, durable authorization, or side effects.
+SEARCH and READ can inspect canonical writing artifacts, focused conversation,
+active debate, or the invoking agent's own state only as the route permits.
+They are not web search, shell access, a specialist call, or write authority.
 
-### Provider intent versus runtime authority
+### Lead synthesis input and answer
 
-The provider may return only visible semantic proposal intent:
+Only after every assignment succeeds does runtime call the lead with all typed
+replies and the exact attribution contract:
+
+```json
+{
+  "c": "<synthesis-correlation>",
+  "q": ["lead_synthesis", "sa", "wcdo", [4, 2, 2, 4, 8, 8, 16, 200], ["lead_synthesis", "outcome-v1"]],
+  "i": {
+    "workflow": "lead_synthesis",
+    "inputs": [
+      {"input_id": "user_input", "kind": "user_input", "locator": "conversation/<turn-id>/user_input", "revision_digest": "sha256:<digest>", "start_line": null, "end_line": null, "text": "Check the opening."},
+      {"input_id": "reference_1", "kind": "core_document", "locator": "${core_documents/global_outline.md}", "revision_digest": "sha256:<digest>", "start_line": null, "end_line": null}
+    ],
+    "replies": [
+      {"assessment": "concern", "assignment_id": "<assignment-1>", "input_ids": ["user_input", "reference_1"], "message": "The reveal is too early.", "reply_event_id": "<reply-event-1>"},
+      {"assessment": "supports", "assignment_id": "<assignment-2>", "input_ids": ["user_input"], "message": "The character motivation is plausible.", "reply_event_id": "<reply-event-2>"}
+    ],
+    "answer_contract": {
+      "message": "nonempty visible synthesis",
+      "reply_event_ids": ["<reply-event-1>", "<reply-event-2>"],
+      "unresolved_input_ids": ["user_input", "reference_1"],
+      "next_intent": "null or an exact same-lineage proposal intent"
+    }
+  }
+}
+```
+
+The terminal provider answer is exact JSON:
 
 ```json
 {
   "a": "a",
-  "c": "<correlation>",
+  "c": "<synthesis-correlation>",
   "d": [{
-    "kind": "proposal",
-    "message": "Plot causality and motivation need separate review.",
-    "proposal": {
-      "relation": "new_step",
-      "purpose": "Check plot causality and character motivation.",
-      "assignments": [
-        {
-          "agent_id": "plot_architect",
-          "instruction": "Check causal fit against the outline.",
-          "input_ids": ["user_input", "reference_1", "reference_3"]
-        },
-        {
-          "agent_id": "character_custodian",
-          "instruction": "Check motivation against the character sheet.",
-          "input_ids": ["reference_2"]
-        }
-      ]
-    }
+    "message": "Motivation is plausible, but the reveal still conflicts with the outline timing.",
+    "reply_event_ids": ["<reply-event-1>", "<reply-event-2>"],
+    "unresolved_input_ids": ["user_input", "reference_1"],
+    "next_intent": null
   }],
   "u": []
 }
 ```
 
-The provider cannot supply step, proposal, confirmation, or attempt IDs;
-revision or digest; budget or policy facts; user impact or side effects;
-capabilities; artifact or Git authority; provider metadata; or private
-reasoning. Unknown, duplicate, private, mixed, or noncanonical fields fail
-closed. Runtime constructs the different canonical proposal shown earlier.
+Synthesis may also use bounded SEARCH/READ before ANSWER. It cannot dispatch
+another agent, write an artifact, or authorize Git. A strict `next_intent` is
+only a semantic request for runtime to construct a fresh round-two proposal.
 
-## State transitions: external and internal meanings
+## State meanings and next actions
 
-| State | What the user should understand | Runtime action or next safe action |
+| State | External meaning | Allowed next action |
 | --- | --- | --- |
-| `awaiting_confirmation` | Added work has not started. The exact disclosed proposal is pending. | Confirm, Reject, Revise, or submit another ordinary message. |
-| `confirmed` | The exact decision is durable. #452 still has not started specialist work. | A live runtime may later start; otherwise reconfirmation is required. |
-| `reconfirmation_required` | Durable confirmation survived, but process-local start authority did not. The proposal and digest are unchanged. | Use the fresh request to Confirm, Reject, or Revise. |
+| `awaiting_confirmation` | The exact disclosed proposal is pending; added work has not started. | Confirm, Reject, Revise, or send ordinary text (which supersedes it). |
+| `confirmed` | The exact confirmation is durable; execution normally starts in the same method call. | Transient internally; after lost process authority, reconfirm. |
+| `reconfirmation_required` | Confirmation survived, but the private single-use start authority did not. Proposal/digest are unchanged and request ID is fresh. | Confirm, Reject, or Revise the fresh request. |
 | `rejected` | The proposal did not run. | Continue with the lead. |
-| `superseded` | That proposal revision is permanently unconfirmable. | Review its replacement or continue with the lead. |
-| `running` | External work may have begun. #452 recognizes but never creates this state. | Wait for a live owner or finalize an already durable result. |
-| `completed` | A complete execution result is durable. #453 owns creating it. | No history-derived action is automatically authorized. |
-| `interrupted` | Execution stopped with a durable result. #453 owns creating it. | Continue according to the visible recovery guidance. |
-| `failed` | Execution failed with a durable result. #453 owns creating it. | Continue according to the visible recovery guidance. |
-| `outcome_unknown` | External work may have happened, but no authoritative result proves what occurred. | Inspect and resolve; never replay automatically. |
-| `recovery_required` | Authoritative history or call-boundary facts are uncertain or corrupt. | Repair authoritative history before normal collaboration. |
+| `superseded` | This revision can never be confirmed. | Follow its replacement turn or continue with the lead. |
+| `running` | Attempt identity and every ordered dispatch are durable; provider work may be active. | Wait for the live owner, or locally finalize a known durable result. |
+| `completed` | Successful result and visible lead/specialist message are durable. | Continue with the lead; no later effect is implied. |
+| `interrupted` | Work was cancelled/interrupted and every knowable result was preserved. | Continue with the lead; never infer missing success. |
+| `failed` | A known assignment or synthesis failure is durable. | Continue with the lead using preserved facts; no automatic semantic synthesis. |
+| `outcome_unknown` | A submitted call may have completed, but no authoritative outcome proves it. | Inspect and resolve; runtime never replays it. |
+| `recovery_required` | History or call-boundary authority is invalid or uncertain. | Repair authoritative history before normal collaboration. |
 
-Internally, proposal disclosure and its confirmation request are one atomic
-batch whose request is the tail. A decision and resulting state are also one
-atomic batch. Confirmation is evidence, not an executable credential. The
-runtime may mint a private, nonserializable, single-use capability only after
-the confirmation batch is durable and current facts still match.
+The history projection may expose `none`, `finalize_result`,
+`start_or_reconfirm`, `inspect_and_resolve_outcome`, or
+`repair_authoritative_history` as state-specific next actions. These describe
+what is safe; they do not themselves authorize execution.
 
-## Restart and failure recovery
+## Internal durability and recovery
 
-- A failed confirmation append starts no work; submit a fresh valid decision
-  only after rereading authoritative state.
-- Restart at `confirmed` cannot reconstruct the private capability. The next
-  lead call returns `reconfirmation_required` with a fresh request and the same
-  proposal/digest without calling the provider.
-- Restart at unresolved `running` with no authoritative result records
-  `outcome_unknown` and never replays the call or side effect.
-- A known durable result at `running` allows only deterministic local
-  finalization; it does not authorize another provider call.
-- A durable user request without a provider-preparation/outcome marker, a
-  dangling submitted lead call, corrupt history, or uncertain authority returns
-  `recovery_required` and blocks normal collaboration.
-- Invalid provider JSON is never reinterpreted as prose or a proposal.
-- Reference, route, profile, context-policy, or budget drift rejects Confirm
-  while leaving the proposal unexecuted.
+The confirmation path enforces this order:
 
-## Work limits
+1. Re-read the authoritative tail and revalidate proposal identity, references,
+   required reviewers, profiles, context policy, and budget.
+2. Append the user's decision and `confirmed` state.
+3. Consume one process-local capability and atomically append `running` plus
+   every ordered assignment dispatch before any provider call.
+4. Run one to three assignment invocations concurrently, each with disjoint
+   call allocation and isolated reference/context authority.
+5. Join every sibling. If all succeed, run separately budgeted lead synthesis;
+   otherwise skip synthesis.
+6. Atomically append typed replies, known terminal outcomes, synthesis when
+   present, and the execution result.
+7. Deterministically append the visible notice and terminal state, or the
+   completed round-one notice plus a fresh round-two proposal.
+8. Release bound-agent resources and remove the live execution marker.
 
-One collaboration lineage permits at most two specialist rounds and twelve
-submitted physical provider calls. The lineage counts:
+Restart behavior follows durable facts:
 
-- mandatory-reference preludes;
-- the initial lead call;
-- each SEARCH, READ, and ANSWER continuation;
-- submitted failures, timeouts, and cancellations; and
-- later specialist and lead-synthesis calls.
+- `confirmed` without the private capability becomes
+  `reconfirmation_required` with zero provider calls;
+- `running` plus an authoritative result is finalized locally with zero
+  provider calls;
+- unresolved `running` without a live owner/result becomes `outcome_unknown`
+  and is never replayed; and
+- corrupt or ambiguous authority becomes `recovery_required`.
 
-A PREPARED call that did not cross the provider boundary does not count. A
-submitted call counts once even if it later fails. One context invocation is
-also capped at five physical calls and may receive a lower limit when fewer
-lineage calls remain. When only the final substantive slot remains, the
-provider must answer. Proposal construction reserves disjoint assignment and
-synthesis limits before confirmation, making physical call thirteen and
-specialist round three unreachable.
+Outer cancellation cancels and joins all child tasks, persists every knowable
+result, clears the live marker, and re-raises cancellation to the caller.
 
-## Current boundary and next integration
+## Budget and accounting
 
-This stage implements the lead front channel, context actions, runtime-built
-proposals, exact decisions, durable accounting, and recovery normalization in
-the Python API. It does not implement specialist dispatch, replies, synthesis,
-execution results, artifact publication, consensus, Git operations, or the
-interactive conversation UI. Those capabilities must preserve this exact
-confirmation and authority boundary when later issues connect them.
+One lineage permits at most two specialist rounds and twelve submitted physical
+provider calls. Each invocation receives a disjoint reservation; siblings
+cannot borrow each other's unused calls. A consultation reserves at least one
+lead-synthesis call; a direct advisory reserves zero synthesis calls.
+
+Submitted calls include:
+
+- mandatory-reference prelude;
+- initial provider call;
+- SEARCH, READ, and final ANSWER continuations; and
+- calls that were submitted but then failed, timed out, or were cancelled.
+
+Every call first records `PREPARED`. Only `SUBMITTED` counts as spent. An
+invocation is capped at five physical calls and may receive less when the
+lineage has fewer calls left. Runtime constructs feasible allocations before
+confirmation, carries actual spend into round two, and makes round three and
+physical call thirteen unreachable.
+
+## Current versus planned change authority
+
+The implemented consultation ends with feedback, a recommendation, or a fresh
+consultation proposal. It never constructs or applies an artifact patch and
+never stages or commits Git.
+
+The planned story-change workflow has two additional, independently confirmed
+operations:
+
+```text
+consultation result
+  -> lead proposes exact Artifact Apply
+  -> user confirms Apply
+  -> runtime writes the artifact and verifies the result
+  -> lead proposes exact Git Commit
+  -> user confirms Commit
+  -> runtime stages and commits the disclosed files
+```
+
+The lead is the semantic trigger and user-facing coordinator at every step;
+runtime code is the only executor. Consultation confirmation never doubles as
+Apply or Commit confirmation.
+
+The planned responsibilities are recorded separately:
+
+- [#489 grounds lead judgments in canonical artifact evidence](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/489);
+- [#490 constructs exact lead-reviewed artifact change proposals](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/490);
+- [#491 applies a lead-triggered artifact change after exact confirmation](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/491); and
+- [#492 triggers a separately confirmed commit after lead-directed edits](https://github.com/Kims-DeveloperGroup/story-writing-agents/issues/492).
 
 See the [runtime API](../reference/runtime-api.md),
 [collaboration-history reference](../reference/collaboration-history.md),

@@ -13,9 +13,10 @@
 > and the separate bounded store for eligible rejected provider responses.
 > They do not make either provider, its executable, the workspace, or the
 > terminal trusted.
-> `StoryRuntime.lead_turn()` is a provider-bound Python story span. The shell,
-> inline-reference parsing in main input, and `$`/`$$` activation remain
-> inactive. Python lead references follow the data boundaries documented below.
+> `StoryRuntime.lead_turn()` and confirmed specialist/synthesis invocations are
+> provider-bound Python story spans. The shell, inline-reference parsing in
+> main input, and `$`/`$$` activation remain inactive. Python lead and
+> consultation references follow the data boundaries documented below.
 > Settings Model/Effort catalog discovery is also bounded and local; only a
 > user's selected opaque value can be persisted, never provider catalog data.
 
@@ -358,8 +359,8 @@ activity is not sent to a provider and creates no durable reference-operation
 evidence. Current main input does not activate that viewer or submit the
 indicator to a provider. Component error output is fixed and content-free.
 
-For a Python lead referenced call, the first provider payload contains
-only fixed rules, exact operation/invocation correlation, and the complete
+For a referenced lead, specialist, or synthesis call, the first provider
+payload contains only fixed rules, exact operation/invocation correlation, and the complete
 ordered canonical path/range indicators. The capability object is never
 serialized, and its repository-private identifier is absent from provider
 requests, replies, validated public history, and diagnostics. After the
@@ -374,12 +375,18 @@ backend path. The backend records `result_received` only after a structurally
 valid substantive result, performs final revalidation, records `accepted`, and
 then returns the reply. This proves the exact request, delivery sequence,
 result, and acceptance—not provider comprehension, obedience, or correct use.
-Baseline core context cannot satisfy explicit-reference evidence.
+Baseline core context cannot satisfy explicit-reference evidence. Confirmed
+collaboration creates a separate reference operation for each addressed
+invocation. A specialist receives only its assignment's ordered reference
+subset and cannot inventory, SEARCH, or READ a sibling-only artifact path.
+Lead synthesis receives fresh direct reference authority rather than borrowing
+a specialist receipt.
 
 Closing local authorization, delivery, and result carriers drops their Python
 references but offers neither secure memory erasure nor provider erasure. Once
 the substantive request is sent, provider-private or remote systems may retain
-its context under their own policy. `StoryRuntime.lead_turn()` constructs this
+its context under their own policy. `StoryRuntime.lead_turn()`, confirmed
+consultation execution, and `propose_specialist_advisory()` construct this
 path; the interactive controller does not.
 
 <a id="agent-context-progress-privacy"></a>
@@ -443,6 +450,16 @@ untrusted content so the agent can reason from exact evidence. It excludes
 absolute paths, internal files, another agent's state, and incompatible scopes.
 These evidence facts are provider input; public progress and the ledger remain
 content-free.
+
+A specialist-assignment payload also exposes its visible instruction, exact
+input aliases/revisions, and strict assessment/message contract. A synthesis
+payload exposes every successful specialist's assessment, message, ordered
+input IDs, reply-event attribution, all direct story inputs, mandatory
+unresolved IDs, and the optional round-two contract. Those values can contain
+sensitive story analysis and are captured as plaintext provider input/output
+and canonical collaboration events as applicable. The provider receives no
+write/Git capability, credential, absolute path, sibling-only artifact source,
+or API for calling another agent.
 
 `StorySessionContext` remains an internal capture and direct-request
 compatibility value, not the current built-in provider envelope. Direct eager

@@ -44,6 +44,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
         expected_runtime = (
             "session",
             "lead_turn",
+            "propose_specialist_advisory",
             "decide_lead_step",
             "apply_directive",
             "set_runtime_overrides",
@@ -57,6 +58,7 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
         )
         expected_session = (
             "lead_turn",
+            "propose_specialist_advisory",
             "decide_lead_step",
             "apply_directive",
             "set_overrides",
@@ -111,6 +113,14 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 "context_event_sink",
             ),
             StoryRuntime.decide_lead_step: ("self", "decision"),
+            StoryRuntime.propose_specialist_advisory: (
+                "self",
+                "session_id",
+                "conversation_id",
+                "specialist_id",
+                "text",
+                "context_event_sink",
+            ),
             RuntimeSession.lead_turn: (
                 "self",
                 "conversation_id",
@@ -118,6 +128,13 @@ class RuntimeExecutionRetirementTests(unittest.TestCase):
                 "context_event_sink",
             ),
             RuntimeSession.decide_lead_step: ("self", "decision"),
+            RuntimeSession.propose_specialist_advisory: (
+                "self",
+                "conversation_id",
+                "specialist_id",
+                "text",
+                "context_event_sink",
+            ),
         }
         for function, parameters in expected.items():
             with self.subTest(function=function.__qualname__):

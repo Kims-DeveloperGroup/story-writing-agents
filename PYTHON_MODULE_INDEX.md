@@ -479,7 +479,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ProviderJsonEncodingError`; and pure `canonical_provider_json` and
   `account_provider_payload`. The compact insertion-ordered encoder emits
   strict UTF-8 JSON with `ensure_ascii=False`; schema and payload component
-  counts partition every emitted byte exactly. Binding components permit
+  counts partition every emitted byte exactly. The physical-call vocabulary
+  includes provider-neutral collaboration-initial and
+  collaboration-continuation roles for contextual lead, specialist,
+  synthesis, and advisory calls without importing collaboration schemas.
+  Binding components permit
   distinct content-free core-document path identities. Raw mandatory-reference
   bytes are a validated non-additive subset, and missing or malformed provider
   token metadata is never estimated.
@@ -577,7 +581,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   whole source exceeds the whole-handle cap. The module also owns record
   boundaries, deterministic NFKC/casefold literal search, bounded artifact
   context expansion, scan accounting, capture/re-read drift detection, and
-  fixed source limits and failures.
+  fixed source limits and failures. A writing-artifact adapter may receive one
+  immutable exact allowed-path set; inventory and capture then fail closed for
+  missing or out-of-authority paths so parallel invocations cannot discover a
+  sibling's artifact sources.
 - **Direct internal dependencies:** `agent_context.actions`,
   `agent_context.manifest`, `conversations`, `errors`, `models`, `workspace`,
   `writing_artifacts.filesystem_sources`, `writing_artifacts.references`, and
@@ -645,7 +652,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   session enforce that same tuple and canonicalize accepted structured results
   into the existing internal answer string before domain validation. An
   optional provider-neutral invocation kind and strict JSON-object result
-  contract extend that same tuple for lead execution without importing a story
+  contract extend that same tuple for lead, specialist-assignment,
+  lead-synthesis, and specialist-advisory execution without importing a story
   domain, while an optional positive physical-call limit bounds the whole
   invocation including its mandatory-reference prelude and restricts the final
   substantive slot to ANSWER. The service exposes its immutable composite
@@ -673,7 +681,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   separate from source search/read, use the unchanged provider prelude before
   the substantive action budget, and must complete before verified ledger
   commit. The two failure-fact helpers attach and recover only validated
-  content-free physical call facts without replacing the original exception.
+  content-free physical call facts without replacing the original exception;
+  they additionally expose the exact ordered cumulative SUBMITTED accountings
+  and whether an unaccounted submission may be uncertain.
   Each substantive raw result carries one required, synchronous, repr-hidden,
   comparison-excluded `ContextProviderCallFinalizer`; the service invokes it
   exactly once after semantic acceptance or rejection, cancellation, or a
@@ -893,8 +903,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   `create_session_with_access(session_id)`,
   `reopen_session_with_access(session_id)`, and
   `pause_session_and_release_access(session_id)`.
-  The class also exposes exact active-roster execution-profile inspection and
-  confirmation/thread-status reads. Package-internal
+  The class also exposes exact active-roster execution-profile inspection, a
+  content-free provider/model/effort-and-source fingerprint for each active
+  profile, and confirmation/thread-status reads. Package-internal
   `BackendRuntimeConfigurationCandidate` plus the backend's stage, validate,
   commit, discard, and recovery-reporting seams coordinate one quiescent hot
   activation without adding a project-root export.
@@ -2969,11 +2980,12 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/conversations/__init__.py`
 - **Responsibility:** Provide the stable subject-conversation and schema-v2
   collaboration contract import boundary.
-- **Supported surface:** Exactly 93 names in `__all__`: the retained immutable
+- **Supported surface:** Exactly 95 names in `__all__`: the retained immutable
   conversation metadata, visible-event, and bounded-context value contracts;
   the immutable schema-v2 lead intent/result/decision, provider-call accounting,
   event, proposal, state, readable-field/record/context, error, projection, and
-  store contracts defined by the two owning leaves; `CollaborationPayload`; the
+  store contracts defined by the two owning leaves; typed specialist-assessment
+  and lead-synthesis values; `CollaborationPayload`; the
   five `COLLABORATION_*` constants; the
   two digest functions; the eight strict canonical proposal/event/draft/batch
   encode/decode functions; and the five pure collaboration readable/history,
@@ -3058,11 +3070,14 @@ every intermediate arrow. The current runtime graph is acyclic.
   failure taxonomy for batch/event conflicts, stale sequence, invalid
   candidates, or corrupt existing history. The lead values carry an exact
   structured confirmation decision and the visible persisted outcome of an
-  ordinary or decision turn without exposing runtime capability authority. The
-  projection derives rounds and unique submitted physical calls from v2
-  history, and candidate validation admits the exact ordinary-message plus
-  pending-step supersession batch while preserving structured confirmation for
-  confirm, reject, and revise. The conversations facade exposes
+  ordinary or decision turn without exposing runtime capability authority.
+  Each decision result pairs its decided proposal with the authoritative
+  resulting `LeadTurnResult`. The projection derives rounds and unique
+  submitted physical calls from v2 history, correlates results only to their
+  exact active proposal revision, and admits exact start, typed reply/synthesis,
+  result, terminal-finalization, known-fact outcome-unknown, second-round
+  continuation, and ordinary-message supersession batches while preserving
+  structured confirmation for confirm, reject, and revise. The conversations facade exposes
   the same defining objects, while the project-root facade exposes only the
   retained immutable value subset.
 - **Direct internal dependencies:** `conversations.events` and `errors`.
@@ -3091,11 +3106,12 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Source:** `src/story_writing_agents/conversations/events.py`
 - **Responsibility:** Define immutable visible conversation, lead-intent, and
   collaboration event schemas.
-- **Supported surface:** Exactly 63 owning-module names in `__all__`: the three
+- **Supported surface:** Exactly 65 owning-module names in `__all__`: the three
   retained immutable visible-event names; four schema-v2 constants; the closed
   `Lead*` semantic outcome/proposal-intent values; the closed `Collaboration*`
   actors, kinds, directions, inputs, profiles, basis, budget, assignments,
-  proposal, provider-call lifecycle, outcomes, payloads, events, batches,
+  proposal, specialist assessment and exact reply, typed lead synthesis,
+  provider-call lifecycle, outcomes, payloads, events, batches,
   receipts, failures, and errors; `CollaborationPayload`; two canonical digest
   functions; and eight strict proposal/event/draft/batch encode/decode
   functions. The conversations facade exposes every defining object, while
@@ -3103,7 +3119,9 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** `agents` and `errors`.
 - **State, resources, and side effects:** Immutable v1 and v2 values plus
   deterministic identifier, strict UTF-8/size/privacy, actor direction,
-  lead-result closure, proposal closure, 2-round/12-call reservation,
+  lead-result closure, separate definition/execution profile identity,
+  proposal closure, 2-round/12-call reservation, exact reply-input and
+  synthesis-attribution facts, same-lineage continuation intent,
   content-free provider-call role/kind/state accounting, payload, outcome,
   canonical JSON, digest, batch, sequence, and timestamp validation only. Owns
   no mutable state or external resource and performs no import-time I/O.
@@ -4694,21 +4712,31 @@ every intermediate arrow. The current runtime graph is acyclic.
   `RuntimeSession`; package-internal `RuntimeConfigurationCandidate`.
   Directive/override management, async prepare/commit/discard, session/debate/
   context/reference inspection, and quiescent provider-binding release remain.
-  Both runtime facades add async `lead_turn` and `decide_lead_step` without an
-  agent selector. Ordinary turns persist user input before the lead invocation,
-  can supersede an exact pending request, and return one strict visible lead
-  outcome; exact structured decisions confirm, reject, or revise the
-  authoritative proposal tail. The runtime decodes provider-neutral lead
+  Both runtime facades expose async `lead_turn`, `decide_lead_step`, and the
+  separately confirmed one-specialist `propose_specialist_advisory` without a
+  general agent selector. Ordinary turns persist user input before the lead
+  invocation, can supersede an exact pending request, and return one strict
+  visible lead outcome; exact structured decisions confirm, reject, or revise
+  the authoritative proposal tail. Confirm consumes its private capability and
+  returns only after the authoritative execution turn. The runtime decodes provider-neutral lead
   intent, derives required specialist reviewers, authoritative input/profile/
   route/context/budget facts, complete user impact and side effects, then
   constructs and persists the canonical proposal and confirmation request.
   Mandatory attached references retain submitted order and precede optional
   bounded SEARCH/READ discovery. Provider-call PREPARED/SUBMITTED facts are
-  durably appended around the backend context seam. Restart normalization
-  converts capability-less CONFIRMED state to reconfirmation and unresolved
-  RUNNING state to outcome unknown without replay; corrupt history returns a
-  blocking recovery result. Confirmation creates only a private process-local,
-  nonserializable, single-use start capability for the later execution owner.
+  durably appended around generalized lead, specialist-assignment, synthesis,
+  and advisory context seams. Runtime atomically starts RUNNING plus every
+  canonical dispatch, runs one to three specialists concurrently under
+  disjoint call and artifact-source authority, preserves sibling outcomes on
+  failure, synthesizes only after all assignments succeed, and persists typed
+  replies, terminal outcomes, and the exact result before deterministic local
+  finalization. An optional typed continuation intent creates only a same-step
+  second-round proposal requiring fresh confirmation. Restart normalization
+  locally finalizes a result-backed RUNNING step without a provider call and
+  converts unresolved or submission-uncertain work to outcome unknown without
+  replay; corrupt history returns a blocking recovery result. Confirmation
+  creates and execution consumes only a private process-local, nonserializable,
+  single-use capability.
   `converse`, `converse_with_retrieval`, `run_prompt`, `run_draft`,
   and the `Runtime`/`Session` aliases are absent.
 - **Direct internal dependencies:** `agent_context.accounting`,
@@ -4723,14 +4751,20 @@ every intermediate arrow. The current runtime graph is acyclic.
   composed v2 `ConversationStorageServices` bundle, optional RAG service,
   artifact repository, backend snapshot, one workspace-scoped
   `AgentContextService`, quiescent binding state, per-conversation async locks,
-  private confirmed-step capabilities, and the reserved live-execution marker
-  seam. Runtime and bound sessions expose the same storage bundle; no raw
+  private confirmed-step capabilities, and live execution-attempt markers.
+  Runtime and bound sessions expose the same storage bundle; no raw
   schema-v1 event-store injection or property remains. Explicit lead turns may
   bind the lead, authorize ordered references, invoke its provider-neutral
   context lifecycle, append schema-v2 user/lead/proposal/state/accounting events,
-  and retain or retire provider bindings. They never dispatch a specialist,
-  create RUNNING/results, mutate a writing artifact, or publish content.
+  and retain or retire provider bindings. Confirmed consultations additionally
+  create invocation-local exact reference operations, retain isolated bindings,
+  account calls synchronously between awaits, cancel and join parallel tasks,
+  and append idempotently derived start/result/finalization batches. Advisory
+  proposals are provider-free until confirmation and reject a core-document
+  reviewer mismatch. No path mutates or publishes a writing artifact, invokes
+  Git, starts consensus, or exposes provider-native agent orchestration.
 - **Primary verification/documentation:** `tests/test_lead_orchestration.py`,
+  `tests/test_specialist_orchestration.py`,
   `tests/test_public_api_and_cli.py`,
   `tests/test_runtime_reference_integration.py`,
   `tests/test_interactive_management.py`,
@@ -4906,7 +4940,12 @@ every intermediate arrow. The current runtime graph is acyclic.
   inspection operation. `Workspace.read_agent_session_state` returns one
   validated owner's complete session outcomes in stable chronology, while
   `read_agent_state` remains its debate-ID-validating compatibility delegate;
-  topology and serialization details are internal.
+  topology and serialization details are internal. The private
+  `DEFAULT_AGENT_PROMPTS` mapping owns the four prompts installed into a blank
+  workspace and mirrors the role configuration prompts: the lead default
+  distinguishes front-channel and synthesis contracts, while each specialist
+  default requires exact assignment/input attribution, a typed assessment, and
+  advice-only behavior without delegation or mutation.
 - **Direct internal dependencies:** `agents`, `conversations`, `errors`, and
   `models`, plus the `writing_artifacts` facade.
 - **State, resources, and side effects:** Owns topology, path and symlink
@@ -5535,8 +5574,8 @@ every intermediate arrow. The current runtime graph is acyclic.
   `initialize_workspace`, and `FilesystemConversationCatalog`. The 63-name
   conversation-storage facade exports contracts/composition/archive workflow
   only and no concrete filesystem or SQLite adapter. The conversations facade
-  now contains exactly 93 exports; its context and events owners contain 23 and
-  63 respectively, while `agent_context.service` contains 26 direct-module-only
+  now contains exactly 95 exports; its context and events owners contain 23 and
+  65 respectively, while `agent_context.service` contains 26 direct-module-only
   exports and the project-root surface remains unchanged.
 - `models.py` remains a provider-neutral value-contract owner with direct
   dependencies on `agents`, `conversations`, and `errors`.
@@ -5544,7 +5583,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   dependency on `errors`. Neither module changed in this contraction.
 - Generic `AgentBackend`, `BoundAgent`, provider adapter, request/reply,
   prompt, context, and lifecycle seams remain in their established owner
-  modules for later workflow work. No lead/specialist workflow was introduced.
+  modules. The orchestrator composes those seams into confirmed specialist
+  consultation and provider-free advisory workflows without moving provider,
+  storage, reference-authorization, or artifact-mutation ownership.
 - Active filesystem and SQLite selection now return one same-provenance
   `ConversationStorageServices` shape whose authoritative event store supports
   only `append_batch`, `read`, and `read_context`, and whose search port returns

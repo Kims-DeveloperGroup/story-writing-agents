@@ -413,12 +413,13 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
         self.assertTrue(callable(services.event_store.append_batch))
         self.assertFalse(hasattr(services.event_store, "append"))
 
-    def test_all_six_batch_families_append_and_every_split_rolls_back(self) -> None:
+    def test_all_batch_families_append_and_every_split_rolls_back(self) -> None:
         completed = contract_batches(self.metadata.conversation_id)
         completed_names = (
             "proposal",
             "confirmation",
             "running",
+            "calls",
             "result",
             "completion",
         )
@@ -447,7 +448,7 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
 
         unknown_workspace, unknown_metadata, unknown_store = self.fresh_store()
         unknown = contract_batches(unknown_metadata.conversation_id)
-        unknown_names = ("proposal", "confirmation", "running", "unknown")
+        unknown_names = ("proposal", "confirmation", "running", "calls", "unknown")
         for name in unknown_names:
             receipt = unknown_store.append_batch(unknown[name])
             self.assertIs(receipt.status, CollaborationAppendStatus.APPENDED)
@@ -476,17 +477,17 @@ class SQLiteCollaborationEventStoreFirstSliceTests(unittest.TestCase):
             (("proposal",), "confirmation", slice(0, 1)),
             (("proposal", "confirmation"), "running", slice(0, -1)),
             (
-                ("proposal", "confirmation", "running"),
+                ("proposal", "confirmation", "running", "calls"),
                 "result",
                 slice(-1, None),
             ),
             (
-                ("proposal", "confirmation", "running", "result"),
+                ("proposal", "confirmation", "running", "calls", "result"),
                 "completion",
                 slice(-1, None),
             ),
             (
-                ("proposal", "confirmation", "running"),
+                ("proposal", "confirmation", "running", "calls"),
                 "unknown",
                 slice(-1, None),
             ),

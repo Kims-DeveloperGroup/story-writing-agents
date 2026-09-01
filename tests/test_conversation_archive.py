@@ -62,14 +62,14 @@ EMPTY_GOLDEN = (
     b'"value":"d5820aa0c81591e89e32ab06f83181f74e5d6bb68a450e0d255d26227c848e68"}}\n'
 )
 NONEMPTY_WIRE_SHA256 = (
-    "1cf9a30e8ed9c45bc7695b0059267d421f5bb16ba4ae36f02a0c846a96664f73"
+    "86ea6f290c64b93c0808c71ac60eec01296418e5072e1f7f6206a7593f18acf1"
 )
-NONEMPTY_DIGEST = "bda9e5753ff1e46d71f039bc58303e27f6d3730e905c3fb65e79853fd65b7c63"
+NONEMPTY_DIGEST = "669ceae1fb2a4615b190014ac83ef74382a89a431d0458670343480719d635aa"
 REPRESENTATIVE_WIRE_SHA256 = (
-    "fe7388ea67ed20fdc6f72488f0ff5ce637aa214e2d21e6ad42bf31ca405c4439"
+    "efbd4b41b1ff38366421d9fa4cf8d8da0ae3967a6091eece5f95125b69a08659"
 )
 REPRESENTATIVE_DIGEST = (
-    "df17c262d0e657c3b90a2ffbdba2ce1f141dabe23590e53114c4f622affb274b"
+    "ea690a8976b8e2421b2be4ba1d696526cab154a40447df344b08f31269c7f1dd"
 )
 
 
@@ -245,6 +245,7 @@ class ConversationArchiveValueTests(unittest.TestCase):
                 "batch_proposal",
                 "batch_confirmation",
                 "batch_running",
+                "batch_calls",
                 "batch_result",
                 "batch_completed",
                 "batch_unknown",

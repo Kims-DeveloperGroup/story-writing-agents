@@ -47,6 +47,7 @@ from story_writing_agents.conversations import (
     CollaborationInputState,
     CollaborationInterruptionPayload,
     CollaborationInvocationKind,
+    CollaborationLeadSynthesisPayload,
     CollaborationMessagePayload,
     CollaborationProposal,
     CollaborationProviderCallKind,
@@ -54,6 +55,7 @@ from story_writing_agents.conversations import (
     CollaborationProviderCallState,
     CollaborationSideEffect,
     CollaborationSpecialistReplyPayload,
+    CollaborationSpecialistAssessment,
     CollaborationStepKind,
     CollaborationStepState,
     CollaborationStepStatePayload,
@@ -124,6 +126,7 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "message",
                 "assignment_dispatch",
                 "specialist_reply",
+                "lead_synthesis",
                 "step_state",
                 "confirmation",
                 "execution_result",
@@ -208,7 +211,12 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "cancelled",
             ),
             CollaborationTerminalScope: ("assignment", "synthesis"),
-            CollaborationInvocationKind: ("lead", "specialist", "synthesis"),
+            CollaborationInvocationKind: (
+                "lead",
+                "specialist_assignment",
+                "lead_synthesis",
+                "specialist_advisory",
+            ),
             CollaborationProviderCallKind: (
                 "reference_prelude",
                 "initial",
@@ -222,7 +230,11 @@ class CollaborationValueContractTests(unittest.TestCase):
                 "recommendation",
                 "proposal",
             ),
-            LeadProposalRelation: ("new_step", "revise_pending"),
+            LeadProposalRelation: (
+                "new_step",
+                "revise_pending",
+                "continue_lineage",
+            ),
             CollaborationAppendStatus: ("APPENDED", "ALREADY_COMMITTED"),
             CollaborationAppendFailure: (
                 "stale_sequence",
@@ -265,6 +277,16 @@ class CollaborationValueContractTests(unittest.TestCase):
             CollaborationProviderCallKind.INITIAL,
             CollaborationProviderCallState.SUBMITTED,
         )
+        specialist_reply = next(
+            event.payload
+            for event in history
+            if type(event.payload) is CollaborationSpecialistReplyPayload
+        )
+        lead_synthesis = next(
+            event.payload
+            for event in history
+            if type(event.payload) is CollaborationLeadSynthesisPayload
+        )
         values_and_fields = (
             (USER, ("kind", "agent_id")),
             (
@@ -279,7 +301,14 @@ class CollaborationValueContractTests(unittest.TestCase):
                     "end_line",
                 ),
             ),
-            (proposal.basis.agent_profiles[0], ("agent_id", "profile_fingerprint")),
+            (
+                proposal.basis.agent_profiles[0],
+                (
+                    "agent_id",
+                    "definition_fingerprint",
+                    "execution_fingerprint",
+                ),
+            ),
             (
                 proposal.basis,
                 (
@@ -401,6 +430,33 @@ class CollaborationValueContractTests(unittest.TestCase):
             ),
             (lead_outcome, ("kind", "message", "proposal")),
             (
+                specialist_reply,
+                (
+                    "proposal_id",
+                    "proposal_revision",
+                    "proposal_digest",
+                    "execution_attempt_id",
+                    "assignment_id",
+                    "dispatch_event_id",
+                    "assessment",
+                    "message",
+                    "input_ids",
+                ),
+            ),
+            (
+                lead_synthesis,
+                (
+                    "proposal_id",
+                    "proposal_revision",
+                    "proposal_digest",
+                    "execution_attempt_id",
+                    "message",
+                    "reply_event_ids",
+                    "unresolved_input_ids",
+                    "next_intent",
+                ),
+            ),
+            (
                 provider_call,
                 (
                     "invocation_id",
@@ -437,6 +493,9 @@ class CollaborationValueContractTests(unittest.TestCase):
             batch.events,
             lead_assignment.input_ids,
             lead_intent.assignments,
+            specialist_reply.input_ids,
+            lead_synthesis.reply_event_ids,
+            lead_synthesis.unresolved_input_ids,
         ):
             self.assertIs(type(nested), tuple)
 
@@ -465,8 +524,20 @@ class CollaborationValueContractTests(unittest.TestCase):
                     ATTEMPT_ID,
                     assignment.assignment_id,
                     f"dispatch_{assignment.assignment_id}",
+                    CollaborationSpecialistAssessment.SUPPORTS,
                     "Visible reply.",
+                    assignment.input_ids,
                 )
+            ),
+            CollaborationEventKind.LEAD_SYNTHESIS: CollaborationLeadSynthesisPayload(
+                advisory.proposal_id,
+                advisory.proposal_revision,
+                advisory.proposal_digest,
+                ATTEMPT_ID,
+                "Visible synthesis.",
+                ("reply_event",),
+                (),
+                None,
             ),
             CollaborationEventKind.STEP_STATE: CollaborationStepStatePayload(
                 CollaborationStepState.AWAITING_CONFIRMATION,
@@ -523,6 +594,9 @@ class CollaborationValueContractTests(unittest.TestCase):
             CollaborationEventKind.SPECIALIST_REPLY: {
                 (CollaborationActorKind.SPECIALIST, CollaborationActorKind.LEAD),
                 (CollaborationActorKind.SPECIALIST, CollaborationActorKind.USER),
+            },
+            CollaborationEventKind.LEAD_SYNTHESIS: {
+                (CollaborationActorKind.LEAD, CollaborationActorKind.USER),
             },
             CollaborationEventKind.STEP_STATE: {
                 (CollaborationActorKind.RUNTIME, CollaborationActorKind.USER),
@@ -706,29 +780,29 @@ class CollaborationWireContractTests(unittest.TestCase):
                 encode_collaboration_proposal,
                 decode_collaboration_proposal,
                 proposal,
-                2240,
-                "d3b6ef0502f3f1204b12639c13fa39f852f5129032f3a2ceb90d27da9533cb9a",
+                2543,
+                "86423e08b04001962f1d2ef5a40157f7e397564bfb93e14945f870557259c020",
             ),
             (
                 encode_collaboration_event_draft,
                 decode_collaboration_event_draft,
                 batch.events[0],
-                2521,
-                "7db650b65a1bae5760c4c69ce0e74a47f1ff4d3f31105b02fe08ffd763416bc3",
+                2824,
+                "3e9598e5c6590b735a2e3fd54776ebbbb2573e5c7ee8ebdc6502716c6d939a46",
             ),
             (
                 encode_collaboration_event,
                 decode_collaboration_event,
                 history[0],
-                2724,
-                "0789c3886839ded790ab1dc499ae02730f3ea17cd0aa611f593330244307ab07",
+                3027,
+                "a016d50a1c64bb919010ef4aaa353b0672ff82e219e706c63f845f276b06fdde",
             ),
             (
                 encode_collaboration_batch,
                 decode_collaboration_batch,
                 batch,
-                3174,
-                "9ba571df05b451f0482c84e3b5a378a22af836397f38b86a11a978fffdc8bc3b",
+                3477,
+                "06f9176cadcacad1f87a8e4802385dcc679b77c3ee056e3283e880446062db64",
             ),
         )
         for encoder, decoder, value, size, digest in cases:
@@ -799,13 +873,27 @@ class CollaborationWireContractTests(unittest.TestCase):
                 route_fingerprint=DIGEST_B,
                 side_effects=base.side_effects,
             ),
-            "profile_fingerprint": replace_proposal(
+            "definition_fingerprint": replace_proposal(
                 base,
                 basis=replace(
                     base.basis,
                     agent_profiles=(
                         replace(
-                            base.basis.agent_profiles[0], profile_fingerprint=DIGEST_B
+                            base.basis.agent_profiles[0],
+                            definition_fingerprint=DIGEST_B,
+                        ),
+                        *base.basis.agent_profiles[1:],
+                    ),
+                ),
+            ),
+            "execution_fingerprint": replace_proposal(
+                base,
+                basis=replace(
+                    base.basis,
+                    agent_profiles=(
+                        replace(
+                            base.basis.agent_profiles[0],
+                            execution_fingerprint=DIGEST_A,
                         ),
                         *base.basis.agent_profiles[1:],
                     ),
@@ -932,7 +1020,7 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
     ) -> None:
         self.assertEqual(tuple(events_owner.__all__), COLLABORATION_EVENT_EXPORTS)
         self.assertEqual(tuple(context_owner.__all__), COLLABORATION_CONTEXT_EXPORTS)
-        self.assertEqual(len(conversations.__all__), 93)
+        self.assertEqual(len(conversations.__all__), 95)
         self.assertNotIn("__getattr__", vars(events_owner))
         self.assertNotIn("__getattr__", vars(context_owner))
         self.assertNotIn("__getattr__", vars(conversations))
@@ -941,7 +1029,7 @@ class CollaborationPackageBoundaryTests(unittest.TestCase):
             for name in conversations.__all__
             if name.startswith("Collaboration") or name.startswith("COLLABORATION_")
         }
-        self.assertEqual(len(collaboration_names), 55)
+        self.assertEqual(len(collaboration_names), 57)
         for owner in (events_owner, context_owner):
             for name in owner.__all__:
                 if name.startswith("Collaboration") or name.startswith(
@@ -1051,8 +1139,8 @@ import story_writing_agents
 import story_writing_agents.conversations as facade
 import story_writing_agents.conversations.context as context
 import story_writing_agents.conversations.events as events
-assert len(facade.__all__) == 93
-assert len(events.__all__) == 63
+assert len(facade.__all__) == 95
+assert len(events.__all__) == 65
 assert len(context.__all__) == 23
 assert facade.CollaborationProposal is events.CollaborationProposal
 assert facade.CollaborationEventStore is context.CollaborationEventStore

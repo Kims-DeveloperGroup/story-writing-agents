@@ -4,8 +4,9 @@
 > optional conversation snapshot; one-step and retrieval turns use separate,
 > compatible request families. Content-free explicit-reference read contracts
 > remain available at the direct repository/backend boundary. Python
-> `StoryRuntime.lead_turn()` constructs them for lead references; specialist
-> execution remains unavailable.
+> `StoryRuntime.lead_turn()` constructs them for lead references; confirmed
+> consultations construct a fresh read contract for each specialist and lead
+> synthesis invocation.
 
 Key terms: **definition**—stable context bound to one agent; **request**—dynamic
 data for one provider call; **blackboard**—public debate messages;
@@ -33,6 +34,12 @@ authority: `read_text()` decodes the captured bytes, and provider binding does
 not reread the path. A definition's fingerprint covers the agent, backend,
 language, component identities, and hashes. Runtime bindings are cached by
 `(agent_id, fingerprint)`.
+
+Collaboration proposals persist both a definition fingerprint and a separate
+content-free execution-profile fingerprint. The latter binds the selected
+backend/provider execution profile without embedding credentials, prompt
+bytes, model output, or provider-native state. Confirm rederives both; drift
+rejects execution instead of silently changing the disclosed participant.
 
 | Agent | Contextual P2 core sources in the built-in runtime |
 | --- | --- |
@@ -93,6 +100,48 @@ they are not fields of `AgentRequest`, `ConversationRequest`, or
 candidate, messages, agent state, conversation history, or retrieval
 observations. See the
 [backend boundary](backend-and-sessions.md#referenced-invocation-boundary).
+
+For confirmed collaboration, an assignment receives exactly its ordered input
+IDs and a fresh reference operation for the artifact subset among them. Its
+writing-artifact source adapter has an immutable allowed-path set, so inventory,
+SEARCH, and READ cannot borrow sibling-only evidence. Synthesis is a separate
+lead invocation with the direct story-artifact inputs and all typed replies.
+
+## Specialist reply and lead synthesis
+
+Import the public semantic values from `story_writing_agents.conversations`:
+
+```python
+CollaborationSpecialistAssessment
+CollaborationSpecialistReplyPayload(
+    proposal_id: str,
+    proposal_revision: int,
+    proposal_digest: str,
+    execution_attempt_id: str,
+    assignment_id: str,
+    dispatch_event_id: str,
+    assessment: CollaborationSpecialistAssessment,
+    message: str,
+    input_ids: tuple[str, ...],
+)
+CollaborationLeadSynthesisPayload(
+    proposal_id: str,
+    proposal_revision: int,
+    proposal_digest: str,
+    execution_attempt_id: str,
+    message: str,
+    reply_event_ids: tuple[str, ...],
+    unresolved_input_ids: tuple[str, ...],
+    next_intent: LeadProposalIntent | None = None,
+)
+```
+
+Assessment is exactly `supports`, `concern`, `conflict`, or
+`insufficient_evidence`. The reply must repeat its assignment ID and exact
+ordered input IDs. Synthesis must cite every successful reply event in order
+and cannot omit an input from a non-supporting reply. A non-null `next_intent`
+must be `continue_lineage`, cover the original and reply-event inputs exactly,
+and is accepted only after round one. Round two cannot continue again.
 
 ## Debate request
 

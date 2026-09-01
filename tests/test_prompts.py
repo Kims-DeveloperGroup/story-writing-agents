@@ -123,7 +123,12 @@ class PromptAssemblerTests(unittest.TestCase):
             '"kind": "answer | question | critique | recommendation | proposal"',
             "no surrounding prose or private reasoning",
             "chain-of-thought",
-            "You recommend and propose; you do not execute",
+            "For `lead_synthesis`",
+            '"reply_event_ids": ["every runtime-supplied reply event ID, in order"]',
+            '"unresolved_input_ids": ["unresolved original input IDs, in input order"]',
+            "relation `continue_lineage`",
+            "Round two must always set `next_intent` to `null`",
+            "You recommend, propose, and synthesize visible advice; you do not execute",
             "Never invoke a specialist",
             "Never create, edit, or delete an artifact",
             "confirm on the user's behalf",
@@ -135,6 +140,27 @@ class PromptAssemblerTests(unittest.TestCase):
                 self.assertIn(phrase, normalized_prompt)
         self.assertIn("set `proposal` to `null`", normalized_prompt)
         self.assertIn('"relation": "new_step | revise_pending"', normalized_prompt)
+
+    def test_all_specialist_prompts_share_the_exact_bounded_assessment_contract(
+        self,
+    ) -> None:
+        for agent_id in ROSTER[1:]:
+            prompt = self.workspace.read_text(AGENT_SPECS[agent_id].system_prompt_file)
+            normalized = " ".join(prompt.split())
+            with self.subTest(agent_id=agent_id):
+                for phrase in (
+                    "exact assignment and ordered input IDs supplied by the runtime",
+                    "Read every attached artifact reference",
+                    "do not borrow another specialist's private context",
+                    "Provide advice only",
+                    "never mutate artifacts, delegate work, invoke another agent",
+                    "Return only one strict JSON object",
+                    '"assessment":"supports | concern | conflict | insufficient_evidence"',
+                    '"assignment_id":"runtime-supplied assignment ID"',
+                    '"input_ids":["runtime-supplied input IDs in exact order"]',
+                    "Do not add private reasoning, unknown fields, invented IDs",
+                ):
+                    self.assertIn(phrase, normalized)
 
     def test_explicit_configuration_snapshot_is_fixed_and_overrides_stay_live(
         self,

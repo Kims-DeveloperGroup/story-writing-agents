@@ -923,7 +923,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                         scope,
                         policy,
                         "parity-call-1",
-                        ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL,
+                        ProviderCallKind.COLLABORATION_INITIAL,
                         schema,
                         payload,
                     )
@@ -933,7 +933,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                         scope,
                         policy,
                         "parity-call-2",
-                        ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION,
+                        ProviderCallKind.COLLABORATION_CONTINUATION,
                         schema,
                         {
                             "c": "B" * 43,
@@ -958,6 +958,13 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(provider.inspect_context_thread(other_scope, policy))
 
         self.assertEqual(second.thread_id, first.thread_id)
+        self.assertEqual(
+            (first.accounting.payload.call_kind, second.accounting.payload.call_kind),
+            (
+                ProviderCallKind.COLLABORATION_INITIAL,
+                ProviderCallKind.COLLABORATION_CONTINUATION,
+            ),
+        )
         self.assertEqual(invocations[0].payload_json, canonical_provider_json(payload))
         self.assertIs(first.accounting.state, ProviderCallState.SUBMITTED)
         self.assertEqual(first.accounting.usage, ProviderUsage(input_tokens=1))
@@ -1030,7 +1037,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
                         scope,
                         policy,
                         "lead-parity-call",
-                        ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL,
+                        ProviderCallKind.COLLABORATION_INITIAL,
                         schema,
                         payload,
                     )
@@ -1040,6 +1047,10 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(invocations[0].payload_json, canonical_provider_json(payload))
         self.assertEqual(result.response_text, response)
         self.assertIs(result.accounting.state, ProviderCallState.SUBMITTED)
+        self.assertIs(
+            result.accounting.payload.call_kind,
+            ProviderCallKind.COLLABORATION_INITIAL,
+        )
         self.assertEqual(
             result.accounting.usage,
             ProviderUsage(input_tokens=1, output_tokens=1),

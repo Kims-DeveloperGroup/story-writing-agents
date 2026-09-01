@@ -1,8 +1,8 @@
 # System design overview
 
-The current integration separates the Python lead conversation/proposal layer
-from the shell's management/inspection layer and the later specialist-execution
-layer. Public schema-v1 direct-run consumers are absent; generic provider,
+The current integration separates the Python lead conversation/confirmed-
+consultation layer from the shell's management/inspection layer and future
+artifact/Git execution layers. Public schema-v1 direct-run consumers are absent; generic provider,
 prompt, context, lifecycle, artifact, and terminal components remain behind
 explicit module boundaries.
 
@@ -29,8 +29,12 @@ flowchart LR
     LT --> CTX[Bounded context and provider]
     CTX --> L[Lead answer, question, critique, recommendation, or proposal]
     L --> D[Structured confirm / reject / revise]
-    D -. confirmed proposal stops here .-> E[#453 specialist execution]
+    D --> R[Durable running + ordered dispatches]
+    R --> E[1-3 isolated specialists in parallel]
+    E --> Y[Typed lead synthesis after all success]
+    Y --> O[Terminal result or fresh round-two proposal]
     LT -. read-only mandatory references .-> A
+    E -. assignment-local reference reads .-> A
 ```
 
 The controller reads ordinary main input with the terminal's plain management
@@ -41,8 +45,8 @@ RAG/reference handling, report provider progress, or publish an artifact.
 A Python application can instead call `lead_turn()`. The lead is the sole
 user-facing agent, may search/read bounded authorized context, and either
 answers directly or discloses one proposal. `decide_lead_step()` records an
-exact structured decision. Confirmation does not yet dispatch a specialist or
-modify an artifact.
+exact structured decision. Confirmation executes only the disclosed read-only
+consultation; it does not modify an artifact or operate Git.
 
 ## Management runtime
 
@@ -54,11 +58,13 @@ facade. It owns:
 - quiescent settings prepare/commit coordination with `AgentBackend`;
 - persisted session/debate/context inspection;
 - content-free artifact-reference operation inspection; and
-- lead provider turns, proposal construction, structured decisions,
-  supersession, and restart-safe confirmation recovery.
+- lead provider turns, proposal construction, structured decisions, confirmed
+  specialist execution/synthesis, supersession, and restart-safe recovery.
 
-`RuntimeSession` binds the same operations to one validated session ID. Neither
-class starts specialist execution or a debate. Broad root aliases are absent.
+`RuntimeSession` binds the same operations to one validated session ID. Both
+classes expose confirmed consultations and direct advisory proposals; neither
+starts a debate or performs story-artifact/Git mutation. Broad root aliases are
+absent.
 
 `session_lifecycle` owns provider-neutral durable/access facts and pure
 readiness. `AgentBackend` still owns claims, manifests, provider routes,
@@ -134,13 +140,17 @@ The fixed roster remains Lead Orchestrator, Plot Architect, Character
 Custodian, and Execution Specialist. The lead is the Python workflow's sole
 user-facing channel. It critiques, recommends the next action, watches
 artifact/workflow constraints, and routes a proposed assignment by subject.
-Specialists remain lead-routed collaborators, but they are not yet dispatched.
-None of this is a CLI dispatch claim.
+Specialists are selectively lead-routed collaborators. After exact
+confirmation, one to three run concurrently with isolated evidence; only an
+all-success set reaches typed lead synthesis. None of this is a CLI dispatch
+claim.
 
-The current #452 layer owns lead proposal/confirmation/reconfirmation behavior,
-and #453 owns specialist execution/result/finalization/outcome-unknown
-behavior. #454 owns whole-workspace rejection of unsupported history. Those
-provider-bound integrations must use the sole v2 store.
+The delivery ownership record remains. The current #452 layer owns lead proposal/confirmation/reconfirmation behavior.
+#453 owns specialist execution/result/finalization/outcome-unknown behavior.
+#454 owns whole-workspace rejection of unsupported history.
+The integrated #452/#453 runtime uses the sole v2 store. Artifact Apply and Git Commit are later,
+separately confirmed runtime-executed operations; the lead remains their
+semantic trigger and user-facing coordinator.
 
 ## Dependency direction
 

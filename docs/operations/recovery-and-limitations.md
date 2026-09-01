@@ -3,8 +3,9 @@
 > **Available:** guarded access recovery, shell workflows, and process-level
 > POSIX PTY verification, including the package-internal ranged viewer.
 > The current shell has no provider-bound prompt span, so main-input `$`/`$$`
-> artifact discovery and selection are inactive. Python lead-turn and decision
-> recovery is available through `StoryRuntime`. Direct Python conversation archive operations
+> artifact discovery and selection are inactive. Python lead-turn, confirmed
+> consultation, and decision recovery is available through `StoryRuntime`.
+> Direct Python conversation archive operations
 > have content-free failures and recognized additive-import recovery. Optional
 > SQLite conversation storage also fails closed. Explicit `/settings` or
 > provider-free `story storage use` can prepare and save desired storage for the
@@ -48,14 +49,28 @@ infer authority from visible text or replay incomplete work.
 | --- | --- | --- |
 | `reply_to_lead` or `continue_with_lead` | Continue the conversation; no work is authorized. | Send a new lead turn. Ordinary text while a proposal is pending supersedes it first. |
 | `submit_confirmation` | One exact proposal is waiting. | Submit `confirm`, `reject`, or `revise` with every returned identity/digest field. Text such as `Yes` is not confirmation. |
-| `start_or_reconfirm` | A confirmation was recorded. #452 did not execute it. | Wait for the separate specialist-execution layer; do not dispatch or mutate from this projection alone. |
+| `start_or_reconfirm` | A confirmation is durable, but projection alone is not a reusable capability. A live `decide_lead_step()` normally crosses this boundary immediately. | Let the owning runtime use its private single-use start authority. After restart, collect the fresh `reconfirmation_required` request instead of reconstructing authority. |
 | `reconfirmation_required` | A confirmed proposal survived restart but its live execution capability did not. | Present the same proposal/digest with the fresh request and collect another exact decision. No provider call is needed. |
+| `finalize_result` | `running` has an authoritative result batch but lacks its visible terminal state. | Let runtime append deterministic local finalization. Do not call a provider or replay assignments. |
+| `continue_with_lead` after `failed` | At least one assignment or synthesis failed; every knowable sibling fact is retained. | Continue with the lead from those facts. Do not manufacture a semantic synthesis over an incomplete result set. |
+| `continue_with_lead` after `interrupted` | Cancellation/interruption and every knowable result are durable. | Continue with the lead; do not infer missing success or replay automatically. |
 | `outcome_unknown` | A running attempt has no authoritative terminal result. | Preserve it and investigate; never replay automatically. |
 | `recovery_required` | History is corrupt, dangling, or otherwise unsafe to interpret. | Stop mutation, preserve the workspace, and inspect canonical collaboration history. |
 
-The current Python layer creates no `running` attempt; those execution-owned
-states become reachable only with #453. See [Lead agent](../guides/lead-agent.md)
-for the complete state table.
+Confirmed consultations create `running` plus all ordered dispatches as one
+durable batch before any provider call. A complete result batch can be
+finalized after restart with zero provider calls. Unresolved `running` without
+a live owner/result becomes `outcome_unknown` and is never replayed. See
+[Lead agent](../guides/lead-agent.md) for the complete state table.
+
+The runtime joins all parallel assignment tasks before classifying a known
+partial failure. One failed peer does not cancel successful siblings, and no
+lead synthesis is attempted over an incomplete set. Outer cancellation cancels
+and joins every child, persists knowable terminal facts/result, removes the
+live marker, releases bound-agent resources, and re-raises. A submitted timeout
+or transport failure marked outcome-uncertain enters `outcome_unknown`; a
+PREPARED call that never crossed the provider boundary does not spend budget or
+justify that state.
 
 <a id="conversation-archive-recovery"></a>
 
@@ -556,8 +571,8 @@ content-free outcome. Once the provider sequence advances, the backend
 best-effort taints the compatible thread where required so later work cannot
 assume a clean continuation. The original failure remains primary.
 
-Inline `${...}` input now creates and finalizes these states. Successful
-conversation, retrieval, and debate results carry an optional operation ID;
+Inline `${...}` input on a provider-bound Python/component path creates and
+finalizes these states. Successful conversation, retrieval, and debate results carry an optional operation ID;
 `StoryRuntime` and `RuntimeSession` expose content-free inspection. The shell
 maps failures to existing safe error categories rather than displaying this
 history. Pre-submit `$`/`$$` discovery and viewer selection create no operation
@@ -613,7 +628,9 @@ different mode.
 ## Ranged-text viewer exits and recovery
 
 The viewer remains an unlisted package-internal supplied-text component rather
-than a command or public API. In provider-bound shell prompt spans, exact `$$`
+than a command or public API. No provider-bound shell prompt span is currently
+connected; the following describes the internal component contract only. In a
+provider-bound shell prompt span, exact `$$`
 immediately opens current-source selection on the second dollar; Enter/Tab
 opens the highlighted source. A complete `$${path}` opens it directly on
 Enter/Tab, while `$` completes a whole-file indicator without viewing. The controller owns
@@ -858,8 +875,9 @@ workflow](privacy-and-provider.md#rejected-provider-response-artifacts).
   transaction with debate logs, lifecycle, results, or provider state.
 - Public shell story input is unavailable. Ordinary/routed/removed shell input
   is rejected before provider, history, RAG, reference, progress, or artifact
-  work. Python lead turns and structured decisions are available; they stop
-  before specialist execution, artifact mutation, consensus, or Git work.
+  work. Python lead turns, structured decisions, and confirmed read-only
+  specialist/synthesis execution are available; they stop before artifact
+  mutation, consensus, or Git work.
 - Conversation search is active-only; transcript reads retain no cursor.
 - Filesystem remains the missing/legacy conversation-storage default.
   `/settings` and provider-free `story storage use` save a desired filesystem

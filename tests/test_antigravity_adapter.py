@@ -417,10 +417,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 for path in state_root.rglob("*")
                 if path.is_file()
             ],
-            [
-                "definitions/plot_architect/"
-                f"{self.definition.fingerprint}/AGENTS.md"
-            ],
+            [f"definitions/plot_architect/{self.definition.fingerprint}/AGENTS.md"],
         )
         rules = rules_before.decode("utf-8")
         self.assertIn(self.definition.system_prompt_file.read_text(), rules)
@@ -442,9 +439,12 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             replace(self.definition, fingerprint="F" * 64),
         )
         for invalid in invalid_definitions:
-            with self.subTest(invalid=invalid), self.assertRaisesRegex(
-                ValueError,
-                "Antigravity agent definition is invalid",
+            with (
+                self.subTest(invalid=invalid),
+                self.assertRaisesRegex(
+                    ValueError,
+                    "Antigravity agent definition is invalid",
+                ),
             ):
                 adapter.bind(invalid)
 
@@ -462,19 +462,19 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(definition.context_document_files, ())
         self.assertEqual(
             definition.fingerprint,
-            "dca5f683704a2e7f592fb506ea725ed6791a41dbc43f84fb5f34159d106b5995",
+            "503ba714375ac989ec9907afa4f407855933e2f61f8628131a87b923cb0446c2",
         )
 
         codex_bytes, codex_components = CodexAdapter._definition_file(definition)
-        antigravity_bytes, antigravity_components = (
-            AntigravityAdapter._definition_file(definition)
+        antigravity_bytes, antigravity_components = AntigravityAdapter._definition_file(
+            definition
         )
         self.assertEqual(antigravity_bytes, codex_bytes)
         self.assertEqual(antigravity_components, codex_components)
-        self.assertEqual(len(codex_bytes), 600)
+        self.assertEqual(len(codex_bytes), 1299)
         self.assertEqual(
             hashlib.sha256(codex_bytes).hexdigest(),
-            "a84597e61e57ae2c295dda8e61e834bc4ec79b7e4dac71da61af97e1a8eaa44d",
+            "5e97e21d3d8864fbffd6828ce48cab89bcbca4136efd6172f1415b8181e7f000",
         )
         self.assertEqual(
             tuple(
@@ -487,7 +487,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             ),
             (
                 (ContextComponentKind.BINDING_STRUCTURE, None, 4),
-                (ContextComponentKind.ROLE_SYSTEM_PROMPT, None, 158),
+                (ContextComponentKind.ROLE_SYSTEM_PROMPT, None, 857),
                 (ContextComponentKind.PERSONA, None, 251),
                 (ContextComponentKind.RESPONSE_LANGUAGE, None, 10),
                 (ContextComponentKind.PROVIDER_CONSTRAINTS, None, 177),
@@ -506,9 +506,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(reference.read_text(), text)
 
     @unittest.skipUnless(
-        os.name == "posix"
-        and hasattr(os, "umask")
-        and _NO_FOLLOW_DIRECTORY_HARDENING,
+        os.name == "posix" and hasattr(os, "umask") and _NO_FOLLOW_DIRECTORY_HARDENING,
         "requires supported POSIX no-follow directory hardening",
     )
     async def test_owned_directory_chains_are_private_without_changing_parent(
@@ -564,9 +562,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                         )
                         runtime_components = (
                             adapter.state_root / "sessions",
-                            adapter.state_root
-                            / "sessions"
-                            / f"mode-{label}-session",
+                            adapter.state_root / "sessions" / f"mode-{label}-session",
                             runtime_root.parent,
                             runtime_root,
                             runtime_root / "provider",
@@ -731,9 +727,12 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
 
     def test_definition_chain_rejects_links_and_non_directories(self) -> None:
         for component_kind in ("state root link", "fingerprint link", "file"):
-            with self.subTest(component=component_kind), tempfile.TemporaryDirectory(
-                dir=self.workspace.root.parent
-            ) as temporary:
+            with (
+                self.subTest(component=component_kind),
+                tempfile.TemporaryDirectory(
+                    dir=self.workspace.root.parent
+                ) as temporary,
+            ):
                 label = component_kind.replace(" ", "-")
                 parent = self.workspace.path(f"definition-{label}-parent")
                 parent.mkdir()
@@ -797,10 +796,18 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_runtime_chain_rejects_links_and_files_before_launch(
         self,
     ) -> None:
-        for component_kind in ("session link", "provider link", "workspace link", "file"):
-            with self.subTest(component=component_kind), tempfile.TemporaryDirectory(
-                dir=self.workspace.root.parent
-            ) as temporary:
+        for component_kind in (
+            "session link",
+            "provider link",
+            "workspace link",
+            "file",
+        ):
+            with (
+                self.subTest(component=component_kind),
+                tempfile.TemporaryDirectory(
+                    dir=self.workspace.root.parent
+                ) as temporary,
+            ):
                 label = component_kind.replace(" ", "-")
                 parent = self.workspace.path(f"runtime-{label}-parent")
                 parent.mkdir()
@@ -885,9 +892,12 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         for stage in ("binding", "workspace"):
-            with self.subTest(stage=stage), tempfile.TemporaryDirectory(
-                dir=self.workspace.root.parent
-            ) as temporary:
+            with (
+                self.subTest(stage=stage),
+                tempfile.TemporaryDirectory(
+                    dir=self.workspace.root.parent
+                ) as temporary,
+            ):
                 adapter = self.adapter(f"rules-{stage}-link-state")
                 outside = Path(temporary) / "outside"
                 outside.mkdir()
@@ -955,17 +965,18 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         for kind in ("directory", "fifo", "hard link"):
-            with self.subTest(destination=kind), tempfile.TemporaryDirectory(
-                dir=self.workspace.root.parent
-            ) as temporary:
+            with (
+                self.subTest(destination=kind),
+                tempfile.TemporaryDirectory(
+                    dir=self.workspace.root.parent
+                ) as temporary,
+            ):
                 label = kind.replace(" ", "-")
                 adapter = self.adapter(f"unsafe-target-{label}-state")
                 binding = adapter.bind(self.definition)
                 session_id = f"unsafe-target-{label}"
                 target = (
-                    self.runtime_root(adapter, session_id)
-                    / "workspace"
-                    / "AGENTS.md"
+                    self.runtime_root(adapter, session_id) / "workspace" / "AGENTS.md"
                 )
                 target.parent.mkdir(parents=True)
                 outside = Path(temporary) / "outside"
@@ -974,9 +985,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 outside_file.write_bytes(b"PRIVATE_OUTSIDE_RULES")
                 if kind == "directory":
                     target.mkdir()
-                    (target / "sentinel.bin").write_bytes(
-                        b"PRIVATE_DIRECTORY_BYTES"
-                    )
+                    (target / "sentinel.bin").write_bytes(b"PRIVATE_DIRECTORY_BYTES")
                     before = _directory_snapshot(target)
                 elif kind == "fifo":
                     self.fifo(target)
@@ -1014,9 +1023,12 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         for kind in ("symlink", "directory", "fifo", "hard link"):
-            with self.subTest(source=kind), tempfile.TemporaryDirectory(
-                dir=self.workspace.root.parent
-            ) as temporary:
+            with (
+                self.subTest(source=kind),
+                tempfile.TemporaryDirectory(
+                    dir=self.workspace.root.parent
+                ) as temporary,
+            ):
                 label = kind.replace(" ", "-")
                 adapter = self.adapter(f"unsafe-source-{label}-state")
                 binding = adapter.bind(self.definition)
@@ -1024,9 +1036,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 canonical = source.read_bytes()
                 session_id = f"unsafe-source-{label}"
                 target = (
-                    self.runtime_root(adapter, session_id)
-                    / "workspace"
-                    / "AGENTS.md"
+                    self.runtime_root(adapter, session_id) / "workspace" / "AGENTS.md"
                 )
                 target.parent.mkdir(parents=True)
                 target.write_bytes(b"PRIVATE_RETAINED_TARGET")
@@ -1042,9 +1052,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 elif kind == "directory":
                     source.unlink()
                     source.mkdir()
-                    (source / "sentinel.bin").write_bytes(
-                        b"PRIVATE_DIRECTORY_BYTES"
-                    )
+                    (source / "sentinel.bin").write_bytes(b"PRIVATE_DIRECTORY_BYTES")
                     before = _directory_snapshot(source)
                 elif kind == "fifo":
                     source.unlink()
@@ -1092,9 +1100,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 canonical = source.read_bytes()
                 session_id = f"rules-{label}"
                 target = (
-                    self.runtime_root(adapter, session_id)
-                    / "workspace"
-                    / "AGENTS.md"
+                    self.runtime_root(adapter, session_id) / "workspace" / "AGENTS.md"
                 )
                 target.parent.mkdir(parents=True)
                 target.write_bytes(b"PRIVATE_RETAINED_TARGET")
@@ -1151,9 +1157,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                             side_effect=mismatched_descriptor_identity,
                         ),
                     )
-                    expected_cause = (
-                        "Antigravity rules temporary file is unsafe"
-                    )
+                    expected_cause = "Antigravity rules temporary file is unsafe"
 
                 with contextlib.ExitStack() as stack:
                     for context in contexts:
@@ -1171,18 +1175,12 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     ["AGENTS.md"],
                 )
 
-        with tempfile.TemporaryDirectory(
-            dir=self.workspace.root.parent
-        ) as temporary:
+        with tempfile.TemporaryDirectory(dir=self.workspace.root.parent) as temporary:
             adapter = self.adapter("rules-final-leaf-swap-state")
             binding = adapter.bind(self.definition)
             canonical = (binding.staging_directory / "AGENTS.md").read_bytes()
             session_id = "rules-final-leaf-swap"
-            target = (
-                self.runtime_root(adapter, session_id)
-                / "workspace"
-                / "AGENTS.md"
-            )
+            target = self.runtime_root(adapter, session_id) / "workspace" / "AGENTS.md"
             target.parent.mkdir(parents=True)
             target.write_bytes(b"PRIVATE_RETAINED_TARGET")
             outside = Path(temporary) / "outside"
@@ -1240,17 +1238,18 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(request.cwd, target.parent)
 
         for installed_kind in ("symlink", "foreign hard link"):
-            with self.subTest(installed=installed_kind), tempfile.TemporaryDirectory(
-                dir=self.workspace.root.parent
-            ) as temporary:
+            with (
+                self.subTest(installed=installed_kind),
+                tempfile.TemporaryDirectory(
+                    dir=self.workspace.root.parent
+                ) as temporary,
+            ):
                 label = installed_kind.replace(" ", "-")
                 adapter = self.adapter(f"rules-installed-{label}-state")
                 binding = adapter.bind(self.definition)
                 session_id = f"rules-installed-{label}"
                 target = (
-                    self.runtime_root(adapter, session_id)
-                    / "workspace"
-                    / "AGENTS.md"
+                    self.runtime_root(adapter, session_id) / "workspace" / "AGENTS.md"
                 )
                 target.parent.mkdir(parents=True)
                 target.write_bytes(b"PRIVATE_RETAINED_TARGET")
@@ -1352,9 +1351,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 canonical = (binding.staging_directory / "AGENTS.md").read_bytes()
                 session_id = f"rules-{label}"
                 target = (
-                    self.runtime_root(adapter, session_id)
-                    / "workspace"
-                    / "AGENTS.md"
+                    self.runtime_root(adapter, session_id) / "workspace" / "AGENTS.md"
                 )
                 retained = target.parent / "retained.bin"
                 if behavior == "fchmod failure":
@@ -1456,9 +1453,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 canonical = (binding.staging_directory / "AGENTS.md").read_bytes()
                 session_id = f"rules-{behavior}-failure"
                 target = (
-                    self.runtime_root(adapter, session_id)
-                    / "workspace"
-                    / "AGENTS.md"
+                    self.runtime_root(adapter, session_id) / "workspace" / "AGENTS.md"
                 )
                 target.parent.mkdir(parents=True)
                 target.write_bytes(b"PRIVATE_RETAINED_TARGET")
@@ -1592,9 +1587,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     ).lower()
                     adapter = self.adapter(f"rules-{label}-state")
                     binding = adapter.bind(self.definition)
-                    canonical = (
-                        binding.staging_directory / "AGENTS.md"
-                    ).read_bytes()
+                    canonical = (binding.staging_directory / "AGENTS.md").read_bytes()
                     session_id = f"rules-{label}"
                     target = (
                         self.runtime_root(adapter, session_id)
@@ -1685,9 +1678,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         binding = adapter.bind(self.definition)
         canonical = (binding.staging_directory / "AGENTS.md").read_bytes()
         session_id = "rules-ordinary-precedence"
-        target = (
-            self.runtime_root(adapter, session_id) / "workspace" / "AGENTS.md"
-        )
+        target = self.runtime_root(adapter, session_id) / "workspace" / "AGENTS.md"
         target.parent.mkdir(parents=True)
         target.write_bytes(b"PRIVATE_RETAINED_TARGET")
         real_open = os.open
@@ -1865,9 +1856,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             fresh,
             ProviderResult(
                 thread_id="conversation-one",
-                response_text=(
-                    '{"revision_id":"r0","content":"structured response"}'
-                ),
+                response_text=('{"revision_id":"r0","content":"structured response"}'),
             ),
         )
         self.assertEqual(
@@ -1986,9 +1975,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             payload=payload,
             thread_id=None,
             call_kind=ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL,
-            component_paths={
-                ("i",): ContextComponentKind.CURRENT_INPUT
-            },
+            component_paths={("i",): ContextComponentKind.CURRENT_INPUT},
         )
         requests: list[ProcessRequest] = []
 
@@ -2020,14 +2007,14 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             outer,
             {
                 "event": "user",
-                "message": {
-                    "content": invocation.payload_json.decode("utf-8")
-                },
+                "message": {"content": invocation.payload_json.decode("utf-8")},
             },
         )
         self.assertNotEqual(requests[0].stdin.rstrip(b"\n"), invocation.payload_json)
         self.assertEqual(result.actual_transport_utf8_bytes, len(requests[0].stdin))
-        self.assertGreater(result.actual_transport_utf8_bytes, len(invocation.payload_json))
+        self.assertGreater(
+            result.actual_transport_utf8_bytes, len(invocation.payload_json)
+        )
         self.assertEqual(result.usage, ProviderUsage(0, 4))
         self.assertEqual(
             invocation.payload_accounting.payload_utf8_bytes,
@@ -2184,17 +2171,13 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             ("persisted-system-model", "low"),
         )
         self.assertEqual(
-            backend._antigravity_adapter.invocation_settings(
-                PLOT_ARCHITECT
-            ),
+            backend._antigravity_adapter.invocation_settings(PLOT_ARCHITECT),
             ("persisted-agent-model", "medium"),
         )
         agents[PLOT_ARCHITECT]["antigravity_model"] = "mutated-after-init"
         self.workspace.write_json("config/agent_configs.json", agents)
         self.assertEqual(
-            backend._antigravity_adapter.invocation_settings(
-                PLOT_ARCHITECT
-            ),
+            backend._antigravity_adapter.invocation_settings(PLOT_ARCHITECT),
             ("persisted-agent-model", "medium"),
         )
 
@@ -2305,15 +2288,12 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             "invoke",
             first_invoke,
         ):
-            reply = await bound.invoke(
-                self.request(session_id, debate_id="debate-one")
-            )
+            reply = await bound.invoke(self.request(session_id, debate_id="debate-one"))
         self.assertEqual(reply, AgentReply.candidate("r0", "candidate"))
         first_invocation = first_invoke.await_args.args[1]
         self.assertIsNone(first_invocation.thread_id)
         manifest = self.workspace.read_json(
-            "agent_states/orchestrator_state/provider_sessions/"
-            f"{session_id}.json"
+            f"agent_states/orchestrator_state/provider_sessions/{session_id}.json"
         )
         self.assertEqual(
             manifest["provider_threads"]["antigravity:plot_architect"],
@@ -2323,8 +2303,9 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 "fingerprint": self.definition.fingerprint,
                 "thread_id": "agy-conversation",
                 "tainted": False,
-                "updated_at": manifest["provider_threads"]
-                ["antigravity:plot_architect"]["updated_at"],
+                "updated_at": manifest["provider_threads"][
+                    "antigravity:plot_architect"
+                ]["updated_at"],
             },
         )
         retained_staging = bound.staging_directory
@@ -2394,9 +2375,10 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                 ),
             )
             for invocation, diagnostic in invalid_invocations:
-                with self.subTest(diagnostic=diagnostic), self.assertRaises(
-                    ProviderInvocationError
-                ) as caught:
+                with (
+                    self.subTest(diagnostic=diagnostic),
+                    self.assertRaises(ProviderInvocationError) as caught,
+                ):
                     await adapter.invoke(binding, invocation)
                 self.assertEqual(str(caught.exception), diagnostic)
                 self.assertIs(caught.exception.taint_existing_thread, False)
@@ -2441,9 +2423,10 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         for label, stdout, expected_thread_id, diagnostic in stream_cases:
-            with self.subTest(stream=label), self.assertRaises(
-                ProviderInvocationError
-            ) as caught:
+            with (
+                self.subTest(stream=label),
+                self.assertRaises(ProviderInvocationError) as caught,
+            ):
                 adapter._provider_result(
                     stdout,
                     expected_thread_id=expected_thread_id,
@@ -2503,10 +2486,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
 
                 async def wait_for(awaitable, *, timeout):
                     timeouts.append(timeout)
-                    if (
-                        awaitable is communication
-                        and communication_failure is not None
-                    ):
+                    if awaitable is communication and communication_failure is not None:
                         awaitable.cancel()
                         raise communication_failure
                     return await awaitable
@@ -2525,14 +2505,17 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     thread_id=None,
                 )
                 assert invocation.payload_json is not None
-                expected_stdin = canonical_provider_json(
-                    {
-                        "event": "user",
-                        "message": {
-                            "content": invocation.payload_json.decode("utf-8")
-                        },
-                    }
-                ) + b"\n"
+                expected_stdin = (
+                    canonical_provider_json(
+                        {
+                            "event": "user",
+                            "message": {
+                                "content": invocation.payload_json.decode("utf-8")
+                            },
+                        }
+                    )
+                    + b"\n"
+                )
                 if isinstance(communication_failure, asyncio.CancelledError):
                     with self.assertRaises(asyncio.CancelledError) as caught:
                         await adapter.invoke(binding, invocation)
@@ -2758,11 +2741,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(which.call_count, len(cases))
         self.assertEqual(
             [label for label, _command, _options in calls],
-            [
-                label
-                for label, executable, _behavior, _expected in cases
-                if executable
-            ],
+            [label for label, executable, _behavior, _expected in cases if executable],
         )
         for _label, command, options in calls:
             self.assertEqual(
@@ -2783,9 +2762,7 @@ class AntigravityAdapterTests(unittest.IsolatedAsyncioTestCase):
                     "check": False,
                 },
             )
-            self.assertFalse(
-                any("dangerously" in argument for argument in command)
-            )
+            self.assertFalse(any("dangerously" in argument for argument in command))
         self.assertTrue(binding.staging_directory.is_dir())
         self.assertTrue(native_state.parent.is_dir())
 

@@ -642,13 +642,44 @@ class ContextExecutionValueTests(ContextExecutionTestCase):
 
     def test_provider_failure_facts_are_exact_optional_and_chainless(self) -> None:
         failure = RuntimeError("PRIVATE_PROVIDER_EXCEPTION")
-        facts = ContextProviderFailureFacts(timed_out=True, taint_existing_thread=True)
+        encoded, payload = account_provider_payload(
+            {"type": "object"},
+            {"value": "bounded"},
+            call_kind=ProviderCallKind.COLLABORATION_INITIAL,
+        )
+        submitted = ProviderCallAccounting(
+            payload,
+            state=ProviderCallState.SUBMITTED,
+            actual_transport_utf8_bytes=len(encoded),
+        )
+        facts = ContextProviderFailureFacts(
+            accounting=submitted,
+            timed_out=True,
+            taint_existing_thread=True,
+            submitted_accountings=(submitted,),
+            submission_uncertain=True,
+        )
         record_context_provider_failure(failure, facts)
         self.assertIs(context_provider_failure_facts(failure), facts)
         self.assertEqual(
             context_provider_failure_facts(ValueError()), ContextProviderFailureFacts()
         )
         self.assertNotIn("PRIVATE_PROVIDER_EXCEPTION", repr(facts))
+        prepared = replace(
+            submitted,
+            state=ProviderCallState.PREPARED,
+            actual_transport_utf8_bytes=None,
+        )
+        for changes in (
+            {"submitted_accountings": (prepared,)},
+            {"submitted_accountings": [submitted]},
+            {"submission_uncertain": 1},
+        ):
+            with (
+                self.subTest(changes=changes),
+                self.assertRaises(ContextExecutionError),
+            ):
+                replace(facts, **changes)
 
     def test_conditional_source_classification_is_exact(
         self,

@@ -32,6 +32,7 @@ from story_writing_agents.conversations import (
     CollaborationInputState,
     CollaborationInterruptionPayload,
     CollaborationInvocationKind,
+    CollaborationLeadSynthesisPayload,
     CollaborationMessagePayload,
     CollaborationProposal,
     CollaborationProposalBasis,
@@ -40,6 +41,7 @@ from story_writing_agents.conversations import (
     CollaborationProviderCallState,
     CollaborationSideEffect,
     CollaborationSpecialistReplyPayload,
+    CollaborationSpecialistAssessment,
     CollaborationStepKind,
     CollaborationStepState,
     CollaborationStepStatePayload,
@@ -94,6 +96,7 @@ COLLABORATION_EVENT_EXPORTS = (
     "CollaborationInputState",
     "CollaborationInterruptionPayload",
     "CollaborationInvocationKind",
+    "CollaborationLeadSynthesisPayload",
     "CollaborationMessagePayload",
     "CollaborationPayload",
     "CollaborationProposal",
@@ -103,6 +106,7 @@ COLLABORATION_EVENT_EXPORTS = (
     "CollaborationProviderCallState",
     "CollaborationSideEffect",
     "CollaborationSpecialistReplyPayload",
+    "CollaborationSpecialistAssessment",
     "CollaborationStepKind",
     "CollaborationStepState",
     "CollaborationStepStatePayload",
@@ -194,6 +198,7 @@ CONVERSATION_FACADE_EXPORTS = (
     "CollaborationInputState",
     "CollaborationInterruptionPayload",
     "CollaborationInvocationKind",
+    "CollaborationLeadSynthesisPayload",
     "CollaborationMessagePayload",
     "CollaborationNextAction",
     "CollaborationPayload",
@@ -209,6 +214,7 @@ CONVERSATION_FACADE_EXPORTS = (
     "CollaborationReadableRecord",
     "CollaborationSideEffect",
     "CollaborationSpecialistReplyPayload",
+    "CollaborationSpecialistAssessment",
     "CollaborationStepKind",
     "CollaborationStepState",
     "CollaborationStepStatePayload",
@@ -366,7 +372,8 @@ def make_proposal(
         if synthesis_max_physical_calls:
             profile_ids += (LEAD_ORCHESTRATOR,)
     profiles = tuple(
-        CollaborationAgentProfile(agent_id, DIGEST_A) for agent_id in profile_ids
+        CollaborationAgentProfile(agent_id, DIGEST_A, DIGEST_B)
+        for agent_id in profile_ids
     )
     max_additional = sum(item.max_physical_calls for item in assignments)
     max_additional += synthesis_max_physical_calls
@@ -614,15 +621,15 @@ def running_history(
     *,
     include_synthesis_call: bool = True,
 ) -> tuple[tuple[CollaborationEvent, ...], CollaborationProposal]:
-    """Return atomic running, dispatch, and submitted physical-call facts."""
+    """Return an atomic start followed by durable physical-call facts."""
 
     history, proposal = confirmed_history(proposal)
-    drafts: list[CollaborationEventDraft] = [
+    start_drafts: list[CollaborationEventDraft] = [
         make_draft(
             "running_event",
             CollaborationEventKind.STEP_STATE,
             RUNTIME,
-            LEAD,
+            USER,
             proposal_state(
                 proposal,
                 CollaborationStepState.RUNNING,
@@ -635,7 +642,7 @@ def running_history(
         CHARACTER_CUSTODIAN: CHARACTER,
     }
     for assignment in proposal.assignments:
-        drafts.append(
+        start_drafts.append(
             make_draft(
                 f"dispatch_{assignment.assignment_id}",
                 CollaborationEventKind.ASSIGNMENT_DISPATCH,
@@ -650,26 +657,37 @@ def running_history(
                 ),
             )
         )
-        drafts.extend(
+    history = store_batch(
+        history,
+        make_batch(history, "batch_running", *start_drafts),
+    )
+    call_drafts: list[CollaborationEventDraft] = []
+    for assignment in proposal.assignments:
+        call_drafts.extend(
             provider_call_drafts(
                 invocation_id=f"invocation_{assignment.assignment_id}",
                 call_id=f"call_{assignment.assignment_id}",
                 role=assignment.specialist_id,
                 recipient=actors[assignment.specialist_id],
-                invocation_kind=CollaborationInvocationKind.SPECIALIST,
+                invocation_kind=CollaborationInvocationKind.SPECIALIST_ASSIGNMENT,
             )
         )
     if include_synthesis_call and proposal.budget.synthesis_max_physical_calls:
-        drafts.extend(
+        call_drafts.extend(
             provider_call_drafts(
                 invocation_id="invocation_synthesis",
                 call_id="call_synthesis",
                 role=LEAD_ORCHESTRATOR,
                 recipient=LEAD,
-                invocation_kind=CollaborationInvocationKind.SYNTHESIS,
+                invocation_kind=CollaborationInvocationKind.LEAD_SYNTHESIS,
             )
         )
-    return store_batch(history, make_batch(history, "batch_running", *drafts)), proposal
+    if call_drafts:
+        history = store_batch(
+            history,
+            make_batch(history, "batch_calls", *call_drafts),
+        )
+    return history, proposal
 
 
 def result_batch(
@@ -710,7 +728,9 @@ def result_batch(
                         ATTEMPT_ID,
                         assignment.assignment_id,
                         f"dispatch_{assignment.assignment_id}",
+                        CollaborationSpecialistAssessment.SUPPORTS,
                         f"Visible reply from {assignment.specialist_id}.",
+                        assignment.input_ids,
                     ),
                 )
             )
@@ -744,10 +764,22 @@ def result_batch(
         drafts.append(
             make_draft(
                 synthesis_result_id,
-                CollaborationEventKind.MESSAGE,
+                CollaborationEventKind.LEAD_SYNTHESIS,
                 LEAD,
                 USER,
-                CollaborationMessagePayload("Visible lead synthesis."),
+                CollaborationLeadSynthesisPayload(
+                    proposal.proposal_id,
+                    proposal.proposal_revision,
+                    proposal.proposal_digest,
+                    ATTEMPT_ID,
+                    "Visible lead synthesis.",
+                    tuple(
+                        f"reply_{assignment.assignment_id}"
+                        for assignment in proposal.assignments
+                    ),
+                    (),
+                    None,
+                ),
             )
         )
         drafts.append(
@@ -841,7 +873,7 @@ def retarget_batch(
 def contract_batches(
     conversation_id: str,
 ) -> dict[str, CollaborationEventBatch]:
-    """Return the six atomic collaboration families shared by store adapters."""
+    """Return atomic collaboration families shared by store adapters."""
 
     awaiting, proposal = awaiting_history()
     confirmed, _ = confirmed_history(proposal)
@@ -903,6 +935,9 @@ def contract_batches(
         ),
         "running": retarget_batch(
             batch_from_history(running, "batch_running"), conversation_id
+        ),
+        "calls": retarget_batch(
+            batch_from_history(running, "batch_calls"), conversation_id
         ),
         "result": retarget_batch(
             batch_from_history(executed, "batch_result"), conversation_id

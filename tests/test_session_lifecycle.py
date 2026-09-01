@@ -491,9 +491,10 @@ class SessionLifecycleContractTests(unittest.TestCase):
         self.assertEqual(len(headings), 97)
         self.assertEqual(len(set(headings)), 97)
         self.assertEqual(set(headings), expected_modules)
-        self.assertIn("Exactly 93 names in `__all__`", index)
+        self.assertIn("now contains exactly 95 exports", index)
+        self.assertIn("events owners contain 23 and\n  65 respectively", index)
         self.assertIn("Exactly 23 owning-module names in `__all__`", index)
-        self.assertIn("Exactly 63 owning-module names in `__all__`", index)
+        self.assertIn("Exactly 65 owning-module names in `__all__`", index)
         self.assertIn(
             "project-root facade retains only its immutable conversation-",
             index,

@@ -1,10 +1,10 @@
 # story-writing-agents
 
 A Python 3.11+ runtime for building a lead-led, multi-agent novel-writing
-workflow. The Python API now supports ordinary conversation with the Lead
-Orchestrator, strict lead outcomes, runtime-built specialist proposals, and
-exact Confirm/Reject/Revise decisions. Specialist execution and the interactive
-lead UI remain later integration steps.
+workflow. The Python API supports ordinary conversation with the Lead
+Orchestrator, strict lead outcomes, runtime-built specialist proposals, exact
+Confirm/Reject/Revise decisions, confirmed specialist execution, and typed lead
+synthesis. The interactive lead UI remains a later integration step.
 
 ## Current integration stage
 
@@ -18,16 +18,19 @@ inspection and the Python lead front channel.
 | Create, resume, list, and pause story sessions. | Route a line to an agent or select a sticky target. |
 | Create, list, focus, rename, archive, search, and read conversations. | Start a debate or publish a manuscript from the installed CLI. |
 | Apply directives and edit workspace settings. | Open `$`/`$$` artifact pickers from shell input. |
-| Inspect session, debate, history, transcript, status, and recorded exchanges. | Dispatch a specialist or start a debate through the runtime facade. |
-| Call the Python lead API with ordered artifact references and decide a proposal. | Treat confirmation as specialist, artifact, consensus, or Git execution. |
+| Inspect session, debate, history, transcript, status, and recorded exchanges. | Start a debate through the runtime facade. |
+| Call the Python lead API with ordered artifact references; confirm a one-to-three-specialist consultation; receive typed replies and lead synthesis. | Treat consultation confirmation as artifact, consensus, or Git execution. |
+| Propose one provider-free direct specialist advisory and confirm its execution. | Apply a core-document/manuscript change or create a Git commit. |
 | Use schema-v2 collaboration contracts, stores, archive/transfer, readable projection, search, and paging APIs. | Bypass the runtime with a removed direct-run method. |
 | Run a provider-free management/storage smoke check. | Use smoke as evidence of provider behavior or story quality. |
 
 Python callers can call `lead_turn()` and `decide_lead_step()` without an agent
-selector. A lead turn can return a direct
-answer, question, critique, or recommendation, or disclose a bounded
-consultation proposal. Confirming that proposal records authority evidence but
-does not dispatch a specialist in this stage.
+selector. A lead turn can return a direct answer, question, critique, or
+recommendation, or disclose a bounded consultation proposal. Confirming that
+proposal records authority, atomically records `running` plus every dispatch
+before provider work, executes one to three specialists concurrently, and
+returns an authoritative terminal or round-two turn. Specialist advice is
+read-only.
 
 When ordinary text, routed text, or a retired execution command is submitted in
 the shell, Story reports:
@@ -40,11 +43,11 @@ The rejection happens before provider binding, transcript append, RAG,
 artifact-reference reads, progress reporting, or artifact publication. #466
 delivered the pure schema-v2 values; #474-#479 added readable projections,
 storage, archive/transfer, and the sole active storage/inspection service.
-#452 adds lead proposal/confirmation writes through that same service. #453
-owns specialist execution/results, and #454 owns whole-workspace rejection of
-unsupported history.
+#452 added lead proposal/confirmation writes through that same service; #453
+adds specialist execution, typed synthesis, results, and restart-safe local
+finalization. #454 owns whole-workspace rejection of unsupported history.
 
-See [Lead agent: conversation, proposals, and confirmation](docs/guides/lead-agent.md)
+See [Lead agent: conversation and specialist consultation](docs/guides/lead-agent.md)
 for responsibilities, authority limits, current scenarios, provider-call
 examples, and recovery behavior.
 
@@ -169,9 +172,11 @@ The exact grammar is in the [CLI reference](docs/reference/cli.md) and
 
 `StoryRuntime` is a management, configuration, directive, inspection, and lead-
 orchestration facade. It can bind a `RuntimeSession`; both expose async
-`lead_turn()` and `decide_lead_step()` methods. Neither exposes a debate-start,
-specialist-execution, artifact-publication, consensus, or Git method. The
-package root no longer exports the broad `Runtime` or `Session` aliases.
+`lead_turn()`, `propose_specialist_advisory()`, and `decide_lead_step()`
+methods. Confirmation executes the disclosed read-only consultation through
+`decide_lead_step()`; there is no public unconfirmed specialist-dispatch,
+debate-start, artifact-publication, consensus, or Git method. The package root
+no longer exports the broad `Runtime` or `Session` aliases.
 
 ```python
 from story_writing_agents import StoryRuntime, Workspace
@@ -219,11 +224,11 @@ provider-text span, so `$` and `$$` do not open a picker there. See
 
 ## Important limits
 
-- Python lead conversation and proposal decisions are active; specialist
-  execution, story generation, debate, artifact modification, consensus, and
-  Git operations are not.
-- Confirming a consultation does not start it in #452 and never confirms an
-  artifact change or Git commit.
+- Python lead conversation, proposal decisions, confirmed specialist
+  execution, and typed synthesis are active; story generation, debate,
+  artifact modification, consensus, and Git operations are not.
+- Confirming a consultation starts only the disclosed read-only provider work.
+  It never confirms an artifact change or Git commit.
 - Smoke is intentionally provider-free and story-free.
 - Workspace configuration, histories, diagnostics, and artifacts are local
   plaintext unless the surrounding environment protects them.

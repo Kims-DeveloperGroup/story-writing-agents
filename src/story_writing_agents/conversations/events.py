@@ -31,6 +31,7 @@ class CollaborationEventKind(StrEnum):
     MESSAGE = "message"
     ASSIGNMENT_DISPATCH = "assignment_dispatch"
     SPECIALIST_REPLY = "specialist_reply"
+    LEAD_SYNTHESIS = "lead_synthesis"
     STEP_STATE = "step_state"
     CONFIRMATION = "confirmation"
     EXECUTION_RESULT = "execution_result"
@@ -145,6 +146,7 @@ class LeadProposalRelation(StrEnum):
 
     NEW_STEP = "new_step"
     REVISE_PENDING = "revise_pending"
+    CONTINUE_LINEAGE = "continue_lineage"
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,8 +221,9 @@ class CollaborationInvocationKind(StrEnum):
     """Closed semantic role of one provider-call lineage."""
 
     LEAD = "lead"
-    SPECIALIST = "specialist"
-    SYNTHESIS = "synthesis"
+    SPECIALIST_ASSIGNMENT = "specialist_assignment"
+    LEAD_SYNTHESIS = "lead_synthesis"
+    SPECIALIST_ADVISORY = "specialist_advisory"
 
 
 class CollaborationProviderCallKind(StrEnum):
@@ -244,6 +247,15 @@ class CollaborationAssignmentOutcomeKind(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+class CollaborationSpecialistAssessment(StrEnum):
+    """Closed semantic assessment returned by a specialist assignment."""
+
+    SUPPORTS = "supports"
+    CONCERN = "concern"
+    CONFLICT = "conflict"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
 
 
 class CollaborationSynthesisOutcomeKind(StrEnum):
@@ -435,15 +447,23 @@ class CollaborationInputRevision:
 
 @dataclass(frozen=True, slots=True)
 class CollaborationAgentProfile:
-    """Exact profile fingerprint for one proposal participant."""
+    """Definition and content-free execution fingerprints for one participant."""
 
     agent_id: str
-    profile_fingerprint: str
+    definition_fingerprint: str
+    execution_fingerprint: str
 
     def __post_init__(self) -> None:
         if self.agent_id not in ROSTER:
             raise ValueError("profile agent ID must be canonical")
-        _validate_digest(self.profile_fingerprint, label="profile fingerprint")
+        _validate_digest(
+            self.definition_fingerprint,
+            label="definition fingerprint",
+        )
+        _validate_digest(
+            self.execution_fingerprint,
+            label="execution fingerprint",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -801,29 +821,41 @@ class CollaborationExecutionResult:
             self.visible_exchange_event_ids,
             label="visible exchange event IDs",
         )
-        successful = all(
+        assignments_succeeded = all(
             item.outcome is CollaborationAssignmentOutcomeKind.SUCCEEDED
             for item in self.assignment_outcomes
         )
-        if self.overall_outcome is CollaborationExecutionOutcomeKind.SUCCEEDED:
-            if not successful or self.synthesis_outcome not in (
-                CollaborationSynthesisOutcomeKind.SUCCEEDED,
-                CollaborationSynthesisOutcomeKind.NOT_ATTEMPTED,
-            ):
-                raise ValueError(
-                    "successful execution has inconsistent terminal outcomes"
-                )
-        elif any(
-            item.outcome is CollaborationAssignmentOutcomeKind.FAILED
-            for item in self.assignment_outcomes
+        if not assignments_succeeded and self.synthesis_outcome is not (
+            CollaborationSynthesisOutcomeKind.NOT_ATTEMPTED
         ):
-            if self.overall_outcome is not CollaborationExecutionOutcomeKind.FAILED:
-                raise ValueError("assignment failure requires overall failed outcome")
-            if (
-                self.synthesis_outcome
-                is not CollaborationSynthesisOutcomeKind.NOT_ATTEMPTED
-            ):
-                raise ValueError("partial assignment failure prohibits synthesis")
+            raise ValueError("a non-successful assignment prohibits synthesis")
+        if (
+            any(
+                item.outcome is CollaborationAssignmentOutcomeKind.FAILED
+                for item in self.assignment_outcomes
+            )
+            or self.synthesis_outcome is CollaborationSynthesisOutcomeKind.FAILED
+        ):
+            expected_overall = CollaborationExecutionOutcomeKind.FAILED
+        elif (
+            any(
+                item.outcome is CollaborationAssignmentOutcomeKind.CANCELLED
+                for item in self.assignment_outcomes
+            )
+            or self.synthesis_outcome is CollaborationSynthesisOutcomeKind.CANCELLED
+        ):
+            expected_overall = CollaborationExecutionOutcomeKind.CANCELLED
+        elif assignments_succeeded and self.synthesis_outcome in (
+            CollaborationSynthesisOutcomeKind.SUCCEEDED,
+            CollaborationSynthesisOutcomeKind.NOT_ATTEMPTED,
+        ):
+            expected_overall = CollaborationExecutionOutcomeKind.SUCCEEDED
+        else:
+            raise ValueError("execution result terminal outcomes are incomplete")
+        if self.overall_outcome is not expected_overall:
+            raise ValueError(
+                "overall execution outcome disagrees with terminal outcomes"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -867,7 +899,9 @@ class CollaborationSpecialistReplyPayload:
     execution_attempt_id: str
     assignment_id: str
     dispatch_event_id: str
-    content: str
+    assessment: CollaborationSpecialistAssessment
+    message: str
+    input_ids: tuple[str, ...]
 
     def __post_init__(self) -> None:
         _validate_identifier(self.proposal_id, label="reply proposal ID")
@@ -878,7 +912,50 @@ class CollaborationSpecialistReplyPayload:
         _validate_identifier(self.execution_attempt_id, label="reply attempt ID")
         _validate_identifier(self.assignment_id, label="reply assignment ID")
         _validate_identifier(self.dispatch_event_id, label="reply dispatch event ID")
-        _validate_visible_text(self.content, label="specialist reply")
+        _require_enum(
+            self.assessment,
+            CollaborationSpecialistAssessment,
+            "specialist assessment",
+        )
+        _validate_visible_text(self.message, label="specialist reply")
+        _validate_identifier_tuple(self.input_ids, label="specialist reply input IDs")
+
+
+@dataclass(frozen=True, slots=True)
+class CollaborationLeadSynthesisPayload:
+    """Visible lead synthesis bound to every successful specialist reply."""
+
+    proposal_id: str
+    proposal_revision: int
+    proposal_digest: str
+    execution_attempt_id: str
+    message: str
+    reply_event_ids: tuple[str, ...]
+    unresolved_input_ids: tuple[str, ...]
+    next_intent: LeadProposalIntent | None = None
+
+    def __post_init__(self) -> None:
+        _validate_identifier(self.proposal_id, label="synthesis proposal ID")
+        _validate_positive_integer(
+            self.proposal_revision,
+            label="synthesis proposal revision",
+        )
+        _validate_digest(self.proposal_digest, label="synthesis proposal digest")
+        _validate_identifier(self.execution_attempt_id, label="synthesis attempt ID")
+        _validate_visible_text(self.message, label="lead synthesis")
+        _validate_identifier_tuple(
+            self.reply_event_ids,
+            label="synthesis reply event IDs",
+        )
+        _validate_identifier_tuple(
+            self.unresolved_input_ids,
+            label="synthesis unresolved input IDs",
+        )
+        if self.next_intent is not None:
+            if type(self.next_intent) is not LeadProposalIntent:
+                raise TypeError("synthesis next intent must be a LeadProposalIntent")
+            if self.next_intent.relation is not LeadProposalRelation.CONTINUE_LINEAGE:
+                raise ValueError("synthesis next intent must continue the same lineage")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1049,7 +1126,7 @@ class CollaborationProviderCallPayload:
         )
         if self.invocation_kind in {
             CollaborationInvocationKind.LEAD,
-            CollaborationInvocationKind.SYNTHESIS,
+            CollaborationInvocationKind.LEAD_SYNTHESIS,
         }:
             if self.role != LEAD_ORCHESTRATOR:
                 raise ValueError("lead and synthesis calls require the lead role")
@@ -1062,6 +1139,7 @@ CollaborationPayload = (
     | CollaborationMessagePayload
     | CollaborationAssignmentDispatchPayload
     | CollaborationSpecialistReplyPayload
+    | CollaborationLeadSynthesisPayload
     | CollaborationStepStatePayload
     | CollaborationConfirmationPayload
     | CollaborationExecutionResult
@@ -1428,7 +1506,8 @@ def _input_value(item: CollaborationInputRevision) -> dict[str, object]:
 def _profile_value(profile: CollaborationAgentProfile) -> dict[str, object]:
     return {
         "agent_id": profile.agent_id,
-        "profile_fingerprint": profile.profile_fingerprint,
+        "definition_fingerprint": profile.definition_fingerprint,
+        "execution_fingerprint": profile.execution_fingerprint,
     }
 
 
@@ -1451,6 +1530,21 @@ def _assignment_value(assignment: CollaborationAssignment) -> dict[str, object]:
         "max_physical_calls": assignment.max_physical_calls,
         "round": assignment.round,
         "specialist_id": assignment.specialist_id,
+    }
+
+
+def _lead_proposal_intent_value(intent: LeadProposalIntent) -> dict[str, object]:
+    return {
+        "assignments": [
+            {
+                "agent_id": assignment.agent_id,
+                "input_ids": list(assignment.input_ids),
+                "instruction": assignment.instruction,
+            }
+            for assignment in intent.assignments
+        ],
+        "purpose": intent.purpose,
+        "relation": intent.relation.value,
     }
 
 
@@ -1533,13 +1627,31 @@ def _payload_value(payload: CollaborationPayload) -> dict[str, object]:
     if type(payload) is CollaborationSpecialistReplyPayload:
         return {
             "assignment_id": payload.assignment_id,
-            "content": payload.content,
+            "assessment": payload.assessment.value,
             "dispatch_event_id": payload.dispatch_event_id,
             "execution_attempt_id": payload.execution_attempt_id,
+            "input_ids": list(payload.input_ids),
+            "message": payload.message,
             "payload_type": "specialist_reply",
             "proposal_digest": payload.proposal_digest,
             "proposal_id": payload.proposal_id,
             "proposal_revision": payload.proposal_revision,
+        }
+    if type(payload) is CollaborationLeadSynthesisPayload:
+        return {
+            "execution_attempt_id": payload.execution_attempt_id,
+            "message": payload.message,
+            "next_intent": (
+                None
+                if payload.next_intent is None
+                else _lead_proposal_intent_value(payload.next_intent)
+            ),
+            "payload_type": "lead_synthesis",
+            "proposal_digest": payload.proposal_digest,
+            "proposal_id": payload.proposal_id,
+            "proposal_revision": payload.proposal_revision,
+            "reply_event_ids": list(payload.reply_event_ids),
+            "unresolved_input_ids": list(payload.unresolved_input_ids),
         }
     if type(payload) is CollaborationStepStatePayload:
         return {
@@ -1668,15 +1780,59 @@ def _decode_input(value: object) -> CollaborationInputRevision:
 def _decode_profile(value: object) -> CollaborationAgentProfile:
     item = _object(
         value,
-        {"agent_id", "profile_fingerprint"},
+        {"agent_id", "definition_fingerprint", "execution_fingerprint"},
         label="collaboration profile",
     )
     return CollaborationAgentProfile(
         agent_id=_string(item["agent_id"], label="profile agent ID"),
-        profile_fingerprint=_string(
-            item["profile_fingerprint"],
-            label="profile fingerprint",
+        definition_fingerprint=_string(
+            item["definition_fingerprint"],
+            label="definition fingerprint",
         ),
+        execution_fingerprint=_string(
+            item["execution_fingerprint"],
+            label="execution fingerprint",
+        ),
+    )
+
+
+def _decode_lead_proposal_intent(value: object) -> LeadProposalIntent:
+    item = _object(
+        value,
+        {"assignments", "purpose", "relation"},
+        label="lead proposal intent",
+    )
+    assignments = []
+    for raw in _array(item["assignments"], label="lead intent assignments"):
+        assignment = _object(
+            raw,
+            {"agent_id", "input_ids", "instruction"},
+            label="lead assignment intent",
+        )
+        assignments.append(
+            LeadAssignmentIntent(
+                agent_id=_string(assignment["agent_id"], label="lead specialist ID"),
+                instruction=_string(
+                    assignment["instruction"],
+                    label="lead assignment instruction",
+                ),
+                input_ids=tuple(
+                    _string(input_id, label="lead assignment input ID")
+                    for input_id in _array(
+                        assignment["input_ids"],
+                        label="lead assignment input IDs",
+                    )
+                ),
+            )
+        )
+    return LeadProposalIntent(
+        relation=_enum(
+            LeadProposalRelation,
+            item["relation"],
+            label="lead proposal relation",
+        ),
+        purpose=_string(item["purpose"], label="lead proposal purpose"),
+        assignments=tuple(assignments),
     )
 
 
@@ -1963,9 +2119,11 @@ def _decode_payload(value: object) -> CollaborationPayload:
             value,
             {
                 "assignment_id",
-                "content",
+                "assessment",
                 "dispatch_event_id",
                 "execution_attempt_id",
+                "input_ids",
+                "message",
                 "payload_type",
                 "proposal_digest",
                 "proposal_id",
@@ -1992,7 +2150,67 @@ def _decode_payload(value: object) -> CollaborationPayload:
                 item["dispatch_event_id"],
                 label="reply dispatch event ID",
             ),
-            content=_string(item["content"], label="reply content"),
+            assessment=_enum(
+                CollaborationSpecialistAssessment,
+                item["assessment"],
+                label="specialist assessment",
+            ),
+            message=_string(item["message"], label="reply message"),
+            input_ids=tuple(
+                _string(input_id, label="reply input ID")
+                for input_id in _array(item["input_ids"], label="reply input IDs")
+            ),
+        )
+    if payload_type == "lead_synthesis":
+        item = _object(
+            value,
+            {
+                "execution_attempt_id",
+                "message",
+                "next_intent",
+                "payload_type",
+                "proposal_digest",
+                "proposal_id",
+                "proposal_revision",
+                "reply_event_ids",
+                "unresolved_input_ids",
+            },
+            label="lead synthesis payload",
+        )
+        return CollaborationLeadSynthesisPayload(
+            proposal_id=_string(item["proposal_id"], label="synthesis proposal ID"),
+            proposal_revision=_integer(
+                item["proposal_revision"],
+                label="synthesis proposal revision",
+            ),
+            proposal_digest=_string(
+                item["proposal_digest"],
+                label="synthesis proposal digest",
+            ),
+            execution_attempt_id=_string(
+                item["execution_attempt_id"],
+                label="synthesis attempt ID",
+            ),
+            message=_string(item["message"], label="synthesis message"),
+            reply_event_ids=tuple(
+                _string(event_id, label="synthesis reply event ID")
+                for event_id in _array(
+                    item["reply_event_ids"],
+                    label="synthesis reply event IDs",
+                )
+            ),
+            unresolved_input_ids=tuple(
+                _string(input_id, label="synthesis unresolved input ID")
+                for input_id in _array(
+                    item["unresolved_input_ids"],
+                    label="synthesis unresolved input IDs",
+                )
+            ),
+            next_intent=(
+                None
+                if item["next_intent"] is None
+                else _decode_lead_proposal_intent(item["next_intent"])
+            ),
         )
     if payload_type == "step_state":
         item = _object(
@@ -2251,6 +2469,7 @@ def _validate_collaboration_payload(
             CollaborationAssignmentDispatchPayload,
         ),
         CollaborationEventKind.SPECIALIST_REPLY: (CollaborationSpecialistReplyPayload,),
+        CollaborationEventKind.LEAD_SYNTHESIS: (CollaborationLeadSynthesisPayload,),
         CollaborationEventKind.STEP_STATE: (CollaborationStepStatePayload,),
         CollaborationEventKind.CONFIRMATION: (CollaborationConfirmationPayload,),
         CollaborationEventKind.EXECUTION_RESULT: (CollaborationExecutionResult,),
@@ -2362,6 +2581,9 @@ def _validate_collaboration_direction(
         CollaborationEventKind.SPECIALIST_REPLY: {
             (CollaborationActorKind.SPECIALIST, CollaborationActorKind.LEAD),
             (CollaborationActorKind.SPECIALIST, CollaborationActorKind.USER),
+        },
+        CollaborationEventKind.LEAD_SYNTHESIS: {
+            (CollaborationActorKind.LEAD, CollaborationActorKind.USER),
         },
         CollaborationEventKind.STEP_STATE: {
             (CollaborationActorKind.RUNTIME, CollaborationActorKind.USER),
@@ -2638,6 +2860,7 @@ __all__ = [
     "CollaborationInputState",
     "CollaborationInterruptionPayload",
     "CollaborationInvocationKind",
+    "CollaborationLeadSynthesisPayload",
     "CollaborationMessagePayload",
     "CollaborationPayload",
     "CollaborationProposal",
@@ -2647,6 +2870,7 @@ __all__ = [
     "CollaborationProviderCallState",
     "CollaborationSideEffect",
     "CollaborationSpecialistReplyPayload",
+    "CollaborationSpecialistAssessment",
     "CollaborationStepKind",
     "CollaborationStepState",
     "CollaborationStepStatePayload",

@@ -1566,6 +1566,31 @@ class AgentBackend:
         with self._generation_lock:
             return self._active_adapter_generation.profiles[agent_id]
 
+    def execution_profile_fingerprint(self, agent_id: str) -> str:
+        """Return provider/model/effort and source facts without prompt content."""
+
+        return self._execution_profile_fingerprint(self.execution_profile(agent_id))
+
+    @staticmethod
+    def _execution_profile_fingerprint(profile: AgentExecutionProfile) -> str:
+        if type(profile) is not AgentExecutionProfile:
+            raise TypeError("execution profile is invalid")
+        body = json.dumps(
+            {
+                "effort": profile.effort,
+                "effort_source": profile.effort_source.value,
+                "model": profile.model,
+                "model_source": profile.model_source.value,
+                "provider": profile.provider,
+                "provider_source": profile.provider_source.value,
+            },
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8", errors="strict")
+        return "sha256:" + hashlib.sha256(body).hexdigest()
+
     def execution_profiles(self) -> tuple[AgentExecutionProfile, ...]:
         """Return the active roster in canonical order."""
 

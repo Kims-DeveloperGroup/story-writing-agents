@@ -2,9 +2,9 @@
 
 The runtime has one active schema-v2 collaboration-history path. Management,
 structured history/search/transcript reads, provider-free smoke, and the Python
-lead proposal/confirmation API are available. The interactive shell and
-specialist execution are not connected yet. Start with the page that matches
-your task.
+lead/confirmed-specialist consultation API are available. The interactive
+shell is not connected yet, and artifact/Git mutation remains unavailable.
+Start with the page that matches your task.
 
 ## Start here
 
@@ -22,7 +22,7 @@ your task.
 | Initialize and inspect a workspace | [Workspaces](guides/workspaces.md) |
 | Manage sessions and conversations | [Story sessions](guides/story-sessions.md) |
 | Understand why shell story instructions are unavailable | [Collaboration transition](guides/consensus-runs.md) |
-| Converse with the Python lead and decide a proposal | [Lead agent](guides/lead-agent.md) |
+| Converse with the Python lead, consult specialists, and decide proposals | [Lead agent](guides/lead-agent.md) |
 | Run the local management/storage check | [Provider-free smoke](guides/smoke-test.md) |
 | Apply session directives | [Directives](guides/directives.md) |
 | Inspect and recover local state | [Inspection and recovery](guides/inspection-and-recovery.md) |
