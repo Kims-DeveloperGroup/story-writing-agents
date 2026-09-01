@@ -16,8 +16,9 @@ The stable inventories in this revision are:
 | `story_writing_agents.conversation_retrieval` | 24 | Low-level provider search/read-history/answer contracts |
 | `story_writing_agents.conversation_storage` | 63 | Storage composition, provenance, activation, archive, and transfer contracts |
 | `story_writing_agents.workspace` | 3 | `Workspace`, `initialize_workspace`, and `FilesystemConversationCatalog` |
+| `story_writing_agents.writing_artifacts` | 62 | Canonical artifact/reference values plus pure exact change-set and relationship-policy contracts |
 
-The production graph has 97 modules, 370 dependency edges, no cycles, and 104
+The production graph has 99 modules, 375 dependency edges, no cycles, and 104
 package-root exports. The conversations facade contributes 73 event exports
 and 23 context exports; its bindings are identical to the owner bindings.
 
@@ -38,6 +39,79 @@ session lifecycle, catalog, parser, retrieval, and error contracts. Those are
 component seams, not alternate runtime execution entry points. The exact list
 is authoritative in `story_writing_agents.__all__` and is checked against the
 project module index.
+
+Canonical artifact value contracts live in
+`story_writing_agents.writing_artifacts`, but are intentionally absent from the
+104-name package-root facade. Its exact 62-name facade includes immutable path,
+catalog, kind, reference, and filesystem `ArtifactSourceIdentity` values;
+content-free authorization, operation history/state, read-request/action,
+`ReferenceOperationFailure`, and parser contracts; and the 16 pure exact
+change-set symbols and 15 pure relationship-policy symbols below.
+Filesystem-backed `WritingArtifactRepository`, content-bearing read results,
+private capabilities, runtime coordinators, the ranged viewer, and interactive
+activation values remain internal. The current management controller does not
+activate `$`/`$$` prompt editing or expose a public selection API or standalone
+artifact command. See [Canonical writing artifacts](writing-artifacts.md).
+
+The supported change-set imports are:
+
+```python
+from story_writing_agents.writing_artifacts import (
+    ARTIFACT_CHANGE_SET_SCHEMA_VERSION,
+    ArtifactChangeOperation,
+    ArtifactChangeOperationKind,
+    ArtifactChangeSet,
+    ArtifactChangeSetError,
+    ArtifactChangeSetErrorCode,
+    ArtifactCreateOperation,
+    ArtifactDeleteOperation,
+    ArtifactPatchOperation,
+    ArtifactRenameOperation,
+    ArtifactReplaceOperation,
+    ArtifactTextHunk,
+    build_artifact_change_set,
+    deserialize_artifact_change_set,
+    project_artifact_change_set,
+    serialize_artifact_change_set,
+)
+```
+
+These frozen values and pure functions build, project, and byte-canonically
+serialize complete-state-bound proposals. They perform no filesystem,
+provider, lead-agent, relationship-policy, confirmation, apply, publication,
+or Git operation. Their exact fields, byte-offset rules, signatures, digest
+model, failure codes, and core/manuscript examples are documented under
+[Exact in-memory artifact change sets](writing-artifacts.md#exact-in-memory-artifact-change-sets).
+
+The supported relationship-policy imports are:
+
+```python
+from story_writing_agents.writing_artifacts import (
+    ARTIFACT_RELATIONSHIP_COMPANION_RULES,
+    ARTIFACT_RELATIONSHIP_SCHEMA_VERSION,
+    MAX_RELATIONSHIP_ARTIFACTS,
+    MAX_RELATIONSHIP_ARTIFACT_UTF8_BYTES,
+    MAX_RELATIONSHIP_EDGES,
+    MAX_RELATIONSHIP_STATE_UTF8_BYTES,
+    ArtifactRelationshipEdge,
+    ArtifactRelationshipError,
+    ArtifactRelationshipErrorCode,
+    ArtifactRelationshipKind,
+    ArtifactRelationshipValidation,
+    ArtifactReviewDomain,
+    ArtifactReviewFact,
+    ArtifactReviewReason,
+    validate_artifact_relationships,
+)
+```
+
+This module depends only on the canonical artifact catalog and exact
+change-set contracts. It projects and compares complete in-memory relationship
+graphs, enforces permanent core identities, and derives artifact-only review
+facts. It owns no filesystem, repository, provider, agent, confirmation,
+apply, publication, or Git behavior. Exact fields, limits, grammar, graph
+deltas, review domains, errors, and all seven user workflows are documented
+under [Canonical artifact relationship validation](writing-artifacts.md#canonical-artifact-relationship-validation).
 
 <a id="structured-collaboration-history-boundary"></a>
 
@@ -241,6 +315,7 @@ filesystem and Git effects.
 
 - [Runtime management API](runtime-api.md)
 - [Workspace API](workspace-api.md)
+- [Canonical writing artifacts](writing-artifacts.md)
 - [Collaboration history](collaboration-history.md)
 - [Conversation transcripts](conversation-transcripts.md)
 - [Conversation search](conversation-search.md)

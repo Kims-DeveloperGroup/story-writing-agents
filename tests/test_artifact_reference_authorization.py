@@ -244,7 +244,7 @@ class ReferenceAuthorizationValueTests(unittest.TestCase):
         self.assertTrue(supported.issubset(artifact_facade.__all__))
         self.assertTrue(transient.isdisjoint(artifact_facade.__all__))
         self.assertNotIn("CanonicalArtifactFilesystem", artifact_facade.__all__)
-        self.assertEqual(len(artifact_facade.__all__), 31)
+        self.assertEqual(len(artifact_facade.__all__), 62)
         self.assertTrue(
             (supported | transient).isdisjoint(story_writing_agents.__all__)
         )
