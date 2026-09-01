@@ -18,7 +18,7 @@ Package root: `src/story_writing_agents/`
 
 Importable production units indexed: 97.
 
-Direct internal dependency edges indexed: 385.
+Direct internal dependency edges indexed: 360.
 
 Directed internal dependency cycles indexed: 0.
 
@@ -36,25 +36,12 @@ __main__ -> cli -> conversation_rag_cli
                  -> interactive_settings -> agents/config/errors/workspace
                  -> provider_auth -> (standard library only)
                  -> provider_catalog -> (standard library only)
-                 -> run_inputs -> errors
                  -> debug_log -> agents/provider_adapter/workspace
-                 -> orchestrator -> agent_context.actions/manifest/planning/service/sources
+                 -> orchestrator -> backend/config/conversations/debug_log/directives
                  |               -> conversation_rag_runtime
-                 |               |  -> conversation_literal_search/conversation_rag
-                 |               |  -> conversation_retrieval/conversation_search
-                 |               |  -> conversation_storage.contracts/conversations
-                 |               -> conversation_retrieval
-                 |               |  -> agents/conversation_rag/conversation_search
-                 |               |                           -> conversations/errors/models
-                 |               -> conversation_search -> conversation_literal_search
-                 |                                      -> conversations/errors
-                 |               -> prompts -> agents/config/conversations/models
-                 |               |          -> workspace/writing_artifacts
-                 |               |          -> writing_artifacts.repository
-                 |               -> agents/backend/config/conversations/debug_log/directives
-                 |               -> errors/models/session_lifecycle/workspace
-                 |               -> writing_artifacts/writing_artifacts.repository
-                 |               -> writing_artifacts.runtime_references
+                 |               -> conversation_storage.composition/contracts
+                 |               -> errors/prompts/workspace
+                 |               -> writing_artifacts/repository/runtime_references
                  -> backend -> agent_context/agent_context.service
                  |          -> agent_exchanges/agent_exchanges.capture
                  |          -> antigravity_adapter -> agent_context/models
@@ -76,14 +63,12 @@ interactive_controller._core -> interactive_controller._session_policy
                              -> interactive_controller._exchange_viewer
                              -> interactive_controller._runtime_policy
                              -> agent_exchanges/agents/backend/cli_context/debug_log
-                             -> conversation_rag_composition
-                             -> conversation_retrieval/conversation_search
+                             -> conversation_search
                              -> conversation_storage.contracts/selection
                              -> conversations/errors/interactive_commands
                              -> interactive_auth/interactive_settings/interactive_terminal
-                             -> models/orchestrator/provider_adapter/provider_auth
-                             -> provider_catalog/run_inputs
-                             -> session_lifecycle/workspace/writing_artifacts
+                             -> orchestrator/provider_adapter/provider_auth
+                             -> provider_catalog/session_lifecycle/workspace
 interactive_controller._session_policy -> errors/interactive_terminal/session_lifecycle
 interactive_controller._conversation_policy -> conversation_search/conversations
                                             -> errors/interactive_terminal/workspace
@@ -91,15 +76,12 @@ interactive_controller._exchange_policy -> agent_exchanges/agents/models
 interactive_controller._exchange_viewer -> agent_exchanges
                                         -> interactive_terminal._external_view
                                         -> jsonl-viewer (required exact-pinned base package, lazy import)
-interactive_controller._runtime_policy -> agent_context.service
-                                       -> conversation_retrieval/conversation_search
-                                       -> errors/interactive_terminal/models/workspace
+interactive_controller._runtime_policy -> errors/interactive_terminal/models/workspace
 
-smoke -> agents/conversation_retrieval/conversation_search/conversations/debug_log
-      -> models/orchestrator/session_lifecycle/workspace/writing_artifacts.repository
+smoke -> agents/conversation_search/conversations/debug_log/orchestrator/workspace
 debug_log -> agents/provider_adapter/workspace
 directives -> config/workspace/errors/agents
-interactive_commands -> agents/conversation_search
+interactive_commands -> agents
 interactive_auth -> interactive_terminal/provider_auth
 interactive_line_editor -> interactive_commands/interactive_terminal
 interactive_settings -> agents/config/errors/workspace
@@ -239,82 +221,65 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 - **Source:** `src/story_writing_agents/__init__.py`
 - **Responsibility:** Provide the intentional package-level API facade.
-- **Supported surface:** Exactly 120 names in `__all__`, grouped by owner:
-  `AGENT_SPECS`, `ROSTER`, `SPECIALIST_IDS`, `LEAD_ORCHESTRATOR`,
-  `PLOT_ARCHITECT`, `CHARACTER_CUSTODIAN`, and `EXECUTION_SPECIALIST` from
-  `agents`; `AgentBackend` and `BoundAgent` from `backend`; `DirectiveKind`,
-  `RuntimeDirective`, `apply_directive`, and `parse_directive` from `directives`;
-  `StoryWritingAgentsError`, `WorkspaceSecurityError`, `WorkspaceFormatError`,
-  `WorkspaceVersionUnsupportedError`, `ConfigurationError`, `DirectiveError`,
-  `SessionIdError`,
-  `ConversationNotFoundError`, `ConversationExistsError`,
-  `ManuscriptExistsError`, `BackendProtocolError`, `SessionExistsError`,
-  `SessionNotFoundError`, `SessionPausedError`, `SessionAccessBlockedError`,
-  `SessionOwnershipUnknownError`, `DebateExistsError`,
-  `ProgressObserverError`, `ConversationRetrievalError`,
-  `ConversationRetrievalSemanticError`, `ConversationRetrievalBudgetError`, and
-  `ConversationRetrievalObserverError` from `errors`;
-  `CONVERSATION_CONTEXT_POLICY`,
-  `CONVERSATION_EVENT_SCHEMA_VERSION`,
-  `CONVERSATION_METADATA_SCHEMA_VERSION`,
-  `CONVERSATION_SUBJECT_NORMALIZATION_VERSION`,
-  `MAX_CONVERSATION_SUBJECT_LENGTH`, `ConversationCatalog`,
+- **Supported surface:** Exactly these 118 names in canonical `__all__` order:
+  `AGENT_SPECS`, `COMMANDS`, `ActionKind`, `AgentBackend`, `AgentDefinition`,
+  `AgentReply`, `AgentRequest`, `AgentStateEntry`, `BackendProtocolError`,
+  `BoundAgent`, `CHARACTER_CUSTODIAN`, `CONVERSATION_MEMORY_POLICY`,
+  `CONVERSATION_CONTEXT_POLICY`, `CONVERSATION_EVENT_SCHEMA_VERSION`,
+  `CONVERSATION_METADATA_SCHEMA_VERSION`, `CONVERSATION_RETRIEVAL_POLICY`,
+  `CONVERSATION_SUBJECT_NORMALIZATION_VERSION`, `ConfigurationError`,
+  `CommandSpec`, `ConversationCitation`, `ConversationCatalog`,
   `ConversationContextPolicy`, `ConversationContextWindow`,
   `ConversationEvent`, `ConversationEventAppend`, `ConversationEventKind`,
-  `ConversationEventStore`, `ConversationMetadata`, `ConversationStatus`, and
-  `normalize_conversation_subject` from `conversations`;
-  `CONVERSATION_MEMORY_POLICY`, `ConversationCitation`,
+  `ConversationEventStore`, `ConversationExistsError`, `ConversationMetadata`,
   `ConversationMemoryPolicy`, `ConversationMemoryService`,
-  `ConversationSearch`, `ConversationSearchHit`,
-  `ConversationSearchMatchKind`, `ConversationSearchQuery`,
-  `ConversationSearchResult`, `ConversationSearchScope`,
-  `ConversationTranscriptCursor`, `ConversationTranscriptPage`, and
-  `ReferenceConversationSearch` from `conversation_search`;
-  `CONVERSATION_RETRIEVAL_POLICY`, `ConversationRetrievalAction`,
+  `ConversationNotFoundError`, `ConversationRetrievalAction`,
   `ConversationRetrievalActionHandler`, `ConversationRetrievalActionKind`,
-  `ConversationRetrievalAnswerAction`, `ConversationRetrievalObservation`,
-  `ConversationRetrievalPolicy`, `ConversationRetrievalProgressEvent`,
-  `ConversationRetrievalProgressPhase`, `ConversationRetrievalProgressSink`,
-  `ConversationRetrievalReadAction`, `ConversationRetrievalReadObservation`,
-  `ConversationRetrievalReply`, `ConversationRetrievalRequest`,
-  `ConversationRetrievalResult`, `ConversationRetrievalSearchAction`,
-  `ConversationRetrievalSearchItem`, `ConversationRetrievalSearchObservation`,
-  `ConversationRetrievalSource`, and `ConversationRetrievalTranscriptEvent`
-  from `conversation_retrieval`; `ActionKind`,
-  `InteractiveAction`, `CommandSpec`, `COMMANDS`, and
-  `parse_interactive_line` from `interactive_commands`; `InputKind`, `Phase`,
-  `Verdict`, `DebateStatus`, `DebateContextMode`, `DebateContextRequest`,
-  `DebateFailureKind`, `DebateProgressPhase`, `DebateProgressEvent`,
-  `DebateProgressSink`, `DebateMessage`, `AgentStateEntry`,
-  `PromptFileReference`, `AgentDefinition`, `AgentRequest`, `AgentReply`,
-  `ConversationRequest`, `ConversationReply`, `ConversationResult`, and
-  `DebateResult` from `models`; `SessionDurableState`, `SessionAccessState`,
-  `SessionLifecycleState`, and
-  `provider_work_is_ready` from `session_lifecycle`; `StoryRuntime`,
-  `RuntimeSession`, `Runtime`, and `Session` from `orchestrator`; and
+  `ConversationRetrievalAnswerAction`, `ConversationRetrievalBudgetError`,
+  `ConversationRetrievalError`, `ConversationRetrievalObservation`,
+  `ConversationRetrievalObserverError`, `ConversationRetrievalPolicy`,
+  `ConversationRetrievalProgressEvent`, `ConversationRetrievalProgressPhase`,
+  `ConversationRetrievalProgressSink`, `ConversationRetrievalReadAction`,
+  `ConversationRetrievalReadObservation`, `ConversationRetrievalReply`,
+  `ConversationRetrievalRequest`, `ConversationRetrievalResult`,
+  `ConversationRetrievalSearchAction`, `ConversationRetrievalSearchItem`,
+  `ConversationRetrievalSearchObservation`,
+  `ConversationRetrievalSemanticError`, `ConversationRetrievalSource`,
+  `ConversationRetrievalTranscriptEvent`, `ConversationReply`,
+  `ConversationRequest`, `ConversationResult`, `ConversationSearch`,
+  `ConversationSearchHit`, `ConversationSearchMatchKind`,
+  `ConversationSearchQuery`, `ConversationSearchResult`,
+  `ConversationSearchScope`, `ConversationStatus`,
+  `ConversationTranscriptCursor`, `ConversationTranscriptPage`,
+  `DebateContextMode`, `DebateContextRequest`, `DebateFailureKind`,
+  `DebateMessage`, `DebateProgressEvent`, `DebateProgressPhase`,
+  `DebateProgressSink`, `DebateResult`, `DebateStatus`, `DebateExistsError`,
+  `DirectiveError`, `DirectiveKind`, `EXECUTION_SPECIALIST`,
   `FilesystemConversationCatalog`, `FilesystemConversationEventStore`,
-  `Workspace`, plus `initialize_workspace` from `workspace`.
-  Schema-v2 `Collaboration*` contracts are intentionally omitted from this
-  project-root facade and are supported only by the conversations facade.
-  The re-exported `ActionKind` includes the additive `AUTH` case, while it and
-  `InteractiveAction` retain the earlier additive search and transcript cases
-  plus the optional positive `start_sequence` payload; the facade name count
-  and established import paths are unchanged.
+  `InputKind`, `InteractiveAction`, `LEAD_ORCHESTRATOR`,
+  `MAX_CONVERSATION_SUBJECT_LENGTH`, `ManuscriptExistsError`, `PLOT_ARCHITECT`,
+  `Phase`, `PromptFileReference`, `ProgressObserverError`, `ROSTER`,
+  `ReferenceConversationSearch`, `RuntimeDirective`, `RuntimeSession`,
+  `SPECIALIST_IDS`, `SessionAccessBlockedError`, `SessionAccessState`,
+  `SessionDurableState`, `SessionExistsError`, `SessionIdError`,
+  `SessionLifecycleState`, `SessionNotFoundError`,
+  `SessionOwnershipUnknownError`, `SessionPausedError`, `StoryRuntime`,
+  `StoryWritingAgentsError`, `Verdict`, `Workspace`, `WorkspaceFormatError`,
+  `WorkspaceSecurityError`, `WorkspaceVersionUnsupportedError`,
+  `apply_directive`, `initialize_workspace`, `normalize_conversation_subject`,
+  `parse_directive`, `parse_interactive_line`, and `provider_work_is_ready`.
+  It does not import or export the removed compatibility aliases `Runtime` or
+  `Session`. Schema-v2 `Collaboration*` contracts remain supported only by the
+  direct `conversations` facade pending the separate active-v2 cutover.
 - **Direct internal dependencies:** `agents`, `backend`,
   `conversation_retrieval`, `conversation_search`, `conversations`,
-  `directives`, `errors`, `interactive_commands`, `models`, `orchestrator`,
-  `session_lifecycle`, and `workspace`.
+  `directives`, `errors`, `interactive_commands`, `models`,
+  `orchestrator`, `session_lifecycle`, and `workspace`.
 - **State, resources, and side effects:** Owns no state or external resource;
   importing the facade loads its exported modules.
 - **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
-  `tests/test_conversation_runtime.py`, `tests/test_codex_backend.py`,
-  `tests/test_conversation_catalog.py`,
-  `tests/test_session_lifecycle.py`, `tests/test_conversation_event_store.py`,
-  `tests/test_interactive_commands.py`, `tests/test_conversation_search.py`,
-  `docs/reference/package-api.md`, `docs/reference/runtime-api.md`,
-  `docs/reference/conversation-search.md`,
-  `docs/reference/conversation-transcripts.md`, and
-  `docs/reference/conversation-retrieval.md`.
+  `docs/reference/runtime-api.md`, `docs/reference/agent-contracts.md`, and
+  `docs/reference/cli.md` verify the supported facade.
 
 ### `story_writing_agents.__main__`
 
@@ -339,7 +304,8 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** Immutable module metadata only.
 - **Primary verification/documentation:** `tests/test_workspace_and_config.py`,
-  `docs/concepts.md`, and `docs/reference/configuration/agent-configuration.md`.
+  `docs/concepts.md`, `docs/guides/lead-agent.md`, and
+  `docs/reference/configuration/agent-configuration.md`.
 
 ### `story_writing_agents.agent_exchanges`
 
@@ -523,11 +489,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   while every retained accounting value contains only kinds, safe identities,
   counts, state, and exact optional usage. Importing performs no I/O.
 - **Primary verification/documentation:**
-  `tests/test_agent_context_accounting.py` and
-  `tests/test_context_accounting_baseline.py`, supported by
-  `tests/context_accounting_baseline_fixture.py` and
-  `tests/fixtures/agent_context/provider_context_baseline_v1.json`;
-  `tests/test_context_accounting_optimized.py`;
+  `tests/test_agent_context_accounting.py`,
   `tests/test_codex_backend.py`, `tests/test_antigravity_adapter.py`,
   `tests/test_antigravity_parity.py`, and
   `docs/design/prompts-and-provider.md`.
@@ -749,8 +711,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_agent_context_execution.py`,
   `tests/test_agent_exchange_capture.py`,
   `tests/test_agent_context_runtime_adoption.py`,
-  `tests/test_agent_context_release_scenarios.py`,
-  `tests/test_context_accounting_optimized.py`, `tests/test_codex_backend.py`,
+  `tests/test_codex_backend.py`,
   `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`,
   `docs/audits/issue-380-agent-context-conformance.md`,
   `docs/design/agent-context.md`, `docs/guides/agent-context.md`, and
@@ -1113,12 +1074,11 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_agent_context_execution.py`,
   `tests/test_agent_exchange_capture.py`,
   `tests/test_agent_context_runtime_adoption.py`, `tests/test_codex_backend.py`,
-  `tests/test_context_accounting_baseline.py`,
-  `tests/test_context_accounting_optimized.py`, `tests/test_prompts.py`,
+  `tests/test_prompts.py`,
   `tests/test_conversation_retrieval.py`,
   `tests/test_antigravity_adapter.py`, `tests/test_antigravity_parity.py`,
   `tests/test_session_lifecycle.py`, `docs/reference/backend-and-sessions.md`,
-  `docs/guides/antigravity.md`,
+  `docs/guides/antigravity.md`, `docs/guides/lead-agent.md`,
   `docs/reference/conversation-retrieval.md`,
   `docs/design/prompts-and-provider.md`, `docs/design/session-lifecycle.md`, and
   `docs/operations/privacy-and-provider.md`, plus
@@ -1419,119 +1379,25 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.cli`
 
 - **Source:** `src/story_writing_agents/cli.py`
-- **Responsibility:** Parse command-line arguments and dispatch CLI commands.
-- **Supported surface:** Script entry point `story_writing_agents.cli:main` for
-  both `story` and `story-writing-agents`. `build_parser` and other helpers are
-  not package-supported APIs. Interactive `chat` and noninteractive `run`
-  accept additive `--antigravity-executable` (default `agy`),
-  `--antigravity-model`, and `--antigravity-effort` options and pass their
-  values to `AgentBackend`. The lifecycle grammar is exactly
-  `story session create SESSION`, `story session reopen [SESSION]`, and
-  `story session pause [SESSION]`; those actions have no lifecycle `--session`
-  option. Omitted reopen/pause targets use `default_session_id`; create and
-  reopen save that default only after their ready/access transition succeeds,
-  while pause retains it. Lifecycle success is printed after access release as
-  sorted, indented JSON containing only `access_state`, `durable_state`, and
-  `session_id`. Noninteractive `run` requires `--output PART/PATH.md`; the
-  runtime publishes it create-only beneath `manuscript/PART/`. The provider-
-  free storage grammar additionally includes
-  `storage use BACKEND [--install-missing --yes] [--workspace PATH]`, where
-  `BACKEND` is `filesystem` or `sqlite`, plus the existing
-  `storage transfer --from BACKEND --to BACKEND [--dry-run] [--workspace PATH]`
-  and `storage verify --from BACKEND --to BACKEND [--workspace PATH]`, where
-  both backend arguments are restricted to `filesystem` or `sqlite`. The
-  additive local-RAG grammar is exactly `rag status`,
-  `rag enable --provider PROVIDER`, `rag rebuild [--yes]`,
-  `rag search QUERY`, `rag disable`, and `rag purge [--yes]`, with
-  `--workspace` on every operation and `--session` only on status, rebuild,
-  search, and purge.
-- **Direct internal dependencies:** `agents`, `backend`, `cli_context`, `config`,
-  `conversation_rag_cli`, `conversation_storage.contracts`,
+- **Responsibility:** Parse and dispatch the retained CLI management,
+  inspection, storage, provider-free RAG, smoke, and interactive-shell commands.
+- **Supported surface:** Script entry point `story_writing_agents.cli:main`
+  for both console aliases. The grammar contains `chat`, `init`,
+  `directive`, `inspect`, `session`, `storage`, `rag`, and `smoke`;
+  the former `run` parser, flags, input resolver, dispatch, and result
+  presentation are absent. Backend-override parsing remains shared by retained
+  commands.
+- **Direct internal dependencies:** `agents`, `backend`, `cli_context`,
+  `config`, `conversation_rag_cli`, `conversation_storage.contracts`,
   `conversation_storage.migration`, `conversation_storage.selection`,
-  `debug_log`, `errors`, `interactive_auth`, `interactive_controller`,
-  `interactive_settings`, `interactive_terminal`, `models`, `orchestrator`,
-  `provider_auth`, `provider_catalog`, `run_inputs`, `session_lifecycle`, and
-  `workspace`; imports both `smoke` and `conversation_storage.migration` lazily
-  in their owning command branches.
-- **State, resources, and side effects:** Interactive construction creates one
-  command-free provider catalog service with the exact validated Antigravity
-  executable and injects it into the controller; discovery remains selection-
-  triggered and resource-owned by `provider_catalog`. Reads terminal input and
-  delegates caller-selected draft-file reads to `run_inputs`; writes JSON,
-  plain-text interaction, or errors to standard streams; creates backends;
-  constructs one
-  unified stream-backed terminal through its package-internal factory after a
-  stdin/stdout TTY guard; constructs the interactive controller; and runs the
-  async event loop. The factory binds main and composition previews plus
-  semantic confirmation input explicitly through one terminal driver, whose
-  first actual input irreversibly selects its capable live byte source or the
-  existing `input` callback. Capable subject, composition, and confirmation
-  reads are history-free; an incapable first read permanently retains ordinary
-  callback input. Interactive startup validates TTY and all
-  arguments before workspace discovery. After workspace discovery and
-  configuration validation it constructs the terminal and coordinates desired
-  conversation-storage activation beneath one terminal-owned text-free
-  progress span. It injects the resulting immutable service bundle into the
-  controller before constructing one workspace-root-bound
-  `ProviderAuthService` and `InteractiveAuthCoordinator`. It sequences the
-  welcome, an initial hard gate until at least one provider is exactly
-  authenticated, missing-default selection and persistence, immutable
-  configuration loading, effective-route resolution in CLI-override, explicit
-  agent, workspace-default, then Codex order, and a fresh hard gate for every
-  distinct effective provider. It treats cancellation, interrupt, and EOF as
-  clean pre-backend exits and delays CLI-context loading, backend and controller
-  construction, initial session attachment, and lobby work until both gates
-  pass. CLI-context, backend, and controller preparation share a second
-  continuous terminal-owned progress span that clears before lobby transfer.
-  It injects the same borrowed coordinator into the controller for later
-  `/auth` and authenticated settings work. Native subprocess, terminal, and
-  configuration-persistence ownership remain with `provider_auth`,
-  `interactive_terminal`, and `interactive_settings` respectively. The
-  controller owns interactive backend cleanup after its session-lobby run
-  begins, while the CLI closes a backend if construction fails before that
-  ownership transfer. After workspace
-  initialization or discovery succeeds, the CLI independently marks later
-  failure-hint eligibility and attempts optional workspace-bound debug-log
-  handle construction through one `BaseException`-guarded helper. Interactive,
-  `init`, explicit-smoke, and ordinary resolved-workspace entry all use that
-  helper; module-private trace and error helpers accept an absent handle and
-  guard every submission. For explicit smoke, the CLI initializes and retains
-  one identity-bearing `Workspace` and passes that exact instance to
-  `smoke.run_smoke` without resolving the path again. Initialization,
-  discovery, argparse, and other pre-workspace failures, plus implicit smoke,
-  remain hint-free. A later caught eligible noninteractive `Exception` appends
-  the fixed workspace-relative hint even when no handle, record, or file is
-  available, while returned domain outcomes remain JSON-only. Interactive
-  startup failures after workspace discovery add the corresponding fixed
-  terminal notice independently of handle availability. Existing sanitized
-  error text and exit behavior are otherwise unchanged, and `debug_log`
-  retains storage ownership. A valid storage command resolves its workspace
-  and dispatches transfer/verification through the internal-named migration
-  module's transfer owner or desired
-  selection through the selection owner before debug-log creation, CLI-context
-  loading, authentication, provider/backend/runtime/settings/session
-  composition, or `sqlite3` import. Selection keeps standard output reserved
-  for one compact sorted counts-free schema-v1 report and routes native
-  installer output to standard error; transfer retains its compact sorted
-  counts-only report. Each workflow returns its fixed report exit code, and
-  workspace-discovery failure uses the corresponding fixed content-free
-  schema. Importing the CLI and its selection boundary does not load
-  `sqlite3` or perform readiness, filesystem, installer, or database I/O. RAG
-  routing resolves workspace/session through the established helpers, skips
-  debug-log construction and hint prose, activates configured authoritative
-  conversation storage only for confirmed rebuild and search, delegates every
-  workflow decision to `conversation_rag_cli`, and writes exactly one compact
-  sorted schema-v1 JSON line. Status, enable, disable, unconfirmed rebuild,
-  and purge do not activate conversation storage; argparse alone owns syntax
-  exit 2.
-- **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
-  `tests/test_conversation_storage_migration_cli.py`,
-  `tests/test_conversation_storage_selection_cli.py`,
-  `tests/test_cli_context.py`, `tests/test_smoke_cli.py`, and
-  `tests/test_interactive_pty.py` for primary process-level POSIX PTY
-  verification; `docs/reference/cli.md`, `docs/reference/package-api.md`,
-  `docs/getting-started.md`, `docs/guides/artifact-references.md`, and
-  `docs/guides/antigravity.md`.
+  `debug_log`, `errors`, `interactive_auth`,
+  `interactive_controller`, `interactive_settings`,
+  `interactive_terminal`, `orchestrator`, `provider_auth`,
+  `provider_catalog`, `session_lifecycle`, `smoke`, and `workspace`.
+- **State, resources, and side effects:** Argument parsing is resource-free;
+  retained dispatch delegates state and resources to the selected owner.
+- **Primary verification/documentation:** `tests/test_public_api_and_cli.py`
+  and command-specific CLI tests verify the retained grammar and dispatch.
 
 ### `story_writing_agents.cli_context`
 
@@ -1647,7 +1513,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   citation identities, event correlation, source identities, and half-open
   ranges; they omit query text, subjects, provider scores/candidates, paths,
   credentials, exception text, and generation identities. No name is
-  re-exported by the 120-name package-root facade.
+  re-exported by the 118-name package-root facade.
 - **Direct internal dependencies:** `config`, `conversation_rag`,
   `conversation_rag_composition`, `conversation_rag_local`,
   `conversation_rag_runtime`, `conversation_rag_store`,
@@ -1712,7 +1578,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `ConversationRagStateError`, and `ConversationRagOperationError`.
   These names are supported only from
   `story_writing_agents.conversation_rag`; none is re-exported by the
-  120-name package-root facade.
+  118-name package-root facade.
 - **Direct internal dependencies:** None.
 - **State, resources, and side effects:** Standard-library-only frozen,
   slotted values, exact enums, runtime-checkable caller-owned collaborator
@@ -1939,7 +1805,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   bounded `preflight(..., forced_query=None)`, explicit
   `search_authorized(...)`, and
   `project_authorized(..., rebuild=False)` operations. None is re-exported by
-  the 120-name package-root facade.
+  the 118-name package-root facade.
 - **Direct internal dependencies:** `conversation_literal_search`,
   `conversation_rag`, `conversation_retrieval`, `conversation_search`,
   `conversation_storage.contracts`, and `conversations`.
@@ -2543,7 +2409,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `agent_states/orchestrator_state/conversation_storage_transfers`.
   The frozen report provides its fixed counts-only `to_dict`, compact sorted
   `to_json`, and process `exit_code` projections. These names are absent from
-  both the 63-name conversation-storage facade and 120-name package-root
+  both the 63-name conversation-storage facade and 118-name package-root
   facade. No former migration-named public constant, type, operation, or
   callable remains as an alias.
 - **Direct internal dependencies:** `conversation_storage.archive`,
@@ -3383,84 +3249,25 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.interactive_commands`
 
 - **Source:** `src/story_writing_agents/interactive_commands.py`
-- **Responsibility:** Own the deterministic interactive command language.
-- **Supported surface:** Package-supported `ActionKind`, `InteractiveAction`,
-  `CommandSpec`, `COMMANDS`, and `parse_interactive_line`, plus module-supported
-  `AgentRouteSpec` and `AGENT_ROUTES` at their owning path. `AgentRouteSpec` is
-  frozen and slotted; `AGENT_ROUTES` is immutable, follows canonical roster
-  order, and owns each route's canonical ID, preferred prompt alias, ordered
-  aliases, and advisory-domain copy. The unlisted package-internal
-  `CommandCompletionContext` and `project_command_completion` derive the
-  canonical cursor-aware completion grammar, exact replacement spans, stable
-  grammar-position identities, and ordered fixed candidates from the same
-  command and route metadata without parsing. Agent-valued slash completion
-  positions project exactly each route's preferred prompt alias in roster
-  order; leading routed-message completion derives `@`-prefixed candidates
-  from those same preferred aliases, while all ordered aliases remain valid
-  parser inputs and fuzzy agent suggestions present the preferred alias. Other
-  package-internal `ProviderTextSpan` and `project_provider_text_span` values
-  project the cursor-active provider-bound region for ordinary prompts,
-  recognized routed prompts, `/say`, and `/run`, excluding run flags and output
-  identities. That projection performs no attachment, catalog, parser,
-  terminal, or repository work. Other
-  parser helpers and command-alias maps are internal; agent parsing and
-  canonical validation derive from the route registry. Search and transcript
-  actions extend the
-  frozen, slotted `InteractiveAction` with the optional positive
-  `start_sequence` field;
-  existing action payloads remain compatible. `/search QUERY` and
-  `/transcript ID [COUNT] [--from SEQUENCE]` participate in the same immutable
-  help registry and exact parser. Additive alias-free `/rag QUERY` validates
-  the established strict-UTF-8, control-free, nonblank 200-code-point search
-  query contract and carries it only in a keyword-only, representation-hidden
-  `rag_query` field. The command is provider-neutral control input, so provider-
-  text projection returns no span and parsing performs no provider, storage, or
-  persistence work. Global no-argument `/auth` and `/settings`
-  are represented by the additive `AUTH` and `SETTINGS` actions and the same
-  help/completion grammar. Their registry metadata truthfully allows native
-  provider calls and artifact writes: authentication may persist provider-owned
-  native auth state, while settings may additionally persist workspace
-  configuration. Canonical session-only language and persona changes are
-  grouped under `/override language LANG`, `/override persona AGENT NAME`, and
-  `/override reset`; the older `/language`, `/persona`, and `/reset` spellings
-  remain parser-compatible but are absent from root completion and full help.
-  `/quit` is the sole parsed and advertised termination command; `/exit` is an
-  ordinary unsupported command that receives the bounded `/quit` suggestion.
-  Additive alias-free bare `/exchanges` is represented by the exact
-  no-payload `EXCHANGES` action, accepts no argument or trailing field, and is
-  classified as a provider-free read-only inspection command. Parsing neither
-  imports the required external viewer package nor reads exchange storage.
-  Story-session parsing recognizes exactly
-  `/session create NAME`, `/session resume [NAME]`, `/session pause`, and
-  `/session list`, with no old lifecycle verbs or aliases. Conversation
-  selection recognizes exactly `/conversation resume [ID]`: omission produces
-  a `CONVERSATION_USE` action without an argument for controller-owned live
-  selection, while an included identity remains the action argument. Existing
-  pre-authentication public `ActionKind` member names and values remain
-  unchanged, with additive `AUTH` and `EXCHANGES` using the exact `"auth"` and
-  `"exchanges"` values. Consensus
-  actions carry an optional `output_path`; `/run --output PART/PATH.md [PROMPT]` and
-  `/run --fresh --output PART/PATH.md PROMPT` provide it directly, while an
-  omitted value is collected by the controller before composition. Run-option
-  fields split only on ASCII space and tab: Unicode whitespace cannot introduce
-  or separate `--output`, and malformed fresh-output flag spellings return a
-  typed parse error. After exact `--fresh`, every second leading double-hyphen
-  token except exact `--output` is rejected as an unknown flag instead of
-  becoming prompt text. The package facade does not re-export the route
-  metadata.
-- **Direct internal dependencies:** `agents` and `conversation_search`.
-- **State, resources, and side effects:** Immutable command and agent-route
-  metadata only. Completion and provider-span projection are pure and
-  call-local; the module owns
-  no editor, palette, history, process state, or external resource and performs
-  no provider, filesystem, persistence, environment, or import-time
-  operational side effects.
+- **Responsibility:** Own the deterministic management and inspection command
+  language plus read-only agent roster metadata.
+- **Supported surface:** Package-supported `ActionKind`,
+  `InteractiveAction`, `CommandSpec`, `COMMANDS`, and
+  `parse_interactive_line`; module-supported `AgentRouteSpec` and
+  `AGENT_ROUTES`; package-internal completion metadata. Direct message,
+  routed/sticky target, composition, send/cancel, run/draft-file, and one-shot
+  RAG actions and payload fields are absent. Ordinary text, `@agent`, and the
+  removed slash commands deterministically produce the integration-stage
+  unavailable guidance. Agent-route aliases remain display/persona metadata
+  for existing terminal and override consumers and are not parsed or completed
+  as direct invocation grammar.
+- **Direct internal dependencies:** `agents`.
+- **State, resources, and side effects:** Immutable metadata and pure parsing
+  only; no provider, filesystem, terminal, or persistence operation.
 - **Primary verification/documentation:** `tests/test_interactive_commands.py`,
-  `tests/test_agent_exchange_viewer.py`,
   `tests/test_interactive_terminal_completion.py`,
-  `tests/test_public_api_and_cli.py`, and
-  `docs/reference/interactive-command-parser.md`, `docs/reference/cli.md`,
-  `docs/guides/agent-exchanges.md`, and `docs/guides/story-sessions.md`.
+  `tests/test_public_api_and_cli.py`, `docs/guides/lead-agent.md`, and
+  `docs/reference/interactive-terminal.md` verify this boundary.
 
 ### `story_writing_agents.interactive_controller`
 
@@ -3481,538 +3288,36 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.interactive_controller._core`
 
 - **Source:** `src/story_writing_agents/interactive_controller/_core.py`
-- **Responsibility:** Own one synchronous interactive shell's state and
-  orchestration lifecycle.
-- **Supported surface:** Package-internal defining `InteractiveController`,
-  re-exported only through `story_writing_agents.interactive_controller`, whose
-  constructor accepts explicit workspace, CLI-context, backend, and terminal
-  collaborators plus optional keyword-only `ConversationCatalog`, immutable
-  `ConversationStorageServices`, borrowed `InteractiveAuthCoordinator`, and
-  borrowed `ProviderCatalogService` collaborators, and whose single-use
-  `run_session_lobby` operation returns process status 0 or 2. An omitted
-  catalog and bundle use the runtime's default composed filesystem services;
-  an explicitly supplied catalog retains the legacy raw-adapter path, while a
-  bundle conflicts with a separately supplied catalog. An omitted
-  authentication coordinator preserves direct legacy construction without
-  native auth, while an omitted provider catalog creates a command-free
-  workspace-bound service. The
-  shell dispatches
-  the exact lifecycle commands `/session create`, `/session resume`,
-  `/session pause`, and `/session list`; provider-free global status; attached
-  runtime directives and safe session/debate inspection; current-focus
-  conversation history; roster,
-  sticky-target, current-session search, and bounded transcript-read actions;
-  global attached-or-unattached persistent settings editing;
-  private next-turn `/rag QUERY` arming;
-  current-focus advisory turns; and current-focus consensus
-  prompt, fresh-prompt, and draft-file actions while retaining the established
-  conversation commands. Search, transcript reads, directives, and inspection
-  require an attachment but no current conversation; history and every
-  consensus action require both an attachment
-  and current focus. `/status` and `/session list` are lifecycle-read-only:
-  status renders the canonical session record before separate detail records,
-  and list orders rows by newest durable update and then ID without exposing
-  owner host, PID, or claim token. Status record order is `Session`,
-  `Durable state`, `Process access`, `Default session`, `Current attachment`,
-  `Default conversation`, `Current focus`, `Agent focus`,
-  `Provider readiness`, and `Next action`; list rows use the lifecycle subset
-  through `Default session`, then `Provider readiness` and `Next action`.
-  `/status` then renders the complete active execution roster with exact
-  provider/model/effort values and sources, route generation, confirmation, and
-  native-thread status; `/agents` shares a compact execution-profile and
-  confirmation projection for every canonical agent. Both diagnostic commands
-  remain fully detailed regardless of the message-details preference.
-  All transition, identity-resolution, routing,
-  directive-result, inspection, trusted context/debate/retrieval progress and
-  result, retrieval-source, and other presentation validation helpers are
-  package internal, and the project-root facade does not re-export this class
-  or module.
-  The controller constructs closed semantic components for the migrated
-  high-frequency and information-dense scope, status, inspection, management,
-  directive, routing, advisory, retrieval, consensus, focused-history, list,
-  search, and transcript records through the terminal facade's unlisted
-  `InteractiveSemanticOutput`; it retains that adapter alongside the same
-  terminal used for input and terminal-owned semantic writers. After
-  attachment, focus, collaborator, Runner, and payload validation, accepted
-  ordinary or routed advisory text is projected once as an exact-body
-  chat-block `Message` headed `You → <full agent display name>`, while
-  accepted inline, fresh, or composed prompt consensus text is projected once
-  as an exact-body chat-block `Message` headed `You → Consensus`. Both use
-  the magenta speaker accent and the adapter's mode-gated accepted-input writer
-  before coroutine construction or progress; the controller neither observes
-  terminal mode nor projects draft-file bytes.
-  Consensus requests also emit one persistent context record containing the
-  validated output path and, for draft input, only its source path. Validated
-  active search, filtered conversation-list, and resolved transcript requests
-  emit persistent context records containing their normalized query and scope,
-  or their visible conversation handle and effective page parameters, before
-  the corresponding provider-free catalog or memory operation. Unfiltered
-  lists add no request record. Omitted session/conversation resume preparation,
-  advisory turns, consensus waits, and bounded Settings Provider/Model/Effort
-  option reads retain the facade's unlisted
-  `InteractiveAdvisoryProgress` and `InteractiveDebateProgress` adapters. The
-  runtime paths wrap exactly their awaitables instead of emitting persistent
-  routing and waiting notices; picker and Settings preparation move their
-  synchronous bounded reads to the Runner thread while the same terminal
-  lifecycle remains active. Capable
-  stream terminals show bounded progress, while callback and ordinary-line
-  fallback remain visually silent. The controller owns no indicator glyph,
-  cursor control, or animation task. Independently, each validated debate
-  progress callback constructs one `Debate phase · DISPLAY_NAME` `Panel` and
-  submits it in one semantic write. A private exhaustive trusted phase-name
-  projection keeps active panel headings state-neutral instead of labeling them
-  loading, while successful terminal headings are completion-silent and error
-  or cancelled state remains visible; the Outcome field preserves its prior
-  role/state. Debate
-  ID, canonical phase, round, revision, action, outcome, conflicts, and any
-  applicable starting-context notice remain visible with message details Off;
-  details On additionally includes the phase handoff. The same
-  panel contains either a fixed debate-log-read warning or the unread
-  chronological suffix of persisted canonical-agent speeches, grouped by each
-  consecutive phase, round, and revision tuple. Non-error speeches retain their
-  complete formatted bodies as stable-accent chat-block `Message` values headed
-  by the full agent display name; agent-error prose remains redacted, and
-  details On alone adds each speech kind. `Workspace` remains the durable
-  debate-log owner. The controller also retains the facade's resource-free
-  main-input,
-  generic-picker, and cancellable-prompt adapters. Omitted
-  `/session resume` and `/conversation resume` pass a call-local provider of
-  controller-built immutable `Picker` choices and opaque canonical command
-  identities through `InteractiveMainInput`; the same adapter receives private
-  call-local provider-span, canonical-path-list, and bounded-text-read callbacks
-  for attached, focused provider-text fields. A resource-free
-  `InteractiveCompositionInput` supplies those collaborators to internally
-  supported RUN and CHAT composition without exposing `/compose` or changing
-  public terminal methods. Capable input obtains a fresh
-  backend-lifecycle, active-conversation-catalog, or canonical-artifact
-  filesystem snapshot for each exact completion state, while fallback input
-  bypasses the provider. Dynamic-choice Enter
-  submits an explicit identity and bypasses the generic picker. An omitted
-  resume buffer that is itself submitted instead starts a fresh lifecycle or
-  catalog read. When that read succeeds and yields eligible rows, the controller
-  opens the generic picker: it is live and transient on a capable stream and
-  numbered in line fallback, and its selected identity is freshly validated.
-  An empty result or read failure emits its applicable result or error without
-  opening the picker. The submitted omitted main line's history eligibility is
-  independent of that post-submit outcome. Settings explicitly selects the
-  terminal's form presentation for every controller-owned picker and
-  cancellable value prompt through its private helpers, and for either borrowed
-  authentication picker through the coordinator's call-local presentation
-  seam; no prompt-title or scope inference is used. The clean root requests its
-  complete seven-row viewport, while a dirty
-  candidate requests all nine rows so Apply Changes and Discard Changes remain
-  visible; nested settings catalogs retain the standard seven-row limit. When
-  the optional coordinator is supplied, global `/auth`, provider-status choices,
-  authenticated route assignment, missing-default coordination, and a fresh
-  effective-route authentication gate before dirty settings Apply Changes use
-  that borrowed collaborator. The controller owns no native authentication child, cursor
-  sequence, or terminal geometry.
-  Retrieval results and persisted `agent_reply` history/transcript rows use the
-  facade's pure `format_agent_reply_content` projection and agent semantic role
-  without changing the stored event or non-agent content. Retrieval-source
-  records always retain subject and conversation facts; exact-event citations
-  additionally retain sequence, while message-details On adds turn and event
-  kind and subject-only citations omit all event facts. Ordered session,
-  conversation, and search rows retain one positioned `ListView` containing one
-  `Record` per established callback. Transcript and focused-history rows instead
-  use one positioned `ListView` containing one directional chat-block `Message`
-  per callback with its complete body and sequence; message-details On adds
-  turn, kind, and canonical sender/recipient IDs. The controller therefore
-  continues to own result counts and interruption boundaries without any
-  remaining `write_status` or specialized dense-row call. Before every attached
-  main prompt, it freshly revalidates any current focus and its visible handle
-  against the complete conversation catalog, then presents conversation scope
-  initially or when the semantic tuple of session ID, visible handle, subject,
-  or sticky agent changes. Detachment resets that comparison, so a later
-  attachment presents its scope again even when its values match the earlier
-  attachment. The main conversation input composes an existing semantic
-  `Notice` above the unchanged editable prompt, recomputes it from each live
-  buffer so a valid one-shot `@alias` shows the actual target. With
-  message-details Off, that notice contains only the full target display name
-  and performs no execution-profile or confirmation lookup; with details On it
-  preserves the prior exact provider/model/effort, confirmation, and semantic
-  role profile. Terminal rendering may collapse the notice on narrow/fallback
-  layouts. An agent reply is one chat-block `Message` headed
-  `<full agent display name> → You` with its complete formatted body. Details
-  Off performs no reply-profile lookup and adds no metadata; details On adds a
-  subordinate default-styled `Provider / Model / Effort · Thread` row, with
-  `pending` only for an unconfirmed profile and `launch override` only when any
-  effective value has that source. Full sources and confirmation remain in
-  `/agents` and `/status`. Neither projection adds transcript or
-  session-manifest persistence.
-  The clean settings editor exposes the exact seven-row top level Language,
-  Persona, Maximum debate rounds, Conversation storage, Conversation RAG,
-  Message details, and Agents. A dirty candidate appends Apply Changes and
-  Discard Changes as rows eight and nine. Message details selects the pending
-  strict Off/On presentation
-  preference without changing the running shell before persistence. A
-  structurally dirty candidate appends `Apply Changes (*Required)` and `Discard
-  Changes` while retaining the stable internal `save` and `cancel` routing
-  identities; a previously retained action highlight normalizes when its row
-  becomes hidden. Conversation RAG owns nested Provider Disabled/Local and
-  Automatic Off/On pending edits without probing, importing, installing, or
-  composing its optional package; Disabled forces Automatic off, On requires
-  Local, and saved changes affect only the next shell. Conversation storage
-  edits only the pending desired
-  next-shell backend; Apply Changes retains provider-default rebasing in memory,
-  completes any provider auth, then delegates readiness, explicit installer
-  confirmation, provisioning, fresh parity, and the one complete configuration
-  CAS to the selection owner. It supplies the settings-owned fresh
-  persona-catalog validator as selection's precommit guard so a changed catalog
-  becomes a configuration conflict before that CAS, and it never activates or
-  transfers storage. A `TRANSFER_REQUIRED` selection result is rendered as the
-  content-free instruction to transfer active conversations before retrying.
-  Agents selects one
-  roster agent; each agent choice shows the pending-effective
-  `(Provider/model/effort)` tuple as `Current` when it matches the active
-  execution profile or `Pending` otherwise. Its exact provider-neutral
-  Provider, Model, and Effort choices independently show the pending-effective
-  value with the same Current/Pending comparison and enable Codex or
-  Antigravity selection. Model and Effort discover one fresh
-  pending-effective-provider catalog only when selected; use opaque control
-  identities; retain inherit, custom-model, and compatibility escape paths;
-  and edit only the active provider's values without discarding inactive
-  provider values or auto-persisting model defaults. Codex effort choices come
-  from the exact pending effective model, while Antigravity effort choices stay
-  globally low, medium, and high without slug inference. The settings flow
-  gives every value editor pending, not-saved, and dirty-only Apply Changes
-  guidance. One
-  private ordered settings projection supplies root Current/Pending state
-  summaries, the nested Agents pending-change count, and changed-only
-  confirmation fields in stable settings and roster order. Structurally
-  unchanged root values, including Conversation storage, retain explicit
-  `Current:` summaries with muted semantic roles; changed root values retain
-  explicit `Pending:` summaries with warning roles. Nested Conversation RAG
-  Provider/Automatic, Agents roster profiles, and agent Provider/Model/Effort
-  rows use the same Current/Pending summary semantics. A clean Agents row has
-  no summary, while its nonzero pending-change count has a warning role. Other
-  help and guidance remain descriptions, while disabled reasons remain separate
-  detail rows. On every top-level read, structural inequality between the
-  pending configuration and opening baseline exposes the two persistence
-  actions and
-  retains both `(*Required)` on Apply Changes and the exact warning-styled
-  `Choose Apply Changes to persist pending changes` notice; all are absent
-  initially and after a complete revert, while the notice remains absent from
-  nested editors and Apply/Discard confirmations. The shared projection names
-  conversation storage, nested Conversation RAG Provider/Automatic, message
-  details, and both providers' model/effort rows, so root visibility and
-  changed-only confirmations identify pending changes
-  without changing the active backend, runtime snapshot, message-details flag,
-  or startup-fixed RAG service and automatic policy.
-  Editors contain no repeated
-  Current/Pending context panel. The clean root contains no persistence action
-  to confirm, authenticate, persist, report, or exit through. Dirty Apply
-  Changes uses the stable `save` route and one selectable YES/NO confirmation
-  whose preceding context contains only changed Current/Pending properties in
-  stable settings and roster order; Current fields use default styling and
-  Pending fields use warning styling, with the explicit changed text cues
-  preserved. Its candidate-specific activation notice mentions current-shell
-  runtime changes only when present and independently identifies desired storage
-  and startup-fixed Conversation RAG changes as next-shell effects; the RAG
-  clause states that the running shell retains its service and automatic policy.
-  After confirmation, the controller rechecks structural dirtiness
-  at the final persistence boundary and loops silently when clean. An exact
-  message-details-only candidate uses the settings-owned prepare and commit
-  transaction, requires the prepared configuration to equal the pending
-  candidate with no switched agents, and updates the controller's active
-  presentation flag only after commit. That path skips authentication,
-  backend/runtime staging and activation, storage readiness, provider-route
-  switching, and provider-thread work. An exact RAG-only candidate uses that
-  same complete configuration/provider-route transaction, leaves the retained
-  RAG service and automatic policy unchanged, emits one fixed next-shell result,
-  and likewise skips authentication, optional-provider work, backend/runtime
-  activation, and storage selection. Every other still-dirty candidate first
-  completes authentication and any provider-default rebase, then delegates
-  storage readiness, installer consent, baseline-checked configuration
-  persistence, the fresh persona-catalog guard, and storage failure reporting
-  to `select_conversation_storage`. Mixed live-capable and RAG changes report
-  live activation separately from the fixed next-shell RAG effect; storage and
-  RAG changes likewise retain distinct truthful restart results. Exactly one
-  saved result follows only a successful dirty persistence; failed, cancelled,
-  or rejected apply attempts emit none. Explicit Discard
-  Changes uses the stable `cancel` route and root Settings Escape shares the
-  same action: an unchanged candidate exits immediately, while a structurally
-  changed candidate uses the same selectable confirmation context. Any
-  whole-flow cancellation is silent for a clean candidate and emits exactly
-  one discard report for a dirty candidate; persistence remains exclusive to
-  the internal save action. Confirmation NO or nested Escape returns to the
-  settings menu, while Ctrl-C or EOF preserves whole-flow cancellation.
-  Provider-bound routes pass the submitted text
-  unchanged to `StoryRuntime`; reference UI therefore emits only ordinary
-  `${path}` or `${path}#Lx-Ly` tokens for the existing runtime parser and never
-  authorizes a read. The controller borrows the filesystem-authoritative
-  `StoryRuntime.artifacts.list_paths` only for an active eligible marker and
-  borrows one bounded, freshly
-  revalidated `read_text` result only for the supplied-text viewer. It maps all
-  expected discovery/read failures to fixed content-free terminal categories,
-  retains no artifact body, and consumes only the resulting
-  optional content-free reference-operation identity. It maps malformed
-  directives and structured `ReferenceOperationFailure` codes to fixed safe
-  interactive errors without presenting exception prose.
-  Bare attached-session `/exchanges` constructs the Story-owned exchange
-  store, reads one authoritative content-free inventory, and projects
-  newest-first distinct conversation/debate scopes through
-  `_exchange_policy`. Conversation subjects come from the complete active and
-  archived catalog; debate subjects use only the bounded first canonical
-  initiation message. A second transient picker contains every canonical
-  roster agent, including agents without retained records. The controller then
-  passes either the exact immutable selected snapshot or empty immutable bytes
-  for an inventory-proven empty agent stream to `_exchange_viewer`, and opens
-  only its generic operation through the terminal facade's unlisted
-  `InteractiveExternalViewer`. A disappeared stream is refreshed once and is
-  never replaced with another scope or an invented empty snapshot. Picker,
-  search, navigation, and view state are call-local; the path performs no
-  provider call, focus/session mutation, exchange write, retry, replay, or
-  deletion and exposes only fixed content-free storage/projection/viewer
-  failures.
-- **Direct internal dependencies:** `agent_exchanges`, `agents`, `backend`, `cli_context`,
-  `conversation_rag_composition`, `conversation_retrieval`,
-  `conversation_search`, `conversations`, `debug_log`,
-  `conversation_storage.contracts`, `conversation_storage.selection`, `errors`,
-  `interactive_auth`, `interactive_commands`,
-  `interactive_controller._conversation_policy`,
-  `interactive_controller._exchange_policy`,
-  `interactive_controller._exchange_viewer`,
-  `interactive_controller._runtime_policy`,
-  `interactive_controller._session_policy`, `interactive_settings`,
-  `interactive_terminal`, `models`, `orchestrator`, `provider_adapter`,
-  `run_inputs`, `provider_auth`, `provider_catalog`, `session_lifecycle`,
-  `workspace`, and `writing_artifacts`.
-- **State, resources, and side effects:** Instances retain borrowed workspace,
-  CLI-context, backend, terminal, optional authentication-coordinator, and
-  provider-catalog collaborators plus either one immutable active storage bundle
-  or the established borrowed raw catalog path. An omitted
-  provider catalog creates a command-free workspace-bound service; selecting
-  Model or Effort invokes one fresh discovery, while `provider_catalog` alone
-  owns every resulting child, output buffer, and reader lifecycle. The
-  controller constructs and retains one `StoryRuntime`; bundle mode shares the
-  bundle's exact catalog, event store, search, and coordinator through the
-  runtime and attachment-scoped `ConversationMemoryService`, while raw
-  compatibility mode constructs the established filesystem event store around
-  the injected catalog. From the backend's immutable construction snapshot,
-  Disabled RAG performs no compatibility probe or composition; configured
-  Local RAG with a complete bundle composes exactly one local service with the
-  exact automatic policy and injects it into that runtime. Sanitized local
-  composition failure retains a usable RAG-free shell/settings flow and emits
-  one fixed warning without changing configuration. Legacy raw-catalog and
-  controller-composed default-storage construction remain RAG-free, reporting
-  that same fixed unavailability only when Local was configured. The memory
-  service is absent in lobby state,
-  constructed for a validated destination before attachment commit, rebound on
-  a successful switch, and cleared on pause, cleanup, and final close. The
-  controller also owns its current attached-session identifier, current-focus
-  conversation metadata, sticky target, current CLI-context snapshot,
-  at most one representation-hidden pending RAG query scoped to the exact
-  session and conversation,
-  process-local per-session latest accepted STARTED debate-ID map,
-  persisted-speech offsets and last-conflict tuples keyed by session and debate,
-  and the active message-details presentation flag initialized from the
-  backend's immutable configuration snapshot, and one-run/closed state. For each
-  trusted debate phase it derives a candidate speech offset and complete panel
-  from the current presentation state, then advances the offset,
-  phase-conflict state, accepted-event sequence, and applicable latest-STARTED
-  mapping only after its semantic panel write succeeds. A debate-log read
-  failure contributes the
-  fixed warning without advancing the speech offset, while a failed terminal
-  write advances none of that process-local progress state. These maps own no
-  durable debate bytes or external resource. The controller also retains a
-  controller-private count of
-  successfully rendered typed errors. Each submitted command snapshots that
-  count before dispatch and independently records `failed`/`rejected` when a
-  normally returned path rendered a new typed error, or
-  `succeeded`/`completed` when it rendered none; an earlier command cannot
-  reclassify a later one. It retains one workspace-bound debug-log handle,
-  best-effort records fixed lobby, command, attachment, focus, cleanup, and
-  safe failure facts, and routes every post-workspace typed error through the
-  fixed debug-log-path notice without retaining or resolving that notice.
-  Controller-private trace and error guards catch diagnostic `BaseException`
-  failures. `debug_log` remains the resource owner, and diagnostic failure does
-  not alter controller results, exceptions, cancellation, or cleanup
-  sequencing. Once its single-use run starts, it constructs and owns
-  one private `asyncio.Runner` for the rest of that lifecycle. Repeated
-  `Runner.run` calls execute every accepted advisory and consensus coroutine on
-  that Runner; controller-local entry/cancellation/join evidence and public
-  Runner task inspection distinguish a quiescent pre-entry interruption, a
-  completed entered cancellation, and an unjoined or otherwise uncertain
-  operation. Final cleanup attempts each applicable stage once in order:
-  Runner close and its residual asynchronous work, known process-access
-  release, backend close, then controller-state clearing. An uncaught body
-  process-control failure wins; otherwise the first cleanup process-control
-  failure wins, with every later stage still attempted before the exact object
-  and its originating traceback chain propagate. The Runner reference is
-  retained only when Runner close itself is interrupted by process control;
-  ordinary Runner-close failure clears it, while attachment, focus, and memory
-  always clear and the controller closes. With no retained process control,
-  ordinary cleanup failures force status 2 and one best-effort nonduplicated
-  `cleanup_failed` diagnostic. A diagnostic process control participates only
-  when no earlier winner exists and cannot replace a retained body or cleanup
-  control.
-  Authentication actions request full status refresh and native login only
-  through `interactive_auth`, coordinate its default-selection policy, and
-  delegate exact-byte default persistence and open-settings rebase to
-  `interactive_settings`. Settings assignment requires a fresh exact
-  authenticated status for the selected provider, and every dirty Apply Changes
-  outside the presentation-only path freshly gates each distinct effective
-  agent route with fixed unauthenticated, unavailable, or indeterminate
-  remediation.
-  Outside Settings, completed
-  authentication and missing-default effects remain durable. Within an open
-  Settings flow, authentication rebases a missing default only in the pending
-  candidate, so cancellation preserves the opening configuration bytes. This module owns only
-  interaction state and sequencing. `provider_auth` retains
-  authentication subprocess ownership, `provider_catalog` retains catalog
-  discovery subprocess/output ownership, `interactive_settings` retains
-  candidate and persona-catalog validation, `conversation_storage.selection`
-  sequences Apply Changes readiness, and `config` plus `Workspace` retain
-  publication and route-resolution ownership.
-  `AgentBackend` retains the actual access claim, manifest, and provider-thread
-  coordination, while provider adapters retain binding, staging, and provider-
-  native state and `provider_process` owns subprocess resources. The settings
-  flow retains only one call-local immutable baseline and pending candidate. Each
-  retained Language, Persona, Maximum debate rounds, Conversation storage,
-  Message details, Provider, Model, Custom model, and Effort editor owns one
-  entry-local
-  normalized last-successful semantic commit: the first success arms it, a
-  different success replaces it, and a second consecutive success of the same
-  value returns silently to the parent. Invalid input, authentication failure,
-  Custom-model navigation, and editor re-entry reset or recreate that state. The
-  flow constructs its changed-only confirmation context and passes it only as
-  picker-owned transient input context rather than as a separate durable
-  semantic write. Except for the exact
-  message-details-only transaction above, Dirty Apply Changes stages and
-  provider-preflights one complete backend generation, quiesces and stages the
-  runtime prompt snapshot, delegates the persona-catalog guard, storage
-  readiness/parity, and complete configuration CAS to their named owners,
-  commits the prepared provider-route generation state, and then activates the
-  matching backend and prompt snapshots before returning to the prompt. A
-  message-details change mixed with any other change updates the active
-  presentation flag only after that full activation succeeds.
-  Provider/model/effort, language, persona, round, and message-details changes
-  therefore apply to the current shell, while a changed storage backend remains
-  desired next-shell state only. Preflight or persistence failure leaves active
-  runtime and presentation state unchanged; a verified post-persist failure
-  before activation restores the exact configuration and optional route bytes,
-  while uncertain post-persist activation reports recovery-required and never
-  renders false success.
-  Launch-masked settings fields are read-only and show their explicit source.
-  Successful activation renders the current-running-shell saved-and-applied
-  notice for live changes, the desired-storage next-shell notice for storage
-  changes, and both for a mixed change. Its compact completion notice reports
-  only the changed-profile count, adds fresh-thread and story-session context
-  only for provider switches, and directs active values and confirmation to
-  `/agents` plus thread and source detail to `/status`; it does not repeat exact
-  before/active profile rows, a pending-confirmation block, or same-provider
-  thread-reuse guidance.
-  Cancellation or failed apply attempts do not mutate the active backend or
-  runtime snapshot. Accepted user-message and
-  request-context values remain call-local terminal presentation: the
-  controller retains no rendered payload, adds no transcript or provider call,
-  and leaves fallback duplication policy and persistent stream writing to the
-  terminal boundary. The lobby loop also retains one call-local last-
-  successfully-presented conversation-scope tuple containing session ID,
-  visible handle, subject, and sticky agent. It advances that tuple only after
-  any required terminal write succeeds and resets it while detached; the
-  terminal retains no comparison state, and the tuple adds no storage or
-  provider effect. Through public collaborators the controller reads and
-  parses terminal input, submits typed presentation facts, invokes
-  terminal-owned semantic writers, and sequences nested
-  conversation transitions. A session destination proceeds through
-  configuration validation, lifecycle pre-read, create/acquire or durable
-  reopen, correlated post-read, destination focus load, destination-default
-  persistence, source release when switching, and only then in-memory
-  attachment/focus commit. Later failure releases newly
-  acquired destination access where possible but does not roll back a
-  successful paused-to-ready reopen. A reported default-save failure can follow
-  `os.replace`, so the persisted default is not guaranteed to retain its old
-  value; source-release failure after destination-default persistence leaves
-  the new default and aborts through `cleanup_failed`. Pause retains defaults,
-  changes durable state, releases access, and returns to the lobby. Quit, EOF,
-  and final cleanup release access without pausing. Persisted conversation
-  defaults remain distinct from the in-memory current focus.
-  Reference parsing, capture, provider-read enforcement, durable evidence, and
-  operation finalization remain below the controller boundary; it owns no
-  reference-operation state, artifact storage, or retained artifact bytes.
-  The controller also performs
-  catalog create/list/get/rename/archive and compensating unarchive calls,
-  persists session and conversation defaults through `cli_context`, applies
-  exact existing directives and reads whitelisted session/debate inspection
-  through `StoryRuntime`,
-  performs active-only search and fresh bounded active-or-archived transcript
-  reads through `ConversationMemoryService`, reads the authoritative event
-  store exactly once for each current-focus history or status snapshot, derives
-  canonical context facts through `select_bounded_conversation_context`, and
-  runs one synchronous
-  `StoryRuntime.converse_with_retrieval` operation per accepted advisory content
-  turn through the retained Runner and terminal-owned progress adapter. It
-  passes the exact attachment-scoped
-  service plus the established retrieval sink and, when the runtime advertises
-  contextual capability, one generic context sink. A call-local
-  operation-keyed projection map validates every lifecycle event and requires
-  the successful advisory operation to end in one advanced checkpoint. The
-  controller renders fixed content-free planning, answer, failure, and
-  checkpoint copy, while generic search/read rendering is suppressed after
-  validation because the established retrieval sink already presents those
-  actions. It constructs fixed progress and ordered source components through
-  the retained semantic-output adapter. Before advisory coroutine entry, the
-  established
-  fixed cancelled/hint copy returns attached only when public Runner task
-  inspection proves quiescence; that path calls no provider and mutates no
-  controller or persistent state. `/rag` arms or replaces one process-local
-  query without echo, provider work, or persistence. Ineligible commands retain
-  it; scope/session changes, pause, detach, quit, and cleanup clear it. The next
-  eligible ordinary, `/say`, or routed turn consumes it only after its coroutine
-  enters, so pre-entry cancellation retains it while any later outcome consumes
-  it exactly once; the consumed value is passed only as the runtime's one-turn
-  forced `rag_query`, overriding automatic policy for that turn. After entry,
-  returning attached requires the
-  runtime to receive `CancelledError` and the operation to join; every other
-  advisory cancellation state fails closed. Provider-free search, transcript,
-  and focused-history interruption stops further rendering and returns to the
-  same prompt without persistence mutation. The controller also delegates
-  draft reads to `run_inputs` and submits each accepted consensus action
-  through the same Runner. Context-capable consensus calls use the same
-  controller-safe validator with call-local state per interleaved debate-agent
-  operation, render agent/phase/round-qualified lifecycle facts, and verify
-  terminal context outcomes before presenting the debate result. When a
-  consensus action omits `output_path`, it
-  prompts for and validates a create-only `PART/PATH.md` after attachment and
-  focus checks and before composition or draft-file access. `RUN` and
-  `RUN_FRESH` dispatch to `StoryRuntime.run_prompt`; `DRAFT_FILE` alone loads
-  strict-UTF-8 bytes through `read_draft_file` and dispatches them to
-  `StoryRuntime.run_draft` as `InputKind.DRAFT`, preserving the exact validated
-  output path and included current-focus context. A trusted `INTERRUPTED`
-  progress event, which may be first after reservation, is its sole durable-
-  interruption proof; only `STARTED` updates the process-local latest-debate
-  map, pre-entry cancellation remains provider-free, and an entered
-  cancellation without proof fails closed through `operation_interrupted` and
-  `cleanup_failed`. `StoryRuntime` owns context
-  capture, retrieval authorization and memory access, transcript/provider and
-  consensus sequencing, validated results, artifact durability, and its async
-  caches and locks; the event store, catalog, and `Workspace` retain persistence
-  ownership. The controller's only direct event-store operation is the public
-  read used for fixed focused history/status snapshots; it never appends or
-  calls `read_context`, dispatches a backend provider directly, or persists
-  retrieval controls/progress/sources, debate context/results, or artifacts,
-  and has no import-time operational side effects.
+- **Responsibility:** Own one synchronous management/inspection shell lifecycle.
+- **Supported surface:** Package-internal `InteractiveController`. It retains
+  authentication, settings, overrides, session binding/lifecycle, conversation
+  catalog/focus, search, history, transcript, exchanges, status, explicit
+  persisted debate/context/reference inspection, help, and quit. It has no
+  provider-turn, consensus, draft, one-shot RAG, sticky-target, artifact
+  reference-activation, debate-progress, execution-result, or cancellation
+  execution path. The controller uses the non-reference `InteractiveMainInput.read_main`
+  seam, supplies an attached session without an agent target, supplies no
+  artifact collaborators, and presents deterministic direct-execution
+  unavailability.
+- **Direct internal dependencies:** `agent_exchanges`, `agents`, `backend`,
+  `cli_context`, `conversation_search`,
+  `conversation_storage.contracts`, `conversation_storage.selection`,
+  `conversations`, `debug_log`, `errors`, `interactive_auth`,
+  `interactive_commands`, the retained controller policies/viewer helpers,
+  `interactive_settings`, `interactive_terminal`, `orchestrator`,
+  `provider_adapter`, `provider_auth`, `provider_catalog`,
+  `session_lifecycle`, and `workspace`.
+- **State, resources, and side effects:** Owns shell attachment/focus, input,
+  picker, settings-progress, and cleanup state. Retained provider calls are
+  limited to explicit authentication/settings/provider-catalog management; no
+  story provider request, schema-v1 append, debate, or manuscript write occurs.
 - **Primary verification/documentation:** `tests/test_interactive_controller.py`,
-  `tests/test_agent_exchange_viewer.py`,
-  `tests/test_interactive_management.py`, `tests/test_interactive_consensus.py`,
-  `tests/test_interactive_conversation.py`,
-  `tests/test_interactive_cancellation.py`, `tests/test_session_lifecycle.py`,
-  `tests/test_cli_context.py`, `tests/test_interactive_commands.py`,
-  `tests/test_interactive_terminal.py`,
-  `tests/test_interactive_search.py` for real-filesystem shell search and
-  transcript-read integration, and `tests/test_interactive_pty.py` for primary
-  process-level POSIX PTY lifecycle verification;
-  `docs/design/session-lifecycle.md`,
-  `docs/design/overview.md`, `docs/design/persistence.md`,
-  `docs/guides/agent-context-progress.md`,
-  `docs/guides/agent-exchanges.md`, `docs/guides/story-sessions.md`,
-  `docs/guides/artifact-references.md`,
-  `docs/reference/cli.md`,
-  `docs/reference/interactive-terminal.md`, and
-  `docs/reference/conversation-retrieval.md` verify the current collaborator,
-  lifecycle, selection, and retrieval-presentation contracts.
+  `tests/test_interactive_management.py`,
+  `tests/test_interactive_cancellation.py`, `tests/test_interactive_search.py`,
+  `tests/test_agent_exchange_viewer.py`, `tests/test_session_lifecycle.py`, and
+  `tests/test_interactive_pty.py`, with shared controller scaffolding in
+  `tests/interactive_controller_fixture.py`; `docs/guides/lead-agent.md`,
+  `docs/reference/interactive-terminal.md`, and `docs/design/overview.md`.
 
 ### `story_writing_agents.interactive_controller._exchange_policy`
 
@@ -4126,61 +3431,26 @@ every intermediate arrow. The current runtime graph is acyclic.
   or external resource and performs no filesystem, terminal, provider, or
   import-time operational I/O.
 - **Primary verification/documentation:** `tests/test_interactive_controller.py`,
-  `tests/test_interactive_conversation.py`,
   `tests/test_interactive_management.py`, `tests/test_interactive_search.py`,
   `docs/reference/interactive-terminal.md`, and `docs/design/overview.md`.
 
 ### `story_writing_agents.interactive_controller._runtime_policy`
 
 - **Source:** `src/story_writing_agents/interactive_controller/_runtime_policy.py`
-- **Responsibility:** Interpret runtime progress, result, and inspection facts.
-- **Supported surface:** No project-public import. Its exact package-internal
-  `__all__` contains the frozen, slotted `ContextProgressProjection`,
-  `DebateContextInspectionFacts`, and `DebateInspectionFacts` contracts plus
-  `classify_advisory_turn_failure`,
-  `classify_consensus_execution_failure`, `classify_inspection_failure`,
-  `classify_progress_callback_failure`,
-  `interactive_code_for_debate_failure`, `validate_consensus_result`,
-  `validate_conversation_retrieval_progress`,
-  `validate_conversation_retrieval_result`,
-  `validate_context_execution_progress`,
-  `validate_debate_context_inspection`, `validate_debate_inspection`,
-  `validate_debate_progress`, and `validate_session_inspection`. Validators
-  reconstruct exact immutable contracts, consume only a previous event,
-  operation-keyed immutable projection map, or immutable progress tuple, and
-  return canonical typed facts. Context execution validation reconstructs the
-  direct service event, correlates its complete scope and operation identity,
-  enforces operation-local bootstrap/delta, omission, paired sequential
-  search/read, answer-before-commit, failure, and terminal ordering, rejects
-  post-terminal events, and projects only controller-safe content-free facts.
-  Debate and
-  context inspection validators return the whitelisted fact contracts without
-  flattening presentation text. Debate inspection and retrieval-result
-  validation accept an additive optional reference-operation identity only
-  when it has the exact content-free
-  `rr_<two-hex-length>_<session>_<32-lowercase-hex>` form for the inspected
-  session, and preserve it in the canonical result. Retrieval-result
-  validation also deeply reconstructs and preserves the exact RAG attempt and
-  ordered `rag_sources` provenance subset. RAG provenance, not an outcome or
-  erased citation prefix, permits those proven sources without retrieval
-  progress; every source outside that subset still requires terminal completed
-  search/read progress correlated to the result turn, including mixed-source
-  replies. The
-  module never renders, appends, retains, or calls the runtime.
-- **Direct internal dependencies:** `agent_context.service`,
-  `conversation_retrieval`, `conversation_search`, `errors`,
-  `interactive_terminal`, `models`, and `workspace`.
-- **State, resources, and side effects:** Export metadata only; owns no runtime,
-  progress collection, controller state, cache, or external resource and
-  performs no terminal, filesystem, provider, lifecycle, or import-time
-  operational I/O.
-- **Primary verification/documentation:** `tests/test_interactive_controller.py`,
-  `tests/test_interactive_consensus.py`,
-  `tests/test_interactive_cancellation.py`,
-  `tests/test_interactive_search.py`,
-  `tests/test_runtime_reference_integration.py`,
-  `docs/guides/agent-context-progress.md`,
-  `docs/reference/conversation-retrieval.md`, and `docs/design/overview.md`.
+- **Responsibility:** Validate and classify persisted runtime inspection facts.
+- **Supported surface:** Exact package-internal `__all__` contains
+  `DebateInspectionFacts`, `DebateContextInspectionFacts`,
+  `validate_debate_inspection`, `validate_debate_context_inspection`,
+  `validate_session_inspection`, and `classify_inspection_failure`.
+  Execution, retrieval, result, and progress policy is absent.
+- **Direct internal dependencies:** `errors`, `interactive_terminal`,
+  `models`, and `workspace`.
+- **State, resources, and side effects:** Pure immutable validation and error
+  classification; no runtime, terminal, filesystem, or provider operation.
+- **Primary verification/documentation:**
+  `tests/test_interactive_management.py` and
+  `tests/test_interactive_controller.py` verify the persisted-state projection
+  and safe failure mapping.
 
 ### `story_writing_agents.interactive_line_editor`
 
@@ -5147,7 +4417,10 @@ every intermediate arrow. The current runtime graph is acyclic.
   re-exported by the package facade. Constructor and public method signatures,
   validation, typed input outcomes, established plain record contents/order,
   error redaction/caps, composition behavior, callback granularity, and fixed
-  callback-width semantics remain compatible. `write_error` alone adds the
+  callback-width semantics remain compatible. Main prompt projection accepts
+  lobby scope with neither identity, attached session-only scope, or the
+  established session-plus-agent scope; agent-without-session remains invalid.
+  `write_error` alone adds the
   optional keyword-only `debug_log_path` presentation seam: `None` preserves
   the established error record exactly, and supplied validated text becomes
   one sanitized third notice labelled `debug log`. Its package-internal stream
@@ -5350,244 +4623,36 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **Primary verification/documentation:** `tests/test_prompts.py`,
   `tests/test_codex_backend.py`, `tests/test_conversation_runtime.py`,
   `tests/test_session_lifecycle.py`, orchestration and state tests,
-  `docs/reference/agent-contracts.md`, `docs/reference/runtime-api.md`, and
-  `docs/reference/backend-and-sessions.md`.
+  `docs/guides/lead-agent.md`, `docs/reference/agent-contracts.md`,
+  `docs/reference/runtime-api.md`, and `docs/reference/backend-and-sessions.md`.
 
 ### `story_writing_agents.orchestrator`
 
 - **Source:** `src/story_writing_agents/orchestrator.py`
-- **Responsibility:** Coordinate provider-neutral runtime workflows across
-  debates and advisory conversation turns.
-- **Supported surface:** Package-supported `StoryRuntime` and `RuntimeSession`,
-  exposing provider-free directive application, runtime-override saving, and
-  session/debate/context inspection,
-  including one-step `converse()`, additive bounded
-  `converse_with_retrieval()` with required scoped memory service and optional
-  synchronous retrieval progress sink, and context-aware `run_prompt()` and
-  `run_draft()` with required `output_path=PART/PATH.md`. All four operations
-  on both runtime forms accept an additive keyword-only direct-module
-  `ContextExecutionEventSink` as `context_event_sink`,
-  and the separate strict `inspect_debate_context()` accessor on both forms,
-  plus `inspect_reference_operation()` on both forms and compatibility aliases
-  `Runtime` and `Session`. The session-bound accessor rejects operation
-  identities outside its embedded session scope. Existing provider-bound
-  method signatures consume inline artifact-reference directives without new
-  parameters, and their result contracts expose an optional content-free
-  reference-operation identity. Package-internal
-  `RuntimeConfigurationCandidate` and the runtime's asynchronous prepare/commit
-  plus resource-free discard seams coordinate prompt/config snapshot hot
-  activation with the backend. `StoryRuntime` retains its positional
-  construction and raw keyword-only `conversation_event_store` seam plus the
-  keyword-only immutable `conversation_storage_services` seam, and accepts an additive
-  optional keyword-only `conversation_rag_service`. A RAG service requires the
-  complete storage-services form; the legacy raw event-store form remains
-  compatible when RAG is absent, while supplying both storage forms is rejected.
-  `converse_with_retrieval()` on both runtime
-  forms accepts additive optional `rag_query`; a supplied query forces one
-  attempt, while an absent query follows the injected service's
-  default-disabled automatic policy. Supplying no service and no query
-  preserves no-attempt behavior; forcing without a service yields an explicit
-  disabled fallback. A supplied context sink is validated as declared
-  synchronous and requires contextual capability before session access,
-  context, provider, storage, persistence, or transcript work; omitting it
-  preserves the established contextual and legacy fallback behavior.
-- **Direct internal dependencies:** `agent_context.actions`,
-  `agent_context.manifest`, `agent_context.planning`, `agent_context.service`,
-  `agent_context.sources`, `agents`, `backend`, `config`,
-  `conversation_rag_runtime`, `conversation_retrieval`, `conversation_search`,
-  `conversation_storage.composition`, `conversation_storage.contracts`,
-  `debug_log`, `directives`, `conversations`, `errors`, `models`, `prompts`,
-  `session_lifecycle`, and `workspace`; plus `writing_artifacts`,
-  `writing_artifacts.repository`, and `writing_artifacts.runtime_references`.
-- **State, resources, and side effects:** Retains an injected complete immutable
-  conversation-storage service bundle or the legacy raw event-store
-  collaborator. When neither is supplied, it composes the provider-free
-  filesystem bundle and exposes that same bundle for controller/memory-service
-  reuse; the runtime consumes its exact event-store port and does not mutate or
-  inspect bundle internals. It also owns each canonical agent's newest
-  desired fingerprint, at most one current binding, same-fingerprint shielded
-  bind task and waiter count, operation-use counts, retiring bindings, one
-  binding-state lock, and per-session/conversation advisory-turn locks. A
-  matching current binding is leased immediately. Missing identical bindings
-  share one flight; the newest successful desired fingerprint becomes current,
-  while an out-of-order result serves only its already-waiting retained
-  operation and never becomes idle current. Former current bindings retire
-  after their final use, cancellation joins a last-waiter flight and releases a
-  cancellation-suppressing result, and A-to-B-to-A oscillation can promote the
-  still-active A while B survives only its active uses. Backend release always
-  occurs outside the asyncio binding lock through the package-internal seam;
-  runtime code never reaches into backend collections. Debate invocation,
-  ordinary conversation, and retrieval each retain their exact binding from
-  acquisition through the provider call and release it in `finally` on success,
-  failure, or cancellation. Each provider-bound conversation, retrieval, and
-  debate input is parsed and, when references are present, captured once by one
-  call-local runtime-reference operation. Durable conversation and debate
-  input records retain its exact source text, while provider requests and
-  messages receive only its projected provider text. Every provider attempt,
-  debate phase, and round receives a fresh ordinally correlated read
-  invocation; the operation accepts only after all invocations are terminal
-  and the repository revalidates, and terminates on cancellation, provider
-  failure, or workflow failure. The runtime coordinator retains only a
-  call-local lock, pending-invocation map, ordinal, and generated identities;
-  the repository alone owns filesystem capture and persistent evidence, while
-  the backend remains the mandatory read-action consumer. A backend-bound
-  runtime retains the backend's active immutable configuration and provider-
-  route generation snapshot and shares both with prompt assembly; session
-  runtime overrides and explicit call overrides remain live and higher
-  precedence. Quiescent preparation retires all cached bindings and builds one
-  candidate `PromptAssembler`; commit holds the binding lock while the backend
-  swaps its exact adapter/profile generation, then publishes the matching
-  runtime configuration and prompt assembler. The same runtime, workspace,
-  event store, transcript, memory collaborator, session access, focus, and
-  workflow locks survive activation. Backend-free construction retains the
-  established on-demand configuration path. A runtime with both the concrete
-  backend and complete conversation-storage bundle retains one workspace-bound
-  `AgentContextService` and routes every built-in advisory, retrieval, and
-  debate-agent provider invocation through it. Those routes bind stable
-  definitions without mutable core-document bytes and construct compact
-  canonical P0 current/candidate material. Named role core documents are eager
-  P2 hard constraints; focused conversation and active debate are eager P2
-  evidence; nonfocused conversations, other artifacts, and own-agent state are
-  P3 SEARCH-first sources under the zero default P3 budget. Only role-core
-  classifications explicitly allow absence, matching the workspace rule that a
-  missing core document is omitted and a later appearance becomes a new P2
-  constraint; all conversation, debate, owner-state, and retrieved-source
-  classifications remain strict. Ordinary conversation authorizes writing-
-  artifact/conversation/owner-state search, retrieval authorizes conversation
-  search only, and debate phases additionally authorize active-debate search.
-  Orchestrator-owned semantic projection preserves named document paths,
-  bounded conversation completeness plus user/replying-agent/reply records,
-  debate state and sender/phase/round/base-revision/kind/content records, and
-  phase-specific compact result contracts; it reconstructs and validates the
-  unchanged public domain replies after service authorization. The four
-  concrete source adapters remain the only read authorities. Runtime-reference
-  proofs become
-  the same ordered
-  content-free reservations while each addressed call receives its matching
-  read invocation, so the mandatory prelude remains outside the substantive
-  action budget and retains the existing operation completion rules.
-  Orchestrator-owned pure validator closures reuse backend domain decoders
-  after service authorization and before reference completion or ledger commit;
-  invalid advisory, retrieval, debate, citation, or publication-shaped output
-  therefore cannot advance READY. At this runtime edge, only the exact
-  service-owned `MALFORMED_ACTION` failure is translated to the established
-  `BackendProtocolError`; other context execution failures retain their exact
-  classification. Retrieval uses the conversation adapter's
-  explicit active same-session mode, maps only completed used read evidence to
-  public sources, preserves supplied RAG source order, existing progress and
-  transcript persistence, and never runs the legacy provider retrieval loop in
-  parallel. Content-free service events compose deterministically through the
-  existing private debug guard, then the established retrieval progress sink
-  for search/read, then the generic context sink. The runtime forwards that
-  sink to ordinary conversation, retrieval, and every logical debate-agent
-  invocation with explicit phase/round correlation. A private observer-failure
-  carrier preserves the original generic callback failure across debate task
-  aggregation and unwraps it at the public operation boundary; post-commit
-  delivery cannot roll authority back. When the
-  contextual capability is unavailable, the established eager-definition and
-  direct backend paths remain the compatibility fallback. For an included
-  consensus request
-  it captures one canonical immutable context window before reservation, reuses
-  that exact snapshot for every agent phase, and delegates create-only sidecar
-  persistence to `Workspace`; fresh mode persists identity with no focused
-  transcript snapshot, and an absent request projects omitted focused context.
-  Every substantive advisory, bounded-retrieval, and consensus provider request
-  builds its definition first and attaches the bounded schema-v1 story-session
-  context for that session/agent, so `/run --fresh` still carries newest bounded
-  owner outcomes and current bound core-document identities while discarding
-  focused transcript events. Operation-specific input, candidates, blackboard
-  data, retrieval from other conversations, and artifact bytes remain in their
-  existing request/reference channels rather than the envelope; provider-native
-  hidden history is never continuity authority. Each runtime retains one
-  I/O-free workspace-bound debug-log
-  handle, but runtime construction emits no diagnostic record. Later operations
-  best-effort record fixed configuration, directive, inspection, advisory,
-  retrieval, consensus, and safe failure facts through runtime-private trace
-  and error guards that catch diagnostic `BaseException` failures. Diagnostic
-  calls preserve the established result, exception, cancellation, and
-  persistence behavior, while `debug_log` retains storage ownership. For
-  synchronous `apply_directive`, `set_runtime_overrides`, `inspect_session`,
-  `inspect_debate`, and `inspect_debate_context`, an underlying
-  `KeyboardInterrupt` or `SystemExit` attempts exactly one
-  `cancelled`/`interrupted` record through that safe guard before a bare
-  re-raise preserves the identical object and originating traceback. Ordinary
-  failures retain `failed`/`failed`; successful directive/configuration calls
-  retain `succeeded`/`completed`, and successful inspections retain
-  `observed`/`completed`.
-  It synchronously emits typed provider-neutral debate progress in lifecycle
-  order, makes result and terminal state durable before terminal debate
-  progress, preserves typed observer failures, and retains external
-  cancellation while best-effort recording interruption. It also sequences
-  ordinary debate persistence and the one-step advisory context-read,
-  user-append, provider-call, and reply/error-append flow. After the user event
-  is durable, a provider-phase `KeyboardInterrupt` or `SystemExit` in either
-  one-step advisory or bounded retrieval attempts a `cancelled`/`interrupted`
-  runtime terminal diagnostic, appends no transcript outcome, performs no
-  automatic retry, and re-raises the identical exception. The unmatched user
-  transcript event remains, and consensus execution is unchanged.
-  Before any provider-bound workflow, the runtime requires exact synchronous
-  backend lifecycle hooks and performs provider-configuration validation,
-  lifecycle pre-read, access acquisition, and lifecycle post-read in that
-  order. It validates exact session/durable/timestamp correlation and pure
-  provider readiness, compensating only a claim newly acquired by a failed
-  sequence; it has no fallback lifecycle path.
-  For bounded retrieval it validates the exact current-session memory-service
-  scope and synchronous sink before context, provider, store, or user-event
-  access; then holds the existing `(session, conversation)` lock across context
-  capture, one user append, the complete provider action loop, and one final
-  reply or safe runtime-error append. A private synchronous handler owns action
-  correlation and ordering, active-only search and cited read authorization,
-  fixed cumulative budgets, complete-visible-turn filtering, deep memory-result
-  revalidation, canonical framed-observation charging, supplied-source
-  resolution, and content-free progress. Cancellation preserves the existing
-  transcript outcome and re-raises. The injected memory service owns search and
-  transcript reads; the event store, `Workspace`, and backend retain their
-  persistence and provider resources. Retrieval creates no debate, artifact,
-  catalog, owner-state, or control/progress/source persistence.
-  When configured, exactly one nonrecursive RAG preflight runs before the user
-  append and supplies its optional context only to the initial provider
-  request. While provider citation identities remain available, the call-local
-  handler records the exact final result-ordered subset sourced from its
-  preflight-owned citation map alongside later search/read citations. It
-  exposes that provenance only after exact final-reply validation and never
-  infers authorization from erased `g`/`s` prefixes. `StoryRuntime` copies the
-  subset and attempted outcome into the result. After a successful agent-reply
-  append in either
-  advisory path, the runtime synchronously requests one isolated full-target
-  projection. Ordinary projection or stale-marking failure records only a
-  fixed safe diagnostic and cannot change the committed reply or append an
-  error; cancellation, `KeyboardInterrupt`, and `SystemExit` propagate after
-  commit. No projection runs after a user-append, provider/runtime-error, or
-  reply-append failure. The authorization service owns RAG state decisions;
-  orchestration imports no provider, generation store, settings, SQLite, or
-  MySQL implementation.
-  Consensus owns a `WritingArtifactRepository` built from the resolved
-  workspace root. The execution specialist authors every revision-zero
-  candidate, including supplied-draft requests; the lead orchestrator owns
-  synthesized candidates and final core updates. Only unanimous results enter
-  the repository's recoverable, part-scoped publication operation.
-- **Primary verification/documentation:** `tests/test_conversation_runtime.py`,
-  `tests/test_context_accounting_baseline.py`,
-  `tests/test_context_accounting_optimized.py`,
-  `tests/test_agent_context_runtime_adoption.py`,
-  `tests/test_agent_context_release_scenarios.py`,
-  `tests/test_conversation_retrieval.py`, `tests/test_interactive_consensus.py`,
-  `tests/test_interactive_conversation.py` for retained runtime use through the
-  controller-owned persistent Runner and its single lifecycle event loop,
+- **Responsibility:** Own runtime management, configuration activation, session
+  binding, and persisted-state inspection.
+- **Supported surface:** Package-supported `StoryRuntime` and
+  `RuntimeSession`; package-internal `RuntimeConfigurationCandidate`.
+  Directive/override management, async prepare/commit/discard, session/debate/
+  context/reference inspection, and quiescent provider-binding release remain.
+  `converse`, `converse_with_retrieval`, `run_prompt`, `run_draft`,
+  and the `Runtime`/`Session` aliases are absent.
+- **Direct internal dependencies:** `backend`, `config`,
+  `conversation_rag_runtime`, `conversation_storage.composition`,
+  `conversation_storage.contracts`, `conversations`, `debug_log`,
+  `directives`, `errors`, `prompts`, `workspace`,
+  `writing_artifacts`, `writing_artifacts.repository`, and
+  `writing_artifacts.runtime_references`.
+- **State, resources, and side effects:** Retains workspace, prompt/config,
+  storage, optional RAG-service, artifact-repository, backend snapshot, and
+  quiescent binding state. It performs only explicit management/inspection I/O
+  and no story provider request, transcript append, debate, or publication.
+- **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
   `tests/test_runtime_reference_integration.py`,
-  `tests/test_antigravity_parity.py`,
-  `tests/test_orchestration_workflow.py`,
-  `tests/test_orchestration_safety.py`, `tests/test_lifecycle_atomicity.py`,
-  `tests/test_prompts.py`, `tests/test_interactive_pty.py`,
-  `tests/test_agent_state.py`,
-  `docs/audits/issue-380-agent-context-conformance.md`,
-  `docs/guides/agent-context.md`, `docs/guides/agent-context-progress.md`,
-  `docs/guides/artifact-references.md`,
-  `docs/reference/runtime-api.md`,
-  `docs/reference/writing-artifacts.md`,
-  `docs/reference/conversation-retrieval.md`, and
-  `docs/design/consensus-workflow.md`, plus `docs/design/overview.md` and
-  `docs/design/prompts-and-provider.md` for binding ownership and lifecycle.
+  `tests/test_interactive_management.py`,
+  `tests/test_interactive_cancellation.py`, and
+  `tests/test_session_lifecycle.py`; `docs/guides/lead-agent.md`,
+  `docs/reference/runtime-api.md`, and `docs/design/overview.md`.
 
 ### `story_writing_agents.prompts`
 
@@ -5654,9 +4719,9 @@ every intermediate arrow. The current runtime graph is acyclic.
   read using caller-CWD `Path` semantics; absolute paths, symlinks, and literal
   metacharacters remain allowed, and empty strict-UTF-8 text is returned for the
   runtime caller to validate.
-- **Primary verification/documentation:** `tests/test_public_api_and_cli.py`,
-  `tests/test_cli_context.py`, `tests/test_interactive_consensus.py`,
-  `docs/reference/cli.md`, and `docs/guides/consensus-runs.md`.
+- **Primary verification/documentation:** `tests/test_cli_context.py` verifies
+  strict loading behavior, and `tests/test_interactive_controller.py` verifies
+  the direct-module-only import boundary.
 
 ### `story_writing_agents.session_lifecycle`
 
@@ -5691,46 +4756,21 @@ every intermediate arrow. The current runtime graph is acyclic.
 ### `story_writing_agents.smoke`
 
 - **Source:** `src/story_writing_agents/smoke.py`
-- **Responsibility:** Run the provider-free deterministic CLI diagnostic across
-  subject catalog, transcript, search, retrieval, persisted conversation
-  continuity, and included-context consensus behavior.
+- **Responsibility:** Run a provider-free deterministic workspace and
+  collaboration-contract diagnostic.
 - **Supported surface:** Internal
   `run_smoke(workspace: Workspace | None = None)`; no package-supported API.
-  `None` selects the implicit temporary lifecycle, while a supplied value must
-  be an initialized `Workspace`. There is no string-or-path compatibility form.
-- **Direct internal dependencies:** `agents`, `conversation_retrieval`,
-  `conversation_search`, `conversations`, `debug_log`, `models`,
-  `orchestrator`, `session_lifecycle`, `workspace`, and
-  `writing_artifacts.repository`.
-- **State, resources, and side effects:** Runs a unique temporary or explicitly
-  retained workspace diagnostic with a session directive, two
-  conversation metadata and transcript sets, bounded search, transcript-read,
-  and retrieval activity, trusted in-memory nonpersistent retrieval progress,
-  an immutable included-context sidecar, debate and agent state, a result, and
-  a provenance-backed part-scoped manuscript; verifies core-document bytes.
-  Its provider-free no-reference conversation, retrieval, and debate paths
-  assert that result operation identities remain `None`, and that the persisted
-  debate result omits the optional identity key.
-  Its provider-free backend
-  implements the exact lifecycle hooks and returns correlated ready/access
-  facts so runtime preparation exercises the canonical contract. Implicit mode
-  owns, initializes, and removes one temporary `Workspace` and its bounded debug
-  log after return or propagation. Explicit mode borrows the caller's exact
-  initialized identity-bearing `Workspace` and leaves it retained. Every fresh
-  workspace-bound runtime, catalog, event store, memory service, and inspection
-  consumer borrows that exact instance rather than reconstructing or rebinding
-  one from its path; the provider-free backend remains a separate fresh service
-  without workspace ownership. Logger-handle acquisition is optional and
-  guarded independently from the module-private trace and error submissions;
-  diagnostic `BaseException` failures cannot replace a smoke report or
-  propagated application failure. Every diagnostic handle therefore retains
-  the original Workspace identity and either appends there or fails closed
-  instead of redirecting into a replacement root. Ordinary smoke artifact I/O
-  deliberately retains the established pathname-based, nontransactional
-  `Workspace` behavior and may observe a real-directory replacement. `debug_log`
-  retains ownership of the diagnostic schema and storage.
-- **Primary verification/documentation:** `tests/test_smoke_cli.py`,
-  `docs/guides/smoke-test.md`, and `docs/reference/cli.md`.
+- **Direct internal dependencies:** `agents`, `conversation_search`,
+  `conversations`, `debug_log`, `orchestrator`, and `workspace`.
+- **State, resources, and side effects:** Verifies workspace initialization,
+  directive persistence, metadata-only catalog persistence, and empty/read-only
+  schema-v2 history, readable context, search, and page projections. It calls
+  no provider and leaves no transcript, collaboration-history, debate,
+  specialist-agent state, provider-session, exchange, or manuscript artifact.
+  Temporary mode removes its workspace; explicit mode retains the allowed
+  directive and catalog metadata.
+- **Primary verification/documentation:** `tests/test_smoke_cli.py` verifies
+  temporary/explicit lifecycle, report fields, and provider-free invariants.
 
 ### `story_writing_agents.workspace`
 
@@ -5858,7 +4898,6 @@ every intermediate arrow. The current runtime graph is acyclic.
   remains the cross-process same-session write guard.
 - **Primary verification/documentation:** `tests/test_workspace_and_config.py`,
   `tests/test_debug_log.py`, `tests/test_agent_state.py`,
-  `tests/test_lifecycle_atomicity.py`,
   `tests/test_public_api_and_cli.py`,
   `tests/conversation_catalog_contract.py`,
   `tests/test_conversation_catalog.py`,
@@ -5907,7 +4946,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_artifact_reference_directives.py`,
   `tests/test_artifact_reference_authorization.py`,
   `tests/test_artifact_reference_read_actions.py`,
-  `tests/test_public_api_and_cli.py`, `tests/test_orchestration_workflow.py`,
+  `tests/test_public_api_and_cli.py`,
   `docs/guides/artifact-references.md`, `docs/reference/writing-artifacts.md`,
   `docs/reference/workspace-api.md`, and `docs/design/persistence.md`.
 
@@ -5932,7 +4971,7 @@ every intermediate arrow. The current runtime graph is acyclic.
 - **State, resources, and side effects:** Immutable values and pure validation
   only; catalog mappings are copied and exposed read-only.
 - **Primary verification/documentation:** `tests/test_writing_artifacts.py`,
-  `tests/test_orchestration_workflow.py`, `tests/test_workspace_and_config.py`,
+  `tests/test_workspace_and_config.py`,
   `docs/reference/writing-artifacts.md`, `docs/reference/runtime-api.md`, and
   `docs/reference/workspace-api.md`.
 
@@ -6217,7 +5256,7 @@ every intermediate arrow. The current runtime graph is acyclic.
   manual filesystem mutation is supported only while workspace processes are
   stopped, not as a hostile same-user live namespace writer.
 - **Primary verification/documentation:** `tests/test_writing_artifacts.py`,
-  `tests/test_workspace_and_config.py`, `tests/test_orchestration_safety.py`,
+  `tests/test_workspace_and_config.py`,
   `docs/reference/writing-artifacts.md`, `docs/design/persistence.md`, and
   `docs/operations/filesystem-safety.md`.
 
@@ -6386,7 +5425,6 @@ every intermediate arrow. The current runtime graph is acyclic.
   `tests/test_artifact_reference_evidence.py`,
   `tests/test_artifact_reference_read_actions.py`,
   `tests/test_runtime_reference_integration.py`,
-  `tests/test_orchestration_workflow.py`, `tests/test_orchestration_safety.py`,
   `tests/test_smoke_cli.py`, `docs/guides/artifact-references.md`,
   `docs/reference/writing-artifacts.md`,
   `docs/reference/configuration/session-storage.md`,
@@ -6396,721 +5434,51 @@ every intermediate arrow. The current runtime graph is acyclic.
 
 ## Consistency Notes
 
-- Schema-v2 collaboration contracts extend the three existing conversations
-  units without adding a module or an internal dependency edge. Events owns
-  immutable values, strict canonical serialization and digests, fixed
-  receipts/failures, and independent value invariants; context depends inward
-  on events and owns pure history/candidate/transition/co-batch validation plus
-  the sole not-active-service-composed v2 store protocol; the conversations
-  facade statically re-exports that intentional surface. The project-root
-  facade and every
-  active v1 store/runtime consumer remain unchanged. The source inventory and
-  import graph therefore remain 97 production units, 385 direct internal
-  edges, and zero directed cycles.
-
-- Canonical conversation archives now require top-level schema version two,
-  preserve schema-version-one catalog metadata plus the existing canonical
-  `CollaborationEvent` values, and reject schema-version-one archive bytes,
-  filesystem `transcript.jsonl`, and SQLite `conversation_events` rows before
-  destination mutation. The duplicate `ConversationArchiveEvent` type is
-  removed. Filesystem and SQLite adapters own exact collaboration-history
-  transport; the retained internal-named `migration.py` owns only same-schema
-  backend transfer, its independent schema-version-one checkpoints, and final
-  parity. Selection and activation consume transfer readiness without
-  depending on workflow reports, and derived FTS remains non-authoritative.
-  These responsibility and public-surface changes add no production module or
-  dependency edge; the root, conversation-storage, archive, contracts,
-  transfer-workflow, selection, and SQLite surfaces are respectively 120, 63,
-  21, 34, 7, 8, and 15 names, with the graph still at 97 modules, 385 edges,
-  and zero cycles.
-
-- Agent-exchange inspection remains one-way and isolated. Controller `_core`
-  depends on the supported `agent_exchanges` facade plus pure
-  `_exchange_policy` and lazy `_exchange_viewer`; the latter depends inward on
-  the generic `interactive_terminal._external_view` host contract. Terminal
-  `_core` and `_driver` also depend inward on that contract, while the driver
-  remains the sole stream, input-latch, raw-mode, alternate-screen, geometry,
-  signal, presentation, and restoration owner. These three new modules and ten
-  internal edges produce 92 modules and 372 edges without a cycle. Root,
-  `agent_exchanges`, and `interactive_terminal` facades remain exactly 120, 15,
-  and 12 names. `jsonl-viewer` is installed from the unconditional exact VCS
-  requirement at `1d4f5f86ccb4ebd2f458f046df7a0b99b9fbeaec`, but is loaded
-  only by `_exchange_viewer` after an explicit command and is validated before
-  terminal acquisition. The empty `viewer` extra is a compatibility alias;
-  the lock source and matching gitlink are external audit/package facts, not
-  production units or internal edges. No production import uses
-  `vendor/jsonl-viewer`.
-
-- Agent-exchange capture remains one-way and isolated from provider-native
-  transport. `backend` alone composes the feature and depends explicitly on
-  the supported `agent_exchanges` facade for durable provider/scope enums and
-  on the direct-only `agent_exchanges.capture` module for its internal
-  lifecycle; capture depends inward on
-  `agent_exchanges.contracts`, `agent_exchanges.storage`, `provider_adapter`,
-  and `workspace`. The service-owned contextual finalizer protocol keeps
-  `agent_context.service` independent from exchange contracts and storage, so
-  the feature adds exactly one module and six internal edges without a cycle.
-  The root and `agent_context` facades remain 120 and 11 names;
-  `agent_exchanges`, its contracts module, its direct-only capture module, and
-  `agent_context.service` expose exactly 15, 14, 3, and 24 names respectively.
-  Capture exclusively submits request, completed-response, and closed-outcome
-  records through the #412 store. It does not import, scan, prune, or alter
-  `provider_error_artifacts`, whose separate #375 eligibility and
-  `provider_error_responses` ownership remain unchanged.
-
-- Live agent-context lifecycle progress remains one-way and content-free:
-  `agent_context.service` owns the direct-module event contract and
-  authoritative delivery, `orchestrator` composes runtime observers,
-  `interactive_controller._runtime_policy` is the controller's sole direct
-  event-contract consumer, and `_core` consumes only that policy's safe
-  projection. The sole new edge is
-  `interactive_controller._runtime_policy -> agent_context.service`; the root,
-  `agent_context`, and `writing_artifacts` facades remain exactly 120, 11, and
-  31 names.
-
-- Optional conversation RAG has three one-way direct-module boundaries.
-  `conversation_rag` is the standard-library-only story contract and policy
-  leaf. `generic_rag_adapter` is the sole production dual-project importer and
-  depends inward only on that leaf; it borrows every injected collaborator and
-  returns text-free stable story references. `conversation_rag_composition`
-  stays safe in the base installation, depends on the story leaf, and exposes
-  its adapter edge only through a statically named deferred import after an
-  exact `generic-rag` 0.1.0 distribution check. The package-root facade remains
-  120 names and exports none of these surfaces. The only base dependency is the
-  separately isolated, exact-pinned `jsonl-viewer`; `generic-rag` remains absent
-  from the base installation, and the `rag` extra, lock, and
-  `vendor/generic-rag` gitlink share the exact
-  `c77456321c614518e420e45c033e3f71dc5363b8` pin. That separate seven-module
-  generic project is governed by its own index, imports no story module, and is
-  not a production unit beneath this index's `src/story_writing_agents/` root.
-  These three story modules own no provider, derived store, runtime/agent
-  scheduling or authorization, authoritative reread/citation, CLI, settings,
-  or conversation-storage integration.
-
-- `conversation_storage.contracts` is the backend-neutral direction owner for
-  filesystem/SQLite selection, explicit raw-port component binding, capability
-  preflight, transfer readiness/parity, activation outcomes/failures, bounded
-  mutation leases, and generic exact archives. It depends only on the
-  existing catalog/event-store/search/error contracts. The pure `archive`
-  module owns the canonical backend-neutral logical/wire value independently
-  of those generic ports, while `filesystem_archive` alone knows the fixed
-  filesystem layout and depends inward on both. The package facade re-exports
-  their intentional supported surfaces. The CLI locally imports the separate
-  direct-only internal-named `conversation_storage.migration` workflow only
-  for explicit transfer/verification and directly consumes the distinct
-  direct-only `conversation_storage.selection` workflow for desired selection
-  and startup.
-  `conversation_storage.provisioning` owns runtime/host readiness and explicit
-  provisioning beneath selection; selection imports public archive,
-  composition, contract, filesystem-archive, provisioning, and SQLite surfaces
-  and never depends on transfer reports or checkpoints. Neither workflow is
-  re-exported by a facade, and importing either does not load `sqlite3`.
-  `conversation_storage.composition` alone owns the weak workspace coordinator
-  registry, contained POSIX advisory guard, activation marker I/O, and explicit
-  filesystem binding. Its service bundle exposes
-  concrete-`isinstance`-compatible construction-pinned filesystem collaborators
-  under one explicit provenance, using operation-local workspaces without
-  retaining caller-mutable bindings or adding external resource ownership.
-  Its composed filesystem catalog mutations and event append borrow the same
-  coordinator included in their immutable bundle; direct standalone adapters
-  retain their borrowed-`Workspace`, uncoordinated behavior. Missing activation
-  state remains the unwritten filesystem baseline. A supported mutation borrows
-  one exclusive, owner-thread-bound,
-  expiring lease first. Filesystem archive transfer validates that supplied
-  outer lease throughout its privileged operation. SQLite catalog/event
-  mutations borrow the same coordinator before their database transaction,
-  while SQLite provisioning and its canonical archive operations validate a
-  caller-supplied outer lease. The retained internal-named transfer owner is
-  the explicit copy and checkpoint consumer: it captures one root, acquires one
-  outer lease, composes
-  both canonical archive adapters, owns planning/checkpointing, and proves
-  fresh final parity without changing activation.
-  Activation CAS likewise validates its supplied lease rather than acquiring
-  one behind its caller. The pure `conversation_literal_search` module owns the
-  shared versioned normalization/classification/snippet/order mechanics;
-  `conversation_search` and the optional SQLite adapter depend inward on that
-  surface without either facade re-exporting it. The SQLite adapter also depends
-  inward on the existing contracts and composition boundary, the authoritative
-  `sqlite_database` owner, and the story-independent disposable
-  `sqlite_search_index` owner. Required searchable values and their generation
-  commit in the main database; only afterward can an adapter rebuild the
-  generation-bound FTS companion under the same lease. Companion failure or
-  capability absence cannot affect main readiness or exact one-snapshot search,
-  and search never repairs it. The SQLite modules remain direct-only surfaces:
-  neither facade imports or re-exports them. Config and Workspace own only the
-  desired/default value, while selection owns explicit readiness and next-shell
-  choice, startup owns activation, and runtime/controller consume only one
-  already-composed immutable active bundle; no facade or import changes the
-  filesystem default.
-
-- Writing-artifact directive parsing is a pure package-local boundary:
-  `writing_artifacts.directives` scans only one supplied current input and
-  constructs the `writing_artifacts.references`-owned frozen batch. That value
-  module owns the reference-source predicate independently from the strict
-  publication predicate in `writing_artifacts.catalog`; both consume only the
-  catalog module's package-internal lexical POSIX-path validation. The batch
-  retains exact source text, exposes only the one-backslash escaped-dollar
-  provider projection plus ordered canonical path/range identities, and never
-  carries artifact bytes. Parsing performs no repository read or runtime,
-  provider, controller, terminal, picker, viewer, or composer integration;
-  those workflows cannot treat a parsed directive as authorized content.
-
-- Agent-directed context operations retain three one-way internal boundaries.
-  `agent_context.actions` owns only immutable actions, correlations, evidence
-  values, fixed policies and errors, and canonical untrusted frames;
-  `agent_context.sources` owns the exact four concrete authority adapters and
-  deterministic bounded capture/search; and `agent_context.service` alone owns
-  workspace-scoped manifest/planner/ledger composition plus each invocation's
-  HMAC handles, provider-neutral action loop, accounting handoff, counters,
-  receipts, transitions, and final source revalidation. Source adapters call
-  only public owner operations on the writing-artifact repository, conversation
-  catalog/event store, and Workspace.
-  They never import orchestration, providers, prompts, runtime, or ledger, and
-  backend imports only the service-owned provider protocol rather than its
-  planner, ledger, or source collaborators. Orchestrator is the sole production
-  composition consumer: it imports the five direct context contracts, builds
-  runtime manifests and classifications, supplies the fixed authorities,
-  validates domain answers, and projects typed context events into existing
-  debug/progress owners without reversing any context dependency. Prompts owns
-  the stable no-core-byte runtime definition while retaining its eager legacy
-  definition. Service-owned classification joining remains strict unless the
-  orchestrator explicitly marks a P2 hard constraint as conditional; only
-  role-core IDs use that path, so missing workspace cores are omitted without
-  weakening conversation, debate, owner-state, or retrieved-source authority.
-  Mandatory references pass through answer authorization unchanged,
-  remain outside source search/read authority, and execute as a separately
-  accounted backend prelude before the substantive context-action budget; the
-  runtime-reference coordinator exposes only ordered content-free proof facts
-  for reservation construction. Native contextual continuation storage stays
-  backend-owned and is keyed independently from legacy session threads. None
-  of the three modules is re-exported by the accounting-only `agent_context`
-  facade.
-
-- Explicit artifact reads retain split, one-way ownership.
-  `writing_artifacts.authorization` owns pure content-free evidence contracts
-  and the captured authorization bytes; `writing_artifacts.read_actions` owns
-  the provider-neutral request/action/result/coordinator boundary;
-  `writing_artifacts._reference_evidence` owns canonical create-only lifecycle
-  records; `writing_artifacts.references` owns catalog-independent source
-  eligibility and identity; `writing_artifacts.filesystem_sources` applies that
-  policy to secure discovery and capture; and
-  `writing_artifacts.repository` alone owns secure reads, exact current-source
-  revalidation, repository leases,
-  durable sequencing, and each concrete one-use coordinator/capability.
-  `backend` imports only the
-  read-action boundary: it validates the addressed agent/phase/round, requires
-  one complete exact action before bytes are delivered, frames those bytes once
-  for the next provider call, and accepts no substantive result before durable
-  result receipt and revalidation. One operation snapshot never refreshes and
-  every provider attempt retains an independent correlation and capability.
-  Evidence and inspection never carry artifact bytes, source/provider text,
-  prompts, or diagnostics. `writing_artifacts.runtime_references` now owns one
-  call-local top-level coordinator: the orchestrator parses and captures once,
-  preserves source text in durable conversation/debate input, projects only
-  provider text to backend calls, allocates a fresh correlation per provider
-  attempt, and finalizes or terminates through the repository. The backend
-  remains only the mandatory `read_actions` consumer, and the repository alone
-  persists evidence. Controller error mapping and content-free result/inspection
-  identities do not move reference bytes above those boundaries. Interactive
-  `$`/`$$` completion, picker, and direct-view activation consume only a
-  controller-borrowed sorted safe-filesystem path snapshot and bounded
-  repository `read_text`; the UI
-  replaces only its active provider-text span with ordinary `${path}` or
-  `${path}#Lx-Ly` tokens and therefore cannot bypass this downstream parser,
-  capture, authorization, provider-read, and evidence path. The supplied-text
-  terminal viewer remains independent of discovery, storage, provider/runtime
-  coordination, and authorization.
-
-- Canonical core context crosses the repository/provider boundary only as an
-  `ArtifactContentSnapshot` converted to an immutable `PromptFileReference`.
-  Its content-free source identity records canonical kind/path, full hash and
-  size, and physical file stamps rather than publication metadata.
-  `PromptAssembler` requests only the current agent's configured core paths;
-  provider binding and staging decode the captured bytes and never reopen the
-  lexical workspace path. Empty, manual, initialized, pre-provenance, and
-  hash-divergent safe current core sources are therefore available without
-  weakening later publication checks. `Workspace` generic writers reject canonical
-  artifact identities and case-folded or NFKC-normalized aliases of both
-  repository-owned namespaces before mutation and expose no artifact-specific
-  core reader. Repository mutation remains protected by a permanent exact-name
-  readiness triple initialized under a transient artifact-state-directory
-  bootstrap flock, created durably before its first body entry, and reverified
-  by a call-scoped primary-lock lease. Legacy pairs and partial triples fail
-  closed without reconstruction or migration.
-
-- `WritingArtifactRepository` creates one immutable authoritative schema-v2
-  journal before target publication and never replaces it with a phase update.
-  Exact catalog-before recovery rolls forward; exact catalog-after recovery
-  verifies without republishing; divergent catalog, commit, target, or journal
-  authority durably blocks. Non-target catalog entries remain identical across
-  the recorded before/after images. Immutable commits are the permanent
-  reservation ledger: every stored record is canonical repository JSON, the
-  catalog path set equals the full artifact-path union of all non-exempt
-  commits, and each current catalog entry exactly projects its commit.
-  Superseded core history remains valid and represented, while each repeated
-  core path is governed by its unique greatest offset-aware commit instant;
-  equal newest instants or a stale projection fail closed. New supported commit
-  instants advance strictly beyond the full ledger maximum, including across
-  clock rollback, and overflow fails before mutation. Only the active journal's
-  exact commit may be exempted while the catalog is at its exact before image;
-  it then contributes neither expected paths nor newest-core authority, while
-  every older established path remains required. Catalog-after and ordinary
-  access have no exemption or reconstruction. Strict final journal retirement
-  occurs only after target, commit, catalog-after, and ledger verification.
-  `_storage`
-  captures its root as a lexical absolute name without construction-time
-  resolution or I/O, immediately owns every opened traversal descriptor for
-  exact-once failure cleanup, independently prechecks final names and all
-  readiness-triple spelling, rejects
-  normalized/case aliases, fsyncs created child entries through retained parent
-  descriptors, and completes triple durability under bootstrap before the
-  primary flock can guard body entry.
-
-- `Workspace` remains the sole containment and no-symlink authority, owns each
-  instance's immutable canonical-root identity and package-internal root
-  open/reverification policy, and declares the `debug_logs` scaffold.
-  `debug_log` depends one way on that non-facade seam and owns each attempt's
-  root and child descriptors, safe event schema, weak per-workspace process
-  locks, independent advisory guard, leaf mutation, regular-file and single-link
-  validation for guard/active/backup files, active/backup size validation,
-  expected rotation state, append rollback, bounded rotation, and cleanup. This
-  independent guard intentionally does not reuse the backend's private
-  access-claim lock: access claims fail closed, while ordinary diagnostic
-  `Exception` failures drop their record.
-  Process-control `BaseException` failures deliberately leave the low-level
-  surface, and `backend`, `cli`, `interactive_controller._core`, `orchestrator`,
-  and `smoke` each guard every trace and error call privately so diagnostics
-  never affect caller control flow. The five synchronous provider-free runtime
-  operations also attempt `cancelled`/`interrupted` records for application
-  `KeyboardInterrupt` or `SystemExit` before bare-reraising the identical
-  control. Explicit CLI smoke initializes and retains one identity-bearing
-  `Workspace`; smoke and every fresh workspace-bound service borrow that same
-  instance, so none can reacquire a replacement identity. Implicit smoke instead
-  owns its temporary workspace lifecycle. This diagnostic identity continuity
-  does not change ordinary pathname-based, nontransactional Workspace domain
-  I/O. CLI and smoke guard diagnostic-handle acquisition; CLI separately marks
-  hint eligibility after successful initialization or discovery, so an eligible
-  hint does not imply that a handle, record, or file exists. The diagnostics
-  module is not re-exported by the project facade, and its import and handle
-  construction perform no filesystem operation. A missing-root Workspace whose
-  one post-creation identity bind fails never retries and never writes child
-  scaffold/defaults on that instance, while an initially unavailable existing
-  root retains its distinct established behavior. Backend emission begins only
-  after its existing configuration snapshot validates, while runtime handle
-  construction emits no record. All five consumers use only the internal append
-  surface; none assumes ownership of diagnostic files, locks, schema, or
-  rotation.
-- `Workspace` initializes the canonical twelve-key system and seven-key per-agent
-  configuration shapes with desired conversation storage set to filesystem,
-  message details false, nullable local RAG provider, automatic RAG false, and
-  nullable workspace/agent provider routes, but never rewrites existing
-  documents.
-  `ConfigManager` owns full system and per-agent schema validation,
-  the independent filesystem/SQLite desired-storage vocabulary, the exact
-  Codex/Antigravity backend vocabulary with legacy Gemini guidance, nullable
-  default and explicit route handling, both providers' model/effort validators,
-  immutable complete snapshots, exact-byte baselines, and one canonical
-  complete-document compare-and-set with reverse-order rollback. `AgentBackend`
-  resolves the authoritative roster-wide provider/model/effort profiles and
-  each value's source at construction and for every staged hot generation, then
-  passes the exact provider-filtered profiles to both adapters. Codex model
-  resolution remains explicit-over-agent-over-system and its reasoning remains
-  agent-over-system; Antigravity model and effort resolution is explicit-over-
-  agent-over-system-over-provider-default. Provider routing is CLI override,
-  explicit agent route, workspace default, then Codex. Launch overrides retain
-  highest precedence and mask their settings fields for that backend lifetime.
-  Effective model and effort values reach native provider arguments but not
-  definition fingerprints, so a same-provider model/effort change remains
-  eligible to reuse its native thread. The settings-owned provider-route
-  generation enters the definition fingerprint and advances on every effective
-  provider switch, making A-to-B-to-A fresh rather than reviving the earlier
-  route. A backend-bound `StoryRuntime` and its `PromptAssembler` reuse the
-  active immutable configuration and route-generation snapshot while session
-  and explicit overrides remain live. An exact message-details-only
-  `/settings` Apply Changes prepares and commits the guarded settings
-  transaction, then updates the controller-owned active presentation flag
-  without authentication, storage readiness, backend/runtime staging,
-  provider-route switching, or provider-thread work. An exact RAG-only change
-  uses the same guarded transaction without authentication, optional-provider
-  work, storage selection, backend/runtime staging, or live service replacement;
-  the running shell retains its startup service and automatic policy and the
-  saved policy applies to the next shell. Every remaining successful
-  Apply stages and preflights isolated adapters, proves runtime quiescence,
-  persists its guarded configuration and route transaction, and hot-activates
-  matching backend, runtime, and prompt generations in the current shell; a
-  mixed message-details change updates its active flag only after that
-  activation, while any mixed RAG change receives a separate truthful next-shell
-  result. Changed desired conversation-storage and RAG policies apply only when
-  the next shell freshly activates their ready resources. Direct
-  configuration-file edits have
-  no watcher, and other running shells retain their captured state until a new
-  backend launch reconciles durable route generations and loads configuration.
-- `interactive_settings` owns one call-local exact-byte system, agent, and
-  optional provider-route baseline, immutable pending candidate, safe persona
-  catalog, pending conversation-storage and RAG choices, in-memory missing-
-  provider-default rebase, complete candidate preparation, and exact stale-state
-  detection. It owns provider-generation increments and startup reconciliation
-  plus the three-file rollback/recovery contract; `ConfigManager` remains the
-  canonical twelve-key/seven-key schema owner and owns the two-document CAS used
-  by storage selection.
-  Discard Changes or a clean exit preserves the opening files. Default choice
-  and authentication facts remain outside it. The controller owns
-  authentication, backend/runtime staging, preflight, quiescence, persistence,
-  and activation order. It delegates storage readiness, installer consent,
-  provisioning, parity, and the
-  configuration CAS to `conversation_storage.selection`, then commits the
-  prepared route state without taking ownership of configuration files,
-  adapters, the backend, or the runtime. The settings unit itself has no
-  controller, terminal, backend, runtime, auth, selection, or parser edge.
-- `provider_catalog` is the sole model/effort discovery subprocess boundary: it
-  owns exact native command launch, the bounded stdout reader and retained-byte
-  ceiling, deadline and child cleanup, strict provider parsing, and sanitized
-  immutable projections. `cli` resolves executable composition and
-  `interactive_controller._core` requests fresh discovery only for selected
-  settings fields; neither retains raw output or owns discovery resources.
-- `provider_auth` is the sole authentication subprocess boundary: it probes
-  only the exact native commands at the resolved workspace root, gives login
-  the inherited real terminal, reaps its children, and exposes only immutable
-  content-free states. `interactive_auth` depends one way on that service and
-  the terminal facade to own status presentation, picker/login coordination,
-  full refresh, sanitized outcomes, and default selection policy without
-  owning either resource. After workspace/config loading, the CLI first asks
-  selection to activate one ready immutable storage bundle, then composes both
-  auth modules and sequences welcome, initial/effective-provider hard gates,
-  default persistence, and delayed context/backend/controller construction.
-  The controller receives the active storage bundle and only borrows the auth
-  coordinator for `/auth` and authenticated settings while consuming only
-  `provider_auth`'s immutable snapshot facts. Credentials,
-  provider output, browser/keyring behavior, terminal mode, and configuration
-  files remain respectively provider-native, undisclosed, terminal-owned, and
-  settings/config/workspace-owned. Both auth modules remain absent from the
-  project facade.
-- `interactive_commands` owns canonical command and agent-route metadata, parse
-  rules, typed parsed actions, and the pure cursor-aware completion grammar and
-  replacement spans derived from that same metadata. Its pure provider-span
-  projection limits interactive artifact activation to ordinary, routed,
-  `/say`, and RUN prompt text while excluding management, identity, numeric,
-  output-path, and option fields. Agent-valued completion
-  and fuzzy guidance expose only preferred prompt aliases in roster order while
-  parsing retains every accepted route alias. `interactive_line_editor`
-  preserves its legacy main suggestion projection while delegating actual main
-  reads to the shared selectable terminal route; `_controls` owns the fixed
-  ordered `/send`, `/cancel` composition projection. The facade delegates all
-  raw terminal behavior to the unified terminal driver and creates no registry
-  or parser edge. The fixed interactive lifecycle grammar uses
-  `/session resume [NAME]` and `/conversation resume [ID]` while preserving the
-  existing public `ActionKind` identities and values. The
-  `interactive_terminal` package keeps its established public facade while
-  `_core` consumes public `COMMANDS` and `AGENT_ROUTES` metadata plus canonical
-  display names to coordinate safe presentation and explicit callback, main,
-  subject, composition, and confirmation reader routing. `_model`, `_controls`, and
-  `_render` remain pure. `_render` alone recognizes complete strict JSON
-  object/array agent replies for two-space Unicode-preserving presentation and
-  owns the bold terminal-default `AGENT` decoration; terminal `_core` and
-  controller facade consumers apply that projection only at presentation, so
-  provider results and stored conversation events remain unchanged. `_driver`
-  alone owns raw streams, capabilities,
-  functional cursor
-  controls, width, key decoding, writes, flushes, restoration, and one bounded
-  process-local main-input history store. `_input_lifecycle` owns the driver's
-  irreversible LIVE/FALLBACK latch, exact decoder specification, persistent
-  one-byte decoder, bounded decoded suffix, stable EOF, poisoning, interrupt
-  reset, and synchronous input exclusion; `_driver` retains the fixed
-  50-millisecond Escape readiness select and checks decoded suffixes first. For
-  startup, advisory, consensus, and Settings progress it also
-  exclusively owns the active row state, operation/animation task joining,
-  cursor clear/redraw writes, rightmost-cell-safe fitting, and cleanup;
-  `_render` supplies only the pure injected text-free shimmer row,
-  and incapable or callback terminals remain
-  visually silent. For the separate fixed startup/auth presentation it alone
-  owns capability and reduced-motion selection, guarded noncanonical/no-echo
-  activation, atomic type-ahead discard, exact restoration before native login,
-  bounded timing, fresh-width rendering, right-margin safety, write-progress
-  geometry, result line boundaries, SGR reset, and best-effort cleanup.
-  `_model` owns the unlisted stage-only purpose-bound welcome contract, `_core`
-  owns its canonical four-value sequence and sole driver-index adapter, and
-  `_render` owns the fixed wordmark data and pure welcome projections. `_core`
-  also supplies semantic authentication notices. Eligible capable ANSI reduced
-  motion renders one colored final welcome without animation, raw-mode
-  activation, cursor control, clearing, or delay; authentication notices remain
-  static plain records. A decoration-disabling `NO_COLOR` value, callback
-  construction, or a dumb, constrained, or uncertain terminal instead keeps the
-  welcome meaningful, plain, and delay-free. It receives
-  completion, palette, preview, and trusted semantic input collaborators only
-  per read,
-  resets navigation for each main read, and keeps composition and confirmation
-  reads history-free. Cancellable settings prompt input is also history- and
-  completion-free: `_controls` owns its pure Escape outcome, `_core` binds the
-  resource-free facade adapter, and the sole driver owns its raw/fallback input
-  and restoration. The real stream factory binds main, subject, composition,
-  confirmation, picker, and cancellable-prompt reads to one irreversible input
-  source and submitted-input lifecycle: the driver clears each complete capable
-  live frame before submit,
-  commit, cancel, interrupt, or EOF returns and attempts the same cleanup on
-  failure before restoration. Static completion-only Enter keeps the main read
-  open, so it triggers neither frame cleanup nor history append. Eligible main
-  submissions append once after capable cleanup and restoration or after an
-  ordinary fallback reader returns. Callback and line fallback retain printed
-  prompts and input and emit no synthetic `completed` or `cancelled` control
-  frame; capable stream-backed conversation-subject input is history-free live
-  input, while callback construction remains ordinary. Persistent semantic
-  output written after the input boundary remains in scrollback. Explicit Apply
-  Changes and Discard Changes confirmations alone carry the controller-owned
-  changed-only Current/Pending context, including plain-text changed cues and
-  any invalid-answer hint; ordinary editing and whole-flow cancellation emit no
-  snapshot.
-  Nested Escape returns without committing. The driver also owns the dedicated
-  picker lifecycle, observes picker width on each redraw, and keeps picker input
-  separate from editable line, history, and completion state. `_controls`
-  supplies immutable history,
-  selectable palette, composer, confirmation, and generic picker transitions:
-  open-palette Up and Down move the clamped highlight, while closed-palette Up
-  and Down remain history keys; picker Up and Down skip disabled choices and
-  clamp within their own at-most-seven-row viewport. Exact `$$` on a capable
-  editor uses a distinct completion namespace but the same nonmodal palette
-  state, opens immediately when the second `$` is projected, and never enters
-  the generic picker lifecycle. Its empty namespace keeps the same overlay open
-  with actionable guidance and a deferred empty-source failure. `_driver`
-  consumes the controls-correlated Enter/Tab selection only to open the
-  independent viewer; ordinary fallback retains the generic numbered picker
-  after its line is submitted. No timer participates in either path. Opaque
-  choice identities remain internal
-  correlation keys and are never rendered. Composition preview remains
-  nonselectable. The real CLI constructs one
-  stream-backed terminal rather than injecting a second editor. The terminal
-  facade also
-  exposes an unlisted typed semantic-output adapter and closed component
-  bindings, including `ListView`, for package consumers without expanding
-  `__all__`; controller code imports only that facade, never a terminal leaf.
-  The same facade exposes unlisted progress and error bindings: CLI startup,
-  authentication, controller picker preparation, and controller runtime waits
-  each bracket exactly one awaitable without owning animation mechanics. The
-  driver removes the indicator before the next view, result, cancellation, or
-  failure presentation. Persistent advisory routing and waiting records are
-  intentionally absent.
-  Counted session, conversation, search, transcript, and history output uses
-  one positioned one-record list and one component write for each established
-  row callback, preserving partial-output and cancellation boundaries.
-  Composer lifecycle records and invalid-confirmation hints now use one semantic
-  component write each, with zero internal composer calls to the generic status
-  writer; the controller owns none. The controller still receives only
-  completed terminal outcomes, alone passes exact lines to the parser once, and
-  neither it nor parser or storage code owns or persists command history.
-- `interactive_terminal._reference_activation` owns only pure active-marker,
-  completion, request, and replacement values, including the paired ranged-
-  source completion/PICK projection, paired empty completion/failure, and
-  immutable provider-scope and directive-parity correlation. It validates each
-  complete adjusted provider-visible span atomically, including earlier
-  references while excluding command options outside that scope. `_core`
-  combines them with controller-supplied provider scopes, sorted eligible
-  source paths, bounded text reads, fixed errors, and the controls-owned
-  selection callback. `_controls` owns pure overlay projection, highlighting,
-  Escape restoration, and selection correlation; `_driver` alone turns that
-  correlated capable selection into a VIEW request and runs the supplied-text
-  viewer under the already-held input latch and raw-mode lifetime. Its generic
-  picker remains only the ordinary-fallback `$$` selection mechanism. This
-  preserves outer buffer, cursor, completion, history navigation, saved draft,
-  overlay, composer, focus, and mode state on cancellation or failure and
-  mutates only the active span on success. Main history and RUN/CHAT dispatch
-  occur only after the returned line's normal final commit. Filesystem listing
-  and reads remain explicit caller callbacks; the controller and terminal
-  retain no catalog or artifact body after a call, and the emitted token remains
-  subject to the unchanged writing-artifact directive and runtime enforcement
-  path.
-- The ranged text viewer remains wholly inside `interactive_terminal`:
-  `_viewer_model` owns immutable LF-derived document/state/viewport/result
-  values, the private terminal-local 8 MiB source and 65,536-line capacities,
-  exact empty-state/viewport correlation, and a complete 16 MiB sanitized-
-  fallback budget with exact empty-projection accounting independent from the
-  writing-artifact reference limit; `_viewer_controls` owns pure anchored and
-  fallback transitions; `_viewer_render` owns width-plus-256 bounded live-row
-  clipping and complete un-clipped plain fallback projection;
-  `_input_lifecycle` owns canonical ASCII/UTF-8/ISO-8859-1 and built-in
-  strict/surrogateescape admission plus persistent ordered decoding; and the
-  existing `_driver` owns keys, exact configured-control classification,
-  geometry, streams, raw mode, alternate screen, readiness, cleanup, and
-  next-interaction resize observation.
-  `_core` binds one stateless unlisted facade adapter and drops its call-local
-  state in `finally`.
-  No terminal unit discovers files or imports workspace, artifact repository,
-  runtime, backend, controller, parser, or composer ownership. The viewer does
-  not implement `$`, `$${file}`, or `$$`, artifact eligibility, ordered
-  references, provider context, or composer restoration.
-- `interactive_controller` is the stable one-class import boundary and owns no
-  shell state or resource. Its `_core` owns interactive shell action mapping,
-  current in-memory attachment, current-focus conversation and sticky-target
-  state, borrowed auth-coordinator interaction, full `/auth` refresh/default
-  coordination, and freshly authenticated provider assignment and dirty Apply
-  Changes gates,
-  resource-free facade-only generic picker interaction for settings and for a
-  submitted omitted `/session resume` or `/conversation resume` after its fresh
-  lifecycle or catalog read succeeds and yields eligible rows; the opened picker
-  is live and transient on capable streams and numbered in line fallback. Empty
-  results and read failures emit their applicable result or error without
-  opening it. Before submission, exact omitted commands on capable input receive
-  call-local lifecycle/catalog choice snapshots through `InteractiveMainInput`;
-  dynamic-choice Enter submits an explicit identity and bypasses the picker,
-  while Escape followed by Enter or nonempty VEOF submits the unchanged omitted
-  buffer and follows the fresh post-submit read. That submitted main line's
-  history eligibility is independent of whether the read opens a picker or
-  returns an empty result or error. The controller also owns cancellable-prompt
-  interaction and the settings flow's call-local pending candidate and
-  confirmation diff,
-  process-local per-session latest accepted STARTED debate IDs, transition and
-  compensation ordering, retained runtime and memory-service wiring, one
-  private lifecycle `asyncio.Runner`, controller-local interruption/progress
-  proof, and outer cleanup arbitration after its one run starts. That boundary
-  attempts Runner close, known-access release, backend close, and state clearing
-  in order; an uncaught body process control outranks the first cleanup process
-  control, later stages still run, and the retained exact object and originating
-  traceback propagate only afterward. It alone owns Runner-retention and final
-  controller-state clearing decisions.
-  `AgentBackend` retains actual session access claims, manifests, and provider-
-  thread coordination; provider adapters retain binding, staging, and provider-
-  native state, while `provider_process` owns subprocess resources;
-  `ConversationCatalog` retains conversation
-  metadata ownership; `cli_context` owns both session and per-session
-  conversation-default persistence; and `interactive_terminal` retains
-  synchronous I/O and presentation ownership. Interactive advisory content
-  crosses only the public `StoryRuntime.converse_with_retrieval` boundary with
-  the exact attachment-scoped memory service and a synchronous progress sink;
-  repeated interactive advisory and consensus operations use the controller's
-  one Runner, while unchanged direct Python one-step calls retain
-  `StoryRuntime.converse` and noninteractive loop ownership remains outside the
-  controller. Before an advisory coroutine enters, fixed attached cancellation
-  requires public Runner quiescence proof and performs no provider or state/
-  persistence mutation; after entry, it requires runtime `CancelledError` and
-  operation join, while every uncertain state fails closed.
-  The `_session_policy`, `_conversation_policy`, and `_runtime_policy` leaves
-  interpret immutable collaborator facts and safe failure categories without
-  retaining state, performing I/O, formatting presentation text, mutating
-  progress collections, importing `_core`, or depending on one another.
-  `_runtime_policy` returns typed debate and context inspection facts;
-  `_core` alone constructs their semantic presentation and focused-history
-  context accounting and commits canonical results to controller-owned process
-  state, while the terminal remains the rendering and emission owner.
-  Provider-free `/search` and `/transcript` inspection crosses only public
-  `ConversationMemoryService.search` and
-  `ConversationMemoryService.read_transcript` boundaries. Provider-free
-  focused `/history` and the transcript portion of `/status` each cross one
-  public active-bundle `ConversationEventStore.read` boundary and derive
-  context facts from that exact immutable tuple through the pure module-supported
-  `select_bounded_conversation_context`; the controller never appends or calls
-  event-store `read_context`. Ctrl-C during provider-free search, transcript,
-  or history rendering stops further output without mutating those boundaries.
-  Directives and safe inspection cross only public
-  `StoryRuntime` methods. The controller performs no direct backend provider,
-  context/result, retrieval-control, or artifact persistence.
-  Every current-focus consensus action resolves one required create-only
-  `PART/PATH.md` before composition or draft-file access. `RUN` and `RUN_FRESH`
-  cross `StoryRuntime.run_prompt`; `DRAFT_FILE` alone crosses
-  `run_inputs.read_draft_file` and then `StoryRuntime.run_draft` with
-  `InputKind.DRAFT`. Each route passes the exact validated output path, while
-  `RUN_FRESH` is context-free and the other two routes include current focus.
-- The controller normally injects one immutable active
-  `ConversationStorageServices` bundle into `StoryRuntime` and every
-  attachment-scoped `ConversationMemoryService`, so its catalog, event-store,
-  search, and mutation-coordinator ports retain one provenance. The additive
-  bundle conflicts with the legacy raw catalog injection; that raw compatibility
-  path retains its established filesystem event-store construction without
-  widening the storage contracts. The controller prepares the destination
-  memory service before attachment commit, rebinds it only with the committed
-  attachment, and clears it on switch, pause, cleanup, and final close;
-  changing current focus does not rebind it. Search defaults to
-  active conversations, while transcript identifiers resolve across active and
-  archived conversations for explicit provider-free terminal reads. For agent
-  retrieval, `StoryRuntime` first validates that service's exact current-session
-  scope, forces active-only search, authorizes each read through a citation
-  minted by an earlier same-turn search, and owns all memory-service calls. It
-  returns trusted ordered sources; the controller alone renders their subject
-  and stable conversation/turn/sequence/kind fields. Source and progress output
-  is terminal-only and never enters the transcript.
-- `conversation_retrieval` owns only immutable provider-neutral contracts,
-  fixed policy, exact validators, canonical untrusted observation framing, and
-  the synchronous `ConversationRetrievalActionHandler` protocol. Runtime owns
-  the implementing handler and memory authority; backend consumes the protocol
-  and never imports orchestration or a memory/storage port. This inversion keeps
-  the graph acyclic and prevents private runtime reach-through.
-- `Workspace` and `ConversationEventStore` implementations own persistence
-  mechanics. `Workspace` exclusively owns the strict immutable debate-context
-  sidecar schema and I/O. `StoryRuntime` captures included context once before
-  reservation and sequences sidecar/result/state durability and typed debate
-  progress. It sequences one-step advisory turns as before. For retrieval it
-  holds the existing conversation lock across validated context capture, one
-  durable user append, all provider/actions/memory calls, and exactly one final
-  reply or sanitized runtime-error append. Retrieval actions, observations,
-  progress, and sources have no persistence schema or artifact.
-- `AgentBackend` owns provider-neutral structured request/reply schemas, thread
-  persistence, per-call timeout, cancellation, and taint coordination. Concrete
-  adapters own provider-specific binding, command, staging, protocol parsing,
-  and safe diagnostics, while `provider_process` owns bounded subprocess launch,
-  concurrent stream draining, timeout/cancellation termination, and cleanup.
-  `BoundAgent` is the immutable per-definition dispatch handle for debate,
-  one-step conversation, and retrieval calls. The backend owns retrieval
-  provider schemas, initial/continuation payloads, repeated calls, and framing
-  handoff, while runtime owns every semantic, scope, budget, and memory decision.
-- `StoryRuntime` owns desired/current/retiring binding selection, shielded
-  same-fingerprint flights and waiters, and operation-use leases. Newest desired
-  success wins; superseded success is restricted to its waiting retained
-  operation, last-waiter cancellation joins and releases abandoned results, and
-  A-to-B-to-A reuse leaves only A current at quiescence. The runtime calls the
-  package-internal release seam only after dropping its binding lock and never
-  mutates backend collections. `AgentBackend` and each concrete `BoundAgent`
-  alone own provisional staging, active provider-call counts, retirement, and
-  exact-once cleanup. Terminal backend close rejects later work immediately but
-  defers shared access, in-memory thread-lock, and staging cleanup until all
-  entered calls exit; no reverse orchestration dependency is introduced.
-- `ConversationCatalog` exposes logical identifiers and immutable metadata only;
-  `FilesystemConversationCatalog` owns the fixed metadata layout through
-  `Workspace` without exposing paths through that protocol.
-- `ConversationEventStore` owns visible event append, authoritative read, and
-  fixed-policy complete-turn context contracts. The provider-neutral
-  `conversations.select_bounded_conversation_context` function owns pure
-  validation and fixed-policy selection from one immutable authoritative
-  snapshot; `FilesystemConversationEventStore` owns the fixed JSONL layout,
-  locks, catalog validation, and transcript I/O through `Workspace`, and its
-  locked `read_context` delegates only that pure selection.
-- `ReferenceConversationSearch` may call the event-store port's full `read`
-  operation while enforcing deterministic logical scan and result bounds; it
-  owns neither the filesystem layout nor persistence resources.
-- The filesystem event adapter's process-wide weak locks serialize one
-  conversation in process; the backend-owned story-session access claim remains
-  responsible for cross-process same-session write exclusion.
-- One `StoryRuntime` serializes a complete advisory operation per
-  `(session_id, conversation_id)` while allowing other conversations to
-  proceed. This does not widen the event adapter's or story-session claim's
-  cross-runtime guarantees.
-- Persisted provider-thread keys include the backend and agent ID. In-process
-  serialization additionally includes the session ID. A retrieval turn takes
-  the runtime `(session, conversation)` lock before the backend
-  `(session, backend, agent)` lock, and the backend holds its lock across the
-  complete repeated-call loop and every handler invocation. Thus `invoke`,
-  `converse`, and `converse_with_retrieval` cannot interleave one provider
-  thread even when operations target different conversations.
-- Existing `ConversationRequest`, `ConversationReply`, `BoundAgent.converse`,
-  and positional runtime/session provider-bound method signatures remain
-  unchanged. `ConversationResult`, `ConversationRetrievalResult`, and
-  `DebateResult` add an optional content-free `reference_operation_id` whose
-  `None` default preserves no-reference construction and serialized debate
-  shape. Retrieval keeps its separate additive request/reply/action types and
-  methods. No-reference provider payloads remain unchanged; referenced inputs
-  retain their source tokens in durable input records while only the projected
-  text reaches provider calls. Provider-private thread history remains scoped
-  by session, backend, and agent and can therefore span conversations.
-- `session_lifecycle` owns only the immutable provider-neutral durable/access
-  facts, their invariants, and the pure provider-readiness query. `AgentBackend`
-  owns V2 manifest, claim, claim-token, guard, liveness classification,
-  provider-thread, and provider resources. Guarded claim, proved-dead reclaim,
-  and exact-token release transactions preserve changed or foreign claims.
-  `StoryRuntime` owns provider-bound lifecycle preparation through exact
-  validation, pre-read, acquisition, post-read, correlation, and new-claim
-  compensation. The controller owns interactive attachment/default/focus
-  state and presentation; `cli_context` owns V2 session and conversation
-  defaults. No lifecycle alias, projection, old callable, fallback, migration,
-  automatic deletion, or second lifecycle abstraction remains. Version-1
-  lifecycle/default artifacts are unsupported inputs and are never rewritten.
-- `tests/conversation_catalog_contract.py` and
-  `tests/conversation_event_store_contract.py` are reusable test-only adapter
-  conformance support; neither is a production module or supported package API.
-- Direct imports of internal configuration, prompt, workspace-constant, or CLI
-  helpers in tests do not add them to the supported package API.
+- Attached management input crosses only `InteractiveMainInput.read_main`.
+  It passes `session_id` with no `agent_id`, which terminal core renders as
+  `story[SESSION]> ` without constructing a direct-execution target. No
+  reference scope, path-list, or text-reader collaborator crosses that call,
+  so ordinary `$` input and removed commands cannot activate artifact access.
+  This correction changes no import edge or public export.
+- Direct story execution was retired without adding, deleting, renaming, moving,
+  splitting, or merging a production module. The inventory remains 97 modules.
+  Static AST derivation over every module-level and function-local import yields
+  360 unique direct internal edges and no directed cycle, down from 385 edges.
+- The 25 removed edges are execution-only: CLI no longer depends on `models`
+  or `run_inputs`; interactive commands no longer depend on
+  `conversation_search`; controller core no longer depends on RAG
+  composition/retrieval, models, run inputs, or writing artifacts; runtime
+  policy no longer depends on agent-context, retrieval, or search; orchestrator
+  no longer depends on agent-context planning/service/source modules, agents,
+  retrieval/search, models, or session lifecycle; and smoke no longer depends
+  on retrieval, models, session lifecycle, or the artifact repository.
+- The project-root facade contains exactly 118 exports. Only `Runtime` and
+  `Session` were removed; `StoryRuntime`, `RuntimeSession`, generic
+  backend/model contracts, and the still-schema-v1 active storage exports
+  remain.
+- `models.py` remains a provider-neutral value-contract owner with direct
+  dependencies on `agents`, `conversations`, and `errors`.
+  `run_inputs.py` remains the strict input-loading helper with its sole direct
+  dependency on `errors`. Neither module changed in this contraction.
+- Generic `AgentBackend`, `BoundAgent`, provider adapter, request/reply,
+  prompt, context, and lifecycle seams remain in their established owner
+  modules for later workflow work. No lead/specialist workflow was introduced.
+- Active conversation storage remains on the existing schema-v1-shaped service
+  boundary. Direct schema-v2 collaboration values, projections, search, pages,
+  citations, stores, archive, and transfer contracts remain available through
+  their existing direct modules; no active-v2 cutover occurred.
+- Interactive terminal progress, composition, and reference-activation modules
+  and the generic `run_inputs` module remain indexed because this issue did
+  not conclusively establish them as globally dead. The contracted controller
+  has no execution-time call path into those terminal capabilities.
+- All dependency arrows point inward to existing owners. No new dependency,
+  packaging change, policy exception, or structural compatibility layer was
+  introduced. Removed public/runtime/command surfaces have no forwarding,
+  deprecation, migration, or compatibility shim.
+- The final documentation-link and production-isolation conformance check is
+  `tests/test_agent_context_conformance.py`. Restored retained-shell coverage
+  remains in `tests/test_interactive_pty.py`,
+  `tests/test_interactive_management.py`, and
+  `tests/test_interactive_cancellation.py`; the latter two share only the
+  test-local `tests/interactive_controller_fixture.py`, which is not a
+  production importable unit.

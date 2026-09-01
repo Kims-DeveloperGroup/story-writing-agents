@@ -11,9 +11,10 @@
 > package facade or composed into the current runtime, storage selection,
 > transcript views, shell, or provider calls. Canonical archive schema 2 and
 > `story storage transfer` now carry these exact v2 histories between ready
-> filesystem and SQLite stores. SQLite's active bundle remains v1-shaped;
-> runtime cutover is deferred to #478/#479. There is no conversion of legacy
-> history.
+> filesystem and SQLite stores. #478 removed the public direct-execution
+> consumers; SQLite's active bundle remains v1-shaped until #479 activates the
+> sole v2 storage/inspection service. Stored schema-v1 history is not accepted
+> as schema-v2 history.
 
 Key terms: **proposal**—the complete disclosure for one possible step;
 **decision**—one structured `confirm`, `reject`, or `revise` response to the
@@ -102,7 +103,7 @@ input is not accepted by this selector and remains a separate invocation
 input. These pure readable operations do not persist history, authorize
 retrieval, start a provider call, or supply the UI. The direct filesystem
 adapters described below can supply the canonical history; archive/transfer
-uses it, while #478/#479 own the remaining active-service integration.
+uses it, while #479 owns the remaining active-service cutover.
 
 ## Illustrative future interaction
 
@@ -392,8 +393,9 @@ Requested/retained/omitted counts and `truncated` report the result.
 
 The selector has no `current_input` parameter. The current user input remains
 separate, and the selected value still does not invoke a provider or establish
-retrieval authorization. Runtime composition and provider delivery remain
-later #478-#479 work.
+retrieval authorization. Issue #478 removed the public direct-execution
+consumers; #479 owns storage/inspection activation, while #452/#453 later own
+lead and specialist workflow integration after parent #467 completes.
 
 ## Atomic batch flow
 
@@ -961,9 +963,10 @@ their canonical histories, but this contract still defines no UI, provider
 call, lead-agent behavior, artifact/Git executor, credential model, complete
 workspace backup, or recovery tool. It also does not wire readable records
 into a provider prompt, automatic context, RAG generation, storage search, or
-selected runtime service; #478/#479 own those integrations.
-It also does not provide the full lead-agent usage guide; that later workflow
-is owned by issue #460. See
+selected runtime service. #479 owns that storage/inspection cutover. After
+parent #467 completes, open #452 owns the lead-facing proposal/confirmation
+workflow and open #453 owns specialist execution/results. See the dedicated
+[lead-agent guide](../guides/lead-agent.md),
 [conversation transcripts](conversation-transcripts.md) for the active
 schema-v1 path, [persistence](../design/persistence.md) for authority ownership,
 [filesystem safety](../operations/filesystem-safety.md#schema-v2-collaboration-history-safety)

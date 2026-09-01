@@ -1,14 +1,10 @@
 # Prompts and provider boundary
 
-> **Availability:** file-referenced definitions, provider-specific prompt
-> binding, advisory turns with optional bounded retrieval, context-aware
-> debates, and compatible threads are implemented for Codex and Antigravity.
-> `StoryRuntime` turns inline canonical reference indicators into one
-> repository operation and supplies a fresh authorized coordinator to every
-> addressed provider invocation. In provider-bound shell prompt spans,
-> `$`/`$$` discovery and viewer-driven attachment construct those same
-> indicators before normal submission. Every backend physical structured call
-> is also offered to the bounded agent-exchange diagnostic channel.
+> **Status:** this page documents retained prompt/provider/context components
+> and historical execution accounting. Codex and Antigravity bindings, thread
+> continuity, reference coordinators, and exchange capture remain implemented,
+> but the current `StoryRuntime` and shell expose no provider-bound story call.
+> `$`/`$$` activation has no current main-input scope.
 
 Key terms: **definition**—stable context for one role; **fingerprint**—its
 hash-derived identity; **binding**—the provider object for a definition;
@@ -140,7 +136,7 @@ below both the 90,287 hard ceiling and 84,104 engineering target. Provider
 usage is unavailable in both fixed fixtures and remains `None`.
 
 The canonical verification is the
-[baseline test](../../tests/test_context_accounting_baseline.py), and the
+[baseline test](../../tests/test_agent_context_accounting.py), and the
 versioned evidence is the
 [v1 golden report](../../tests/fixtures/agent_context/provider_context_baseline_v1.json).
 The report is content-free: it stores counts, call categories, scenario IDs,
@@ -180,15 +176,14 @@ may accelerate a call but is not authoritative context.
 
 <a id="conversation-turn-flow"></a>
 
-## Advisory context
+## Provider-context component
 
-The shell passes focused identity, route, input, optional conversation-RAG
-preflight, and current storage authorities to
-`StoryRuntime.converse_with_retrieval()`. The runtime captures current source
-material, builds a content-free manifest, plans bootstrap/delta, and invokes the
-provider-neutral context service. If selected material is sufficient, the
-provider answers in one substantive call. Otherwise wire-v5 SEARCH/READ actions
-can add exact authorized evidence from route-permitted sources.
+A future structured workflow can pass focused identity, route, input, optional
+conversation-RAG context, and current storage authorities into the
+provider-neutral context service. The service captures current source material,
+builds a content-free manifest, and plans bootstrap/delta. If selected material
+is insufficient, wire-v5 SEARCH/READ actions can add exact authorized evidence
+from route-permitted sources. The current shell does not enter this flow.
 
 Established conversation retrieval remains responsible for its cited
 conversation observations. Optional `rag_context` is independent semantic RAG

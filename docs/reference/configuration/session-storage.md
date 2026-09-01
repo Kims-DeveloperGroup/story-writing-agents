@@ -5,7 +5,8 @@
 > part-scoped manuscripts, explicit-reference evidence, provider-native state,
 > bounded runtime debug logs, bounded agent-exchange JSONL, and bounded
 > rejected-provider-response artifacts persist as plaintext workspace files.
-> Runtime-managed documents and records are strict UTF-8.
+> Runtime-managed documents and records are strict UTF-8. These retained files
+> and low-level components do not imply a current public story-execution path.
 
 Key terms: **default**—a persisted command or conversation fallback;
 **manifest**—durable provider state; **access claim**—temporary process ownership;
@@ -90,8 +91,9 @@ Initialization adds `.gitkeep` to selected empty state and manuscript
 directories. Normal init preserves files; prompt overwrite replaces only the
 four role prompts. Initialization
 does not create any of the four core documents or a manuscript. Artifact state
-appears only when the artifact repository is accessed or a unanimous run
-publishes output; `recovery_blocked.json` appears only after recovery cannot be
+appears only when a direct artifact-repository operation is accessed; no
+current public shell command publishes output. `recovery_blocked.json` appears
+only after recovery cannot be
 trusted. Staging residue is non-authoritative, never catalog-listed, retained
 after successful and failed publication, and may grow. Only exact JSON entries
 under `transactions/` are recovery journals. The three permanent lock names are
@@ -163,8 +165,9 @@ command changes desired or active state.
 The main schema-v2 database contains catalog metadata, the still-active v1
 `conversation_events` channel, and canonical v2 `collaboration_events`. For
 archive/transfer, only catalog metadata plus `collaboration_events` is
-authoritative; any legacy event row fails closed before mutation. Until #478
-and #479, the selected shell service still uses the v1 channel. The fixed private
+authoritative; any schema-v1 event row fails closed before mutation. Issue #478
+removed the public execution consumers, while the selected shell service still
+uses the v1 channel until #479. The fixed private
 `discussion_logs/.conversation_storage_fts5.sqlite3` companion is a derived,
 owner-only FTS5 hint resource. It can appear after provisioning or an effective
 SQLite mutation, but absence, staleness, an unavailable FTS5 capability, or an

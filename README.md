@@ -1,97 +1,69 @@
 # story-writing-agents
 
-<a id="objective"></a>
-A Python 3.11+ multi-agent runtime for drafting and reviewing long-form fiction.
-Four fixed roles work from editable project documents, audit the same revision,
-and write a manuscript only after all three voting specialists agree.
+A Python 3.11+ runtime for building a lead-led, multi-agent novel-writing
+workflow. The repository currently exposes the workspace, configuration,
+session, conversation, collaboration-history, storage, search, and inspection
+foundations. Active lead/specialist story collaboration is the next integration
+step; it is not callable in this revision.
 
-> **Available now:** workspace setup, directives, consensus, inspection,
-> persistent Codex and Antigravity sessions, a provider-free smoke test, and a TTY shell. The
-> shell provides lifecycle status, conversation work, retrieval, and consensus.
-> Inline writing-artifact references are available after a session is attached
-> and a conversation is focused. In a capable terminal's provider-bound prompt
-> span, `$` opens `Writing artifact selection [open]` for whole-file insertion.
-> The list contains the four supported core documents and every eligible
-> lowercase-`.md` file anywhere below `manuscript/`. Typing the second `$`
-> immediately changes that panel into ranged-source selection; Up/Down chooses
-> a source and Enter/Tab opens the independent viewer. A completed
-> `$${path}` marker also opens that source directly on Enter/Tab. There is no
-> standalone artifact command or noninteractive picker UI.
-> Context-capable turns and debates automatically show compact content-free
-> bootstrap/delta, search/read, answer, and checkpoint progress. See
-> [Bounded agent context](docs/guides/agent-context.md) for concrete user
-> scenarios, exact reference behavior, limits, and what agents can access.
-> Every physical provider call also attempts a bounded request, optional raw
-> valid `ProviderResult`, and terminal-outcome record. After a session is
-> attached, bare `/exchanges` opens scope and agent pickers followed by an
-> installed isolated read-only JSONL viewer. See
-> [Inspect agent exchanges](docs/guides/agent-exchanges.md).
+## Current integration stage
 
-## Quick start
+The public schema-v1 direct-execution paths have been removed so there is only
+one collaboration path to complete and maintain.
 
-Install the Codex CLI for the final fallback route used by real story runs:
+| You can do now | You cannot do in this stage |
+| --- | --- |
+| Initialize a writing workspace. | Send an ordinary shell line to an agent. |
+| Create, resume, list, and pause story sessions. | Route a line to an agent or select a sticky target. |
+| Create, list, focus, rename, archive, search, and read conversations. | Start a debate or publish a manuscript from the installed CLI. |
+| Apply directives and edit workspace settings. | Attach canonical artifact references to an agent call. |
+| Inspect session, debate, history, transcript, status, and recorded exchanges. | Call a direct-execution method on `StoryRuntime` or `RuntimeSession`. |
+| Use schema-v2 collaboration contracts, stores, archive/transfer, readable projection, search, and paging APIs. | Treat schema-v2 history as already wired to the shell or a provider. |
+| Run a provider-free management/storage smoke check. | Use smoke as evidence of provider behavior or story quality. |
 
-```bash
-npm install -g @openai/codex
-rehash
+When ordinary text, routed text, or a retired execution command is submitted in
+the shell, Story reports:
+
+```text
+Direct story execution is unavailable in this integration stage. Session, conversation, history, search, and inspection remain available.
 ```
 
-To route through Antigravity, install the `agy` executable as described in
-[Use Antigravity agents](docs/guides/antigravity.md). On each interactive
-`story` launch, the runtime checks both native CLIs and opens the selected CLI's
-own sign-in flow when you choose an unauthenticated provider. Its exact native
-commands are:
+The rejection happens before provider binding, transcript append, RAG,
+artifact-reference reads, progress reporting, or artifact publication. #466
+delivered the pure schema-v2 values; #474-#477 added readable projections and
+the storage/archive/transfer pieces on the integration branch. #479 activates
+the sole schema-v2 storage/inspection service and removes the last active-v1
+service path. After parent #467 completes, open issues #452/#453 wire the
+lead-facing and specialist workflows to that store.
 
-| Provider | Status check | Sign-in |
-| --- | --- | --- |
-| Codex | `codex login status` | `codex login` |
-| Antigravity | `EXECUTABLE models` | `EXECUTABLE` with no arguments |
+See [Lead agent and collaboration status](docs/guides/lead-agent.md) for the
+lead's responsibilities, confirmation boundary, and current versus target
+examples.
 
-For Antigravity, `EXECUTABLE` is `agy` by default or the resolved
-`--antigravity-executable PATH` override supported by `story chat`.
+## Install
 
-The sign-in process inherits the real terminal and environment at the resolved
-workspace root and may open a provider-controlled browser. The runtime does not
-read provider output, account details, OAuth URLs, tokens, credentials, or the
-provider's native credential storage.
-
-Install in a standard-library virtual environment or Conda; do not nest a `venv` inside active Conda.
+Choose one Python environment. Do not create a standard-library virtual
+environment inside an active Conda environment.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --editable .
 rehash
+story --help
 ```
 
-That is the normal RAG-free installation. It installs the independent
-`jsonl-viewer` 0.1.1 at the exact required VCS pin, so bare `/exchanges` needs
-no setting, enablement step, or extra. The historical `viewer` extra remains an
-accepted empty compatibility alias—`'.[viewer]'` installs no distinct
-capability. Installing either form does not invoke a provider. After updating
-a Story checkout, rerun `python -m pip install --editable .` in the active
-environment: pulling source alone does not update installed dependencies. That
-ordinary reinstall upgrades viewer 0.1.0 to 0.1.1 without uninstalling it or
-using `--force-reinstall` or `--ignore-installed`. See
-[Inspect agent exchanges](docs/guides/agent-exchanges.md#availability-and-installation).
-Approved internal, non-redistributing
-evaluation can use the optional direct Python boundary, deterministic local
-provider, disposable generation store, and programmatic runtime/agent
-integration. Noninteractive `story rag` status, opt-in, rebuild, cited search,
-disable, and derived-only purge workflows are available; enabling or using the
-local provider requires the pinned `rag` extra, and installation alone never
-opts a workspace in. Interactive `/settings` RAG controls, automatic shell-turn
-wiring, and one-turn `/rag QUERY` are available: saved settings apply to the
-next shell, and `/rag` privately arms the next eligible focused story turn.
-See [Optional conversation RAG](docs/guides/conversation-rag.md) for setup,
-commands, interactive use, and trust/persistence limits.
+`story` and `story-writing-agents` are exact command aliases. The normal
+installation includes the isolated read-only JSONL viewer used by
+`/exchanges`. Optional local conversation RAG requires the reviewed `rag`
+extra before it can be enabled; installation alone never enables it.
 
-`story` and `story-writing-agents` are exact aliases. Smoke uses synthetic data
-without Codex or Antigravity, credential reads, a terminal, subprocesses, apps,
-web, or network.
-It validates conversation persistence/routing, exact search, cited retrieval, fresh-runtime continuity, and included-context consensus; a pass includes `"provider_tested":false`.
+The interactive shell still performs its configured native provider
+authentication gate and exposes `/auth` and provider settings. This prepares
+configuration for the forthcoming collaboration cutover. No currently
+accepted shell content invokes a story provider.
 
-Create a workspace, run the provider-free check, and enter the primary human workflow:
+## Quick start
 
 ```bash
 story init ./my-story
@@ -100,238 +72,162 @@ story smoke
 story
 ```
 
-After workspace and configuration loading, startup first resolves the desired
-conversation-storage backend into one ready active service bundle. The welcome
-then precedes the first interactive gate: at least one provider must pass a
-fresh native status check, and every distinct provider selected by the
-effective agent routes must pass again before the runtime constructs a story
-backend or session controller. Press Ctrl-C or send EOF to leave without
-starting the shell; cancelling the picker keeps the gate open.
-
-At `story[lobby]>`, create a session and focus a subject conversation:
+At `story[lobby]>`, manage and inspect local state:
 
 ```text
 /session create novel
-/conversation new Opening scene
-Which core-document constraint should shape the opening?
-/run --output part-01/opening.md Draft the opening from the current conversation focus.
-/inspect last
-/exchanges
+/conversation new Opening structure
+/status
+/conversation list
+/history
+/search opening
 /quit
 ```
 
-Every consensus run publishes to a required create-only `PART/PATH.md` beneath
-`manuscript/`; omitting it in the shell opens a separate output prompt. Advisory
-input is one line; `/run --output part-01/opening.md` with no prompt owns
-multiline composition. `/quit`
-releases process access without pausing the ready session. The default session
-and default conversation remain saved, so later `story` can resume the session
-and restore its conversation.
-Inside the shell, `/session resume [NAME]` and
-`/conversation resume [ID]` are the only resume grammar. On a capable terminal,
-typing either omitted form shows choices before Enter; highlighted Enter submits
-an explicit identity and bypasses the picker. If the omitted form itself is
-submitted, the controller reads the choices again. A successful read with at
-least one eligible choice opens a generic picker: live and transient on a
-capable terminal, or numbered in ordinary-line fallback. An empty or failed
-read reports its result or error without opening the picker. See the user-visible
-state and input behavior in [Story sessions](docs/guides/story-sessions.md).
-See the complete [Glasswater journey](docs/guides/glasswater-scenario.md).
+A newly created conversation has no collaboration events, so `/history` is
+empty until a future collaboration integration appends schema-v2 events. The
+management actions themselves remain useful for preparing and checking a
+workspace.
 
-For scripts and non-TTY automation, use `story run`; it never uses conversation
-focus. See the [single automation example](docs/guides/glasswater-scenario.md#use-one-explicit-automation-call-then-pause)
-and [CLI contract](docs/reference/cli.md#workspace-noninteractive-behavior-and-exits).
-For example:
+An attempted story instruction is rejected without side effects:
 
-```bash
-story run --output part-01/opening.md --prompt 'Draft the opening.'
+```text
+story[novel]> Please review the opening.
+Direct story execution is unavailable in this integration stage. Session, conversation, history, search, and inspection remain available.
 ```
 
-## Choose the next page
+The semantic renderer adds an error heading and may add decoration depending on
+terminal capabilities; the sentence and behavior are stable.
 
-- [Getting started](docs/getting-started.md) explains installation and the first run.
-- [Documentation index](docs/INDEX.md) routes each task, contract, design topic, and operational concern.
-- [Workspace guide](docs/guides/workspaces.md) explains the editable project files.
-- [Writing artifacts](docs/reference/writing-artifacts.md) separates current reference sources from publication identity, provenance, and recovery.
-- [Conversation archives](docs/reference/conversation-archives.md) documents canonical conversation-only bytes and privileged filesystem transfer.
-- [SQLite conversation storage](docs/guides/sqlite-conversation-storage.md) walks a newcomer through readiness, explicit installation consent, selection, transfer, next-shell activation, everyday search, recovery, and the separate RAG boundary.
-- [Optional conversation RAG](docs/guides/conversation-rag.md) covers the local provider/store, noninteractive lifecycle and cited-search commands, interactive settings and one-turn use, and programmatic runtime integration.
-- [Antigravity guide](docs/guides/antigravity.md) covers `agy` setup, authentication, routing, safety, sessions, and provider-free verification.
-- [Story sessions](docs/guides/story-sessions.md) shows shell management, conversation reads, retrieval, and consensus.
-- [Bounded agent context](docs/guides/agent-context.md) explains selection, search/read, debate deltas, Part-scoped changes, exact references, progress, and recovery.
-- [Inspect agent exchanges](docs/guides/agent-exchanges.md) explains standard-install availability, picker-first request/response/outcome inspection, nested JSON, colors, privacy, and recovery.
-- [Session lifecycle](docs/design/session-lifecycle.md) maps internal state to commands, output, errors, and next actions.
-- [Consensus-run guide](docs/guides/consensus-runs.md) covers prompts, drafts, outputs, and round limits.
-- [CLI reference](docs/reference/cli.md) is the exact installed command contract.
-- [Package API](docs/reference/package-api.md) starts the Python reference.
-- [Security and provider privacy](docs/operations/privacy-and-provider.md)
-  should be read before using sensitive material; it also explains how to
-  inspect an eligible rejected provider response safely.
-
-<a id="backends"></a>
-
-`AgentBackend` coordinates Codex and Antigravity. Route precedence is a CLI
-override, explicit agent route, persisted workspace default, then Codex.
-The only supported backend names are `codex` and `antigravity`; legacy
-`gemini` configuration is rejected with transition guidance.
-`StoryRuntime` owns consensus, advisory sequencing, and retrieval authorization. See the [system design](docs/design/overview.md).
-
-<a id="minimal-python-api"></a>
-
-For Python integrations, start with the [runtime API](docs/reference/runtime-api.md), [agent contracts](docs/reference/agent-contracts.md), and [bounded retrieval](docs/reference/conversation-retrieval.md).
-
-The optional conversation RAG contracts, deterministic local provider,
-identity-bound generation store, exact generic adapter, composition, and
-provider/store-neutral runtime service are direct-module APIs and are not
-package-root exports. An application can inject the runtime service into
-`StoryRuntime`; the installed CLI also exposes explicit local lifecycle and
-cited-search commands. The shell composes a persisted local selection at
-startup and supports automatic or one-turn preflight. See
-the [RAG package boundary](docs/reference/package-api.md#optional-conversation-rag-boundary).
-
-Canonical conversation archive values and lease-bound filesystem export/import
-are available from the `story_writing_agents.conversation_storage` subpackage.
-They are application-controlled transport infrastructure, not a shell command,
-complete workspace backup, or arbitrary restore workflow. See
-[Conversation archives](docs/reference/conversation-archives.md).
-
-Conversation catalog, transcript, and reference-search ports also have an
-optional SQLite implementation for direct Python composition. The installed
-shell can select the complete filesystem or SQLite bundle for its next launch;
-direct `StoryRuntime` construction still defaults to filesystem unless the
-caller supplies a composed bundle. Start with the
-[SQLite conversation-storage guide](docs/guides/sqlite-conversation-storage.md),
-then use the
-[package API](docs/reference/package-api.md#optional-sqlite-conversation-storage)
-for direct Python integration.
-`SQLiteConversationSearch` keeps the public literal-search contract exact; a
-private disposable FTS5 companion can supply hints but never determines a
-result or readiness.
-
-Select desired storage without a provider:
+## Provider-free smoke
 
 ```bash
-story storage use sqlite
+story smoke
 ```
 
-The command checks SQLite through the active Python interpreter and may
-explicitly provision an absent empty database. If it reports
-`installation_required`, rerun it only after reviewing the supported host
-command and authorizing both automation flags:
+Smoke creates a temporary workspace and verifies exactly these checks:
 
-```bash
-story storage use sqlite --install-missing --yes
+```json
+{
+  "checks": [
+    "workspace_initialized",
+    "directive_persisted",
+    "conversation_catalog_persisted",
+    "collaboration_history_empty",
+    "collaboration_readable_context_empty",
+    "collaboration_search_empty",
+    "collaboration_page_empty",
+    "execution_artifacts_unchanged"
+  ],
+  "provider_tested": false,
+  "status": "passed"
+}
 ```
 
-If the active filesystem store is nonempty, selection can instead report
-`transfer_required`. The ready SQLite destination can then be copied and
-verified before selection is retried:
+The actual report is compact one-line JSON and also includes generated session
+and conversation IDs plus workspace metadata. It proves management, catalog,
+and empty schema-v2 projections work together. It creates no transcript,
+debate, specialist state, provider exchange, or manuscript.
 
-```bash
-story storage transfer --from filesystem --to sqlite --dry-run
-story storage transfer --from filesystem --to sqlite
-story storage verify --from filesystem --to sqlite
-story storage use sqlite
-story
+Use `story smoke --workspace PATH` to retain the initialized workspace,
+directive, catalog metadata, and bounded diagnostics. See the
+[smoke guide](docs/guides/smoke-test.md).
+
+## Supported commands
+
+Top-level commands are:
+
+```text
+story [chat [SESSION]]
+story init [WORKSPACE]
+story directive [--workspace PATH] [--session ID] TEXT
+story inspect [--workspace PATH] [--session ID] [--debate ID]
+story session {create|reopen|pause} ...
+story storage {use|transfer|verify} ...
+story rag {status|enable|rebuild|search|disable|purge} ...
+story smoke [--workspace PATH]
 ```
 
-Selection changes only the desired backend. It never transfers, deletes, or
-activates data; a successful choice applies when the next shell freshly checks
-readiness and exact canonical parity. The current shell keeps its original
-bundle. See the
-[guided SQLite workflow](docs/guides/sqlite-conversation-storage.md) or the
-[storage selection contract](docs/reference/cli.md#conversation-storage-selection).
+There is no noninteractive story-execution command. In the shell, use `/help`
+for the retained command registry. The management and inspection commands are
+`/agents`, `/auth`, `/settings`, `/override`, `/session`, `/conversation`,
+`/search`, `/transcript`, `/inspect`, `/exchanges`, `/history`, `/status`,
+`/help`, and `/quit`.
 
-Ready filesystem and SQLite stores in the same workspace can be
-planned, copied, and compared without a provider:
+The exact grammar is in the [CLI reference](docs/reference/cli.md) and
+[interactive parser reference](docs/reference/interactive-command-parser.md).
 
-```bash
-story storage transfer --from filesystem --to sqlite --dry-run
-story storage transfer --from filesystem --to sqlite
-story storage verify --from filesystem --to sqlite
+## Python integration
+
+`StoryRuntime` is now a management, configuration, directive, and inspection
+facade. It can bind a `RuntimeSession`, but neither class has a public method
+for a provider turn or debate. The package root no longer exports the broad
+`Runtime` or `Session` aliases.
+
+```python
+from story_writing_agents import StoryRuntime, Workspace
+
+workspace = Workspace("/path/to/initialized-story")
+runtime = StoryRuntime(workspace)
+runtime.apply_directive("novel", "[SYS: LANG=EN]")
+session = runtime.session("novel")
+print(session.inspect())
 ```
 
-`--from` must name the workspace's active backend, and the two backend names
-must differ. Transfer preserves exact active and archived conversation
-metadata and every canonical collaboration event, but it never provisions
-SQLite, changes the active backend, deletes the source, or copies the derived
-FTS companion. Archives and transfers accept only v2 collaboration history;
-old transcript files and legacy database event rows are rejected, not upgraded.
-See the [CLI contract](docs/reference/cli.md#conversation-storage-transfer).
+Direct schema-v2 collaboration-history values and pure projections are
+available through `story_writing_agents.conversations`; direct search, paging,
+and citation values are in `story_writing_agents.conversation_search`.
+Filesystem/SQLite stores, archives, transfer, and activation remain separate
+infrastructure boundaries. Start with the [runtime API](docs/reference/runtime-api.md),
+[collaboration-history reference](docs/reference/collaboration-history.md), and
+[package API](docs/reference/package-api.md).
 
-<a id="current-limitations"></a>
+## Canonical writing artifacts
+
+The canonical reference-source paths remain `core_documents/...` and
+lowercase-`.md` files below `manuscript/`. `${path}` and
+`${path}#Lx-Ly` remain the content-free reference indicators that future
+collaboration requests will carry. This revision has no public provider-bound
+input span, so `$`, `$$`, and those indicators do not trigger a picker, read,
+or agent requirement. See [artifact-reference status](docs/guides/artifact-references.md).
 
 ## Important limits
 
-- Provider calls have a timeout but no automatic retry or rate limiter.
-- Deadlocked and interrupted debates cannot resume under the same debate ID.
-- Workspace content, logs, rejected-provider-response artifacts, provider
-  metadata, agent state, and manuscripts are plaintext.
-- `debug_logs/agent_exchanges/` deliberately contains bounded plaintext
-  provider-call requests and results. Simple viewer mode is not redaction, and
-  capture gaps never prove that a provider call or result did not occur.
-- Writing-artifact publication is journaled and catalog-last, and rolls forward
-  on the next catalog or publication access after an interruption. It is not
-  one transaction with debate logs, lifecycle state, or result files.
-- Conversation storage defaults to filesystem. `/settings` and provider-free
-  `story storage use` can save filesystem or SQLite as the desired backend for
-  the next shell. SQLite host installation requires explicit confirmation, and
-  startup never installs or provisions it. Transfer remains a separate
-  provider-free copy/parity workflow over two ready same-workspace stores and
-  never activates or deletes one. There is no live switch, dual write, or MySQL
-  adapter. Optional local conversation RAG is disabled by
-  default and has explicit provider-free status plus opt-in, rebuild, cited
-  search, disable, and derived-only purge commands. It consumes the active or
-  freshly activated complete filesystem/SQLite authority bundle without
-  coupling derived state to either backend. `/settings` persists the RAG choice
-  for the next shell; explicitly enabled automatic retrieval and `/rag QUERY`
-  affect only eligible focused advisory turns. The
-  derived FTS5 companion does not change readiness, exact literal results,
-  transfer parity, or selection.
-- Smoke's explicit workspace is not read-only and retains bounded plaintext
-  diagnostics when they can be written; abrupt termination can interrupt
-  cleanup. A pass does not validate provider/model, terminal behavior,
-  integration, or story quality. See the
-  [smoke guide](docs/guides/smoke-test.md).
-- The interactive shell accepts one advisory line; `/run --output PART/PATH.md`
-  without prompt text owns multiline composition. Bare `/run` first prompts for
-  that required output. Process-level PTY tests verify TTY gating and VINTR/VEOF delivery
-  on supported POSIX. Retrieval is active-only and bounded. Inline `${path}`
-  and `${path}#Lx-Ly` indicators make every addressed agent read the ordered
-  canonical batch before its result is accepted. In provider-bound shell spans,
-  `$` opens a labeled artifact-selection panel populated from the current safe
-  reference sources and completes a whole-file indicator. Exact `$$`
-  immediately shows ranged-source choices; Enter/Tab opens the highlighted
-  source in the independent viewer. A completed `$${path}` marker opens that
-  source directly on Enter/Tab. These editing actions do not submit the prompt.
-  Lobby/no-focus input and non-provider fields remain inert. Standalone artifact
-  commands and automation UI remain unavailable.
-  See the [artifact-reference guide](docs/guides/artifact-references.md) and
-  [conversation retrieval](docs/reference/conversation-retrieval.md).
+- No public story generation, advisory turn, debate, or artifact modification
+  is active in this integration stage.
+- Smoke is intentionally provider-free and story-free.
+- Workspace configuration, histories, diagnostics, and artifacts are local
+  plaintext unless the surrounding environment protects them.
+- `/exchanges` can reveal bounded provider-call diagnostics from earlier or
+  externally produced records; the viewer is not a redaction boundary.
+- Conversation storage selection applies to the next shell and is separate
+  from transfer. Transfer accepts schema-v2 collaboration history only.
+- Optional RAG lifecycle and cited local search remain available, but the
+  interactive one-turn provider preflight is not.
+
+## Documentation
+
+- [Documentation index](docs/INDEX.md)
+- [Getting started](docs/getting-started.md)
+- [Story sessions and conversations](docs/guides/story-sessions.md)
+- [Lead agent and collaboration status](docs/guides/lead-agent.md)
+- [Provider-free smoke](docs/guides/smoke-test.md)
+- [CLI reference](docs/reference/cli.md)
+- [Runtime API](docs/reference/runtime-api.md)
+- [System design](docs/design/overview.md)
 
 ## Development
 
-<a id="verification"></a>
+The Python package is under `src/story_writing_agents/`; tests are under
+`tests/`; role prompts are under `config/agents/`; and
+[PYTHON_MODULE_INDEX.md](PYTHON_MODULE_INDEX.md) is the production-module map.
 
-Run the full standard-library suite or the focused POSIX PTY boundary with:
+Run the complete standard-library suite with:
 
 ```bash
 python -m unittest discover -s tests -v
-PYTHONPATH=src python -m unittest tests.test_interactive_pty -v
 ```
 
-Without a usable POSIX PTY, the focused suite skips with an explicit reason; it does not emulate Windows consoles.
-
-<a id="contribution-guidelines"></a>
-
-Contributors should read [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md), [AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md), and [COMMIT_POLICY.md](COMMIT_POLICY.md).
-
-<a id="project-structure"></a>
-
-The Python package is under `src/story_writing_agents/`; tests are under
-`tests/`; role prompts are under `config/agents/`; and
-[PYTHON_MODULE_INDEX.md](PYTHON_MODULE_INDEX.md) is the module navigation map.
-Contributors who need to audit or test the independently maintained viewer
-source can optionally initialize `vendor/jsonl-viewer`; normal Story
-installation resolves the required package directly and does not import from
-that submodule.
+Contributors must follow [GITHUB_WORKFLOW.md](GITHUB_WORKFLOW.md),
+[AGENT_TASK_RUNBOOK.md](AGENT_TASK_RUNBOOK.md), and
+[COMMIT_POLICY.md](COMMIT_POLICY.md).

@@ -1,7 +1,9 @@
 # Glossary
 
 > **Availability:** with a session attached, the shell manages conversations,
-> advisory turns, search, transcripts, and consensus. See [Story sessions](guides/story-sessions.md).
+> search, transcripts, history, and inspection. Public advisory turns and
+> consensus are unavailable in this integration stage. See
+> [Story sessions](guides/story-sessions.md).
 
 ## A–W
 
@@ -69,8 +71,8 @@
   holds. A default session is not necessarily attached. See
   [Session lifecycle](design/session-lifecycle.md).
 
-- **Current focus and agent focus.** Current focus is the conversation used for
-  turns; agent focus is the ordinary advisory responder. Both are process-local.
+- **Current conversation focus.** The process-local conversation selected for
+  management and inspection. It does not select an advisory responder.
 
 - **Default session and default conversation.** Persisted fallbacks used when a
   command omits a session or when session attachment restores conversation
@@ -118,8 +120,9 @@
   [Session storage](reference/configuration/session-storage.md).
 
 - **Manuscript.** Create-only story output at
-  `manuscript/PART/PATH.md` after consensus/finalization. A revision uses a
-  distinct part-scoped path. See [Consensus runs](guides/consensus-runs.md).
+  `manuscript/PART/PATH.md`. Direct repository components and the future
+  confirmed collaboration workflow preserve distinct part-scoped revision
+  paths. See [Consensus runs](guides/consensus-runs.md).
 
 - **Owner-isolated state.** Concise persisted outcomes supplied only to their
   agent, unlike the blackboard; files remain plaintext. See
@@ -139,8 +142,9 @@
   durable `ready` and process access `held_here`. The query is pure and does not
   acquire access.
 
-- **Runtime.** Local orchestration that validates, coordinates debates and turns,
-  and persists results. See the
+- **Runtime.** The current management/configuration/inspection facade plus
+  retained low-level orchestration components. It has no public provider-turn
+  method in this stage. See the
   [System overview](design/overview.md).
 
 - **Story session.** Durable related work/history spanning debates and

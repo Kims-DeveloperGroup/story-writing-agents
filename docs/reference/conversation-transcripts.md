@@ -1,14 +1,15 @@
 # Conversation transcripts
 
-> **Availability:** interactive turns use the startup-selected filesystem or
-> SQLite event store, append transcripts, and consume bounded context.
-> `/transcript` reads bounded pages; focused `/history` shows one full snapshot
-> with context accounting; `/search` cites active events. Both adapters remain
+> **Availability:** the current shell uses the startup-selected filesystem or
+> SQLite event store for management reads. `/transcript` reads bounded pages;
+> focused `/history` shows one full snapshot with context accounting; `/search`
+> cites active stored events. Ordinary input no longer appends a transcript.
+> Both adapters and their append operations remain
 > available through their documented Python imports; direct runtime
 > construction defaults to filesystem unless supplied a complete bundle.
-> A separate schema-v2 structured-collaboration contract is available through
-> `story_writing_agents.conversations`, but it is not used by these adapters,
-> the current runtime, `/transcript`, `/history`, search, or context selection.
+> A separate schema-v2 structured-collaboration contract and direct stores are
+> available, but they are not selected by the current runtime, `/transcript`,
+> `/history`, search, or context selection until #479.
 
 Key terms: **event**—one visible stored record; **complete turn**—one user event
 plus one outcome; **unmatched turn**—a user event without an outcome;
@@ -27,15 +28,16 @@ by one agent reply or runtime error. Schema-v2 `CollaborationEvent` values model
 future ordered user/lead/specialist/runtime/artifact/Git exchanges, exact
 proposal decisions, execution facts, and recovery states. They share the
 `story_writing_agents.conversations` facade for public imports but do not share
-a storage protocol, stored path, context selector, or runtime authority.
+a storage protocol, stored path, context selector, or current runtime authority.
 
 `project_collaboration_history()` accepts only canonical v2 events and rejects
 the schema-v1 `ConversationEvent` defined below. Conversely, the current
 filesystem and SQLite transcript stores accept only this page's schema-v1
 values. There is no conversion workflow and no current user action. See
-[Structured collaboration history](collaboration-history.md) for the future
-contract and [persistence ownership](../design/persistence.md#structured-collaboration-history-persistence)
-for the unimplemented store boundary.
+[Structured collaboration history](collaboration-history.md) for the direct v2
+contract/stores and
+[persistence ownership](../design/persistence.md#structured-collaboration-history-persistence)
+for the selected-service boundary.
 
 ## Public contract
 
@@ -121,8 +123,8 @@ rewriting; whitespace-only, multiline, and trailing-LF content are valid.
 
 An outcome cannot precede its user event, and one turn cannot have two
 outcomes. Runtime-error text is visible content. Direct callers must sanitize
-their own values; `StoryRuntime` applies the
-[runtime diagnostic policy](../operations/privacy-and-provider.md#runtime-error-diagnostics).
+their own values. The current `StoryRuntime` has no public turn method that
+appends either event.
 
 The SQLite adapter stores those same ten public values as normalized event
 rows. Required canonical `searchable_content` supports exact literal search;
@@ -176,16 +178,18 @@ exceed either cap, never splits a turn, and restores retained events to storage
 order. Its count, ordered-limit, and addressed lookup queries remain compatible
 with the documented SQLite 3.7.16 minimum and require no window functions.
 
-After an advisory user append, `asyncio` cancellation best-effort adds
+The retired schema-v1 direct-turn consumer used this failure boundary: after an
+advisory user append, `asyncio` cancellation best-effort added
 `runtime_error` content `CancelledError: conversation turn was cancelled`;
 ordinary failures attempt a `runtime_error` through the safe diagnostic policy.
 A provider `KeyboardInterrupt` or `SystemExit` appends no transcript outcome.
-The runtime attempts a separate content-safe `cancelled`/`interrupted`
+That consumer attempted a separate content-safe `cancelled`/`interrupted`
 operational record and re-raises the identical exception without automatic
 retry. Failed outcome storage or that process-control path leaves the user
 unmatched. Full reads expose it; context excludes it without retry or repair.
 The window reports
-total/retained/omitted complete turns, bytes, and truncation. It never compacts,
+total/retained/omitted complete turns, bytes, and truncation. Current ordinary
+input creates none of these records. The store never compacts,
 rewrites, or deletes events.
 
 ## Storage and validation boundary

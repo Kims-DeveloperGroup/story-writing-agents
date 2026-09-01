@@ -1717,7 +1717,7 @@ class ConversationStorageBoundaryTests(unittest.TestCase):
             for name in module.__all__:
                 with self.subTest(module=module.__name__, name=name):
                     self.assertIs(getattr(storage, name), getattr(module, name))
-        self.assertEqual(len(story_writing_agents.__all__), 120)
+        self.assertEqual(len(story_writing_agents.__all__), 118)
         for name in filesystem_module.__all__:
             with self.subTest(filesystem_owner_name=name):
                 self.assertNotIn(name, storage.__all__)
@@ -1847,7 +1847,7 @@ class ConversationStorageBoundaryTests(unittest.TestCase):
             "assert all(getattr(root, name) is getattr(filesystem, name) "
             "for name in filesystem.__all__[:2]); "
             "assert not hasattr(root, 'FilesystemCollaborationEventStore'); "
-            "assert len(root.__all__) == 120; "
+            "assert len(root.__all__) == 118; "
             "assert all(name not in root.__all__ for name in expected); "
             "assert all(not hasattr(root, name) for name in expected); "
             "assert 'sqlite3' not in sys.modules; "

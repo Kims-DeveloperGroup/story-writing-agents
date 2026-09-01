@@ -108,7 +108,7 @@ class ConversationArchiveSurfaceTests(unittest.TestCase):
             ],
         )
         self.assertEqual(len(storage.__all__), 63)
-        self.assertEqual(len(story_writing_agents.__all__), 120)
+        self.assertEqual(len(story_writing_agents.__all__), 118)
         for name in expected_archive | set(filesystem_archive_module.__all__):
             with self.subTest(name=name):
                 owner = (

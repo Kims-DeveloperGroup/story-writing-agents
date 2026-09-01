@@ -2,16 +2,16 @@
 
 > **Available:** guarded access recovery, shell workflows, and process-level
 > POSIX PTY verification, including the package-internal ranged viewer.
-> Interactive `$`/`$$` artifact discovery and selection are available in
-> provider-bound prompt spans. Direct Python conversation archive operations
+> The current shell has no provider-bound prompt span, so main-input `$`/`$$`
+> artifact discovery and selection are inactive. Direct Python conversation archive operations
 > have content-free failures and recognized additive-import recovery. Optional
 > SQLite conversation storage also fails closed. Explicit `/settings` or
 > provider-free `story storage use` can prepare and save desired storage for the
 > next shell; host installation always requires explicit consent. Transfer and
 > parity verification remain separate workflows between two already-ready
 > stores. Optional local conversation RAG has no-write status, explicit
-> opt-in/rebuild/search/disable, confirmed derived-only purge recovery,
-> next-shell settings, and private one-turn preflight arming.
+> opt-in/rebuild/search/disable, confirmed derived-only purge recovery, and
+> next-shell settings. The former one-turn preflight is unavailable.
 > Automatic retry, silent installation, general destructive cleanup, event
 > repair, live switching, automation picker UI, and Windows console emulation
 > are not available.
@@ -104,10 +104,9 @@ and
 
 `source_invalid` or `destination_invalid` can mean that archive/transfer found
 a filesystem `transcript.jsonl` or SQLite `conversation_events` row. Those are
-legacy schema-v1 history, not recovery inputs. Preserve the stores; do not
-rename, parse-and-rewrite, or hand-copy them into v2. Until #478 completes the
-active runtime cutover, ordinary direct-run work can still create exactly this
-intermediate limitation.
+schema-v1 history, not recovery inputs. Preserve the stores; do not rename,
+parse-and-rewrite, or hand-copy them into v2. Issue #478 removed ordinary
+direct-run consumers; #479 owns the remaining selected-service cutover.
 
 Checkpoints remain at
 `agent_states/orchestrator_state/conversation_storage_transfers/{filesystem-to-sqlite,sqlite-to-filesystem}.json`.
@@ -666,14 +665,16 @@ path/range indicator. The viewer itself never receives or preserves the outer
 composer. Multiple ordered references use repeated fresh viewer calls owned by
 that caller.
 
-See the [exact viewer contract](../reference/interactive-terminal.md#independent-ranged-text-viewer)
-and [terminal safety boundary](terminal-safety.md#ranged-text-viewer-boundary).
+The independent ranged viewer remains a generic terminal component but current
+main input does not activate it. See the
+[interactive terminal reference](../reference/interactive-terminal.md) and
+[terminal safety boundary](terminal-safety.md#ranged-text-viewer-boundary).
 
 ## Pause, quit, and cleanup
 
 Declined or interrupted pause confirmation keeps the current attachment; EOF at
 confirmation exits. Confirmed pause writes durable `paused`, releases access,
-retains defaults, clears current attachment/current focus/agent focus, and
+retains defaults, clears current attachment/current conversation focus, and
 returns to the lobby. Quit and main/composer EOF release access without pausing.
 
 Cleanup attempts each applicable stage once in this order: Runner close, known
@@ -763,13 +764,10 @@ and restart. Startup never installs or silently disables the saved provider.
 Choose Disabled and confirm Apply Changes only when that is the intended
 durable policy.
 
-An armed `/rag QUERY` is not an immediate operation. Ineligible commands retain
-it, while scope change, pause/detach, quit, or cleanup clears it. If Ctrl-C
-arrives before the advisory runtime coroutine enters, retrying an eligible turn
-uses the retained query. Once the coroutine enters, the query is consumed even
-when that turn later fails or is cancelled; explicitly arm it again for a new
-attempt. The query is intentionally absent from logs/transcripts/results, so a
-user who needs to retry must retain it outside those channels.
+The former one-turn interactive RAG preflight is unavailable. Use the six
+provider-free top-level `story rag` lifecycle/search commands or the direct
+service APIs; ordinary input does not retain an armed query or start a provider
+turn.
 
 A successful search can still report `literal_fallback` with a non-ready reason
 and exit `0`. Its excerpts, if any, were reread from authority, but the result is
@@ -839,8 +837,9 @@ workflow](privacy-and-provider.md#rejected-provider-response-artifacts).
   [Bounded agent context](../guides/agent-context.md#c20-decisions-limits-and-user-impact).
 - Artifact publication is recoverable and catalog-last, but does not share one
   transaction with debate logs, lifecycle, results, or provider state.
-- Advisory input is one line; `/run --output PART/PATH.md` without prompt text
-  owns multiline composition. Bare `/run` first prompts for the output.
+- Public story input is unavailable. Ordinary/routed/removed execution input
+  is rejected before provider, history, RAG, reference, progress, or artifact
+  work. Management and inspection remain available.
 - Conversation search is active-only; transcript reads retain no cursor.
 - Filesystem remains the missing/legacy conversation-storage default.
   `/settings` and provider-free `story storage use` save a desired filesystem
@@ -852,17 +851,14 @@ workflow](privacy-and-provider.md#rejected-provider-response-artifacts).
   The private local FTS5 companion supplies non-authoritative hints only.
 - Optional local conversation RAG defaults off and has explicit noninteractive
   status, enable, rebuild, cited search, disable, and derived-only purge.
-  `/settings` provider/automatic editors apply to the next shell; Automatic On
-  and private `/rag QUERY` use bounded preflight only for eligible focused
-  advisory turns. External/network RAG providers and MySQL coupling remain
-  unavailable. Literal `/search` is unchanged.
-- Parsing, repository authorization/evidence, top-level `StoryRuntime`
-  propagation, and provider-enforced reads are active for inline canonical
-  references. Provider-bound interactive spans add `$` completion and
-  `$${path}`/`$$` ranged selection. Standalone compose/artifact commands,
-  automation selection UI, and public selection APIs remain unavailable. The
-  supplied-text viewer remains independent and package-internal: its controller
-  caller discovers artifacts and attaches references.
+  `/settings` provider/automatic editors preserve next-shell configuration, but
+  the current shell has no provider-bound turn that consumes Automatic. External
+  or network RAG providers and MySQL coupling remain unavailable. Literal
+  `/search` is unchanged.
+- Artifact parsing, repository authorization/evidence, provider read actions,
+  and the independent supplied-text viewer remain generic components. No
+  current public input activates `$`/`$$`, propagates an inline reference to an
+  agent, or exposes a selection API.
 
 See [Session lifecycle](../design/session-lifecycle.md),
 [Troubleshooting](../guides/troubleshooting.md), and

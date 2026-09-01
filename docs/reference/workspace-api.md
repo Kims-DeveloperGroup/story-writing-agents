@@ -104,10 +104,11 @@ consuming contract performs schema validation.
 classify canonical paths or perform the artifact repository's descriptor-safe
 source capture. Although it can physically read a canonical file, callers must
 not treat that result as the immutable snapshot used for story-agent context.
-`Workspace.read_core_documents()` has been removed with no compatibility alias;
-trusted story context is selected internally through repository-backed runtime
-prompt construction. Generic raw reads remain appropriate for noncanonical
-inputs and internal workspace files.
+`Workspace.read_core_documents()` has been removed with no forwarding alias.
+Low-level contextual execution selects trusted story context through the
+artifact repository. The current management runtime does not start that
+provider path. Generic raw reads remain appropriate for noncanonical inputs and
+internal workspace files.
 
 `write_text` and `write_json` atomically replace one file when overwrite is
 allowed, except that both reject the four canonical core-document paths, every
@@ -157,8 +158,9 @@ Workspace.inspect_debate(session_id: str, debate_id: str) -> dict[str, Any]
 Workspace.inspect_session(session_id: str) -> dict[str, Any]
 ```
 
-These methods are public but are low-level orchestration primitives; normal
-integrations should use `StoryRuntime`. Reservation uses exclusive creation, so
+These methods are public but are low-level orchestration primitives. Use
+`StoryRuntime` for current management and inspection, not to start the retained
+debate engine. Reservation uses exclusive creation, so
 one session/debate ID has one owner. The owner token coordinates transitions
 but is not authentication and is omitted by normal inspection.
 
@@ -170,9 +172,9 @@ absent context sidecar. It does not change `inspect_debate()` or
 [Persistence](../design/persistence.md#debate-context-sidecar).
 
 `Workspace` no longer exposes manuscript read/write or approved-artifact commit
-helpers. `StoryRuntime` owns the supported orchestration entry and uses the
-domain-specific, module-internal `WritingArtifactRepository` for provenance,
-create-only part manuscripts, catalog-last publication, and recovery. See
+helpers. The domain-specific, module-internal `WritingArtifactRepository` owns
+provenance, create-only part manuscripts, catalog-last publication, and
+recovery. `StoryRuntime` has no current public publication entry. See
 [Canonical writing artifacts](writing-artifacts.md).
 
 Constructing `Workspace`, `StoryRuntime`, or the artifact repository performs

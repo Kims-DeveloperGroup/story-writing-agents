@@ -1,69 +1,49 @@
 # Session lifecycle design
 
+Session lifecycle remains fully active for management even though public story
+execution is unavailable.
+
 <a id="canonical-lifecycle-state"></a>
 
-| Durable ↓ / process access → | `claimable` | `held_here` | `blocked_by_live_local_owner` | `ownership_unknown` |
+## State axes
+
+| Durable ↓ / access → | `claimable` | `held_here` | `blocked_by_live_local_owner` | `ownership_unknown` |
 | --- | --- | --- | --- | --- |
 | `absent` | Create it. | Invalid | Invalid | Invalid |
-| `ready` | Resume it. | Work when configured. | Close the local owner. | Verify; preserve claim. |
-| `paused` | Resume to ready. | Valid, but work is paused. | Close the local owner. | Verify; preserve claim. |
+| `ready` | Resume it. | Manage/read it. | Close the local owner. | Verify and preserve the claim. |
+| `paused` | Reopen it. | Valid claim, but durably paused. | Close the local owner. | Verify and preserve the claim. |
 
-**Durable state** says missing, ready, or paused. **Process access** says
-claimable, held here, blocked locally, or unknown. The axes are independent;
-`absent` means neither manifest nor claim. Conversation and debate states differ.
+Durable state says whether a session is absent, ready, or paused. Process access
+says whether this process owns the claim. The axes are independent. A ready,
+claimable session after `/quit` is durable but not attached.
 
-Agent-context `bootstrap`, `delta`, and checkpoint outcomes are a third,
-operation-scoped state machine. They do not change provider-session durable
-state or process access. A READY context checkpoint only authorizes compatible
-later omission; see [Bounded agent context](../guides/agent-context.md#c19-state-transition).
+`SessionLifecycleState` carries session ID, durable/access enums, paired owner
+facts, and ordered offset-aware timestamps. `provider_work_is_ready()` is pure:
+valid provider configuration plus `ready` plus `held_here`. In this integration
+stage that fact is diagnostic/configuration readiness, not evidence that a
+public provider command exists.
 
-`SessionLifecycleState` is frozen, slotted, keyword-only, with fields
-`session_id`, `durable_state`, `access_state`, `owner_hostname`, `owner_pid`,
-`created_at`, `updated_at`. Owner fields pair; persisted timestamps are ordered
-and offset-aware. A dead-local claim can be claimable while retaining owner facts.
+## Defaults and current scope
 
-## What the shell state means to a user
+- Default session is a saved fallback for a later command/process.
+- Current attachment is the session whose claim this shell holds.
+- Default conversation is saved within one session.
+- Current focus is the active conversation used by scoped reads.
 
-`/status` presents a snapshot, not one combined lifecycle label. Durable state
-answers whether provider work is intentionally available; process access
-answers whether this process may use it. A ready but claimable session therefore
-still cannot run provider work until this shell resumes and holds it. A paused
-session must become ready as part of resume. Blocked or unknown ownership cannot
-be bypassed from the shell.
+Defaults prove no current ownership. `/status` presents these fields
+separately, along with durable/access state, storage, provider readiness, and an
+applicable next action.
 
-Defaults and current scope are also separate. A saved default only tells a
-later command or process which session or conversation to try. Current
-attachment is the session held now; current focus is the active conversation
-used now; agent focus chooses the ordinary advisory responder. Provider
-readiness is derived from validated configuration plus `ready` and `held_here`.
-It never acquires access or changes another field.
-
-Successful create/resume writes orientation with an `AttachmentKind` result:
-`created`, `opened` for an already-ready session, or `reopened` for a paused
-session made ready. Those result labels describe what happened; `opened` and
-`reopened` are not interactive command words.
-
-## Defaults, process scope, and readiness
-
-The **default session** is a command fallback; **current attachment** is held by
-this shell. **Default conversation** persists per session. **Current focus** is
-the conversation used now; **agent focus** is its responder. Defaults prove no
-current scope.
-
-`provider_work_is_ready()` is pure: exact `True` configuration + `ready` +
-`held_here`. Ready plus claimable reports readiness `no`.
-
-## Internal transition mechanism
+## Transition mechanism
 
 ```mermaid
 sequenceDiagram
-    participant C as Controller/runtime
+    participant C as Controller
     participant B as AgentBackend
     participant G as Claim guard
-    participant M as V2 manifest
-    C->>B: validate configuration
-    C->>B: lifecycle pre-read
-    B->>G: lock; inspect claim
+    participant M as Lifecycle manifest
+    C->>B: validate configuration and pre-read lifecycle
+    B->>G: lock and inspect claim
     alt absent or proved-dead local claim
         G->>G: create/replace this process claim
     else live local or unknown owner
@@ -73,105 +53,71 @@ sequenceDiagram
     opt create, reopen, or pause
         B->>M: create/replace manifest
     end
-    C->>B: correlated lifecycle post-read
-    alt normal release
-        B->>G: compare token; remove own claim
-    else failure after new claim
-        B->>G: compensate only that new claim
+    C->>B: correlated post-read
+    opt release
+        B->>G: compare token and remove own claim
     end
 ```
 
-Every runtime provider-work preparation requires synchronous validation →
-pre-read → acquire → post-read. Results must correlate, preserve identity, and
-end `ready` + `held_here`. Failure compensates only newly acquired access.
+Identity and pre/post facts must correlate. Failure compensates only a newly
+acquired claim; it never deletes another process's claim.
 
-## Commands, errors, and exact next actions
+## Commands and next actions
 
-| Facts or need | Command / stable failure | Exact next action |
+| Facts | Command | Next action |
 | --- | --- | --- |
-| Missing | `/session create NAME`; `story session create SESSION` | `Create a session.` |
-| Ready + claimable | `/session resume [NAME]`; `story session reopen [SESSION]` | `Resume the session.` |
-| Paused + claimable/held here | `SessionPausedError` / `session_paused` | `Resume the session to make it ready.` |
-| Live local owner | `SessionAccessBlockedError` / `session_access_blocked` | `Close the owning local process normally, then retry.` |
-| Unknown owner | `SessionOwnershipUnknownError` / `session_ownership_unknown` | `Verify ownership; do not remove the access claim.` |
-| Invalid provider setup | `ConfigurationError` or `BackendProtocolError` / `provider_preflight_failed` | `Repair provider configuration, then retry.` |
-| Held, configured, no focus | `conversation_required` | `Create or choose a conversation.` |
-| Held, configured, focused | Continue discussion/run | `Continue with the current focus.` |
+| Absent | `/session create NAME` or `story session create SESSION` | Create a session. |
+| Ready + claimable | `/session resume [NAME]` or `story session reopen [SESSION]` | Resume/attach it. |
+| Paused | Same resume/reopen forms | Make it ready and attach it. |
+| Live local owner | `session_access_blocked` | Close the owner normally, then retry. |
+| Unknown owner | `session_ownership_unknown` | Verify ownership; preserve the claim. |
+| Attached, no focus | `/conversation new` or `/conversation resume` | Create or choose a conversation for scoped reads. |
+| Attached and focused | Management/inspection ready | Use history/search/transcript/status; story execution remains unavailable. |
 
-`/status` fields are exactly `Session`, `Durable state`, `Process access`,
-`Default session`, `Current attachment`, `Default conversation`, `Current
-focus`, `Agent focus`, `Provider readiness`, `Next action`. `/session list`
-uses `Session`, `Durable state`, `Process access`, `Default session`, `Provider
-readiness`, `Next action`. Both are read-only for lifecycle/domain state and
-omit owner host, PID, and token; their workspace-aware execution may append a
-bounded operational debug record.
-`session_not_attached` gates attached commands;
-`workspace_version_unsupported` reports rejected V1 data.
+Noninteractive create/reopen saves the default, releases its temporary access,
+and prints ready/claimable JSON. Pause retains the default and reports
+paused/claimable. Lifecycle commands have no `--session` option; their optional
+positional session uses the saved default where allowed.
 
-Automation create/reopen saves the default, releases, then prints only sorted,
-indented `access_state`, `durable_state`, `session_id`. Pause retains the
-default. Lifecycle commands have no `--session`.
+<a id="shell-transitions-and-compensation"></a>
 
-## Shell transitions and compensation
+## Shell switching and compensation
 
-Bare `story` resumes a ready default and asks for confirmation before resuming a
-paused default. `story chat SESSION` creates an absent session or resumes a
-persisted session; `/session resume` never creates. Switching validates
-configuration and lifecycle, acquires or durably reopens the
-destination, performs correlated post-validation, loads destination focus,
-persists the destination default, releases the source, then commits in-memory
-attachment/focus and resets agent focus to `lead`.
+Bare `story` resumes a ready default and asks before reopening a paused default.
+`story chat SESSION` creates an absent session or resumes an existing one.
+Interactive `/session resume` never creates.
 
-Snapshot/highlight work, cancel, and rejection before acquisition are
-mutation-free. The later sequence is not transactional: a successful
-paused-to-ready reopen is not rolled back if focus loading, default persistence,
-source release, or another later step fails. Later failure releases newly
-acquired destination access where possible and does not advance in-memory
-attachment/focus, but durable lifecycle/default rollback is not promised. A
-reported default-write failure may follow `os.replace`; inspect persisted state
-instead of assuming the old value. Source-release failure after default
-persistence is fatal `cleanup_failed`, and the new default remains. The
-standalone automation command remains `story session reopen`; it is distinct
-from interactive grammar.
+Switching performs destination validation/acquisition, optional durable reopen,
+post-validation, destination-focus load, default persistence, source release,
+then in-memory attachment/focus commit. The sequence is not one transaction. A
+successful paused-to-ready transition is not rolled back if a later focus or
+default step fails. Later failure releases a newly acquired destination when
+possible and leaves in-memory scope unchanged; inspect persisted state because
+an atomic replacement can complete before a reported failure.
 
-<a id="reference-editing-lifecycle"></a>
+`/quit` and EOF release without pausing. Confirmed `/session pause` persists
+paused, clears current scope, and releases. Both retain defaults.
 
-## Reference editing and operation lifecycle
+## Conversation compensation
 
-Artifact browsing is nested input state, not another durable session state.
-It is available only when attachment and active conversation focus make the
-cursor's text provider-bound.
+Conversation creation/resume saves the selected default before changing current
+focus. A reported save failure leaves in-memory focus unchanged but can follow
+an atomic persisted replacement. Archiving focused content chooses another
+active default or `null`; rollback is attempted only while ready access remains
+proved.
 
-| Internal stage | User-visible meaning |
-| --- | --- |
-| Outer editing with immutable origin | The current draft, cursor, focus, and terminal mode are the restoration point. Nothing has been submitted. |
-| Filesystem-source completion | `$` shows current safe reference paths; Enter or Tab inserts `${path}` and stays in editing. |
-| Ranged-source selection | The second `$` immediately shows the same eligible sources before a third key or newline. Up/Down changes the highlight; Escape closes the panel while preserving `$$`. |
-| Independent viewer | Enter/Tab on the `$$` highlight, or on a complete `$${path}` marker, opens verified text. Shift+Up/Down adjusts inclusive lines while the outer draft remains unchanged. |
-| Editing with amended draft | Viewer Enter inserts `${path}#Lx-Ly`; several indicators remain ordered. A later normal submit is still required. |
-| Restored origin | Escape, Ctrl-C, EOF, handled error, or invalid/stale selection returns the exact draft/cursor with no dispatch or history append. |
-| Runtime `requested` → `captured` → `accepted` | Only after normal submission: references are parsed once, captured, independently read by every addressed provider invocation, and finally revalidated. |
-| Runtime `terminated` | Capture, drift, read-action, provider, cancellation, or acceptance failure yields no accepted reply/publication. Retry starts a new operation. |
+Conversation catalog mutations create no transcript or collaboration event.
+`/history` is therefore empty for a new conversation, while `/search` can still
+match its catalog subject. Pure schema-v2 history remains empty until a v2
+writer appends real workflow events; #479 later selects that inspection path.
 
-Capable source-panel/viewer input shares the driver's irreversible `LIVE` latch;
-ordinary fallback shares its irreversible `FALLBACK` route and requires a
-second Enter after displaying the amended draft. Neither route creates a
-session transition. Source-list/viewer activity is not durable work history; only
-the later submitted prompt and content-free runtime evidence are recorded.
-See [Canonical artifact references](../guides/artifact-references.md) for exact
-controls and [Terminal safety](../operations/terminal-safety.md) for cleanup.
+## Artifact viewer relationship
 
-<a id="conversation-lifecycle-and-compensation"></a>
+Artifact source pickers and the independent text viewer remain generic terminal
+components, not durable lifecycle states. The current controller exposes no
+provider-text input span, so main-input `$`/`$$` does not enter those components
+and creates no reference operation.
 
-Conversation creation or resume saves its default before changing current
-focus. A reported save failure leaves in-memory focus unchanged but may occur
-after replacement of the persisted default, which must then be inspected.
-Archiving focused content saves another active default or `null`; save failure
-restores archive state only while ready access remains proved.
-
-Confirmed `/session pause` retains defaults, clears attachment and both focuses,
-and releases. Quit/EOF releases without pausing. A later process establishes a
-new attachment and restores only an active default conversation. See
-[Backend API](../reference/backend-and-sessions.md#lifecycle-value-contracts),
-[storage](../reference/configuration/session-storage.md), and
+See [Story sessions](../guides/story-sessions.md),
+[Backend and sessions](../reference/backend-and-sessions.md), and
 [recovery](../operations/recovery-and-limitations.md).

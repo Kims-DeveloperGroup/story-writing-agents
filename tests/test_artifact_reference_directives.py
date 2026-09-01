@@ -96,7 +96,9 @@ class ArtifactReferenceDirectiveParsingTests(unittest.TestCase):
                     expected_tokens,
                 )
 
-    def test_bare_dollars_escaped_directives_and_no_references_are_literal(self) -> None:
+    def test_bare_dollars_escaped_directives_and_no_references_are_literal(
+        self,
+    ) -> None:
         plain = "Price $5; trailing $; no writing artifact here."
         plain_batch = parse_artifact_references(plain)
         self.assertEqual(
@@ -132,7 +134,9 @@ class ArtifactReferenceDirectiveParsingTests(unittest.TestCase):
                     parse_artifact_references(text)
                 self.assertEqual(str(raised.exception), message)
 
-    def test_range_trailing_punctuation_and_adjacent_token_are_unambiguous(self) -> None:
+    def test_range_trailing_punctuation_and_adjacent_token_are_unambiguous(
+        self,
+    ) -> None:
         punctuation = (".", ",", ")", ";", ":", "!", "?")
         for suffix in punctuation:
             with self.subTest(suffix=suffix):
@@ -150,10 +154,7 @@ class ArtifactReferenceDirectiveParsingTests(unittest.TestCase):
                     ),
                 )
 
-        adjacent = (
-            _token(_MANUSCRIPT_PATH, "#L1-L2")
-            + _token(_SECOND_CORE_PATH)
-        )
+        adjacent = _token(_MANUSCRIPT_PATH, "#L1-L2") + _token(_SECOND_CORE_PATH)
         self.assertEqual(
             parse_artifact_references(adjacent).references,
             (
@@ -360,8 +361,7 @@ class ArtifactReferenceDirectiveValidationTests(unittest.TestCase):
         self.assertEqual(
             batch.references,
             tuple(
-                ArtifactReference(_MANUSCRIPT_PATH, line_range)
-                for line_range in ranges
+                ArtifactReference(_MANUSCRIPT_PATH, line_range) for line_range in ranges
             ),
         )
 
@@ -573,9 +573,7 @@ class ArtifactReferenceFacadeTests(unittest.TestCase):
             "ArtifactReferenceDirectiveError": (
                 reference_module.ArtifactReferenceDirectiveError
             ),
-            "parse_artifact_references": (
-                directive_module.parse_artifact_references
-            ),
+            "parse_artifact_references": (directive_module.parse_artifact_references),
         }
         for name, value in expected.items():
             with self.subTest(name=name):
@@ -583,7 +581,7 @@ class ArtifactReferenceFacadeTests(unittest.TestCase):
                 self.assertIs(getattr(artifact_facade, name), value)
                 self.assertNotIn(name, story_writing_agents.__all__)
                 self.assertFalse(hasattr(story_writing_agents, name))
-        self.assertEqual(len(story_writing_agents.__all__), 120)
+        self.assertEqual(len(story_writing_agents.__all__), 118)
 
     def test_parser_is_provider_free_and_uses_no_operational_io(self) -> None:
         failure = AssertionError("directive parsing must not open files")

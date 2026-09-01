@@ -333,7 +333,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         modules = _module_inventory()
         edges = _internal_edges(modules)
         self.assertEqual(len(modules), 97)
-        self.assertEqual(len(edges), 385)
+        self.assertEqual(len(edges), 360)
         self.assertIsNone(_cycle_witness(modules, edges))
         conversation_dependencies = {
             "story_writing_agents.conversations": {
@@ -466,8 +466,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
             {
                 source
                 for source, target in edges
-                if target
-                == "story_writing_agents.conversation_storage.filesystem"
+                if target == "story_writing_agents.conversation_storage.filesystem"
             },
             {
                 "story_writing_agents.conversation_storage.composition",
@@ -602,7 +601,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
                 if target == "story_writing_agents.agent_context.service"
                 and source.startswith("story_writing_agents.interactive_controller.")
             },
-            {"story_writing_agents.interactive_controller._runtime_policy"},
+            set(),
         )
         self.assertEqual(
             {
@@ -684,7 +683,7 @@ class RagModuleBoundaryTests(unittest.TestCase):
         )
 
     def test_supported_module_surfaces_do_not_expand_the_root_facade(self) -> None:
-        self.assertEqual(len(story_writing_agents.__all__), 120)
+        self.assertEqual(len(story_writing_agents.__all__), 118)
         rag_names = set().union(
             conversation_rag.__all__,
             conversation_rag_cli.__all__,
@@ -1034,7 +1033,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.workspace as workspace
                 import story_writing_agents.workspace.core as workspace_core
                 from story_writing_agents.agent_exchanges import AgentExchangeScopeKind
-                assert len(story_writing_agents.__all__) == 120
+                assert len(story_writing_agents.__all__) == 118
                 assert len(conversations.__all__) == 83
                 assert len(conversation_events.__all__) == 55
                 assert len(conversation_context.__all__) == 21
@@ -1286,7 +1285,7 @@ class RagPackagingBoundaryTests(unittest.TestCase):
                 import story_writing_agents.conversations.catalog as catalog
                 import story_writing_agents.conversations.context as context
                 import story_writing_agents.conversations.events as events
-                assert len(story_writing_agents.__all__) == 120
+                assert len(story_writing_agents.__all__) == 118
                 assert len(conversations.__all__) == 83
                 assert len(events.__all__) == 55
                 assert len(context.__all__) == 21

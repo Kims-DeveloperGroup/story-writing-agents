@@ -9,8 +9,9 @@
 > Separately, this module now exposes pure direct-only schema-v2 collaboration
 > search, exact citation, snapshot-page, and derived-document-ID contracts.
 > Those additions are not package-root exports and are not connected to the
-> current shell, storage adapters, runtime, RAG, or provider calls; #475-#479
-> own later integration.
+> current shell's v1 transcript search, RAG, or provider calls. #474-#477
+> supplied the v2 projection/storage/archive/transfer pieces; #479 owns the
+> selected storage/inspection cutover.
 
 Key terms: **scope**—one authorized story session; **hit**—the strongest match
 from one conversation; **citation**—stable identity plus an optional exact
@@ -55,11 +56,11 @@ page neighboring events from one unchanged snapshot. If the user explicitly
 selects that event for later context, the pure selector can include the whole
 record under fixed limits.
 
-Today, a Python integration can call these pure functions directly. A shell
-user cannot yet search or page v2 collaboration history, current storage
-adapters do not persist it, and no readable record is automatically sent to a
-provider or RAG service. Default context is content-free. Integration is owned
-by #475-#479.
+Today, a Python integration can call these pure functions and the direct v2
+stores persist canonical history. A shell user cannot yet search or page that
+v2 history, and no readable record is automatically sent to a provider or RAG
+service. Default context is content-free. #479 owns the selected
+storage/inspection cutover.
 
 Before #474, `project_collaboration_history()` exposed current state and
 recovery facts only. After #474, one separate readable record per event supports

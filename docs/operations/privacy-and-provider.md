@@ -1,22 +1,21 @@
 # Privacy and provider exposure
 
-> **Availability:** these controls cover local reads, advisory turns, and
-> retrieval-enabled turns, management commands, focused-context consensus, and
-> runtime explicit-reference authorization and backend enforcement, plus direct
+> **Availability:** these controls cover current management/search/inspection
+> commands and retained low-level backend, contextual execution, debate, and
+> explicit-reference components, plus direct
 > Python conversation archive values, filesystem transfer, and optional SQLite
 > conversation/search storage, provider-free desired selection, and
 > conversation transfer. They also cover the optional fixed-local
 > conversation-RAG store and noninteractive lifecycle/authorized-search
-> commands, plus interactive settings, startup composition, automatic
-> preflight, and private one-turn `/rag` arming.
+> commands, plus interactive settings and startup composition.
 > They also cover the content-safe runtime debug log, automatic bounded
 > agent-exchange store, required base-installed isolated `/exchanges` viewer,
 > and the separate bounded store for eligible rejected provider responses.
 > They do not make either provider, its executable, the workspace, or the
 > terminal trusted.
-> Inline canonical references in provider-bound prompt text are active.
-> `$`/`$$` discovery and viewer attachment are active in eligible interactive
-> prompt spans; they remain local until the user normally submits the prompt.
+> The current shell and `StoryRuntime` expose no provider-bound story span.
+> Inline references and `$`/`$$` main-input activation are therefore inactive;
+> direct components retain the data boundaries documented below.
 > Settings Model/Effort catalog discovery is also bounded and local; only a
 > user's selected opaque value can be persisted, never provider catalog data.
 
@@ -213,22 +212,13 @@ only the system configuration without entering either gate or activating RAG.
 The saved choice applies at the next shell, while the current service and
 automatic policy remain unchanged.
 
-`/rag QUERY` retains one representation-hidden process-local value scoped to
-the attached session and focused conversation. It is absent from configuration,
-conversation transcripts, runtime debug records, RAG outcome/source result
-values, semantic output, and the later story-agent payload. The subsequent
-ordinary story message and reply retain their normal transcript persistence.
-The live editor necessarily displays typed input, process-local command history
-may recall the submitted line, and ordinary-line fallback or terminal/remote
-infrastructure may retain it in scrollback; those surfaces are not a secrecy
-boundary.
-
-An attempted preflight sends the story agent only bounded reauthorized excerpt
-bodies with stable citations. The shell renders only content-free outcome/reason
-and source identities, never excerpt bodies as diagnostics. Raw optional-package
-and composition diagnostics are replaced with fixed guidance and do not enter
-configuration, transcript, debug, or semantic result output. The fixed local
-provider has no runtime network or credential flow. Provider fragment text and
+The former one-turn interactive RAG preflight is unavailable. Ordinary input
+does not retain a query or send excerpts to a story provider. The six top-level
+RAG lifecycle/search commands retain their documented local data boundaries;
+direct callers of the low-level service own any subsequent provider use. Raw
+optional-package and composition diagnostics are replaced with fixed guidance
+and do not enter configuration, transcript, debug, or semantic result output.
+The fixed local provider has no runtime network or credential flow. Provider fragment text and
 vectors never become authority, and canonical writing-artifact references
 remain an independent authorization path.
 
@@ -348,7 +338,8 @@ provider projections, prompts, provider results, and diagnostic values derived
 from content. Authorization errors use fixed coded messages without echoing a
 path or selected text.
 
-Before provider delivery, selected artifact byte tuples are held in closeable,
+In a direct low-level provider integration, selected artifact byte tuples are
+held in closeable,
 nonserializable in-process authorization, delivery, and result carriers whose
 `repr` hides content. The backend transiently decodes them for the one provider
 payload described below. Closing drops the carriers' references to their byte
@@ -356,17 +347,17 @@ tuples; Python and the operating system do not provide a secure memory-zeroing
 guarantee. The durable evidence remains plaintext and has no encryption,
 access control, secure erase, or retention policy.
 
-Interactive source entries contain canonical paths only. Listing reads path and
-type metadata, not file bytes. Opening an artifact
+Direct artifact-source entries contain canonical paths only. Listing reads path
+and type metadata, not file bytes. Opening an artifact through the generic viewer
 loads verified plaintext into local process memory and renders it in the
 terminal. A capable viewer uses an alternate screen, but closing it is cleanup,
 not secure erasure from the process, emulator, multiplexer, or remote terminal.
 Fallback prints the complete numbered content into scrollback. Source-list/viewer
 activity is not sent to a provider and creates no durable reference-operation
-evidence; only a later submitted `${...}` indicator starts the runtime path.
-UI error output is fixed and content-free.
+evidence. Current main input does not activate that viewer or submit the
+indicator to a provider. Component error output is fixed and content-free.
 
-For an optional referenced backend call, the first provider payload contains
+For a caller-composed referenced backend call, the first provider payload contains
 only fixed rules, exact operation/invocation correlation, and the complete
 ordered canonical path/range indicators. The capability object is never
 serialized, and its repository-private identifier is absent from provider
@@ -387,16 +378,15 @@ Baseline core context cannot satisfy explicit-reference evidence.
 Closing local authorization, delivery, and result carriers drops their Python
 references but offers neither secure memory erasure nor provider erasure. Once
 the substantive request is sent, provider-private or remote systems may retain
-its context under their own policy. `StoryRuntime` now constructs this path
-from inline `${...}` indicators. The interactive controller can now construct
-those same indicators through `$`/`$$` discovery and viewer selection without
-copying selected content into the prompt or work history.
+its context under their own policy. The current `StoryRuntime` and interactive
+controller do not construct this path; a future structured collaboration
+consumer must integrate it explicitly.
 
 <a id="agent-context-progress-privacy"></a>
 
 ## Agent-context progress privacy
 
-The optional context lifecycle observer and installed-shell progress contain
+The optional context lifecycle observer and a future shell projection contain
 only validated scope and operation identities, fixed lifecycle kinds,
 nonnegative counters, and an optional truncation boolean. They have no field
 for prompts, search queries, candidates, excerpts, mandatory-reference bodies,
@@ -406,10 +396,10 @@ the canonical agent, phase, and round needed to distinguish logical
 invocations.
 
 Observer delivery adds no provider call, result field, story content,
-conversation event, debate record, or second context ledger. The runtime has no
-supported post-hoc observer inspection. The installed shell renders compact
-facts into terminal output only; a terminal emulator, multiplexer, or remote
-terminal may retain them in scrollback. A Python caller may deliberately retain
+conversation event, debate record, or second context ledger. The component has
+no supported post-hoc observer inspection. A consumer may render compact facts
+into terminal output, where an emulator, multiplexer, or remote terminal may
+retain them in scrollback. A Python caller may deliberately retain
 callback values, in which case that caller owns access control, retention, and
 cleanup for the new copy.
 
@@ -746,9 +736,10 @@ metadata and do not echo provider response values. Progress exposes fixed facts;
 sources intentionally reveal subject/citation, never
 query/event/candidate/critique/error/model prose.
 
-Separately, after a durable advisory user event, an ordinary `Exception` from a
-`StoryRuntime` turn attempts to store failure type plus sanitized detail in the
-transcript. Its known-value sanitizer:
+The retired schema-v1 direct-turn consumer used the following failure-storage
+boundary. It is retained only to interpret preexisting records; current
+ordinary input creates no durable user event or failure transcript. Its
+known-value sanitizer:
 
 - replaces current/context/retrieval variants with `<redacted>` and workspace
   roots with `<workspace>`;

@@ -1,5 +1,16 @@
 # Interactive CLI design system contract
 
+> **Historical design record:** this long-form record preserves the terminal
+> behavior delivered across earlier issues, including the retired schema-v1
+> advisory, routing, composition, consensus, and artifact-picker consumers.
+> Those execution examples and acceptance rows are not current runnable
+> instructions. Issue #478 retains the generic terminal models, renderer,
+> driver, settings/management pickers, independent text-viewer component, and
+> `/exchanges` host, but main input has no provider-text span. Use the
+> [current terminal reference](../reference/interactive-terminal.md) and
+> [parser reference](../reference/interactive-command-parser.md) for callable
+> behavior.
+
 > **Status:** #82 delivered the import-compatible package, closed semantic
 > models, pure foundation controls, responsive plain/fixed-ANSI renderer,
 > capability profiles, unified raw driver and CLI factory, line-editor
