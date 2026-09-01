@@ -406,7 +406,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             ]
         )
         source_files = tuple(source_root.rglob("*.py"))
-        self.assertEqual(len(source_files), 92)
+        self.assertEqual(len(source_files), 93)
         self.assertTrue(
             {
                 source_root / "conversation_storage" / "archive.py",
@@ -427,7 +427,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             <= set(source_files)
         )
         index = (source_root.parents[1] / "PYTHON_MODULE_INDEX.md").read_text(encoding="utf-8")
-        self.assertIn("Importable production units indexed: 92.", index)
+        self.assertIn("Importable production units indexed: 93.", index)
         environment = dict(os.environ, PYTHONPATH=str(source_root.parent))
         result = subprocess.run(
             [

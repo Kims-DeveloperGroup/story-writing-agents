@@ -5,7 +5,7 @@
 > context to story agents or resolving explicit references; publication
 > provenance is a separate audit and recovery concern. The `writing_artifacts` Python subpackage can parse content-free
 > reference directives and exposes the repository authorization, read-action,
-> and evidence values described below. `StoryRuntime` captures inline
+> evidence, and pure exact change-set values described below. `StoryRuntime` captures inline
 > `${path}` and `${path}#Lx-Ly` indicators and gives every addressed provider
 > invocation a fresh private coordinator. In provider-bound shell prompt spans,
 > `$` lists current safe reference sources. Exact `$$` immediately shows
@@ -57,6 +57,328 @@ For example, `part-01/scenes/opening.md` publishes
 the part grammar, so `output_path=manuscript/chapter.md` is legal and publishes
 `manuscript/manuscript/chapter.md`. The first `manuscript` is the canonical
 directory; the second is the user-selected part ID.
+
+## Exact in-memory artifact change sets
+
+> **Availability:** schema-v1 artifact change sets are an implemented, pure
+> Python value contract. They validate and project proposed bytes in memory.
+> They do not read or write a workspace, ask a provider or lead agent for a
+> decision, record confirmation, apply a proposal, or create a Git commit.
+
+This API gives a caller one exact, reviewable description of how a complete
+canonical artifact state would change. It is useful for building and checking
+a proposal before any component with write authority acts.
+
+| A caller can | A caller cannot |
+| --- | --- |
+| Describe creation, byte-exact patching, full replacement, rename, or deletion of canonical core documents and manuscripts. | Infer the current files from a workspace or mutate any file. The caller must supply the complete base mapping. |
+| Verify the exact base state and inspect a read-only projected mapping. | Treat projection as approval, user confirmation, provider output, publication, or Git authority. |
+| Serialize the complete review content to one canonical JSON byte sequence and restore it exactly. | Expect ordinary representations or errors to reveal story text. Explicit serialization is the content-bearing review surface. |
+| Represent a core-document rename or deletion as a pure value. | Assume that operation is permitted by artifact policy. This contract does not implement the separate fixed-core policy that is expected to reject those operations later. |
+
+Relationship validation is also outside this layer. For example, renaming a
+manuscript does not find or repair Markdown links. The caller must describe
+each inbound-reference patch separately, and a later relationship-policy layer
+must decide whether the complete proposal is valid. Later lead-review and apply
+workflows may consume these values, but this API itself grants none of their
+authority.
+
+### Public Python surface
+
+Import the 16 change-set symbols from the writing-artifacts facade, not the
+project-root facade:
+
+```python
+from story_writing_agents.writing_artifacts import (
+    ARTIFACT_CHANGE_SET_SCHEMA_VERSION,
+    ArtifactChangeOperation,
+    ArtifactChangeOperationKind,
+    ArtifactChangeSet,
+    ArtifactChangeSetError,
+    ArtifactChangeSetErrorCode,
+    ArtifactCreateOperation,
+    ArtifactDeleteOperation,
+    ArtifactPatchOperation,
+    ArtifactRenameOperation,
+    ArtifactReplaceOperation,
+    ArtifactTextHunk,
+    build_artifact_change_set,
+    deserialize_artifact_change_set,
+    project_artifact_change_set,
+    serialize_artifact_change_set,
+)
+```
+
+The schema version is exactly `1`. The value types are frozen, slotted
+dataclasses with these exact fields:
+
+```text
+ArtifactTextHunk(base_digest, start_utf8_byte, end_utf8_byte, old_text, new_text)
+ArtifactCreateOperation(path, artifact_kind, content, projected_digest)
+ArtifactPatchOperation(path, artifact_kind, base_digest, hunks, projected_digest)
+ArtifactReplaceOperation(path, artifact_kind, base_digest, content, projected_digest)
+ArtifactRenameOperation(source_path, destination_path, artifact_kind, base_digest, projected_digest)
+ArtifactDeleteOperation(path, artifact_kind, base_digest)
+ArtifactChangeSet(schema_version, base_state_digest, operations, projected_state_digest, change_set_digest)
+```
+
+`ArtifactChangeOperation` is the union of the five operation values. Each
+operation's `operation_kind` is the corresponding `create`, `patch`, `replace`,
+`rename`, or `delete` enum member. The four functions have these signatures:
+
+```python
+build_artifact_change_set(
+    base_state: Mapping[str, bytes],
+    operations: tuple[ArtifactChangeOperation, ...],
+) -> ArtifactChangeSet
+
+project_artifact_change_set(
+    base_state: Mapping[str, bytes],
+    change_set: ArtifactChangeSet,
+) -> Mapping[str, bytes]
+
+serialize_artifact_change_set(change_set: ArtifactChangeSet) -> bytes
+deserialize_artifact_change_set(data: bytes) -> ArtifactChangeSet
+```
+
+The returned projection is a `MappingProxyType` ordered by path UTF-8 bytes.
+The functions do not mutate either the caller's base mapping or the contained
+byte values.
+
+### Exact matching and ordering rules
+
+A hunk uses zero-based, half-open `[start_utf8_byte, end_utf8_byte)` offsets
+over the **original base bytes**. Both offsets must be UTF-8 code-point
+boundaries, `old_text` must equal that exact byte slice, and every hunk must
+carry the operation's exact lowercase SHA-256 `base_digest`. All text values
+are strict UTF-8 bytes. There is no fuzzy matching or newline, Unicode, BOM, or
+NUL normalization; CRLF versus LF and composed versus decomposed characters
+remain different bytes.
+
+Hunks are caller-canonical in ascending `(start_utf8_byte, end_utf8_byte)`
+order and are all evaluated against the same original base. Adjacent hunks are
+valid. One zero-width insertion immediately before a consuming hunk at the
+same offset is valid. Overlap, a second insertion at the same anchor, an empty
+hunk list, or any hunk whose old and new bytes are equal fails closed.
+
+| Operation | Exact base rule | Projected result |
+| --- | --- | --- |
+| `create` | The path is absent from the original base. | Adds the supplied content whose digest is `projected_digest`. |
+| `patch` | The path is present and its content digest equals `base_digest`. | Applies the ordered original-base hunks; the result must equal `projected_digest`. |
+| `replace` | The path is present and its content digest equals `base_digest`. | Replaces it with different supplied bytes whose digest is `projected_digest`. |
+| `rename` | The source is present; the distinct destination is absent; both paths have the same `ArtifactKind`; and `base_digest == projected_digest`. | Moves the source bytes unchanged. |
+| `delete` | The path is present and its content digest equals `base_digest`. | Removes the path. |
+
+Operations must be a nonempty tuple ordered by each operation's primary path
+(the rename source) as UTF-8 bytes. A path may participate in only one
+operation, including either side of a rename. Rename chains, swaps, and cycles
+are invalid because a rename source may not also be a rename destination.
+Every operation is evaluated against the original base rather than against a
+preceding operation's projection. No individual operation or complete change
+set may be a no-op.
+
+### Scenario: patch a character sheet exactly
+
+This minimal fixture changes only `scout` to `captain`. The byte offsets are
+17 through 22 in the original UTF-8 bytes:
+
+```python
+import hashlib
+
+from story_writing_agents.writing_artifacts import (
+    ArtifactKind,
+    ArtifactCreateOperation,
+    ArtifactPatchOperation,
+    ArtifactRenameOperation,
+    ArtifactTextHunk,
+    build_artifact_change_set,
+    deserialize_artifact_change_set,
+    project_artifact_change_set,
+    serialize_artifact_change_set,
+)
+
+sha256 = lambda value: hashlib.sha256(value).hexdigest()
+path = "core_documents/character_sheets.md"
+before = b"Name: Mara\nRole: scout\n"
+after = b"Name: Mara\nRole: captain\n"
+base = {path: before}
+base_digest = sha256(before)
+
+hunk = ArtifactTextHunk(
+    base_digest=base_digest,
+    start_utf8_byte=17,
+    end_utf8_byte=22,
+    old_text=b"scout",
+    new_text=b"captain",
+)
+operation = ArtifactPatchOperation(
+    path=path,
+    artifact_kind=ArtifactKind.CORE_DOCUMENT,
+    base_digest=base_digest,
+    hunks=(hunk,),
+    projected_digest=sha256(after),
+)
+change_set = build_artifact_change_set(base, (operation,))
+wire = serialize_artifact_change_set(change_set)
+restored = deserialize_artifact_change_set(wire)
+projected = project_artifact_change_set(base, restored)
+
+print(base_digest)
+print(change_set.base_state_digest)
+print(change_set.projected_state_digest)
+print(change_set.change_set_digest)
+print(dict(projected))
+print(restored == change_set, wire.endswith(b"\n"))
+```
+
+Output:
+
+```text
+99570638f3e420feb6978de30a17c2cacd90072ee55277f3a6becebe68482f7d
+76d6735233da0c88f361e50fd6fe27e240ecb3405657c0ec67474d57e6273cfa
+a25050ae167f12dad6f3c620542586a10490fb7502e5a87efb1154df8f936c8b
+de78ee07ff0f501ebba7c86cf453d0cffef468c752a2bab5a41da715ba6d26f1
+{'core_documents/character_sheets.md': b'Name: Mara\nRole: captain\n'}
+True False
+```
+
+The exact canonical `wire` value is one UTF-8 line with sorted object keys,
+compact separators, and no trailing newline:
+
+```json
+{"base_state_digest":"76d6735233da0c88f361e50fd6fe27e240ecb3405657c0ec67474d57e6273cfa","change_set_digest":"de78ee07ff0f501ebba7c86cf453d0cffef468c752a2bab5a41da715ba6d26f1","operations":[{"base_digest":"99570638f3e420feb6978de30a17c2cacd90072ee55277f3a6becebe68482f7d","hunks":[{"base_digest":"99570638f3e420feb6978de30a17c2cacd90072ee55277f3a6becebe68482f7d","end_utf8_byte":22,"new_text":"captain","old_text":"scout","start_utf8_byte":17}],"kind":"core_document","operation":"patch","path":"core_documents/character_sheets.md","projected_digest":"6bc9739b048a6b54c61a23642f1736cdf13fdee1a8475ecceb590eae459f6022"}],"projected_state_digest":"a25050ae167f12dad6f3c620542586a10490fb7502e5a87efb1154df8f936c8b","schema_version":1}
+```
+
+This output is only an in-memory proposal. The character-sheet file is still
+unchanged on disk, and no user confirmation has been requested or granted.
+
+### Scenario: create a manuscript
+
+Creation binds both the required absence and the new bytes. This and the next
+scenario reuse the imports and `sha256` helper above:
+
+```python
+content = b"Scene placeholder.\n"
+path = "manuscript/part-02/opening.md"
+create = ArtifactCreateOperation(
+    path=path,
+    artifact_kind=ArtifactKind.MANUSCRIPT,
+    content=content,
+    projected_digest=sha256(content),
+)
+creation = build_artifact_change_set({}, (create,))
+print(dict(project_artifact_change_set({}, creation)))
+```
+
+```text
+{'manuscript/part-02/opening.md': b'Scene placeholder.\n'}
+```
+
+If that path is present in the supplied base, building fails with
+`base_artifact_mismatch`. Projection still does not create the file.
+
+### Scenario: rename a manuscript and patch an inbound link
+
+A rename preserves bytes but does not discover relationships. Here the caller
+supplies a separate patch to the index that names the manuscript:
+
+```python
+index_path = "manuscript/part-01/index.md"
+source_path = "manuscript/part-01/opening.md"
+destination_path = "manuscript/part-01/arrival.md"
+index_before = b"[Opening](opening.md)\n"
+index_after = b"[Opening](arrival.md)\n"
+scene = b"# Opening\n"
+index_digest = sha256(index_before)
+scene_digest = sha256(scene)
+
+link_patch = ArtifactPatchOperation(
+    path=index_path,
+    artifact_kind=ArtifactKind.MANUSCRIPT,
+    base_digest=index_digest,
+    hunks=(ArtifactTextHunk(
+        base_digest=index_digest,
+        start_utf8_byte=10,
+        end_utf8_byte=20,
+        old_text=b"opening.md",
+        new_text=b"arrival.md",
+    ),),
+    projected_digest=sha256(index_after),
+)
+rename = ArtifactRenameOperation(
+    source_path=source_path,
+    destination_path=destination_path,
+    artifact_kind=ArtifactKind.MANUSCRIPT,
+    base_digest=scene_digest,
+    projected_digest=scene_digest,
+)
+base = {index_path: index_before, source_path: scene}
+proposal = build_artifact_change_set(base, (link_patch, rename))
+print(dict(project_artifact_change_set(base, proposal)))
+```
+
+```text
+{'manuscript/part-01/arrival.md': b'# Opening\n', 'manuscript/part-01/index.md': b'[Opening](arrival.md)\n'}
+```
+
+The operation order is `index.md` then `opening.md`, the UTF-8 ordering of the
+primary paths. The pure layer would also accept the rename without the link
+patch; only a later relationship validator can require that patch. Nothing in
+this scenario changes either file on disk.
+
+### Complete-state digests, serialization, and failures
+
+The base and projected state digests cover the complete supplied mapping, not
+only changed paths. Their canonical manifest has this shape, with artifacts
+sorted by path UTF-8 bytes:
+
+```json
+{"artifacts":[{"content_digest":"<lowercase SHA-256>","kind":"core_document","path":"core_documents/character_sheets.md","utf8_bytes":23}],"schema_version":1}
+```
+
+The digest is the SHA-256 of those canonical JSON bytes. An unrelated path
+addition, removal, or byte change therefore causes `base_state_mismatch` at
+projection. `change_set_digest` is the SHA-256 of the canonical change-set
+object without its own `change_set_digest` field. It is content identity only:
+it carries no user, agent, session, confirmation, authority, timestamp, or Git
+metadata.
+
+`serialize_artifact_change_set()` is intentionally the explicit review
+surface: it includes create/replace content and patch old/new text. Ordinary
+dataclass representations omit those direct content fields, and every
+`ArtifactChangeSetError` has a fixed content-free message. Do not place
+serialized bytes in an ordinary diagnostic channel. Deserialization requires
+exact `bytes`, strict UTF-8, unique keys at every nesting level, exact fields,
+and byte-identical canonical JSON. Pretty printing, a trailing newline,
+duplicate or unknown fields, noncanonical key/spacing/escape forms, and
+`NaN`/`Infinity` are rejected.
+
+Typical closed failures are:
+
+| Input | Observable result |
+| --- | --- |
+| Project the character-sheet change set over a mapping with changed or extra bytes. | `error.code is ArtifactChangeSetErrorCode.BASE_STATE_MISMATCH` |
+| Build a patch after its target bytes drift, or give a hunk the wrong exact `old_text`. | `BASE_ARTIFACT_MISMATCH`, with the operation and, when applicable, hunk index |
+| Supply consuming ranges `[0, 5)` and `[4, 7)`. | `HUNK_OVERLAP`, `hunk_index == 1` |
+| Patch and replace the same path in one operation tuple. | `PATH_COLLISION`, `operation_index == 1` |
+| Rename onto an existing base path, create an existing path, or use a missing source. | `RENAME_CONFLICT` or `BASE_ARTIFACT_MISMATCH`, according to the violated rule |
+
+The stable error-code values are:
+
+```text
+invalid_schema, invalid_serialization, invalid_utf8, invalid_path,
+invalid_kind, invalid_digest, invalid_hunk, invalid_byte_boundary, no_op,
+hunk_order, hunk_overlap, duplicate_insertion, operation_order,
+base_state_mismatch, base_artifact_mismatch, projected_digest_mismatch,
+path_collision, rename_conflict, change_set_digest_mismatch
+```
+
+`ArtifactChangeSetError` is a `RuntimeError` with the exact constructor
+`ArtifactChangeSetError(code, *, operation_index=None, hunk_index=None)`. It
+exposes the enum `code`, optional zero-based `operation_index`, and optional
+zero-based `hunk_index`. A failed build or projection has no partial result and
+performs no recovery or retry. The caller must acquire current bytes and build
+a new exact proposal; this pure API does not read those bytes itself.
 
 ## Reference directive parser
 
