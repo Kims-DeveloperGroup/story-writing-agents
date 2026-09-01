@@ -2329,7 +2329,7 @@ class LedgerBoundaryTests(LedgerTestCase):
     def test_facades_import_direction_compile_and_graph_contract_are_exact(
         self,
     ) -> None:
-        self.assertEqual(len(story_writing_agents.__all__), 118)
+        self.assertEqual(len(story_writing_agents.__all__), 104)
         self.assertEqual(len(agent_context.__all__), 11)
         self.assertEqual(len(writing_artifacts.__all__), 31)
         self.assertTrue(

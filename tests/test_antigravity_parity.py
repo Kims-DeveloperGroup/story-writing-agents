@@ -40,6 +40,7 @@ from story_writing_agents import (
     Verdict,
 )
 from story_writing_agents.config import ConfigManager
+from story_writing_agents.conversations import select_bounded_collaboration_context
 from story_writing_agents.agent_context import (
     ProviderCallKind,
     ProviderCallState,
@@ -665,6 +666,10 @@ def _empty_context() -> ConversationContextWindow:
         retained_utf8_bytes=0,
         truncated=False,
     )
+
+
+def _empty_readable_context():  # type: ignore[no-untyped-def]
+    return select_bounded_collaboration_context(())
 
 
 class _RetrievalHandler:
@@ -1352,7 +1357,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             turn_id="turn-retrieval",
             agent_id=PLOT_ARCHITECT,
             content="PRIVATE_RETRIEVAL_REQUEST",
-            context=_empty_context(),
+            context=_empty_readable_context(),
         )
         handler = _RetrievalHandler()
         retrieval_reply = await bound.converse_with_retrieval(retrieval, handler)
@@ -2406,7 +2411,7 @@ class AntigravityParityTests(unittest.IsolatedAsyncioTestCase):
             turn_id="turn-failure",
             agent_id=PLOT_ARCHITECT,
             content="PRIVATE_RETRIEVAL_FAILURE_REQUEST",
-            context=_empty_context(),
+            context=_empty_readable_context(),
         )
         handler = _RetrievalHandler()
         with (

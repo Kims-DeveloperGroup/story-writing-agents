@@ -128,9 +128,10 @@ erasure or authorization.
 
 ## Local management, search, and reads
 
-`/search` shows active subjects/user/replies; `/transcript` shows active or
-archived metadata/content; `/history` shows one full or newest-suffix snapshot,
-including errors, unmatched users, and whitespace. `/status` exposes
+`/search` shows snippets from closed readable schema-v2 event fields plus a
+display-only subject and exact event/field/range citations. `/transcript` shows
+active or archived structured readable records; `/history` shows one full or
+newest-record suffix plus state and next-safe-action meanings. `/status` exposes
 workspace/session/subject/context/run metadata. Session status shows durable
 state, process access, defaults, current attachment/focus, readiness, and next
 action, then the authoritative provider/model/effort profile, sources,
@@ -155,7 +156,7 @@ absolute diagnostic path. Terminal escaping is not redaction. See
 [Conversation search](../reference/conversation-search.md) and
 [Terminal safety](terminal-safety.md).
 
-Direct SQLite catalog, transcript, context, and exact literal-search operations
+Direct SQLite catalog, collaboration history, context, and exact search operations
 are provider-free and add no network call, authentication, RAG, or new citation
 mechanism. Optional FTS5 hint lookup adds no network path and never becomes
 search truth. Returned Python values, application logs, process memory, and

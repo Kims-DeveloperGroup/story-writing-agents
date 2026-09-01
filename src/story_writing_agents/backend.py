@@ -78,6 +78,7 @@ from .conversation_retrieval import (
     ConversationRetrievalActionHandler,
     ConversationRetrievalActionKind,
     ConversationRetrievalAnswerAction,
+    ConversationRetrievalHistoryRecord,
     ConversationRetrievalObservation,
     ConversationRetrievalReadAction,
     ConversationRetrievalReadObservation,
@@ -87,7 +88,6 @@ from .conversation_retrieval import (
     ConversationRetrievalSearchItem,
     ConversationRetrievalSearchObservation,
     ConversationRetrievalSource,
-    ConversationRetrievalTranscriptEvent,
     serialize_conversation_retrieval_observation,
 )
 from .debug_log import (
@@ -181,8 +181,8 @@ _SAFE_CONTEXT_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 _CONVERSATION_RETRIEVAL_RULES = (
     "Return exactly one structured retrieval action with the supplied "
     "session_id, conversation_id, turn_id, and action_index.",
-    "Use search_conversations before read_transcript; after the first "
-    "read_transcript, use only read_transcript or answer; answer may be the "
+    "Use search_conversations before read_history; after the first "
+    "read_history, use only read_history or answer; answer may be the "
     "first action.",
     "Use only citation_id values supplied in observations from this turn; do "
     "not invent or alter citations.",
@@ -348,8 +348,7 @@ class _BoundContextProvider:
                 "terminate",
             )
             if type(request) is not ReferenceReadRequest or any(
-                not callable(getattr(reference_read, name, None))
-                for name in methods
+                not callable(getattr(reference_read, name, None)) for name in methods
             ):
                 raise TypeError(
                     "reference_read must provide a synchronous ReferenceReadInvocation"
@@ -392,9 +391,7 @@ class _BoundContextProvider:
             or type(policy_fingerprint) is not str
             or self._active_scope is not None
         ):
-            raise ContextExecutionError(
-                ContextExecutionErrorCode.PROVIDER_CONTRACT
-            )
+            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         with self._bound_agent._reference_call_use(self._reference_read):
             try:
                 lock = self._bound_agent.backend._context_thread_lock(
@@ -430,9 +427,7 @@ class _BoundContextProvider:
             scope != self._active_scope
             or policy_fingerprint != self._active_policy_fingerprint
         ):
-            raise ContextExecutionError(
-                ContextExecutionErrorCode.PROVIDER_CONTRACT
-            )
+            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
 
     def inspect_context_thread(
         self,
@@ -468,11 +463,14 @@ class _BoundContextProvider:
                 request,
             )
         except BaseException as failure:
-            if getattr(
-                failure,
-                _CONTEXT_REFERENCE_TERMINATED_ATTRIBUTE,
-                False,
-            ) is True:
+            if (
+                getattr(
+                    failure,
+                    _CONTEXT_REFERENCE_TERMINATED_ATTRIBUTE,
+                    False,
+                )
+                is True
+            ):
                 self._reference_terminal = True
             raise
         self._reference_prepared = True
@@ -525,9 +523,7 @@ class _BoundContextProvider:
                         f"reference read {name}() returned a value"
                     )
         except BaseException:
-            self._terminate_reference(
-                ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE
-            )
+            self._terminate_reference(ReferenceAuthorizationErrorCode.WORKFLOW_FAILURE)
             raise
         self._reference_terminal = True
 
@@ -3348,11 +3344,14 @@ class AgentBackend:
         self._ensure_open()
         schema = self._conversation_output_schema()
         payload = self._conversation_request_payload(request)
-        decode = lambda response_text: self._decode_conversation_reply(
-            request,
-            response_text,
-            provider_name=_provider_name,
-        )
+
+        def decode(response_text: str) -> ConversationReply:
+            return self._decode_conversation_reply(
+                request,
+                response_text,
+                provider_name=_provider_name,
+            )
+
         if reference_read is None:
             return await self._invoke_provider_structured(
                 bound_agent,
@@ -3483,9 +3482,7 @@ class AgentBackend:
                     after_read=after_read,
                 )
                 if observation_frame is None:
-                    call_kind = (
-                        ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL
-                    )
+                    call_kind = ProviderCallKind.CONVERSATION_RETRIEVAL_INITIAL
                     payload = self._conversation_retrieval_initial_payload(
                         request,
                         allowed_actions=allowed_actions,
@@ -3496,9 +3493,7 @@ class AgentBackend:
                         )
                         reference_context = None
                 else:
-                    call_kind = (
-                        ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION
-                    )
+                    call_kind = ProviderCallKind.CONVERSATION_RETRIEVAL_CONTINUATION
                     payload = self._conversation_retrieval_continuation_payload(
                         request,
                         action_index=action_index,
@@ -3638,7 +3633,7 @@ class AgentBackend:
     ) -> ConversationRetrievalSource:
         """Deep-copy one exact handler source without I/O or authorization.
 
-        The retrieval contracts revalidate subject and citation shape. A
+        The retrieval contracts revalidate the exact event-field citation. A
         subclass, tampered value, or malformed nested citation raises and is
         converted by the owning handler-result boundary to
         ``BackendProtocolError``.
@@ -3646,10 +3641,7 @@ class AgentBackend:
 
         if type(source) is not ConversationRetrievalSource:
             raise TypeError("conversation retrieval handler source is invalid")
-        return ConversationRetrievalSource(
-            subject=source.subject,
-            citation=source.citation,
-        )
+        return ConversationRetrievalSource(citation=source.citation)
 
     @classmethod
     def _canonical_conversation_retrieval_observation(
@@ -3658,7 +3650,7 @@ class AgentBackend:
     ) -> ConversationRetrievalObservation:
         """Deep-copy one exact handler observation without owning semantics.
 
-        Search items, transcript events, sources, citations, correlation, IDs,
+        Search items, history records, sources, citations, correlation, IDs,
         and limits are reconstructed through public retrieval contracts. No
         provider, storage, or runtime state changes; invalid shapes raise for
         conversion to ``BackendProtocolError`` by the caller.
@@ -3679,7 +3671,6 @@ class AgentBackend:
                         source=cls._canonical_conversation_retrieval_source(
                             item.source
                         ),
-                        match_kind=item.match_kind,
                         snippet=item.snippet,
                     )
                 )
@@ -3693,21 +3684,18 @@ class AgentBackend:
             )
         if type(observation) is not ConversationRetrievalReadObservation:
             raise TypeError("conversation retrieval handler observation is invalid")
-        if type(observation.events) is not tuple:
-            raise TypeError("conversation retrieval handler events are invalid")
-        events: list[ConversationRetrievalTranscriptEvent] = []
-        for event in observation.events:
-            if type(event) is not ConversationRetrievalTranscriptEvent:
+        if type(observation.records) is not tuple:
+            raise TypeError("conversation retrieval handler records are invalid")
+        records: list[ConversationRetrievalHistoryRecord] = []
+        for item in observation.records:
+            if type(item) is not ConversationRetrievalHistoryRecord:
                 raise TypeError(
-                    "conversation retrieval handler transcript event is invalid"
+                    "conversation retrieval handler history record is invalid"
                 )
-            events.append(
-                ConversationRetrievalTranscriptEvent(
-                    citation_id=event.citation_id,
-                    citation=event.citation,
-                    sender=event.sender,
-                    recipient=event.recipient,
-                    content=event.content,
+            records.append(
+                ConversationRetrievalHistoryRecord(
+                    record=item.record,
+                    field_citation_ids=tuple(item.field_citation_ids),
                 )
             )
         return ConversationRetrievalReadObservation(
@@ -3717,7 +3705,7 @@ class AgentBackend:
             action_index=observation.action_index,
             source_citation_id=observation.source_citation_id,
             source=cls._canonical_conversation_retrieval_source(observation.source),
-            events=tuple(events),
+            records=tuple(records),
             truncated=observation.truncated,
         )
 
@@ -3794,9 +3782,7 @@ class AgentBackend:
             call_kind is ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ
             and "references" in payload
         ):
-            paths[("references",)] = (
-                ContextComponentKind.MANDATORY_REFERENCE_DESCRIPTOR
-            )
+            paths[("references",)] = ContextComponentKind.MANDATORY_REFERENCE_DESCRIPTOR
 
         reference_root = "untrusted_writing_artifact_context"
         reference_context = payload.get(reference_root)
@@ -4121,9 +4107,7 @@ class AgentBackend:
             call_kind=call_kind,
             component_paths=component_paths,
             mandatory_reference_paths=mandatory_reference_paths,
-            binding_components=(
-                bound_agent._provider_binding.binding_components
-            ),
+            binding_components=(bound_agent._provider_binding.binding_components),
         )
         provider_diagnostic: str | None = None
         provider_cause: BaseException | None = None
@@ -4350,9 +4334,7 @@ class AgentBackend:
             or type(call_kind) is not ProviderCallKind
             or call_kind is ProviderCallKind.UNCLASSIFIED
         ):
-            raise ContextExecutionError(
-                ContextExecutionErrorCode.PROVIDER_CONTRACT
-            )
+            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         session = self.workspace.validate_identifier(scope.session_id)
         self._assert_provider_work_ready(session)
         stored_thread_id = self._load_context_thread(
@@ -4362,9 +4344,7 @@ class AgentBackend:
             policy_fingerprint,
         )
         if stored_thread_id != expected_thread_id:
-            raise ContextExecutionError(
-                ContextExecutionErrorCode.CONTINUATION_MISMATCH
-            )
+            raise ContextExecutionError(ContextExecutionErrorCode.CONTINUATION_MISMATCH)
 
         generation = bound_agent._adapter_generation
         adapter = (
@@ -4383,9 +4363,7 @@ class AgentBackend:
             binding_components=bound_agent._provider_binding.binding_components,
         )
         if invocation.call_accounting is None or invocation.payload_json is None:
-            raise ContextExecutionError(
-                ContextExecutionErrorCode.PROVIDER_CONTRACT
-            )
+            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
 
         definition_fingerprint = f"sha256:{bound_agent.definition.fingerprint}"
         exchange = self._begin_context_agent_exchange(
@@ -4500,9 +4478,7 @@ class AgentBackend:
         )
         self._observe_context_accounting(accounting)
         if type(result) is not ProviderResult or type(result.response_text) is not str:
-            failure = ContextExecutionError(
-                ContextExecutionErrorCode.PROVIDER_CONTRACT
-            )
+            failure = ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
             record_context_provider_failure(
                 failure,
                 ContextProviderFailureFacts(
@@ -4526,9 +4502,7 @@ class AgentBackend:
             type(result.thread_id) is not str
             or _SAFE_THREAD_ID.fullmatch(result.thread_id) is None
         ):
-            failure = ContextExecutionError(
-                ContextExecutionErrorCode.PROVIDER_CONTRACT
-            )
+            failure = ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
             record_context_provider_failure(
                 failure,
                 ContextProviderFailureFacts(
@@ -4691,7 +4665,7 @@ class AgentBackend:
                     reference_result.close()
                 raise BackendProtocolError(
                     "reference read handler returned an invalid result"
-            )
+                )
             with reference_result:
                 context = tuple(
                     dict(item)
@@ -4779,9 +4753,7 @@ class AgentBackend:
 
         self._ensure_open()
         if type(scope) is not ContextScope:
-            raise ContextExecutionError(
-                ContextExecutionErrorCode.PROVIDER_CONTRACT
-            )
+            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         session = self.workspace.validate_identifier(scope.session_id)
         key = (
             scope.workspace_id,
@@ -4930,19 +4902,47 @@ class AgentBackend:
     @staticmethod
     def _conversation_retrieval_context_projection(
         request: ConversationRetrievalRequest,
-    ) -> list[dict[str, str]]:
-        """Return the exact existing event projection without other metadata."""
+    ) -> dict[str, Any]:
+        """Return content-free bootstrap plus selected closed readable fields."""
 
-        return [
-            {
-                "turn_id": event.turn_id,
-                "sender": event.sender,
-                "recipient": event.recipient,
-                "kind": event.kind.value,
-                "content": event.content,
-            }
-            for event in request.context.events
-        ]
+        context = request.context
+        bootstrap = context.bootstrap
+        return {
+            "bootstrap": {
+                "schema_version": bootstrap.schema_version,
+                "session_id": bootstrap.session_id,
+                "conversation_id": bootstrap.conversation_id,
+                "total_records": bootstrap.total_records,
+                "last_sequence": bootstrap.last_sequence,
+                "tail_batch_digest": bootstrap.tail_batch_digest,
+            },
+            "records": [
+                {
+                    "event_id": record.event_id,
+                    "turn_id": record.turn_id,
+                    "step_id": record.step_id,
+                    "sequence": record.sequence,
+                    "batch_digest": record.batch_digest,
+                    "direction": record.direction.value,
+                    "kind": record.kind.value,
+                    "fields": [
+                        {
+                            "key": field.key.value,
+                            "text": field.text,
+                            "assignment_ordinal": field.assignment_ordinal,
+                            "input_ordinal": field.input_ordinal,
+                        }
+                        for field in record.fields
+                    ],
+                }
+                for record in context.records
+            ],
+            "requested_records": context.requested_records,
+            "retained_records": context.retained_records,
+            "omitted_records": context.omitted_records,
+            "retained_utf8_bytes": context.retained_utf8_bytes,
+            "truncated": context.truncated,
+        }
 
     @staticmethod
     def _conversation_retrieval_control(
@@ -5041,13 +5041,13 @@ class AgentBackend:
             return (ConversationRetrievalActionKind.ANSWER,)
         if after_read:
             return (
-                ConversationRetrievalActionKind.READ_TRANSCRIPT,
+                ConversationRetrievalActionKind.READ_HISTORY,
                 ConversationRetrievalActionKind.ANSWER,
             )
         if has_observation:
             return (
                 ConversationRetrievalActionKind.SEARCH_CONVERSATIONS,
-                ConversationRetrievalActionKind.READ_TRANSCRIPT,
+                ConversationRetrievalActionKind.READ_HISTORY,
                 ConversationRetrievalActionKind.ANSWER,
             )
         return (
@@ -5091,7 +5091,7 @@ class AgentBackend:
                     {"query": {"type": "string"}},
                 ),
                 action_schema(
-                    ConversationRetrievalActionKind.READ_TRANSCRIPT,
+                    ConversationRetrievalActionKind.READ_HISTORY,
                     {
                         "citation_id": {"type": "string"},
                         "start_sequence": {"type": "integer", "minimum": 1},
@@ -5200,7 +5200,7 @@ class AgentBackend:
         }
         action_fields = {
             ConversationRetrievalActionKind.SEARCH_CONVERSATIONS: {"query"},
-            ConversationRetrievalActionKind.READ_TRANSCRIPT: {
+            ConversationRetrievalActionKind.READ_HISTORY: {
                 "citation_id",
                 "start_sequence",
                 "end_sequence",
@@ -5257,7 +5257,7 @@ class AgentBackend:
                     **common,
                     query=required_text("query"),
                 )
-            if kind is ConversationRetrievalActionKind.READ_TRANSCRIPT:
+            if kind is ConversationRetrievalActionKind.READ_HISTORY:
                 start_sequence = positive_integer("start_sequence")
                 raw_end_sequence = value["end_sequence"]
                 end_sequence = (
@@ -6258,9 +6258,7 @@ class AgentBackend:
             or _SAFE_CONTEXT_DIGEST.fullmatch(definition_fingerprint) is None
             or _SAFE_CONTEXT_DIGEST.fullmatch(policy_fingerprint) is None
         ):
-            raise ContextExecutionError(
-                ContextExecutionErrorCode.PROVIDER_CONTRACT
-            )
+            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
 
     def _load_context_thread(
         self,
@@ -6327,9 +6325,7 @@ class AgentBackend:
             or _SAFE_THREAD_ID.fullmatch(thread_id) is None
             or type(tainted) is not bool
         ):
-            raise ContextExecutionError(
-                ContextExecutionErrorCode.PROVIDER_CONTRACT
-            )
+            raise ContextExecutionError(ContextExecutionErrorCode.PROVIDER_CONTRACT)
         self._assert_owned_access(scope.session_id)
         key = self._context_thread_key_payload(
             scope,

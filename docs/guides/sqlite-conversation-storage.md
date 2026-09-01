@@ -1,18 +1,14 @@
 # SQLite conversation storage
 
-SQLite is an optional way to keep Story's conversation subjects and
-transcripts in one workspace database. Filesystem storage remains the default,
+SQLite is an optional way to keep Story's conversation catalog and schema-v2
+collaboration history in one workspace database. Filesystem storage remains the default,
 and changing storage does not change how `/conversation`, `/search`, or
 `/transcript` work. Ordinary story turns are unavailable in this stage.
 
-The database format is now exact schema version `2`. It retains the current v1
-catalog/transcript resources and adds direct-only schema-v2 collaboration
-history persistence. This is an intermediate integration boundary: canonical
-archive/transfer now uses only v2 collaboration history, while shell commands
-and the selected service bundle still write the v1-shaped channel. Active v2
-service cutover is deferred to #479. A Python integrator can use the direct
-collaboration store now; a shell user cannot select or display it yet.
-Archive/transfer rejects schema-v1 direct-run transcript residue.
+The database format is exact schema version `2`. The selected service bundle
+uses its `collaboration_events` authority for `/history`, `/search`,
+`/transcript`, and `/status`. Catalog management and those reads are available;
+the shell still cannot create provider-bound collaboration events.
 
 For a new workspace with no conversations, the shortest safe path is:
 
@@ -42,12 +38,12 @@ These terms describe different parts of one switch:
 | --- | --- |
 | Desired backend | The workspace preference saved for a future shell. Selecting SQLite changes this value only after all checks pass. |
 | Active backend | The one store that a shell currently reads and writes. Only one backend is active. |
-| Authority | The active store is the truth for conversation subjects, statuses, and transcript events. A second copy is not a live replica. |
+| Authority | The active store is the truth for conversation subjects, statuses, and schema-v2 collaboration events. A second copy is not a live replica. |
 | Provisioning | Creating and validating a new, empty SQLite database. Provisioning never copies conversations. |
 | Transfer | Copying canonical v2 collaboration conversations from the active store to the other ready store, then proving exact parity. Transfer never selects or activates the destination. |
-| Adapter/service bundle | The catalog, transcript-event store, literal search, and mutation coordinator that all operate on the same backend. The shell passes one complete bundle to conversation features. |
+| Adapter/service bundle | The catalog, schema-v2 event store, aggregate event-field search, and mutation coordinator that all operate on the same backend. The shell passes one complete bundle to conversation features. |
 | Derived FTS hint | An optional disposable SQLite full-text-search companion that can suggest search candidates. It never decides truth or readiness; exact search falls back to the authoritative database. |
-| Direct v2 collaboration store | An uncomposed Python adapter for atomic schema-v2 batches in the main database. Archive/transfer uses this history, but it is not yet part of the selected runtime bundle, search, or FTS. |
+| Concrete v2 collaboration store | A direct-module-only adapter placed behind the selected service bundle. It is not re-exported by package facades. |
 
 The desired and active records are deliberately separate. This lets Story
 prepare and verify a change without switching a running shell:
@@ -256,12 +252,9 @@ dual-writes future changes.
 
 This path accepts only archive schema 2 and canonical v2 collaboration events.
 It rejects any filesystem `transcript.jsonl`, SQLite `conversation_events`
-row, or schema-1 archive before destination mutation. There is no converter or
-compatibility alias. The `schema_version:1` in catalog metadata and in the
+row, or unsupported archive before destination mutation. The `schema_version:1` in catalog metadata and in the
 compact transfer report is valid: those are separate schemas from the
-top-level archive schema 2. Preexisting schema-v1 transcript events can
-therefore make transfer fail; issue #478 no longer creates them through a
-public story turn.
+top-level archive schema 2. Unsupported transcript rows make transfer fail.
 
 After verified parity, selection reports:
 
@@ -309,25 +302,25 @@ SQLite-backed bundle. For example:
 
 | Input | Participating component | Stored or transient data | Output and next action |
 | --- | --- | --- | --- |
-| Conversation commands, then `/search council vessel` | The active SQLite catalog/search bundle; the FTS companion can offer hints | Subjects are stored in the main database. The literal query, result rows, and optional hint candidates are transient. | Search returns the matching subject without a provider call. Existing transcript hits can be followed with `/transcript CONVERSATION_ID [COUNT] [--from SEQUENCE]`. |
+| Conversation commands, then `/search council vessel` | The active SQLite catalog/search bundle; the FTS companion can offer hints | Subjects are stored in the main database but are display-only. The literal query, result rows, and optional hint candidates are transient. | Search returns matching readable event fields without a provider call. Hits can be followed with `/transcript CONVERSATION_ID [COUNT] [--from SEQUENCE]`. |
 
 Creating or renaming a conversation writes catalog metadata to the active
-SQLite database. Ordinary input is rejected before any transcript append.
+SQLite database. Ordinary input is rejected before any event append.
 `/search` is provider-free and read-only: the query and search result are
-transient, not transcript events. A deterministic low-level fixture with those
-two subjects and a preexisting user event has this rendering:
+transient. Subjects alone produce zero matches. With a preexisting canonical
+event whose readable field contains `council vessel`, rendering has this shape:
 
 ```text
 [context] Search request
   Query: council vessel
   Scope: active
-Search results (1/2)
+Search results (1/1)
   [search c_0123456789]
     Status: active
-    Match: exact_subject
-    Subject: Council Vessel
-    Citation: conversation c_0123456789
+    Subject (display only): Council Vessel
+    Citation: conversation c_0123456789, event proposal_event, sequence 1, field proposal.purpose, range 0:14
     Snippet: council vessel
+[result] Search returned 1 of 1 matching readable fields.
 Search results (2/2)
   [search c_fedcba9876]
     Status: active
@@ -458,7 +451,7 @@ the active authority. SQLite provides no encryption or secure erasure. Protect
 the main database, optional companion, checkpoints, backups, and terminal
 output according to the workspace's sensitivity.
 
-### Direct schema-v2 collaboration operations
+### Active schema-v2 collaboration operations
 
 For a Python integrator, the change is:
 
@@ -466,9 +459,9 @@ For a Python integrator, the change is:
 | --- | --- |
 | Archive/transfer depended on the schema-v1 transcript channel. | Archive schema 2 carries exact `CollaborationEvent` values and both backends import/export canonical v2 history. |
 | Filesystem used `transcript.jsonl`; SQLite used `conversation_events`. | Filesystem uses `collaboration-history.jsonl`; SQLite uses `collaboration_events` canonical BLOB rows. Presence of either legacy channel rejects archive/transfer. |
-| No selected service exposed v2 collaboration. | #478 removed public direct execution; selection and the active shell/runtime bundle remain v1-shaped until #479, while archive/transfer is v2-only. |
+| No selected service exposed v2 collaboration. | The active shell/runtime bundle now uses the sole v2 storage/inspection service; public provider execution remains unavailable. |
 
-The direct store requires a provisioned schema-v2 database and an existing
+The concrete store requires a provisioned schema-v2 database and an existing
 catalog conversation. Its append holds the workspace coordinator, uses
 `BEGIN IMMEDIATE`, validates the complete addressed history, and commits every
 event or none. A precommit failure rolls back. If a final check reports failure
@@ -477,13 +470,12 @@ the visible commit returns `ALREADY_COMMITTED` with its original receipt.
 Identical concurrent candidates therefore commit once and retry once; distinct
 same-tail candidates commit once and reject the other as stale.
 
-An existing schema-v1 database is rejected unchanged. Do not rename, hand-edit,
-or `ALTER` it: there is no schema upgrade, converter, or compatibility mode.
-Malformed collaboration rows also fail closed; preserve the main database and
-stop direct appends. Canonical public collaboration payloads are plaintext in
-the main database, while hidden reasoning, provider diagnostics, credentials,
-and referenced file bytes are excluded. FTS remains a disposable,
-non-authoritative v1 literal-search hint and is not updated by v2 appends.
+An unsupported database is rejected unchanged. Do not rename, hand-edit, or
+`ALTER` it. Malformed collaboration rows also fail closed; preserve the main
+database and stop appends. Canonical public collaboration payloads are
+plaintext in the main database, while hidden reasoning, provider diagnostics,
+credentials, and referenced file bytes are excluded. FTS remains a disposable,
+non-authoritative candidate hint; canonical search is authoritative.
 
 See the exact constructor, `APPENDED` then `ALREADY_COMMITTED` sample, failure
 categories, and read output in
@@ -504,7 +496,7 @@ the next action:
 | `provisioning_failed` or unsafe/malformed SQLite state | Preserve the database, sidecars, and residue. Use observational preflight or restore a verified backup; do not delete suspect files to obtain an empty target. |
 | `transfer_required` | Dry-run, transfer, verify in the active direction, then select again. The empty target may already exist. |
 | `parity_mismatch`, `conflict`, `destination_only`, or `unsupported` | Preserve both stores and investigate offline. Selection and transfer never overwrite, merge, truncate, or delete to resolve the difference. |
-| `source_invalid` or `destination_invalid` with schema-v1 transcript/database rows | Preserve both stores. Schema-v1 history is not transferable; use a genuine canonical v2 source. Do not hand-convert rows. |
+| `source_invalid` or `destination_invalid` with unsupported transcript/database rows | Preserve both stores and use a genuine canonical v2 source. Do not hand-edit rows. |
 | `coordination_failed` | Let the supported owner finish, stop unsupported direct writers, then retry under a fresh workspace lease. |
 | Startup fails before active-state compare-and-set | Fix readiness, parity, or coordination; the prior backend remains active and there is no fallback shell. |
 | Startup fails after active-state compare-and-set | Fix the later terminal/provider/session issue. The new backend is already authoritative. |
@@ -513,7 +505,7 @@ the next action:
 Back up the authoritative main SQLite database. The FTS companion may be
 omitted; if retained, protect it as plaintext transcript data and keep it with
 the matching main-database generation. Transfer is conversation-only, not a
-complete workspace backup or a SQLite schema upgrade.
+complete workspace backup.
 
 For full failure mappings and interrupted-operation rules, use
 [Conversation storage transfer recovery](../operations/recovery-and-limitations.md#conversation-storage-transfer-recovery),

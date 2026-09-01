@@ -70,12 +70,12 @@ an eligible unique prefix; omitting it opens a picker. Subject changes the
 focused display subject. Archive removes a conversation from the active list
 without deleting its stored identity/history. `--all` includes archives.
 
-`/history` reads the focused visible schema-v1 transcript snapshot retained by
-the current selected service. `/search` performs bounded literal search in the
-attached session. `/transcript` reads a fresh bounded transcript page for the
-requested conversation without changing focus. These reads do not call a
-provider. Schema-v2 history becomes the sole selected inspection service only
-after #479.
+`/history` reads the focused schema-v2 collaboration history and explains its
+current state and next safe action. `/search` performs bounded literal search
+over readable event fields in active conversations. Subjects are display-only
+metadata and never create a hit. `/transcript` reads a fresh bounded structured
+page for an active or archived conversation without changing focus. These
+reads do not call a provider or mutate history.
 
 Example:
 
@@ -89,8 +89,14 @@ Example:
 ```
 
 In a new workspace, the list contains the newly created catalog entry while
-history contains no visible events and search can match the subject. Catalog
-metadata is not a synthetic conversation turn.
+history reports `empty` and `/search opening` returns zero matching readable
+fields. Catalog metadata is not a synthetic collaboration event.
+
+When events exist, each history/transcript row identifies sequence, turn,
+step, kind, direction, actors, and closed readable fields. Search citations
+identify the exact conversation, event ID, sequence, field, and code-point
+range. See [Collaboration history](../reference/collaboration-history.md) for
+the state and next-action meanings.
 
 <a id="edit-persistent-settings"></a>
 
@@ -110,8 +116,8 @@ provider profiles. Values remain pending until Apply Changes is confirmed.
 Storage selection applies to the next shell. `/auth` refreshes native provider
 status and can run the provider's sign-in flow; it does not send a story prompt.
 
-These configuration controls remain available so the active collaboration
-cutover can use the same persisted choices.
+These configuration controls remain available so the later provider-bound
+lead/specialist workflow can use the same persisted choices.
 
 ## Inspection
 

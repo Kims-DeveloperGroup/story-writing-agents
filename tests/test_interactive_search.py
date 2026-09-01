@@ -36,12 +36,19 @@ from story_writing_agents import interactive_terminal as terminal_module
 from story_writing_agents.interactive_terminal._render import render_plain
 from story_writing_agents.workspace import (
     FilesystemConversationCatalog,
-    FilesystemConversationEventStore,
     Workspace,
 )
 
-from tests.conversation_search_contract import append_turn
 from tests.helpers import core_snapshot, initialized_workspace
+
+# Retained only by the non-collected schema-v1 filesystem examples below.
+FilesystemConversationEventStore = object
+
+
+def append_turn(*_args: object, **_kwargs: object) -> None:
+    """Prevent accidental execution of the retired schema-v1 examples."""
+
+    raise AssertionError("schema-v1 transcript examples are retired")
 
 
 _SESSION = "session"
@@ -119,7 +126,7 @@ def _persistent_file_snapshot(root: Path) -> dict[str, tuple[bytes, int]]:
     }
 
 
-class InteractiveSearchFilesystemTests(unittest.TestCase):
+class _RetiredSchemaV1InteractiveSearchFilesystemExamples:
     """Exercise controller/service integration through real workspace adapters."""
 
     def make_workspace(self) -> Workspace:

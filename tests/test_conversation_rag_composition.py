@@ -19,7 +19,7 @@ from story_writing_agents import conversation_rag_store as rag_store
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _GENERIC_RAG_SOURCE = _REPOSITORY_ROOT / "vendor" / "generic-rag" / "src"
-_VISIBLE_TURN_SCHEMA_ID = "story-conversation-rag-visible-turn-v1"
+_VISIBLE_TURN_SCHEMA_ID = "story-collaboration-rag-readable-event-v2"
 
 
 def _collaborators() -> rag.ConversationRagCollaborators:
@@ -773,7 +773,9 @@ class ConversationRagCompositionTests(unittest.TestCase):
     def test_compatibility_probe_is_deferred_sanitized_and_resource_free(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Workspace(temporary).initialize()
-            rag_root = workspace.root / "agent_states/orchestrator_state/conversation_rag"
+            rag_root = (
+                workspace.root / "agent_states/orchestrator_state/conversation_rag"
+            )
             cases = (
                 (
                     metadata.PackageNotFoundError("PRIVATE_PACKAGE_PATH"),
@@ -889,9 +891,7 @@ class ConversationRagCompositionTests(unittest.TestCase):
                     status=status,
                     state=projected,
                     provider_id=("local" if projected is present else None),
-                    generation_id=(
-                        "gen-" + "a" * 64 if projected is present else None
-                    ),
+                    generation_id=("gen-" + "a" * 64 if projected is present else None),
                     counts=rag_store.ConversationRagStoreCounts(),
                 )
                 with (
@@ -928,7 +928,9 @@ class ConversationRagCompositionTests(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Workspace(temporary).initialize()
-            rag_root = workspace.root / "agent_states/orchestrator_state/conversation_rag"
+            rag_root = (
+                workspace.root / "agent_states/orchestrator_state/conversation_rag"
+            )
 
             class LowLevel:
                 def project_documents(self, *args):  # type: ignore[no-untyped-def]

@@ -45,7 +45,7 @@ from .conversation_retrieval import (
     ConversationRagContext,
     ConversationRagExcerpt,
 )
-from .conversation_search import ConversationCitation
+from .conversation_search import CollaborationHistoryCitation
 from .conversation_storage.contracts import (
     ConversationStorageCoordinationError,
     ConversationStorageError,
@@ -54,7 +54,7 @@ from .conversation_storage.contracts import (
 from .conversation_storage.selection import (
     compose_active_conversation_storage,
 )
-from .conversations import ConversationEventKind
+from .conversations import CollaborationReadableFieldKey
 from .errors import ConfigurationError, WorkspaceFormatError
 from .workspace import Workspace
 
@@ -335,9 +335,13 @@ class ConversationRagCliExcerpt:
     citation_id: str
     session_id: str
     conversation_id: str
-    turn_id: str | None
-    sequence: int | None
-    event_kind: str | None
+    event_id: str
+    sequence: int
+    field_key: str
+    field_start_codepoint: int
+    field_end_codepoint: int
+    assignment_ordinal: int | None
+    input_ordinal: int | None
     document_id: str
     revision_id: str
     fragment_id: str
@@ -351,26 +355,22 @@ class ConversationRagCliExcerpt:
             or self.citation_id not in _RAG_CITATION_IDS
         ):
             raise ValueError("conversation RAG CLI citation ID is invalid")
-        event_kind: ConversationEventKind | None
-        if self.event_kind is None:
-            event_kind = None
-        else:
-            if type(self.event_kind) is not str:
-                raise TypeError("conversation RAG CLI event kind must be a string")
-            try:
-                event_kind = ConversationEventKind(self.event_kind)
-            except ValueError as exc:
-                raise ValueError("conversation RAG CLI event kind is invalid") from exc
-            if event_kind is ConversationEventKind.RUNTIME_ERROR:
-                raise ValueError(
-                    "conversation RAG CLI excerpt cannot cite runtime errors"
-                )
-        citation = ConversationCitation(
+        if type(self.field_key) is not str:
+            raise TypeError("conversation RAG CLI field key must be a string")
+        try:
+            field_key = CollaborationReadableFieldKey(self.field_key)
+        except ValueError as exc:
+            raise ValueError("conversation RAG CLI field key is invalid") from exc
+        citation = CollaborationHistoryCitation(
             session_id=self.session_id,
             conversation_id=self.conversation_id,
-            turn_id=self.turn_id,
+            event_id=self.event_id,
             sequence=self.sequence,
-            event_kind=event_kind,
+            field_key=field_key,
+            start_codepoint=self.field_start_codepoint,
+            end_codepoint=self.field_end_codepoint,
+            assignment_ordinal=self.assignment_ordinal,
+            input_ordinal=self.input_ordinal,
         )
         ConversationRagDocumentKey(
             session_id=citation.session_id,
@@ -407,11 +407,13 @@ class ConversationRagCliExcerpt:
             citation_id=excerpt.citation_id,
             session_id=citation.session_id,
             conversation_id=citation.conversation_id,
-            turn_id=citation.turn_id,
+            event_id=citation.event_id,
             sequence=citation.sequence,
-            event_kind=(
-                None if citation.event_kind is None else citation.event_kind.value
-            ),
+            field_key=citation.field_key.value,
+            field_start_codepoint=citation.start_codepoint,
+            field_end_codepoint=citation.end_codepoint,
+            assignment_ordinal=citation.assignment_ordinal,
+            input_ordinal=citation.input_ordinal,
             document_id=document.key.document_id,
             revision_id=document.revision_id,
             fragment_id=excerpt.reference.fragment_id,
@@ -426,10 +428,14 @@ class ConversationRagCliExcerpt:
             "content": self.content,
             "source": {
                 "conversation_id": self.conversation_id,
-                "event_kind": self.event_kind,
+                "event_id": self.event_id,
+                "field_key": self.field_key,
+                "start_codepoint": self.field_start_codepoint,
+                "end_codepoint": self.field_end_codepoint,
+                "assignment_ordinal": self.assignment_ordinal,
+                "input_ordinal": self.input_ordinal,
                 "sequence": self.sequence,
                 "session_id": self.session_id,
-                "turn_id": self.turn_id,
             },
             "reference": {
                 "document_id": self.document_id,

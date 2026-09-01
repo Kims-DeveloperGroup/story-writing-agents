@@ -36,9 +36,9 @@ from ..cli_context import (
 )
 from ..conversation_search import (
     CONVERSATION_MEMORY_POLICY,
-    ConversationMemoryService,
-    ConversationSearchQuery,
-    ConversationSearchScope,
+    CollaborationHistorySearchQuery,
+    CollaborationHistorySearchScope,
+    CollaborationHistoryService,
 )
 from ..conversation_storage.contracts import ConversationStorageServices
 from ..conversation_storage.selection import (
@@ -53,15 +53,13 @@ from ..debug_log import (
     WorkspaceDebugLog,
 )
 from ..conversations import (
-    CONVERSATION_CONTEXT_POLICY,
-    ConversationCatalog,
-    ConversationContextWindow,
-    ConversationEvent,
-    ConversationEventKind,
+    CollaborationHistoryProjection,
+    CollaborationNextAction,
+    CollaborationReadableRecord,
+    CollaborationStepState,
     ConversationMetadata,
     ConversationStatus,
     normalize_conversation_subject,
-    select_bounded_conversation_context,
 )
 from ..errors import (
     BackendProtocolError,
@@ -115,7 +113,6 @@ from ..interactive_terminal import (
     InteractiveAdvisoryProgress,
     InteractiveMainInput,
     InputPresentation,
-    format_agent_reply_content,
     AttachmentKind,
     Choice,
     ConfirmationResult,
@@ -131,7 +128,6 @@ from ..interactive_terminal import (
     InteractiveTerminal,
     ListView,
     Message,
-    MessagePresentation,
     Notice,
     Panel,
     Picker,
@@ -162,10 +158,7 @@ from ..session_lifecycle import (
     SessionLifecycleState,
     provider_work_is_ready,
 )
-from ..workspace import (
-    FilesystemConversationEventStore,
-    Workspace,
-)
+from ..workspace import Workspace
 from ._conversation_policy import (
     ConversationCatalogProtocolFailure,
     classify_conversation_failure,
@@ -177,6 +170,7 @@ from ._conversation_policy import (
     validate_catalog_entries,
     validate_catalog_metadata,
     validate_conversation_reference,
+    validate_history_snapshot,
     validate_search_result_handles,
     validate_transcript_page,
     visible_conversation_handle,
@@ -602,7 +596,7 @@ class InteractiveController:
     single-use; once it starts, this controller closes the backend on every
     exit and releases any attachment it can still identify safely. The retained
     ``StoryRuntime`` owns management and inspection while one attachment-scoped
-    memory service owns provider-free search/read access.
+    collaboration-history service owns provider-free search/read access.
     """
 
     __slots__ = (
@@ -611,8 +605,7 @@ class InteractiveController:
         "_backend",
         "_closed",
         "_conversation_catalog",
-        "_conversation_event_store",
-        "_conversation_memory_service",
+        "_collaboration_history_service",
         "_conversation_storage_services",
         "_context",
         "_debug_log",
@@ -640,20 +633,20 @@ class InteractiveController:
         backend: AgentBackend,
         terminal: InteractiveTerminal,
         *,
-        conversation_catalog: ConversationCatalog | None = None,
         conversation_storage_services: ConversationStorageServices | None = None,
         auth_coordinator: InteractiveAuthCoordinator | None = None,
         provider_catalog: ProviderCatalogService | None = None,
     ) -> None:
-        """Bind collaborators and construct one shared transcript adapter.
+        """Bind collaborators and construct one shared v2 storage bundle.
 
         The four positional arguments remain the established construction
-        contract. An omitted keyword-only catalog creates the workspace-backed
-        adapter; injected conversation-catalog, authentication, and provider-
-        catalog collaborators are retained as borrowed state and are never
-        closed by this controller. An omitted provider catalog creates the
-        command-free workspace-bound default. The event store is shared by the
-        retained runtime and later attachment-scoped memory services.
+        contract. An omitted keyword-only storage bundle creates the selected
+        workspace-backed services; injected storage, authentication, and
+        provider-catalog collaborators are retained as borrowed state and are
+        never closed by this controller. An omitted provider catalog creates
+        the command-free workspace-bound default. The collaboration event store
+        is shared by the retained runtime and later attachment-scoped history
+        services.
         Construction performs no provider call, filesystem write, or access
         claim.
         """
@@ -700,35 +693,23 @@ class InteractiveController:
         self._main_input = InteractiveMainInput(terminal)
         if (
             conversation_storage_services is not None
-            and conversation_catalog is not None
-        ):
-            raise TypeError(
-                "conversation_storage_services conflicts with conversation_catalog"
-            )
-        if (
-            conversation_storage_services is not None
             and type(conversation_storage_services) is not ConversationStorageServices
         ):
             raise TypeError(
                 "conversation_storage_services must be ConversationStorageServices"
             )
-        if conversation_storage_services is None and conversation_catalog is None:
+        if conversation_storage_services is None:
             self._runtime = StoryRuntime(workspace, backend)
             conversation_storage_services = self._runtime.conversation_storage_services
             if type(conversation_storage_services) is not ConversationStorageServices:
                 raise TypeError("runtime storage services are invalid")
-        elif conversation_storage_services is not None:
+        else:
             self._runtime = StoryRuntime(
                 workspace,
                 backend,
                 conversation_storage_services=conversation_storage_services,
             )
-        resolved_catalog = (
-            conversation_storage_services.catalog
-            if conversation_storage_services is not None
-            else conversation_catalog
-        )
-        assert resolved_catalog is not None
+        resolved_catalog = conversation_storage_services.catalog
         if any(
             not callable(getattr(resolved_catalog, operation, None))
             for operation in _CONVERSATION_CATALOG_OPERATIONS
@@ -736,21 +717,7 @@ class InteractiveController:
             raise TypeError("conversation_catalog must implement ConversationCatalog")
         self._conversation_storage_services = conversation_storage_services
         self._conversation_catalog = resolved_catalog
-        self._conversation_event_store = (
-            conversation_storage_services.event_store
-            if conversation_storage_services is not None
-            else FilesystemConversationEventStore(
-                workspace,
-                catalog=resolved_catalog,
-            )
-        )
-        if conversation_storage_services is None:
-            self._runtime = StoryRuntime(
-                workspace,
-                backend,
-                conversation_event_store=self._conversation_event_store,
-            )
-        self._conversation_memory_service: ConversationMemoryService | None = None
+        self._collaboration_history_service: CollaborationHistoryService | None = None
         self._attached_session_id: str | None = None
         self._focused_conversation: ConversationMetadata | None = None
         self._runner: asyncio.Runner | None = None
@@ -882,41 +849,119 @@ class InteractiveController:
             return "artifact_store"
         return agent_id.replace("_", " ")
 
-    def _conversation_event_message(self, event: ConversationEvent) -> Message:
-        """Project one durable transcript event into its human message view."""
+    @staticmethod
+    def _collaboration_record_view(record: CollaborationReadableRecord) -> Record:
+        """Render one validated event identity and its closed readable fields."""
 
-        if event.kind is ConversationEventKind.USER_MESSAGE:
-            sender = f"You → {AGENT_SPECS[event.recipient].display_name}"
-            accent = SpeakerAccent.MAGENTA
-        elif event.kind is ConversationEventKind.AGENT_REPLY:
-            sender = f"{AGENT_SPECS[event.sender].display_name} → You"
-            accent = _AGENT_SPEAKER_ACCENTS[event.sender]
-        else:
-            assert event.kind is ConversationEventKind.RUNTIME_ERROR
-            sender = "Runtime → You"
-            accent = SpeakerAccent.CYAN
-
-        metadata = f"Sequence: {event.sequence}"
-        if self._show_message_details:
-            metadata += (
-                f" · Turn: {event.turn_id}"
-                f" · Kind: {event.kind.value}"
-                f" · IDs: {event.sender} → {event.recipient}"
+        sender = record.sender.agent_id or record.sender.kind.value
+        recipient = record.recipient.agent_id or record.recipient.kind.value
+        readable_fields = tuple(
+            Field(
+                (
+                    field.key.value
+                    + (
+                        ""
+                        if field.assignment_ordinal is None
+                        else f"[{field.assignment_ordinal}]"
+                    )
+                    + (
+                        ""
+                        if field.input_ordinal is None
+                        else f"[{field.input_ordinal}]"
+                    )
+                ),
+                field.text,
             )
-        is_agent_reply = event.kind is ConversationEventKind.AGENT_REPLY
-        return Message(
-            sender,
-            (
-                format_agent_reply_content(event.content)
-                if is_agent_reply
-                else event.content
-            ),
-            role=(SemanticRole.AGENT if is_agent_reply else SemanticRole.DEFAULT),
-            state=ViewState.COMPLETED,
-            presentation=MessagePresentation.CHAT_BLOCK,
-            metadata=metadata,
-            accent=accent,
+            for field in record.fields
         )
+        return Record(
+            f"event {record.event_id}",
+            fields=(
+                Field("Sequence", str(record.sequence)),
+                Field("Turn", record.turn_id),
+                Field("Step", record.step_id),
+                Field("Kind", record.kind.value),
+                Field("Direction", record.direction.value),
+                Field("Actors", f"{sender} → {recipient}"),
+                *readable_fields,
+            ),
+            state=ViewState.COMPLETED,
+        )
+
+    @staticmethod
+    def _collaboration_state_meaning(
+        projection: CollaborationHistoryProjection,
+    ) -> tuple[str, str]:
+        """Return the durable state and its direct user-facing meaning."""
+
+        meanings = {
+            CollaborationStepState.AWAITING_CONFIRMATION: (
+                "A proposal is waiting for your confirmation."
+            ),
+            CollaborationStepState.RECONFIRMATION_REQUIRED: (
+                "The earlier confirmation is no longer sufficient; review and "
+                "confirm the updated proposal."
+            ),
+            CollaborationStepState.CONFIRMED: (
+                "You confirmed the proposal; execution has not started yet."
+            ),
+            CollaborationStepState.RUNNING: (
+                "The confirmed work is currently being executed."
+            ),
+            CollaborationStepState.COMPLETED: (
+                "The confirmed work completed and its result is recorded."
+            ),
+            CollaborationStepState.REJECTED: (
+                "You rejected the proposal; that work will not execute."
+            ),
+            CollaborationStepState.SUPERSEDED: (
+                "A newer proposal replaced this proposal."
+            ),
+            CollaborationStepState.INTERRUPTED: (
+                "Execution stopped before a complete outcome was recorded."
+            ),
+            CollaborationStepState.FAILED: (
+                "Execution failed and the failure outcome is recorded."
+            ),
+            CollaborationStepState.OUTCOME_UNKNOWN: (
+                "Execution may have occurred, but its outcome cannot be proven."
+            ),
+            CollaborationStepState.RECOVERY_REQUIRED: (
+                "History requires operator inspection before any safe continuation."
+            ),
+        }
+        state = projection.current_state
+        if state is None:
+            return "empty", "No collaboration event has been recorded yet."
+        return state.value, meanings[state]
+
+    @staticmethod
+    def _collaboration_next_action_meaning(
+        action: CollaborationNextAction,
+    ) -> str:
+        """Explain history-derived guidance without granting execution authority."""
+
+        return {
+            CollaborationNextAction.NONE: "No history-derived action is pending.",
+            CollaborationNextAction.SUBMIT_CONFIRMATION: (
+                "Review the proposal and submit a confirmation decision."
+            ),
+            CollaborationNextAction.START_OR_RECONFIRM: (
+                "Start confirmed work, or reconfirm if its basis changed."
+            ),
+            CollaborationNextAction.FINALIZE_RESULT: (
+                "Record the terminal result for the running work."
+            ),
+            CollaborationNextAction.CONTINUE_WITH_LEAD: (
+                "Continue the conversation with the lead agent."
+            ),
+            CollaborationNextAction.INSPECT_AND_RESOLVE_OUTCOME: (
+                "Inspect durable evidence and resolve the uncertain outcome."
+            ),
+            CollaborationNextAction.REPAIR_AUTHORITATIVE_HISTORY: (
+                "Repair authoritative history before continuing."
+            ),
+        }[action]
 
     @staticmethod
     def _agent_display_chain(agent_ids: tuple[str, ...]) -> str:
@@ -1327,17 +1372,9 @@ class InteractiveController:
             self._present_destination_conversation_failure(exc)
             return
         try:
-            memory_service = (
-                ConversationMemoryService(
-                    ConversationSearchScope(session_id),
-                    conversation_storage_services=(self._conversation_storage_services),
-                )
-                if self._conversation_storage_services is not None
-                else ConversationMemoryService(
-                    ConversationSearchScope(session_id),
-                    self._conversation_catalog,
-                    self._conversation_event_store,
-                )
+            history_service = CollaborationHistoryService(
+                CollaborationHistorySearchScope(session_id),
+                conversation_storage_services=self._conversation_storage_services,
             )
         except Exception:
             self._release_uncommitted_destination(session_id)
@@ -1349,14 +1386,14 @@ class InteractiveController:
                 session_id,
                 attachment,
                 focused_conversation,
-                memory_service,
+                history_service,
             )
             return
         self._switch_attached_session(
             session_id,
             attachment,
             focused_conversation,
-            memory_service,
+            history_service,
         )
 
     def _load_destination_conversation(
@@ -1412,9 +1449,9 @@ class InteractiveController:
         session_id: str,
         attachment: AttachmentKind,
         focused_conversation: ConversationMetadata | None,
-        memory_service: ConversationMemoryService,
+        history_service: CollaborationHistoryService,
     ) -> None:
-        """Persist and commit one destination with its scoped memory service.
+        """Persist and commit one destination with its scoped history service.
 
         The default is written only after access acquisition. A write failure
         releases the destination before it is reported; failed release makes
@@ -1430,7 +1467,7 @@ class InteractiveController:
             session_id,
             attachment,
             focused_conversation,
-            memory_service,
+            history_service,
         )
 
     def _switch_attached_session(
@@ -1438,7 +1475,7 @@ class InteractiveController:
         destination_session: str,
         attachment: AttachmentKind,
         focused_conversation: ConversationMetadata | None,
-        memory_service: ConversationMemoryService,
+        history_service: CollaborationHistoryService,
     ) -> None:
         """Save the destination default before replacing source and read scope.
 
@@ -1446,7 +1483,7 @@ class InteractiveController:
         releases it and preserves the source. Source-release failure after the
         default write is not rolled back; owned resources are closed best
         effort and the process exits with ``cleanup_failed``. The candidate
-        memory service commits only after source access is released.
+        history service commits only after source access is released.
         """
 
         source_session = self._attached_session_id
@@ -1459,13 +1496,13 @@ class InteractiveController:
             require_released_state(released, source_session)
         except Exception:
             self._abandon_known_attachment_for_cleanup_abort()
-        self._conversation_memory_service = None
+        self._collaboration_history_service = None
         self._commit_attached_session(
             next_context,
             destination_session,
             attachment,
             focused_conversation,
-            memory_service,
+            history_service,
         )
 
     def _persist_destination_default(
@@ -1522,7 +1559,7 @@ class InteractiveController:
         session_id: str,
         attachment: AttachmentKind,
         focused_conversation: ConversationMetadata | None,
-        memory_service: ConversationMemoryService,
+        history_service: CollaborationHistoryService,
     ) -> None:
         """Commit attachment, memory scope, and orientation together.
 
@@ -1534,7 +1571,7 @@ class InteractiveController:
         self._context = context
         self._attached_session_id = session_id
         self._focused_conversation = focused_conversation
-        self._conversation_memory_service = memory_service
+        self._collaboration_history_service = history_service
         self._trace_debug(
             DebugOperation.ATTACHMENT,
             DebugPhase.SUCCEEDED,
@@ -4716,7 +4753,7 @@ class InteractiveController:
 
         if attached_session is None:
             return
-        if type(self._conversation_memory_service) is not ConversationMemoryService:
+        if type(self._collaboration_history_service) is not CollaborationHistoryService:
             raise _ControllerAbort(
                 InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
             )
@@ -4743,7 +4780,7 @@ class InteractiveController:
                     InteractiveError(InteractiveErrorCode.CONVERSATION_ARCHIVED)
                 )
                 return
-            events, context = self._read_focused_transcript_snapshot(current)
+            records, projection = self._read_focused_history_snapshot(current)
         except ConversationNotFoundError as exc:
             self._present_conversation_failure(exc)
             return
@@ -4767,30 +4804,24 @@ class InteractiveController:
             Record(
                 "context",
                 fields=(
-                    Field("History displayed", f"{len(events)}/{len(events)} events"),
-                    Field("Complete turns", str(context.total_complete_turns)),
+                    Field("History records", str(len(records))),
+                    Field("Last sequence", str(projection.last_sequence)),
                     Field(
-                        "Context retained",
-                        f"{context.retained_turns} turns, {len(context.events)} events",
+                        "Current state",
+                        self._collaboration_state_meaning(projection)[0],
                     ),
-                    Field("Omitted turns", str(context.omitted_turns)),
                     Field(
-                        "UTF-8 bytes",
-                        (
-                            f"{context.retained_utf8_bytes}/"
-                            f"{CONVERSATION_CONTEXT_POLICY.max_utf8_bytes}"
+                        "User meaning", self._collaboration_state_meaning(projection)[1]
+                    ),
+                    Field("Next safe action", projection.next_safe_action.value),
+                    Field(
+                        "Next action meaning",
+                        self._collaboration_next_action_meaning(
+                            projection.next_safe_action
                         ),
                     ),
-                    Field(
-                        "Turn cap",
-                        str(CONVERSATION_CONTEXT_POLICY.max_complete_turns),
-                    ),
-                    Field(
-                        "Truncated",
-                        f"{'yes' if context.truncated else 'no'}.",
-                    ),
                 ),
-                state=ViewState.COMPLETED,
+                state=(ViewState.EMPTY if not records else ViewState.COMPLETED),
             ),
         )
         self._semantic_output.write_component(
@@ -4928,14 +4959,12 @@ class InteractiveController:
         self,
         action: InteractiveAction,
     ) -> None:
-        """Render the focused transcript snapshot and context accounting.
+        """Render structured collaboration history and current durable state.
 
         The command requires an attached active focus. It reads the
-        authoritative event store exactly once, derives bounded context from
-        that exact tuple, and displays either all events or the requested newest
-        suffix in chronological order. No cursor, mutation, search, or provider
-        operation occurs. Ctrl-C stops rendering after any completed rows and
-        returns to the same attached prompt.
+        authoritative event store exactly once and validates the full history
+        before rendering a requested suffix. No cursor, mutation, search, or
+        provider operation occurs.
         """
 
         try:
@@ -4961,7 +4990,7 @@ class InteractiveController:
         if focused is None:
             return
         try:
-            events, context = self._read_focused_transcript_snapshot(focused)
+            records, projection = self._read_focused_history_snapshot(focused)
         except _ControllerAbort:
             raise
         except Exception as exc:
@@ -4970,12 +4999,12 @@ class InteractiveController:
             self._present_transcript_service_failure(exc)
             return
 
-        displayed = events if action.count is None else events[-action.count :]
+        displayed = records if action.count is None else records[-action.count :]
         total_count = len(displayed)
         for position, event in enumerate(displayed, start=1):
             self._write_counted_list_row(
                 "History",
-                self._conversation_event_message(event),
+                self._collaboration_record_view(event),
                 position=position,
                 total_count=total_count,
             )
@@ -4985,53 +5014,54 @@ class InteractiveController:
                 fields=(
                     Field(
                         "History displayed",
-                        f"{len(displayed)}/{len(events)} events",
+                        f"{len(displayed)}/{len(records)} records",
                     ),
-                    Field("Complete turns", str(context.total_complete_turns)),
+                    Field("Last sequence", str(projection.last_sequence)),
                     Field(
-                        "Context retained",
-                        f"{context.retained_turns} turns, {len(context.events)} events",
+                        "Current state",
+                        self._collaboration_state_meaning(projection)[0],
                     ),
-                    Field("Omitted turns", str(context.omitted_turns)),
                     Field(
-                        "UTF-8 bytes",
-                        (
-                            f"{context.retained_utf8_bytes}/"
-                            f"{CONVERSATION_CONTEXT_POLICY.max_utf8_bytes}"
+                        "User meaning",
+                        self._collaboration_state_meaning(projection)[1],
+                    ),
+                    Field("Next safe action", projection.next_safe_action.value),
+                    Field(
+                        "Next action meaning",
+                        self._collaboration_next_action_meaning(
+                            projection.next_safe_action
                         ),
-                    ),
-                    Field(
-                        "Turn cap",
-                        str(CONVERSATION_CONTEXT_POLICY.max_complete_turns),
-                    ),
-                    Field(
-                        "Truncated",
-                        f"{'yes' if context.truncated else 'no'}.",
                     ),
                 ),
                 state=(ViewState.EMPTY if not displayed else ViewState.COMPLETED),
             ),
         )
 
-    def _read_focused_transcript_snapshot(
+    def _read_focused_history_snapshot(
         self,
         focused: ConversationMetadata,
-    ) -> tuple[tuple[ConversationEvent, ...], ConversationContextWindow]:
-        """Read the focused transcript once and derive canonical context.
+    ) -> tuple[
+        tuple[CollaborationReadableRecord, ...],
+        CollaborationHistoryProjection,
+    ]:
+        """Read and fully validate the focused v2 history exactly once.
 
-        The retained filesystem adapter remains the authoritative read owner;
-        the pure selector consumes the exact immutable tuple it returns. The
-        method performs no append, provider call, search, or private reach-through.
+        The selected v2 event store remains the authoritative read owner; the
+        pure selector consumes the exact immutable tuple it returns. The method
+        performs no append, provider call, search, or private reach-through.
         """
 
         session_id = self._attached_session_id
         assert session_id is not None
-        events = self._conversation_event_store.read(
+        events = self._conversation_storage_services.event_store.read(
             session_id,
             focused.conversation_id,
         )
-        context = select_bounded_conversation_context(events)
-        return events, context
+        return validate_history_snapshot(
+            events,
+            session_id=session_id,
+            conversation_id=focused.conversation_id,
+        )
 
     def _inspect_attached_runtime(self, action: InteractiveAction) -> None:
         """Render a safe attached-session or debate inspection projection.
@@ -5547,19 +5577,18 @@ class InteractiveController:
 
         try:
             try:
-                query = ConversationSearchQuery(action.text)
+                query = CollaborationHistorySearchQuery(action.text)
             except (TypeError, ValueError):
                 self._write_error(
                     InteractiveError(InteractiveErrorCode.COMMAND_INVALID)
                 )
                 return
-            normalized_query = normalize_conversation_subject(query.text)
             self._semantic_output.write_component(
                 Record(
                     "context",
                     title="Search request",
                     fields=(
-                        Field("Query", normalized_query),
+                        Field("Query", query.text),
                         Field("Scope", "active"),
                     ),
                     state=ViewState.COMPLETED,
@@ -5572,13 +5601,13 @@ class InteractiveController:
                 self._present_memory_catalog_or_reference_failure(exc)
                 return
 
-            memory_service = self._conversation_memory_service
-            if memory_service is None:
+            history_service = self._collaboration_history_service
+            if history_service is None:
                 raise _ControllerAbort(
                     InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
                 )
             try:
-                result = memory_service.search(query)
+                result = history_service.search(query)
                 handles = validate_search_result_handles(
                     result,
                     query=query,
@@ -5595,24 +5624,16 @@ class InteractiveController:
                 start=1,
             ):
                 citation = hit.citation
-                citation_values = (
-                    citation.turn_id,
-                    citation.sequence,
-                    citation.event_kind,
+                metadata = next(
+                    entry
+                    for entry in entries
+                    if entry.conversation_id == citation.conversation_id
                 )
-                if all(value is None for value in citation_values):
-                    citation_value = f"conversation {handle}"
-                elif any(value is None for value in citation_values):
-                    raise ValueError(
-                        "citation turn ID, sequence, and kind must be present together"
-                    )
-                else:
-                    citation_value = (
-                        f"conversation {handle}, turn {citation.turn_id}, "
-                        f"sequence {citation.sequence}, kind "
-                        f"{citation.event_kind.value}"
-                    )
-                archived = hit.status is ConversationStatus.ARCHIVED
+                citation_value = (
+                    f"conversation {handle}, event {citation.event_id}, "
+                    f"sequence {citation.sequence}, field {citation.field_key.value}, "
+                    f"range {citation.start_codepoint}:{citation.end_codepoint}"
+                )
                 self._write_counted_list_row(
                     "Search results",
                     Record(
@@ -5620,14 +5641,13 @@ class InteractiveController:
                         fields=(
                             Field(
                                 "Status",
-                                "archived" if archived else "active",
+                                "active",
                             ),
-                            Field("Match", hit.match_kind.value),
-                            Field("Subject", hit.subject),
+                            Field("Subject (display only)", metadata.subject),
                             Field("Citation", citation_value),
                             Field("Snippet", hit.snippet),
                         ),
-                        role=(SemanticRole.MUTED if archived else SemanticRole.DEFAULT),
+                        role=SemanticRole.DEFAULT,
                         state=ViewState.COMPLETED,
                     ),
                     position=position,
@@ -5636,7 +5656,7 @@ class InteractiveController:
             self._write_notice(
                 (
                     f"Search returned {len(result.hits)} of "
-                    f"{result.matched_conversations} matching conversations."
+                    f"{result.matched_fields} matching readable fields."
                 ),
                 label="result",
                 role=(SemanticRole.MUTED if not result.hits else SemanticRole.SUCCESS),
@@ -5683,11 +5703,13 @@ class InteractiveController:
                 self._present_memory_catalog_or_reference_failure(exc)
                 return
 
-            memory_service = self._conversation_memory_service
-            if memory_service is None:
-                raise _ControllerAbort(
-                    InteractiveError(InteractiveErrorCode.INTERNAL_ERROR)
-                )
+            history_service = CollaborationHistoryService(
+                CollaborationHistorySearchScope(
+                    session_id,
+                    include_archived=True,
+                ),
+                conversation_storage_services=self._conversation_storage_services,
+            )
             start_sequence = action.start_sequence or 1
             page_limit = action.count or CONVERSATION_MEMORY_POLICY.default_page_events
             handle = visible_conversation_handle(metadata, entries)
@@ -5704,10 +5726,10 @@ class InteractiveController:
                 )
             )
             try:
-                page = memory_service.read_transcript(
+                page = history_service.read_history(
                     metadata.conversation_id,
                     start_sequence=start_sequence,
-                    max_events=page_limit,
+                    max_records=page_limit,
                 )
                 page = validate_transcript_page(
                     page,
@@ -5720,25 +5742,25 @@ class InteractiveController:
                 self._present_transcript_service_failure(exc)
                 return
 
-            total_count = len(page.events)
-            for position, event in enumerate(page.events, start=1):
+            total_count = len(page.records)
+            for position, event in enumerate(page.records, start=1):
                 self._write_counted_list_row(
                     "Transcript",
-                    self._conversation_event_message(event),
+                    self._collaboration_record_view(event),
                     position=position,
                     total_count=total_count,
                 )
             self._write_notice(
-                f"Transcript page returned {len(page.events)} events.",
+                f"Transcript page returned {len(page.records)} records.",
                 label="result",
-                role=(SemanticRole.MUTED if not page.events else SemanticRole.SUCCESS),
-                state=(ViewState.EMPTY if not page.events else ViewState.COMPLETED),
+                role=(SemanticRole.MUTED if not page.records else SemanticRole.SUCCESS),
+                state=(ViewState.EMPTY if not page.records else ViewState.COMPLETED),
             )
             if page.next_cursor is not None:
                 self._write_notice(
                     (
                         f"Continue with /transcript {handle} "
-                        f"{page.next_cursor.max_events} --from "
+                        f"{page.next_cursor.max_records} --from "
                         f"{page.next_cursor.next_sequence}."
                     ),
                     label="hint",
@@ -6808,7 +6830,7 @@ class InteractiveController:
 
         self._attached_session_id = None
         self._focused_conversation = None
-        self._conversation_memory_service = None
+        self._collaboration_history_service = None
         self._trace_debug(
             DebugOperation.ATTACHMENT,
             DebugPhase.SUCCEEDED,
@@ -6955,7 +6977,7 @@ class InteractiveController:
 
         self._attached_session_id = None
         self._focused_conversation = None
-        self._conversation_memory_service = None
+        self._collaboration_history_service = None
         raise _ControllerAbort(InteractiveError(InteractiveErrorCode.CLEANUP_FAILED))
 
     def _write_error_best_effort(self, error: InteractiveError) -> bool:
@@ -7083,7 +7105,7 @@ class InteractiveController:
             self._runner = None
         self._attached_session_id = None
         self._focused_conversation = None
-        self._conversation_memory_service = None
+        self._collaboration_history_service = None
         self._closed = True
 
         if cleanup_failed and not cleanup_error_reported:

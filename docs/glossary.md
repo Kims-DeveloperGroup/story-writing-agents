@@ -49,21 +49,23 @@
   approve one revision; deadlock leaves conflicts at the round limit. See
   [Inspection and recovery](guides/inspection-and-recovery.md).
 
-- **Conversation.** An immutable session-scoped subject and visible history.
-  Its catalog stores identity and status; its event store holds the transcript.
+- **Conversation.** An immutable session-scoped identity with mutable display
+  subject/status and authoritative schema-v2 collaboration history.
   See [Conversation catalog](reference/conversation-catalog.md).
 
-- **Conversation catalog and event store.** The catalog owns identity and discovery;
-  the store owns append, full reads, and bounded context. Archive does not hide
-  transcripts. See [Conversation
+- **Conversation catalog and event store.** The catalog owns identity,
+  display-only subject, and discovery; the active v2 store owns atomic append,
+  full reads, and bounded context. Archive does not hide transcript reads. See [Conversation
   transcripts](reference/conversation-transcripts.md).
 
-- **Conversation citation, page, and cursor.** A citation identifies a record;
-  a page is a bounded read, and its cursor continues that snapshot. See
+- **Conversation citation, page, and cursor.** A citation identifies an exact
+  event, readable field, and code-point range; a page is a bounded read, and
+  its cursor continues only the unchanged snapshot. See
   [Conversation search](reference/conversation-search.md).
 
-- **Conversation search.** Bounded literal matching over current-session
-  subjects and visible messages. Direct `/search` is a provider-free CLI
+- **Conversation search.** Bounded literal matching over closed readable event
+  fields in active current-session conversations. Subjects are display-only
+  metadata. Direct `/search` is a provider-free CLI
   command, not a provider call or tool; agent retrieval reaches memory only
   through runtime authorization. See [Conversation search](reference/conversation-search.md).
 
@@ -101,8 +103,10 @@
   is missing, permits provider work, or is intentionally stopped. It is
   independent of process access.
 
-- **Event, turn, and context window.** An event is one record; a complete turn
-  pairs user input with a reply or error. Context is a bounded complete-turn view.
+- **Event, turn, and context window.** An event is one canonical schema-v2
+  collaboration fact. A readable record exposes only its closed public fields.
+  Provider context is an explicit bounded whole-record selection; its default
+  bootstrap contains no history content.
   See [Conversation transcripts](reference/conversation-transcripts.md).
 
 - **Fingerprint and provider thread.** A fingerprint identifies resolved prompt

@@ -256,7 +256,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             ],
         )
         self.assertIs(story_writing_agents.SessionLifecycleState, SessionLifecycleState)
-        self.assertEqual(len(story_writing_agents.__all__), 118)
+        self.assertEqual(len(story_writing_agents.__all__), 104)
 
         expected = {
             "get_session_lifecycle": ("self", "session_id"),
@@ -478,7 +478,7 @@ class SessionLifecycleContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("Importable production units indexed: 97.", index)
-        self.assertIn("Direct internal dependency edges indexed: 360.", index)
+        self.assertIn("Direct internal dependency edges indexed: 362.", index)
         self.assertIn("Directed internal dependency cycles indexed: 0.", index)
         headings = tuple(re.findall(r"^### `([^`]+)`$", index, flags=re.MULTILINE))
         expected_modules: set[str] = set()
@@ -491,11 +491,11 @@ class SessionLifecycleContractTests(unittest.TestCase):
         self.assertEqual(len(headings), 97)
         self.assertEqual(len(set(headings)), 97)
         self.assertEqual(set(headings), expected_modules)
-        self.assertIn("Exactly 83 names in `__all__`", index)
-        self.assertIn("Exactly 21 owning-module names in `__all__`", index)
-        self.assertIn("Exactly 55 owning-module names in `__all__`", index)
+        self.assertIn("Exactly 81 names in `__all__`", index)
+        self.assertIn("Exactly 20 owning-module names in `__all__`", index)
+        self.assertIn("Exactly 54 owning-module names in `__all__`", index)
         self.assertIn(
-            "project-root facade retains exactly its established v1 subset",
+            "project-root facade retains only its immutable conversation-",
             index,
         )
         self.assertIn("exports no schema-v2 collaboration name", index)

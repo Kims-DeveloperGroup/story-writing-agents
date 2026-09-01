@@ -11,11 +11,8 @@ from pathlib import Path
 from unittest import mock
 
 from story_writing_agents import (
-    ConversationEvent,
-    ConversationEventKind,
     ConversationMetadata,
     FilesystemConversationCatalog,
-    FilesystemConversationEventStore,
     ManuscriptExistsError,
     Workspace,
 )
@@ -54,7 +51,6 @@ from tests.conversation_archive_fixture import (
     transcript_relative,
     workspace_snapshot,
 )
-from tests.conversation_event_store_contract import make_append
 
 
 class ControlledLease:
@@ -122,28 +118,14 @@ def _create_legacy_conversation(
     workspace: Workspace,
     *,
     session_id: str = "legacy_session",
-) -> tuple[ConversationMetadata, tuple[ConversationEvent, ConversationEvent]]:
+) -> ConversationMetadata:
     catalog = FilesystemConversationCatalog(workspace)
-    event_store = FilesystemConversationEventStore(workspace, catalog=catalog)
     metadata = catalog.create(session_id, "Legacy transcript")
-    user = event_store.append(
-        make_append(
-            session_id=session_id,
-            conversation_id=metadata.conversation_id,
-            turn_id="turn_a",
-            content="legacy question",
-        )
+    workspace.write_text(
+        transcript_relative(session_id, metadata.conversation_id),
+        '{"schema_version":1,"legacy":"transcript sentinel"}\n',
     )
-    reply = event_store.append(
-        make_append(
-            session_id=session_id,
-            conversation_id=metadata.conversation_id,
-            turn_id="turn_a",
-            kind=ConversationEventKind.AGENT_REPLY,
-            content="legacy answer",
-        )
-    )
-    return metadata, (user, reply)
+    return metadata
 
 
 class FilesystemConversationArchiveCompositionTests(unittest.TestCase):
@@ -488,10 +470,11 @@ class FilesystemConversationArchiveRecoveryTests(unittest.TestCase):
             b"collision\n",
         )
 
-    def test_active_v1_service_remains_but_archive_refuses_its_transcript(self) -> None:
+    def test_frozen_v1_transcript_sentinel_is_rejected_without_a_public_writer(
+        self,
+    ) -> None:
         workspace = initialized_workspace(self)
-        metadata, events = _create_legacy_conversation(workspace)
-        self.assertEqual(tuple(event.sequence for event in events), (1, 2))
+        metadata = _create_legacy_conversation(workspace)
         self.assertTrue(
             workspace.path(
                 transcript_relative(metadata.session_id, metadata.conversation_id)

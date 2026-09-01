@@ -106,10 +106,11 @@ an atomic persisted replacement. Archiving focused content chooses another
 active default or `null`; rollback is attempted only while ready access remains
 proved.
 
-Conversation catalog mutations create no transcript or collaboration event.
-`/history` is therefore empty for a new conversation, while `/search` can still
-match its catalog subject. Pure schema-v2 history remains empty until a v2
-writer appends real workflow events; #479 later selects that inspection path.
+Conversation catalog mutations create no collaboration event. `/history` is
+therefore `empty` for a new conversation, and `/search` returns no hit for its
+subject because search covers event fields only. The selected schema-v2
+inspection path remains empty until an authorized writer appends real workflow
+events.
 
 ## Artifact viewer relationship
 

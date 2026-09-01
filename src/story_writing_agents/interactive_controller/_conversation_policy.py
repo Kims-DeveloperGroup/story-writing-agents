@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 from ..conversation_search import (
-    ConversationSearchQuery,
-    ConversationSearchResult,
-    ConversationTranscriptPage,
+    CollaborationHistoryPage,
+    CollaborationHistorySearchQuery,
+    CollaborationHistorySearchResult,
 )
 from ..conversations import (
+    CollaborationEvent,
+    CollaborationHistoryProjection,
+    CollaborationReadableRecord,
     ConversationMetadata,
     ConversationStatus,
     normalize_conversation_subject,
+    project_collaboration_history,
+    project_collaboration_readable_history,
 )
 from ..errors import (
     ConversationExistsError,
@@ -82,8 +87,7 @@ def validate_catalog_entries(
             "conversation catalog returned an invalid collection"
         )
     validated = tuple(
-        validate_catalog_metadata(entry, expected_session_id)
-        for entry in entries
+        validate_catalog_metadata(entry, expected_session_id) for entry in entries
     )
     identifiers = tuple(entry.conversation_id for entry in validated)
     if len(set(identifiers)) != len(identifiers):
@@ -123,32 +127,20 @@ def resolve_conversation_reference(
     """Resolve exact ID or one case-sensitive unique prefix without I/O."""
 
     exact = next(
-        (
-            entry
-            for entry in entries
-            if entry.conversation_id == safe_reference
-        ),
+        (entry for entry in entries if entry.conversation_id == safe_reference),
         None,
     )
     if exact is not None:
         return exact
     if len(safe_reference) < _MINIMUM_CONVERSATION_PREFIX_LENGTH:
-        raise ConversationResolutionFailure(
-            InteractiveErrorCode.CONVERSATION_INVALID
-        )
+        raise ConversationResolutionFailure(InteractiveErrorCode.CONVERSATION_INVALID)
     matches = tuple(
-        entry
-        for entry in entries
-        if entry.conversation_id.startswith(safe_reference)
+        entry for entry in entries if entry.conversation_id.startswith(safe_reference)
     )
     if not matches:
-        raise ConversationResolutionFailure(
-            InteractiveErrorCode.CONVERSATION_NOT_FOUND
-        )
+        raise ConversationResolutionFailure(InteractiveErrorCode.CONVERSATION_NOT_FOUND)
     if len(matches) > 1:
-        raise ConversationResolutionFailure(
-            InteractiveErrorCode.CONVERSATION_AMBIGUOUS
-        )
+        raise ConversationResolutionFailure(InteractiveErrorCode.CONVERSATION_AMBIGUOUS)
     return matches[0]
 
 
@@ -159,29 +151,24 @@ def visible_conversation_handle(
     """Return a unique twelve-character prefix or the immutable full ID."""
 
     prefix = metadata.conversation_id[:_MINIMUM_CONVERSATION_PREFIX_LENGTH]
-    collisions = sum(
-        entry.conversation_id.startswith(prefix) for entry in entries
-    )
+    collisions = sum(entry.conversation_id.startswith(prefix) for entry in entries)
     return prefix if collisions == 1 else metadata.conversation_id
 
 
 def validate_search_result_handles(
     result: object,
     *,
-    query: ConversationSearchQuery,
+    query: CollaborationHistorySearchQuery,
     session_id: str,
     entries: tuple[ConversationMetadata, ...],
 ) -> tuple[str, ...]:
     """Validate one search result against the complete catalog snapshot."""
 
-    if type(result) is not ConversationSearchResult:
-        raise TypeError("conversation search returned an invalid result")
+    if type(result) is not CollaborationHistorySearchResult:
+        raise TypeError("collaboration history search returned an invalid result")
     if result.query != query:
         raise ValueError("conversation search changed its query")
-    metadata_by_id = {
-        entry.conversation_id: entry
-        for entry in entries
-    }
+    metadata_by_id = {entry.conversation_id: entry for entry in entries}
     handles: list[str] = []
     for hit in result.hits:
         if hit.citation.session_id != session_id:
@@ -189,14 +176,7 @@ def validate_search_result_handles(
         metadata = metadata_by_id.get(hit.citation.conversation_id)
         if metadata is None:
             raise ValueError("conversation search returned an unknown identity")
-        if (
-            hit.status is not ConversationStatus.ACTIVE
-            or metadata.status is not ConversationStatus.ACTIVE
-            or hit.status is not metadata.status
-            or hit.subject != metadata.subject
-            or hit.subject_revision != metadata.subject_revision
-            or hit.updated_at != metadata.updated_at
-        ):
+        if metadata.status is not ConversationStatus.ACTIVE:
             raise ValueError("conversation search metadata is inconsistent")
         handles.append(visible_conversation_handle(metadata, entries))
     return tuple(handles)
@@ -209,44 +189,66 @@ def validate_transcript_page(
     conversation_id: str,
     start_sequence: int,
     page_limit: int,
-) -> ConversationTranscriptPage:
-    """Return a page matching one fresh no-filter transcript request."""
+) -> CollaborationHistoryPage:
+    """Return a readable-history page matching one fresh transcript command."""
 
-    if type(page) is not ConversationTranscriptPage:
-        raise TypeError("conversation transcript returned an invalid page")
+    if type(page) is not CollaborationHistoryPage:
+        raise TypeError("collaboration history returned an invalid page")
     if page.session_id != session_id or page.conversation_id != conversation_id:
         raise ValueError("conversation transcript crossed its attached scope")
     if page.requested_start_sequence != start_sequence:
         raise ValueError("conversation transcript changed its requested start")
-    if page.requested_end_sequence != page.snapshot_last_sequence:
-        raise ValueError("conversation transcript shortened its requested range")
-    if len(page.events) > page_limit:
+    if len(page.records) > page_limit:
         raise ValueError("conversation transcript exceeded its requested count")
-    if page.next_cursor is not None and page.next_cursor.max_events != page_limit:
+    if page.next_cursor is not None and page.next_cursor.max_records != page_limit:
         raise ValueError("conversation transcript cursor changed its count")
 
-    if not page.events:
+    if not page.records:
         if page.requested_start_sequence != page.snapshot_last_sequence + 1:
-            raise ValueError(
-                "conversation transcript returned an invalid empty page"
-            )
+            raise ValueError("conversation transcript returned an invalid empty page")
         return page
 
-    for expected_sequence, event in enumerate(page.events, start=start_sequence):
-        if event.sequence != expected_sequence:
-            raise ValueError(
-                "conversation transcript returned non-contiguous events"
-            )
+    for expected_sequence, record in enumerate(page.records, start=start_sequence):
+        if record.sequence != expected_sequence:
+            raise ValueError("conversation transcript returned non-contiguous events")
 
-    last_returned_sequence = page.events[-1].sequence
+    last_returned_sequence = page.records[-1].sequence
     if page.next_cursor is not None:
         if page.next_cursor.next_sequence != last_returned_sequence + 1:
-            raise ValueError(
-                "conversation transcript cursor skipped returned events"
-            )
+            raise ValueError("conversation transcript cursor skipped returned events")
     elif last_returned_sequence != page.requested_end_sequence:
         raise ValueError("conversation transcript returned an incomplete page")
     return page
+
+
+def validate_history_snapshot(
+    events: object,
+    *,
+    session_id: str,
+    conversation_id: str,
+) -> tuple[
+    tuple[CollaborationReadableRecord, ...],
+    CollaborationHistoryProjection,
+]:
+    """Validate one complete v2 store snapshot before any authoritative rendering."""
+
+    if type(events) is not tuple or any(
+        type(event) is not CollaborationEvent for event in events
+    ):
+        raise TypeError("collaboration store returned invalid history")
+    records = project_collaboration_readable_history(events)
+    projection = project_collaboration_history(events)
+    if records and (
+        records[0].session_id != session_id
+        or records[0].conversation_id != conversation_id
+    ):
+        raise ValueError("collaboration history crossed its attached scope")
+    if projection.session_id is not None and (
+        projection.session_id != session_id
+        or projection.conversation_id != conversation_id
+    ):
+        raise ValueError("collaboration projection crossed its attached scope")
+    return records, projection
 
 
 def classify_conversation_failure(
@@ -370,6 +372,7 @@ __all__ = [
     "validate_catalog_metadata",
     "validate_conversation_reference",
     "validate_search_result_handles",
+    "validate_history_snapshot",
     "validate_transcript_page",
     "visible_conversation_handle",
 ]

@@ -104,9 +104,9 @@ and
 
 `source_invalid` or `destination_invalid` can mean that archive/transfer found
 a filesystem `transcript.jsonl` or SQLite `conversation_events` row. Those are
-schema-v1 history, not recovery inputs. Preserve the stores; do not rename,
-parse-and-rewrite, or hand-copy them into v2. Issue #478 removed ordinary
-direct-run consumers; #479 owns the remaining selected-service cutover.
+unsupported owning-boundary inputs. Preserve the stores; do not rename,
+parse-and-rewrite, or hand-copy them into v2. #454 owns whole-workspace
+rejection; active adapters reject the addressed owning boundary now.
 
 Checkpoints remain at
 `agent_states/orchestrator_state/conversation_storage_transfers/{filesystem-to-sqlite,sqlite-to-filesystem}.json`.

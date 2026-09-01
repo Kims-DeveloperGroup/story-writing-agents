@@ -38,7 +38,6 @@ from .events import (
     CollaborationTerminalScope,
     collaboration_batch_digest,
     ConversationEvent,
-    ConversationEventAppend,
     ConversationEventKind,
 )
 
@@ -372,33 +371,6 @@ def select_bounded_conversation_context(
     )
 
 
-class ConversationEventStore(Protocol):
-    """Storage-neutral visible transcript operations."""
-
-    def append(self, event: ConversationEventAppend) -> ConversationEvent:
-        """Durably append one event with storage-assigned order metadata."""
-
-        ...
-
-    def read(
-        self,
-        session_id: str,
-        conversation_id: str,
-    ) -> tuple[ConversationEvent, ...]:
-        """Read the complete authoritative transcript in storage order."""
-
-        ...
-
-    def read_context(
-        self,
-        session_id: str,
-        conversation_id: str,
-    ) -> ConversationContextWindow:
-        """Select the fixed-policy suffix of complete turns."""
-
-        ...
-
-
 class CollaborationNextAction(StrEnum):
     """History-derived next safe action; it is evidence, never authority."""
 
@@ -502,7 +474,9 @@ class CollaborationReadableField:
 
     def __post_init__(self) -> None:
         if type(self.key) is not CollaborationReadableFieldKey:
-            raise TypeError("readable field key must be a CollaborationReadableFieldKey")
+            raise TypeError(
+                "readable field key must be a CollaborationReadableFieldKey"
+            )
         if type(self.text) is not str:
             raise TypeError("readable field text must be a string")
         if not self.text:
@@ -664,8 +638,7 @@ class CollaborationReadableContext:
         if type(self.bootstrap) is not CollaborationContextBootstrap:
             raise TypeError("readable context bootstrap is invalid")
         if type(self.records) is not tuple or any(
-            type(record) is not CollaborationReadableRecord
-            for record in self.records
+            type(record) is not CollaborationReadableRecord for record in self.records
         ):
             raise TypeError(
                 "readable context records must be a tuple of CollaborationReadableRecord"
@@ -1004,7 +977,7 @@ def validate_collaboration_candidate_batch(
 
 
 class CollaborationEventStore(Protocol):
-    """The sole storage-neutral, currently unused schema-v2 history port."""
+    """The sole storage-neutral port for active schema-v2 history services."""
 
     def append_batch(
         self,
@@ -1874,9 +1847,7 @@ def _collaboration_readable_fields(
         ]
         fields.extend(
             CollaborationReadableField(
-                key=(
-                    CollaborationReadableFieldKey.PROPOSAL_ASSIGNMENT_INSTRUCTION
-                ),
+                key=(CollaborationReadableFieldKey.PROPOSAL_ASSIGNMENT_INSTRUCTION),
                 text=assignment.instruction,
                 assignment_ordinal=ordinal,
             )
@@ -1918,9 +1889,7 @@ def _collaboration_readable_fields(
         )
         fields.extend(
             CollaborationReadableField(
-                key=(
-                    CollaborationReadableFieldKey.PROPOSAL_ASSIGNMENT_CALL_LIMIT
-                ),
+                key=(CollaborationReadableFieldKey.PROPOSAL_ASSIGNMENT_CALL_LIMIT),
                 text=f"max_physical_calls={assignment.max_physical_calls}",
                 assignment_ordinal=ordinal,
             )
@@ -1930,8 +1899,7 @@ def _collaboration_readable_fields(
             CollaborationReadableField(
                 key=CollaborationReadableFieldKey.PROPOSAL_SYNTHESIS_CALL_LIMIT,
                 text=(
-                    "max_physical_calls="
-                    f"{payload.budget.synthesis_max_physical_calls}"
+                    f"max_physical_calls={payload.budget.synthesis_max_physical_calls}"
                 ),
             )
         )
@@ -1944,9 +1912,7 @@ def _collaboration_readable_fields(
             ),
             CollaborationReadableField(
                 key=CollaborationReadableFieldKey.DISPATCH_CALL_LIMIT,
-                text=(
-                    f"max_physical_calls={payload.assignment.max_physical_calls}"
-                ),
+                text=(f"max_physical_calls={payload.assignment.max_physical_calls}"),
             ),
         )
     if type(payload) is CollaborationSpecialistReplyPayload:
@@ -2030,10 +1996,7 @@ def _collaboration_readable_fields(
             ),
             CollaborationReadableField(
                 key=CollaborationReadableFieldKey.TERMINAL_CALL_USAGE,
-                text=(
-                    "submitted_physical_calls="
-                    f"{payload.submitted_physical_calls}"
-                ),
+                text=(f"submitted_physical_calls={payload.submitted_physical_calls}"),
             ),
         )
     raise TypeError("unsupported collaboration payload")
@@ -2061,7 +2024,6 @@ __all__ = [
     "CollaborationReadableRecord",
     "ConversationContextPolicy",
     "ConversationContextWindow",
-    "ConversationEventStore",
     "project_collaboration_history",
     "project_collaboration_readable_history",
     "select_bounded_collaboration_context",

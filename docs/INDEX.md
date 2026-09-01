@@ -1,8 +1,9 @@
 # Documentation
 
-The runtime is between collaboration integrations. Management, inspection,
-schema-v2 contracts, and provider-free smoke are available. Public story
-execution is not. Start with the page that matches your task.
+The runtime has one active schema-v2 storage/inspection path. Management,
+structured history/search/transcript reads, and provider-free smoke are
+available; public story execution is not. Start with the page that matches
+your task.
 
 ## Start here
 

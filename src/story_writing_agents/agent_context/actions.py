@@ -104,17 +104,16 @@ class ContextActionKind(StrEnum):
 
 
 class ContextSourceBoundaryKind(StrEnum):
-    """Exact record boundaries supported by canonical context sources."""
+    """Exact line or record boundaries supported by canonical context sources."""
 
     WHOLE = "whole"
     ARTIFACT_LINES = "artifact_lines"
-    CONVERSATION_TURNS = "conversation_turns"
     RECORDS = "records"
 
 
 _SOURCE_BOUNDARY = {
     ContextSourceKind.WRITING_ARTIFACT: ContextSourceBoundaryKind.ARTIFACT_LINES,
-    ContextSourceKind.CONVERSATION: ContextSourceBoundaryKind.CONVERSATION_TURNS,
+    ContextSourceKind.CONVERSATION: ContextSourceBoundaryKind.RECORDS,
     ContextSourceKind.ACTIVE_DEBATE: ContextSourceBoundaryKind.RECORDS,
     ContextSourceKind.OWN_AGENT_STATE: ContextSourceBoundaryKind.RECORDS,
 }
@@ -140,15 +139,9 @@ _ACTION_ERROR_MESSAGES = {
     ContextActionErrorCode.CORRELATION_MISMATCH: (
         "context action correlation does not match"
     ),
-    ContextActionErrorCode.INVALID_TRANSITION: (
-        "context action transition is invalid"
-    ),
-    ContextActionErrorCode.ACTION_LIMIT_EXCEEDED: (
-        "context action limit exceeded"
-    ),
-    ContextActionErrorCode.SEARCH_LIMIT_EXCEEDED: (
-        "context search limit exceeded"
-    ),
+    ContextActionErrorCode.INVALID_TRANSITION: ("context action transition is invalid"),
+    ContextActionErrorCode.ACTION_LIMIT_EXCEEDED: ("context action limit exceeded"),
+    ContextActionErrorCode.SEARCH_LIMIT_EXCEEDED: ("context search limit exceeded"),
     ContextActionErrorCode.READ_LIMIT_EXCEEDED: "context read limit exceeded",
     ContextActionErrorCode.OBSERVATION_LIMIT_EXCEEDED: (
         "context observation limit exceeded"
@@ -157,9 +150,7 @@ _ACTION_ERROR_MESSAGES = {
     ContextActionErrorCode.OUTSTANDING_READ: (
         "context read delivery remains outstanding"
     ),
-    ContextActionErrorCode.ANSWER_NOT_AUTHORIZED: (
-        "context answer is not authorized"
-    ),
+    ContextActionErrorCode.ANSWER_NOT_AUTHORIZED: ("context answer is not authorized"),
 }
 
 
@@ -423,7 +414,7 @@ class ContextSearchQuery:
 
 @dataclass(frozen=True, slots=True)
 class ContextSourceBoundary:
-    """One exact whole, line, complete-turn, or record boundary."""
+    """One exact whole, line, or record boundary."""
 
     kind: ContextSourceBoundaryKind
     start: int | None = None
@@ -445,12 +436,6 @@ class ContextSourceBoundary:
         end = _positive(self.end)
         if end < start:
             raise _invalid()
-        if self.kind is ContextSourceBoundaryKind.CONVERSATION_TURNS:
-            if self.first_id is None or self.last_id is None:
-                raise _invalid()
-            _safe_identity(self.first_id)
-            _safe_identity(self.last_id)
-            return
         if self.first_id is not None or self.last_id is not None:
             raise _invalid()
 
@@ -465,24 +450,6 @@ class ContextSourceBoundary:
         """Construct one one-based inclusive artifact line boundary."""
 
         return cls(ContextSourceBoundaryKind.ARTIFACT_LINES, start, end)
-
-    @classmethod
-    def conversation_turns(
-        cls,
-        first_sequence: int,
-        last_sequence: int,
-        first_turn_id: str,
-        last_turn_id: str,
-    ) -> ContextSourceBoundary:
-        """Construct one complete-turn sequence and identity boundary."""
-
-        return cls(
-            ContextSourceBoundaryKind.CONVERSATION_TURNS,
-            first_sequence,
-            last_sequence,
-            first_turn_id,
-            last_turn_id,
-        )
 
     @classmethod
     def records(cls, start: int, end: int) -> ContextSourceBoundary:
@@ -577,8 +544,7 @@ class ContextAnswerAction:
         if (
             type(self.used_handles) is not tuple
             or any(
-                type(handle) is not ContextSourceHandle
-                for handle in self.used_handles
+                type(handle) is not ContextSourceHandle for handle in self.used_handles
             )
             or len({handle.value for handle in self.used_handles})
             != len(self.used_handles)
@@ -817,9 +783,11 @@ class ContextAnswerAuthorization:
             )
         ):
             raise _invalid()
-        if len({item.handle.value for item in self.used_evidence}) != len(
-            self.used_evidence
-        ) or len(self.used_evidence) > CONTEXT_ACTION_POLICY.max_cumulative_handles:
+        if (
+            len({item.handle.value for item in self.used_evidence})
+            != len(self.used_evidence)
+            or len(self.used_evidence) > CONTEXT_ACTION_POLICY.max_cumulative_handles
+        ):
             raise _invalid()
         if self.completed_read_digest != _completed_evidence_digest(
             self.completed_evidence
@@ -1140,8 +1108,4 @@ def serialize_context_action_observation(
         raise _invalid()
     if compact:
         return encoded
-    return (
-        f"{_BEGIN_UNTRUSTED_STORY_DATA}\n"
-        f"{encoded}\n"
-        f"{_END_UNTRUSTED_STORY_DATA}"
-    )
+    return f"{_BEGIN_UNTRUSTED_STORY_DATA}\n{encoded}\n{_END_UNTRUSTED_STORY_DATA}"

@@ -45,6 +45,13 @@ most four nonterminal actions across five provider calls, with at most two
 searches and two reads. Mandatory references have a separate limit of 16
 references, 128 KiB each, and 256 KiB in aggregate.
 
+Focused conversation history follows an additional rule: the default
+`CollaborationReadableContext` bootstrap is content-free and contains zero
+records. A caller must explicitly select event IDs. Retained records stay whole
+under the fixed 24-record/32,768-byte bound and cross the source adapter as a
+`RECORDS` boundary. The adapter never auto-loads the full transcript and never
+exposes private typed payload fields.
+
 Search returns invocation-bound handles rather than permanent authority. Read
 accepts only live handles from the same invocation. Guessed, stale, consumed,
 cross-agent, cross-scope, or drifting evidence fails closed. A final answer

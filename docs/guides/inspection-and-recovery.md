@@ -33,13 +33,20 @@ With a session attached:
 | `/inspect` | Persisted debate summaries for the attached session. |
 | `/inspect ID` | Safe facts for one exact debate. |
 | `/inspect last` | This process's most recent accepted debate start, if any. In the current management-only shell, none is normal. |
-| `/history [COUNT]` | Focused schema-v2 collaboration history. |
-| `/transcript ID ...` | Bounded transcript page without changing focus. |
+| `/history [COUNT]` | Focused schema-v2 collaboration records, durable state, user meaning, and next-safe-action meaning. |
+| `/transcript ID ...` | Bounded structured page without changing focus. |
 | `/exchanges` | Read-only viewer over an immutable stored exchange snapshot. |
 
 Inspection is provider-free. Runtime inspection wrappers may best-effort append
 a bounded operational diagnostic, but they do not change session/debate state,
 conversation history, provider state, or artifacts.
+
+`/search` covers readable event fields in active conversations only; the
+displayed subject does not create a match. A hit's exact event/field/range
+citation can be followed with `/transcript`. A continued direct-API page is
+valid only for its unchanged snapshot; a stale cursor means to restart the
+read, not join results across an append. See
+[Conversation search](../reference/conversation-search.md).
 
 ## Existing terminal debates
 

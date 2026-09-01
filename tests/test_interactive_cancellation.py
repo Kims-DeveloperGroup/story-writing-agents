@@ -5,11 +5,11 @@ from __future__ import annotations
 import asyncio
 import unittest
 from collections.abc import Callable, Coroutine
+from dataclasses import replace
 from typing import Any
 from unittest import mock
 
 from story_writing_agents.interactive_controller import _core as controller_core_module
-from story_writing_agents.agents import LEAD_ORCHESTRATOR
 from story_writing_agents.backend import AgentBackend
 from story_writing_agents.cli_context import (
     load_cli_context,
@@ -18,9 +18,14 @@ from story_writing_agents.cli_context import (
     save_default_session,
 )
 from story_writing_agents.conversations import (
-    ConversationEventAppend,
-    ConversationEventKind,
+    CollaborationEventBatch,
     ConversationMetadata,
+)
+from story_writing_agents.conversation_storage import (
+    compose_filesystem_conversation_storage,
+)
+from story_writing_agents.conversation_storage.filesystem import (
+    FilesystemCollaborationEventStore,
 )
 from story_writing_agents.interactive_controller import InteractiveController
 from story_writing_agents.interactive_terminal import (
@@ -28,12 +33,9 @@ from story_writing_agents.interactive_terminal import (
     InteractiveErrorCode,
     InteractiveTerminal,
 )
-from story_writing_agents.workspace import (
-    FilesystemConversationCatalog,
-    FilesystemConversationEventStore,
-    Workspace,
-)
+from story_writing_agents.workspace import FilesystemConversationCatalog, Workspace
 
+from tests.collaboration_contract_fixture import contract_batches
 from tests.helpers import all_manuscripts
 from tests.interactive_controller_fixture import (
     REAL_RUNTIME as _REAL_RUNTIME,
@@ -255,7 +257,7 @@ class InteractiveCancellationTestCase(InteractiveConversationTestCase):
         tuple[ConversationMetadata, ...],
         InteractiveController,
         AgentBackend,
-        FilesystemConversationEventStore,
+        FilesystemCollaborationEventStore,
     ]:
         """Create one active selected attachment around supplied callbacks."""
 
@@ -275,15 +277,8 @@ class InteractiveCancellationTestCase(InteractiveConversationTestCase):
             callbacks.write_text,
             width=240,
         )
-        if runtime is _REAL_RUNTIME:
-            controller = InteractiveController(
-                workspace,
-                load_cli_context(workspace),
-                selected_backend,
-                terminal,
-                conversation_catalog=catalog,
-            )
-        else:
+        services = compose_filesystem_conversation_storage(workspace)
+        if runtime is not _REAL_RUNTIME:
             with mock.patch.object(
                 controller_core_module,
                 "StoryRuntime",
@@ -294,9 +289,17 @@ class InteractiveCancellationTestCase(InteractiveConversationTestCase):
                     load_cli_context(workspace),
                     selected_backend,
                     terminal,
-                    conversation_catalog=catalog,
+                    conversation_storage_services=services,
                 )
-        store = controller._conversation_event_store
+        else:
+            controller = InteractiveController(
+                workspace,
+                load_cli_context(workspace),
+                selected_backend,
+                terminal,
+                conversation_storage_services=services,
+            )
+        store = services.event_store
         return (
             workspace,
             catalog,
@@ -312,34 +315,22 @@ class ProviderFreeCancellationTests(InteractiveCancellationTestCase):
 
     @staticmethod
     def _append_pair(
-        store: FilesystemConversationEventStore,
+        store: FilesystemCollaborationEventStore,
         metadata: ConversationMetadata,
-        turn_id: str,
-        question: str,
-        reply: str,
+        _turn_id: str,
+        _question: str,
+        _reply: str,
     ) -> None:
-        """Append one canonical visible question/reply pair."""
+        """Append one canonical two-event schema-v2 proposal batch."""
 
-        store.append(
-            ConversationEventAppend(
-                session_id="session",
-                conversation_id=metadata.conversation_id,
-                turn_id=turn_id,
-                sender="user",
-                recipient=LEAD_ORCHESTRATOR,
-                kind=ConversationEventKind.USER_MESSAGE,
-                content=question,
-            )
-        )
-        store.append(
-            ConversationEventAppend(
-                session_id="session",
-                conversation_id=metadata.conversation_id,
-                turn_id=turn_id,
-                sender=LEAD_ORCHESTRATOR,
-                recipient="user",
-                kind=ConversationEventKind.AGENT_REPLY,
-                content=reply,
+        batch = contract_batches(metadata.conversation_id)["proposal"]
+        store.append_batch(
+            CollaborationEventBatch(
+                batch_id=batch.batch_id,
+                expected_last_sequence=batch.expected_last_sequence,
+                events=tuple(
+                    replace(event, session_id="session") for event in batch.events
+                ),
             )
         )
 
@@ -349,7 +340,7 @@ class ProviderFreeCancellationTests(InteractiveCancellationTestCase):
         cases = (
             (
                 "search",
-                "/search needle",
+                "/search Consult specialists",
                 lambda text: text.startswith("Search results ("),
                 "[cancelled] Search cancelled; attached state is unchanged.\n",
                 "[result] Search returned",
@@ -387,7 +378,7 @@ class ProviderFreeCancellationTests(InteractiveCancellationTestCase):
                     store,
                 ) = self.selected_controller_with_callbacks(
                     callbacks,
-                    subjects=("Needle first", "Needle second"),
+                    subjects=("First", "Second"),
                 )
                 for index, entry in enumerate(entries, start=1):
                     self._append_pair(
@@ -410,7 +401,7 @@ class ProviderFreeCancellationTests(InteractiveCancellationTestCase):
                 original_read = store.read
                 with (
                     mock.patch.object(backend, "bind") as bind,
-                    mock.patch.object(store, "append") as append,
+                    mock.patch.object(store, "append_batch") as append,
                     mock.patch.object(
                         store,
                         "read",
@@ -552,7 +543,7 @@ class TerminalAndCleanupFailureTests(InteractiveCancellationTestCase):
         self.assertIsNone(controller._runner)
         self.assertIsNone(controller._attached_session_id)
         self.assertIsNone(controller._focused_conversation)
-        self.assertIsNone(controller._conversation_memory_service)
+        self.assertIsNone(controller._collaboration_history_service)
 
     def test_interrupted_runner_close_runs_later_cleanup_and_retains_runner(
         self,
@@ -599,7 +590,7 @@ class TerminalAndCleanupFailureTests(InteractiveCancellationTestCase):
         self.assertIs(controller._runner, runner_factory.instances[0])
         self.assertIsNone(controller._attached_session_id)
         self.assertIsNone(controller._focused_conversation)
-        self.assertIsNone(controller._conversation_memory_service)
+        self.assertIsNone(controller._collaboration_history_service)
         self.assertFalse(workspace.path(_ACCESS_RELATIVE).exists())
 
     def test_first_cleanup_process_control_wins_after_every_stage(self) -> None:
@@ -780,7 +771,7 @@ class TerminalAndCleanupFailureTests(InteractiveCancellationTestCase):
                 self.assertTrue(controller._closed)
                 self.assertIsNone(controller._attached_session_id)
                 self.assertIsNone(controller._focused_conversation)
-                self.assertIsNone(controller._conversation_memory_service)
+                self.assertIsNone(controller._collaboration_history_service)
                 self.assertFalse(workspace.path(_ACCESS_RELATIVE).exists())
 
     def test_body_system_exit_outranks_cleanup_controls_and_diagnostic(self) -> None:
@@ -921,7 +912,7 @@ class TerminalAndCleanupFailureTests(InteractiveCancellationTestCase):
         self.assertTrue(controller._closed)
         self.assertIsNone(controller._attached_session_id)
         self.assertIsNone(controller._focused_conversation)
-        self.assertIsNone(controller._conversation_memory_service)
+        self.assertIsNone(controller._collaboration_history_service)
         self.assertFalse(workspace.path(_ACCESS_RELATIVE).exists())
 
 

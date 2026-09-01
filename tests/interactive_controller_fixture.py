@@ -14,8 +14,12 @@ from story_writing_agents.cli_context import (
     save_default_session,
 )
 from story_writing_agents.conversation_storage import (
+    ConversationStorageComponentBinding,
     ConversationStorageServices,
     compose_filesystem_conversation_storage,
+)
+from story_writing_agents.conversation_storage.filesystem import (
+    FilesystemCollaborationEventStore,
 )
 from story_writing_agents.conversations import ConversationMetadata
 from story_writing_agents.interactive_controller import InteractiveController
@@ -29,7 +33,6 @@ from story_writing_agents.interactive_terminal._render import render_plain
 from story_writing_agents.session_lifecycle import SessionDurableState
 from story_writing_agents.workspace import (
     FilesystemConversationCatalog,
-    FilesystemConversationEventStore,
     Workspace,
 )
 
@@ -124,7 +127,7 @@ class InteractiveControllerTestCase(unittest.TestCase):
         InteractiveController,
         AgentBackend,
         ScriptedTerminalCallbacks,
-        FilesystemConversationEventStore | None,
+        FilesystemCollaborationEventStore,
         mock.Mock | None,
     ]:
         selected_backend = backend or self.make_backend(workspace)
@@ -135,12 +138,18 @@ class InteractiveControllerTestCase(unittest.TestCase):
             width=width,
         )
         keywords: dict[str, object] = {}
-        storage_services: ConversationStorageServices | None = None
+        storage_services = compose_filesystem_conversation_storage(workspace)
         if catalog is not None:
-            keywords["conversation_catalog"] = catalog
-        elif runtime is not REAL_RUNTIME:
-            storage_services = compose_filesystem_conversation_storage(workspace)
-            keywords["conversation_storage_services"] = storage_services
+            storage_services = ConversationStorageServices(
+                catalog_binding=ConversationStorageComponentBinding(
+                    storage_services.provenance,
+                    catalog,
+                ),
+                event_store_binding=storage_services.event_store_binding,
+                search_binding=storage_services.search_binding,
+                mutation_coordinator=storage_services.mutation_coordinator,
+            )
+        keywords["conversation_storage_services"] = storage_services
 
         if runtime is REAL_RUNTIME:
             controller = InteractiveController(
@@ -150,7 +159,13 @@ class InteractiveControllerTestCase(unittest.TestCase):
                 terminal,
                 **keywords,
             )
-            return controller, selected_backend, callbacks, None, None
+            return (
+                controller,
+                selected_backend,
+                callbacks,
+                storage_services.event_store,
+                None,
+            )
 
         with mock.patch.object(
             controller_core_module,
@@ -164,12 +179,7 @@ class InteractiveControllerTestCase(unittest.TestCase):
                 terminal,
                 **keywords,
             )
-        if storage_services is not None:
-            store = storage_services.event_store
-        else:
-            call = runtime_factory.call_args
-            assert call is not None
-            store = call.kwargs["conversation_event_store"]
+        store = storage_services.event_store
         return controller, selected_backend, callbacks, store, runtime_factory
 
     def prepared_selected_controller(
@@ -186,7 +196,7 @@ class InteractiveControllerTestCase(unittest.TestCase):
         InteractiveController,
         AgentBackend,
         ScriptedTerminalCallbacks,
-        FilesystemConversationEventStore | None,
+        FilesystemCollaborationEventStore,
     ]:
         workspace = self.make_workspace()
         self.seed_session(workspace, session_id)

@@ -33,7 +33,6 @@ from ..conversations import (
     ConversationCatalog,
     ConversationContextWindow,
     ConversationEvent,
-    ConversationEventAppend,
     ConversationEventKind,
     ConversationMetadata,
     ConversationStatus,
@@ -44,6 +43,7 @@ from ..conversations import (
     select_bounded_conversation_context,
     validate_collaboration_candidate_batch,
 )
+from ..conversations.events import ConversationEventAppend
 from ..errors import (
     ConversationExistsError,
     ConversationNotFoundError,
@@ -447,7 +447,7 @@ class FilesystemConversationCatalog:
             pass
 
 
-class FilesystemConversationEventStore:
+class _SchemaV1ConversationTranscriptStore:
     """Persist authoritative visible transcripts through one secure workspace."""
 
     def __init__(
@@ -866,6 +866,7 @@ class FilesystemCollaborationEventStore:
         )
         event_lock = self._event_lock(session, conversation)
         with event_lock.lock:
+            self._require_no_schema_v1_transcript(session, conversation)
             self._verify_catalog_identity(session, conversation)
             with self._advisory_guard(session, conversation):
                 try:
@@ -937,6 +938,7 @@ class FilesystemCollaborationEventStore:
         )
         event_lock = self._event_lock(session, conversation)
         with event_lock.lock:
+            self._require_no_schema_v1_transcript(session, conversation)
             self._verify_catalog_identity(session, conversation)
             if not self._history_exists(session, conversation):
                 return ()
@@ -957,6 +959,7 @@ class FilesystemCollaborationEventStore:
         )
         event_lock = self._event_lock(session, conversation)
         with event_lock.lock:
+            self._require_no_schema_v1_transcript(session, conversation)
             self._verify_catalog_identity(session, conversation)
             if not self._history_exists(session, conversation):
                 return project_collaboration_history(())
@@ -1008,6 +1011,25 @@ class FilesystemCollaborationEventStore:
                 f"{self._logical_artifact(session_id, conversation_id)}"
             )
         return True
+
+    def _require_no_schema_v1_transcript(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> None:
+        """Reject any retired transcript artifact before reads or mutation."""
+
+        target = self.workspace.path(
+            self._schema_v1_transcript_relative(session_id, conversation_id)
+        )
+        try:
+            os.stat(target, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        raise WorkspaceFormatError(
+            "schema-v1 conversation transcript is unsupported: "
+            f"{session_id}/{conversation_id}/transcript.jsonl"
+        )
 
     def _read_history(
         self,
@@ -1454,6 +1476,22 @@ class FilesystemCollaborationEventStore:
             / "collaboration-history.jsonl"
         )
 
+    @staticmethod
+    def _schema_v1_transcript_relative(
+        session_id: str,
+        conversation_id: str,
+    ) -> Path:
+        """Return the retired transcript sentinel path for one identity."""
+
+        return (
+            Path("discussion_logs")
+            / session_id
+            / "interactive"
+            / "conversations"
+            / conversation_id
+            / "transcript.jsonl"
+        )
+
     @classmethod
     def _lock_relative(cls, session_id: str, conversation_id: str) -> Path:
         """Return the sibling advisory-guard path for a v2 history."""
@@ -1471,6 +1509,5 @@ class FilesystemCollaborationEventStore:
 
 __all__ = [
     "FilesystemConversationCatalog",
-    "FilesystemConversationEventStore",
     "FilesystemCollaborationEventStore",
 ]

@@ -139,10 +139,11 @@ artifact work.
 
 ## Search returns no conversation events
 
-`/search QUERY` is provider-free and searches active conversation subjects plus
-stored visible events. A newly created conversation can therefore match by
-subject while `/history` and its transcript remain empty. Use a known handle
-with `/transcript ID`; transcript reads can include archives.
+`/search QUERY` is provider-free and searches closed readable fields in
+schema-v2 events for active conversations. A subject is displayed beside a hit
+but is not indexed or matched; a newly created conversation therefore returns
+zero matches until it has readable events. Use a known handle with
+`/transcript ID`; transcript reads can include archives.
 
 ## Smoke exits with 1 or 2
 
