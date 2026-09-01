@@ -68,9 +68,7 @@ _V1_CONVERSATION_FACADE_EXPORTS = (
     "ConversationContextPolicy",
     "ConversationContextWindow",
     "ConversationEvent",
-    "ConversationEventAppend",
     "ConversationEventKind",
-    "ConversationEventStore",
     "ConversationMetadata",
     "ConversationStatus",
     "normalize_conversation_subject",
@@ -100,9 +98,7 @@ _PUBLIC_CONVERSATION_OBJECTS = {
     "ConversationContextPolicy",
     "ConversationContextWindow",
     "ConversationEvent",
-    "ConversationEventAppend",
     "ConversationEventKind",
-    "ConversationEventStore",
     "ConversationMetadata",
     "ConversationStatus",
     "normalize_conversation_subject",
@@ -555,9 +551,11 @@ class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
         duplicate = catalog.create("session_a", "Duplicate field")
         payload = duplicate.to_dict()
         pairs = list(payload.items()) + [("status", "active")]
-        duplicate_json = "{" + ",".join(
-            f"{json.dumps(key)}:{json.dumps(value)}" for key, value in pairs
-        ) + "}"
+        duplicate_json = (
+            "{"
+            + ",".join(f"{json.dumps(key)}:{json.dumps(value)}" for key, value in pairs)
+            + "}"
+        )
         _metadata_path(
             workspace,
             "session_a",
@@ -773,14 +771,20 @@ class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
             if case == "catalog":
                 catalog_root.parent.mkdir(parents=True)
                 catalog_root.symlink_to(outside, target_is_directory=True)
-                operation = lambda: catalog.list("session_a")
+
+                def operation() -> object:
+                    return catalog.list("session_a")
+
             elif case == "conversation":
                 catalog_root.mkdir(parents=True)
                 (catalog_root / "conversation_a").symlink_to(
                     outside,
                     target_is_directory=True,
                 )
-                operation = lambda: catalog.get("session_a", "conversation_a")
+
+                def operation() -> object:
+                    return catalog.get("session_a", "conversation_a")
+
             else:
                 metadata = catalog.create("session_a", "Symlink metadata")
                 target = _metadata_path(
@@ -795,10 +799,9 @@ class FilesystemConversationCatalogPersistenceTests(unittest.TestCase):
                 )
                 target.unlink()
                 target.symlink_to(outside_metadata)
-                operation = lambda: catalog.get(
-                    "session_a",
-                    metadata.conversation_id,
-                )
+
+                def operation() -> object:
+                    return catalog.get("session_a", metadata.conversation_id)
 
             with self.subTest(case=case):
                 with self.assertRaises(WorkspaceSecurityError):
@@ -811,7 +814,6 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
             "ConversationExistsError",
             "ConversationNotFoundError",
             "FilesystemConversationCatalog",
-            "FilesystemConversationEventStore",
         }
         self.assertTrue(expected_root.issubset(set(story_writing_agents.__all__)))
         self.assertEqual(
@@ -950,9 +952,7 @@ class ConversationPackageBoundaryTests(unittest.TestCase):
             {"subject": str, "return": str},
         )
         self.assertIs(
-            get_type_hints(conversation_catalog_module.ConversationMetadata)[
-                "status"
-            ],
+            get_type_hints(conversation_catalog_module.ConversationMetadata)["status"],
             conversations_module.ConversationStatus,
         )
 
@@ -975,7 +975,7 @@ assert story_writing_agents.ConversationCatalog is conversations.ConversationCat
 assert story_writing_agents.ConversationMetadata is conversations.ConversationMetadata
 assert catalog.ConversationCatalog is conversations.ConversationCatalog
 assert events.ConversationEvent is conversations.ConversationEvent
-assert context.ConversationEventStore is conversations.ConversationEventStore
+assert context.CollaborationEventStore is conversations.CollaborationEventStore
 assert tuple(conversations.__all__) == {_CONVERSATION_FACADE_EXPORTS!r}
 assert "__getattr__" not in vars(conversations)
 for name in {tuple(sorted(_PUBLIC_CONVERSATION_OBJECTS))!r}:
@@ -987,7 +987,7 @@ assert (
 )
 assert filesystem.__all__ == [
     "FilesystemConversationCatalog",
-    "FilesystemConversationEventStore",
+    "FilesystemCollaborationEventStore",
 ]
 assert filesystem.FilesystemConversationCatalog.__module__ == filesystem.__name__
 assert set({sorted(CONVERSATION_CATALOG_METHODS)!r}) <= set(dir(conversations.ConversationCatalog))

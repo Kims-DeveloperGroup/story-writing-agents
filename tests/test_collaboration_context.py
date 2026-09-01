@@ -9,6 +9,7 @@ from dataclasses import replace
 from typing import get_type_hints
 
 from story_writing_agents.conversations import (
+    COLLABORATION_READABLE_CONTEXT_POLICY,
     CONVERSATION_EVENT_SCHEMA_VERSION,
     CollaborationAppendError,
     CollaborationAppendFailure,
@@ -26,6 +27,8 @@ from story_writing_agents.conversations import (
     CollaborationInterruptionPayload,
     CollaborationMessagePayload,
     CollaborationNextAction,
+    CollaborationReadableContextPolicy,
+    CollaborationReadableFieldKey,
     CollaborationStepKind,
     CollaborationStepState,
     CollaborationSynthesisOutcomeKind,
@@ -33,6 +36,8 @@ from story_writing_agents.conversations import (
     ConversationEvent,
     ConversationEventKind,
     project_collaboration_history,
+    project_collaboration_readable_history,
+    select_bounded_collaboration_context,
     validate_collaboration_candidate_batch,
     validate_collaboration_transition,
 )
@@ -818,6 +823,214 @@ class CollaborationAtomicBatchTests(unittest.TestCase):
             (unknown.events[-1],),
         )
         _assert_invalid(self, running_again, unknown_without_interruption)
+
+
+class CollaborationReadableProjectionTests(unittest.TestCase):
+    def test_every_event_projects_once_with_complete_identity_and_closed_fields(
+        self,
+    ) -> None:
+        history, _, _ = executed_history()
+        records = project_collaboration_readable_history(history)
+
+        self.assertEqual(len(records), len(history))
+        self.assertEqual(
+            tuple(record.sequence for record in records),
+            tuple(range(1, len(history) + 1)),
+        )
+        for event, record in zip(history, records, strict=True):
+            with self.subTest(event_id=event.event_id):
+                self.assertEqual(
+                    (
+                        record.schema_version,
+                        record.session_id,
+                        record.conversation_id,
+                        record.turn_id,
+                        record.step_id,
+                        record.event_id,
+                        record.batch_id,
+                        record.batch_ordinal,
+                        record.batch_size,
+                        record.batch_digest,
+                        record.sequence,
+                        record.timestamp,
+                        record.sender,
+                        record.recipient,
+                        record.direction,
+                        record.kind,
+                        record.payload,
+                    ),
+                    (
+                        event.schema_version,
+                        event.session_id,
+                        event.conversation_id,
+                        event.turn_id,
+                        event.step_id,
+                        event.event_id,
+                        event.batch_id,
+                        event.batch_ordinal,
+                        event.batch_size,
+                        event.batch_digest,
+                        event.sequence,
+                        event.timestamp,
+                        event.sender,
+                        event.recipient,
+                        event.direction,
+                        event.kind,
+                        event.payload,
+                    ),
+                )
+
+        running, proposal = running_history()
+        unknown = store_batch(
+            running,
+            make_batch(
+                running,
+                "batch_readable_interruption",
+                make_draft(
+                    "readable_interruption",
+                    CollaborationEventKind.INTERRUPTION,
+                    RUNTIME,
+                    USER,
+                    CollaborationInterruptionPayload(
+                        ATTEMPT_ID,
+                        "Visible interruption for inspection.",
+                    ),
+                ),
+                make_draft(
+                    "readable_unknown_state",
+                    CollaborationEventKind.STEP_STATE,
+                    RUNTIME,
+                    USER,
+                    proposal_state(
+                        proposal,
+                        CollaborationStepState.OUTCOME_UNKNOWN,
+                        execution_attempt_id=ATTEMPT_ID,
+                    ),
+                ),
+            ),
+        )
+        all_records = records + project_collaboration_readable_history(unknown)
+        observed_keys = {field.key for record in all_records for field in record.fields}
+        self.assertEqual(observed_keys, set(CollaborationReadableFieldKey))
+        self.assertEqual(
+            tuple(item.value for item in CollaborationReadableFieldKey),
+            (
+                "message.content",
+                "specialist_reply.content",
+                "proposal.purpose",
+                "proposal.user_impact",
+                "proposal.assignment.instruction",
+                "proposal.input.locator",
+                "proposal.input.range",
+                "proposal.call_usage",
+                "proposal.assignment.call_limit",
+                "proposal.synthesis.call_limit",
+                "dispatch.instruction",
+                "dispatch.call_limit",
+                "interruption.content",
+                "step.state",
+                "confirmation.decision",
+                "execution.outcome",
+                "execution.assignment.outcome",
+                "execution.assignment.call_usage",
+                "execution.synthesis.outcome",
+                "execution.synthesis.call_usage",
+                "terminal.scope",
+                "terminal.outcome",
+                "terminal.call_usage",
+            ),
+        )
+        searchable_names = " ".join(item.value for item in observed_keys)
+        for forbidden in (
+            "authority",
+            "capability",
+            "diagnostic",
+            "private",
+            "provider_session",
+            "revision_digest",
+        ):
+            self.assertNotIn(forbidden, searchable_names)
+
+    def test_default_context_is_content_free_and_selection_is_bounded_additive(
+        self,
+    ) -> None:
+        history, _, _ = executed_history()
+        empty = select_bounded_collaboration_context(history)
+
+        self.assertEqual(empty.records, ())
+        self.assertEqual(empty.requested_records, 0)
+        self.assertEqual(empty.bootstrap.total_records, len(history))
+        self.assertEqual(empty.bootstrap.last_sequence, len(history))
+        self.assertEqual(empty.bootstrap.tail_batch_digest, history[-1].batch_digest)
+        self.assertEqual(
+            tuple(field.name for field in dataclasses.fields(empty.bootstrap)),
+            (
+                "schema_version",
+                "session_id",
+                "conversation_id",
+                "total_records",
+                "last_sequence",
+                "tail_batch_digest",
+            ),
+        )
+        self.assertNotIn(
+            "current_input",
+            inspect.signature(select_bounded_collaboration_context).parameters,
+        )
+
+        event_ids = (history[-1].event_id, history[0].event_id)
+        selected = select_bounded_collaboration_context(
+            history,
+            event_ids=event_ids,
+            policy=CollaborationReadableContextPolicy(
+                max_records=1,
+                max_utf8_bytes=COLLABORATION_READABLE_CONTEXT_POLICY.max_utf8_bytes,
+            ),
+        )
+        self.assertEqual(tuple(item.sequence for item in selected.records), (1,))
+        self.assertEqual(selected.requested_records, 2)
+        self.assertEqual(selected.retained_records, 1)
+        self.assertEqual(selected.omitted_records, 1)
+        self.assertTrue(selected.truncated)
+
+        for event_ids in ((history[0].event_id,) * 2, ("unknown_event",)):
+            with self.subTest(event_ids=event_ids):
+                with self.assertRaises(ValueError):
+                    select_bounded_collaboration_context(
+                        history,
+                        event_ids=event_ids,
+                    )
+
+    def test_readable_projection_rejects_v1_and_every_corrupt_history_shape(
+        self,
+    ) -> None:
+        legacy = ConversationEvent(
+            schema_version=CONVERSATION_EVENT_SCHEMA_VERSION,
+            session_id=SESSION_ID,
+            conversation_id=CONVERSATION_ID,
+            turn_id="legacy_turn",
+            sequence=1,
+            timestamp="2026-08-31T00:00:00+00:00",
+            sender="user",
+            recipient="lead_orchestrator",
+            kind=ConversationEventKind.USER_MESSAGE,
+            content="Legacy content.",
+        )
+        with self.assertRaises(TypeError):
+            project_collaboration_readable_history((legacy,))  # type: ignore[arg-type]
+
+        history, _, _ = executed_history()
+        corruptions = (
+            (replace(history[0], sequence=2), *history[1:]),
+            (*history[:-1], replace(history[-1], event_id=history[0].event_id)),
+            (*history[:-1], replace(history[-1], batch_digest="sha256:" + "0" * 64)),
+        )
+        for corrupted in corruptions:
+            with self.subTest(last_event=corrupted[-1].event_id):
+                with self.assertRaises(ValueError):
+                    project_collaboration_readable_history(corrupted)
+        with self.assertRaises(ValueError):
+            replace(project_collaboration_readable_history(history)[0], fields=())
 
 
 class CollaborationPortAndLegacyIsolationTests(unittest.TestCase):

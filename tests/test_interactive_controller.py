@@ -16,19 +16,14 @@ import unittest
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError, fields, replace
 from pathlib import Path
-from types import SimpleNamespace
 from typing import get_type_hints
 from unittest import mock
 
 import story_writing_agents
 from story_writing_agents.agents import (
     AGENT_SPECS,
-    CHARACTER_CUSTODIAN,
-    EXECUTION_SPECIALIST,
-    LEAD_ORCHESTRATOR,
     PLOT_ARCHITECT,
     ROSTER,
-    SPECIALIST_IDS,
 )
 from story_writing_agents import interactive_controller as controller_package
 from story_writing_agents.backend import AgentBackend
@@ -40,14 +35,6 @@ from story_writing_agents.cli_context import (
     save_default_session,
 )
 from story_writing_agents.config import ConfigManager
-from story_writing_agents.agent_context.manifest import (
-    ContextScope,
-    ContextSubjectKind,
-)
-from story_writing_agents.agent_context.service import (
-    ContextExecutionEvent,
-    ContextExecutionEventKind,
-)
 from story_writing_agents.conversation_search import (
     ConversationCitation,
     ConversationSearchHit,
@@ -58,13 +45,10 @@ from story_writing_agents.conversation_search import (
     ConversationTranscriptCursor,
     ConversationTranscriptPage,
 )
-from story_writing_agents.conversation_rag_composition import (
-    ConversationRagCompositionError,
-    ConversationRagCompositionFailure,
-)
 from story_writing_agents.conversation_storage import (
     CONVERSATION_STORAGE_ACTIVATION_STATE_PATH,
     ConversationStorageBackend,
+    ConversationStorageComponentBinding,
     ConversationStorageServices,
     compose_filesystem_conversation_storage,
 )
@@ -76,6 +60,7 @@ from story_writing_agents.conversation_storage.selection import (
     ConversationStorageSelectionReport,
 )
 from story_writing_agents.conversations import (
+    CollaborationEventBatch,
     CONVERSATION_EVENT_SCHEMA_VERSION,
     CONVERSATION_METADATA_SCHEMA_VERSION,
     ConversationCatalog,
@@ -138,19 +123,6 @@ from story_writing_agents.provider_catalog import (
 )
 from story_writing_agents import interactive_terminal as terminal_module
 from story_writing_agents.interactive_terminal._render import render_plain
-from story_writing_agents.interactive_terminal._reference_activation import (
-    ReferenceInputFailure,
-    ReferenceInputFailureKind,
-    ReferenceInputScope,
-)
-from story_writing_agents.models import (
-    DebateContextMode,
-    DebateFailureKind,
-    DebateMessage,
-    DebateProgressEvent,
-    DebateProgressPhase,
-    InputKind,
-)
 from story_writing_agents.session_lifecycle import (
     SessionAccessState,
     SessionDurableState,
@@ -159,8 +131,8 @@ from story_writing_agents.session_lifecycle import (
 from story_writing_agents.workspace import (
     Workspace,
 )
-from story_writing_agents.writing_artifacts import MAX_VIEWER_UTF8_BYTES
 
+from tests.collaboration_contract_fixture import contract_batches
 from tests.helpers import initialized_workspace
 
 
@@ -365,8 +337,7 @@ def _tree_snapshot(root: Path) -> dict[str, tuple[bytes, int, int]]:
             path.stat().st_mtime_ns,
         )
         for path in sorted(root.rglob("*"))
-        if path.is_file()
-        and "debug_logs" not in path.relative_to(root).parts
+        if path.is_file() and "debug_logs" not in path.relative_to(root).parts
     }
 
 
@@ -419,17 +390,22 @@ def _conversation_scope_record(
     *,
     width: int = 200,
 ) -> str:
-    """Return one exact framed conversation-scope callback record."""
+    """Return one exact retained conversation-or-empty callback record."""
 
-    fields = [
-        terminal_module.Field("Session", session_id),
-        terminal_module.Field("Conversation", conversation_id or "none"),
-    ]
-    if subject is not None:
-        fields.append(terminal_module.Field("Subject", subject))
-    fields.append(terminal_module.Field("Agent", "lead"))
-    component = terminal_module.Panel("Conversation scope", tuple(fields))
-    return f"{render_plain(component, width=width).text}\n"
+    del width
+    if conversation_id is None:
+        return (
+            "[conversation] [empty]\n"
+            f"  Session: {session_id}\n"
+            "  Conversation: none\n"
+            "  Subject: none\n"
+        )
+    return (
+        "[conversation]\n"
+        f"  Session: {session_id}\n"
+        f"  Conversation: {conversation_id}\n"
+        f"  Subject: {subject}\n"
+    )
 
 
 def _lifecycle(
@@ -579,9 +555,7 @@ class ScriptedConversationMemoryService:
     ) -> object:
         """Record and return one fresh-page outcome or scripted failure."""
 
-        self.transcript_calls.append(
-            (conversation_id, start_sequence, max_events)
-        )
+        self.transcript_calls.append((conversation_id, start_sequence, max_events))
         if not self.transcript_outcomes:
             raise AssertionError("unexpected transcript read")
         outcome = self.transcript_outcomes.pop(0)
@@ -640,10 +614,7 @@ class MemoryConversationCatalog:
             entry
             for entry in self.entries
             if entry.session_id == session_id
-            and (
-                include_archived
-                or entry.status is ConversationStatus.ACTIVE
-            )
+            and (include_archived or entry.status is ConversationStatus.ACTIVE)
         )
 
     def rename(
@@ -671,9 +642,7 @@ class MemoryConversationCatalog:
         current = self.get(session_id, conversation_id)
         if current.status is ConversationStatus.ARCHIVED:
             return current
-        return self._replace(
-            replace(current, status=ConversationStatus.ARCHIVED)
-        )
+        return self._replace(replace(current, status=ConversationStatus.ARCHIVED))
 
     def unarchive(
         self,
@@ -765,7 +734,18 @@ class ControllerTestCase(unittest.TestCase):
         )
         controller_keywords: dict[str, object] = {}
         if conversation_catalog is not None:
-            controller_keywords["conversation_catalog"] = conversation_catalog
+            if conversation_storage_services is not None:
+                raise TypeError("catalog and storage services are mutually exclusive")
+            base = compose_filesystem_conversation_storage(workspace)
+            conversation_storage_services = ConversationStorageServices(
+                catalog_binding=ConversationStorageComponentBinding(
+                    base.provenance,
+                    conversation_catalog,
+                ),
+                event_store_binding=base.event_store_binding,
+                search_binding=base.search_binding,
+                mutation_coordinator=base.mutation_coordinator,
+            )
         if conversation_storage_services is not None:
             controller_keywords["conversation_storage_services"] = (
                 conversation_storage_services
@@ -813,7 +793,6 @@ class ControllerContractTests(ControllerTestCase):
                 "context",
                 "backend",
                 "terminal",
-                "conversation_catalog",
                 "conversation_storage_services",
                 "auth_coordinator",
                 "provider_catalog",
@@ -826,15 +805,7 @@ class ControllerContractTests(ControllerTestCase):
                 for parameter in tuple(constructor.parameters.values())[:4]
             )
         )
-        catalog_parameter = constructor.parameters["conversation_catalog"]
-        self.assertIs(
-            catalog_parameter.kind,
-            inspect.Parameter.KEYWORD_ONLY,
-        )
-        self.assertIsNone(catalog_parameter.default)
-        services_parameter = constructor.parameters[
-            "conversation_storage_services"
-        ]
+        services_parameter = constructor.parameters["conversation_storage_services"]
         self.assertIs(
             services_parameter.kind,
             inspect.Parameter.KEYWORD_ONLY,
@@ -856,16 +827,13 @@ class ControllerContractTests(ControllerTestCase):
                 "context": CliContext,
                 "backend": AgentBackend,
                 "terminal": InteractiveTerminal,
-                "conversation_catalog": ConversationCatalog | None,
                 "conversation_storage_services": ConversationStorageServices | None,
                 "auth_coordinator": InteractiveAuthCoordinator | None,
                 "provider_catalog": ProviderCatalogService | None,
                 "return": type(None),
             },
         )
-        run_signature = inspect.signature(
-            InteractiveController.run_session_lobby
-        )
+        run_signature = inspect.signature(InteractiveController.run_session_lobby)
         self.assertEqual(
             tuple(run_signature.parameters),
             ("self", "requested_session"),
@@ -896,7 +864,7 @@ class ControllerContractTests(ControllerTestCase):
         self.assertEqual(callbacks.prompts, [])
         self.assertEqual(callbacks.records, [])
 
-        with self.assertRaisesRegex(TypeError, "ConversationCatalog"):
+        with self.assertRaisesRegex(TypeError, "conversation_catalog"):
             InteractiveController(
                 workspace,
                 CliContext(),
@@ -964,7 +932,7 @@ class ControllerContractTests(ControllerTestCase):
         self.assertIsNone(controller._runner)
         self.assertIsNone(controller._attached_session_id)
         self.assertIsNone(controller._focused_conversation)
-        self.assertIsNone(controller._conversation_memory_service)
+        self.assertIsNone(controller._collaboration_history_service)
 
     def test_trace_failure_preserves_rejected_and_success_output_and_cleanup(
         self,
@@ -978,9 +946,7 @@ class ControllerContractTests(ControllerTestCase):
             "/quit",
         )
         failed_log = mock.Mock()
-        failed_log.trace.side_effect = KeyboardInterrupt(
-            "diagnostic trace failure"
-        )
+        failed_log.trace.side_effect = KeyboardInterrupt("diagnostic trace failure")
         controller._debug_log = failed_log
 
         with mock.patch.object(
@@ -1003,7 +969,7 @@ class ControllerContractTests(ControllerTestCase):
         self.assertIsNone(controller._runner)
         self.assertIsNone(controller._attached_session_id)
         self.assertIsNone(controller._focused_conversation)
-        self.assertIsNone(controller._conversation_memory_service)
+        self.assertIsNone(controller._collaboration_history_service)
 
     def test_runtime_inspection_facts_are_exact_frozen_internal_contracts(
         self,
@@ -1095,316 +1061,11 @@ class ControllerContractTests(ControllerTestCase):
         with self.assertRaises(FrozenInstanceError):
             context.truncated = True  # type: ignore[misc]
 
-    def test_context_progress_projection_validates_interleaved_operations_exactly(
-        self,
-    ) -> None:
-        projection_type = runtime_policy_module.ContextProgressProjection
-        validator = runtime_policy_module.validate_context_execution_progress
-        self.assertEqual(
-            tuple(field.name for field in fields(projection_type)),
-            (
-                "workspace_id",
-                "session_id",
-                "subject_kind",
-                "subject_id",
-                "agent_id",
-                "operation_id",
-                "kind",
-                "stage",
-                "phase",
-                "round_number",
-                "action_index",
-                "selected_source_count",
-                "selected_source_utf8_bytes",
-                "omitted_searchable_source_count",
-                "omitted_searchable_source_utf8_bytes",
-                "search_hit_count",
-                "retrieved_source_count",
-                "retrieved_source_utf8_bytes",
-                "mandatory_reference_count",
-                "mandatory_reference_utf8_bytes",
-                "provider_input_tokens",
-                "truncated",
-            ),
-        )
-        self.assertNotIn("ContextProgressProjection", controller_package.__all__)
-        self.assertNotIn(
-            "validate_context_execution_progress",
-            controller_package.__all__,
-        )
-        scope = ContextScope(
-            "workspace",
-            "session",
-            ContextSubjectKind.CONVERSATION,
-            "conversation",
-            LEAD_ORCHESTRATOR,
-        )
-        plan_facts = {
-            "selected_source_count": 3,
-            "selected_source_utf8_bytes": 2048,
-            "omitted_searchable_source_count": 1,
-            "omitted_searchable_source_utf8_bytes": 64,
-            "mandatory_reference_count": 0,
-            "mandatory_reference_utf8_bytes": 0,
-        }
-        operations: dict[tuple[str, str, str, str, str, str], object] = {}
-
-        def accept(event: ContextExecutionEvent):
-            projection = validator(
-                event,
-                expected_session_id="session",
-                expected_subject_kind="conversation",
-                expected_subject_id="conversation",
-                expected_agent_id=LEAD_ORCHESTRATOR,
-                previous_by_operation=operations,
-            )
-            operations[projection.operation_key] = projection
-            return projection
-
-        first = accept(
-            ContextExecutionEvent(
-                ContextExecutionEventKind.BOOTSTRAP,
-                scope,
-                "operation-a",
-                **plan_facts,
-            )
-        )
-        second = accept(
-            ContextExecutionEvent(
-                ContextExecutionEventKind.DELTA,
-                scope,
-                "operation-b",
-                **plan_facts,
-            )
-        )
-        self.assertEqual((first.stage, second.stage), ("plan", "plan"))
-        self.assertFalse(first.terminal)
-        with self.assertRaises(FrozenInstanceError):
-            first.stage = "private"  # type: ignore[misc]
-
-        interleaved = (
-            ContextExecutionEvent(
-                ContextExecutionEventKind.SEARCH_STARTED,
-                scope,
-                "operation-a",
-                action_index=1,
-            ),
-            ContextExecutionEvent(
-                ContextExecutionEventKind.ANSWER_AUTHORIZED,
-                scope,
-                "operation-b",
-                action_index=1,
-            ),
-            ContextExecutionEvent(
-                ContextExecutionEventKind.SEARCH_COMPLETED,
-                scope,
-                "operation-a",
-                action_index=1,
-                search_hit_count=2,
-                observation_utf8_bytes=90,
-                truncated=False,
-            ),
-            ContextExecutionEvent(
-                ContextExecutionEventKind.CHECKPOINT_ADVANCED,
-                scope,
-                "operation-b",
-                provider_input_tokens=12,
-            ),
-            ContextExecutionEvent(
-                ContextExecutionEventKind.READ_STARTED,
-                scope,
-                "operation-a",
-                action_index=2,
-            ),
-            ContextExecutionEvent(
-                ContextExecutionEventKind.READ_COMPLETED,
-                scope,
-                "operation-a",
-                action_index=2,
-                retrieved_source_count=2,
-                retrieved_source_utf8_bytes=800,
-                transcript_turn_count=0,
-                transcript_event_count=0,
-                observation_utf8_bytes=850,
-            ),
-            ContextExecutionEvent(
-                ContextExecutionEventKind.ANSWER_AUTHORIZED,
-                scope,
-                "operation-a",
-                action_index=3,
-            ),
-            ContextExecutionEvent(
-                ContextExecutionEventKind.CHECKPOINT_ADVANCED,
-                scope,
-                "operation-a",
-                provider_input_tokens=None,
-            ),
-        )
-        stages = tuple(accept(event).stage for event in interleaved)
-        self.assertEqual(
-            stages,
-            ("action", "verify", "action", "commit", "action", "action", "verify", "commit"),
-        )
-        self.assertTrue(operations[first.operation_key].terminal)  # type: ignore[attr-defined]
-        self.assertTrue(operations[second.operation_key].terminal)  # type: ignore[attr-defined]
-
-        failure = accept(
-            ContextExecutionEvent(
-                ContextExecutionEventKind.INVALIDATED,
-                scope,
-                "operation-c",
-            )
-        )
-        self.assertEqual(failure.stage, "fail")
-        accept(
-            ContextExecutionEvent(
-                ContextExecutionEventKind.TAINTED,
-                scope,
-                "operation-c",
-            )
-        )
-        failed_terminal = accept(
-            ContextExecutionEvent(
-                ContextExecutionEventKind.CHECKPOINT_NOT_ADVANCED,
-                scope,
-                "operation-c",
-                provider_input_tokens=None,
-            )
-        )
-        self.assertTrue(failed_terminal.terminal)
-
-        invalid_events = (
-            ContextExecutionEvent(
-                ContextExecutionEventKind.ANSWER_AUTHORIZED,
-                scope,
-                "operation-d",
-                action_index=1,
-            ),
-            ContextExecutionEvent(
-                ContextExecutionEventKind.ANSWER_AUTHORIZED,
-                scope,
-                "operation-b",
-                action_index=2,
-            ),
-            ContextExecutionEvent(
-                ContextExecutionEventKind.SEARCH_STARTED,
-                scope,
-                "operation-a",
-                action_index=4,
-            ),
-        )
-        for event in invalid_events:
-            with self.subTest(kind=event.kind, operation=event.operation_id):
-                with self.assertRaises(ValueError):
-                    accept(event)
-
-        for violation in ("pair", "index"):
-            with self.subTest(violation=violation):
-                local: dict[tuple[str, str, str, str, str, str], object] = {}
-
-                def local_accept(event: ContextExecutionEvent):
-                    value = validator(
-                        event,
-                        expected_session_id="session",
-                        expected_subject_kind="conversation",
-                        expected_subject_id="conversation",
-                        expected_agent_id=LEAD_ORCHESTRATOR,
-                        previous_by_operation=local,
-                    )
-                    local[value.operation_key] = value
-
-                operation_id = f"operation-{violation}"
-                local_accept(
-                    ContextExecutionEvent(
-                        ContextExecutionEventKind.BOOTSTRAP,
-                        scope,
-                        operation_id,
-                        **plan_facts,
-                    )
-                )
-                if violation == "pair":
-                    local_accept(
-                        ContextExecutionEvent(
-                            ContextExecutionEventKind.SEARCH_STARTED,
-                            scope,
-                            operation_id,
-                            action_index=1,
-                        )
-                    )
-                    bad = ContextExecutionEvent(
-                        ContextExecutionEventKind.READ_COMPLETED,
-                        scope,
-                        operation_id,
-                        action_index=1,
-                        retrieved_source_count=0,
-                        retrieved_source_utf8_bytes=0,
-                        transcript_turn_count=0,
-                        transcript_event_count=0,
-                        observation_utf8_bytes=0,
-                    )
-                else:
-                    bad = ContextExecutionEvent(
-                        ContextExecutionEventKind.SEARCH_STARTED,
-                        scope,
-                        operation_id,
-                        action_index=2,
-                    )
-                with self.assertRaisesRegex(ValueError, "phase order"):
-                    local_accept(bad)
-
-        omission_operations: dict[tuple[str, str, str, str, str, str], object] = {}
-        omission_plan = ContextExecutionEvent(
-            ContextExecutionEventKind.BOOTSTRAP,
-            scope,
-            "operation-omission",
-            **plan_facts,
-        )
-        projection = validator(
-            omission_plan,
-            expected_session_id="session",
-            expected_subject_kind="conversation",
-            expected_subject_id="conversation",
-            expected_agent_id=LEAD_ORCHESTRATOR,
-            previous_by_operation=omission_operations,
-        )
-        omission_operations[projection.operation_key] = projection
-        with self.assertRaisesRegex(ValueError, "omission facts"):
-            validator(
-                ContextExecutionEvent(
-                    ContextExecutionEventKind.OMISSION,
-                    scope,
-                    "operation-omission",
-                    omitted_searchable_source_count=2,
-                    omitted_searchable_source_utf8_bytes=64,
-                ),
-                expected_session_id="session",
-                expected_subject_kind="conversation",
-                expected_subject_id="conversation",
-                expected_agent_id=LEAD_ORCHESTRATOR,
-                previous_by_operation=omission_operations,
-            )
-        foreign_scope = replace(scope, session_id="foreign")
-        with self.assertRaisesRegex(ValueError, "identity"):
-            validator(
-                ContextExecutionEvent(
-                    ContextExecutionEventKind.INVALIDATED,
-                    foreign_scope,
-                    "operation-foreign",
-                ),
-                expected_session_id="session",
-                expected_subject_kind="conversation",
-                expected_subject_id="conversation",
-                expected_agent_id=LEAD_ORCHESTRATOR,
-                previous_by_operation={},
-            )
-
     def test_agents_and_status_ignore_message_detail_preference(self) -> None:
         workspace = self.make_workspace()
         controller, _backend, callbacks = self.make_controller(workspace)
         components: list[object] = []
-        real_write_component = (
-            terminal_module.InteractiveSemanticOutput.write_component
-        )
+        real_write_component = terminal_module.InteractiveSemanticOutput.write_component
 
         def capture_component(output, component):
             components.append(component)
@@ -1454,7 +1115,6 @@ class ControllerContractTests(ControllerTestCase):
                 tuple(field.label for field in item.fields)
                 == (
                     "ID",
-                    "Aliases",
                     "Advisory domain",
                     "Execution",
                     "Confirmation",
@@ -1491,9 +1151,7 @@ class ControllerContractTests(ControllerTestCase):
         self,
     ) -> None:
         source_root = (
-            Path(__file__).resolve().parents[1]
-            / "src"
-            / "story_writing_agents"
+            Path(__file__).resolve().parents[1] / "src" / "story_writing_agents"
         )
         controller_tree = ast.parse(
             (source_root / "interactive_controller" / "_core.py").read_text(
@@ -1531,9 +1189,7 @@ class ControllerContractTests(ControllerTestCase):
 
     def test_five_unit_responsibilities_dependencies_and_policy_state(self) -> None:
         source_root = (
-            Path(__file__).resolve().parents[1]
-            / "src"
-            / "story_writing_agents"
+            Path(__file__).resolve().parents[1] / "src" / "story_writing_agents"
         )
         controller_root = source_root / "interactive_controller"
         sources = {
@@ -1560,11 +1216,11 @@ class ControllerContractTests(ControllerTestCase):
                 "Pure lifecycle interpretation for the interactive controller."
             ),
             "interactive_controller._conversation_policy": (
-                "Pure conversation fact interpretation for the interactive "
-                "controller."
+                "Pure conversation fact interpretation for the interactive controller."
             ),
             "interactive_controller._runtime_policy": (
-                "Pure runtime fact interpretation for the interactive controller."
+                "Pure persisted-runtime fact interpretation for the interactive "
+                "controller."
             ),
         }
         expected_dependencies = {
@@ -1574,8 +1230,6 @@ class ControllerContractTests(ControllerTestCase):
                 "agents",
                 "backend",
                 "cli_context",
-                "conversation_retrieval",
-                "conversation_rag_composition",
                 "conversation_search",
                 "conversation_storage.contracts",
                 "conversation_storage.selection",
@@ -1591,15 +1245,12 @@ class ControllerContractTests(ControllerTestCase):
                 "interactive_controller._runtime_policy",
                 "interactive_controller._session_policy",
                 "interactive_terminal",
-                "models",
                 "orchestrator",
-                "provider_auth",
                 "provider_adapter",
+                "provider_auth",
                 "provider_catalog",
-                "run_inputs",
                 "session_lifecycle",
                 "workspace",
-                "writing_artifacts",
             },
             "interactive_controller._session_policy": {
                 "errors",
@@ -1614,9 +1265,6 @@ class ControllerContractTests(ControllerTestCase):
                 "workspace",
             },
             "interactive_controller._runtime_policy": {
-                "agent_context.service",
-                "conversation_retrieval",
-                "conversation_search",
                 "errors",
                 "interactive_terminal",
                 "models",
@@ -1641,7 +1289,9 @@ class ControllerContractTests(ControllerTestCase):
                 if isinstance(node, ast.ImportFrom) and node.level > 0
             }
             with self.subTest(module=module_name):
-                self.assertEqual(ast.get_docstring(tree), expected_docstrings[module_name])
+                self.assertEqual(
+                    ast.get_docstring(tree), expected_docstrings[module_name]
+                )
                 self.assertEqual(dependencies, expected_dependencies[module_name])
 
         expected_policy_exports = {
@@ -1668,25 +1318,16 @@ class ControllerContractTests(ControllerTestCase):
                 "validate_catalog_metadata",
                 "validate_conversation_reference",
                 "validate_search_result_handles",
+                "validate_history_snapshot",
                 "validate_transcript_page",
                 "visible_conversation_handle",
             ],
             runtime_policy_module: [
-                "ContextProgressProjection",
                 "DebateContextInspectionFacts",
                 "DebateInspectionFacts",
-                "classify_advisory_turn_failure",
-                "classify_consensus_execution_failure",
                 "classify_inspection_failure",
-                "classify_progress_callback_failure",
-                "interactive_code_for_debate_failure",
-                "validate_consensus_result",
-                "validate_context_execution_progress",
-                "validate_conversation_retrieval_progress",
-                "validate_conversation_retrieval_result",
                 "validate_debate_context_inspection",
                 "validate_debate_inspection",
-                "validate_debate_progress",
                 "validate_session_inspection",
             ],
         }
@@ -1719,7 +1360,6 @@ class ControllerContractTests(ControllerTestCase):
                 "ConversationResolutionFailure",
             },
             "interactive_controller._runtime_policy": {
-                "ContextProgressProjection",
                 "DebateContextInspectionFacts",
                 "DebateInspectionFacts",
             },
@@ -1740,10 +1380,18 @@ class ControllerContractTests(ControllerTestCase):
                 self.assertEqual(assignments, expected_policy_assignments[module_name])
                 self.assertEqual(classes, expected_policy_classes[module_name])
                 self.assertFalse(
-                    [node for node in ast.walk(tree) if isinstance(node, ast.AsyncFunctionDef)]
+                    [
+                        node
+                        for node in ast.walk(tree)
+                        if isinstance(node, ast.AsyncFunctionDef)
+                    ]
                 )
                 self.assertFalse(
-                    [node for node in ast.walk(tree) if isinstance(node, (ast.Global, ast.Nonlocal))]
+                    [
+                        node
+                        for node in ast.walk(tree)
+                        if isinstance(node, (ast.Global, ast.Nonlocal))
+                    ]
                 )
                 self.assertFalse(
                     {
@@ -1874,7 +1522,7 @@ class ControllerContractTests(ControllerTestCase):
         for module_name in graph:
             visit(module_name)
         self.assertEqual(len(modules), 97)
-        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 385)
+        self.assertEqual(sum(len(dependencies) for dependencies in graph.values()), 362)
         self.assertTrue(
             {
                 "story_writing_agents.conversations",
@@ -1899,1287 +1547,9 @@ class ControllerContractTests(ControllerTestCase):
             <= modules
         )
 
-    def test_reference_callbacks_are_scoped_fresh_bounded_and_content_free(
-        self,
-    ) -> None:
-        workspace = self.make_workspace()
-        controller, _backend, _callbacks = self.make_controller(workspace)
-        focused = _conversation_metadata("c_0123456789", "Focused")
-        controller._attached_session_id = "session"
-        controller._focused_conversation = focused
-
-        scope_cases = (
-            ("ordinary $", 10, ReferenceInputScope(0, 10)),
-            ("@plot revise $", 14, ReferenceInputScope(6, 14)),
-            ("/say revise $", 13, ReferenceInputScope(5, 13)),
-            ("/run --fresh revise $", 21, ReferenceInputScope(13, 21)),
-            ("/status $", 9, None),
-            ("/run --output part.md $", 18, None),
-        )
-        for buffer, cursor, expected in scope_cases:
-            with self.subTest(buffer=buffer):
-                self.assertEqual(
-                    controller._main_reference_scope(buffer, cursor),
-                    expected,
-                )
-        controller._focused_conversation = None
-        self.assertIsNone(controller._main_reference_scope("ordinary $", 10))
-        controller._focused_conversation = focused
-        controller._attached_session_id = None
-        self.assertIsNone(controller._main_reference_scope("ordinary $", 10))
-        self.assertEqual(
-            controller._composition_reference_scope("line $", 3),
-            ReferenceInputScope(0, 6),
-        )
-
-        repository = controller._runtime.artifacts
-        snapshots = (
-            ("core_documents/global_outline.md",),
-            ("core_documents/character_sheets.md",),
-        )
-        with mock.patch.object(
-            repository,
-            "list_paths",
-            side_effect=snapshots,
-        ) as list_paths:
-            self.assertEqual(controller._reference_paths(), snapshots[0])
-            self.assertEqual(controller._reference_paths(), snapshots[1])
-        self.assertEqual(list_paths.call_count, 2)
-
-        path = snapshots[0][0]
-        with mock.patch.object(
-            repository,
-            "read_text",
-            return_value="private referenced bytes",
-        ) as read_text:
-            self.assertEqual(
-                controller._reference_text(path),
-                "private referenced bytes",
-            )
-        read_text.assert_called_once_with(path, max_bytes=MAX_VIEWER_UTF8_BYTES)
-
-        failures = (
-            (
-                "list_paths",
-                OSError("catalog secret"),
-                ReferenceInputFailureKind.UNAVAILABLE,
-            ),
-            (
-                "read_text",
-                WorkspaceSecurityError("race secret"),
-                ReferenceInputFailureKind.STALE,
-            ),
-            (
-                "read_text",
-                WorkspaceFormatError("decode secret"),
-                ReferenceInputFailureKind.UNREADABLE,
-            ),
-            (
-                "read_text",
-                OSError("storage secret"),
-                ReferenceInputFailureKind.UNAVAILABLE,
-            ),
-        )
-        for method, failure, expected in failures:
-            with self.subTest(method=method, expected=expected), mock.patch.object(
-                repository,
-                method,
-                side_effect=failure,
-            ):
-                with self.assertRaises(ReferenceInputFailure) as raised:
-                    if method == "list_paths":
-                        controller._reference_paths()
-                    else:
-                        controller._reference_text(path)
-                self.assertIs(raised.exception.kind, expected)
-                self.assertEqual(str(raised.exception), expected.value)
-                self.assertNotIn("secret", str(raised.exception))
-
-
-class ControllerDebateVisibilityTests(ControllerTestCase):
-    """Verify debate handoffs and blackboard message presentation."""
-
-    def _event(
-        self,
-        phase: DebateProgressPhase,
-        *,
-        input_kind: InputKind = InputKind.PROMPT,
-        revision_id: str | None = None,
-        round_number: int = 0,
-        context_mode: DebateContextMode | None = None,
-        context_event_count: int = 0,
-        context_omitted_turns: int = 0,
-        conflicting_agents: tuple[str, ...] = (),
-        manuscript_path: str | None = None,
-        core_updates: tuple[str, ...] = (),
-        failure_kind: DebateFailureKind | None = None,
-    ) -> DebateProgressEvent:
-        """Build one valid event for direct visibility projections."""
-
-        return DebateProgressEvent(
-            session_id="session",
-            debate_id="debate",
-            input_kind=input_kind,
-            phase=phase,
-            revision_id=revision_id,
-            round_number=round_number,
-            context_mode=context_mode,
-            context_event_count=context_event_count,
-            context_omitted_turns=context_omitted_turns,
-            conflicting_agents=conflicting_agents,
-            manuscript_path=manuscript_path,
-            core_updates=core_updates,
-            failure_kind=failure_kind,
-        )
-
-    def test_draft_and_synthesis_handoffs_match_runtime_flow(self) -> None:
-        workspace = self.make_workspace()
-        controller, backend, _callbacks = self.make_controller(workspace)
-
-        draft_start = controller._debate_handoff_for_phase(
-            self._event(DebateProgressPhase.STARTED, input_kind=InputKind.DRAFT)
-        )
-        self.assertEqual(
-            draft_start,
-            (
-                ("user",),
-                (EXECUTION_SPECIALIST,),
-                "Ask Execution Specialist to author revision 0 from the supplied draft.",
-            ),
-        )
-        drafted = (
-            (EXECUTION_SPECIALIST,),
-            tuple(SPECIALIST_IDS),
-            "Draft complete; request specialist audits.",
-        )
-        self.assertEqual(
-            controller._debate_handoff_for_phase(
-                self._event(
-                    DebateProgressPhase.DRAFTED,
-                    input_kind=InputKind.DRAFT,
-                    revision_id="r0",
-                )
-            ),
-            drafted,
-        )
-        self.assertEqual(
-            controller._debate_handoff_for_phase(
-                self._event(
-                    DebateProgressPhase.DRAFTED,
-                    input_kind=InputKind.PROMPT,
-                    revision_id="r0",
-                )
-            ),
-            drafted,
-        )
-        synthesized = controller._debate_handoff_for_phase(
-            self._event(
-                DebateProgressPhase.SYNTHESIZED,
-                revision_id="r1",
-                round_number=1,
-            )
-        )
-        self.assertEqual(synthesized[0], ("lead_orchestrator",))
-        self.assertEqual(synthesized[1], tuple(SPECIALIST_IDS))
-        backend.close()
-
-    def test_every_phase_writes_one_panel_with_always_visible_fields(self) -> None:
-        workspace = self.make_workspace()
-        controller, backend, callbacks = self.make_controller(workspace)
-        controller._show_message_details = False
-        cases = (
-            (
-                self._event(
-                    DebateProgressPhase.STARTED,
-                    context_mode=DebateContextMode.INCLUDED,
-                    context_event_count=4,
-                    context_omitted_turns=1,
-                ),
-                "Started",
-                "Started prompt consensus.",
-                terminal_module.SemanticRole.INFO,
-                terminal_module.ViewState.LOADING,
-                terminal_module.ViewState.IDLE,
-            ),
-            (
-                self._event(DebateProgressPhase.DRAFTED, revision_id="r0"),
-                "Drafted",
-                "Drafted revision r0.",
-                terminal_module.SemanticRole.INFO,
-                terminal_module.ViewState.LOADING,
-                terminal_module.ViewState.IDLE,
-            ),
-            (
-                self._event(DebateProgressPhase.AUDIT_STARTED, revision_id="r0"),
-                "Audit started",
-                "Audit started for r0 at round 0.",
-                terminal_module.SemanticRole.INFO,
-                terminal_module.ViewState.LOADING,
-                terminal_module.ViewState.IDLE,
-            ),
-            (
-                self._event(
-                    DebateProgressPhase.AUDIT_COMPLETED,
-                    revision_id="r0",
-                    conflicting_agents=(PLOT_ARCHITECT,),
-                ),
-                "Audit completed",
-                "Audit completed for r0 at round 0; conflicts: plot_architect.",
-                terminal_module.SemanticRole.INFO,
-                terminal_module.ViewState.LOADING,
-                terminal_module.ViewState.IDLE,
-            ),
-            (
-                self._event(
-                    DebateProgressPhase.SYNTHESIZED,
-                    revision_id="r1",
-                    round_number=1,
-                ),
-                "Synthesized",
-                "Synthesized r1 at round 1.",
-                terminal_module.SemanticRole.INFO,
-                terminal_module.ViewState.LOADING,
-                terminal_module.ViewState.IDLE,
-            ),
-            (
-                self._event(
-                    DebateProgressPhase.ARTIFACTS_COMMITTED,
-                    revision_id="r1",
-                    round_number=1,
-                    manuscript_path="manuscript/part.md",
-                    core_updates=("global_outline.md",),
-                ),
-                "Artifacts committed",
-                (
-                    "Artifacts committed for r1: manuscript/part.md; "
-                    "core updates: global_outline.md."
-                ),
-                terminal_module.SemanticRole.INFO,
-                terminal_module.ViewState.LOADING,
-                terminal_module.ViewState.IDLE,
-            ),
-            (
-                self._event(
-                    DebateProgressPhase.CONSENSUS,
-                    revision_id="r1",
-                    round_number=1,
-                ),
-                "Consensus",
-                "Consensus reached on r1 after 1 revision rounds.",
-                terminal_module.SemanticRole.SUCCESS,
-                terminal_module.ViewState.COMPLETED,
-                terminal_module.ViewState.COMPLETED,
-            ),
-            (
-                self._event(
-                    DebateProgressPhase.DEADLOCK,
-                    revision_id="r1",
-                    round_number=1,
-                ),
-                "Deadlock",
-                "Deadlock on r1 after 1 revision rounds.",
-                terminal_module.SemanticRole.ERROR,
-                terminal_module.ViewState.ERROR,
-                terminal_module.ViewState.ERROR,
-            ),
-            (
-                self._event(
-                    DebateProgressPhase.FAILED,
-                    revision_id="r1",
-                    round_number=1,
-                    failure_kind=DebateFailureKind.INTERNAL,
-                ),
-                "Failed",
-                "Run failed (internal).",
-                terminal_module.SemanticRole.ERROR,
-                terminal_module.ViewState.ERROR,
-                terminal_module.ViewState.ERROR,
-            ),
-            (
-                self._event(DebateProgressPhase.INTERRUPTED),
-                "Interrupted",
-                "Run interrupted after durable state transition.",
-                terminal_module.SemanticRole.WARNING,
-                terminal_module.ViewState.CANCELLED,
-                terminal_module.ViewState.CANCELLED,
-            ),
-        )
-        self.assertEqual(
-            {case[0].phase for case in cases},
-            set(DebateProgressPhase),
-        )
-        components: list[object] = []
-        real_write_component = (
-            terminal_module.InteractiveSemanticOutput.write_component
-        )
-
-        def capture_component(output, component):
-            components.append(component)
-            return real_write_component(output, component)
-
-        with mock.patch.object(
-            terminal_module.InteractiveSemanticOutput,
-            "write_component",
-            autospec=True,
-            side_effect=capture_component,
-        ):
-            for (
-                event,
-                expected_display_name,
-                expected_outcome,
-                expected_role,
-                expected_outcome_state,
-                expected_panel_state,
-            ) in cases:
-                with self.subTest(phase=event.phase):
-                    component_start = len(components)
-                    record_start = len(callbacks.records)
-                    self.assertEqual(controller._render_debate_progress(event), 0)
-                    self.assertEqual(len(components), component_start + 1)
-                    self.assertEqual(len(callbacks.records), record_start + 1)
-                    panel = components[-1]
-                    self.assertIs(type(panel), terminal_module.Panel)
-                    assert isinstance(panel, terminal_module.Panel)
-                    self.assertEqual(
-                        panel.title,
-                        f"Debate phase · {expected_display_name}",
-                    )
-                    self.assertIs(panel.state, expected_panel_state)
-                    fields = tuple(
-                        item
-                        for item in panel.items
-                        if type(item) is terminal_module.Field
-                    )
-                    self.assertEqual(
-                        tuple(field.label for field in fields),
-                        (
-                            "Debate ID",
-                            "Phase",
-                            "Round",
-                            "Revision",
-                            "Action",
-                            "Outcome",
-                            "Conflicts",
-                        ),
-                    )
-                    self.assertEqual(fields[0].value, "debate")
-                    self.assertEqual(fields[1].value, event.phase.value)
-                    self.assertEqual(fields[2].value, str(event.round_number))
-                    self.assertEqual(fields[3].value, event.revision_id or "n/a")
-                    self.assertTrue(fields[4].value)
-                    self.assertEqual(
-                        fields[5],
-                        terminal_module.Field(
-                            "Outcome",
-                            expected_outcome,
-                            role=expected_role,
-                            state=expected_outcome_state,
-                        ),
-                    )
-                    self.assertNotIn("Handoff", tuple(field.label for field in fields))
-                    if event.phase is DebateProgressPhase.AUDIT_COMPLETED:
-                        self.assertEqual(
-                            fields[6].value,
-                            "Plot & Structure Architect",
-                        )
-                    else:
-                        self.assertEqual(fields[6].value, "none")
-                    context_notices = tuple(
-                        item
-                        for item in panel.items
-                        if type(item) is terminal_module.Notice
-                        and item.label == "context"
-                    )
-                    if event.phase is DebateProgressPhase.STARTED:
-                        self.assertEqual(
-                            context_notices,
-                            (
-                                terminal_module.Notice(
-                                    (
-                                        "Included 4 focused-conversation events; "
-                                        "1 earlier turns omitted."
-                                    ),
-                                    label="context",
-                                    state=terminal_module.ViewState.COMPLETED,
-                                ),
-                            ),
-                        )
-                    else:
-                        self.assertEqual(context_notices, ())
-        with self.assertRaisesRegex(
-            RuntimeError,
-            r"^Unsupported debate progress phase\.$",
-        ):
-            controller._debate_progress_display_name(object())  # type: ignore[arg-type]
-        backend.close()
-
-    def test_phase_panel_groups_complete_speeches_and_gates_details(self) -> None:
-        long_speech = "opening " + ("x" * 1205) + " COMPLETE_TAIL"
-        raw_json = '{"verdict":"approve","score":1}'
-        formatted_json = '{\n  "verdict": "approve",\n  "score": 1\n}'
-        messages = (
-            DebateMessage(
-                "user", "initiation", 0, "r0", "prompt", "private prompt", _CREATED
-            ),
-            DebateMessage(
-                EXECUTION_SPECIALIST,
-                "draft",
-                0,
-                "r0",
-                "candidate",
-                long_speech,
-                _CREATED,
-            ),
-            DebateMessage(
-                PLOT_ARCHITECT,
-                "audit",
-                0,
-                "r0",
-                "critique",
-                raw_json,
-                _CREATED,
-            ),
-            DebateMessage(
-                EXECUTION_SPECIALIST,
-                "audit",
-                0,
-                "r0",
-                "verdict",
-                "same-group execution verdict",
-                _CREATED,
-            ),
-            DebateMessage(
-                CHARACTER_CUSTODIAN,
-                "audit",
-                1,
-                "r0",
-                "verdict",
-                "visible character verdict",
-                _CREATED,
-            ),
-            DebateMessage(
-                LEAD_ORCHESTRATOR,
-                "audit",
-                1,
-                "r1",
-                "error",
-                "provider secret details",
-                _CREATED,
-            ),
-        )
-        for details in (False, True):
-            with self.subTest(details=details):
-                workspace = self.make_workspace()
-                controller, backend, callbacks = self.make_controller(workspace)
-                controller._show_message_details = details
-                for message in messages:
-                    workspace.append_debate_message("session", "debate", message)
-                started = self._event(
-                    DebateProgressPhase.STARTED,
-                    context_mode=DebateContextMode.INCLUDED,
-                )
-                drafted = self._event(
-                    DebateProgressPhase.DRAFTED,
-                    revision_id="r0",
-                )
-                audit_started = self._event(
-                    DebateProgressPhase.AUDIT_STARTED,
-                    revision_id="r0",
-                )
-                events = [started, drafted, audit_started]
-                audit_completed = self._event(
-                    DebateProgressPhase.AUDIT_COMPLETED,
-                    revision_id="r0",
-                    conflicting_agents=(PLOT_ARCHITECT, CHARACTER_CUSTODIAN),
-                )
-                synthesized = self._event(
-                    DebateProgressPhase.SYNTHESIZED,
-                    revision_id="r1",
-                    round_number=1,
-                )
-                components: list[object] = []
-                real_write_component = (
-                    terminal_module.InteractiveSemanticOutput.write_component
-                )
-
-                def capture_component(output, component):
-                    components.append(component)
-                    return real_write_component(output, component)
-
-                with mock.patch.object(
-                    terminal_module.InteractiveSemanticOutput,
-                    "write_component",
-                    autospec=True,
-                    side_effect=capture_component,
-                ):
-                    controller._accept_debate_progress(
-                        audit_completed,
-                        expected_session_id="session",
-                        expected_input_kind=InputKind.PROMPT,
-                        expected_context_mode=DebateContextMode.INCLUDED,
-                        events=events,
-                    )
-                    controller._accept_debate_progress(
-                        synthesized,
-                        expected_session_id="session",
-                        expected_input_kind=InputKind.PROMPT,
-                        expected_context_mode=DebateContextMode.INCLUDED,
-                        events=events,
-                    )
-
-                handoff = (
-                    (
-                        terminal_module.Field(
-                            "Handoff",
-                            (
-                                "Plot & Structure Architect, "
-                                "Character & World Custodian -> Lead Orchestrator"
-                            ),
-                        ),
-                    )
-                    if details
-                    else ()
-                )
-                metadata = (lambda kind: f"Kind: {kind}") if details else (lambda _kind: None)
-                expected_audit = terminal_module.Panel(
-                    "Debate phase · Audit completed",
-                    (
-                        terminal_module.Field("Debate ID", "debate"),
-                        terminal_module.Field("Phase", "audit_completed"),
-                        terminal_module.Field("Round", "0"),
-                        terminal_module.Field("Revision", "r0"),
-                        *handoff,
-                        terminal_module.Field(
-                            "Action",
-                            "Conflicts found; return critiques to orchestrator.",
-                        ),
-                        terminal_module.Field(
-                            "Outcome",
-                            (
-                                "Audit completed for r0 at round 0; conflicts: "
-                                "plot_architect, character_custodian."
-                            ),
-                            role=terminal_module.SemanticRole.INFO,
-                            state=terminal_module.ViewState.LOADING,
-                        ),
-                        terminal_module.Field(
-                            "Conflicts",
-                            (
-                                "Plot & Structure Architect, "
-                                "Character & World Custodian"
-                            ),
-                        ),
-                        terminal_module.Section(
-                            "Speeches · draft · round 0 · revision r0",
-                            (
-                                terminal_module.Message(
-                                    "Tone & Execution Specialist",
-                                    long_speech,
-                                    role=terminal_module.SemanticRole.AGENT,
-                                    state=terminal_module.ViewState.COMPLETED,
-                                    presentation=(
-                                        terminal_module.MessagePresentation.CHAT_BLOCK
-                                    ),
-                                    metadata=metadata("candidate"),
-                                    accent=terminal_module.SpeakerAccent.BLUE,
-                                ),
-                            ),
-                        ),
-                        terminal_module.Section(
-                            "Speeches · audit · round 0 · revision r0",
-                            (
-                                terminal_module.Message(
-                                    "Plot & Structure Architect",
-                                    formatted_json,
-                                    role=terminal_module.SemanticRole.AGENT,
-                                    state=terminal_module.ViewState.COMPLETED,
-                                    presentation=(
-                                        terminal_module.MessagePresentation.CHAT_BLOCK
-                                    ),
-                                    metadata=metadata("critique"),
-                                    accent=terminal_module.SpeakerAccent.YELLOW,
-                                ),
-                                terminal_module.Message(
-                                    "Tone & Execution Specialist",
-                                    "same-group execution verdict",
-                                    role=terminal_module.SemanticRole.AGENT,
-                                    state=terminal_module.ViewState.COMPLETED,
-                                    presentation=(
-                                        terminal_module.MessagePresentation.CHAT_BLOCK
-                                    ),
-                                    metadata=metadata("verdict"),
-                                    accent=terminal_module.SpeakerAccent.BLUE,
-                                ),
-                            ),
-                        ),
-                        terminal_module.Section(
-                            "Speeches · audit · round 1 · revision r0",
-                            (
-                                terminal_module.Message(
-                                    "Character & World Custodian",
-                                    "visible character verdict",
-                                    role=terminal_module.SemanticRole.AGENT,
-                                    state=terminal_module.ViewState.COMPLETED,
-                                    presentation=(
-                                        terminal_module.MessagePresentation.CHAT_BLOCK
-                                    ),
-                                    metadata=metadata("verdict"),
-                                    accent=terminal_module.SpeakerAccent.GREEN,
-                                ),
-                            ),
-                        ),
-                        terminal_module.Section(
-                            "Speeches · audit · round 1 · revision r1",
-                            (
-                                terminal_module.Message(
-                                    "Lead Orchestrator",
-                                    "Agent error details are unavailable.",
-                                    role=terminal_module.SemanticRole.AGENT,
-                                    state=terminal_module.ViewState.COMPLETED,
-                                    presentation=(
-                                        terminal_module.MessagePresentation.CHAT_BLOCK
-                                    ),
-                                    metadata=metadata("error"),
-                                    accent=terminal_module.SpeakerAccent.CYAN,
-                                ),
-                            ),
-                        ),
-                    ),
-                    state=terminal_module.ViewState.IDLE,
-                )
-                synthesis_handoff = (
-                    (
-                        terminal_module.Field(
-                            "Handoff",
-                            (
-                                "Lead Orchestrator -> Plot & Structure Architect, "
-                                "Character & World Custodian, "
-                                "Tone & Execution Specialist"
-                            ),
-                        ),
-                    )
-                    if details
-                    else ()
-                )
-                expected_synthesis = terminal_module.Panel(
-                    "Debate phase · Synthesized",
-                    (
-                        terminal_module.Field("Debate ID", "debate"),
-                        terminal_module.Field("Phase", "synthesized"),
-                        terminal_module.Field("Round", "1"),
-                        terminal_module.Field("Revision", "r1"),
-                        *synthesis_handoff,
-                        terminal_module.Field(
-                            "Action",
-                            (
-                                "Synthesize revision from proposals and feedback; "
-                                "re-audit all specialists."
-                            ),
-                        ),
-                        terminal_module.Field(
-                            "Outcome",
-                            "Synthesized r1 at round 1.",
-                            role=terminal_module.SemanticRole.INFO,
-                            state=terminal_module.ViewState.LOADING,
-                        ),
-                        terminal_module.Field(
-                            "Conflicts",
-                            (
-                                "Plot & Structure Architect, "
-                                "Character & World Custodian"
-                            ),
-                        ),
-                    ),
-                    state=terminal_module.ViewState.IDLE,
-                )
-                self.assertEqual(components, [expected_audit, expected_synthesis])
-                self.assertEqual(
-                    [
-                        item.title
-                        for item in expected_audit.items
-                        if type(item) is terminal_module.Section
-                    ],
-                    [
-                        "Speeches · draft · round 0 · revision r0",
-                        "Speeches · audit · round 0 · revision r0",
-                        "Speeches · audit · round 1 · revision r0",
-                        "Speeches · audit · round 1 · revision r1",
-                    ],
-                )
-                self.assertEqual(
-                    [
-                        len(item.items)
-                        for item in expected_audit.items
-                        if type(item) is terminal_module.Section
-                    ],
-                    [1, 2, 1, 1],
-                )
-                self.assertEqual(len(callbacks.records), 2)
-                self.assertEqual(events[-2:], [audit_completed, synthesized])
-                key = ("session", "debate")
-                self.assertEqual(controller._debate_message_offsets[key], len(messages))
-                self.assertEqual(
-                    controller._debate_last_conflict_targets[key],
-                    (PLOT_ARCHITECT, CHARACTER_CUSTODIAN),
-                )
-                rendered = "".join(callbacks.records)
-                self.assertIn("COMPLETE_TAIL", rendered)
-                self.assertIn('"verdict": "approve"', rendered)
-                self.assertIn("Agent error details are unavailable.", rendered)
-                self.assertNotIn("[truncated]", rendered)
-                self.assertNotIn("private prompt", rendered)
-                self.assertNotIn("provider secret details", rendered)
-                plain = render_plain(expected_audit, width=80).text
-                self.assertIn("COMPLETE_TAIL", plain)
-                self.assertIn('"score": 1', plain)
-                backend.close()
-
-    def test_later_phase_read_failure_retries_from_nonzero_cursor(self) -> None:
-        workspace = self.make_workspace()
-        controller, backend, callbacks = self.make_controller(workspace)
-        messages = (
-            DebateMessage(
-                EXECUTION_SPECIALIST,
-                "draft",
-                0,
-                "r0",
-                "candidate",
-                "OLD_CURSOR_ONE",
-                _CREATED,
-            ),
-            DebateMessage(
-                PLOT_ARCHITECT,
-                "audit",
-                0,
-                "r0",
-                "critique",
-                "OLD_CURSOR_TWO",
-                _CREATED,
-            ),
-            DebateMessage(
-                CHARACTER_CUSTODIAN,
-                "audit",
-                0,
-                "r0",
-                "verdict",
-                "NEW_CURSOR_ONE",
-                _CREATED,
-            ),
-            DebateMessage(
-                LEAD_ORCHESTRATOR,
-                "synthesize",
-                1,
-                "r1",
-                "candidate",
-                "NEW_CURSOR_TWO",
-                _CREATED,
-            ),
-        )
-        started = self._event(
-            DebateProgressPhase.STARTED,
-            context_mode=DebateContextMode.INCLUDED,
-        )
-        drafted = self._event(DebateProgressPhase.DRAFTED, revision_id="r0")
-        audit_started = self._event(
-            DebateProgressPhase.AUDIT_STARTED,
-            revision_id="r0",
-        )
-        audit_completed = self._event(
-            DebateProgressPhase.AUDIT_COMPLETED,
-            revision_id="r0",
-        )
-        synthesized = self._event(
-            DebateProgressPhase.SYNTHESIZED,
-            revision_id="r1",
-            round_number=1,
-        )
-        events = [started, drafted, audit_started]
-        key = ("session", "debate")
-        committed_offset = 2
-        controller._debate_message_offsets[key] = committed_offset
-        components: list[object] = []
-        real_write_component = (
-            terminal_module.InteractiveSemanticOutput.write_component
-        )
-
-        def capture_component(output, component):
-            components.append(component)
-            return real_write_component(output, component)
-
-        with (
-            mock.patch.object(
-                workspace,
-                "read_debate_messages",
-                side_effect=(
-                    WorkspaceFormatError("raw provider details"),
-                    messages,
-                ),
-            ) as read_messages,
-            mock.patch.object(
-                terminal_module.InteractiveSemanticOutput,
-                "write_component",
-                autospec=True,
-                side_effect=capture_component,
-            ),
-        ):
-            controller._accept_debate_progress(
-                audit_completed,
-                expected_session_id="session",
-                expected_input_kind=InputKind.PROMPT,
-                expected_context_mode=DebateContextMode.INCLUDED,
-                events=events,
-            )
-            self.assertEqual(
-                controller._debate_message_offsets[key],
-                committed_offset,
-            )
-            controller._accept_debate_progress(
-                synthesized,
-                expected_session_id="session",
-                expected_input_kind=InputKind.PROMPT,
-                expected_context_mode=DebateContextMode.INCLUDED,
-                events=events,
-            )
-
-        self.assertEqual(
-            read_messages.call_args_list,
-            [mock.call("session", "debate"), mock.call("session", "debate")],
-        )
-        self.assertEqual(len(components), 2)
-        self.assertTrue(
-            all(type(component) is terminal_module.Panel for component in components)
-        )
-        first = components[0]
-        second = components[1]
-        assert isinstance(first, terminal_module.Panel)
-        assert isinstance(second, terminal_module.Panel)
-        self.assertIn(
-            terminal_module.Notice(
-                "Agent sayings unavailable; the debate log could not be read.",
-                label="agent-saying",
-                role=terminal_module.SemanticRole.WARNING,
-                state=terminal_module.ViewState.ERROR,
-            ),
-            first.items,
-        )
-        self.assertFalse(
-            any(type(component) is terminal_module.Notice for component in components)
-        )
-        sections = tuple(
-            item for item in second.items if type(item) is terminal_module.Section
-        )
-        self.assertEqual(
-            tuple(section.title for section in sections),
-            (
-                "Speeches · audit · round 0 · revision r0",
-                "Speeches · synthesize · round 1 · revision r1",
-            ),
-        )
-        self.assertEqual(
-            tuple(section.items[0].content for section in sections),
-            ("NEW_CURSOR_ONE", "NEW_CURSOR_TWO"),
-        )
-        self.assertEqual(
-            controller._debate_message_offsets[key],
-            len(messages),
-        )
-        self.assertEqual(
-            events,
-            [started, drafted, audit_started, audit_completed, synthesized],
-        )
-        self.assertEqual(len(callbacks.records), 2)
-        rendered = "".join(callbacks.records)
-        self.assertNotIn("OLD_CURSOR_ONE", rendered)
-        self.assertNotIn("OLD_CURSOR_TWO", rendered)
-        self.assertEqual(rendered.count("NEW_CURSOR_ONE"), 1)
-        self.assertEqual(rendered.count("NEW_CURSOR_TWO"), 1)
-        self.assertNotIn("raw provider details", rendered)
-        backend.close()
-
-    def test_phase_write_failure_rolls_back_state_event_and_cursor_for_retry(
-        self,
-    ) -> None:
-        workspace = self.make_workspace()
-        controller, backend, callbacks = self.make_controller(workspace)
-        workspace.append_debate_message(
-            "session",
-            "debate",
-            DebateMessage(
-                EXECUTION_SPECIALIST,
-                "draft",
-                0,
-                "r0",
-                "candidate",
-                "write-retry speech",
-                _CREATED,
-            ),
-        )
-        event = self._event(
-            DebateProgressPhase.STARTED,
-            context_mode=DebateContextMode.INCLUDED,
-        )
-        key = ("session", "debate")
-        controller._debate_message_offsets[key] = 7
-        controller._debate_last_conflict_targets[key] = (PLOT_ARCHITECT,)
-        controller._last_started_debate_by_session["session"] = "older_debate"
-        events: list[DebateProgressEvent] = []
-        attempted: list[object] = []
-        failure = OSError("terminal write secret")
-        real_write_component = (
-            terminal_module.InteractiveSemanticOutput.write_component
-        )
-
-        def fail_once(output, component):
-            attempted.append(component)
-            if len(attempted) == 1:
-                raise failure
-            return real_write_component(output, component)
-
-        with mock.patch.object(
-            terminal_module.InteractiveSemanticOutput,
-            "write_component",
-            autospec=True,
-            side_effect=fail_once,
-        ):
-            with self.assertRaises(OSError) as raised:
-                controller._accept_debate_progress(
-                    event,
-                    expected_session_id="session",
-                    expected_input_kind=InputKind.PROMPT,
-                    expected_context_mode=DebateContextMode.INCLUDED,
-                    events=events,
-                )
-            self.assertIs(raised.exception, failure)
-            self.assertEqual(controller._debate_message_offsets[key], 7)
-            self.assertEqual(
-                controller._debate_last_conflict_targets[key],
-                (PLOT_ARCHITECT,),
-            )
-            self.assertEqual(
-                controller._last_started_debate_by_session,
-                {"session": "older_debate"},
-            )
-            self.assertEqual(events, [])
-            self.assertEqual(callbacks.records, [])
-
-            controller._accept_debate_progress(
-                event,
-                expected_session_id="session",
-                expected_input_kind=InputKind.PROMPT,
-                expected_context_mode=DebateContextMode.INCLUDED,
-                events=events,
-            )
-
-        self.assertEqual(len(attempted), 2)
-        self.assertEqual(attempted[0], attempted[1])
-        self.assertEqual(controller._debate_message_offsets[key], 1)
-        self.assertEqual(controller._debate_last_conflict_targets[key], ())
-        self.assertEqual(
-            controller._last_started_debate_by_session,
-            {"session": "debate"},
-        )
-        self.assertEqual(events, [event])
-        self.assertEqual(len(callbacks.records), 1)
-        self.assertEqual("".join(callbacks.records).count("write-retry speech"), 1)
-        self.assertNotIn("terminal write secret", "".join(callbacks.records))
-        backend.close()
-
-    def test_audit_write_failure_keeps_prior_conflicts_until_retry(self) -> None:
-        workspace = self.make_workspace()
-        controller, backend, callbacks = self.make_controller(workspace)
-        for content in ("OLD_AUDIT_CURSOR", "NEW_AUDIT_CURSOR"):
-            workspace.append_debate_message(
-                "session",
-                "debate",
-                DebateMessage(
-                    CHARACTER_CUSTODIAN,
-                    "audit",
-                    0,
-                    "r0",
-                    "critique",
-                    content,
-                    _CREATED,
-                ),
-            )
-        started = self._event(
-            DebateProgressPhase.STARTED,
-            context_mode=DebateContextMode.INCLUDED,
-        )
-        drafted = self._event(DebateProgressPhase.DRAFTED, revision_id="r0")
-        audit_started = self._event(
-            DebateProgressPhase.AUDIT_STARTED,
-            revision_id="r0",
-        )
-        event = self._event(
-            DebateProgressPhase.AUDIT_COMPLETED,
-            revision_id="r0",
-            conflicting_agents=(CHARACTER_CUSTODIAN,),
-        )
-        events = [started, drafted, audit_started]
-        prior_events = list(events)
-        key = ("session", "debate")
-        controller._debate_message_offsets[key] = 1
-        controller._debate_last_conflict_targets[key] = (PLOT_ARCHITECT,)
-        attempted: list[object] = []
-        failure = OSError("audit write secret")
-        real_write_component = (
-            terminal_module.InteractiveSemanticOutput.write_component
-        )
-
-        def fail_once(output, component):
-            attempted.append(component)
-            if len(attempted) == 1:
-                raise failure
-            return real_write_component(output, component)
-
-        with mock.patch.object(
-            terminal_module.InteractiveSemanticOutput,
-            "write_component",
-            autospec=True,
-            side_effect=fail_once,
-        ):
-            with self.assertRaises(OSError) as raised:
-                controller._accept_debate_progress(
-                    event,
-                    expected_session_id="session",
-                    expected_input_kind=InputKind.PROMPT,
-                    expected_context_mode=DebateContextMode.INCLUDED,
-                    events=events,
-                )
-            self.assertIs(raised.exception, failure)
-            self.assertEqual(controller._debate_message_offsets[key], 1)
-            self.assertEqual(
-                controller._debate_last_conflict_targets[key],
-                (PLOT_ARCHITECT,),
-            )
-            self.assertEqual(events, prior_events)
-            self.assertEqual(callbacks.records, [])
-
-            controller._accept_debate_progress(
-                event,
-                expected_session_id="session",
-                expected_input_kind=InputKind.PROMPT,
-                expected_context_mode=DebateContextMode.INCLUDED,
-                events=events,
-            )
-
-        self.assertEqual(attempted[0], attempted[1])
-        self.assertEqual(controller._debate_message_offsets[key], 2)
-        self.assertEqual(
-            controller._debate_last_conflict_targets[key],
-            (CHARACTER_CUSTODIAN,),
-        )
-        self.assertEqual(events, [*prior_events, event])
-        self.assertEqual(len(callbacks.records), 1)
-        rendered = "".join(callbacks.records)
-        self.assertNotIn("OLD_AUDIT_CURSOR", rendered)
-        self.assertEqual(rendered.count("NEW_AUDIT_CURSOR"), 1)
-        self.assertNotIn("audit write secret", rendered)
-        backend.close()
-
 
 class ControllerStartupTests(ControllerTestCase):
     """Verify explicit, defaulted, confirmed, and failed startup paths."""
-
-    def test_disabled_rag_startup_skips_optional_composition_and_injects_none(
-        self,
-    ) -> None:
-        workspace = self.make_workspace()
-        storage = compose_filesystem_conversation_storage(workspace)
-        backend = self.make_backend(workspace)
-        before = _tree_snapshot(workspace.root)
-        runtime = SimpleNamespace()
-
-        with (
-            mock.patch.object(
-                controller_core_module,
-                "compose_local_conversation_rag_runtime",
-            ) as compose_rag,
-            mock.patch.object(
-                controller_core_module,
-                "StoryRuntime",
-                return_value=runtime,
-            ) as runtime_factory,
-        ):
-            controller, _backend, _callbacks = self.make_controller(
-                workspace,
-                backend=backend,
-                conversation_storage_services=storage,
-            )
-
-        compose_rag.assert_not_called()
-        runtime_factory.assert_called_once_with(
-            workspace,
-            backend,
-            conversation_storage_services=storage,
-            conversation_rag_service=None,
-        )
-        self.assertIs(controller._runtime, runtime)
-        self.assertFalse(controller._conversation_rag_startup_unavailable)
-        self.assertEqual(_tree_snapshot(workspace.root), before)
-
-    def test_local_rag_startup_composes_once_with_exact_automatic_policy(
-        self,
-    ) -> None:
-        for automatic in (False, True):
-            with self.subTest(automatic=automatic):
-                workspace = self.make_workspace()
-                state = settings_module.update_conversation_rag_provider(
-                    settings_module.load_settings_state(workspace),
-                    "local",
-                )
-                state = settings_module.update_conversation_rag_automatic(
-                    state,
-                    automatic,
-                )
-                settings_module.save_settings_state(workspace, state)
-                storage = compose_filesystem_conversation_storage(workspace)
-                backend = self.make_backend(workspace)
-                service = object()
-                runtime = SimpleNamespace()
-
-                with (
-                    mock.patch.object(
-                        controller_core_module,
-                        "compose_local_conversation_rag_runtime",
-                        return_value=SimpleNamespace(service=service),
-                    ) as compose_rag,
-                    mock.patch.object(
-                        controller_core_module,
-                        "StoryRuntime",
-                        return_value=runtime,
-                    ) as runtime_factory,
-                ):
-                    controller, _backend, _callbacks = self.make_controller(
-                        workspace,
-                        backend=backend,
-                        conversation_storage_services=storage,
-                    )
-
-                compose_rag.assert_called_once_with(
-                    workspace,
-                    automatic_enabled=automatic,
-                )
-                runtime_factory.assert_called_once_with(
-                    workspace,
-                    backend,
-                    conversation_storage_services=storage,
-                    conversation_rag_service=service,
-                )
-                self.assertIs(controller._runtime, runtime)
-                self.assertFalse(controller._conversation_rag_startup_unavailable)
-
-    def test_unavailable_local_rag_warns_safely_and_keeps_settings_usable(
-        self,
-    ) -> None:
-        failures = (
-            ConversationRagCompositionFailure.DEPENDENCY_MISSING,
-            ConversationRagCompositionFailure.CAPABILITY_INCOMPATIBLE,
-        )
-        for failure in failures:
-            with self.subTest(failure=failure):
-                workspace = self.make_workspace()
-                state = settings_module.update_conversation_rag_provider(
-                    settings_module.load_settings_state(workspace),
-                    "local",
-                )
-                settings_module.save_settings_state(workspace, state)
-                defaults_path = workspace.path("config/system_defaults.json")
-                defaults_before = defaults_path.read_bytes()
-                storage = compose_filesystem_conversation_storage(workspace)
-                backend = self.make_backend(workspace)
-                callbacks = ScriptedTerminalCallbacks(
-                    "/settings",
-                    "/cancel",
-                    "/quit",
-                )
-                terminal = InteractiveTerminal(
-                    callbacks.read_line,
-                    callbacks.write_text,
-                    width=200,
-                )
-                raw_secret = "raw-optional-provider-secret"
-                composition_error = ConversationRagCompositionError(failure)
-                composition_error.__cause__ = RuntimeError(raw_secret)
-
-                with (
-                    mock.patch.object(
-                        controller_core_module,
-                        "compose_local_conversation_rag_runtime",
-                        side_effect=composition_error,
-                    ) as compose_rag,
-                    mock.patch.object(
-                        controller_core_module,
-                        "StoryRuntime",
-                        return_value=SimpleNamespace(),
-                    ),
-                ):
-                    controller = InteractiveController(
-                        workspace,
-                        load_cli_context(workspace),
-                        backend,
-                        terminal,
-                        conversation_storage_services=storage,
-                    )
-                    self.assertEqual(controller.run_session_lobby(), 0)
-
-                compose_rag.assert_called_once_with(
-                    workspace,
-                    automatic_enabled=False,
-                )
-                rendered = "".join(callbacks.records)
-                warning = (
-                    "Conversation RAG is unavailable for this shell. Verify the "
-                    "pinned rag extra and restart; settings remain available and "
-                    "configuration was not changed."
-                )
-                self.assertEqual(rendered.count(warning), 1)
-                self.assertNotIn(raw_secret, rendered)
-                self.assertIn("Settings", "".join(callbacks.prompts))
-                self.assertEqual(defaults_path.read_bytes(), defaults_before)
-
-    def test_legacy_catalog_path_never_composes_configured_local_rag(
-        self,
-    ) -> None:
-        workspace = self.make_workspace()
-        state = settings_module.update_conversation_rag_provider(
-            settings_module.load_settings_state(workspace),
-            "local",
-        )
-        settings_module.save_settings_state(workspace, state)
-        defaults_before = workspace.path("config/system_defaults.json").read_bytes()
-        catalog = MemoryConversationCatalog()
-        runtime = SimpleNamespace()
-
-        with (
-            mock.patch.object(
-                controller_core_module,
-                "compose_local_conversation_rag_runtime",
-            ) as compose_rag,
-            mock.patch.object(
-                controller_core_module,
-                "StoryRuntime",
-                return_value=runtime,
-            ),
-        ):
-            controller, _backend, callbacks = self.make_controller(
-                workspace,
-                "/settings",
-                "/cancel",
-                "/quit",
-                conversation_catalog=catalog,
-                terminal_width=200,
-            )
-            self.assertEqual(controller.run_session_lobby(), 0)
-
-        compose_rag.assert_not_called()
-        rendered = "".join(callbacks.records)
-        self.assertEqual(rendered.count("Conversation RAG is unavailable"), 1)
-        self.assertIn("Settings", "".join(callbacks.prompts))
-        self.assertEqual(
-            workspace.path("config/system_defaults.json").read_bytes(),
-            defaults_before,
-        )
 
     def test_unselected_lobby_is_read_only(self) -> None:
         workspace = self.make_workspace()
@@ -3216,9 +1586,7 @@ class ControllerStartupTests(ControllerTestCase):
                     "/quit",
                 )
                 self.assertEqual(
-                    controller.run_session_lobby(
-                        requested_session=session_id
-                    ),
+                    controller.run_session_lobby(requested_session=session_id),
                     0,
                 )
                 self.assertEqual(
@@ -3231,12 +1599,8 @@ class ControllerStartupTests(ControllerTestCase):
                     ],
                     "ready",
                 )
-                self.assertFalse(
-                    workspace.path(_access_relative(session_id)).exists()
-                )
-                self.assertFalse(
-                    any("[Y/n]" in prompt for prompt in callbacks.prompts)
-                )
+                self.assertFalse(workspace.path(_access_relative(session_id)).exists())
+                self.assertFalse(any("[Y/n]" in prompt for prompt in callbacks.prompts))
                 rendered = "".join(callbacks.records)
                 self.assertIn(
                     f"Session: {session_id} ({attachment})\n",
@@ -3247,7 +1611,9 @@ class ControllerStartupTests(ControllerTestCase):
 
     def test_saved_ready_opens_without_rewriting_default(self) -> None:
         workspace = self.make_workspace()
-        self.seed_session(workspace, "selected", durable_state=SessionDurableState.READY)
+        self.seed_session(
+            workspace, "selected", durable_state=SessionDurableState.READY
+        )
         save_default_session(workspace, "selected")
         context_path = workspace.path(_CONTEXT_PATH)
         context_before = (
@@ -3264,7 +1630,7 @@ class ControllerStartupTests(ControllerTestCase):
             context_before,
         )
         self.assertIn("Session: selected (opened)\n", callbacks.records[0])
-        self.assertEqual(callbacks.prompts, ["story[selected:lead]> "])
+        self.assertEqual(callbacks.prompts, ["story[selected]> "])
 
     def test_saved_paused_confirmation_outcomes_are_distinct(self) -> None:
         cases = (
@@ -3282,7 +1648,9 @@ class ControllerStartupTests(ControllerTestCase):
         for label, decision, durable_state, exits_at_prompt, marker in cases:
             with self.subTest(case=label):
                 workspace = self.make_workspace()
-                self.seed_session(workspace, "saved", durable_state=SessionDurableState.PAUSED)
+                self.seed_session(
+                    workspace, "saved", durable_state=SessionDurableState.PAUSED
+                )
                 save_default_session(workspace, "saved")
                 before = _tree_snapshot(workspace.root)
                 reads = (decision,) if exits_at_prompt else (decision, "/quit")
@@ -3299,9 +1667,7 @@ class ControllerStartupTests(ControllerTestCase):
                     ),
                 )
                 self.assertEqual(
-                    workspace.read_json(_manifest_relative("saved"))[
-                        "durable_state"
-                    ],
+                    workspace.read_json(_manifest_relative("saved"))["durable_state"],
                     durable_state,
                 )
                 self.assertEqual(
@@ -3312,19 +1678,19 @@ class ControllerStartupTests(ControllerTestCase):
                     self.assertIn(marker, "".join(callbacks.records))
                 if durable_state == "paused":
                     self.assertEqual(_tree_snapshot(workspace.root), before)
-                self.assertFalse(
-                    workspace.path(_access_relative("saved")).exists()
-                )
+                self.assertFalse(workspace.path(_access_relative("saved")).exists())
 
     def test_startup_failures_use_typed_safe_mapping(self) -> None:
-        cases: tuple[
-            tuple[type[Exception], InteractiveErrorCode, bool], ...
-        ] = (
+        cases: tuple[tuple[type[Exception], InteractiveErrorCode, bool], ...] = (
             (SessionIdError, InteractiveErrorCode.SESSION_INVALID, True),
             (SessionExistsError, InteractiveErrorCode.SESSION_EXISTS, True),
             (SessionNotFoundError, InteractiveErrorCode.SESSION_NOT_FOUND, True),
             (SessionPausedError, InteractiveErrorCode.SESSION_PAUSED, True),
-            (SessionAccessBlockedError, InteractiveErrorCode.SESSION_ACCESS_BLOCKED, True),
+            (
+                SessionAccessBlockedError,
+                InteractiveErrorCode.SESSION_ACCESS_BLOCKED,
+                True,
+            ),
             (
                 SessionOwnershipUnknownError,
                 InteractiveErrorCode.SESSION_OWNERSHIP_UNKNOWN,
@@ -3374,9 +1740,7 @@ class ControllerStartupTests(ControllerTestCase):
                     "get_session_lifecycle",
                     side_effect=failure,
                 ):
-                    result = controller.run_session_lobby(
-                        requested_session="target"
-                    )
+                    result = controller.run_session_lobby(requested_session="target")
                 self.assertEqual(result, 0 if recoverable else 2)
                 rendered = "".join(callbacks.records)
                 self.assertIn(_error_record(code, width=200), rendered)
@@ -3434,11 +1798,12 @@ class ControllerStartupTests(ControllerTestCase):
         self.assertFalse(workspace.path(_CONTEXT_PATH).exists())
 
     def test_acquisition_rejects_mismatched_or_unowned_summaries(self) -> None:
-        mutations: tuple[
-            tuple[str, Callable[[SessionLifecycleState], object]], ...
-        ] = (
+        mutations: tuple[tuple[str, Callable[[SessionLifecycleState], object]], ...] = (
             ("wrong_id", lambda value: replace(value, session_id="other")),
-            ("paused", lambda value: replace(value, durable_state=SessionDurableState.PAUSED)),
+            (
+                "paused",
+                lambda value: replace(value, durable_state=SessionDurableState.PAUSED),
+            ),
             (
                 "available",
                 lambda value: replace(
@@ -3451,7 +1816,9 @@ class ControllerStartupTests(ControllerTestCase):
         for label, mutate in mutations:
             with self.subTest(case=label):
                 workspace = self.make_workspace()
-                self.seed_session(workspace, "target", durable_state=SessionDurableState.READY)
+                self.seed_session(
+                    workspace, "target", durable_state=SessionDurableState.READY
+                )
                 backend = self.make_backend(workspace)
                 original_attach = backend.acquire_session_access
 
@@ -3470,9 +1837,7 @@ class ControllerStartupTests(ControllerTestCase):
                     side_effect=invalid_attach,
                 ):
                     self.assertEqual(
-                        controller.run_session_lobby(
-                            requested_session="target"
-                        ),
+                        controller.run_session_lobby(requested_session="target"),
                         0,
                     )
                 self.assertIn(
@@ -3480,102 +1845,80 @@ class ControllerStartupTests(ControllerTestCase):
                     callbacks.records,
                 )
                 self.assertFalse(workspace.path(_CONTEXT_PATH).exists())
-                self.assertFalse(
-                    workspace.path(_access_relative("target")).exists()
-                )
+                self.assertFalse(workspace.path(_access_relative("target")).exists())
+
+    def test_removed_execution_inputs_have_exact_guidance_and_zero_calls(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        self.seed_session(
+            workspace,
+            "managed",
+            durable_state=SessionDurableState.READY,
+        )
+        save_default_session(workspace, "managed")
+        removed_inputs = (
+            "ordinary prompt",
+            "@plot critique",
+            "/run draft",
+            "/draft-file source.md",
+            "/say advise",
+            "/to plot",
+            "/agent plot",
+            "/rag private query",
+        )
+        controller, backend, callbacks = self.make_controller(
+            workspace,
+            *removed_inputs,
+            "/status",
+            "/quit",
+        )
+        event_store_type = type(controller._conversation_storage_services.event_store)
+        artifacts_type = type(controller._runtime.artifacts)
+        with (
+            mock.patch.object(backend, "bind", autospec=True) as bind,
+            mock.patch.object(
+                event_store_type,
+                "append_batch",
+                autospec=True,
+            ) as append,
+            mock.patch.object(
+                artifacts_type, "list_paths", autospec=True
+            ) as list_paths,
+            mock.patch.object(artifacts_type, "read_text", autospec=True) as read_text,
+            mock.patch.object(
+                artifacts_type,
+                "commit_consensus",
+                autospec=True,
+            ) as commit,
+            mock.patch.object(
+                type(controller._advisory_progress),
+                "run",
+                autospec=True,
+            ) as progress,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+        for collaborator in (bind, append, list_paths, read_text, commit, progress):
+            collaborator.assert_not_called()
+        rendered = "".join(callbacks.records)
+        unavailable_records = tuple(
+            record
+            for record in callbacks.records
+            if "command_invalid" in record
+            and "Direct story execution is unavailable" in record
+        )
+        self.assertEqual(len(unavailable_records), len(removed_inputs))
+        self.assertIn("Execution profiles", rendered)
+        for removed_attribute in (
+            "_main_reference_scope",
+            "_reference_paths",
+            "_reference_text",
+        ):
+            self.assertFalse(hasattr(controller, removed_attribute))
 
 
 class ControllerConversationStartupTests(ControllerTestCase):
     """Verify saved conversation restoration and nested session switching."""
-
-    def test_missing_null_active_missing_and_archived_saved_state(self) -> None:
-        cases = (
-            ("missing_file", None, None, False),
-            ("explicit_null", None, None, True),
-            (
-                "active",
-                _conversation_metadata(_UNIQUE_C, "Opening scene"),
-                _UNIQUE_C,
-                True,
-            ),
-            ("missing_record", None, _UNIQUE_C, True),
-            (
-                "archived",
-                _conversation_metadata(
-                    _UNIQUE_C,
-                    "Old opening",
-                    status=ConversationStatus.ARCHIVED,
-                ),
-                _UNIQUE_C,
-                True,
-            ),
-        )
-        for label, entry, selected_id, persist_file in cases:
-            with self.subTest(case=label):
-                workspace = self.make_workspace()
-                self.seed_session(workspace, "session", durable_state=SessionDurableState.READY)
-                save_default_session(workspace, "session")
-                catalog = MemoryConversationCatalog(
-                    () if entry is None else (entry,)
-                )
-                if persist_file:
-                    save_default_conversation(
-                        workspace,
-                        "session",
-                        selected_id,
-                    )
-                    selection_path = workspace.path(
-                        _default_relative("session")
-                    )
-                    selection_before = (
-                        selection_path.read_bytes(),
-                        selection_path.stat().st_mtime_ns,
-                    )
-                controller, _backend, callbacks = self.make_controller(
-                    workspace,
-                    "/quit",
-                    conversation_catalog=catalog,
-                )
-                self.assertEqual(controller.run_session_lobby(), 0)
-                scopes = [
-                    record
-                    for record in callbacks.records
-                    if record.startswith("--- Conversation scope")
-                ]
-                if label == "active":
-                    self.assertEqual(len(scopes), 1)
-                    for fact in (
-                        "Session: session",
-                        "Conversation: c_fedcba9876",
-                        "Subject: Opening scene",
-                        "Agent: lead",
-                    ):
-                        with self.subTest(case=label, fact=fact):
-                            self.assertIn(fact, scopes[0])
-                else:
-                    self.assertEqual(
-                        scopes,
-                        [
-                            _conversation_scope_record(
-                                "session",
-                                None,
-                                None,
-                                width=80,
-                            )
-                        ],
-                    )
-                if persist_file:
-                    self.assertEqual(
-                        (
-                            selection_path.read_bytes(),
-                            selection_path.stat().st_mtime_ns,
-                        ),
-                        selection_before,
-                    )
-                else:
-                    self.assertFalse(
-                        workspace.path(_default_relative("session")).exists()
-                    )
 
     def test_malformed_or_unsafe_initial_selection_aborts_and_detaches(self) -> None:
         cases = (
@@ -3593,7 +1936,9 @@ class ControllerConversationStartupTests(ControllerTestCase):
         for label, expected_code, symlinked in cases:
             with self.subTest(case=label):
                 workspace = self.make_workspace()
-                self.seed_session(workspace, "session", durable_state=SessionDurableState.READY)
+                self.seed_session(
+                    workspace, "session", durable_state=SessionDurableState.READY
+                )
                 save_default_session(workspace, "session")
                 selection_path = workspace.root / _default_relative("session")
                 selection_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3606,9 +1951,7 @@ class ControllerConversationStartupTests(ControllerTestCase):
                     )
                     external.write_text("{}\n", encoding="utf-8")
                     self.addCleanup(
-                        lambda path=external: path.unlink()
-                        if path.exists()
-                        else None
+                        lambda path=external: path.unlink() if path.exists() else None
                     )
                     selection_path.symlink_to(external)
                 else:
@@ -3619,9 +1962,7 @@ class ControllerConversationStartupTests(ControllerTestCase):
                 )
                 self.assertEqual(controller.run_session_lobby(), 2)
                 self.assertIn(_error_record(expected_code), callbacks.records)
-                self.assertFalse(
-                    workspace.path(_access_relative("session")).exists()
-                )
+                self.assertFalse(workspace.path(_access_relative("session")).exists())
                 self.assertEqual(callbacks.prompts, [])
 
     def test_injected_startup_metadata_tampering_is_internal_and_fatal(
@@ -3655,12 +1996,100 @@ class ControllerConversationStartupTests(ControllerTestCase):
         )
         self.assertFalse(workspace.path(_access_relative("session")).exists())
 
+    def test_missing_null_active_missing_and_archived_saved_state(self) -> None:
+        cases = (
+            ("missing_file", None, None, False),
+            ("explicit_null", None, None, True),
+            (
+                "active",
+                _conversation_metadata(_UNIQUE_C, "Opening scene"),
+                _UNIQUE_C,
+                True,
+            ),
+            ("missing_record", None, _UNIQUE_C, True),
+            (
+                "archived",
+                _conversation_metadata(
+                    _UNIQUE_C,
+                    "Old opening",
+                    status=ConversationStatus.ARCHIVED,
+                ),
+                _UNIQUE_C,
+                True,
+            ),
+        )
+        for label, entry, selected_id, persist_file in cases:
+            with self.subTest(case=label):
+                workspace = self.make_workspace()
+                self.seed_session(
+                    workspace, "session", durable_state=SessionDurableState.READY
+                )
+                save_default_session(workspace, "session")
+                catalog = MemoryConversationCatalog(() if entry is None else (entry,))
+                if persist_file:
+                    save_default_conversation(
+                        workspace,
+                        "session",
+                        selected_id,
+                    )
+                    selection_path = workspace.path(_default_relative("session"))
+                    selection_before = (
+                        selection_path.read_bytes(),
+                        selection_path.stat().st_mtime_ns,
+                    )
+                controller, _backend, callbacks = self.make_controller(
+                    workspace,
+                    "/quit",
+                    conversation_catalog=catalog,
+                )
+                self.assertEqual(controller.run_session_lobby(), 0)
+                scopes = [
+                    record
+                    for record in callbacks.records
+                    if record.startswith(("[conversation]\n", "[conversation] [empty]"))
+                ]
+                if label == "active":
+                    self.assertEqual(len(scopes), 1)
+                    for fact in (
+                        "Session: session",
+                        "Conversation: c_fedcba9876",
+                        "Subject: Opening scene",
+                    ):
+                        with self.subTest(case=label, fact=fact):
+                            self.assertIn(fact, scopes[0])
+                else:
+                    self.assertEqual(
+                        scopes,
+                        [
+                            _conversation_scope_record(
+                                "session",
+                                None,
+                                None,
+                                width=80,
+                            )
+                        ],
+                    )
+                if persist_file:
+                    self.assertEqual(
+                        (
+                            selection_path.read_bytes(),
+                            selection_path.stat().st_mtime_ns,
+                        ),
+                        selection_before,
+                    )
+                else:
+                    self.assertFalse(
+                        workspace.path(_default_relative("session")).exists()
+                    )
+
     def test_switch_validates_destination_conversation_before_session_commit(
         self,
     ) -> None:
         workspace = self.make_workspace()
         for session_id in ("source", "destination"):
-            self.seed_session(workspace, session_id, durable_state=SessionDurableState.READY)
+            self.seed_session(
+                workspace, session_id, durable_state=SessionDurableState.READY
+            )
         source = _conversation_metadata(
             _COLLIDING_A,
             "Source subject",
@@ -3751,12 +2180,11 @@ class ControllerConversationStartupTests(ControllerTestCase):
             events.index("select-session:destination"),
             events.index("detach:source"),
         )
-        rendered = "".join(callbacks.records)
         self.assertEqual(
             [
                 record
                 for record in callbacks.records
-                if record.startswith("--- Conversation scope")
+                if record.startswith(("[conversation]\n", "[conversation] [empty]"))
             ],
             [
                 _conversation_scope_record(
@@ -3792,12 +2220,13 @@ class ControllerConversationStartupTests(ControllerTestCase):
         restarted_rendered = "".join(restarted_callbacks.records)
         self.assertIn("Subject:", restarted_rendered)
         self.assertIn("Destination subject", restarted_rendered)
-        self.assertIn("Agent: lead", restarted_rendered)
 
     def test_malformed_destination_releases_it_and_continues_source(self) -> None:
         workspace = self.make_workspace()
         for session_id in ("source", "destination"):
-            self.seed_session(workspace, session_id, durable_state=SessionDurableState.READY)
+            self.seed_session(
+                workspace, session_id, durable_state=SessionDurableState.READY
+            )
         source = _conversation_metadata(
             _UNIQUE_C,
             "Source subject",
@@ -3809,9 +2238,7 @@ class ControllerConversationStartupTests(ControllerTestCase):
         malformed = workspace.root / _default_relative("destination")
         malformed.parent.mkdir(parents=True, exist_ok=True)
         malformed.write_text("{not-json}\n", encoding="utf-8")
-        source_selection = workspace.path(
-            _default_relative("source")
-        ).read_bytes()
+        source_selection = workspace.path(_default_relative("source")).read_bytes()
         backend = self.make_backend(workspace)
         controller, _backend, callbacks = self.make_controller(
             workspace,
@@ -3857,7 +2284,9 @@ class ControllerConversationStartupTests(ControllerTestCase):
     ) -> None:
         workspace = self.make_workspace()
         for session_id in ("source", "destination"):
-            self.seed_session(workspace, session_id, durable_state=SessionDurableState.READY)
+            self.seed_session(
+                workspace, session_id, durable_state=SessionDurableState.READY
+            )
         source = _conversation_metadata(
             _COLLIDING_A,
             "Source subject",
@@ -3933,9 +2362,7 @@ class ControllerCommandTests(ControllerTestCase):
             ),
             1,
         )
-        raw = workspace.path("debug_logs/runtime.jsonl").read_text(
-            encoding="utf-8"
-        )
+        raw = workspace.path("debug_logs/runtime.jsonl").read_text(encoding="utf-8")
         records = [
             record
             for record in (json.loads(line) for line in raw.splitlines())
@@ -3970,80 +2397,6 @@ class ControllerCommandTests(ControllerTestCase):
             str(workspace.root),
         ):
             self.assertNotIn(prohibited, raw)
-
-    def test_help_parser_interrupt_and_unsupported_domains_are_nonmutating(
-        self,
-    ) -> None:
-        workspace = self.make_workspace()
-        before = _tree_snapshot(workspace.root)
-        controller, _backend, callbacks = self.make_controller(
-            workspace,
-            " ",
-            KeyboardInterrupt(),
-            "/? session",
-            "/sesion list",
-            "ordinary provider message",
-            "/run create artifact",
-            "/inspect last",
-            "/to plot",
-            "/session list",
-            "/session pause",
-            "/exit",
-            "/quit",
-        )
-        with (
-            mock.patch.object(
-                controller_core_module,
-                "parse_interactive_line",
-                wraps=controller_core_module.parse_interactive_line,
-            ) as parse_line,
-            mock.patch.object(subprocess, "Popen") as popen,
-            mock.patch.object(subprocess, "run") as run,
-            mock.patch.object(socket, "create_connection") as connect,
-        ):
-            self.assertEqual(controller.run_session_lobby(), 0)
-        popen.assert_not_called()
-        run.assert_not_called()
-        connect.assert_not_called()
-        self.assertEqual(
-            parse_line.call_args_list,
-            [
-                mock.call(" "),
-                mock.call("/? session"),
-                mock.call("/sesion list"),
-                mock.call("ordinary provider message"),
-                mock.call("/run create artifact"),
-                mock.call("/inspect last"),
-                mock.call("/to plot"),
-                mock.call("/session list"),
-                mock.call("/session pause"),
-                mock.call("/exit"),
-                mock.call("/quit"),
-            ],
-        )
-        self.assertEqual(_tree_snapshot(workspace.root), before)
-
-        rendered = "".join(callbacks.records)
-        self.assertIn("[cancelled] No action was taken.\n", rendered)
-        self.assertIn(
-            "Syntax: /session list | create NAME | resume [NAME] | pause",
-            rendered,
-        )
-        self.assertIn("[error command_invalid] unknown command: /sesion\n", rendered)
-        self.assertIn("[hint] Try /session, or type /help.\n", rendered)
-        self.assertIn("[error command_invalid] unknown command: /exit\n", rendered)
-        self.assertIn("[hint] Try /quit, or type /help.\n", rendered)
-        unavailable = (
-            "[error command_invalid] This command is not available in the "
-            "session lobby.\n"
-        )
-        self.assertEqual(rendered.count(unavailable), 0)
-        self.assertEqual(rendered.count("[error session_not_attached]"), 5)
-        self.assertIn("[session] No story sessions found.\n", rendered)
-        self.assertIn(
-            _error_record(InteractiveErrorCode.SESSION_NOT_ATTACHED),
-            rendered,
-        )
 
     def test_session_list_preserves_order_and_hides_access_owner_facts(self) -> None:
         workspace = self.make_workspace()
@@ -4157,10 +2510,7 @@ class ControllerCommandTests(ControllerTestCase):
         self.assertEqual(session_views, expected_views)
         self.assertEqual(
             session_records,
-            [
-                f"{render_plain(view, width=240).text}\n"
-                for view in expected_views
-            ],
+            [f"{render_plain(view, width=240).text}\n" for view in expected_views],
         )
         beta, alpha = session_records
         for fact in (
@@ -4413,9 +2763,7 @@ class ControllerCommandTests(ControllerTestCase):
             self.assertEqual(controller.run_session_lobby(), 0)
 
         self.assertEqual(
-            parse.call_args_list.count(
-                mock.call("/session resume destination")
-            ),
+            parse.call_args_list.count(mock.call("/session resume destination")),
             1,
         )
         self.assertEqual(
@@ -4680,9 +3028,7 @@ class ControllerCommandTests(ControllerTestCase):
 
                 self.assertEqual(_tree_snapshot(workspace.root), before)
                 self.assertTrue(backend._closed)
-                self.assertFalse(
-                    workspace.path(_access_relative("source")).exists()
-                )
+                self.assertFalse(workspace.path(_access_relative("source")).exists())
                 rendered = "".join(callbacks.records)
                 if exits_from_picker:
                     self.assertNotIn("Session resume cancelled.", rendered)
@@ -4755,6 +3101,80 @@ class ControllerCommandTests(ControllerTestCase):
             1,
         )
 
+    def test_help_parser_interrupt_and_unsupported_domains_are_nonmutating(
+        self,
+    ) -> None:
+        workspace = self.make_workspace()
+        before = _tree_snapshot(workspace.root)
+        controller, _backend, callbacks = self.make_controller(
+            workspace,
+            " ",
+            KeyboardInterrupt(),
+            "/? session",
+            "/sesion list",
+            "ordinary provider message",
+            "/run create artifact",
+            "/inspect last",
+            "/to plot",
+            "/session list",
+            "/session pause",
+            "/exit",
+            "/quit",
+        )
+        with (
+            mock.patch.object(
+                controller_core_module,
+                "parse_interactive_line",
+                wraps=controller_core_module.parse_interactive_line,
+            ) as parse_line,
+            mock.patch.object(subprocess, "Popen") as popen,
+            mock.patch.object(subprocess, "run") as run,
+            mock.patch.object(socket, "create_connection") as connect,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+        popen.assert_not_called()
+        run.assert_not_called()
+        connect.assert_not_called()
+        self.assertEqual(
+            parse_line.call_args_list,
+            [
+                mock.call(" "),
+                mock.call("/? session"),
+                mock.call("/sesion list"),
+                mock.call("ordinary provider message"),
+                mock.call("/run create artifact"),
+                mock.call("/inspect last"),
+                mock.call("/to plot"),
+                mock.call("/session list"),
+                mock.call("/session pause"),
+                mock.call("/exit"),
+                mock.call("/quit"),
+            ],
+        )
+        self.assertEqual(_tree_snapshot(workspace.root), before)
+
+        rendered = "".join(callbacks.records)
+        self.assertIn("[cancelled] No action was taken.\n", rendered)
+        self.assertIn(
+            "Syntax: /session list | create NAME | resume [NAME] | pause",
+            rendered,
+        )
+        self.assertIn("[error command_invalid] unknown command: /sesion\n", rendered)
+        self.assertIn("[hint] Try /session, or type /help.\n", rendered)
+        self.assertIn("[error command_invalid] unknown command: /exit\n", rendered)
+        self.assertIn("[hint] Try /quit, or type /help.\n", rendered)
+        unavailable = (
+            "[error command_invalid] This command is not available in the "
+            "session lobby.\n"
+        )
+        self.assertEqual(rendered.count(unavailable), 0)
+        self.assertEqual(rendered.count("[error session_not_attached]"), 2)
+        self.assertIn("[session] No story sessions found.\n", rendered)
+        self.assertIn(
+            _error_record(InteractiveErrorCode.SESSION_NOT_ATTACHED),
+            rendered,
+        )
+
 
 class ControllerAuthTests(ControllerTestCase):
     """Verify live `/auth` behavior and durable missing-default policy."""
@@ -4811,9 +3231,7 @@ class ControllerAuthTests(ControllerTestCase):
         )
         coordinator = ScriptedAuthCoordinator(
             snapshots=(both,),
-            results=(
-                InteractiveAuthResult(InteractiveAuthResultKind.CANCEL, both),
-            ),
+            results=(InteractiveAuthResult(InteractiveAuthResultKind.CANCEL, both),),
         )
         controller, _backend, callbacks = self.make_controller(
             workspace,
@@ -4867,230 +3285,6 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertEqual(instruction.count(self.VALUE_SAVE_GUIDANCE), 1)
         self.assertTrue(instruction.endswith(self.VALUE_SAVE_GUIDANCE))
 
-    def test_rag_provider_and_automatic_save_as_one_unprobed_transaction(
-        self,
-    ) -> None:
-        workspace = self.make_workspace()
-        storage = compose_filesystem_conversation_storage(workspace)
-        auth = ScriptedAuthCoordinator(snapshots=())
-        catalog = ScriptedProviderCatalog(
-            ProviderCatalogDiscovery("codex", ProviderCatalogState.EMPTY)
-        )
-        controller, backend, callbacks = self.make_controller(
-            workspace,
-            "/settings",
-            "5",
-            "1",
-            "2",
-            "2",
-            "2",
-            "2",
-            "2",
-            "/cancel",
-            "8",
-            "1",
-            "/quit",
-            conversation_storage_services=storage,
-            auth_coordinator=auth,
-            provider_catalog=catalog,
-            terminal_width=320,
-        )
-        defaults_path = workspace.path("config/system_defaults.json")
-        agents_path = workspace.path("config/agent_configs.json")
-        route_path = workspace.path(
-            "agent_states/orchestrator_state/provider_route_generations.json"
-        )
-        agents_before = agents_path.read_bytes()
-        route_before = route_path.read_bytes()
-        original_picker = terminal_module.InteractivePickerInput.read_picker
-
-        with (
-            mock.patch.object(
-                terminal_module.InteractivePickerInput,
-                "read_picker",
-                autospec=True,
-                side_effect=original_picker,
-            ) as picker,
-            mock.patch.object(
-                controller_core_module,
-                "compose_local_conversation_rag_runtime",
-            ) as compose_rag,
-            mock.patch.object(
-                controller_core_module,
-                "select_conversation_storage",
-            ) as select_storage,
-            mock.patch.object(
-                InteractiveController,
-                "_authenticate_settings_routes",
-                autospec=True,
-            ) as authenticate,
-            mock.patch.object(
-                backend,
-                "stage_runtime_configuration",
-            ) as stage_backend,
-            mock.patch.object(
-                backend,
-                "validate_runtime_configuration_candidate",
-            ) as validate_backend,
-            mock.patch.object(
-                backend,
-                "discard_runtime_configuration",
-            ) as discard_backend,
-            mock.patch.object(
-                controller._runtime,
-                "prepare_runtime_configuration",
-                new=mock.AsyncMock(),
-            ) as prepare_runtime,
-            mock.patch.object(
-                controller._runtime,
-                "commit_runtime_configuration",
-                new=mock.AsyncMock(),
-            ) as commit_runtime,
-            mock.patch.object(
-                controller._runtime,
-                "discard_runtime_configuration",
-            ) as discard_runtime,
-            mock.patch.object(subprocess, "Popen") as popen,
-            mock.patch.object(subprocess, "run") as run,
-            mock.patch.object(socket, "create_connection") as connect,
-        ):
-            self.assertEqual(controller.run_session_lobby(), 0)
-
-        compose_rag.assert_not_called()
-        select_storage.assert_not_called()
-        authenticate.assert_not_called()
-        stage_backend.assert_not_called()
-        validate_backend.assert_not_called()
-        discard_backend.assert_not_called()
-        prepare_runtime.assert_not_awaited()
-        commit_runtime.assert_not_awaited()
-        discard_runtime.assert_not_called()
-        popen.assert_not_called()
-        run.assert_not_called()
-        connect.assert_not_called()
-        self.assertEqual(auth.events, [])
-        self.assertEqual(catalog.events, [])
-        self.assertEqual(agents_path.read_bytes(), agents_before)
-        self.assertEqual(route_path.read_bytes(), route_before)
-        self.assertNotEqual(defaults_path.read_bytes(), b"")
-        persisted = settings_module.load_settings_state(workspace).pending
-        self.assertEqual(persisted.system_defaults.conversation_rag_provider, "local")
-        self.assertTrue(persisted.system_defaults.conversation_rag_automatic)
-        prompts = "".join(callbacks.prompts)
-        self.assertIn("Current: Provider Disabled; Automatic Off", prompts)
-        self.assertIn("Pending: Provider Local; Automatic On", prompts)
-        dirty_settings = next(
-            call
-            for call in picker.call_args_list
-            if call.args[1].name == "Settings" and len(call.args[2]) == 9
-        )
-        rag_choice = next(
-            choice
-            for choice in dirty_settings.args[2]
-            if choice.identity == "conversation_rag"
-        )
-        self.assertEqual(
-            rag_choice.form_summary,
-            "Pending: Provider Local; Automatic On",
-        )
-        self.assertIs(
-            rag_choice.form_summary_role,
-            terminal_module.SemanticRole.WARNING,
-        )
-        self.assertIsNone(rag_choice.description)
-        rag_picker_calls = tuple(
-            call
-            for call in picker.call_args_list
-            if call.args[1].name == "Conversation RAG"
-        )
-        rag_summary_states = tuple(
-            tuple(
-                (choice.form_summary, choice.form_summary_role)
-                for choice in call.args[2]
-            )
-            for call in rag_picker_calls
-        )
-        muted = terminal_module.SemanticRole.MUTED
-        warning = terminal_module.SemanticRole.WARNING
-        self.assertIn(
-            (
-                ("Current: Disabled", muted),
-                ("Current: Off", muted),
-            ),
-            rag_summary_states,
-        )
-        self.assertIn(
-            (
-                ("Pending: Local", warning),
-                ("Current: Off", muted),
-            ),
-            rag_summary_states,
-        )
-        self.assertIn(
-            (
-                ("Pending: Local", warning),
-                ("Pending: On", warning),
-            ),
-            rag_summary_states,
-        )
-        self.assertTrue(
-            all(
-                choice.description is None
-                for call in rag_picker_calls
-                for choice in call.args[2]
-            )
-        )
-        rendered = "".join(callbacks.records)
-        exact_notice = (
-            "Conversation RAG settings were saved for the next shell. This "
-            "running shell retains its current Conversation RAG service and "
-            "automatic policy."
-        )
-        self.assertEqual(rendered.count(exact_notice), 1)
-        self.assertNotIn("saved and applied", rendered)
-
-    def test_rag_provider_and_automatic_cancel_discards_exact_bytes(self) -> None:
-        workspace = self.make_workspace()
-        storage = compose_filesystem_conversation_storage(workspace)
-        defaults_path = workspace.path("config/system_defaults.json")
-        agents_path = workspace.path("config/agent_configs.json")
-        before = (defaults_path.read_bytes(), agents_path.read_bytes())
-        controller, _backend, callbacks = self.make_controller(
-            workspace,
-            "/settings",
-            "5",
-            "1",
-            "2",
-            "2",
-            "2",
-            "2",
-            "2",
-            "/cancel",
-            "9",
-            "1",
-            "/quit",
-            conversation_storage_services=storage,
-            terminal_width=180,
-        )
-
-        with mock.patch.object(
-            controller_core_module,
-            "compose_local_conversation_rag_runtime",
-        ) as compose_rag:
-            self.assertEqual(controller.run_session_lobby(), 0)
-
-        compose_rag.assert_not_called()
-        self.assertEqual(
-            (defaults_path.read_bytes(), agents_path.read_bytes()),
-            before,
-        )
-        persisted = settings_module.load_settings_state(workspace).pending
-        self.assertIsNone(persisted.system_defaults.conversation_rag_provider)
-        self.assertFalse(persisted.system_defaults.conversation_rag_automatic)
-        rendered = "".join(callbacks.records)
-        self.assertEqual(rendered.count("Pending changes discarded"), 1)
-        self.assertNotIn("Settings saved", rendered)
-
     @staticmethod
     def expected_pending_save_notice() -> terminal_module.Notice:
         return terminal_module.Notice(
@@ -5143,7 +3337,9 @@ class ControllerSettingsTests(ControllerTestCase):
                     (
                         (
                             f"{display_name} Provider",
-                            provider if agent.backend is not None else f"{provider} (default)",
+                            provider
+                            if agent.backend is not None
+                            else f"{provider} (default)",
                         ),
                         (
                             f"{display_name} Codex model",
@@ -5190,9 +3386,7 @@ class ControllerSettingsTests(ControllerTestCase):
         )
 
         if changed_indices:
-            live_changes = any(
-                index not in {3, 4, 5} for index in changed_indices
-            )
+            live_changes = any(index not in {3, 4, 5} for index in changed_indices)
             storage_changes = 3 in changed_indices
             rag_changes = any(index in {4, 5} for index in changed_indices)
             activation_parts: list[str] = []
@@ -5516,9 +3710,7 @@ class ControllerSettingsTests(ControllerTestCase):
         provider_prompts = [
             prompt
             for prompt in callbacks.prompts
-            if prompt.startswith(
-                "Provider\nContext: Plot & Structure Architect\n"
-            )
+            if prompt.startswith("Provider\nContext: Plot & Structure Architect\n")
         ]
         self.assertEqual(len(provider_prompts), 4)
         configuration = settings_module.load_settings_state(workspace).pending
@@ -5560,11 +3752,9 @@ class ControllerSettingsTests(ControllerTestCase):
                     autospec=True,
                     return_value=choose_antigravity,
                 ):
-                    unchanged, whole_cancel = (
-                        controller._edit_settings_agent_provider(
-                            settings_module.load_settings_state(workspace),
-                            PLOT_ARCHITECT,
-                        )
+                    unchanged, whole_cancel = controller._edit_settings_agent_provider(
+                        settings_module.load_settings_state(workspace),
+                        PLOT_ARCHITECT,
                     )
 
                 self.assertTrue(whole_cancel)
@@ -5747,9 +3937,7 @@ class ControllerSettingsTests(ControllerTestCase):
 
         pending_notice = self.expected_pending_save_notice()
         top_level_calls = [
-            call
-            for call in picker.call_args_list
-            if call.args[1].name == "Settings"
+            call for call in picker.call_args_list if call.args[1].name == "Settings"
         ]
         self.assertEqual(
             tuple(call.kwargs.get("notice") for call in top_level_calls),
@@ -6044,9 +4232,7 @@ class ControllerSettingsTests(ControllerTestCase):
             select_storage.assert_not_called()
             choices = picker.call_args.args[2]
             choice = next(
-                choice
-                for choice in choices
-                if choice.identity == "providers"
+                choice for choice in choices if choice.identity == "providers"
             )
             return (
                 choice.form_summary,
@@ -6139,9 +4325,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     active[index] = replace(
                         profile,
                         provider=(
-                            "antigravity"
-                            if profile.provider == "codex"
-                            else "codex"
+                            "antigravity" if profile.provider == "codex" else "codex"
                         ),
                     )
                 else:
@@ -6256,10 +4440,13 @@ class ControllerSettingsTests(ControllerTestCase):
             auth_coordinator=auth,
             provider_catalog=catalog,
         )
-        commit = lambda value: terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.COMMIT,
-            text=value,
-        )
+
+        def commit(value):
+            return terminal_module.ControlOutcome(
+                terminal_module.ControlOutcomeKind.COMMIT,
+                text=value,
+            )
+
         cancel = terminal_module.ControlOutcome(
             terminal_module.ControlOutcomeKind.CANCEL
         )
@@ -6323,9 +4510,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 for choice in initial_agents
             )
         )
-        self.assertTrue(
-            all(choice.description is None for choice in initial_agents)
-        )
+        self.assertTrue(all(choice.description is None for choice in initial_agents))
 
         initial_fields = picker.call_args_list[1].args[2]
         self.assertEqual(
@@ -6348,9 +4533,7 @@ class ControllerSettingsTests(ControllerTestCase):
             tuple(choice.form_summary_role for choice in initial_fields),
             (terminal_module.SemanticRole.MUTED,) * 3,
         )
-        self.assertTrue(
-            all(choice.description is None for choice in initial_fields)
-        )
+        self.assertTrue(all(choice.description is None for choice in initial_fields))
 
         redrawn_fields = picker.call_args_list[2].args[2]
         self.assertEqual(
@@ -6369,14 +4552,10 @@ class ControllerSettingsTests(ControllerTestCase):
                 terminal_module.SemanticRole.MUTED,
             ),
         )
-        self.assertTrue(
-            all(choice.description is None for choice in redrawn_fields)
-        )
+        self.assertTrue(all(choice.description is None for choice in redrawn_fields))
         redrawn_agents = picker.call_args_list[3].args[2]
         plot_choice = next(
-            choice
-            for choice in redrawn_agents
-            if choice.identity == PLOT_ARCHITECT
+            choice for choice in redrawn_agents if choice.identity == PLOT_ARCHITECT
         )
         self.assertEqual(
             plot_choice.form_summary,
@@ -6393,12 +4572,10 @@ class ControllerSettingsTests(ControllerTestCase):
             PLOT_ARCHITECT,
             "gpt-pending",
         )
-        model_effort_pending = (
-            settings_module.update_agent_codex_reasoning_effort(
-                model_effort_pending,
-                PLOT_ARCHITECT,
-                "future_2",
-            )
+        model_effort_pending = settings_module.update_agent_codex_reasoning_effort(
+            model_effort_pending,
+            PLOT_ARCHITECT,
+            "future_2",
         )
         with mock.patch.object(
             terminal_module.InteractivePickerInput,
@@ -6428,9 +4605,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 terminal_module.SemanticRole.WARNING,
             ),
         )
-        self.assertTrue(
-            all(choice.description is None for choice in pending_fields)
-        )
+        self.assertTrue(all(choice.description is None for choice in pending_fields))
 
         inactive_only = settings_module.update_agent_antigravity_model(
             state,
@@ -6443,9 +4618,7 @@ class ControllerSettingsTests(ControllerTestCase):
             autospec=True,
             return_value=cancel,
         ) as inactive_picker:
-            unchanged, whole_cancel = controller._edit_settings_provider(
-                inactive_only
-            )
+            unchanged, whole_cancel = controller._edit_settings_provider(inactive_only)
         self.assertFalse(whole_cancel)
         self.assertEqual(unchanged, inactive_only)
         inactive_plot = next(
@@ -6525,10 +4698,7 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertEqual(tuple(choice.enabled for choice in fields), (False,) * 3)
         self.assertEqual(
             tuple(choice.disabled_reason for choice in fields),
-            (
-                "Set by a launch override; read-only in this shell.",
-            )
-            * 3,
+            ("Set by a launch override; read-only in this shell.",) * 3,
         )
         self.assertEqual(
             tuple(choice.form_summary_role for choice in fields),
@@ -6576,7 +4746,9 @@ class ControllerSettingsTests(ControllerTestCase):
             mock.patch.object(socket, "create_connection") as connect,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
-        self.assertEqual(parse_line.call_args_list, [mock.call("/settings"), mock.call("/quit")])
+        self.assertEqual(
+            parse_line.call_args_list, [mock.call("/settings"), mock.call("/quit")]
+        )
         popen.assert_not_called()
         run.assert_not_called()
         connect.assert_not_called()
@@ -6645,9 +4817,7 @@ class ControllerSettingsTests(ControllerTestCase):
             ),
         )
         self.assertEqual(
-            tuple(
-                choice.form_summary_role for choice in settings_call.args[2]
-            ),
+            tuple(choice.form_summary_role for choice in settings_call.args[2]),
             (terminal_module.SemanticRole.MUTED,) * 6
             + (terminal_module.SemanticRole.DEFAULT,),
         )
@@ -6773,9 +4943,7 @@ class ControllerSettingsTests(ControllerTestCase):
         workspace = self.make_workspace()
         controller, _backend, _callbacks = self.make_controller(workspace)
         state = settings_module.load_settings_state(workspace)
-        persona_values = tuple(
-            entry.name for entry in state.baseline.persona_catalog
-        )
+        persona_values = tuple(entry.name for entry in state.baseline.persona_catalog)
         self.assertTrue(persona_values)
 
         def commit(value: str) -> terminal_module.ControlOutcome:
@@ -6815,7 +4983,9 @@ class ControllerSettingsTests(ControllerTestCase):
                 self.assertEqual(pending_value(updated), values[1])
                 expected_calls = 2 if values[0] == values[1] else 3
                 self.assertEqual(picker.call_count, expected_calls)
-                self.assertIn("Enter applies", picker.call_args_list[0].args[1].instruction)
+                self.assertIn(
+                    "Enter applies", picker.call_args_list[0].args[1].instruction
+                )
                 self.assertIn("press Esc", picker.call_args_list[0].args[1].instruction)
                 self.assert_value_save_guidance(
                     picker.call_args_list[0].args[1].instruction
@@ -6870,8 +5040,8 @@ class ControllerSettingsTests(ControllerTestCase):
                     autospec=True,
                     side_effect=(commit(selected), commit(selected)),
                 ) as picker:
-                    updated, whole_cancel = (
-                        controller._edit_settings_message_details(state)
+                    updated, whole_cancel = controller._edit_settings_message_details(
+                        state
                     )
 
                 self.assertFalse(whole_cancel)
@@ -6939,16 +5109,13 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertEqual(prompt.call_count, 4)
         self.assertTrue(
             all(
-                call.kwargs["presentation"]
-                is terminal_module.InputPresentation.FORM
+                call.kwargs["presentation"] is terminal_module.InputPresentation.FORM
                 for call in prompt.call_args_list
             )
         )
         self.assertIn("Enter applies", prompt.call_args_list[0].args[1].instruction)
         self.assertIn("press Esc", prompt.call_args_list[0].args[1].instruction)
-        self.assert_value_save_guidance(
-            prompt.call_args_list[0].args[1].instruction
-        )
+        self.assert_value_save_guidance(prompt.call_args_list[0].args[1].instruction)
         self.assertEqual(
             prompt.call_args_list[1].kwargs["context"],
             (self.expected_entered_notice("Maximum debate rounds", "2"),),
@@ -6990,8 +5157,7 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertEqual(unchanged_prompt.call_count, 2)
         self.assertEqual(
             tuple(
-                call.kwargs["initial_value"]
-                for call in unchanged_prompt.call_args_list
+                call.kwargs["initial_value"] for call in unchanged_prompt.call_args_list
             ),
             ("1", "1"),
         )
@@ -7026,9 +5192,7 @@ class ControllerSettingsTests(ControllerTestCase):
             updated.pending.agent_configs[PLOT_ARCHITECT].backend,
             "codex",
         )
-        self.assert_value_save_guidance(
-            picker.call_args_list[0].args[1].instruction
-        )
+        self.assert_value_save_guidance(picker.call_args_list[0].args[1].instruction)
         self.assertEqual(
             picker.call_args_list[1].kwargs["notice"],
             self.expected_entered_notice("Provider", "Antigravity"),
@@ -7100,17 +5264,13 @@ class ControllerSettingsTests(ControllerTestCase):
                 ),
             ),
         )
-        catalog = ScriptedProviderCatalog(
-            _ready_provider_catalog("codex", *models)
-        )
+        catalog = ScriptedProviderCatalog(_ready_provider_catalog("codex", *models))
         controller, _backend, callbacks = self.make_controller(
             workspace,
             provider_catalog=catalog,
         )
         state = settings_module.load_settings_state(workspace)
-        persona_values = tuple(
-            entry.name for entry in state.baseline.persona_catalog
-        )
+        persona_values = tuple(entry.name for entry in state.baseline.persona_catalog)
         self.assertTrue(persona_values)
 
         def commit(value: str) -> terminal_module.ControlOutcome:
@@ -7200,35 +5360,39 @@ class ControllerSettingsTests(ControllerTestCase):
                 lambda candidate: candidate.pending.system_defaults.language,
                 "update_language",
             )
-            with mock.patch.object(
-                terminal_module.InteractivePickerInput,
-                "read_picker",
-                autospec=True,
-                side_effect=(
-                    commit(persona_values[0]),
-                    commit(persona_values[0]),
-                ),
-            ) as picker, mock.patch.object(
-                controller_core_module,
-                "update_persona",
-                wraps=controller_core_module.update_persona,
-            ) as update:
-                persona_state, whole_cancel = controller._edit_settings_persona(
-                    state
-                )
+            with (
+                mock.patch.object(
+                    terminal_module.InteractivePickerInput,
+                    "read_picker",
+                    autospec=True,
+                    side_effect=(
+                        commit(persona_values[0]),
+                        commit(persona_values[0]),
+                    ),
+                ) as picker,
+                mock.patch.object(
+                    controller_core_module,
+                    "update_persona",
+                    wraps=controller_core_module.update_persona,
+                ) as update,
+            ):
+                persona_state, whole_cancel = controller._edit_settings_persona(state)
             self.assertFalse(whole_cancel)
             self.assertEqual(picker.call_count, 2)
             self.assertEqual(update.call_count, 1)
-            with mock.patch.object(
-                terminal_module.InteractivePickerInput,
-                "read_picker",
-                autospec=True,
-                side_effect=(commit(persona_values[0]), cancel),
-            ) as picker, mock.patch.object(
-                controller_core_module,
-                "update_persona",
-                wraps=controller_core_module.update_persona,
-            ) as update:
+            with (
+                mock.patch.object(
+                    terminal_module.InteractivePickerInput,
+                    "read_picker",
+                    autospec=True,
+                    side_effect=(commit(persona_values[0]), cancel),
+                ) as picker,
+                mock.patch.object(
+                    controller_core_module,
+                    "update_persona",
+                    wraps=controller_core_module.update_persona,
+                ) as update,
+            ):
                 reentered, whole_cancel = controller._edit_settings_persona(
                     persona_state
                 )
@@ -7287,54 +5451,61 @@ class ControllerSettingsTests(ControllerTestCase):
                 "update_agent_codex_reasoning_effort",
             )
             self.assertEqual(
-                state.pending.agent_configs[
-                    PLOT_ARCHITECT
-                ].codex_reasoning_effort,
+                state.pending.agent_configs[PLOT_ARCHITECT].codex_reasoning_effort,
                 "high",
             )
 
-            with mock.patch.object(
-                terminal_module.InteractivePromptInput,
-                "read_prompt",
-                autospec=True,
-                side_effect=(commit("02"), commit("3"), commit("03")),
-            ) as prompt, mock.patch.object(
-                controller_core_module,
-                "update_max_debate_rounds",
-                wraps=controller_core_module.update_max_debate_rounds,
-            ) as update:
+            with (
+                mock.patch.object(
+                    terminal_module.InteractivePromptInput,
+                    "read_prompt",
+                    autospec=True,
+                    side_effect=(commit("02"), commit("3"), commit("03")),
+                ) as prompt,
+                mock.patch.object(
+                    controller_core_module,
+                    "update_max_debate_rounds",
+                    wraps=controller_core_module.update_max_debate_rounds,
+                ) as update,
+            ):
                 state, whole_cancel = controller._edit_settings_rounds(state)
             self.assertFalse(whole_cancel)
             self.assertEqual(prompt.call_count, 3)
             self.assertEqual(update.call_count, 2)
             self.assertEqual(state.pending.system_defaults.max_debate_rounds, 3)
 
-            with mock.patch.object(
-                terminal_module.InteractivePromptInput,
-                "read_prompt",
-                autospec=True,
-                side_effect=(commit("bad"), commit("03"), commit("3")),
-            ) as prompt, mock.patch.object(
-                controller_core_module,
-                "update_max_debate_rounds",
-                wraps=controller_core_module.update_max_debate_rounds,
-            ) as update:
+            with (
+                mock.patch.object(
+                    terminal_module.InteractivePromptInput,
+                    "read_prompt",
+                    autospec=True,
+                    side_effect=(commit("bad"), commit("03"), commit("3")),
+                ) as prompt,
+                mock.patch.object(
+                    controller_core_module,
+                    "update_max_debate_rounds",
+                    wraps=controller_core_module.update_max_debate_rounds,
+                ) as update,
+            ):
                 reentered, whole_cancel = controller._edit_settings_rounds(state)
             self.assertFalse(whole_cancel)
             self.assertEqual(prompt.call_count, 3)
             self.assertEqual(update.call_count, 1)
             self.assertEqual(reentered, state)
 
-            with mock.patch.object(
-                terminal_module.InteractivePromptInput,
-                "read_prompt",
-                autospec=True,
-                side_effect=(commit("custom-a"), commit(""), commit("")),
-            ) as prompt, mock.patch.object(
-                controller_core_module,
-                "update_agent_codex_model",
-                wraps=controller_core_module.update_agent_codex_model,
-            ) as update:
+            with (
+                mock.patch.object(
+                    terminal_module.InteractivePromptInput,
+                    "read_prompt",
+                    autospec=True,
+                    side_effect=(commit("custom-a"), commit(""), commit("")),
+                ) as prompt,
+                mock.patch.object(
+                    controller_core_module,
+                    "update_agent_codex_model",
+                    wraps=controller_core_module.update_agent_codex_model,
+                ) as update,
+            ):
                 state, whole_cancel = controller._edit_settings_custom_model(
                     state,
                     PLOT_ARCHITECT,
@@ -7343,20 +5514,21 @@ class ControllerSettingsTests(ControllerTestCase):
             self.assertFalse(whole_cancel)
             self.assertEqual(prompt.call_count, 3)
             self.assertEqual(update.call_count, 2)
-            self.assertIsNone(
-                state.pending.agent_configs[PLOT_ARCHITECT].codex_model
-            )
+            self.assertIsNone(state.pending.agent_configs[PLOT_ARCHITECT].codex_model)
 
-            with mock.patch.object(
-                terminal_module.InteractivePromptInput,
-                "read_prompt",
-                autospec=True,
-                side_effect=(commit("-unsafe"), commit(""), commit("")),
-            ) as prompt, mock.patch.object(
-                controller_core_module,
-                "update_agent_codex_model",
-                wraps=controller_core_module.update_agent_codex_model,
-            ) as update:
+            with (
+                mock.patch.object(
+                    terminal_module.InteractivePromptInput,
+                    "read_prompt",
+                    autospec=True,
+                    side_effect=(commit("-unsafe"), commit(""), commit("")),
+                ) as prompt,
+                mock.patch.object(
+                    controller_core_module,
+                    "update_agent_codex_model",
+                    wraps=controller_core_module.update_agent_codex_model,
+                ) as update,
+            ):
                 reentered, whole_cancel = controller._edit_settings_custom_model(
                     state,
                     PLOT_ARCHITECT,
@@ -7406,10 +5578,13 @@ class ControllerSettingsTests(ControllerTestCase):
             workspace,
             provider_catalog=catalog,
         )
-        commit = lambda value: terminal_module.ControlOutcome(
-            terminal_module.ControlOutcomeKind.COMMIT,
-            text=value,
-        )
+
+        def commit(value):
+            return terminal_module.ControlOutcome(
+                terminal_module.ControlOutcomeKind.COMMIT,
+                text=value,
+            )
+
         cancel = terminal_module.ControlOutcome(
             terminal_module.ControlOutcomeKind.CANCEL
         )
@@ -7464,10 +5639,7 @@ class ControllerSettingsTests(ControllerTestCase):
             (ROSTER[0], PLOT_ARCHITECT, ROSTER[0]),
         )
         self.assertEqual(
-            tuple(
-                calls[index].kwargs["highlighted_id"]
-                for index in (1, 3, 5, 7, 9)
-            ),
+            tuple(calls[index].kwargs["highlighted_id"] for index in (1, 3, 5, 7, 9)),
             (
                 "provider",
                 "provider",
@@ -7742,9 +5914,7 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertEqual(catalog.events, ["codex"])
         self.assertEqual(picker.call_count, 2)
         self.assertEqual(prompt.call_count, 5)
-        self.assert_value_save_guidance(
-            prompt.call_args_list[0].args[1].instruction
-        )
+        self.assert_value_save_guidance(prompt.call_args_list[0].args[1].instruction)
         self.assertEqual(
             prompt.call_args_list[1].kwargs["context"],
             (self.expected_entered_notice("Custom model", "first-custom"),),
@@ -7829,9 +5999,7 @@ class ControllerSettingsTests(ControllerTestCase):
         self.assertFalse(whole_cancel)
         self.assertEqual(catalog.events, ["codex"])
         choices = picker.call_args_list[0].args[2]
-        self.assert_value_save_guidance(
-            picker.call_args_list[0].args[1].instruction
-        )
+        self.assert_value_save_guidance(picker.call_args_list[0].args[1].instruction)
         self.assertEqual(
             tuple(choice.identity for choice in choices),
             ("settings:inherit", "settings:effort:0", "settings:effort:1"),
@@ -8183,8 +6351,7 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         self.assertTrue(
             all(
-                call.kwargs["presentation"]
-                is terminal_module.InputPresentation.FORM
+                call.kwargs["presentation"] is terminal_module.InputPresentation.FORM
                 for call in picker.call_args_list
             )
         )
@@ -8207,9 +6374,7 @@ class ControllerSettingsTests(ControllerTestCase):
             )
         )
         root_calls = [
-            call
-            for call in picker.call_args_list
-            if call.args[1].name == "Settings"
+            call for call in picker.call_args_list if call.args[1].name == "Settings"
         ]
         self.assertEqual(
             tuple(
@@ -8258,8 +6423,7 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         self.assertTrue(
             all(
-                call.kwargs["presentation"]
-                is terminal_module.InputPresentation.FORM
+                call.kwargs["presentation"] is terminal_module.InputPresentation.FORM
                 for call in prompt.call_args_list
             )
         )
@@ -8354,7 +6518,9 @@ class ControllerSettingsTests(ControllerTestCase):
             "".join(callbacks.records),
         )
         self.assertEqual(
-            settings_module.load_settings_state(workspace).pending.system_defaults.language,
+            settings_module.load_settings_state(
+                workspace
+            ).pending.system_defaults.language,
             "EN",
         )
 
@@ -8459,9 +6625,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 self.assertIs(called_controller, controller)
                 self.assertEqual(
                     prompt.name,
-                    "Apply changes?"
-                    if action == "save"
-                    else "Discard changes?",
+                    "Apply changes?" if action == "save" else "Discard changes?",
                 )
                 self.assertEqual(
                     choices,
@@ -8503,8 +6667,7 @@ class ControllerSettingsTests(ControllerTestCase):
             backend.execution_profile(agent_id) for agent_id in ROSTER
         )
         thread_status_before = tuple(
-            backend.execution_profile_thread_status(agent_id)
-            for agent_id in ROSTER
+            backend.execution_profile_thread_status(agent_id) for agent_id in ROSTER
         )
         commit_save = terminal_module.ControlOutcome(
             terminal_module.ControlOutcomeKind.COMMIT,
@@ -8513,9 +6676,7 @@ class ControllerSettingsTests(ControllerTestCase):
         events: list[str] = []
         prepared_values = []
         rendered_components = []
-        real_classify = (
-            InteractiveController._settings_change_is_message_details_only
-        )
+        real_classify = InteractiveController._settings_change_is_message_details_only
         real_prepare = controller_core_module.prepare_settings_save
         real_commit = controller_core_module.commit_prepared_settings_save
         real_output = controller._semantic_output.write_component
@@ -8693,8 +6854,7 @@ class ControllerSettingsTests(ControllerTestCase):
         )
         self.assertEqual(
             tuple(
-                backend.execution_profile_thread_status(agent_id)
-                for agent_id in ROSTER
+                backend.execution_profile_thread_status(agent_id) for agent_id in ROSTER
             ),
             thread_status_before,
         )
@@ -8711,10 +6871,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     "Settings",
                     (
                         terminal_module.Notice(
-                            (
-                                "Settings saved and applied to this running "
-                                "shell now."
-                            ),
+                            ("Settings saved and applied to this running shell now."),
                             label="saved and applied",
                             role=terminal_module.SemanticRole.SUCCESS,
                             state=terminal_module.ViewState.COMPLETED,
@@ -8914,9 +7071,7 @@ class ControllerSettingsTests(ControllerTestCase):
                         "commit_prepared_settings_save",
                     ) as commit,
                 ):
-                    with self.assertRaises(
-                        controller_core_module._ControllerAbort
-                    ):
+                    with self.assertRaises(controller_core_module._ControllerAbort):
                         controller._save_message_details_setting(state)
 
                 prepare.assert_called_once()
@@ -9155,9 +7310,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 self.assertEqual(_tree_snapshot(workspace.root), before)
                 rendered = "".join(callbacks.records)
                 self.assertEqual(
-                    rendered.count(
-                        "[cancelled] Pending changes discarded.\n"
-                    ),
+                    rendered.count("[cancelled] Pending changes discarded.\n"),
                     discard_count,
                 )
                 self.assertNotIn("[saved] Settings saved.", rendered)
@@ -9342,9 +7495,7 @@ class ControllerSettingsTests(ControllerTestCase):
                             "providers",
                         ),
                     )
-                    self.assertIsNone(
-                        picker.call_args_list[1].kwargs["highlighted_id"]
-                    )
+                    self.assertIsNone(picker.call_args_list[1].kwargs["highlighted_id"])
                     self.assertNotIn(
                         "[cancelled] Pending changes discarded.",
                         "".join(callbacks.records),
@@ -9513,7 +7664,9 @@ class ControllerSettingsTests(ControllerTestCase):
             1,
         )
         self.assertEqual(catalog.events, ["codex", "codex", "codex"])
-        compact_prompts = "".join("".join(prompt.split()) for prompt in callbacks.prompts)
+        compact_prompts = "".join(
+            "".join(prompt.split()) for prompt in callbacks.prompts
+        )
         self.assertIn("pendingCodexprovider", compact_prompts)
         self.assertIn("effectivemodel", compact_prompts)
         self.assertGreaterEqual(
@@ -9602,9 +7755,9 @@ class ControllerSettingsTests(ControllerTestCase):
         run.assert_not_called()
         connect.assert_not_called()
 
-        agent = settings_module.load_settings_state(
-            workspace
-        ).pending.agent_configs[PLOT_ARCHITECT]
+        agent = settings_module.load_settings_state(workspace).pending.agent_configs[
+            PLOT_ARCHITECT
+        ]
         self.assertEqual(
             (
                 agent.backend,
@@ -9625,8 +7778,7 @@ class ControllerSettingsTests(ControllerTestCase):
             prompt
             for prompt in callbacks.prompts
             if prompt.startswith(
-                "Effort\n"
-                "Context: Plot & Structure Architect · Antigravity\n"
+                "Effort\nContext: Plot & Structure Architect · Antigravity\n"
             )
         )
         self.assertIn(". low", effort_prompt)
@@ -9653,126 +7805,6 @@ class ControllerSettingsTests(ControllerTestCase):
                 backend.provider_route_generations()[PLOT_ARCHITECT],
             ),
             ("antigravity", "agy-model", "high", 1),
-        )
-
-    def test_mixed_message_details_and_rag_save_splits_live_and_next_shell_effects(
-        self,
-    ) -> None:
-        workspace = self.make_workspace()
-        controller, backend, callbacks = self.make_controller(
-            workspace,
-            terminal_width=320,
-        )
-        state = settings_module.update_conversation_rag_automatic(
-            settings_module.update_conversation_rag_provider(
-                settings_module.update_show_message_details(
-                    settings_module.load_settings_state(workspace),
-                    True,
-                ),
-                "local",
-            ),
-            True,
-        )
-        real_runtime_prepare = (
-            controller._runtime.prepare_runtime_configuration
-        )
-        real_runtime_commit = controller._runtime.commit_runtime_configuration
-        real_result = controller._write_settings_applied_result
-
-        runtime_prepare = mock.AsyncMock(wraps=real_runtime_prepare)
-
-        async def commit_runtime(runtime_candidate, backend_candidate):
-            self.assertFalse(controller._show_message_details)
-            result = await real_runtime_commit(
-                runtime_candidate,
-                backend_candidate,
-            )
-            self.assertFalse(controller._show_message_details)
-            return result
-
-        runtime_commit = mock.AsyncMock(side_effect=commit_runtime)
-
-        def write_result(_controller, *args, **kwargs):
-            self.assertTrue(controller._show_message_details)
-            return real_result(*args, **kwargs)
-
-        with (
-            mock.patch.object(
-                controller_core_module,
-                "prepare_settings_save",
-                wraps=controller_core_module.prepare_settings_save,
-            ) as prepare,
-            mock.patch.object(
-                backend,
-                "stage_runtime_configuration",
-                wraps=backend.stage_runtime_configuration,
-            ) as stage_backend,
-            mock.patch.object(
-                controller._runtime,
-                "prepare_runtime_configuration",
-                new=runtime_prepare,
-            ),
-            mock.patch.object(
-                backend,
-                "validate_runtime_configuration_candidate",
-                wraps=backend.validate_runtime_configuration_candidate,
-            ) as validate_backend,
-            mock.patch.object(
-                controller_core_module,
-                "select_conversation_storage",
-                wraps=controller_core_module.select_conversation_storage,
-            ) as select_storage,
-            mock.patch.object(
-                controller_core_module,
-                "commit_prepared_settings_save",
-                wraps=controller_core_module.commit_prepared_settings_save,
-            ) as commit_settings,
-            mock.patch.object(
-                controller._runtime,
-                "commit_runtime_configuration",
-                new=runtime_commit,
-            ),
-            mock.patch.object(
-                InteractiveController,
-                "_write_settings_applied_result",
-                autospec=True,
-                side_effect=write_result,
-            ) as result,
-            mock.patch.object(
-                controller_core_module,
-                "compose_local_conversation_rag_runtime",
-            ) as compose_rag,
-        ):
-            self.assertEqual(
-                controller._save_and_apply_settings(state),
-                "applied",
-            )
-
-        self.assertEqual(prepare.call_count, 2)
-        stage_backend.assert_called_once()
-        runtime_prepare.assert_awaited_once()
-        validate_backend.assert_called_once()
-        select_storage.assert_called_once()
-        commit_settings.assert_called_once()
-        runtime_commit.assert_awaited_once()
-        result.assert_called_once()
-        self.assertIs(result.call_args.kwargs["rag_changed"], True)
-        compose_rag.assert_not_called()
-        self.assertTrue(controller._show_message_details)
-        loaded = settings_module.load_settings_state(workspace).pending
-        self.assertTrue(loaded.system_defaults.show_message_details)
-        self.assertEqual(loaded.system_defaults.conversation_rag_provider, "local")
-        self.assertTrue(loaded.system_defaults.conversation_rag_automatic)
-        rendered = "".join(callbacks.records)
-        self.assertIn(
-            "Settings saved and applied to this running shell now.",
-            rendered,
-        )
-        self.assertIn(
-            "Conversation RAG settings were saved for the next shell. This "
-            "running shell retains its current Conversation RAG service and "
-            "automatic policy.",
-            rendered,
         )
 
     def test_hot_save_preflight_quiescence_restore_and_recovery_are_truthful(
@@ -9830,9 +7862,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 controller._runtime,
                 "prepare_runtime_configuration",
                 new=mock.AsyncMock(
-                    side_effect=BackendProtocolError(
-                        "PRIVATE_QUIESCENCE_FAILURE"
-                    )
+                    side_effect=BackendProtocolError("PRIVATE_QUIESCENCE_FAILURE")
                 ),
             ) as prepare_runtime,
             mock.patch.object(
@@ -9860,9 +7890,7 @@ class ControllerSettingsTests(ControllerTestCase):
                 controller._runtime,
                 "commit_runtime_configuration",
                 new=mock.AsyncMock(
-                    side_effect=BackendProtocolError(
-                        "PRIVATE_POST_PERSIST_FAILURE"
-                    )
+                    side_effect=BackendProtocolError("PRIVATE_POST_PERSIST_FAILURE")
                 ),
             ) as commit_runtime,
             mock.patch.object(
@@ -9968,12 +7996,13 @@ class ControllerSettingsTests(ControllerTestCase):
                 self.assertEqual(_tree_snapshot(workspace.root), before)
                 rendered = "".join(callbacks.records)
                 self.assertTrue(
-                    any("Choose a setting to edit" in prompt for prompt in callbacks.prompts)
+                    any(
+                        "Choose a setting to edit" in prompt
+                        for prompt in callbacks.prompts
+                    )
                 )
                 self.assertEqual(
-                    rendered.count(
-                        "[cancelled] Pending changes discarded.\n"
-                    ),
+                    rendered.count("[cancelled] Pending changes discarded.\n"),
                     0,
                 )
 
@@ -10163,9 +8192,7 @@ class ControllerSettingsTests(ControllerTestCase):
                     self.assertNotIn("[restored; not applied]", rendered)
                 self.assertNotIn("settings validation failed", rendered)
                 self.assertEqual(
-                    rendered.count(
-                        "[cancelled] Pending changes discarded.\n"
-                    ),
+                    rendered.count("[cancelled] Pending changes discarded.\n"),
                     1,
                 )
 
@@ -10219,14 +8246,12 @@ class ControllerSettingsTests(ControllerTestCase):
                 self.assertNotIn("settings validation failed", rendered)
                 self.assertNotIn("[saved] Settings saved.", rendered)
                 self.assertEqual(
-                    rendered.count(
-                        "[cancelled] Pending changes discarded.\n"
-                    ),
+                    rendered.count("[cancelled] Pending changes discarded.\n"),
                     1,
                 )
 
 
-class ControllerSearchAndTranscriptTests(ControllerTestCase):
+class _RetiredSchemaV1ControllerSearchAndTranscriptExamples:
     """Verify provider-free memory commands and attachment-scoped wiring."""
 
     def test_one_explicit_bundle_identity_reaches_controller_runtime_and_memory(
@@ -10262,7 +8287,9 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
         self.assertIs(controller._conversation_storage_services, bundle)
         self.assertIs(controller._runtime.conversation_storage_services, bundle)
         self.assertIs(controller._conversation_catalog, bundle.catalog)
-        self.assertIs(controller._conversation_event_store, bundle.event_store)
+        self.assertIs(
+            controller._conversation_storage_services.event_store, bundle.event_store
+        )
         memory_factory.assert_called_once()
         self.assertIs(
             memory_factory.call_args.kwargs["conversation_storage_services"],
@@ -10364,9 +8391,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
             True,
             True,
         )
-        memory = ScriptedConversationMemoryService(
-            search_outcomes=(result,)
-        )
+        memory = ScriptedConversationMemoryService(search_outcomes=(result,))
         workspace, _backend, catalog, controller, callbacks = (
             self.prepared_attached_controller(
                 "/search council",
@@ -10401,7 +8426,9 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
         scope, bound_catalog, bound_store = memory_factory.call_args.args
         self.assertEqual(scope, ConversationSearchScope("session"))
         self.assertIs(bound_catalog, catalog)
-        self.assertIs(bound_store, controller._conversation_event_store)
+        self.assertIs(
+            bound_store, controller._conversation_storage_services.event_store
+        )
         self.assertIs(
             controller._runtime.conversation_event_store,
             bound_store,
@@ -10488,10 +8515,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                 for record in callbacks.records
                 if record.startswith("Search results (")
             ],
-            [
-                f"{render_plain(view, width=240).text}\n"
-                for view in expected_views
-            ],
+            [f"{render_plain(view, width=240).text}\n" for view in expected_views],
         )
         self.assertLess(
             rendered.index("Search results (1/2)"),
@@ -10537,10 +8561,8 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                 for component in (*search_views, *result_notices)
             )
         )
-        self.assertFalse(
-            workspace.path(_default_relative("session")).exists()
-        )
-        self.assertIsNone(controller._conversation_memory_service)
+        self.assertFalse(workspace.path(_default_relative("session")).exists())
+        self.assertIsNone(controller._collaboration_history_service)
 
     def test_empty_search_has_one_empty_result_and_no_header_or_row(self) -> None:
         query = ConversationSearchQuery("missing")
@@ -10634,253 +8656,6 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
             1,
         )
 
-    def test_search_failures_and_cancellation_preserve_routing_and_selection(
-        self,
-    ) -> None:
-        entry = _conversation_metadata(_UNIQUE_C, "Council")
-        memory = ScriptedConversationMemoryService(
-            search_outcomes=(KeyboardInterrupt(), object()),
-            transcript_outcomes=(KeyboardInterrupt(),),
-        )
-        workspace, _backend, _catalog, controller, callbacks = (
-            self.prepared_attached_controller(
-                "/to plot",
-                "/search invalid\x00query",
-                "/search council",
-                "/search valid",
-                f"/transcript {entry.conversation_id}",
-                "/quit",
-                entries=(entry,),
-            )
-        )
-        context_before = workspace.path(_CONTEXT_PATH).read_bytes()
-        components: list[object] = []
-        real_write_component = terminal_module.InteractiveSemanticOutput.write_component
-
-        def capture_component(output, component):
-            components.append(component)
-            return real_write_component(output, component)
-
-        with (
-            mock.patch.object(
-                controller_core_module,
-                "ConversationMemoryService",
-                return_value=memory,
-            ),
-            mock.patch.object(controller_core_module.asyncio, "run") as async_run,
-            mock.patch.object(
-                terminal_module.InteractiveSemanticOutput,
-                "write_component",
-                autospec=True,
-                side_effect=capture_component,
-            ),
-        ):
-            self.assertEqual(controller.run_session_lobby(), 0)
-
-        async_run.assert_not_called()
-        self.assertEqual(
-            memory.search_calls,
-            [ConversationSearchQuery("council"), ConversationSearchQuery("valid")],
-        )
-        self.assertEqual(
-            memory.transcript_calls,
-            [(entry.conversation_id, 1, 24)],
-        )
-        self.assertEqual(
-            [
-                component
-                for component in components
-                if type(component) is terminal_module.Record
-                and component.title in {"Search request", "Transcript request"}
-            ],
-            [
-                terminal_module.Record(
-                    "context",
-                    title="Search request",
-                    fields=(
-                        terminal_module.Field("Query", "council"),
-                        terminal_module.Field("Scope", "active"),
-                    ),
-                    state=terminal_module.ViewState.COMPLETED,
-                ),
-                terminal_module.Record(
-                    "context",
-                    title="Search request",
-                    fields=(
-                        terminal_module.Field("Query", "valid"),
-                        terminal_module.Field("Scope", "active"),
-                    ),
-                    state=terminal_module.ViewState.COMPLETED,
-                ),
-                terminal_module.Record(
-                    "context",
-                    title="Transcript request",
-                    fields=(
-                        terminal_module.Field(
-                            "Conversation",
-                            entry.conversation_id[:12],
-                        ),
-                        terminal_module.Field("Start", "1"),
-                        terminal_module.Field("Count", "24"),
-                    ),
-                    state=terminal_module.ViewState.COMPLETED,
-                ),
-            ],
-        )
-        rendered = "".join(callbacks.records)
-        self.assertIn(
-            _error_record(InteractiveErrorCode.COMMAND_INVALID, width=240),
-            rendered,
-        )
-        self.assertIn(
-            "[cancelled] Search cancelled; attached state is unchanged.\n",
-            rendered,
-        )
-        self.assertIn(
-            "[cancelled] Transcript read cancelled; attached state is "
-            "unchanged.\n",
-            rendered,
-        )
-        self.assertIn(
-            _error_record(InteractiveErrorCode.WORKSPACE_INVALID, width=240),
-            rendered,
-        )
-        self.assertEqual(workspace.path(_CONTEXT_PATH).read_bytes(), context_before)
-        self.assertFalse(
-            workspace.path(_default_relative("session")).exists()
-        )
-        self.assertEqual(controller._target_agent_id, "plot_architect")
-        self.assertIsNone(controller._conversation_memory_service)
-
-    def test_memory_recovery_interrupt_fails_closed_for_search_and_transcript(
-        self,
-    ) -> None:
-        entry = _conversation_metadata(_UNIQUE_C, "Council")
-        cases = (
-            (
-                "search_workspace_invalid",
-                "/search council",
-                OSError("search-secret"),
-                InteractiveErrorCode.WORKSPACE_INVALID,
-                "Search cancelled; attached state is unchanged.",
-            ),
-            (
-                "transcript_workspace_unsafe",
-                f"/transcript {entry.conversation_id}",
-                WorkspaceSecurityError("transcript-secret"),
-                InteractiveErrorCode.WORKSPACE_UNSAFE,
-                "Transcript read cancelled; attached state is unchanged.",
-            ),
-        )
-        for label, command, service_failure, typed_code, cancelled in cases:
-            with self.subTest(case=label):
-                memory = ScriptedConversationMemoryService(
-                    search_outcomes=(service_failure,)
-                    if command.startswith("/search")
-                    else (),
-                    transcript_outcomes=(service_failure,)
-                    if command.startswith("/transcript")
-                    else (),
-                )
-                workspace, backend, catalog, controller, callbacks = (
-                    self.prepared_attached_controller(
-                        command,
-                        entries=(entry,),
-                    )
-                )
-                context_path = workspace.path(_CONTEXT_PATH)
-                context_before = (
-                    context_path.read_bytes(),
-                    context_path.stat().st_mtime_ns,
-                )
-                original_lifecycle = backend.get_session_lifecycle
-                lifecycle_calls = 0
-
-                def interrupt_recovery_proof(
-                    session_id: str,
-                ) -> SessionLifecycleState:
-                    """Allow canonical startup, then interrupt recovery proof."""
-
-                    nonlocal lifecycle_calls
-                    lifecycle_calls += 1
-                    if lifecycle_calls <= 4:
-                        return original_lifecycle(session_id)
-                    raise KeyboardInterrupt
-
-                with (
-                    mock.patch.object(
-                        controller_core_module,
-                        "ConversationMemoryService",
-                        return_value=memory,
-                    ),
-                    mock.patch.object(
-                        backend,
-                        "get_session_lifecycle",
-                        side_effect=interrupt_recovery_proof,
-                    ),
-                    mock.patch.object(
-                        backend,
-                        "release_session_access",
-                        wraps=backend.release_session_access,
-                    ) as detach,
-                    mock.patch.object(
-                        controller_core_module.asyncio,
-                        "run",
-                    ) as async_run,
-                    mock.patch.object(
-                        controller._runtime,
-                        "converse",
-                    ) as converse,
-                    mock.patch.object(
-                        controller_core_module,
-                        "save_default_session",
-                    ) as persist_session,
-                    mock.patch.object(
-                        controller_core_module,
-                        "save_default_conversation",
-                    ) as persist_conversation,
-                    mock.patch.object(
-                        controller._conversation_event_store,
-                        "append",
-                    ) as append,
-                ):
-                    self.assertEqual(controller.run_session_lobby(), 2)
-
-                self.assertEqual(lifecycle_calls, 5)
-                detach.assert_not_called()
-                for untouched in (
-                    async_run,
-                    converse,
-                    persist_session,
-                    persist_conversation,
-                    append,
-                ):
-                    untouched.assert_not_called()
-                self.assertEqual(callbacks.prompts, ["story[session:lead]> "])
-                rendered = "".join(callbacks.records)
-                self.assertEqual(rendered.count("[error cleanup_failed]"), 1)
-                self.assertNotIn(f"[error {typed_code.value}]", rendered)
-                self.assertNotIn(f"[cancelled] {cancelled}\n", rendered)
-                self.assertNotIn("[error internal_error]", rendered)
-                self.assertNotIn(str(service_failure), rendered)
-                self.assertIsNone(controller._attached_session_id)
-                self.assertIsNone(controller._focused_conversation)
-                self.assertIsNone(controller._conversation_memory_service)
-                self.assertFalse(
-                    workspace.path(_access_relative("session")).exists()
-                )
-                self.assertFalse(
-                    workspace.path(_default_relative("session")).exists()
-                )
-                self.assertEqual(catalog.entries, [entry])
-                self.assertEqual(
-                    (
-                        context_path.read_bytes(),
-                        context_path.stat().st_mtime_ns,
-                    ),
-                    context_before,
-                )
-
     def test_attachment_proof_does_not_swallow_system_exit(self) -> None:
         _workspace, backend, _catalog, controller, _callbacks = (
             self.prepared_attached_controller()
@@ -10951,9 +8726,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                 snapshot_last=2,
             ),
         )
-        memory = ScriptedConversationMemoryService(
-            transcript_outcomes=outcomes
-        )
+        memory = ScriptedConversationMemoryService(transcript_outcomes=outcomes)
         handle = entry.conversation_id[:12]
         _workspace, _backend, _catalog, controller, callbacks = (
             self.prepared_attached_controller(
@@ -11067,13 +8840,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
             agent_messages[0],
             terminal_module.Message(
                 "Lead Orchestrator → You",
-                '{\n'
-                '  "answer": "界",\n'
-                '  "items": [\n'
-                '    1,\n'
-                '    true\n'
-                '  ]\n'
-                '}',
+                '{\n  "answer": "界",\n  "items": [\n    1,\n    true\n  ]\n}',
                 role=terminal_module.SemanticRole.AGENT,
                 state=terminal_module.ViewState.COMPLETED,
                 presentation=terminal_module.MessagePresentation.CHAT_BLOCK,
@@ -11198,7 +8965,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
 
         with (
             mock.patch.object(
-                controller._conversation_event_store,
+                controller._conversation_storage_services.event_store,
                 "read",
                 return_value=(stored_user, stored_event),
             ) as read,
@@ -11226,15 +8993,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                 mock.call("session", entry.conversation_id),
             ],
         )
-        expected_body = (
-            '{\n'
-            '  "z": "界",\n'
-            '  "a": [\n'
-            '    1,\n'
-            '    true\n'
-            '  ]\n'
-            '}'
-        )
+        expected_body = '{\n  "z": "界",\n  "a": [\n    1,\n    true\n  ]\n}'
         off_views = [
             component
             for component in components[:off_end]
@@ -11248,10 +9007,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
             and component.title == "History"
         ]
         self.assertEqual(
-            [
-                (view.position, view.total_count, view.items[0])
-                for view in off_views
-            ],
+            [(view.position, view.total_count, view.items[0]) for view in off_views],
             [
                 (
                     1,
@@ -11260,9 +9016,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                         "You → Lead Orchestrator",
                         "question",
                         state=terminal_module.ViewState.COMPLETED,
-                        presentation=(
-                            terminal_module.MessagePresentation.CHAT_BLOCK
-                        ),
+                        presentation=(terminal_module.MessagePresentation.CHAT_BLOCK),
                         metadata="Sequence: 1",
                         accent=terminal_module.SpeakerAccent.MAGENTA,
                     ),
@@ -11275,9 +9029,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                         expected_body,
                         role=terminal_module.SemanticRole.AGENT,
                         state=terminal_module.ViewState.COMPLETED,
-                        presentation=(
-                            terminal_module.MessagePresentation.CHAT_BLOCK
-                        ),
+                        presentation=(terminal_module.MessagePresentation.CHAT_BLOCK),
                         metadata="Sequence: 2",
                         accent=terminal_module.SpeakerAccent.CYAN,
                     ),
@@ -11285,10 +9037,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
             ],
         )
         self.assertEqual(
-            [
-                (view.position, view.total_count, view.items[0])
-                for view in on_views
-            ],
+            [(view.position, view.total_count, view.items[0]) for view in on_views],
             [
                 (
                     1,
@@ -11297,9 +9046,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                         "You → Lead Orchestrator",
                         "question",
                         state=terminal_module.ViewState.COMPLETED,
-                        presentation=(
-                            terminal_module.MessagePresentation.CHAT_BLOCK
-                        ),
+                        presentation=(terminal_module.MessagePresentation.CHAT_BLOCK),
                         metadata=(
                             "Sequence: 1 · Turn: turn_1 · "
                             "Kind: user_message · "
@@ -11316,9 +9063,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                         expected_body,
                         role=terminal_module.SemanticRole.AGENT,
                         state=terminal_module.ViewState.COMPLETED,
-                        presentation=(
-                            terminal_module.MessagePresentation.CHAT_BLOCK
-                        ),
+                        presentation=(terminal_module.MessagePresentation.CHAT_BLOCK),
                         metadata=(
                             "Sequence: 2 · Turn: turn_1 · "
                             "Kind: agent_reply · "
@@ -11356,8 +9101,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
         controller._show_message_details = True
         self.assertEqual(
             controller._conversation_event_message(runtime_error).metadata,
-            "Sequence: 3 · Turn: turn_2 · Kind: runtime_error · "
-            "IDs: runtime → user",
+            "Sequence: 3 · Turn: turn_2 · Kind: runtime_error · IDs: runtime → user",
         )
 
     def test_malformed_fresh_transcript_pages_are_transcript_invalid(self) -> None:
@@ -11479,7 +9223,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                     rendered.index("[error transcript_invalid]"),
                 )
                 self.assertNotIn("private transcript detail", rendered)
-                self.assertIsNone(controller._conversation_memory_service)
+                self.assertIsNone(controller._collaboration_history_service)
 
     def test_conversation_mutations_do_not_rebind_the_shared_memory_service(
         self,
@@ -11509,12 +9253,14 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
 
         memory_factory.assert_called_once()
         bound_store = memory_factory.call_args.args[2]
-        self.assertIs(bound_store, controller._conversation_event_store)
+        self.assertIs(
+            bound_store, controller._conversation_storage_services.event_store
+        )
         self.assertIs(controller._runtime.conversation_event_store, bound_store)
         self.assertEqual(len(catalog.entries), 3)
         self.assertEqual(catalog.entries[1].subject, "Revised")
         self.assertIs(catalog.entries[1].status, ConversationStatus.ARCHIVED)
-        self.assertIsNone(controller._conversation_memory_service)
+        self.assertIsNone(controller._collaboration_history_service)
 
     def test_destination_scope_precedes_detach_and_failed_build_keeps_source(
         self,
@@ -11523,7 +9269,9 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
             with self.subTest(fails_destination=fails_destination):
                 workspace = self.make_workspace()
                 for session_id in ("source", "destination"):
-                    self.seed_session(workspace, session_id, durable_state=SessionDurableState.READY)
+                    self.seed_session(
+                        workspace, session_id, durable_state=SessionDurableState.READY
+                    )
                 save_default_session(workspace, "source")
                 backend = self.make_backend(workspace)
                 controller, _backend, callbacks = self.make_controller(
@@ -11611,7 +9359,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
                         load_cli_context(workspace).default_session_id,
                         "destination",
                     )
-                self.assertIsNone(controller._conversation_memory_service)
+                self.assertIsNone(controller._collaboration_history_service)
 
     def test_successful_end_clears_memory_scope_before_lobby_input(self) -> None:
         memory = ScriptedConversationMemoryService()
@@ -11621,9 +9369,7 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
             """Assert successful end cleared the service before lobby input."""
 
             self.assertEqual(prompt, "story[lobby]> ")
-            self.assertIsNone(
-                holder["controller"]._conversation_memory_service
-            )
+            self.assertIsNone(holder["controller"]._collaboration_history_service)
             return "/quit"
 
         _workspace, _backend, _catalog, controller, _callbacks = (
@@ -11640,7 +9386,323 @@ class ControllerSearchAndTranscriptTests(ControllerTestCase):
             return_value=memory,
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
-        self.assertIsNone(controller._conversation_memory_service)
+        self.assertIsNone(controller._collaboration_history_service)
+
+    def test_search_failures_and_cancellation_preserve_routing_and_selection(
+        self,
+    ) -> None:
+        entry = _conversation_metadata(_UNIQUE_C, "Council")
+        memory = ScriptedConversationMemoryService(
+            search_outcomes=(KeyboardInterrupt(), object()),
+            transcript_outcomes=(KeyboardInterrupt(),),
+        )
+        workspace, _backend, _catalog, controller, callbacks = (
+            self.prepared_attached_controller(
+                "/search invalid\x00query",
+                "/search council",
+                "/search valid",
+                f"/transcript {entry.conversation_id}",
+                "/quit",
+                entries=(entry,),
+            )
+        )
+        context_before = workspace.path(_CONTEXT_PATH).read_bytes()
+        components: list[object] = []
+        real_write_component = terminal_module.InteractiveSemanticOutput.write_component
+
+        def capture_component(output, component):
+            components.append(component)
+            return real_write_component(output, component)
+
+        with (
+            mock.patch.object(
+                controller_core_module,
+                "ConversationMemoryService",
+                return_value=memory,
+            ),
+            mock.patch.object(controller_core_module.asyncio, "run") as async_run,
+            mock.patch.object(
+                terminal_module.InteractiveSemanticOutput,
+                "write_component",
+                autospec=True,
+                side_effect=capture_component,
+            ),
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        async_run.assert_not_called()
+        self.assertEqual(
+            memory.search_calls,
+            [ConversationSearchQuery("council"), ConversationSearchQuery("valid")],
+        )
+        self.assertEqual(
+            memory.transcript_calls,
+            [(entry.conversation_id, 1, 24)],
+        )
+        self.assertEqual(
+            [
+                component
+                for component in components
+                if type(component) is terminal_module.Record
+                and component.title in {"Search request", "Transcript request"}
+            ],
+            [
+                terminal_module.Record(
+                    "context",
+                    title="Search request",
+                    fields=(
+                        terminal_module.Field("Query", "council"),
+                        terminal_module.Field("Scope", "active"),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                ),
+                terminal_module.Record(
+                    "context",
+                    title="Search request",
+                    fields=(
+                        terminal_module.Field("Query", "valid"),
+                        terminal_module.Field("Scope", "active"),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                ),
+                terminal_module.Record(
+                    "context",
+                    title="Transcript request",
+                    fields=(
+                        terminal_module.Field(
+                            "Conversation",
+                            entry.conversation_id[:12],
+                        ),
+                        terminal_module.Field("Start", "1"),
+                        terminal_module.Field("Count", "24"),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                ),
+            ],
+        )
+        rendered = "".join(callbacks.records)
+        self.assertIn(
+            _error_record(InteractiveErrorCode.COMMAND_INVALID, width=240),
+            rendered,
+        )
+        self.assertIn(
+            "[cancelled] Search cancelled; attached state is unchanged.\n",
+            rendered,
+        )
+        self.assertIn(
+            "[cancelled] Transcript read cancelled; attached state is unchanged.\n",
+            rendered,
+        )
+        self.assertIn(
+            _error_record(InteractiveErrorCode.WORKSPACE_INVALID, width=240),
+            rendered,
+        )
+        self.assertEqual(workspace.path(_CONTEXT_PATH).read_bytes(), context_before)
+        self.assertFalse(workspace.path(_default_relative("session")).exists())
+        self.assertIsNone(controller._collaboration_history_service)
+
+    def test_memory_recovery_interrupt_fails_closed_for_search_and_transcript(
+        self,
+    ) -> None:
+        entry = _conversation_metadata(_UNIQUE_C, "Council")
+        cases = (
+            (
+                "search_workspace_invalid",
+                "/search council",
+                OSError("search-secret"),
+                InteractiveErrorCode.WORKSPACE_INVALID,
+                "Search cancelled; attached state is unchanged.",
+            ),
+            (
+                "transcript_workspace_unsafe",
+                f"/transcript {entry.conversation_id}",
+                WorkspaceSecurityError("transcript-secret"),
+                InteractiveErrorCode.WORKSPACE_UNSAFE,
+                "Transcript read cancelled; attached state is unchanged.",
+            ),
+        )
+        for label, command, service_failure, typed_code, cancelled in cases:
+            with self.subTest(case=label):
+                memory = ScriptedConversationMemoryService(
+                    search_outcomes=(service_failure,)
+                    if command.startswith("/search")
+                    else (),
+                    transcript_outcomes=(service_failure,)
+                    if command.startswith("/transcript")
+                    else (),
+                )
+                workspace, backend, catalog, controller, callbacks = (
+                    self.prepared_attached_controller(
+                        command,
+                        entries=(entry,),
+                    )
+                )
+                context_path = workspace.path(_CONTEXT_PATH)
+                context_before = (
+                    context_path.read_bytes(),
+                    context_path.stat().st_mtime_ns,
+                )
+                original_lifecycle = backend.get_session_lifecycle
+                lifecycle_calls = 0
+
+                def interrupt_recovery_proof(
+                    session_id: str,
+                ) -> SessionLifecycleState:
+                    """Allow canonical startup, then interrupt recovery proof."""
+
+                    nonlocal lifecycle_calls
+                    lifecycle_calls += 1
+                    if lifecycle_calls <= 4:
+                        return original_lifecycle(session_id)
+                    raise KeyboardInterrupt
+
+                with (
+                    mock.patch.object(
+                        controller_core_module,
+                        "ConversationMemoryService",
+                        return_value=memory,
+                    ),
+                    mock.patch.object(
+                        backend,
+                        "get_session_lifecycle",
+                        side_effect=interrupt_recovery_proof,
+                    ),
+                    mock.patch.object(
+                        backend,
+                        "release_session_access",
+                        wraps=backend.release_session_access,
+                    ) as detach,
+                    mock.patch.object(
+                        controller_core_module.asyncio,
+                        "run",
+                    ) as async_run,
+                    mock.patch.object(
+                        controller_core_module,
+                        "save_default_session",
+                    ) as persist_session,
+                    mock.patch.object(
+                        controller_core_module,
+                        "save_default_conversation",
+                    ) as persist_conversation,
+                    mock.patch.object(
+                        controller._conversation_storage_services.event_store,
+                        "append",
+                    ) as append,
+                ):
+                    self.assertEqual(controller.run_session_lobby(), 2)
+
+                self.assertEqual(lifecycle_calls, 5)
+                detach.assert_not_called()
+                for untouched in (
+                    async_run,
+                    persist_session,
+                    persist_conversation,
+                    append,
+                ):
+                    untouched.assert_not_called()
+                self.assertEqual(callbacks.prompts, ["story[session]> "])
+                rendered = "".join(callbacks.records)
+                self.assertEqual(rendered.count("[error cleanup_failed]"), 1)
+                self.assertNotIn(f"[error {typed_code.value}]", rendered)
+                self.assertNotIn(f"[cancelled] {cancelled}\n", rendered)
+                self.assertNotIn("[error internal_error]", rendered)
+                self.assertNotIn(str(service_failure), rendered)
+                self.assertIsNone(controller._attached_session_id)
+                self.assertIsNone(controller._focused_conversation)
+                self.assertIsNone(controller._collaboration_history_service)
+                self.assertFalse(workspace.path(_access_relative("session")).exists())
+                self.assertFalse(workspace.path(_default_relative("session")).exists())
+                self.assertEqual(catalog.entries, [entry])
+                self.assertEqual(
+                    (
+                        context_path.read_bytes(),
+                        context_path.stat().st_mtime_ns,
+                    ),
+                    context_before,
+                )
+
+
+class ControllerV2HistoryCommandTests(ControllerTestCase):
+    """Verify provider-free structured search, transcript, and history commands."""
+
+    def prepared_v2_controller(
+        self,
+        *reads: object,
+        subject: str = "Focused collaboration",
+        with_history: bool = True,
+    ) -> tuple[
+        object,
+        ConversationStorageServices,
+        ConversationMetadata,
+        InteractiveController,
+        ScriptedTerminalCallbacks,
+    ]:
+        workspace = self.make_workspace()
+        self.seed_session(workspace, "session", durable_state=SessionDurableState.READY)
+        save_default_session(workspace, "session")
+        services = compose_filesystem_conversation_storage(workspace)
+        metadata = services.catalog.create("session", subject)
+        save_default_conversation(workspace, "session", metadata.conversation_id)
+        if with_history:
+            batch = contract_batches(metadata.conversation_id)["proposal"]
+            services.event_store.append_batch(
+                CollaborationEventBatch(
+                    batch_id=batch.batch_id,
+                    expected_last_sequence=batch.expected_last_sequence,
+                    events=tuple(
+                        replace(event, session_id="session") for event in batch.events
+                    ),
+                )
+            )
+        controller, backend, callbacks = self.make_controller(
+            workspace,
+            *reads,
+            conversation_storage_services=services,
+            terminal_width=240,
+        )
+        self.addCleanup(backend.close)
+        return workspace, services, metadata, controller, callbacks
+
+    def test_search_transcript_and_history_are_structured_provider_free_reads(
+        self,
+    ) -> None:
+        workspace, services, metadata, controller, callbacks = (
+            self.prepared_v2_controller(
+                "/search Consult specialists",
+                "/history",
+                "/quit",
+            )
+        )
+        # The transcript command needs the generated opaque conversation ID.
+        callbacks.reads.insert(1, f"/transcript {metadata.conversation_id}")
+        before = services.event_store.read("session", metadata.conversation_id)
+        with mock.patch.object(controller._backend, "bind", autospec=True) as bind:
+            self.assertEqual(controller.run_session_lobby(), 0)
+        bind.assert_not_called()
+        self.assertEqual(
+            services.event_store.read("session", metadata.conversation_id),
+            before,
+        )
+        rendered = "".join(callbacks.records)
+        self.assertIn("proposal_event", rendered)
+        self.assertIn("proposal.purpose", rendered)
+        self.assertIn("awaiting_confirmation", rendered.lower())
+        self.assertIn("submit_confirmation", rendered)
+        self.assertNotIn("route_fingerprint", rendered)
+        self.assertTrue(workspace.root.exists())
+
+    def test_subject_text_alone_never_creates_a_history_search_hit(self) -> None:
+        _workspace, _services, _metadata, controller, callbacks = (
+            self.prepared_v2_controller(
+                "/search Consult specialists",
+                "/quit",
+                subject="Consult specialists",
+                with_history=False,
+            )
+        )
+        self.assertEqual(controller.run_session_lobby(), 0)
+        rendered = "".join(callbacks.records)
+        self.assertIn("Search returned 0 of 0 matching readable fields.", rendered)
 
 
 class ControllerConversationCommandTests(ControllerTestCase):
@@ -11687,17 +9749,44 @@ class ControllerConversationCommandTests(ControllerTestCase):
             callbacks,
         )
 
-    def test_status_with_prior_run_emits_one_exact_framed_result_panel(
+    def test_create_subject_interrupt_and_eof_cancel_without_mutation(self) -> None:
+        cases = (
+            ("interrupt", KeyboardInterrupt(), True),
+            ("eof", EOFError(), False),
+        )
+        for label, event, continues in cases:
+            with self.subTest(case=label):
+                reads: tuple[object, ...] = ("/conversation new", event)
+                if continues:
+                    reads += ("/quit",)
+                workspace, backend, catalog, controller, callbacks = (
+                    self.prepared_controller(*reads)
+                )
+                with mock.patch.object(
+                    backend,
+                    "release_session_access",
+                    wraps=backend.release_session_access,
+                ) as detach:
+                    self.assertEqual(controller.run_session_lobby(), 0)
+                detach.assert_called_once_with("session")
+                self.assertEqual(catalog.entries, [])
+                self.assertFalse(workspace.path(_default_relative("session")).exists())
+                self.assertEqual(
+                    callbacks.prompts.count("conversation[subject]> "),
+                    1,
+                )
+                rendered = "".join(callbacks.records)
+                if continues:
+                    self.assertIn("creation cancelled", rendered.lower())
+
+    def test_empty_conversation_list_is_one_explicit_semantic_callback(
         self,
     ) -> None:
-        workspace, _backend, _catalog, controller, callbacks = (
-            self.prepared_controller(
-                "/conversation new Opening scene",
-                "/status",
-                "/quit",
-            )
+        workspace, _backend, _catalog, controller, callbacks = self.prepared_controller(
+            "/conversation list",
+            "/quit",
         )
-        controller._last_started_debate_by_session["session"] = "debate_1"
+        before = _tree_snapshot(workspace.root)
         components: list[object] = []
         real_write_component = terminal_module.InteractiveSemanticOutput.write_component
 
@@ -11713,41 +9802,867 @@ class ControllerConversationCommandTests(ControllerTestCase):
         ):
             self.assertEqual(controller.run_session_lobby(), 0)
 
-        result_panels = [
-            component
-            for component in components
-            if type(component) is terminal_module.Panel
-            and component.title == "Result"
-        ]
-        self.assertEqual(len(result_panels), 1)
-        result = result_panels[0]
-        self.assertIs(result.state, terminal_module.ViewState.COMPLETED)
-        self.assertEqual(
-            tuple(type(item) for item in result.items),
-            (terminal_module.Field, terminal_module.Section),
+        self.assertEqual(_tree_snapshot(workspace.root), before)
+        expected = terminal_module.ListView(
+            "Conversations",
+            (),
+            total_count=0,
+            empty_notice=terminal_module.Notice(
+                "No conversations found.",
+                label="conversation",
+                role=terminal_module.SemanticRole.MUTED,
+                state=terminal_module.ViewState.EMPTY,
+            ),
+            state=terminal_module.ViewState.EMPTY,
         )
-        expected_record = f"{render_plain(result, width=200).text}\n"
+        self.assertEqual(
+            [
+                component
+                for component in components
+                if type(component) is terminal_module.ListView
+                and component.title == "Conversations"
+            ],
+            [expected],
+        )
         self.assertEqual(
             [
                 record
                 for record in callbacks.records
-                if record.startswith("--- Result")
+                if record.startswith("Conversations (")
             ],
-            [expected_record],
+            [f"{render_plain(expected, width=200).text}\n"],
         )
-        self.assertTrue(expected_record.endswith(f"{'-' * 200}\n"))
-        self.assertFalse(workspace.path(_access_relative("session")).exists())
+
+    def test_filtered_conversation_list_context_precedes_empty_and_error(
+        self,
+    ) -> None:
+        cases = (
+            ("empty", None, False),
+            ("catalog error", OSError("catalog-secret"), True),
+        )
+        for label, failure, expects_error in cases:
+            with self.subTest(case=label):
+                workspace, _backend, catalog, controller, callbacks = (
+                    self.prepared_controller(
+                        "/conversation list --all  MISSING  ",
+                        "/quit",
+                    )
+                )
+                components: list[object] = []
+                real_write_component = (
+                    terminal_module.InteractiveSemanticOutput.write_component
+                )
+
+                def capture_component(output, component):
+                    components.append(component)
+                    return real_write_component(output, component)
+
+                list_patch = (
+                    mock.patch.object(catalog, "list", side_effect=failure)
+                    if failure is not None
+                    else mock.patch.object(catalog, "list", wraps=catalog.list)
+                )
+                with (
+                    list_patch,
+                    mock.patch.object(
+                        terminal_module.InteractiveSemanticOutput,
+                        "write_component",
+                        autospec=True,
+                        side_effect=capture_component,
+                    ),
+                ):
+                    self.assertEqual(controller.run_session_lobby(), 0)
+
+                expected_context = terminal_module.Record(
+                    "context",
+                    title="Conversation list request",
+                    fields=(
+                        terminal_module.Field("Query", "missing"),
+                        terminal_module.Field("Scope", "all"),
+                    ),
+                    state=terminal_module.ViewState.COMPLETED,
+                )
+                self.assertEqual(
+                    [
+                        component
+                        for component in components
+                        if type(component) is terminal_module.Record
+                        and component.title == "Conversation list request"
+                    ],
+                    [expected_context],
+                )
+                rendered = "".join(callbacks.records)
+                context_text = render_plain(expected_context, width=200).text
+                self.assertIn(context_text, rendered)
+                if expects_error:
+                    self.assertNotIn("catalog-secret", rendered)
+                    self.assertNotIn("No conversations found.", rendered)
+                    self.assertLess(
+                        rendered.index(context_text),
+                        rendered.index("[error workspace_invalid]"),
+                    )
+                else:
+                    self.assertIn("No conversations found.", rendered)
+                    self.assertLess(
+                        rendered.index(context_text),
+                        rendered.index("No conversations found."),
+                    )
+                self.assertFalse(workspace.path(_default_relative("session")).exists())
+
+    def test_main_conversation_resume_provider_is_live_and_freshly_validated(
+        self,
+    ) -> None:
+        prior = _conversation_metadata(_COLLIDING_A, "Shared subject")
+        archived = _conversation_metadata(
+            _COLLIDING_B,
+            "Archived subject",
+            status=ConversationStatus.ARCHIVED,
+        )
+        target = _conversation_metadata(_UNIQUE_C, "Target subject")
+        workspace, _backend, catalog, controller, callbacks = self.prepared_controller(
+            entries=(prior, archived, target),
+            selected_id=prior.conversation_id,
+        )
+        reads = 0
+        captured: dict[str, object] = {}
+
+        def commit_live_choice(
+            _main_input: object,
+            provider: Callable[[str, int], object],
+            **_kwargs: object,
+        ) -> terminal_module.TerminalAction:
+            nonlocal reads
+            reads += 1
+            if reads == 1:
+                captured["current"] = provider("/conversation resume", 20)
+                save_default_conversation(
+                    workspace,
+                    "session",
+                    target.conversation_id,
+                )
+                captured["current_precedence"] = provider(
+                    "/conversation resume",
+                    20,
+                )
+                controller._focused_conversation = None
+                captured["default_precedence"] = provider(
+                    "/conversation resume",
+                    20,
+                )
+                captured["explicit"] = provider(
+                    f"/conversation resume {target.conversation_id}",
+                    20 + len(target.conversation_id) + 1,
+                )
+                captured["midline"] = provider("/conversation resume", 8)
+                saved_entries = list(catalog.entries)
+                catalog.entries.clear()
+                captured["empty"] = provider("/conversation resume", 20)
+                catalog.entries[:] = saved_entries
+                with mock.patch.object(
+                    catalog,
+                    "list",
+                    side_effect=OSError("snapshot-secret"),
+                ):
+                    captured["failure"] = provider(
+                        "/conversation resume",
+                        20,
+                    )
+                catalog.entries[-1] = replace(
+                    catalog.entries[-1],
+                    subject="Fresh subject",
+                )
+                picker = captured["default_precedence"]
+                assert isinstance(picker, terminal_module.Picker)
+                return terminal_module.TerminalAction(
+                    terminal_module.TerminalActionKind.LINE,
+                    text=picker.choices[1].identity,
+                )
+            return terminal_module.TerminalAction(
+                terminal_module.TerminalActionKind.LINE,
+                text="/quit",
+            )
+
+        with (
+            mock.patch.object(
+                terminal_module.InteractiveMainInput,
+                "read_main",
+                autospec=True,
+                side_effect=commit_live_choice,
+            ),
+            mock.patch.object(
+                controller_core_module,
+                "parse_interactive_line",
+                wraps=controller_core_module.parse_interactive_line,
+            ) as parse,
+        ):
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        expected_choices = (
+            terminal_module.Choice(
+                f"/conversation resume {prior.conversation_id}",
+                "Shared subject",
+                description=f"Handle: {prior.conversation_id}",
+            ),
+            terminal_module.Choice(
+                f"/conversation resume {target.conversation_id}",
+                "Target subject",
+                description=f"Handle: {target.conversation_id[:12]}",
+            ),
+        )
+        current = captured["current"]
+        self.assertEqual(
+            current,
+            terminal_module.Picker(
+                terminal_module.Prompt(
+                    "Resume conversation",
+                    instruction="Choose an active conversation to resume.",
+                ),
+                expected_choices,
+                highlighted_id=(f"/conversation resume {prior.conversation_id}"),
+            ),
+        )
+        self.assertEqual(captured["current_precedence"], current)
+        self.assertEqual(
+            captured["default_precedence"],
+            terminal_module.Picker(
+                terminal_module.Prompt(
+                    "Resume conversation",
+                    instruction="Choose an active conversation to resume.",
+                ),
+                expected_choices,
+                highlighted_id=(f"/conversation resume {target.conversation_id}"),
+            ),
+        )
+        self.assertIsNone(captured["explicit"])
+        self.assertIsNone(captured["midline"])
+        self.assertEqual(
+            captured["empty"],
+            terminal_module.Picker(
+                terminal_module.Prompt(
+                    "Resume conversation",
+                    instruction="Choose an active conversation to resume.",
+                ),
+                (),
+            ),
+        )
+        self.assertIsNone(captured["failure"])
+        self.assertEqual(
+            parse.call_args_list.count(
+                mock.call(f"/conversation resume {target.conversation_id}")
+            ),
+            1,
+        )
+        self.assertEqual(
+            load_default_conversation(workspace, "session"),
+            target.conversation_id,
+        )
+        rendered = "".join(callbacks.records)
+        self.assertIn("Subject: Fresh subject", rendered)
+        self.assertNotIn("snapshot-secret", rendered)
+
+    def test_use_resolves_full_and_unique_prefixes_across_archived_entries(
+        self,
+    ) -> None:
+        entries = (
+            _conversation_metadata(_COLLIDING_A, "First"),
+            _conversation_metadata(
+                _COLLIDING_B,
+                "Archived",
+                status=ConversationStatus.ARCHIVED,
+            ),
+            _conversation_metadata(_UNIQUE_C, "Unique"),
+        )
+        workspace, _backend, _catalog, controller, callbacks = self.prepared_controller(
+            f"/conversation resume {_UNIQUE_C[:11]}",
+            "/conversation resume c_0123456789",
+            "/conversation resume c_9999999999",
+            f"/conversation resume {_COLLIDING_B}",
+            f"/conversation resume {_COLLIDING_A}",
+            f"/conversation resume {_UNIQUE_C[:12]}",
+            "/quit",
+            entries=entries,
+            selected_id=_UNIQUE_C,
+        )
+        self.assertEqual(controller.run_session_lobby(), 0)
+        rendered = "".join(callbacks.records)
+        for code in (
+            InteractiveErrorCode.CONVERSATION_INVALID,
+            InteractiveErrorCode.CONVERSATION_AMBIGUOUS,
+            InteractiveErrorCode.CONVERSATION_NOT_FOUND,
+            InteractiveErrorCode.CONVERSATION_ARCHIVED,
+        ):
+            with self.subTest(code=code):
+                self.assertIn(_error_record(code, width=200), rendered)
+        self.assertIn(f"Current focus: {_COLLIDING_A} | Subject: First", rendered)
+        self.assertIn("Current focus: c_fedcba9876 | Subject: Unique", rendered)
+        self.assertEqual(
+            load_default_conversation(workspace, "session"),
+            _UNIQUE_C,
+        )
+
+    def test_omitted_use_picker_preserves_active_order_handles_and_current_highlight(
+        self,
+    ) -> None:
+        entries = (
+            _conversation_metadata(_COLLIDING_A, "Shared subject"),
+            _conversation_metadata(
+                _COLLIDING_B,
+                "Archived subject",
+                status=ConversationStatus.ARCHIVED,
+            ),
+            _conversation_metadata(_UNIQUE_C, "Shared subject"),
+        )
+        workspace: Workspace
+
+        def change_saved_default(_prompt: str) -> str:
+            save_default_conversation(workspace, "session", _UNIQUE_C)
+            return "/conversation resume"
+
+        workspace, _backend, _catalog, controller, callbacks = self.prepared_controller(
+            change_saved_default,
+            "2",
+            "/quit",
+            entries=entries,
+            selected_id=_COLLIDING_A,
+        )
+        progress_events: list[str] = []
+
+        async def observe_progress(operation):
+            progress_events.append("started")
+            try:
+                return await operation
+            finally:
+                progress_events.append("completed")
+
+        controller._advisory_progress._run = observe_progress
+        original_picker = terminal_module.InteractivePickerInput.read_picker
+        with mock.patch.object(
+            terminal_module.InteractivePickerInput,
+            "read_picker",
+            autospec=True,
+            side_effect=original_picker,
+        ) as picker:
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        picker.assert_called_once()
+        self.assertEqual(progress_events, ["started", "completed"])
+        picker_call = picker.call_args
+        self.assertEqual(
+            picker_call.args[1],
+            terminal_module.Prompt(
+                "Resume conversation",
+                instruction="Choose an active conversation to resume.",
+            ),
+        )
+        self.assertEqual(
+            picker_call.args[2],
+            (
+                terminal_module.Choice(
+                    _COLLIDING_A,
+                    "Shared subject",
+                    description=f"Handle: {_COLLIDING_A}",
+                ),
+                terminal_module.Choice(
+                    _UNIQUE_C,
+                    "Shared subject",
+                    description=f"Handle: {_UNIQUE_C[:12]}",
+                ),
+            ),
+        )
+        self.assertEqual(
+            picker_call.kwargs["highlighted_id"],
+            _COLLIDING_A,
+        )
+        picker_prompt = next(
+            prompt for prompt in callbacks.prompts if "Resume conversation" in prompt
+        )
+        self.assertLess(
+            picker_prompt.index(f"Handle: {_COLLIDING_A}"),
+            picker_prompt.index(f"Handle: {_UNIQUE_C[:12]}"),
+        )
+        self.assertIn("1. [highlighted] Shared subject", picker_prompt)
+        self.assertIn("2. [available] Shared subject", picker_prompt)
+        self.assertNotIn("Archived subject", picker_prompt)
+        self.assertEqual(
+            load_default_conversation(workspace, "session"),
+            _UNIQUE_C,
+        )
+        self.assertIn(
+            "Current focus: c_fedcba9876 | Subject: Shared subject",
+            "".join(callbacks.records),
+        )
+
+    def test_omitted_use_blank_commits_saved_default_when_focus_is_absent(
+        self,
+    ) -> None:
+        prior = _conversation_metadata(_COLLIDING_A, "Prior")
+        saved = _conversation_metadata(_UNIQUE_C, "Saved")
+        controller: InteractiveController
+
+        def clear_current_focus(_prompt: str) -> str:
+            controller._focused_conversation = None
+            return "/conversation resume"
+
+        workspace, _backend, _catalog, controller, callbacks = self.prepared_controller(
+            clear_current_focus,
+            "",
+            "/quit",
+            entries=(prior, saved),
+            selected_id=saved.conversation_id,
+        )
+        original_picker = terminal_module.InteractivePickerInput.read_picker
+        with mock.patch.object(
+            terminal_module.InteractivePickerInput,
+            "read_picker",
+            autospec=True,
+            side_effect=original_picker,
+        ) as picker:
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        picker.assert_called_once()
+        self.assertEqual(
+            picker.call_args.kwargs["highlighted_id"],
+            saved.conversation_id,
+        )
+        self.assertEqual(
+            load_default_conversation(workspace, "session"),
+            saved.conversation_id,
+        )
+        self.assertIn(
+            "Current focus: c_fedcba9876 | Subject: Saved",
+            "".join(callbacks.records),
+        )
+
+    def test_omitted_use_cancel_interrupt_and_eof_are_nonmutating(self) -> None:
+        cases = (
+            ("cancel", "/cancel", False),
+            ("interrupt", KeyboardInterrupt(), False),
+            ("eof", EOFError(), True),
+        )
+        for label, picker_input, exits_from_picker in cases:
+            with self.subTest(case=label):
+                selected = _conversation_metadata(_COLLIDING_A, "Selected")
+                other = _conversation_metadata(_UNIQUE_C, "Other")
+                reads = (
+                    ("/conversation resume", picker_input)
+                    if exits_from_picker
+                    else ("/conversation resume", picker_input, "/quit")
+                )
+                workspace, backend, catalog, controller, callbacks = (
+                    self.prepared_controller(
+                        *reads,
+                        entries=(selected, other),
+                        selected_id=selected.conversation_id,
+                    )
+                )
+                before = _tree_snapshot(workspace.root)
+                with mock.patch.object(
+                    backend,
+                    "release_session_access",
+                    wraps=backend.release_session_access,
+                ) as detach:
+                    self.assertEqual(controller.run_session_lobby(), 0)
+
+                detach.assert_called_once_with("session")
+                self.assertEqual(_tree_snapshot(workspace.root), before)
+                self.assertEqual(
+                    load_default_conversation(workspace, "session"),
+                    selected.conversation_id,
+                )
+                self.assertFalse(
+                    any(
+                        event.startswith(("create:", "rename:", "archive:"))
+                        for event in catalog.events
+                    )
+                )
+                rendered = "".join(callbacks.records)
+                if exits_from_picker:
+                    self.assertNotIn("Conversation focus cancelled.", rendered)
+                    self.assertEqual(
+                        callbacks.prompts[-1].splitlines()[-1],
+                        "Resume conversation > ",
+                    )
+                else:
+                    self.assertIn(
+                        "[cancelled] Conversation focus cancelled.",
+                        rendered,
+                    )
+
+    def test_omitted_use_empty_active_catalog_does_not_open_picker(self) -> None:
+        archived = _conversation_metadata(
+            _COLLIDING_B,
+            "Archived",
+            status=ConversationStatus.ARCHIVED,
+        )
+        workspace, _backend, _catalog, controller, callbacks = self.prepared_controller(
+            "/conversation resume",
+            "/quit",
+            entries=(archived,),
+        )
+        before = _tree_snapshot(workspace.root)
+        with mock.patch.object(
+            terminal_module.InteractivePickerInput,
+            "read_picker",
+        ) as picker:
+            self.assertEqual(controller.run_session_lobby(), 0)
+
+        picker.assert_not_called()
+        self.assertEqual(_tree_snapshot(workspace.root), before)
+        self.assertIn(
+            "[conversation] No active conversations found.",
+            "".join(callbacks.records),
+        )
+        self.assertEqual(
+            [prompt for prompt in callbacks.prompts if prompt.startswith("story[")],
+            ["story[session]> ", "story[session]> "],
+        )
+
+    def test_command_storage_failure_requires_public_held_access_proof(
+        self,
+    ) -> None:
+        for retained in (True, False):
+            with self.subTest(retained=retained):
+                workspace, backend, catalog, controller, callbacks = (
+                    self.prepared_controller(
+                        "/conversation list",
+                        "/quit",
+                    )
+                )
+                original_lifecycle = backend.get_session_lifecycle
+                lifecycle_calls = 0
+
+                def summarize(
+                    session_id: str,
+                ) -> SessionLifecycleState:
+                    nonlocal lifecycle_calls
+                    lifecycle_calls += 1
+                    if retained or lifecycle_calls != 5:
+                        return original_lifecycle(session_id)
+                    return _lifecycle(
+                        session_id,
+                        durable_state=SessionDurableState.READY,
+                        access_state=SessionAccessState.CLAIMABLE,
+                    )
+
+                with (
+                    mock.patch.object(
+                        catalog,
+                        "list",
+                        side_effect=OSError("catalog-secret"),
+                    ),
+                    mock.patch.object(
+                        backend,
+                        "get_session_lifecycle",
+                        side_effect=summarize,
+                    ),
+                    mock.patch.object(
+                        backend,
+                        "release_session_access",
+                        wraps=backend.release_session_access,
+                    ) as detach,
+                ):
+                    self.assertEqual(
+                        controller.run_session_lobby(),
+                        0 if retained else 2,
+                    )
+
+                self.assertEqual(lifecycle_calls, 6 if retained else 5)
+                rendered = "".join(callbacks.records)
+                self.assertNotIn("catalog-secret", rendered)
+                if retained:
+                    detach.assert_called_once_with("session")
+                    self.assertIn(
+                        _error_record(
+                            InteractiveErrorCode.WORKSPACE_INVALID,
+                            width=200,
+                        ),
+                        rendered,
+                    )
+                else:
+                    detach.assert_not_called()
+                    self.assertEqual(
+                        rendered.count("[error cleanup_failed]"),
+                        1,
+                    )
+                    self.assertNotIn("[error workspace_invalid]", rendered)
+                self.assertFalse(workspace.path(_access_relative("session")).exists())
+
+    def test_injected_catalog_collection_tampering_is_fatal_and_safe(self) -> None:
+        valid = _conversation_metadata(_UNIQUE_C, "Safe subject")
+        foreign = _conversation_metadata(
+            _UNIQUE_C,
+            "foreign-secret",
+            session_id="foreign",
+        )
+        cases: tuple[tuple[str, object], ...] = (
+            ("non_tuple", [valid]),
+            ("foreign", (foreign,)),
+            ("duplicate", (valid, valid)),
+        )
+        for label, returned in cases:
+            with self.subTest(case=label):
+                workspace, backend, catalog, controller, callbacks = (
+                    self.prepared_controller("/conversation list")
+                )
+                with (
+                    mock.patch.object(
+                        catalog,
+                        "list",
+                        return_value=returned,
+                    ),
+                    mock.patch.object(
+                        backend,
+                        "release_session_access",
+                        wraps=backend.release_session_access,
+                    ) as detach,
+                    mock.patch.object(
+                        backend,
+                        "close",
+                        wraps=backend.close,
+                    ) as close,
+                ):
+                    self.assertEqual(controller.run_session_lobby(), 2)
+                detach.assert_called_once_with("session")
+                close.assert_called_once_with()
+                rendered = "".join(callbacks.records)
+                self.assertIn(
+                    _error_record(
+                        InteractiveErrorCode.INTERNAL_ERROR,
+                        width=200,
+                    ),
+                    rendered,
+                )
+                self.assertNotIn("foreign-secret", rendered)
+                self.assertFalse(workspace.path(_access_relative("session")).exists())
+
+    def test_selected_archive_chooses_first_active_successor_or_persists_null(
+        self,
+    ) -> None:
+        for has_successor in (True, False):
+            with self.subTest(has_successor=has_successor):
+                selected = _conversation_metadata(_COLLIDING_A, "Selected")
+                successor = _conversation_metadata(_UNIQUE_C, "Successor")
+                entries = (selected, successor) if has_successor else (selected,)
+                workspace, _backend, catalog, controller, callbacks = (
+                    self.prepared_controller(
+                        "/conversation archive",
+                        "yes",
+                        "/quit",
+                        entries=entries,
+                        selected_id=selected.conversation_id,
+                    )
+                )
+                self.assertEqual(controller.run_session_lobby(), 0)
+                self.assertIs(
+                    catalog.entries[0].status,
+                    ConversationStatus.ARCHIVED,
+                )
+                expected = successor.conversation_id if has_successor else None
+                self.assertEqual(
+                    load_default_conversation(workspace, "session"),
+                    expected,
+                )
+                self.assertIn(
+                    'Archive current conversation "Selected"',
+                    callbacks.prompts[1],
+                )
+                rendered = "".join(callbacks.records)
+                if has_successor:
+                    self.assertIn("current focus: c_fedcba9876", rendered)
+                else:
+                    self.assertIn("current focus is none", rendered)
+
+    def test_nonselected_and_already_archived_explicit_archive_do_not_reselect(
+        self,
+    ) -> None:
+        selected = _conversation_metadata(_COLLIDING_A, "Selected")
+        other = _conversation_metadata(_UNIQUE_C, "Other")
+        archived = _conversation_metadata(
+            _COLLIDING_B,
+            "Archived",
+            status=ConversationStatus.ARCHIVED,
+        )
+        workspace, _backend, catalog, controller, callbacks = self.prepared_controller(
+            f"/conversation archive {archived.conversation_id}",
+            f"/conversation archive {other.conversation_id}",
+            "/quit",
+            entries=(selected, other, archived),
+            selected_id=selected.conversation_id,
+        )
+        archived_before = archived.to_dict()
+        self.assertEqual(controller.run_session_lobby(), 0)
+        self.assertEqual(catalog.entries[2].to_dict(), archived_before)
+        self.assertIs(catalog.entries[1].status, ConversationStatus.ARCHIVED)
+        self.assertEqual(
+            load_default_conversation(workspace, "session"),
+            selected.conversation_id,
+        )
+        self.assertNotIn("Archive current conversation", callbacks.prompts)
+        rendered = "".join(callbacks.records)
+        self.assertIn("Already archived", rendered)
+        self.assertIn("Archived c_fedcba9876 | Subject: Other", rendered)
+
+    def test_selected_archive_no_blank_interrupt_and_eof_preserve_state(
+        self,
+    ) -> None:
+        cases = (
+            ("no", "no", True),
+            ("blank", "", True),
+            ("interrupt", KeyboardInterrupt(), True),
+            ("eof", EOFError(), False),
+        )
+        for label, decision, continues in cases:
+            with self.subTest(case=label):
+                selected = _conversation_metadata(_UNIQUE_C, "Selected")
+                reads: tuple[object, ...] = (
+                    "/conversation archive",
+                    decision,
+                )
+                if continues:
+                    reads += ("/quit",)
+                workspace, backend, catalog, controller, callbacks = (
+                    self.prepared_controller(
+                        *reads,
+                        entries=(selected,),
+                        selected_id=selected.conversation_id,
+                    )
+                )
+                with mock.patch.object(
+                    backend,
+                    "release_session_access",
+                    wraps=backend.release_session_access,
+                ) as detach:
+                    self.assertEqual(controller.run_session_lobby(), 0)
+                detach.assert_called_once_with("session")
+                self.assertIs(
+                    catalog.entries[0].status,
+                    ConversationStatus.ACTIVE,
+                )
+                self.assertEqual(
+                    load_default_conversation(workspace, "session"),
+                    selected.conversation_id,
+                )
+                rendered = "".join(callbacks.records)
+                if continues:
+                    self.assertIn("archive cancelled", rendered.lower())
+
+    def test_output_failure_after_each_durable_commit_does_not_roll_back(
+        self,
+    ) -> None:
+        for operation in ("create", "use", "rename", "archive"):
+            with self.subTest(operation=operation):
+                if operation == "create":
+                    workspace, backend, catalog, controller, callbacks = (
+                        self.prepared_controller(
+                            "/conversation new Created",
+                        )
+                    )
+                elif operation == "use":
+                    prior = _conversation_metadata(_COLLIDING_A, "Prior")
+                    target = _conversation_metadata(_UNIQUE_C, "Target")
+                    workspace, backend, catalog, controller, callbacks = (
+                        self.prepared_controller(
+                            f"/conversation resume {target.conversation_id}",
+                            entries=(prior, target),
+                            selected_id=prior.conversation_id,
+                        )
+                    )
+                elif operation == "rename":
+                    selected = _conversation_metadata(_UNIQUE_C, "Original")
+                    workspace, backend, catalog, controller, callbacks = (
+                        self.prepared_controller(
+                            "/conversation subject Revised",
+                            entries=(selected,),
+                            selected_id=selected.conversation_id,
+                        )
+                    )
+                else:
+                    selected = _conversation_metadata(_COLLIDING_A, "Selected")
+                    successor = _conversation_metadata(_UNIQUE_C, "Successor")
+                    workspace, backend, catalog, controller, callbacks = (
+                        self.prepared_controller(
+                            "/conversation archive",
+                            "yes",
+                            entries=(selected, successor),
+                            selected_id=selected.conversation_id,
+                        )
+                    )
+
+                real_write_component = (
+                    terminal_module.InteractiveSemanticOutput.write_component
+                )
+
+                def fail_committed_notice(output, component):
+                    """Fail only the post-commit conversation acknowledgement."""
+
+                    if (
+                        type(component) is terminal_module.Notice
+                        and component.label == "conversation"
+                    ):
+                        raise RuntimeError("writer-secret")
+                    return real_write_component(output, component)
+
+                with (
+                    mock.patch.object(
+                        terminal_module.InteractiveSemanticOutput,
+                        "write_component",
+                        autospec=True,
+                        side_effect=fail_committed_notice,
+                    ),
+                    mock.patch.object(
+                        backend,
+                        "release_session_access",
+                        wraps=backend.release_session_access,
+                    ) as detach,
+                ):
+                    self.assertEqual(controller.run_session_lobby(), 2)
+
+                detach.assert_called_once_with("session")
+                rendered = "".join(callbacks.records)
+                self.assertIn(
+                    _error_record(
+                        InteractiveErrorCode.INTERNAL_ERROR,
+                        width=200,
+                    ),
+                    rendered,
+                )
+                self.assertNotIn("writer-secret", rendered)
+                self.assertFalse(workspace.path(_access_relative("session")).exists())
+                if operation == "create":
+                    self.assertEqual(len(catalog.entries), 1)
+                    self.assertEqual(
+                        load_default_conversation(workspace, "session"),
+                        catalog.entries[0].conversation_id,
+                    )
+                elif operation == "use":
+                    self.assertEqual(
+                        load_default_conversation(workspace, "session"),
+                        target.conversation_id,
+                    )
+                elif operation == "rename":
+                    self.assertEqual(catalog.entries[0].subject, "Revised")
+                    self.assertEqual(
+                        load_default_conversation(workspace, "session"),
+                        selected.conversation_id,
+                    )
+                else:
+                    self.assertIs(
+                        catalog.entries[0].status,
+                        ConversationStatus.ARCHIVED,
+                    )
+                    self.assertEqual(
+                        load_default_conversation(workspace, "session"),
+                        successor.conversation_id,
+                    )
 
     def test_bare_create_prompts_once_and_duplicate_subjects_stay_distinct(
         self,
     ) -> None:
-        workspace, _backend, catalog, controller, callbacks = (
-            self.prepared_controller(
-                "/conversation new",
-                "Opening scene",
-                "/conversation new Opening scene",
-                "/quit",
-            )
+        workspace, _backend, catalog, controller, callbacks = self.prepared_controller(
+            "/conversation new",
+            "Opening scene",
+            "/conversation new Opening scene",
+            "/quit",
         )
         with (
             mock.patch.object(subprocess, "Popen") as popen,
@@ -11777,7 +10692,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
             [
                 record
                 for record in callbacks.records
-                if record.startswith("--- Conversation scope")
+                if record.startswith(("[conversation]\n", "[conversation] [empty]"))
             ],
             [
                 _conversation_scope_record("session", None, None),
@@ -11796,7 +10711,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         rendered = "".join(callbacks.records)
         self.assertEqual(rendered.count("Created and focused"), 2)
         self.assertIn(
-            "  Subject: Opening scene\n  Agent: lead\n",
+            "  Subject: Opening scene\n",
             rendered,
         )
         self.assertEqual(list(workspace.root.rglob("transcript.jsonl")), [])
@@ -11807,46 +10722,12 @@ class ControllerConversationCommandTests(ControllerTestCase):
             [".gitkeep"],
         )
 
-    def test_create_subject_interrupt_and_eof_cancel_without_mutation(self) -> None:
-        cases = (
-            ("interrupt", KeyboardInterrupt(), True),
-            ("eof", EOFError(), False),
-        )
-        for label, event, continues in cases:
-            with self.subTest(case=label):
-                reads: tuple[object, ...] = ("/conversation new", event)
-                if continues:
-                    reads += ("/quit",)
-                workspace, backend, catalog, controller, callbacks = (
-                    self.prepared_controller(*reads)
-                )
-                with mock.patch.object(
-                    backend,
-                    "release_session_access",
-                    wraps=backend.release_session_access,
-                ) as detach:
-                    self.assertEqual(controller.run_session_lobby(), 0)
-                detach.assert_called_once_with("session")
-                self.assertEqual(catalog.entries, [])
-                self.assertFalse(
-                    workspace.path(_default_relative("session")).exists()
-                )
-                self.assertEqual(
-                    callbacks.prompts.count("conversation[subject]> "),
-                    1,
-                )
-                rendered = "".join(callbacks.records)
-                if continues:
-                    self.assertIn("creation cancelled", rendered.lower())
-
     def test_create_invalid_exhausted_and_selection_write_failures_are_typed(
         self,
     ) -> None:
-        workspace, _backend, catalog, controller, callbacks = (
-            self.prepared_controller(
-                "/conversation new \u00a0",
-                "/quit",
-            )
+        workspace, _backend, catalog, controller, callbacks = self.prepared_controller(
+            "/conversation new \u00a0",
+            "/quit",
         )
         self.assertEqual(controller.run_session_lobby(), 0)
         self.assertEqual(catalog.entries, [])
@@ -11856,11 +10737,9 @@ class ControllerConversationCommandTests(ControllerTestCase):
             callbacks.records,
         )
 
-        workspace, _backend, catalog, controller, callbacks = (
-            self.prepared_controller(
-                "/conversation new Subject",
-                "/quit",
-            )
+        workspace, _backend, catalog, controller, callbacks = self.prepared_controller(
+            "/conversation new Subject",
+            "/quit",
         )
         with mock.patch.object(
             catalog,
@@ -11877,11 +10756,9 @@ class ControllerConversationCommandTests(ControllerTestCase):
         )
         self.assertNotIn("allocation-secret", "".join(callbacks.records))
 
-        workspace, backend, catalog, controller, callbacks = (
-            self.prepared_controller(
-                "/conversation new Subject",
-                "/quit",
-            )
+        workspace, backend, catalog, controller, callbacks = self.prepared_controller(
+            "/conversation new Subject",
+            "/quit",
         )
         with (
             mock.patch.object(
@@ -11903,7 +10780,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         self.assertIn("was created but did not become the default", rendered)
         self.assertIn("[error workspace_invalid]", rendered)
         self.assertNotIn("selection-secret", rendered)
-        self.assertIn("  Conversation: none\n  Agent: lead\n", rendered)
+        self.assertIn("  Conversation: none\n  Subject: none\n", rendered)
 
     def test_list_normalizes_queries_preserves_order_and_uses_global_collisions(
         self,
@@ -11920,15 +10797,13 @@ class ControllerConversationCommandTests(ControllerTestCase):
             ),
             _conversation_metadata(_UNIQUE_C, "Opening Scene"),
         )
-        workspace, _backend, _catalog, controller, callbacks = (
-            self.prepared_controller(
-                "/conversation list",
-                "/conversation list --all motivation",
-                "/conversation list  OPENING  ",
-                "/quit",
-                entries=entries,
-                selected_id=_COLLIDING_A,
-            )
+        workspace, _backend, _catalog, controller, callbacks = self.prepared_controller(
+            "/conversation list",
+            "/conversation list --all motivation",
+            "/conversation list  OPENING  ",
+            "/quit",
+            entries=entries,
+            selected_id=_COLLIDING_A,
         )
         selection_path = workspace.path(_default_relative("session"))
         selection_before = (
@@ -12083,15 +10958,11 @@ class ControllerConversationCommandTests(ControllerTestCase):
         ]
         self.assertEqual(
             rows,
-            [
-                f"{render_plain(view, width=200).text}\n"
-                for view in expected_views
-            ],
+            [f"{render_plain(view, width=200).text}\n" for view in expected_views],
         )
         self.assertTrue(
             all(
-                view.items[0].fields[1].state
-                is terminal_module.ViewState.IDLE
+                view.items[0].fields[1].state is terminal_module.ViewState.IDLE
                 for view in conversation_views
             )
         )
@@ -12104,564 +10975,6 @@ class ControllerConversationCommandTests(ControllerTestCase):
         self.assertEqual(
             (selection_path.read_bytes(), selection_path.stat().st_mtime_ns),
             selection_before,
-        )
-
-    def test_empty_conversation_list_is_one_explicit_semantic_callback(
-        self,
-    ) -> None:
-        workspace, _backend, _catalog, controller, callbacks = (
-            self.prepared_controller(
-                "/conversation list",
-                "/quit",
-            )
-        )
-        before = _tree_snapshot(workspace.root)
-        components: list[object] = []
-        real_write_component = terminal_module.InteractiveSemanticOutput.write_component
-
-        def capture_component(output, component):
-            components.append(component)
-            return real_write_component(output, component)
-
-        with mock.patch.object(
-            terminal_module.InteractiveSemanticOutput,
-            "write_component",
-            autospec=True,
-            side_effect=capture_component,
-        ):
-            self.assertEqual(controller.run_session_lobby(), 0)
-
-        self.assertEqual(_tree_snapshot(workspace.root), before)
-        expected = terminal_module.ListView(
-            "Conversations",
-            (),
-            total_count=0,
-            empty_notice=terminal_module.Notice(
-                "No conversations found.",
-                label="conversation",
-                role=terminal_module.SemanticRole.MUTED,
-                state=terminal_module.ViewState.EMPTY,
-            ),
-            state=terminal_module.ViewState.EMPTY,
-        )
-        self.assertEqual(
-            [
-                component
-                for component in components
-                if type(component) is terminal_module.ListView
-                and component.title == "Conversations"
-            ],
-            [expected],
-        )
-        self.assertEqual(
-            [
-                record
-                for record in callbacks.records
-                if record.startswith("Conversations (")
-            ],
-            [f"{render_plain(expected, width=200).text}\n"],
-        )
-
-    def test_filtered_conversation_list_context_precedes_empty_and_error(
-        self,
-    ) -> None:
-        cases = (
-            ("empty", None, False),
-            ("catalog error", OSError("catalog-secret"), True),
-        )
-        for label, failure, expects_error in cases:
-            with self.subTest(case=label):
-                workspace, _backend, catalog, controller, callbacks = (
-                    self.prepared_controller(
-                        "/conversation list --all  MISSING  ",
-                        "/quit",
-                    )
-                )
-                components: list[object] = []
-                real_write_component = (
-                    terminal_module.InteractiveSemanticOutput.write_component
-                )
-
-                def capture_component(output, component):
-                    components.append(component)
-                    return real_write_component(output, component)
-
-                list_patch = (
-                    mock.patch.object(catalog, "list", side_effect=failure)
-                    if failure is not None
-                    else mock.patch.object(catalog, "list", wraps=catalog.list)
-                )
-                with (
-                    list_patch,
-                    mock.patch.object(
-                        terminal_module.InteractiveSemanticOutput,
-                        "write_component",
-                        autospec=True,
-                        side_effect=capture_component,
-                    ),
-                ):
-                    self.assertEqual(controller.run_session_lobby(), 0)
-
-                expected_context = terminal_module.Record(
-                    "context",
-                    title="Conversation list request",
-                    fields=(
-                        terminal_module.Field("Query", "missing"),
-                        terminal_module.Field("Scope", "all"),
-                    ),
-                    state=terminal_module.ViewState.COMPLETED,
-                )
-                self.assertEqual(
-                    [
-                        component
-                        for component in components
-                        if type(component) is terminal_module.Record
-                        and component.title == "Conversation list request"
-                    ],
-                    [expected_context],
-                )
-                rendered = "".join(callbacks.records)
-                context_text = render_plain(expected_context, width=200).text
-                self.assertIn(context_text, rendered)
-                if expects_error:
-                    self.assertNotIn("catalog-secret", rendered)
-                    self.assertNotIn("No conversations found.", rendered)
-                    self.assertLess(
-                        rendered.index(context_text),
-                        rendered.index("[error workspace_invalid]"),
-                    )
-                else:
-                    self.assertIn("No conversations found.", rendered)
-                    self.assertLess(
-                        rendered.index(context_text),
-                        rendered.index("No conversations found."),
-                    )
-                self.assertFalse(
-                    workspace.path(_default_relative("session")).exists()
-                )
-
-    def test_main_conversation_resume_provider_is_live_and_freshly_validated(
-        self,
-    ) -> None:
-        prior = _conversation_metadata(_COLLIDING_A, "Shared subject")
-        archived = _conversation_metadata(
-            _COLLIDING_B,
-            "Archived subject",
-            status=ConversationStatus.ARCHIVED,
-        )
-        target = _conversation_metadata(_UNIQUE_C, "Target subject")
-        workspace, _backend, catalog, controller, callbacks = (
-            self.prepared_controller(
-                entries=(prior, archived, target),
-                selected_id=prior.conversation_id,
-            )
-        )
-        reads = 0
-        captured: dict[str, object] = {}
-
-        def commit_live_choice(
-            _main_input: object,
-            provider: Callable[[str, int], object],
-            **_kwargs: object,
-        ) -> terminal_module.TerminalAction:
-            nonlocal reads
-            reads += 1
-            if reads == 1:
-                captured["current"] = provider("/conversation resume", 20)
-                save_default_conversation(
-                    workspace,
-                    "session",
-                    target.conversation_id,
-                )
-                captured["current_precedence"] = provider(
-                    "/conversation resume",
-                    20,
-                )
-                controller._focused_conversation = None
-                captured["default_precedence"] = provider(
-                    "/conversation resume",
-                    20,
-                )
-                captured["explicit"] = provider(
-                    f"/conversation resume {target.conversation_id}",
-                    20 + len(target.conversation_id) + 1,
-                )
-                captured["midline"] = provider("/conversation resume", 8)
-                saved_entries = list(catalog.entries)
-                catalog.entries.clear()
-                captured["empty"] = provider("/conversation resume", 20)
-                catalog.entries[:] = saved_entries
-                with mock.patch.object(
-                    catalog,
-                    "list",
-                    side_effect=OSError("snapshot-secret"),
-                ):
-                    captured["failure"] = provider(
-                        "/conversation resume",
-                        20,
-                    )
-                catalog.entries[-1] = replace(
-                    catalog.entries[-1],
-                    subject="Fresh subject",
-                )
-                picker = captured["default_precedence"]
-                assert isinstance(picker, terminal_module.Picker)
-                return terminal_module.TerminalAction(
-                    terminal_module.TerminalActionKind.LINE,
-                    text=picker.choices[1].identity,
-                )
-            return terminal_module.TerminalAction(
-                terminal_module.TerminalActionKind.LINE,
-                text="/quit",
-            )
-
-        with (
-            mock.patch.object(
-                terminal_module.InteractiveMainInput,
-                "read_main",
-                autospec=True,
-                side_effect=commit_live_choice,
-            ),
-            mock.patch.object(
-                controller_core_module,
-                "parse_interactive_line",
-                wraps=controller_core_module.parse_interactive_line,
-            ) as parse,
-        ):
-            self.assertEqual(controller.run_session_lobby(), 0)
-
-        expected_choices = (
-            terminal_module.Choice(
-                f"/conversation resume {prior.conversation_id}",
-                "Shared subject",
-                description=f"Handle: {prior.conversation_id}",
-            ),
-            terminal_module.Choice(
-                f"/conversation resume {target.conversation_id}",
-                "Target subject",
-                description=f"Handle: {target.conversation_id[:12]}",
-            ),
-        )
-        current = captured["current"]
-        self.assertEqual(
-            current,
-            terminal_module.Picker(
-                terminal_module.Prompt(
-                    "Resume conversation",
-                    instruction="Choose an active conversation to resume.",
-                ),
-                expected_choices,
-                highlighted_id=(
-                    f"/conversation resume {prior.conversation_id}"
-                ),
-            ),
-        )
-        self.assertEqual(captured["current_precedence"], current)
-        self.assertEqual(
-            captured["default_precedence"],
-            terminal_module.Picker(
-                terminal_module.Prompt(
-                    "Resume conversation",
-                    instruction="Choose an active conversation to resume.",
-                ),
-                expected_choices,
-                highlighted_id=(
-                    f"/conversation resume {target.conversation_id}"
-                ),
-            ),
-        )
-        self.assertIsNone(captured["explicit"])
-        self.assertIsNone(captured["midline"])
-        self.assertEqual(
-            captured["empty"],
-            terminal_module.Picker(
-                terminal_module.Prompt(
-                    "Resume conversation",
-                    instruction="Choose an active conversation to resume.",
-                ),
-                (),
-            ),
-        )
-        self.assertIsNone(captured["failure"])
-        self.assertEqual(
-            parse.call_args_list.count(
-                mock.call(
-                    f"/conversation resume {target.conversation_id}"
-                )
-            ),
-            1,
-        )
-        self.assertEqual(
-            load_default_conversation(workspace, "session"),
-            target.conversation_id,
-        )
-        rendered = "".join(callbacks.records)
-        self.assertIn("Subject: Fresh subject", rendered)
-        self.assertNotIn("snapshot-secret", rendered)
-
-    def test_use_resolves_full_and_unique_prefixes_across_archived_entries(
-        self,
-    ) -> None:
-        entries = (
-            _conversation_metadata(_COLLIDING_A, "First"),
-            _conversation_metadata(
-                _COLLIDING_B,
-                "Archived",
-                status=ConversationStatus.ARCHIVED,
-            ),
-            _conversation_metadata(_UNIQUE_C, "Unique"),
-        )
-        workspace, _backend, _catalog, controller, callbacks = (
-            self.prepared_controller(
-                f"/conversation resume {_UNIQUE_C[:11]}",
-                "/conversation resume c_0123456789",
-                "/conversation resume c_9999999999",
-                f"/conversation resume {_COLLIDING_B}",
-                f"/conversation resume {_COLLIDING_A}",
-                f"/conversation resume {_UNIQUE_C[:12]}",
-                "/quit",
-                entries=entries,
-                selected_id=_UNIQUE_C,
-            )
-        )
-        self.assertEqual(controller.run_session_lobby(), 0)
-        rendered = "".join(callbacks.records)
-        for code in (
-            InteractiveErrorCode.CONVERSATION_INVALID,
-            InteractiveErrorCode.CONVERSATION_AMBIGUOUS,
-            InteractiveErrorCode.CONVERSATION_NOT_FOUND,
-            InteractiveErrorCode.CONVERSATION_ARCHIVED,
-        ):
-            with self.subTest(code=code):
-                self.assertIn(_error_record(code, width=200), rendered)
-        self.assertIn(f"Current focus: {_COLLIDING_A} | Subject: First", rendered)
-        self.assertIn("Current focus: c_fedcba9876 | Subject: Unique", rendered)
-        self.assertEqual(
-            load_default_conversation(workspace, "session"),
-            _UNIQUE_C,
-        )
-
-    def test_omitted_use_picker_preserves_active_order_handles_and_current_highlight(
-        self,
-    ) -> None:
-        entries = (
-            _conversation_metadata(_COLLIDING_A, "Shared subject"),
-            _conversation_metadata(
-                _COLLIDING_B,
-                "Archived subject",
-                status=ConversationStatus.ARCHIVED,
-            ),
-            _conversation_metadata(_UNIQUE_C, "Shared subject"),
-        )
-        workspace: Workspace
-
-        def change_saved_default(_prompt: str) -> str:
-            save_default_conversation(workspace, "session", _UNIQUE_C)
-            return "/conversation resume"
-
-        workspace, _backend, _catalog, controller, callbacks = (
-            self.prepared_controller(
-                change_saved_default,
-                "2",
-                "/quit",
-                entries=entries,
-                selected_id=_COLLIDING_A,
-            )
-        )
-        progress_events: list[str] = []
-
-        async def observe_progress(operation):
-            progress_events.append("started")
-            try:
-                return await operation
-            finally:
-                progress_events.append("completed")
-
-        controller._advisory_progress._run = observe_progress
-        original_picker = terminal_module.InteractivePickerInput.read_picker
-        with mock.patch.object(
-            terminal_module.InteractivePickerInput,
-            "read_picker",
-            autospec=True,
-            side_effect=original_picker,
-        ) as picker:
-            self.assertEqual(controller.run_session_lobby(), 0)
-
-        picker.assert_called_once()
-        self.assertEqual(progress_events, ["started", "completed"])
-        picker_call = picker.call_args
-        self.assertEqual(
-            picker_call.args[1],
-            terminal_module.Prompt(
-                "Resume conversation",
-                instruction="Choose an active conversation to resume.",
-            ),
-        )
-        self.assertEqual(
-            picker_call.args[2],
-            (
-                terminal_module.Choice(
-                    _COLLIDING_A,
-                    "Shared subject",
-                    description=f"Handle: {_COLLIDING_A}",
-                ),
-                terminal_module.Choice(
-                    _UNIQUE_C,
-                    "Shared subject",
-                    description=f"Handle: {_UNIQUE_C[:12]}",
-                ),
-            ),
-        )
-        self.assertEqual(
-            picker_call.kwargs["highlighted_id"],
-            _COLLIDING_A,
-        )
-        picker_prompt = next(
-            prompt for prompt in callbacks.prompts if "Resume conversation" in prompt
-        )
-        self.assertLess(
-            picker_prompt.index(f"Handle: {_COLLIDING_A}"),
-            picker_prompt.index(f"Handle: {_UNIQUE_C[:12]}"),
-        )
-        self.assertIn("1. [highlighted] Shared subject", picker_prompt)
-        self.assertIn("2. [available] Shared subject", picker_prompt)
-        self.assertNotIn("Archived subject", picker_prompt)
-        self.assertEqual(
-            load_default_conversation(workspace, "session"),
-            _UNIQUE_C,
-        )
-        self.assertIn(
-            "Current focus: c_fedcba9876 | Subject: Shared subject",
-            "".join(callbacks.records),
-        )
-
-    def test_omitted_use_blank_commits_saved_default_when_focus_is_absent(
-        self,
-    ) -> None:
-        prior = _conversation_metadata(_COLLIDING_A, "Prior")
-        saved = _conversation_metadata(_UNIQUE_C, "Saved")
-        controller: InteractiveController
-
-        def clear_current_focus(_prompt: str) -> str:
-            controller._focused_conversation = None
-            return "/conversation resume"
-
-        workspace, _backend, _catalog, controller, callbacks = (
-            self.prepared_controller(
-                clear_current_focus,
-                "",
-                "/quit",
-                entries=(prior, saved),
-                selected_id=saved.conversation_id,
-            )
-        )
-        original_picker = terminal_module.InteractivePickerInput.read_picker
-        with mock.patch.object(
-            terminal_module.InteractivePickerInput,
-            "read_picker",
-            autospec=True,
-            side_effect=original_picker,
-        ) as picker:
-            self.assertEqual(controller.run_session_lobby(), 0)
-
-        picker.assert_called_once()
-        self.assertEqual(
-            picker.call_args.kwargs["highlighted_id"],
-            saved.conversation_id,
-        )
-        self.assertEqual(
-            load_default_conversation(workspace, "session"),
-            saved.conversation_id,
-        )
-        self.assertIn(
-            "Current focus: c_fedcba9876 | Subject: Saved",
-            "".join(callbacks.records),
-        )
-
-    def test_omitted_use_cancel_interrupt_and_eof_are_nonmutating(self) -> None:
-        cases = (
-            ("cancel", "/cancel", False),
-            ("interrupt", KeyboardInterrupt(), False),
-            ("eof", EOFError(), True),
-        )
-        for label, picker_input, exits_from_picker in cases:
-            with self.subTest(case=label):
-                selected = _conversation_metadata(_COLLIDING_A, "Selected")
-                other = _conversation_metadata(_UNIQUE_C, "Other")
-                reads = (
-                    ("/conversation resume", picker_input)
-                    if exits_from_picker
-                    else ("/conversation resume", picker_input, "/quit")
-                )
-                workspace, backend, catalog, controller, callbacks = (
-                    self.prepared_controller(
-                        *reads,
-                        entries=(selected, other),
-                        selected_id=selected.conversation_id,
-                    )
-                )
-                before = _tree_snapshot(workspace.root)
-                with mock.patch.object(
-                    backend,
-                    "release_session_access",
-                    wraps=backend.release_session_access,
-                ) as detach:
-                    self.assertEqual(controller.run_session_lobby(), 0)
-
-                detach.assert_called_once_with("session")
-                self.assertEqual(_tree_snapshot(workspace.root), before)
-                self.assertEqual(
-                    load_default_conversation(workspace, "session"),
-                    selected.conversation_id,
-                )
-                self.assertFalse(
-                    any(
-                        event.startswith(("create:", "rename:", "archive:"))
-                        for event in catalog.events
-                    )
-                )
-                rendered = "".join(callbacks.records)
-                if exits_from_picker:
-                    self.assertNotIn("Conversation focus cancelled.", rendered)
-                    self.assertEqual(
-                        callbacks.prompts[-1].splitlines()[-1],
-                        "Resume conversation > ",
-                    )
-                else:
-                    self.assertIn(
-                        "[cancelled] Conversation focus cancelled.",
-                        rendered,
-                    )
-
-    def test_omitted_use_empty_active_catalog_does_not_open_picker(self) -> None:
-        archived = _conversation_metadata(
-            _COLLIDING_B,
-            "Archived",
-            status=ConversationStatus.ARCHIVED,
-        )
-        workspace, _backend, _catalog, controller, callbacks = (
-            self.prepared_controller(
-                "/conversation resume",
-                "/quit",
-                entries=(archived,),
-            )
-        )
-        before = _tree_snapshot(workspace.root)
-        with mock.patch.object(
-            terminal_module.InteractivePickerInput,
-            "read_picker",
-        ) as picker:
-            self.assertEqual(controller.run_session_lobby(), 0)
-
-        picker.assert_not_called()
-        self.assertEqual(_tree_snapshot(workspace.root), before)
-        self.assertIn(
-            "[conversation] No active conversations found.",
-            "".join(callbacks.records),
-        )
-        self.assertEqual(
-            [prompt for prompt in callbacks.prompts if prompt.startswith("story[")],
-            ["story[session:lead]> ", "story[session:lead]> "],
         )
 
     def test_omitted_use_freshly_resolves_picker_commit_before_selection(
@@ -12760,14 +11073,12 @@ class ControllerConversationCommandTests(ControllerTestCase):
     ) -> None:
         prior = _conversation_metadata(_COLLIDING_A, "Prior")
         target = _conversation_metadata(_UNIQUE_C, "Target")
-        workspace, _backend, _catalog, controller, callbacks = (
-            self.prepared_controller(
-                "/conversation resume",
-                "2",
-                "/quit",
-                entries=(prior, target),
-                selected_id=prior.conversation_id,
-            )
+        workspace, _backend, _catalog, controller, callbacks = self.prepared_controller(
+            "/conversation resume",
+            "2",
+            "/quit",
+            entries=(prior, target),
+            selected_id=prior.conversation_id,
         )
         selection_path = workspace.path(_default_relative("session"))
         selection_before = (
@@ -12807,13 +11118,11 @@ class ControllerConversationCommandTests(ControllerTestCase):
     ) -> None:
         prior = _conversation_metadata(_COLLIDING_A, "Prior")
         target = _conversation_metadata(_UNIQUE_C, "Target")
-        workspace, _backend, catalog, controller, callbacks = (
-            self.prepared_controller(
-                f"/conversation resume {target.conversation_id}",
-                "/quit",
-                entries=(prior, target),
-                selected_id=prior.conversation_id,
-            )
+        workspace, _backend, catalog, controller, callbacks = self.prepared_controller(
+            f"/conversation resume {target.conversation_id}",
+            "/quit",
+            entries=(prior, target),
+            selected_id=prior.conversation_id,
         )
         selection_path = workspace.path(_default_relative("session"))
         selection_before = (
@@ -12932,7 +11241,9 @@ class ControllerConversationCommandTests(ControllerTestCase):
                     [
                         record
                         for record in callbacks.records
-                        if record.startswith("--- Conversation scope")
+                        if record.startswith(
+                            ("[conversation]\n", "[conversation] [empty]")
+                        )
                     ],
                     expected_scopes,
                 )
@@ -12941,14 +11252,12 @@ class ControllerConversationCommandTests(ControllerTestCase):
         self,
     ) -> None:
         selected = _conversation_metadata(_UNIQUE_C, "Selected")
-        workspace, _backend, catalog, controller, callbacks = (
-            self.prepared_controller(
-                "/conversation archive",
-                "yes",
-                "/quit",
-                entries=(selected,),
-                selected_id=selected.conversation_id,
-            )
+        workspace, _backend, catalog, controller, callbacks = self.prepared_controller(
+            "/conversation archive",
+            "yes",
+            "/quit",
+            entries=(selected,),
+            selected_id=selected.conversation_id,
         )
         with mock.patch.object(
             controller_core_module,
@@ -12974,13 +11283,11 @@ class ControllerConversationCommandTests(ControllerTestCase):
         self.assertNotIn("selection-secret", rendered)
 
         selected = _conversation_metadata(_UNIQUE_C, "Selected")
-        workspace, backend, catalog, controller, callbacks = (
-            self.prepared_controller(
-                "/conversation archive",
-                "yes",
-                entries=(selected,),
-                selected_id=selected.conversation_id,
-            )
+        workspace, backend, catalog, controller, callbacks = self.prepared_controller(
+            "/conversation archive",
+            "yes",
+            entries=(selected,),
+            selected_id=selected.conversation_id,
         )
         with (
             mock.patch.object(
@@ -13028,128 +11335,6 @@ class ControllerConversationCommandTests(ControllerTestCase):
             selected.conversation_id,
         )
 
-    def test_command_storage_failure_requires_public_held_access_proof(
-        self,
-    ) -> None:
-        for retained in (True, False):
-            with self.subTest(retained=retained):
-                workspace, backend, catalog, controller, callbacks = (
-                    self.prepared_controller(
-                        "/conversation list",
-                        "/quit",
-                    )
-                )
-                original_lifecycle = backend.get_session_lifecycle
-                lifecycle_calls = 0
-
-                def summarize(
-                    session_id: str,
-                ) -> SessionLifecycleState:
-                    nonlocal lifecycle_calls
-                    lifecycle_calls += 1
-                    if retained or lifecycle_calls != 5:
-                        return original_lifecycle(session_id)
-                    return _lifecycle(
-                        session_id,
-                        durable_state=SessionDurableState.READY,
-                        access_state=SessionAccessState.CLAIMABLE,
-                    )
-
-                with (
-                    mock.patch.object(
-                        catalog,
-                        "list",
-                        side_effect=OSError("catalog-secret"),
-                    ),
-                    mock.patch.object(
-                        backend,
-                        "get_session_lifecycle",
-                        side_effect=summarize,
-                    ),
-                    mock.patch.object(
-                        backend,
-                        "release_session_access",
-                        wraps=backend.release_session_access,
-                    ) as detach,
-                ):
-                    self.assertEqual(
-                        controller.run_session_lobby(),
-                        0 if retained else 2,
-                    )
-
-                self.assertEqual(lifecycle_calls, 6 if retained else 5)
-                rendered = "".join(callbacks.records)
-                self.assertNotIn("catalog-secret", rendered)
-                if retained:
-                    detach.assert_called_once_with("session")
-                    self.assertIn(
-                        _error_record(
-                            InteractiveErrorCode.WORKSPACE_INVALID,
-                            width=200,
-                        ),
-                        rendered,
-                    )
-                else:
-                    detach.assert_not_called()
-                    self.assertEqual(
-                        rendered.count("[error cleanup_failed]"),
-                        1,
-                    )
-                    self.assertNotIn("[error workspace_invalid]", rendered)
-                self.assertFalse(
-                    workspace.path(_access_relative("session")).exists()
-                )
-
-    def test_injected_catalog_collection_tampering_is_fatal_and_safe(self) -> None:
-        valid = _conversation_metadata(_UNIQUE_C, "Safe subject")
-        foreign = _conversation_metadata(
-            _UNIQUE_C,
-            "foreign-secret",
-            session_id="foreign",
-        )
-        cases: tuple[tuple[str, object], ...] = (
-            ("non_tuple", [valid]),
-            ("foreign", (foreign,)),
-            ("duplicate", (valid, valid)),
-        )
-        for label, returned in cases:
-            with self.subTest(case=label):
-                workspace, backend, catalog, controller, callbacks = (
-                    self.prepared_controller("/conversation list")
-                )
-                with (
-                    mock.patch.object(
-                        catalog,
-                        "list",
-                        return_value=returned,
-                    ),
-                    mock.patch.object(
-                        backend,
-                        "release_session_access",
-                        wraps=backend.release_session_access,
-                    ) as detach,
-                    mock.patch.object(
-                        backend,
-                        "close",
-                        wraps=backend.close,
-                    ) as close,
-                ):
-                    self.assertEqual(controller.run_session_lobby(), 2)
-                detach.assert_called_once_with("session")
-                close.assert_called_once_with()
-                rendered = "".join(callbacks.records)
-                self.assertIn(
-                    _error_record(
-                        InteractiveErrorCode.INTERNAL_ERROR,
-                        width=200,
-                    ),
-                    rendered,
-                )
-                self.assertNotIn("foreign-secret", rendered)
-                self.assertFalse(
-                    workspace.path(_access_relative("session")).exists()
-                )
-
     def test_later_feature_allowlists_are_provider_and_artifact_free(
         self,
     ) -> None:
@@ -13177,8 +11362,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
                 relative = path.relative_to(workspace.root)
                 parts = relative.parts
                 if (
-                    parts[0]
-                    in {"core_documents", "discussion_logs", "manuscript"}
+                    parts[0] in {"core_documents", "discussion_logs", "manuscript"}
                     or "debates" in parts
                     or any("search" in part.casefold() for part in parts)
                     or path.name == "transcript.jsonl"
@@ -13187,17 +11371,17 @@ class ControllerConversationCommandTests(ControllerTestCase):
                     outputs[relative.as_posix()] = path.read_bytes()
             return outputs
 
-        journey_snapshots: list[
-            tuple[Workspace, dict[str, bytes]]
-        ] = []
+        journey_snapshots: list[tuple[Workspace, dict[str, bytes]]] = []
         provider_patches = (
             mock.patch.object(subprocess, "Popen"),
             mock.patch.object(subprocess, "run"),
             mock.patch.object(socket, "create_connection"),
         )
-        with provider_patches[0] as popen, provider_patches[1] as run, (
-            provider_patches[2]
-        ) as connect:
+        with (
+            provider_patches[0] as popen,
+            provider_patches[1] as run,
+            provider_patches[2] as connect,
+        ):
             workspace = self.make_workspace()
             catalog = MemoryConversationCatalog()
             controller, _backend, callbacks = self.make_controller(
@@ -13224,7 +11408,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
             self.assertEqual(catalog.events, [])
             rendered = "".join(callbacks.records)
             self.assertEqual(
-                rendered.count("[error conversation_required]"),
+                rendered.count("Direct story execution is unavailable"),
                 len(future_actions),
             )
 
@@ -13266,10 +11450,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
             self.assertEqual(controller.run_session_lobby(), 0)
             rendered = "".join(callbacks.records)
             self.assertEqual(
-                rendered.count(
-                    "[error command_invalid] This command is not available "
-                    "in the session lobby."
-                ),
+                rendered.count("Direct story execution is unavailable"),
                 len(future_actions),
             )
 
@@ -13281,14 +11462,12 @@ class ControllerConversationCommandTests(ControllerTestCase):
 
     def test_rename_preserves_identity_and_rejects_invalid_subject(self) -> None:
         entry = _conversation_metadata(_UNIQUE_C, "Original")
-        workspace, _backend, catalog, controller, callbacks = (
-            self.prepared_controller(
-                "/conversation subject \u00a0",
-                "/conversation subject Revised subject",
-                "/quit",
-                entries=(entry,),
-                selected_id=entry.conversation_id,
-            )
+        workspace, _backend, catalog, controller, callbacks = self.prepared_controller(
+            "/conversation subject \u00a0",
+            "/conversation subject Revised subject",
+            "/quit",
+            entries=(entry,),
+            selected_id=entry.conversation_id,
         )
         self.assertEqual(controller.run_session_lobby(), 0)
         renamed = catalog.entries[0]
@@ -13311,7 +11490,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
             [
                 record
                 for record in callbacks.records
-                if record.startswith("--- Conversation scope")
+                if record.startswith(("[conversation]\n", "[conversation] [empty]"))
             ],
             [
                 _conversation_scope_record(
@@ -13327,295 +11506,18 @@ class ControllerConversationCommandTests(ControllerTestCase):
             ],
         )
 
-    def test_failed_scope_write_is_not_cached_then_success_is_cached(self) -> None:
-        entry = _conversation_metadata(_UNIQUE_C, "Selected")
-        _workspace, _backend, _catalog, controller, callbacks = (
-            self.prepared_controller(
-                entries=(entry,),
-                selected_id=entry.conversation_id,
-            )
-        )
-        controller._attached_session_id = "session"
-        controller._focused_conversation = entry
-        attempts = 0
-        real_write_scope = InteractiveTerminal.write_conversation_scope
-
-        def fail_once(output: object, **kwargs: object) -> None:
-            nonlocal attempts
-            attempts += 1
-            if attempts == 1:
-                raise OSError("scope writer unavailable")
-            real_write_scope(output, **kwargs)
-
-        unpresented = object()
-        with mock.patch.object(
-            InteractiveTerminal,
-            "write_conversation_scope",
-            autospec=True,
-            side_effect=fail_once,
-        ):
-            with self.assertRaisesRegex(OSError, "scope writer unavailable"):
-                controller._write_attached_conversation_scope(unpresented)
-            presented = controller._write_attached_conversation_scope(
-                unpresented
-            )
-            repeated = controller._write_attached_conversation_scope(presented)
-
-        self.assertEqual(repeated, presented)
-        self.assertEqual(attempts, 2)
-        self.assertEqual(
-            callbacks.records,
-            [
-                _conversation_scope_record(
-                    "session",
-                    entry.conversation_id[:12],
-                    "Selected",
-                )
-            ],
-        )
-
-    def test_selected_archive_chooses_first_active_successor_or_persists_null(
-        self,
-    ) -> None:
-        for has_successor in (True, False):
-            with self.subTest(has_successor=has_successor):
-                selected = _conversation_metadata(_COLLIDING_A, "Selected")
-                successor = _conversation_metadata(_UNIQUE_C, "Successor")
-                entries = (
-                    (selected, successor)
-                    if has_successor
-                    else (selected,)
-                )
-                workspace, _backend, catalog, controller, callbacks = (
-                    self.prepared_controller(
-                        "/conversation archive",
-                        "yes",
-                        "/quit",
-                        entries=entries,
-                        selected_id=selected.conversation_id,
-                    )
-                )
-                self.assertEqual(controller.run_session_lobby(), 0)
-                self.assertIs(
-                    catalog.entries[0].status,
-                    ConversationStatus.ARCHIVED,
-                )
-                expected = successor.conversation_id if has_successor else None
-                self.assertEqual(
-                    load_default_conversation(workspace, "session"),
-                    expected,
-                )
-                self.assertIn(
-                    'Archive current conversation "Selected"',
-                    callbacks.prompts[1],
-                )
-                rendered = "".join(callbacks.records)
-                if has_successor:
-                    self.assertIn("current focus: c_fedcba9876", rendered)
-                else:
-                    self.assertIn("current focus is none", rendered)
-
-    def test_nonselected_and_already_archived_explicit_archive_do_not_reselect(
-        self,
-    ) -> None:
-        selected = _conversation_metadata(_COLLIDING_A, "Selected")
-        other = _conversation_metadata(_UNIQUE_C, "Other")
-        archived = _conversation_metadata(
-            _COLLIDING_B,
-            "Archived",
-            status=ConversationStatus.ARCHIVED,
-        )
-        workspace, _backend, catalog, controller, callbacks = (
-            self.prepared_controller(
-                f"/conversation archive {archived.conversation_id}",
-                f"/conversation archive {other.conversation_id}",
-                "/quit",
-                entries=(selected, other, archived),
-                selected_id=selected.conversation_id,
-            )
-        )
-        archived_before = archived.to_dict()
-        self.assertEqual(controller.run_session_lobby(), 0)
-        self.assertEqual(catalog.entries[2].to_dict(), archived_before)
-        self.assertIs(catalog.entries[1].status, ConversationStatus.ARCHIVED)
-        self.assertEqual(
-            load_default_conversation(workspace, "session"),
-            selected.conversation_id,
-        )
-        self.assertNotIn("Archive current conversation", callbacks.prompts)
-        rendered = "".join(callbacks.records)
-        self.assertIn("Already archived", rendered)
-        self.assertIn("Archived c_fedcba9876 | Subject: Other", rendered)
-
-    def test_selected_archive_no_blank_interrupt_and_eof_preserve_state(
-        self,
-    ) -> None:
-        cases = (
-            ("no", "no", True),
-            ("blank", "", True),
-            ("interrupt", KeyboardInterrupt(), True),
-            ("eof", EOFError(), False),
-        )
-        for label, decision, continues in cases:
-            with self.subTest(case=label):
-                selected = _conversation_metadata(_UNIQUE_C, "Selected")
-                reads: tuple[object, ...] = (
-                    "/conversation archive",
-                    decision,
-                )
-                if continues:
-                    reads += ("/quit",)
-                workspace, backend, catalog, controller, callbacks = (
-                    self.prepared_controller(
-                        *reads,
-                        entries=(selected,),
-                        selected_id=selected.conversation_id,
-                    )
-                )
-                with mock.patch.object(
-                    backend,
-                    "release_session_access",
-                    wraps=backend.release_session_access,
-                ) as detach:
-                    self.assertEqual(controller.run_session_lobby(), 0)
-                detach.assert_called_once_with("session")
-                self.assertIs(
-                    catalog.entries[0].status,
-                    ConversationStatus.ACTIVE,
-                )
-                self.assertEqual(
-                    load_default_conversation(workspace, "session"),
-                    selected.conversation_id,
-                )
-                rendered = "".join(callbacks.records)
-                if continues:
-                    self.assertIn("archive cancelled", rendered.lower())
-
-    def test_output_failure_after_each_durable_commit_does_not_roll_back(
-        self,
-    ) -> None:
-        for operation in ("create", "use", "rename", "archive"):
-            with self.subTest(operation=operation):
-                if operation == "create":
-                    workspace, backend, catalog, controller, callbacks = (
-                        self.prepared_controller(
-                            "/conversation new Created",
-                        )
-                    )
-                elif operation == "use":
-                    prior = _conversation_metadata(_COLLIDING_A, "Prior")
-                    target = _conversation_metadata(_UNIQUE_C, "Target")
-                    workspace, backend, catalog, controller, callbacks = (
-                        self.prepared_controller(
-                            f"/conversation resume {target.conversation_id}",
-                            entries=(prior, target),
-                            selected_id=prior.conversation_id,
-                        )
-                    )
-                elif operation == "rename":
-                    selected = _conversation_metadata(_UNIQUE_C, "Original")
-                    workspace, backend, catalog, controller, callbacks = (
-                        self.prepared_controller(
-                            "/conversation subject Revised",
-                            entries=(selected,),
-                            selected_id=selected.conversation_id,
-                        )
-                    )
-                else:
-                    selected = _conversation_metadata(_COLLIDING_A, "Selected")
-                    successor = _conversation_metadata(_UNIQUE_C, "Successor")
-                    workspace, backend, catalog, controller, callbacks = (
-                        self.prepared_controller(
-                            "/conversation archive",
-                            "yes",
-                            entries=(selected, successor),
-                            selected_id=selected.conversation_id,
-                        )
-                    )
-
-                real_write_component = (
-                    terminal_module.InteractiveSemanticOutput.write_component
-                )
-
-                def fail_committed_notice(output, component):
-                    """Fail only the post-commit conversation acknowledgement."""
-
-                    if (
-                        type(component) is terminal_module.Notice
-                        and component.label == "conversation"
-                    ):
-                        raise RuntimeError("writer-secret")
-                    return real_write_component(output, component)
-
-                with (
-                    mock.patch.object(
-                        terminal_module.InteractiveSemanticOutput,
-                        "write_component",
-                        autospec=True,
-                        side_effect=fail_committed_notice,
-                    ),
-                    mock.patch.object(
-                        backend,
-                        "release_session_access",
-                        wraps=backend.release_session_access,
-                    ) as detach,
-                ):
-                    self.assertEqual(controller.run_session_lobby(), 2)
-
-                detach.assert_called_once_with("session")
-                rendered = "".join(callbacks.records)
-                self.assertIn(
-                    _error_record(
-                        InteractiveErrorCode.INTERNAL_ERROR,
-                        width=200,
-                    ),
-                    rendered,
-                )
-                self.assertNotIn("writer-secret", rendered)
-                self.assertFalse(
-                    workspace.path(_access_relative("session")).exists()
-                )
-                if operation == "create":
-                    self.assertEqual(len(catalog.entries), 1)
-                    self.assertEqual(
-                        load_default_conversation(workspace, "session"),
-                        catalog.entries[0].conversation_id,
-                    )
-                elif operation == "use":
-                    self.assertEqual(
-                        load_default_conversation(workspace, "session"),
-                        target.conversation_id,
-                    )
-                elif operation == "rename":
-                    self.assertEqual(catalog.entries[0].subject, "Revised")
-                    self.assertEqual(
-                        load_default_conversation(workspace, "session"),
-                        selected.conversation_id,
-                    )
-                else:
-                    self.assertIs(
-                        catalog.entries[0].status,
-                        ConversationStatus.ARCHIVED,
-                    )
-                    self.assertEqual(
-                        load_default_conversation(workspace, "session"),
-                        successor.conversation_id,
-                    )
-
     def test_session_pause_and_open_restore_the_same_durable_conversation(
         self,
     ) -> None:
         selected = _conversation_metadata(_UNIQUE_C, "Persistent subject")
-        workspace, _backend, catalog, controller, callbacks = (
-            self.prepared_controller(
-                "/session pause",
-                "yes",
-                "/session resume",
-                "",
-                "/quit",
-                entries=(selected,),
-                selected_id=selected.conversation_id,
-            )
+        workspace, _backend, catalog, controller, callbacks = self.prepared_controller(
+            "/session pause",
+            "yes",
+            "/session resume",
+            "",
+            "/quit",
+            entries=(selected,),
+            selected_id=selected.conversation_id,
         )
         selection_path = workspace.path(_default_relative("session"))
         selection_before = (
@@ -13651,10 +11553,7 @@ class ControllerConversationCommandTests(ControllerTestCase):
         self.assertIn("Paused session; default retained", rendered)
         self.assertIn("Session: session (reopened)", rendered)
         self.assertTrue(
-            all(
-                event.startswith(("get:", "list:"))
-                for event in catalog.events
-            )
+            all(event.startswith(("get:", "list:")) for event in catalog.events)
         )
 
 
@@ -13673,7 +11572,9 @@ class ControllerSwitchTests(ControllerTestCase):
 
         workspace = self.make_workspace()
         self.seed_session(workspace, "source", durable_state=SessionDurableState.READY)
-        self.seed_session(workspace, "destination", durable_state=SessionDurableState.READY)
+        self.seed_session(
+            workspace, "destination", durable_state=SessionDurableState.READY
+        )
         save_default_session(workspace, "source")
         backend = self.make_backend(workspace)
         controller, _backend, callbacks = self.make_controller(
@@ -13715,8 +11616,12 @@ class ControllerSwitchTests(ControllerTestCase):
 
         with (
             mock.patch.object(backend, "get_session_lifecycle", side_effect=record_get),
-            mock.patch.object(backend, "acquire_session_access", side_effect=record_attach),
-            mock.patch.object(backend, "release_session_access", side_effect=record_detach),
+            mock.patch.object(
+                backend, "acquire_session_access", side_effect=record_attach
+            ),
+            mock.patch.object(
+                backend, "release_session_access", side_effect=record_detach
+            ),
             mock.patch.object(backend, "close", side_effect=record_close),
             mock.patch.object(
                 controller_core_module,
@@ -13990,14 +11895,10 @@ class ControllerEndAndCleanupTests(ControllerTestCase):
                     self.assertEqual(controller.run_session_lobby(), 0)
                 end.assert_not_called()
                 self.assertEqual(
-                    workspace.read_json(_manifest_relative("session"))[
-                        "durable_state"
-                    ],
+                    workspace.read_json(_manifest_relative("session"))["durable_state"],
                     "ready",
                 )
-                self.assertFalse(
-                    workspace.path(_access_relative("session")).exists()
-                )
+                self.assertFalse(workspace.path(_access_relative("session")).exists())
                 self.assertIn(
                     _confirmation_prompt(
                         "Pause session session?",
@@ -14015,12 +11916,10 @@ class ControllerEndAndCleanupTests(ControllerTestCase):
                     )
 
     def test_successful_pause_retains_default_and_returns_to_lobby(self) -> None:
-        workspace, backend, controller, callbacks = (
-            self.prepared_attached_controller(
-                "/session pause",
-                "yes",
-                "/quit",
-            )
+        workspace, backend, controller, callbacks = self.prepared_attached_controller(
+            "/session pause",
+            "yes",
+            "/quit",
         )
         with mock.patch.object(
             backend,
@@ -14039,12 +11938,10 @@ class ControllerEndAndCleanupTests(ControllerTestCase):
         self.assertIn("Session: lobby\n", rendered)
 
     def test_confirmed_ready_held_pause_failure_is_recoverable_and_safe(self) -> None:
-        workspace, backend, controller, callbacks = (
-            self.prepared_attached_controller(
-                "/session pause",
-                "yes",
-                "/quit",
-            )
+        workspace, backend, controller, callbacks = self.prepared_attached_controller(
+            "/session pause",
+            "yes",
+            "/quit",
         )
         with (
             mock.patch.object(
@@ -14076,7 +11973,10 @@ class ControllerEndAndCleanupTests(ControllerTestCase):
             raise WorkspaceFormatError("summary-read-secret")
 
         cases: tuple[tuple[str, Callable[[SessionLifecycleState], object]], ...] = (
-            ("paused", lambda value: replace(value, durable_state=SessionDurableState.PAUSED)),
+            (
+                "paused",
+                lambda value: replace(value, durable_state=SessionDurableState.PAUSED),
+            ),
             (
                 "claimable",
                 lambda value: replace(
@@ -14123,9 +12023,7 @@ class ControllerEndAndCleanupTests(ControllerTestCase):
                 rendered = "".join(callbacks.records)
                 self.assertEqual(rendered.count("[error cleanup_failed]"), 1)
                 self.assertNotIn("uncertain-secret", rendered)
-                self.assertFalse(
-                    workspace.path(_access_relative("session")).exists()
-                )
+                self.assertFalse(workspace.path(_access_relative("session")).exists())
 
     def test_quit_and_eof_release_before_close_without_pausing(self) -> None:
         cases = (
@@ -14151,15 +12049,15 @@ class ControllerEndAndCleanupTests(ControllerTestCase):
                     original_close()
 
                 with (
-                    mock.patch.object(backend, "release_session_access", side_effect=detach),
+                    mock.patch.object(
+                        backend, "release_session_access", side_effect=detach
+                    ),
                     mock.patch.object(backend, "close", side_effect=close),
                 ):
                     self.assertEqual(controller.run_session_lobby(), 0)
                 self.assertEqual(events, ["detach:session", "close"])
                 self.assertEqual(
-                    workspace.read_json(_manifest_relative("session"))[
-                        "durable_state"
-                    ],
+                    workspace.read_json(_manifest_relative("session"))["durable_state"],
                     "ready",
                 )
                 rendered = "".join(callbacks.records)
@@ -14174,8 +12072,8 @@ class ControllerEndAndCleanupTests(ControllerTestCase):
                     )
 
     def test_cleanup_failure_overrides_normal_exit_and_not_primary_error(self) -> None:
-        workspace, backend, controller, callbacks = (
-            self.prepared_attached_controller("/quit")
+        workspace, backend, controller, callbacks = self.prepared_attached_controller(
+            "/quit"
         )
         with mock.patch.object(
             backend,
@@ -14188,8 +12086,8 @@ class ControllerEndAndCleanupTests(ControllerTestCase):
         self.assertNotIn("detach-secret", rendered)
         self.assertFalse(workspace.path(_access_relative("session")).exists())
 
-        workspace, backend, controller, callbacks = (
-            self.prepared_attached_controller(RuntimeError("primary-secret"))
+        workspace, backend, controller, callbacks = self.prepared_attached_controller(
+            RuntimeError("primary-secret")
         )
         with mock.patch.object(
             backend,
@@ -14205,8 +12103,8 @@ class ControllerEndAndCleanupTests(ControllerTestCase):
         self.assertNotIn("primary-secret", rendered)
         self.assertNotIn("cleanup-secret", rendered)
 
-        workspace, backend, controller, callbacks = (
-            self.prepared_attached_controller("/quit")
+        workspace, backend, controller, callbacks = self.prepared_attached_controller(
+            "/quit"
         )
         with mock.patch.object(
             backend,

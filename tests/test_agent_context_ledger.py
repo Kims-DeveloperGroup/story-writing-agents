@@ -213,8 +213,7 @@ def _projection(
         (current_material, definition_material, artifact_material),
         policy=selected_policy,
         conditions=conditions,
-        checkpoint=checkpoint
-        or ContextCheckpointView(ContextCheckpointState.MISSING),
+        checkpoint=checkpoint or ContextCheckpointView(ContextCheckpointState.MISSING),
         active_provider_thread_id=active_provider_thread_id,
         mandatory_references=references,
     )
@@ -337,7 +336,7 @@ class LedgerTestCase(unittest.TestCase):
         selected = key or self.key
         return self.workspace.root.joinpath(
             "agent_states/orchestrator_state/context_ledger/v2",
-            f"{context_ledger_scope_key(selected)[len('sha256:'): ]}.json",
+            f"{context_ledger_scope_key(selected)[len('sha256:') :]}.json",
         )
 
     def lock_path(self, key: ContextLedgerKey | None = None) -> Path:
@@ -554,9 +553,13 @@ class LedgerSurfaceTests(LedgerTestCase):
         )
         for operation in invalid:
             with self.subTest(operation=operation):
-                self.assert_ledger_error(operation, ContextLedgerErrorCode.INVALID_VALUE)
+                self.assert_ledger_error(
+                    operation, ContextLedgerErrorCode.INVALID_VALUE
+                )
 
-    def test_scope_and_proposal_digests_are_domain_separated_and_canonical(self) -> None:
+    def test_scope_and_proposal_digests_are_domain_separated_and_canonical(
+        self,
+    ) -> None:
         self.assertEqual(
             context_ledger_scope_key(
                 ContextLedgerKey(
@@ -602,7 +605,9 @@ class LedgerSurfaceTests(LedgerTestCase):
         )
 
     def test_import_construction_and_missing_inspection_are_mutation_free(self) -> None:
-        state_root = self.workspace.root / "agent_states/orchestrator_state/context_ledger"
+        state_root = (
+            self.workspace.root / "agent_states/orchestrator_state/context_ledger"
+        )
         self.assertFalse(state_root.exists())
         constructed = ContextLedger(self.workspace, clock=_Clock())
         self.assertFalse(state_root.exists())
@@ -691,7 +696,9 @@ class LedgerSurfaceTests(LedgerTestCase):
 
 
 class LedgerLifecycleTests(LedgerTestCase):
-    def test_persisted_values_have_exact_fields_are_frozen_and_self_validate(self) -> None:
+    def test_persisted_values_have_exact_fields_are_frozen_and_self_validate(
+        self,
+    ) -> None:
         ready = self.ready()
         assert ready.record is not None
         assert ready.record.attempt is not None
@@ -796,8 +803,13 @@ class LedgerLifecycleTests(LedgerTestCase):
             ContextLedgerErrorCode.INVALID_VALUE,
         )
 
-    def test_complete_lifecycle_restart_idempotency_invalidation_and_modes(self) -> None:
-        self.assertIs(self.ledger.inspect(self.key).checkpoint_view.state, ContextCheckpointState.MISSING)
+    def test_complete_lifecycle_restart_idempotency_invalidation_and_modes(
+        self,
+    ) -> None:
+        self.assertIs(
+            self.ledger.inspect(self.key).checkpoint_view.state,
+            ContextCheckpointState.MISSING,
+        )
         reserved = self.ledger.reserve_attempt(
             self.key,
             expected_generation=0,
@@ -976,7 +988,9 @@ class LedgerLifecycleTests(LedgerTestCase):
             ContextLedgerErrorCode.CONFLICT,
         )
 
-    def test_old_ready_is_removed_before_new_provider_work_and_delta_thread_is_exact(self) -> None:
+    def test_old_ready_is_removed_before_new_provider_work_and_delta_thread_is_exact(
+        self,
+    ) -> None:
         first_ready = self.ready()
         delta_projection = _projection(
             self.scope,
@@ -1141,7 +1155,10 @@ class LedgerAuthorizationTests(LedgerTestCase):
     def test_only_submitted_substantive_terminal_call_can_commit(self) -> None:
         for index, (kind, state) in enumerate(
             (
-                (ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ, ProviderCallState.SUBMITTED),
+                (
+                    ProviderCallKind.WRITING_ARTIFACT_REFERENCE_READ,
+                    ProviderCallState.SUBMITTED,
+                ),
                 (ProviderCallKind.UNCLASSIFIED, ProviderCallState.SUBMITTED),
                 (ProviderCallKind.CONVERSATION, ProviderCallState.PREPARED),
             ),
@@ -1236,7 +1253,9 @@ class LedgerUnsafeOutcomeAndUsageTests(LedgerTestCase):
                     tainted,
                 )
 
-    def test_incomplete_restart_maps_to_tainted_and_never_authorizes_delta(self) -> None:
+    def test_incomplete_restart_maps_to_tainted_and_never_authorizes_delta(
+        self,
+    ) -> None:
         reserved = self.ledger.reserve_attempt(
             self.key,
             expected_generation=0,
@@ -1256,7 +1275,9 @@ class LedgerUnsafeOutcomeAndUsageTests(LedgerTestCase):
             ContextBootstrapReason.CHECKPOINT_TAINTED,
         )
 
-    def test_usage_unavailable_zero_partial_and_full_remains_exact_per_call(self) -> None:
+    def test_usage_unavailable_zero_partial_and_full_remains_exact_per_call(
+        self,
+    ) -> None:
         usages = (
             None,
             ProviderUsage(input_tokens=0),
@@ -1327,7 +1348,9 @@ class LedgerUnsafeOutcomeAndUsageTests(LedgerTestCase):
 
 
 class LedgerScopeAndBootstrapTests(LedgerTestCase):
-    def test_exact_scope_key_dimensions_are_isolated_without_cross_scope_reads(self) -> None:
+    def test_exact_scope_key_dimensions_are_isolated_without_cross_scope_reads(
+        self,
+    ) -> None:
         ready = self.ready()
         cases = (
             ContextLedgerKey(_scope(workspace_id="other-workspace"), "provider"),
@@ -1460,7 +1483,9 @@ class LedgerScopeAndBootstrapTests(LedgerTestCase):
             active_provider_thread_id="thread-depth",
         )
         self.assertIs(projected.mode, ContextDeliveryMode.BOOTSTRAP)
-        self.assertIs(projected.bootstrap_reason, ContextBootstrapReason.MAX_DELTA_DEPTH)
+        self.assertIs(
+            projected.bootstrap_reason, ContextBootstrapReason.MAX_DELTA_DEPTH
+        )
 
 
 class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
@@ -1474,7 +1499,9 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
             sort_keys=True,
         ).encode("utf-8")
 
-    def test_canonical_record_is_content_free_and_retains_exact_numeric_evidence(self) -> None:
+    def test_canonical_record_is_content_free_and_retains_exact_numeric_evidence(
+        self,
+    ) -> None:
         reserved = self.ledger.reserve_attempt(
             self.key,
             expected_generation=0,
@@ -1597,14 +1624,16 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
             1,
         )
         self.assertGreater(
-            decoded["attempt"]["plan"]["projection_accounting"]
-            ["mandatory_reference_utf8_bytes"],
+            decoded["attempt"]["plan"]["projection_accounting"][
+                "mandatory_reference_utf8_bytes"
+            ],
             0,
         )
         self.assertEqual(
             set(
-                decoded["attempt"]["plan"]["projection_accounting"]
-                ["budgets"]["mandatory_references"]
+                decoded["attempt"]["plan"]["projection_accounting"]["budgets"][
+                    "mandatory_references"
+                ]
             ),
             {
                 "configured_utf8_bytes",
@@ -1648,17 +1677,11 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
             ),
             (
                 "unknown_nested",
-                changed(
-                    lambda item: item["attempt"]["plan"].__setitem__(
-                        "unknown", 1
-                    )
-                ),
+                changed(lambda item: item["attempt"]["plan"].__setitem__("unknown", 1)),
             ),
             (
                 "missing_nested",
-                changed(
-                    lambda item: item["attempt"]["plan"].pop("operation_id")
-                ),
+                changed(lambda item: item["attempt"]["plan"].pop("operation_id")),
             ),
             (
                 "unknown_schema",
@@ -1700,17 +1723,17 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
             (
                 "invalid_accounting",
                 changed(
-                    lambda item: item["attempt"]["plan"]
-                    ["projection_accounting"].__setitem__(
-                        "logical_source_count", True
-                    )
+                    lambda item: item["attempt"]["plan"][
+                        "projection_accounting"
+                    ].__setitem__("logical_source_count", True)
                 ),
             ),
             (
                 "invalid_usage",
                 changed(
-                    lambda item: item["attempt"]["provider_calls"][0]
-                    ["accounting"].__setitem__(
+                    lambda item: item["attempt"]["provider_calls"][0][
+                        "accounting"
+                    ].__setitem__(
                         "usage",
                         {
                             "cached_input_tokens": None,
@@ -1723,22 +1746,25 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
             (
                 "negative_usage",
                 changed(
-                    lambda item: item["attempt"]["provider_calls"][0]
-                    ["accounting"]["usage"].__setitem__("input_tokens", -1)
+                    lambda item: item["attempt"]["provider_calls"][0]["accounting"][
+                        "usage"
+                    ].__setitem__("input_tokens", -1)
                 ),
             ),
             (
                 "boolean_usage",
                 changed(
-                    lambda item: item["attempt"]["provider_calls"][0]
-                    ["accounting"]["usage"].__setitem__("input_tokens", True)
+                    lambda item: item["attempt"]["provider_calls"][0]["accounting"][
+                        "usage"
+                    ].__setitem__("input_tokens", True)
                 ),
             ),
             (
                 "unknown_usage_field",
                 changed(
-                    lambda item: item["attempt"]["provider_calls"][0]
-                    ["accounting"]["usage"].__setitem__("estimated", 1)
+                    lambda item: item["attempt"]["provider_calls"][0]["accounting"][
+                        "usage"
+                    ].__setitem__("estimated", 1)
                 ),
             ),
         )
@@ -1759,7 +1785,10 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
                 self.assertEqual(path.read_bytes(), before)
         path.write_bytes(baseline)
         os.chmod(path, 0o600)
-        self.assertIs(self.ledger.inspect(self.key).checkpoint_view.state, ContextCheckpointState.READY)
+        self.assertIs(
+            self.ledger.inspect(self.key).checkpoint_view.state,
+            ContextCheckpointState.READY,
+        )
 
     def test_record_source_call_generation_and_size_limits_fail_closed(self) -> None:
         calls = tuple(
@@ -1808,7 +1837,9 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
         self.assertEqual(path.stat().st_size, MAX_CONTEXT_LEDGER_RECORD_UTF8_BYTES + 1)
         self.assertIs(ready.record.state, ContextLedgerRecordState.READY)
 
-    def test_exact_provider_call_limit_and_max_generation_do_not_partially_advance(self) -> None:
+    def test_exact_provider_call_limit_and_max_generation_do_not_partially_advance(
+        self,
+    ) -> None:
         projection = _projection(self.scope)
         plan = _plan(projection)
         reserved = self.ledger.reserve_attempt(
@@ -1841,7 +1872,7 @@ class LedgerCodecPrivacyAndLimitTests(LedgerTestCase):
             attempt_id=plan.attempt_id,
             outcome=ContextLedgerAttemptOutcome.INCOMPLETE,
         )
-        observed = self.ledger.inspect(self.key)
+        self.ledger.inspect(self.key)
         maximum_generation = (1 << 63) - 1
         maximum_value = json.loads(self.record_path().read_bytes())
         maximum_value["generation"] = maximum_generation
@@ -1871,7 +1902,9 @@ class LedgerStorageSecurityAndAtomicityTests(LedgerTestCase):
         self.assertNotIn(relative_lock, paths)
         self.assertFalse(any("context_ledger" in path for path in paths))
 
-    def test_symlink_hardlink_nonregular_and_unsafe_modes_fail_without_outside_mutation(self) -> None:
+    def test_symlink_hardlink_nonregular_and_unsafe_modes_fail_without_outside_mutation(
+        self,
+    ) -> None:
         for kind in (
             "record_symlink",
             "record_hardlink",
@@ -1887,7 +1920,9 @@ class LedgerStorageSecurityAndAtomicityTests(LedgerTestCase):
                 key = ContextLedgerKey(self.scope, "provider")
                 ledger.invalidate(key, expected_generation=0)
                 digest = context_ledger_scope_key(key)[len("sha256:") :]
-                directory = workspace.root / "agent_states/orchestrator_state/context_ledger/v2"
+                directory = (
+                    workspace.root / "agent_states/orchestrator_state/context_ledger/v2"
+                )
                 record = directory / f"{digest}.json"
                 lock = directory / f"{digest}.lock"
                 outside = Path(temporary) / "outside"
@@ -1905,19 +1940,30 @@ class LedgerStorageSecurityAndAtomicityTests(LedgerTestCase):
                     target.write_bytes(b"unsafe-mode")
                     os.chmod(target, 0o644)
                 if kind.startswith("record"):
-                    callable_operation = lambda: ledger.inspect(key)
+
+                    def callable_operation():
+                        return ledger.inspect(key)
                 else:
-                    callable_operation = lambda: ledger.invalidate(
-                        key,
-                        expected_generation=1,
-                    )
+
+                    def callable_operation():
+                        return ledger.invalidate(
+                            key,
+                            expected_generation=1,
+                        )
+
                 with self.assertRaises(ContextLedgerError) as caught:
                     callable_operation()
-                self.assertIs(caught.exception.code, ContextLedgerErrorCode.STORAGE_UNSAFE)
+                self.assertIs(
+                    caught.exception.code, ContextLedgerErrorCode.STORAGE_UNSAFE
+                )
                 self.assertEqual(outside.read_bytes(), b"outside-safe")
 
-    def test_workspace_root_identity_replacement_is_rejected_without_new_state(self) -> None:
-        workspace = Workspace(Path(self.temporary.name) / "identity-workspace").initialize()
+    def test_workspace_root_identity_replacement_is_rejected_without_new_state(
+        self,
+    ) -> None:
+        workspace = Workspace(
+            Path(self.temporary.name) / "identity-workspace"
+        ).initialize()
         ledger = ContextLedger(workspace, clock=_Clock())
         original = workspace.root.with_name("identity-workspace-original")
         workspace.root.rename(original)
@@ -1931,7 +1977,9 @@ class LedgerStorageSecurityAndAtomicityTests(LedgerTestCase):
             workspace.root.rmdir()
             original.rename(workspace.root)
 
-    def test_precommit_write_fsync_and_replace_failures_preserve_old_record_and_retry(self) -> None:
+    def test_precommit_write_fsync_and_replace_failures_preserve_old_record_and_retry(
+        self,
+    ) -> None:
         injections = ("partial_write", "fsync", "replace")
         for index, injection in enumerate(injections, start=1):
             with self.subTest(injection=injection):
@@ -1955,7 +2003,9 @@ class LedgerStorageSecurityAndAtomicityTests(LedgerTestCase):
                     raise OSError("PRIVATE partial write")
 
                 patcher = (
-                    mock.patch.object(ledger_module.os, "write", side_effect=partial_write)
+                    mock.patch.object(
+                        ledger_module.os, "write", side_effect=partial_write
+                    )
                     if injection == "partial_write"
                     else mock.patch.object(
                         ledger_module.os,
@@ -1973,15 +2023,21 @@ class LedgerStorageSecurityAndAtomicityTests(LedgerTestCase):
                         ContextLedgerErrorCode.STORAGE_FAILURE,
                     )
                 self.assertEqual(path.read_bytes(), before)
-                self.assertFalse(any(item.name.startswith(".tmp-") for item in path.parent.iterdir()))
+                self.assertFalse(
+                    any(item.name.startswith(".tmp-") for item in path.parent.iterdir())
+                )
                 recovered = self.ledger.reserve_attempt(
                     key,
                     expected_generation=stale.generation,
                     plan=plan,
                 )
-                self.assertIs(recovered.record.state, ContextLedgerRecordState.INCOMPLETE)
+                self.assertIs(
+                    recovered.record.state, ContextLedgerRecordState.INCOMPLETE
+                )
 
-    def test_post_replace_durability_failure_leaves_complete_idempotent_record(self) -> None:
+    def test_post_replace_durability_failure_leaves_complete_idempotent_record(
+        self,
+    ) -> None:
         stale = self.ledger.invalidate(self.key, expected_generation=0)
         real_fsync = ledger_module.os.fsync
         failed = False
@@ -2020,8 +2076,12 @@ class LedgerStorageSecurityAndAtomicityTests(LedgerTestCase):
             observed,
         )
 
-    def test_control_exceptions_cleanup_temporary_and_writer_lock_for_retry(self) -> None:
-        for index, control in enumerate((KeyboardInterrupt("PRIVATE"), SystemExit(7)), start=1):
+    def test_control_exceptions_cleanup_temporary_and_writer_lock_for_retry(
+        self,
+    ) -> None:
+        for index, control in enumerate(
+            (KeyboardInterrupt("PRIVATE"), SystemExit(7)), start=1
+        ):
             with self.subTest(control=type(control).__name__):
                 scope = _scope(subject_id=f"control-{index}")
                 key = ContextLedgerKey(scope, "provider")
@@ -2056,10 +2116,14 @@ class LedgerStorageSecurityAndAtomicityTests(LedgerTestCase):
                     expected_generation=stale.generation,
                     plan=plan,
                 )
-                self.assertIs(recovered.record.state, ContextLedgerRecordState.INCOMPLETE)
+                self.assertIs(
+                    recovered.record.state, ContextLedgerRecordState.INCOMPLETE
+                )
 
     def test_unsupported_storage_primitives_fail_before_mutation(self) -> None:
-        state_root = self.workspace.root / "agent_states/orchestrator_state/context_ledger"
+        state_root = (
+            self.workspace.root / "agent_states/orchestrator_state/context_ledger"
+        )
         with mock.patch.object(ledger_module, "_fcntl", None):
             self.assert_ledger_error(
                 lambda: self.ledger.inspect(self.key),
@@ -2069,7 +2133,9 @@ class LedgerStorageSecurityAndAtomicityTests(LedgerTestCase):
 
 
 class LedgerConcurrencyTests(LedgerTestCase):
-    def test_two_independent_writers_serialize_without_lost_update_or_deadlock(self) -> None:
+    def test_two_independent_writers_serialize_without_lost_update_or_deadlock(
+        self,
+    ) -> None:
         ledger_a = ContextLedger(self.workspace, clock=_Clock())
         ledger_b = ContextLedger(self.workspace, clock=_Clock())
         plan_a = self.plan
@@ -2077,7 +2143,9 @@ class LedgerConcurrencyTests(LedgerTestCase):
         ready = threading.Barrier(3)
         results: list[tuple[str, object]] = []
 
-        def reserve(name: str, ledger: ContextLedger, plan: ContextLedgerAttemptPlan) -> None:
+        def reserve(
+            name: str, ledger: ContextLedger, plan: ContextLedgerAttemptPlan
+        ) -> None:
             ready.wait(timeout=5)
             try:
                 results.append(
@@ -2103,15 +2171,25 @@ class LedgerConcurrencyTests(LedgerTestCase):
         for thread in threads:
             thread.join(timeout=5)
             self.assertFalse(thread.is_alive())
-        successes = [value for _name, value in results if isinstance(value, ContextLedgerInspection)]
-        failures = [value for _name, value in results if isinstance(value, ContextLedgerErrorCode)]
+        successes = [
+            value
+            for _name, value in results
+            if isinstance(value, ContextLedgerInspection)
+        ]
+        failures = [
+            value
+            for _name, value in results
+            if isinstance(value, ContextLedgerErrorCode)
+        ]
         self.assertEqual(len(successes), 1, results)
         self.assertEqual(failures, [ContextLedgerErrorCode.INVALID_TRANSITION])
         observed = self.ledger.inspect(self.key)
         self.assertEqual(observed, successes[0])
         self.assertIn(observed.record.attempt.plan, {plan_a, plan_b})
 
-    def test_lock_free_reader_over_atomic_replace_returns_complete_successor(self) -> None:
+    def test_lock_free_reader_over_atomic_replace_returns_complete_successor(
+        self,
+    ) -> None:
         stale = self.ledger.invalidate(self.key, expected_generation=0)
         read_started = threading.Event()
         release_read = threading.Event()
@@ -2248,11 +2326,15 @@ class LedgerConcurrencyTests(LedgerTestCase):
 
 
 class LedgerBoundaryTests(LedgerTestCase):
-    def test_facades_import_direction_compile_and_graph_contract_are_exact(self) -> None:
-        self.assertEqual(len(story_writing_agents.__all__), 120)
+    def test_facades_import_direction_compile_and_graph_contract_are_exact(
+        self,
+    ) -> None:
+        self.assertEqual(len(story_writing_agents.__all__), 104)
         self.assertEqual(len(agent_context.__all__), 11)
         self.assertEqual(len(writing_artifacts.__all__), 31)
-        self.assertTrue(set(ledger_module.__all__).isdisjoint(story_writing_agents.__all__))
+        self.assertTrue(
+            set(ledger_module.__all__).isdisjoint(story_writing_agents.__all__)
+        )
         self.assertTrue(set(ledger_module.__all__).isdisjoint(agent_context.__all__))
         source_path = _SOURCE_ROOT / "story_writing_agents/agent_context/ledger.py"
         source = source_path.read_text(encoding="utf-8")
@@ -2278,9 +2360,7 @@ class LedgerBoundaryTests(LedgerTestCase):
                 for node in ast.walk(tree)
                 if isinstance(node, ast.Import)
                 and any(
-                    alias.name.startswith(
-                        ("requests", "httpx", "subprocess", "socket")
-                    )
+                    alias.name.startswith(("requests", "httpx", "subprocess", "socket"))
                     for alias in node.names
                 )
             ]

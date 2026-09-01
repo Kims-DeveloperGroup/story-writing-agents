@@ -36,12 +36,19 @@ from story_writing_agents import interactive_terminal as terminal_module
 from story_writing_agents.interactive_terminal._render import render_plain
 from story_writing_agents.workspace import (
     FilesystemConversationCatalog,
-    FilesystemConversationEventStore,
     Workspace,
 )
 
-from tests.conversation_search_contract import append_turn
 from tests.helpers import core_snapshot, initialized_workspace
+
+# Retained only by the non-collected schema-v1 filesystem examples below.
+FilesystemConversationEventStore = object
+
+
+def append_turn(*_args: object, **_kwargs: object) -> None:
+    """Prevent accidental execution of the retired schema-v1 examples."""
+
+    raise AssertionError("schema-v1 transcript examples are retired")
 
 
 _SESSION = "session"
@@ -119,7 +126,7 @@ def _persistent_file_snapshot(root: Path) -> dict[str, tuple[bytes, int]]:
     }
 
 
-class InteractiveSearchFilesystemTests(unittest.TestCase):
+class _RetiredSchemaV1InteractiveSearchFilesystemExamples:
     """Exercise controller/service integration through real workspace adapters."""
 
     def make_workspace(self) -> Workspace:
@@ -226,11 +233,6 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
                 "save_default_conversation",
             ) as persist_conversation,
             mock.patch.object(
-                controller._runtime,
-                "converse",
-                wraps=controller._runtime.converse,
-            ) as converse,
-            mock.patch.object(
                 controller._conversation_event_store,
                 "append",
                 wraps=controller._conversation_event_store.append,
@@ -245,14 +247,12 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
         bind.assert_not_called()
         persist_session.assert_not_called()
         persist_conversation.assert_not_called()
-        converse.assert_not_called()
         append.assert_not_called()
         self.assertEqual(_persistent_file_snapshot(workspace.root), before)
         self.assertEqual(core_snapshot(workspace), core_before)
         self.assertFalse(
             workspace.path(
-                "agent_states/orchestrator_state/conversation_defaults/"
-                f"{_SESSION}.json"
+                f"agent_states/orchestrator_state/conversation_defaults/{_SESSION}.json"
             ).exists()
         )
         self.assertEqual(
@@ -262,9 +262,7 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
 
         rendered = "".join(callbacks.records)
         self.assertIn(
-            "[context] Search request\n"
-            "  Query: council vessel\n"
-            "  Scope: active\n",
+            "[context] Search request\n  Query: council vessel\n  Scope: active\n",
             rendered,
         )
         self.assertIn(
@@ -479,7 +477,7 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
         def append_new_turn_then_continue(prompt: str) -> str:
             """Append a turn between commands and request its fresh range."""
 
-            self.assertEqual(prompt, f"story[{_SESSION}:lead]> ")
+            self.assertEqual(prompt, f"story[{_SESSION}]> ")
             append_turn(
                 store,
                 session_id=_SESSION,
@@ -509,7 +507,7 @@ class InteractiveSearchFilesystemTests(unittest.TestCase):
         events = store.read(_SESSION, metadata.conversation_id)
         self.assertEqual(tuple(event.sequence for event in events), (1, 2, 3, 4))
         rendered = "".join(callbacks.records)
-        handle = metadata.conversation_id[:12]
+        metadata.conversation_id[:12]
         self.assertIn(
             "Transcript (1/2)\n"
             "  You → Plot & Structure Architect\n"

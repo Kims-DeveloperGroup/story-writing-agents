@@ -2,33 +2,55 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
+import stat
 import threading
 import weakref
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from uuid import uuid4
+
+try:
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - exercised on non-POSIX platforms
+    _fcntl = None  # type: ignore[assignment]
 
 from ..conversations import (
     CONVERSATION_EVENT_SCHEMA_VERSION,
     CONVERSATION_METADATA_SCHEMA_VERSION,
+    COLLABORATION_EVENT_SCHEMA_VERSION,
+    CollaborationAppendError,
+    CollaborationAppendFailure,
+    CollaborationAppendReceipt,
+    CollaborationAppendStatus,
+    CollaborationEvent as CollaborationEventV2,
+    CollaborationEventBatch,
+    CollaborationHistoryProjection,
     ConversationCatalog,
     ConversationContextWindow,
     ConversationEvent,
-    ConversationEventAppend,
     ConversationEventKind,
     ConversationMetadata,
     ConversationStatus,
+    collaboration_batch_digest,
+    decode_collaboration_event,
+    encode_collaboration_event,
+    project_collaboration_history,
     select_bounded_conversation_context,
+    validate_collaboration_candidate_batch,
 )
+from ..conversations.events import ConversationEventAppend
 from ..errors import (
     ConversationExistsError,
     ConversationNotFoundError,
     ManuscriptExistsError,
     SessionIdError,
     WorkspaceFormatError,
+    WorkspaceSecurityError,
 )
 from ..workspace.core import Workspace
 
@@ -75,6 +97,22 @@ _CONVERSATION_EVENT_LOCK_REGISTRY_GUARD = threading.Lock()
 _CONVERSATION_EVENT_LOCKS: weakref.WeakValueDictionary[
     tuple[str, str, str],
     _ConversationEventLock,
+] = weakref.WeakValueDictionary()
+
+
+class _CollaborationEventLock:
+    """Weakly retained process-wide serialization for one v2 history."""
+
+    __slots__ = ("lock", "__weakref__")
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+
+
+_COLLABORATION_EVENT_LOCK_REGISTRY_GUARD = threading.Lock()
+_COLLABORATION_EVENT_LOCKS: weakref.WeakValueDictionary[
+    tuple[str, str, str],
+    _CollaborationEventLock,
 ] = weakref.WeakValueDictionary()
 
 
@@ -409,7 +447,7 @@ class FilesystemConversationCatalog:
             pass
 
 
-class FilesystemConversationEventStore:
+class _SchemaV1ConversationTranscriptStore:
     """Persist authoritative visible transcripts through one secure workspace."""
 
     def __init__(
@@ -794,7 +832,682 @@ class FilesystemConversationEventStore:
 
         return f"{session_id}/{conversation_id}/transcript.jsonl"
 
+
+class FilesystemCollaborationEventStore:
+    """Persist atomic canonical schema-v2 collaboration-history batches."""
+
+    def __init__(
+        self,
+        workspace: Workspace | str | os.PathLike[str],
+        *,
+        catalog: ConversationCatalog | None = None,
+    ) -> None:
+        self.workspace = (
+            workspace if isinstance(workspace, Workspace) else Workspace(workspace)
+        )
+        self.catalog = (
+            catalog
+            if catalog is not None
+            else FilesystemConversationCatalog(self.workspace)
+        )
+
+    def append_batch(
+        self,
+        batch: CollaborationEventBatch,
+    ) -> CollaborationAppendReceipt:
+        """Atomically append one CAS batch or return its stable retry receipt."""
+
+        if type(batch) is not CollaborationEventBatch:
+            raise TypeError("batch must be a CollaborationEventBatch")
+        first = batch.events[0]
+        session, conversation = self._validate_identity(
+            first.session_id,
+            first.conversation_id,
+        )
+        event_lock = self._event_lock(session, conversation)
+        with event_lock.lock:
+            self._require_no_schema_v1_transcript(session, conversation)
+            self._verify_catalog_identity(session, conversation)
+            with self._advisory_guard(session, conversation):
+                try:
+                    events, _ = self._read_history(session, conversation)
+                except WorkspaceFormatError as exc:
+                    raise CollaborationAppendError(
+                        CollaborationAppendFailure.CORRUPT_HISTORY
+                    ) from exc
+
+                validation = validate_collaboration_candidate_batch(events, batch)
+                if isinstance(validation, CollaborationAppendReceipt):
+                    return validation
+
+                digest = collaboration_batch_digest(batch)
+                stored = tuple(
+                    CollaborationEventV2(
+                        schema_version=COLLABORATION_EVENT_SCHEMA_VERSION,
+                        event_id=event.event_id,
+                        session_id=event.session_id,
+                        conversation_id=event.conversation_id,
+                        turn_id=event.turn_id,
+                        step_id=event.step_id,
+                        sequence=len(events) + ordinal + 1,
+                        timestamp=datetime.now(UTC).isoformat(),
+                        batch_id=batch.batch_id,
+                        batch_ordinal=ordinal,
+                        batch_size=len(batch.events),
+                        batch_digest=digest,
+                        kind=event.kind,
+                        sender=event.sender,
+                        recipient=event.recipient,
+                        payload=event.payload,
+                    )
+                    for ordinal, event in enumerate(batch.events)
+                )
+                completed = events + stored
+                try:
+                    project_collaboration_history(completed)
+                except (
+                    AssertionError,
+                    KeyError,
+                    SessionIdError,
+                    TypeError,
+                    ValueError,
+                ) as exc:
+                    raise CollaborationAppendError(
+                        CollaborationAppendFailure.INVALID_TRANSITION
+                    ) from exc
+                self._write_history(completed)
+                return CollaborationAppendReceipt(
+                    status=CollaborationAppendStatus.APPENDED,
+                    batch_id=batch.batch_id,
+                    batch_digest=digest,
+                    first_sequence=stored[0].sequence,
+                    last_sequence=stored[-1].sequence,
+                    timestamps=tuple(event.timestamp for event in stored),
+                )
+
+    def read(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> tuple[CollaborationEventV2, ...]:
+        """Read and strictly validate the complete canonical v2 history."""
+
+        session, conversation = self._validate_identity(
+            session_id,
+            conversation_id,
+        )
+        event_lock = self._event_lock(session, conversation)
+        with event_lock.lock:
+            self._require_no_schema_v1_transcript(session, conversation)
+            self._verify_catalog_identity(session, conversation)
+            if not self._history_exists(session, conversation):
+                return ()
+            with self._advisory_guard(session, conversation):
+                events, _ = self._read_history(session, conversation)
+                return events
+
+    def read_context(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> CollaborationHistoryProjection:
+        """Read and return the exact projection of the complete v2 history."""
+
+        session, conversation = self._validate_identity(
+            session_id,
+            conversation_id,
+        )
+        event_lock = self._event_lock(session, conversation)
+        with event_lock.lock:
+            self._require_no_schema_v1_transcript(session, conversation)
+            self._verify_catalog_identity(session, conversation)
+            if not self._history_exists(session, conversation):
+                return project_collaboration_history(())
+            with self._advisory_guard(session, conversation):
+                _, projection = self._read_history(session, conversation)
+                return projection
+
+    def _verify_catalog_identity(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> None:
+        """Require catalog metadata to match the requested history path."""
+
+        metadata = self.catalog.get(session_id, conversation_id)
+        try:
+            matches_path = (
+                metadata.session_id == session_id
+                and metadata.conversation_id == conversation_id
+            )
+        except AttributeError as exc:
+            raise WorkspaceFormatError(
+                "conversation catalog returned invalid metadata: "
+                f"{session_id}/{conversation_id}"
+            ) from exc
+        if not matches_path:
+            raise WorkspaceFormatError(
+                "conversation catalog identity does not match collaboration path: "
+                f"{session_id}/{conversation_id}"
+            )
+
+    def _history_exists(self, session_id: str, conversation_id: str) -> bool:
+        """Return whether a safe regular history exists without creating storage."""
+
+        target = self.workspace.path(
+            self._history_relative(session_id, conversation_id)
+        )
+        try:
+            value = os.stat(target, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        if stat.S_ISLNK(value.st_mode):
+            raise WorkspaceSecurityError(
+                "collaboration history path is a symbolic link"
+            )
+        if not stat.S_ISREG(value.st_mode):
+            raise WorkspaceFormatError(
+                "collaboration history is not a file: "
+                f"{self._logical_artifact(session_id, conversation_id)}"
+            )
+        return True
+
+    def _require_no_schema_v1_transcript(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> None:
+        """Reject any retired transcript artifact before reads or mutation."""
+
+        target = self.workspace.path(
+            self._schema_v1_transcript_relative(session_id, conversation_id)
+        )
+        try:
+            os.stat(target, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        raise WorkspaceFormatError(
+            "schema-v1 conversation transcript is unsupported: "
+            f"{session_id}/{conversation_id}/transcript.jsonl"
+        )
+
+    def _read_history(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> tuple[tuple[CollaborationEventV2, ...], CollaborationHistoryProjection]:
+        """Read canonical bytes and validate their complete history projection."""
+
+        payload = self._read_history_bytes(session_id, conversation_id)
+        if payload is None:
+            events: tuple[CollaborationEventV2, ...] = ()
+        else:
+            events = self._decode_history(
+                payload,
+                session_id=session_id,
+                conversation_id=conversation_id,
+            )
+        try:
+            projection = project_collaboration_history(events)
+        except (
+            AssertionError,
+            KeyError,
+            SessionIdError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            raise WorkspaceFormatError(
+                "collaboration history has invalid stored transitions: "
+                f"{self._logical_artifact(session_id, conversation_id)}"
+            ) from exc
+        return events, projection
+
+    def _read_history_bytes(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> bytes | None:
+        """Read one safe regular history descriptor; operational failures propagate."""
+
+        target = self.workspace.path(
+            self._history_relative(session_id, conversation_id)
+        )
+        try:
+            named = os.stat(target, follow_symlinks=False)
+        except FileNotFoundError:
+            return None
+        if stat.S_ISLNK(named.st_mode):
+            raise WorkspaceSecurityError(
+                "collaboration history path is a symbolic link"
+            )
+        if not stat.S_ISREG(named.st_mode):
+            raise WorkspaceFormatError(
+                "collaboration history is not a file: "
+                f"{self._logical_artifact(session_id, conversation_id)}"
+            )
+
+        descriptor = os.open(target, self._regular_read_flags())
+        active_error: BaseException | None = None
+        try:
+            self._verify_opened_regular(target, descriptor, label="history")
+            chunks: list[bytes] = []
+            while True:
+                chunk = os.read(descriptor, 1024 * 1024)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            return b"".join(chunks)
+        except BaseException as exc:
+            active_error = exc
+            raise
+        finally:
+            self._close_descriptor(descriptor, active_error=active_error)
+
+    def _decode_history(
+        self,
+        payload: bytes,
+        *,
+        session_id: str,
+        conversation_id: str,
+    ) -> tuple[CollaborationEventV2, ...]:
+        """Decode exact canonical event-plus-LF records without accepting v1."""
+
+        logical_artifact = self._logical_artifact(session_id, conversation_id)
+        if not payload:
+            raise WorkspaceFormatError(
+                f"collaboration history is empty: {logical_artifact}"
+            )
+        if not payload.endswith(b"\n"):
+            raise WorkspaceFormatError(
+                f"collaboration history lacks a final newline: {logical_artifact}"
+            )
+        records = payload[:-1].split(b"\n")
+        events: list[CollaborationEventV2] = []
+        for line_number, record in enumerate(records, 1):
+            if not record:
+                raise WorkspaceFormatError(
+                    "collaboration history contains a blank record: "
+                    f"{logical_artifact} at line {line_number}"
+                )
+            try:
+                event = decode_collaboration_event(record)
+            except (
+                AssertionError,
+                KeyError,
+                SessionIdError,
+                TypeError,
+                ValueError,
+            ) as exc:
+                raise WorkspaceFormatError(
+                    "collaboration history contains an invalid canonical event: "
+                    f"{logical_artifact} at line {line_number}"
+                ) from exc
+            if encode_collaboration_event(event) != record:
+                raise WorkspaceFormatError(
+                    "collaboration history contains a noncanonical event: "
+                    f"{logical_artifact} at line {line_number}"
+                )
+            if (
+                event.session_id != session_id
+                or event.conversation_id != conversation_id
+            ):
+                raise WorkspaceFormatError(
+                    "collaboration event does not match its owning path: "
+                    f"{logical_artifact} at line {line_number}"
+                )
+            events.append(event)
+        return tuple(events)
+
+    def _write_history(self, events: tuple[CollaborationEventV2, ...]) -> None:
+        """Durably replace one complete history with canonical JSON Lines."""
+
+        if not events:
+            raise ValueError("cannot write an empty collaboration history")
+        relative = self._history_relative(
+            events[0].session_id,
+            events[0].conversation_id,
+        )
+        target = self.workspace.path(relative)
+        parent = self.workspace.path(relative.parent)
+        content = b"".join(
+            encode_collaboration_event(event) + b"\n" for event in events
+        )
+
+        parent_descriptor = self._open_parent_directory(parent)
+        temporary = parent / f".{target.name}.{uuid4().hex}.tmp"
+        active_error: BaseException | None = None
+        try:
+            self._write_temporary(temporary, content)
+            self.workspace.path(relative)
+            self._validate_replacement_target(target)
+            os.replace(temporary, target)
+            os.fsync(parent_descriptor)
+        except BaseException as exc:
+            active_error = exc
+            raise
+        finally:
+            cleanup_error: BaseException | None = None
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+            except BaseException as exc:
+                if active_error is not None:
+                    active_error.add_note(
+                        "collaboration history temporary cleanup failed: "
+                        f"{type(exc).__name__}"
+                    )
+                else:
+                    cleanup_error = exc
+            self._close_descriptor(
+                parent_descriptor,
+                active_error=active_error or cleanup_error,
+            )
+            if active_error is None and cleanup_error is not None:
+                raise cleanup_error
+
+    def _write_temporary(self, temporary: Path, content: bytes) -> None:
+        """Completely write, flush, fsync, and close one exclusive temp file."""
+
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | self._safe_open_flags()
+        descriptor = os.open(temporary, flags, 0o600)
+        active_error: BaseException | None = None
+        handle = None
+        try:
+            os.set_inheritable(descriptor, False)
+            handle = os.fdopen(descriptor, "wb", closefd=False)
+            remaining = memoryview(content)
+            while remaining:
+                written = handle.write(remaining)
+                if not isinstance(written, int) or written <= 0:
+                    raise OSError(errno.EIO, "short collaboration history write")
+                remaining = remaining[written:]
+            handle.flush()
+            os.fsync(descriptor)
+        except BaseException as exc:
+            active_error = exc
+            raise
+        finally:
+            cleanup_error: BaseException | None = None
+            if handle is not None:
+                try:
+                    handle.close()
+                except BaseException as exc:
+                    if active_error is not None:
+                        active_error.add_note(
+                            "collaboration history temporary flush failed: "
+                            f"{type(exc).__name__}"
+                        )
+                    else:
+                        cleanup_error = exc
+            self._close_descriptor(
+                descriptor,
+                active_error=active_error or cleanup_error,
+            )
+            if active_error is None and cleanup_error is not None:
+                raise cleanup_error
+
+    @contextmanager
+    def _advisory_guard(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> Iterator[None]:
+        """Hold one blocking POSIX advisory guard across a complete operation."""
+
+        fcntl = self._require_advisory_locking()
+        target = self.workspace.path(self._lock_relative(session_id, conversation_id))
+        self._validate_guard_name(target)
+        flags = (
+            os.O_RDWR
+            | os.O_CREAT
+            | self._safe_open_flags()
+            | getattr(os, "O_NONBLOCK", 0)
+        )
+        descriptor = os.open(target, flags, 0o600)
+        locked = False
+        active_error: BaseException | None = None
+        try:
+            os.set_inheritable(descriptor, False)
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            locked = True
+            self._verify_opened_regular(target, descriptor, label="advisory guard")
+            yield
+        except BaseException as exc:
+            active_error = exc
+            raise
+        finally:
+            cleanup_error: BaseException | None = None
+            if locked:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                except BaseException as exc:
+                    if active_error is not None:
+                        active_error.add_note(
+                            "collaboration advisory guard unlock failed: "
+                            f"{type(exc).__name__}"
+                        )
+                    else:
+                        cleanup_error = exc
+            self._close_descriptor(
+                descriptor,
+                active_error=active_error or cleanup_error,
+            )
+            if active_error is None and cleanup_error is not None:
+                raise cleanup_error
+
+    @staticmethod
+    def _require_advisory_locking() -> Any:
+        """Return POSIX flock support or fail closed before guard creation."""
+
+        if (
+            _fcntl is None
+            or not callable(getattr(_fcntl, "flock", None))
+            or not hasattr(_fcntl, "LOCK_EX")
+            or not hasattr(_fcntl, "LOCK_UN")
+        ):
+            raise OSError(
+                getattr(errno, "ENOTSUP", errno.ENOSYS),
+                "POSIX collaboration-history advisory locking is unsupported",
+            )
+        return _fcntl
+
+    @staticmethod
+    def _safe_open_flags() -> int:
+        """Return non-following close-on-exec flags or fail closed."""
+
+        no_follow = getattr(os, "O_NOFOLLOW", 0)
+        if not no_follow:
+            raise OSError(
+                getattr(errno, "ENOTSUP", errno.ENOSYS),
+                "safe collaboration-history file access is unsupported",
+            )
+        return no_follow | getattr(os, "O_CLOEXEC", 0)
+
+    @classmethod
+    def _regular_read_flags(cls) -> int:
+        """Return safe flags for opening an existing regular history."""
+
+        return os.O_RDONLY | cls._safe_open_flags() | getattr(os, "O_NONBLOCK", 0)
+
+    @classmethod
+    def _open_parent_directory(cls, parent: Path) -> int:
+        """Open and validate the same-directory durability target."""
+
+        directory = getattr(os, "O_DIRECTORY", 0)
+        if not directory:
+            raise OSError(
+                getattr(errno, "ENOTSUP", errno.ENOSYS),
+                "collaboration-history directory durability is unsupported",
+            )
+        descriptor = os.open(parent, os.O_RDONLY | directory | cls._safe_open_flags())
+        active_error: BaseException | None = None
+        try:
+            opened = os.fstat(descriptor)
+            named = os.stat(parent, follow_symlinks=False)
+            if not stat.S_ISDIR(opened.st_mode) or not stat.S_ISDIR(named.st_mode):
+                raise WorkspaceSecurityError(
+                    "collaboration history parent is not a directory"
+                )
+            if cls._file_identity(opened) != cls._file_identity(named):
+                raise WorkspaceSecurityError(
+                    "collaboration history parent identity changed"
+                )
+            return descriptor
+        except BaseException as exc:
+            active_error = exc
+            raise
+        finally:
+            if active_error is not None:
+                cls._close_descriptor(descriptor, active_error=active_error)
+
+    @staticmethod
+    def _validate_guard_name(target: Path) -> None:
+        """Reject a present non-regular or symbolic-link guard before open."""
+
+        try:
+            value = os.stat(target, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        if stat.S_ISLNK(value.st_mode) or not stat.S_ISREG(value.st_mode):
+            raise WorkspaceSecurityError(
+                "collaboration advisory guard is not a non-symlink regular file"
+            )
+
+    @classmethod
+    def _verify_opened_regular(
+        cls,
+        target: Path,
+        descriptor: int,
+        *,
+        label: str,
+    ) -> None:
+        """Require the descriptor and contained name to be one regular file."""
+
+        opened = os.fstat(descriptor)
+        named = os.stat(target, follow_symlinks=False)
+        if (
+            stat.S_ISLNK(named.st_mode)
+            or not stat.S_ISREG(opened.st_mode)
+            or not stat.S_ISREG(named.st_mode)
+        ):
+            raise WorkspaceSecurityError(
+                f"collaboration {label} is not a non-symlink regular file"
+            )
+        if cls._file_identity(opened) != cls._file_identity(named):
+            raise WorkspaceSecurityError(f"collaboration {label} identity changed")
+
+    @staticmethod
+    def _validate_replacement_target(target: Path) -> None:
+        """Allow an absent or regular target, rejecting unsafe replacement types."""
+
+        try:
+            value = os.stat(target, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        if stat.S_ISLNK(value.st_mode) or not stat.S_ISREG(value.st_mode):
+            raise WorkspaceSecurityError(
+                "collaboration history replacement target is unsafe"
+            )
+
+    @staticmethod
+    def _file_identity(value: os.stat_result) -> tuple[int, int]:
+        """Return one device/inode identity for a verified filesystem entry."""
+
+        return value.st_dev, value.st_ino
+
+    @staticmethod
+    def _close_descriptor(
+        descriptor: int,
+        *,
+        active_error: BaseException | None,
+    ) -> None:
+        """Close one descriptor without masking an active primary failure."""
+
+        try:
+            os.close(descriptor)
+        except BaseException as exc:
+            if active_error is None:
+                raise
+            active_error.add_note(
+                "collaboration filesystem descriptor close failed: "
+                f"{type(exc).__name__}"
+            )
+
+    def _event_lock(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> _CollaborationEventLock:
+        """Return the separate process-wide lock for one v2 history identity."""
+
+        key = (os.fspath(self.workspace.root), session_id, conversation_id)
+        with _COLLABORATION_EVENT_LOCK_REGISTRY_GUARD:
+            event_lock = _COLLABORATION_EVENT_LOCKS.get(key)
+            if event_lock is None:
+                event_lock = _CollaborationEventLock()
+                _COLLABORATION_EVENT_LOCKS[key] = event_lock
+            return event_lock
+
+    def _validate_identity(
+        self,
+        session_id: str,
+        conversation_id: str,
+    ) -> tuple[str, str]:
+        """Return validated session and conversation identifiers in order."""
+
+        session = self.workspace.validate_identifier(session_id)
+        conversation = self.workspace.validate_identifier(
+            conversation_id,
+            label="conversation ID",
+        )
+        return session, conversation
+
+    @staticmethod
+    def _history_relative(session_id: str, conversation_id: str) -> Path:
+        """Return the v2 history path for previously validated identities."""
+
+        return (
+            Path("discussion_logs")
+            / session_id
+            / "interactive"
+            / "conversations"
+            / conversation_id
+            / "collaboration-history.jsonl"
+        )
+
+    @staticmethod
+    def _schema_v1_transcript_relative(
+        session_id: str,
+        conversation_id: str,
+    ) -> Path:
+        """Return the retired transcript sentinel path for one identity."""
+
+        return (
+            Path("discussion_logs")
+            / session_id
+            / "interactive"
+            / "conversations"
+            / conversation_id
+            / "transcript.jsonl"
+        )
+
+    @classmethod
+    def _lock_relative(cls, session_id: str, conversation_id: str) -> Path:
+        """Return the sibling advisory-guard path for a v2 history."""
+
+        return cls._history_relative(session_id, conversation_id).with_name(
+            ".collaboration-history.lock"
+        )
+
+    @staticmethod
+    def _logical_artifact(session_id: str, conversation_id: str) -> str:
+        """Return the identity-relative v2 history diagnostic name."""
+
+        return f"{session_id}/{conversation_id}/collaboration-history.jsonl"
+
+
 __all__ = [
     "FilesystemConversationCatalog",
-    "FilesystemConversationEventStore",
+    "FilesystemCollaborationEventStore",
 ]

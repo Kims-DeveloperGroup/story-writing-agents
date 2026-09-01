@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from dataclasses import KW_ONLY, dataclass, field
+from dataclasses import KW_ONLY, dataclass
 from enum import StrEnum
 
 from .agents import (
@@ -14,24 +14,13 @@ from .agents import (
     PLOT_ARCHITECT,
     ROSTER,
 )
-from .conversation_search import ConversationSearchQuery
 
 
 class ActionKind(StrEnum):
     """Actions recognized by the interactive command parser."""
 
     IGNORED = "ignored"
-    MESSAGE = "message"
-    ROUTED_MESSAGE = "routed_message"
-    SET_TARGET = "set_target"
     LIST_AGENTS = "list_agents"
-    COMPOSE = "compose"
-    SEND = "send"
-    CANCEL = "cancel"
-    RUN = "run"
-    RUN_FRESH = "run_fresh"
-    DRAFT_FILE = "draft_file"
-    RAG = "rag"
     SEARCH = "search"
     TRANSCRIPT = "transcript"
     INSPECT = "inspect"
@@ -60,7 +49,7 @@ class ActionKind(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class AgentRouteSpec:
-    """Declare one canonical interactive advisory route and its display copy."""
+    """Declare one canonical agent roster entry and retained display metadata."""
 
     agent_id: str
     prompt_alias: str
@@ -70,7 +59,7 @@ class AgentRouteSpec:
     def __post_init__(self) -> None:
         """Validate route values without normalizing, mutating, or acquiring resources.
 
-        Invalid identifiers, alias relationships, display text, or UTF-8 raise
+        Invalid identifiers, display metadata, or UTF-8 raise
         ``TypeError`` or ``ValueError`` before a route can enter the registry;
         validation owns no cleanup because it performs no external operation.
         """
@@ -102,9 +91,7 @@ def _validate_route_token(name: str, value: object) -> str:
     if not isinstance(value, str):
         raise TypeError(f"{name} must be a string")
     if re.fullmatch(r"[a-z][a-z0-9_]*", value) is None:
-        raise ValueError(
-            f"{name} must be a lowercase ASCII identifier token"
-        )
+        raise ValueError(f"{name} must be a lowercase ASCII identifier token")
     return value
 
 
@@ -138,7 +125,7 @@ def _validated_agent_routes(
     """Return a roster-complete globally unique registry without mutation.
 
     The ordered tuple is validated against ``ROSTER`` and returned unchanged.
-    Invalid route types, canonical order, or cross-route aliases fail at import
+    Invalid route types, canonical order, or duplicate metadata fail at import
     before publication; no external state exists to clean up.
     """
 
@@ -190,11 +177,9 @@ class InteractiveAction:
 
     kind: ActionKind
     _: KW_ONLY
-    rag_query: str | None = field(default=None, repr=False)
     text: str | None = None
     agent_id: str | None = None
     argument: str | None = None
-    output_path: str | None = None
     count: int | None = None
     start_sequence: int | None = None
     error: str | None = None
@@ -207,22 +192,18 @@ class InteractiveAction:
             raise TypeError("kind must be an ActionKind")
 
         values = {
-            "rag_query": self.rag_query,
             "text": self.text,
             "agent_id": self.agent_id,
             "argument": self.argument,
-            "output_path": self.output_path,
             "count": self.count,
             "start_sequence": self.start_sequence,
             "error": self.error,
             "suggestion": self.suggestion,
         }
         for field_name in (
-            "rag_query",
             "text",
             "agent_id",
             "argument",
-            "output_path",
             "error",
             "suggestion",
         ):
@@ -252,15 +233,6 @@ class InteractiveAction:
 
         if self.text is not None and _is_ascii_blank(self.text):
             raise ValueError("text must contain non-whitespace content")
-        if self.rag_query is not None:
-            try:
-                ConversationSearchQuery(
-                    text=self.rag_query,
-                    limit=20,
-                    include_archived=False,
-                )
-            except (TypeError, ValueError) as exc:
-                raise ValueError("rag_query must be a valid bounded query") from exc
         if self.count is not None and self.count <= 0:
             raise ValueError("count must be positive")
         if self.start_sequence is not None and self.start_sequence <= 0:
@@ -277,33 +249,9 @@ class InteractiveAction:
 
 _NO_FIELDS = frozenset()
 _CANONICAL_AGENTS = frozenset(route.agent_id for route in AGENT_ROUTES)
-_ACTION_FIELD_RULES: dict[
-    ActionKind, tuple[frozenset[str], frozenset[str]]
-] = {
+_ACTION_FIELD_RULES: dict[ActionKind, tuple[frozenset[str], frozenset[str]]] = {
     ActionKind.IGNORED: (_NO_FIELDS, _NO_FIELDS),
-    ActionKind.MESSAGE: (frozenset({"text"}), frozenset({"text"})),
-    ActionKind.ROUTED_MESSAGE: (
-        frozenset({"agent_id", "text"}),
-        frozenset({"agent_id", "text"}),
-    ),
-    ActionKind.SET_TARGET: (
-        frozenset({"agent_id"}),
-        frozenset({"agent_id"}),
-    ),
     ActionKind.LIST_AGENTS: (_NO_FIELDS, _NO_FIELDS),
-    ActionKind.COMPOSE: (_NO_FIELDS, _NO_FIELDS),
-    ActionKind.SEND: (_NO_FIELDS, _NO_FIELDS),
-    ActionKind.CANCEL: (_NO_FIELDS, _NO_FIELDS),
-    ActionKind.RUN: (frozenset({"text", "output_path"}), _NO_FIELDS),
-    ActionKind.RUN_FRESH: (
-        frozenset({"text", "output_path"}),
-        frozenset({"text"}),
-    ),
-    ActionKind.DRAFT_FILE: (
-        frozenset({"argument", "output_path"}),
-        frozenset({"argument"}),
-    ),
-    ActionKind.RAG: (frozenset({"rag_query"}), frozenset({"rag_query"})),
     ActionKind.SEARCH: (frozenset({"text"}), frozenset({"text"})),
     ActionKind.TRANSCRIPT: (
         frozenset({"argument", "count", "start_sequence"}),
@@ -403,56 +351,10 @@ class CommandCompletionContext:
             raise ValueError("replacements must be unique")
 
 
-@dataclass(frozen=True, slots=True)
-class ProviderTextSpan:
-    """Identify the exact provider-bound free-text region at one cursor."""
-
-    start: int
-    end: int
-
-    def __post_init__(self) -> None:
-        """Require one ordered nonnegative buffer span."""
-
-        for name, value in (("start", self.start), ("end", self.end)):
-            if type(value) is not int:
-                raise TypeError(f"{name} must be an integer")
-            if value < 0:
-                raise ValueError(f"{name} must not be negative")
-        if self.end < self.start:
-            raise ValueError("end must not precede start")
-
-
 COMMANDS: tuple[CommandSpec, ...] = (
-    CommandSpec("Conversation", "/compose", (), False, False, "/compose"),
-    CommandSpec("Conversation", "/send", (), False, False, "/send"),
-    CommandSpec("Conversation", "/cancel", (), False, False, "/cancel"),
-    CommandSpec(
-        "Conversation",
-        "/say TEXT",
-        (),
-        True,
-        False,
-        "/say /run is literal text",
-    ),
-    CommandSpec(
-        "Conversation",
-        "/rag QUERY",
-        (),
-        False,
-        False,
-        "/rag council vessel",
-    ),
-    CommandSpec("Agents", "/to NAME", ("/agent",), False, False, "/to plot"),
     CommandSpec("Agents", "/agents", (), False, False, "/agents"),
     CommandSpec("Agents", "/auth", (), True, True, "/auth"),
-    CommandSpec(
-        "Agents",
-        "/settings",
-        (),
-        True,
-        True,
-        "/settings",
-    ),
+    CommandSpec("Agents", "/settings", (), True, True, "/settings"),
     CommandSpec(
         "Session overrides",
         "/override language LANG | persona AGENT NAME | reset",
@@ -460,22 +362,6 @@ COMMANDS: tuple[CommandSpec, ...] = (
         False,
         False,
         "/override persona plot meticulous",
-    ),
-    CommandSpec(
-        "Consensus",
-        "/run [--fresh] [--output PART/PATH.md] [PROMPT]",
-        (),
-        True,
-        True,
-        "/run --output part-01/chapter-01.md Outline chapter one",
-    ),
-    CommandSpec(
-        "Consensus",
-        "/draft-file PATH",
-        (),
-        True,
-        True,
-        "/draft-file drafts/chapter-01.md",
     ),
     CommandSpec(
         "Sessions",
@@ -520,22 +406,8 @@ COMMANDS: tuple[CommandSpec, ...] = (
         False,
         "/inspect last",
     ),
-    CommandSpec(
-        "Inspection",
-        "/exchanges",
-        (),
-        False,
-        False,
-        "/exchanges",
-    ),
-    CommandSpec(
-        "Inspection",
-        "/history [COUNT]",
-        (),
-        False,
-        False,
-        "/history 20",
-    ),
+    CommandSpec("Inspection", "/exchanges", (), False, False, "/exchanges"),
+    CommandSpec("Inspection", "/history [COUNT]", (), False, False, "/history 20"),
     CommandSpec("Inspection", "/status", (), False, False, "/status"),
     CommandSpec(
         "Inspection",
@@ -543,26 +415,26 @@ COMMANDS: tuple[CommandSpec, ...] = (
         ("/?",),
         False,
         False,
-        "/help run",
+        "/help status",
     ),
     CommandSpec("Exit", "/quit", (), False, False, "/quit"),
 )
 
 
-_AGENT_ALIASES: dict[str, str] = {
-    alias: route.agent_id
-    for route in AGENT_ROUTES
-    for alias in route.aliases
+_PERSONA_AGENT_ALIASES: dict[str, str] = {
+    "lead": LEAD_ORCHESTRATOR,
+    "orchestrator": LEAD_ORCHESTRATOR,
+    LEAD_ORCHESTRATOR: LEAD_ORCHESTRATOR,
+    "plot": PLOT_ARCHITECT,
+    PLOT_ARCHITECT: PLOT_ARCHITECT,
+    "character": CHARACTER_CUSTODIAN,
+    CHARACTER_CUSTODIAN: CHARACTER_CUSTODIAN,
+    "execution": EXECUTION_SPECIALIST,
+    "prose": EXECUTION_SPECIALIST,
+    EXECUTION_SPECIALIST: EXECUTION_SPECIALIST,
 }
 
 _COMMAND_ALIASES: dict[str, str] = {
-    "compose": "/compose",
-    "send": "/send",
-    "cancel": "/cancel",
-    "say": "/say",
-    "rag": "/rag",
-    "to": "/to",
-    "agent": "/to",
     "agents": "/agents",
     "auth": "/auth",
     "override": "/override",
@@ -570,8 +442,6 @@ _COMMAND_ALIASES: dict[str, str] = {
     "persona": "/override",
     "reset": "/override",
     "settings": "/settings",
-    "run": "/run",
-    "draft-file": "/draft-file",
     "session": "/session",
     "conversation": "/conversation",
     "search": "/search",
@@ -584,6 +454,24 @@ _COMMAND_ALIASES: dict[str, str] = {
     "?": "/help",
     "quit": "/quit",
 }
+
+_REMOVED_EXECUTION_COMMANDS = frozenset(
+    {
+        "agent",
+        "cancel",
+        "compose",
+        "draft-file",
+        "rag",
+        "run",
+        "say",
+        "send",
+        "to",
+    }
+)
+_DIRECT_EXECUTION_UNAVAILABLE = (
+    "Direct story execution is unavailable in this integration stage. "
+    "Session, conversation, history, search, and inspection remain available."
+)
 
 _SESSION_COMMANDS: dict[str, str] = {
     "list": "/session list",
@@ -606,9 +494,6 @@ _OVERRIDE_COMMANDS: dict[str, str] = {
     "reset": "/override reset",
 }
 
-_MAIN_COMPLETION_EXCLUSIONS = frozenset({"/compose", "/send", "/cancel"})
-_RUN_FRESH_FLAG = "--fresh"
-_RUN_OUTPUT_FLAG = "--output"
 _CONVERSATION_ALL_FLAG = "--all"
 _TRANSCRIPT_FROM_FLAG = "--from"
 _INSPECT_LAST_ARGUMENT = "last"
@@ -632,20 +517,10 @@ def project_command_completion(
         raise TypeError("cursor must be an integer")
     if cursor < 0 or cursor > len(buffer):
         raise ValueError("cursor must identify a buffer boundary")
-    if not buffer.startswith(("/", "@")):
+    if not buffer.startswith("/"):
         return None
 
     start, end = _completion_token_span(buffer, cursor)
-    if buffer.startswith("@"):
-        if start != 0:
-            return None
-        return _completion_context(
-            "routed.agent",
-            start,
-            end,
-            tuple(f"@{alias}" for alias in _agent_completion_replacements()),
-        )
-
     active_token = buffer[start:end]
     preceding = _completion_preceding_tokens(buffer, start)
 
@@ -670,13 +545,6 @@ def project_command_completion(
             end,
             tuple(_CONVERSATION_COMMANDS),
         )
-    if preceding in {("/to",), ("/agent",)}:
-        return _completion_context(
-            "target.agent",
-            start,
-            end,
-            _agent_completion_replacements(),
-        )
     if preceding == ("/override",):
         return _completion_context(
             "override.subcommand",
@@ -697,24 +565,6 @@ def project_command_completion(
             start,
             end,
             _agent_completion_replacements(),
-        )
-    if preceding == ("/run",):
-        if active_token and not active_token.startswith("-"):
-            return None
-        return _completion_context(
-            "run.flag",
-            start,
-            end,
-            (_RUN_FRESH_FLAG, _RUN_OUTPUT_FLAG),
-        )
-    if preceding == ("/run", _RUN_FRESH_FLAG):
-        if active_token and not active_token.startswith("-"):
-            return None
-        return _completion_context(
-            "run.fresh.flag",
-            start,
-            end,
-            (_RUN_OUTPUT_FLAG,),
         )
     if preceding == ("/conversation", "list"):
         if active_token and not active_token.startswith("-"):
@@ -767,124 +617,6 @@ def project_command_completion(
     return None
 
 
-def project_provider_text_span(
-    buffer: str,
-    cursor: int,
-) -> ProviderTextSpan | None:
-    """Project only the cursor-active text that may reach a provider.
-
-    This is grammar projection only. Attachment, conversation focus, catalog
-    availability, and terminal activation remain with their owning layers.
-    """
-
-    if not isinstance(buffer, str):
-        raise TypeError("buffer must be a string")
-    buffer = str.__str__(buffer)
-    if type(cursor) is not int:
-        raise TypeError("cursor must be an integer")
-    if cursor < 0 or cursor > len(buffer):
-        raise ValueError("cursor must identify a buffer boundary")
-
-    if not buffer.startswith(("/", "@")):
-        return ProviderTextSpan(0, len(buffer))
-
-    head, tail = _split_head(buffer)
-    if tail is None:
-        return None
-    tail_start = len(head) + 1
-
-    if head.startswith("@"):
-        if head[1:] not in _AGENT_ALIASES:
-            return None
-        return _active_provider_span(tail_start, len(buffer), cursor)
-
-    command = _COMMAND_ALIASES.get(head[1:])
-    if command == "/say":
-        return _active_provider_span(tail_start, len(buffer), cursor)
-    if command != "/run":
-        return None
-    return _run_provider_text_span(buffer, tail_start, cursor)
-
-
-def _active_provider_span(
-    start: int,
-    end: int,
-    cursor: int,
-) -> ProviderTextSpan | None:
-    """Return one provider span only while its cursor is active."""
-
-    if start <= cursor <= end:
-        return ProviderTextSpan(start, end)
-    return None
-
-
-def _run_provider_text_span(
-    buffer: str,
-    prompt_start: int,
-    cursor: int,
-) -> ProviderTextSpan | None:
-    """Project the prompt remainder while excluding run option fields."""
-
-    first = _ascii_token_span(buffer, prompt_start)
-    if first is None:
-        return None
-    first_start, first_end = first
-    first_token = buffer[first_start:first_end]
-    if not first_token.startswith("--"):
-        return _active_provider_span(prompt_start, len(buffer), cursor)
-    if first_token == _RUN_OUTPUT_FLAG:
-        output = _ascii_token_span(buffer, first_end)
-        if output is None:
-            return None
-        _output_start, output_end = output
-        remainder = _ascii_remainder_start(buffer, output_end)
-        if remainder is None:
-            return None
-        return _active_provider_span(remainder, len(buffer), cursor)
-    if first_token != _RUN_FRESH_FLAG:
-        return None
-
-    fresh_start = _ascii_remainder_start(buffer, first_end)
-    if fresh_start is None:
-        return None
-    fresh_first = _ascii_token_span(buffer, fresh_start)
-    assert fresh_first is not None
-    fresh_first_start, fresh_first_end = fresh_first
-    if buffer[fresh_first_start:fresh_first_end] != _RUN_OUTPUT_FLAG:
-        return _active_provider_span(fresh_start, len(buffer), cursor)
-    output = _ascii_token_span(buffer, fresh_first_end)
-    if output is None:
-        return None
-    _output_start, output_end = output
-    remainder = _ascii_remainder_start(buffer, output_end)
-    if remainder is None:
-        return None
-    return _active_provider_span(remainder, len(buffer), cursor)
-
-
-def _ascii_token_span(buffer: str, start: int) -> tuple[int, int] | None:
-    """Return the next ASCII-space/tab-delimited token span."""
-
-    token_start = start
-    while token_start < len(buffer) and buffer[token_start] in " \t":
-        token_start += 1
-    if token_start == len(buffer):
-        return None
-    token_end = token_start
-    while token_end < len(buffer) and buffer[token_end] not in " \t":
-        token_end += 1
-    return token_start, token_end
-
-
-def _ascii_remainder_start(buffer: str, start: int) -> int | None:
-    """Return the first non-delimiter boundary after a complete field."""
-
-    remainder = start
-    while remainder < len(buffer) and buffer[remainder] in " \t":
-        remainder += 1
-    return None if remainder == len(buffer) else remainder
-
-
 def _completion_context(
     position: str,
     start: int,
@@ -925,19 +657,19 @@ def _completion_preceding_tokens(buffer: str, start: int) -> tuple[str, ...]:
 def _root_command_replacements(*, include_composition: bool) -> tuple[str, ...]:
     """Return canonical and alias tokens in exact public registry order."""
 
+    del include_composition
     replacements: list[str] = []
     for spec in COMMANDS:
-        canonical = spec.syntax.split(maxsplit=1)[0]
-        if include_composition or canonical not in _MAIN_COMPLETION_EXCLUSIONS:
-            replacements.append(canonical)
-            replacements.extend(spec.aliases)
+        replacements.append(spec.syntax.split(maxsplit=1)[0])
+        replacements.extend(spec.aliases)
     return tuple(replacements)
 
 
 def _agent_completion_replacements() -> tuple[str, ...]:
-    """Return one preferred completion alias per agent in roster order."""
+    """Return canonical agent identifiers in roster order."""
 
-    return tuple(route.prompt_alias for route in AGENT_ROUTES)
+    return tuple(route.agent_id for route in AGENT_ROUTES)
+
 
 def parse_interactive_line(line: str) -> InteractiveAction:
     """Parse one input line without performing I/O or raising parse errors."""
@@ -957,9 +689,7 @@ def parse_interactive_line(line: str) -> InteractiveAction:
         return InteractiveAction(ActionKind.IGNORED)
     if normalized[0] == "/":
         return _parse_slash_command(normalized)
-    if normalized[0] == "@":
-        return _parse_routed_message(normalized)
-    return InteractiveAction(ActionKind.MESSAGE, text=normalized)
+    return _parse_error(_DIRECT_EXECUTION_UNAVAILABLE)
 
 
 def _parse_slash_command(line: str) -> InteractiveAction:
@@ -967,27 +697,14 @@ def _parse_slash_command(line: str) -> InteractiveAction:
 
     head, tail = _split_head(line)
     command = head[1:]
+    if command in _REMOVED_EXECUTION_COMMANDS:
+        return _parse_error(_DIRECT_EXECUTION_UNAVAILABLE)
     if command not in _COMMAND_ALIASES:
         return _parse_error(
             f"unknown command: {head}",
             _suggest(command, _COMMAND_ALIASES),
         )
 
-    if command == "compose":
-        return _no_argument_action(tail, ActionKind.COMPOSE, "/compose")
-    if command == "send":
-        return _no_argument_action(tail, ActionKind.SEND, "/send")
-    if command == "cancel":
-        return _no_argument_action(tail, ActionKind.CANCEL, "/cancel")
-    if command == "say":
-        text = _required_remainder(tail)
-        if text is None:
-            return _parse_error("/say requires text")
-        return InteractiveAction(ActionKind.MESSAGE, text=text)
-    if command == "rag":
-        return _parse_rag(tail)
-    if command in {"to", "agent"}:
-        return _parse_target(tail, command)
     if command == "agents":
         return _no_argument_action(tail, ActionKind.LIST_AGENTS, "/agents")
     if command == "auth":
@@ -1002,13 +719,6 @@ def _parse_slash_command(line: str) -> InteractiveAction:
         return _no_argument_action(tail, ActionKind.RESET, "/reset")
     if command == "settings":
         return _no_argument_action(tail, ActionKind.SETTINGS, "/settings")
-    if command == "run":
-        return _parse_run(tail)
-    if command == "draft-file":
-        argument = _required_remainder(tail)
-        if argument is None:
-            return _parse_error("/draft-file requires a path")
-        return InteractiveAction(ActionKind.DRAFT_FILE, argument=argument)
     if command == "session":
         return _parse_session(tail)
     if command == "conversation":
@@ -1031,53 +741,6 @@ def _parse_slash_command(line: str) -> InteractiveAction:
         return _no_argument_action(tail, ActionKind.QUIT, "/quit")
 
     return _parse_error(f"unsupported command: {head}")
-
-
-def _parse_routed_message(line: str) -> InteractiveAction:
-    """Parse an ``@agent`` message into a routed action without I/O.
-
-    The first ASCII-delimited alias must be known and the remaining message
-    nonblank; failures return a typed parse-error action with a safe suggestion.
-    """
-
-    head, tail = _split_head(line)
-    alias = head[1:]
-    agent_id = _AGENT_ALIASES.get(alias)
-    if agent_id is None:
-        return _parse_error(
-            f"unknown agent: {head}",
-            _suggest_agent(alias),
-        )
-    text = _required_remainder(tail)
-    if text is None:
-        return _parse_error(f"{head} requires a message")
-    return InteractiveAction(
-        ActionKind.ROUTED_MESSAGE,
-        agent_id=agent_id,
-        text=text,
-    )
-
-
-def _parse_target(tail: str | None, command: str) -> InteractiveAction:
-    """Parse one known control-free agent token into a target action.
-
-    Cardinality, token, or alias failures return typed parse-error actions;
-    parsing performs no mutation or external lookup.
-    """
-
-    tokens = _tokens(tail)
-    if len(tokens) != 1:
-        return _parse_error(f"/{command} requires exactly one agent")
-    alias = tokens[0]
-    if not _is_valid_token(alias):
-        return _parse_error(f"/{command} agent must be a control-free token")
-    agent_id = _AGENT_ALIASES.get(alias)
-    if agent_id is None:
-        return _parse_error(
-            f"unknown agent: {alias}",
-            _suggest_agent(alias),
-        )
-    return InteractiveAction(ActionKind.SET_TARGET, agent_id=agent_id)
 
 
 def _parse_override(tail: str | None) -> InteractiveAction:
@@ -1122,9 +785,7 @@ def _parse_language(
         return _parse_error(f"{command} requires exactly one language")
     language = tokens[0]
     if not _is_valid_token(language):
-        return _parse_error(
-            f"{command} argument must be a control-free token"
-        )
+        return _parse_error(f"{command} argument must be a control-free token")
     return InteractiveAction(ActionKind.SET_LANGUAGE, argument=language)
 
 
@@ -1141,15 +802,11 @@ def _parse_persona(
 
     tokens = _tokens(tail)
     if len(tokens) != 2:
-        return _parse_error(
-            f"{command} requires an agent and one persona name"
-        )
+        return _parse_error(f"{command} requires an agent and one persona name")
     alias, persona = tokens
     if not _is_valid_token(alias) or not _is_valid_token(persona):
-        return _parse_error(
-            f"{command} arguments must be control-free tokens"
-        )
-    agent_id = _AGENT_ALIASES.get(alias)
+        return _parse_error(f"{command} arguments must be control-free tokens")
+    agent_id = _PERSONA_AGENT_ALIASES.get(alias)
     if agent_id is None:
         return _parse_error(
             f"unknown agent: {alias}",
@@ -1159,78 +816,6 @@ def _parse_persona(
         ActionKind.SET_PERSONA,
         agent_id=agent_id,
         argument=persona,
-    )
-
-
-def _parse_run(tail: str | None) -> InteractiveAction:
-    """Parse bare, prompted, output-scoped, or fresh run syntax without I/O.
-
-    Non-flag prompt text is preserved, while unknown leading flags or a blank
-    fresh prompt return typed parse-error actions.
-    """
-
-    prompt = _optional_remainder(tail)
-    if prompt is None:
-        return InteractiveAction(ActionKind.RUN)
-
-    output_path: str | None = None
-    initial_fields = _split_run_fields(prompt)
-    if initial_fields and initial_fields[0] == _RUN_OUTPUT_FLAG:
-        fields = initial_fields
-        if len(fields) < 2 or fields[1].startswith("--"):
-            return _parse_error("/run --output requires PART/PATH.md")
-        output_path = fields[1]
-        if len(fields) == 2:
-            return InteractiveAction(ActionKind.RUN, output_path=output_path)
-        return InteractiveAction(
-            ActionKind.RUN,
-            text=fields[2],
-            output_path=output_path,
-        )
-
-    first_start = 0
-    while first_start < len(prompt) and prompt[first_start] in " \t":
-        first_start += 1
-    first_end = first_start
-    while first_end < len(prompt) and prompt[first_end] not in " \t":
-        first_end += 1
-    first_token = prompt[first_start:first_end]
-    if not first_token.startswith("--"):
-        return InteractiveAction(ActionKind.RUN, text=prompt)
-    if first_token != _RUN_FRESH_FLAG:
-        return _parse_error(f"unknown /run flag: {first_token}")
-    if first_end == len(prompt):
-        return _parse_error("/run --fresh requires a prompt")
-
-    fresh_prompt = prompt[first_end:].lstrip(" \t")
-    fresh_fields = _split_run_fields(fresh_prompt)
-    if (
-        fresh_fields
-        and fresh_fields[0].startswith(_RUN_OUTPUT_FLAG)
-        and len(fresh_fields[0]) > len(_RUN_OUTPUT_FLAG)
-        and fresh_fields[0][len(_RUN_OUTPUT_FLAG)].isspace()
-    ):
-        return _parse_error(
-            "/run --fresh --output requires ASCII space/tab delimiters"
-        )
-    if fresh_fields and fresh_fields[0].startswith("--") and (
-        fresh_fields[0] != _RUN_OUTPUT_FLAG
-    ):
-        return _parse_error(f"unknown /run flag: {fresh_fields[0]}")
-    if fresh_fields and fresh_fields[0] == _RUN_OUTPUT_FLAG:
-        fields = fresh_fields
-        if len(fields) < 3 or fields[1].startswith("--"):
-            return _parse_error(
-                "/run --fresh --output requires PART/PATH.md and a prompt"
-            )
-        output_path = fields[1]
-        fresh_prompt = fields[2]
-    if _is_ascii_blank(fresh_prompt):
-        return _parse_error("/run --fresh requires a prompt")
-    return InteractiveAction(
-        ActionKind.RUN_FRESH,
-        text=fresh_prompt,
-        output_path=output_path,
     )
 
 
@@ -1261,9 +846,7 @@ def _parse_session(tail: str | None) -> InteractiveAction:
             return _parse_error("/session create requires exactly one name")
         name = tokens[1]
         if not _is_valid_token(name):
-            return _parse_error(
-                "/session create name must be a control-free token"
-            )
+            return _parse_error("/session create name must be a control-free token")
         return InteractiveAction(ActionKind.SESSION_CREATE, argument=name)
     if subcommand == "resume":
         if len(tokens) > 2:
@@ -1272,9 +855,7 @@ def _parse_session(tail: str | None) -> InteractiveAction:
             return InteractiveAction(ActionKind.SESSION_OPEN)
         name = tokens[1]
         if not _is_valid_token(name):
-            return _parse_error(
-                "/session resume name must be a control-free token"
-            )
+            return _parse_error("/session resume name must be a control-free token")
         return InteractiveAction(ActionKind.SESSION_OPEN, argument=name)
 
     if len(tokens) != 1:
@@ -1307,10 +888,7 @@ def _parse_conversation(tail: str | None) -> InteractiveAction:
         first_token, query_tail = _split_head(query)
         if first_token == _CONVERSATION_ALL_FLAG:
             all_query = _remainder_after_ascii_delimiters(query_tail)
-            if (
-                all_query is not None
-                and _CONVERSATION_ALL_FLAG in _tokens(all_query)
-            ):
+            if all_query is not None and _CONVERSATION_ALL_FLAG in _tokens(all_query):
                 return _parse_error(
                     "/conversation list --all must appear once and first"
                 )
@@ -1319,13 +897,9 @@ def _parse_conversation(tail: str | None) -> InteractiveAction:
                 argument=all_query,
             )
         if first_token.startswith("--"):
-            return _parse_error(
-                f"unknown /conversation list flag: {first_token}"
-            )
+            return _parse_error(f"unknown /conversation list flag: {first_token}")
         if _CONVERSATION_ALL_FLAG in _tokens(query):
-            return _parse_error(
-                "/conversation list --all must appear once and first"
-            )
+            return _parse_error("/conversation list --all must appear once and first")
         return InteractiveAction(ActionKind.CONVERSATION_LIST, argument=query)
 
     if subcommand == "resume":
@@ -1336,9 +910,7 @@ def _parse_conversation(tail: str | None) -> InteractiveAction:
             return InteractiveAction(ActionKind.CONVERSATION_USE)
         conversation_id = tokens[0]
         if not _is_valid_token(conversation_id):
-            return _parse_error(
-                "/conversation resume ID must be a control-free token"
-            )
+            return _parse_error("/conversation resume ID must be a control-free token")
         return InteractiveAction(
             ActionKind.CONVERSATION_USE,
             argument=conversation_id,
@@ -1360,9 +932,7 @@ def _parse_conversation(tail: str | None) -> InteractiveAction:
         return InteractiveAction(ActionKind.CONVERSATION_ARCHIVE)
     conversation_id = tokens[0]
     if not _is_valid_token(conversation_id):
-        return _parse_error(
-            "/conversation archive ID must be a control-free token"
-        )
+        return _parse_error("/conversation archive ID must be a control-free token")
     return InteractiveAction(
         ActionKind.CONVERSATION_ARCHIVE,
         argument=conversation_id,
@@ -1395,25 +965,6 @@ def _parse_search(tail: str | None) -> InteractiveAction:
     return InteractiveAction(ActionKind.SEARCH, text=query)
 
 
-def _parse_rag(tail: str | None) -> InteractiveAction:
-    """Return one private next-turn RAG control from exact bounded text."""
-
-    query = _required_remainder(tail)
-    if query is None:
-        return _parse_error("/rag requires a query")
-    try:
-        ConversationSearchQuery(
-            text=query,
-            limit=20,
-            include_archived=False,
-        )
-    except (TypeError, ValueError):
-        return _parse_error(
-            "/rag query must be control-free text of 1 to 200 characters"
-        )
-    return InteractiveAction(ActionKind.RAG, rag_query=query)
-
-
 def _parse_transcript(tail: str | None) -> InteractiveAction:
     """Return one transcript action from exact tokens without external state."""
 
@@ -1425,31 +976,23 @@ def _parse_transcript(tail: str | None) -> InteractiveAction:
     if conversation_id.startswith("--"):
         return _parse_error("/transcript requires an ID before any flag")
     if not _is_valid_token(conversation_id):
-        return _parse_error(
-            "/transcript ID must be a control-free token"
-        )
+        return _parse_error("/transcript ID must be a control-free token")
 
     remaining = tokens[1:]
     count: int | None = None
     start_sequence: int | None = None
     if remaining and remaining[0] != _TRANSCRIPT_FROM_FLAG:
         if remaining[0].startswith("--"):
-            return _parse_error(
-                f"unknown /transcript flag: {remaining[0]}"
-            )
+            return _parse_error(f"unknown /transcript flag: {remaining[0]}")
         count = _positive_ascii_integer(remaining[0])
         if count is None:
-            return _parse_error(
-                "/transcript count must be positive ASCII digits"
-            )
+            return _parse_error("/transcript count must be positive ASCII digits")
         remaining = remaining[1:]
 
     if remaining:
         if remaining[0] != _TRANSCRIPT_FROM_FLAG:
             if remaining[0].startswith("--"):
-                return _parse_error(
-                    f"unknown /transcript flag: {remaining[0]}"
-                )
+                return _parse_error(f"unknown /transcript flag: {remaining[0]}")
             return _parse_error(
                 "/transcript accepts one ID, optional count, and optional --from"
             )
@@ -1498,9 +1041,7 @@ def _parse_history(tail: str | None) -> InteractiveAction:
 def _positive_ascii_integer(value: str) -> int | None:
     """Return one positive ASCII integer or ``None`` without side effects."""
 
-    if not value or any(
-        character < "0" or character > "9" for character in value
-    ):
+    if not value or any(character < "0" or character > "9" for character in value):
         return None
     try:
         parsed = int(value)
@@ -1523,6 +1064,8 @@ def _parse_help(tail: str | None, command: str) -> InteractiveAction:
         return _parse_error(f"/{command} accepts at most one command")
     requested = tokens[0]
     name = requested[1:] if requested.startswith("/") else requested
+    if name in _REMOVED_EXECUTION_COMMANDS:
+        return _parse_error(_DIRECT_EXECUTION_UNAVAILABLE)
     canonical = _COMMAND_ALIASES.get(name)
     if canonical is None:
         return _parse_error(
@@ -1551,27 +1094,6 @@ def _split_head(value: str) -> tuple[str, str | None]:
         if character in " \t":
             return value[:index], value[index:]
     return value, None
-
-
-def _split_run_fields(value: str) -> tuple[str, ...]:
-    """Split at most two ASCII-delimited fields and preserve prompt remainder."""
-
-    fields: list[str] = []
-    cursor = 0
-    length = len(value)
-    while cursor < length and value[cursor] in " \t":
-        cursor += 1
-    while cursor < length and len(fields) < 2:
-        end = cursor
-        while end < length and value[end] not in " \t":
-            end += 1
-        fields.append(value[cursor:end])
-        cursor = end
-        while cursor < length and value[cursor] in " \t":
-            cursor += 1
-    if cursor < length:
-        fields.append(value[cursor:])
-    return tuple(fields)
 
 
 def _tokens(tail: str | None) -> tuple[str, ...]:
@@ -1641,13 +1163,9 @@ def _is_valid_token(value: str) -> bool:
 
 
 def _suggest_agent(value: str) -> str | None:
-    """Return a uniquely close preferred agent mention, or ``None``."""
+    """Return a uniquely close canonical persona agent, or ``None``."""
 
-    candidates = {
-        alias: f"@{route.prompt_alias}"
-        for route in AGENT_ROUTES
-        for alias in route.aliases
-    }
+    candidates = {alias: agent_id for alias, agent_id in _PERSONA_AGENT_ALIASES.items()}
     suggestion = _suggest(value, candidates)
     return suggestion
 
@@ -1659,16 +1177,12 @@ def _suggest(value: str, candidates: dict[str, str]) -> str | None:
     empty mapping return ``None``.
     """
 
-    distances = {
-        candidate: _levenshtein(value, candidate) for candidate in candidates
-    }
+    distances = {candidate: _levenshtein(value, candidate) for candidate in candidates}
     if not distances:
         return None
     minimum = min(distances.values())
     closest = [
-        candidate
-        for candidate, distance in distances.items()
-        if distance == minimum
+        candidate for candidate, distance in distances.items() if distance == minimum
     ]
     if minimum > 2 or len(closest) != 1:
         return None
@@ -1686,8 +1200,7 @@ def _levenshtein(left: str, right: str) -> int:
                 min(
                     current[-1] + 1,
                     previous[right_index] + 1,
-                    previous[right_index - 1]
-                    + (left_character != right_character),
+                    previous[right_index - 1] + (left_character != right_character),
                 )
             )
         previous = current

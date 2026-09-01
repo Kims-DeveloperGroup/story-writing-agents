@@ -19,14 +19,13 @@ import story_writing_agents
 import story_writing_agents.conversation_storage as storage
 from story_writing_agents import (
     ConversationCatalog,
-    ConversationEventKind,
-    ConversationEventStore,
-    ConversationSearchQuery,
-    ConversationSearchScope,
     FilesystemConversationCatalog,
-    FilesystemConversationEventStore,
-    ReferenceConversationSearch,
     Workspace,
+)
+from story_writing_agents.conversation_search import (
+    CollaborationHistorySearchQuery,
+    CollaborationHistorySearchScope,
+    ReferenceCollaborationHistorySearch,
 )
 from story_writing_agents.conversation_storage import (
     CONVERSATION_STORAGE_ACTIVATION_SCHEMA_VERSION,
@@ -51,8 +50,8 @@ from story_writing_agents.conversation_storage import (
     ConversationStorageCoordinationError,
     ConversationStorageError,
     ConversationStorageFailure,
-    ConversationStorageMigrationReadiness,
-    ConversationStorageMigrationRequiredError,
+    ConversationStorageTransferReadiness,
+    ConversationStorageTransferRequiredError,
     ConversationStorageMutationLease,
     ConversationStorageParity,
     ConversationStorageParityError,
@@ -79,8 +78,12 @@ from story_writing_agents.conversation_storage import (
     filesystem_archive as filesystem_archive_module,
 )
 from story_writing_agents.conversation_storage import filesystem as filesystem_module
+from story_writing_agents.conversation_storage.filesystem import (
+    FilesystemCollaborationEventStore,
+)
+from story_writing_agents.conversations import CollaborationEventStore
 
-from tests.conversation_event_store_contract import make_append
+from tests.collaboration_contract_fixture import contract_batches
 
 
 def _initialized_workspace(test_case: unittest.TestCase) -> Workspace:
@@ -114,8 +117,8 @@ def _readiness(
     generation: int = 0,
     source_is_empty: bool = True,
     parity: ConversationStorageParity = ConversationStorageParity.NOT_REQUIRED,
-) -> ConversationStorageMigrationReadiness:
-    return ConversationStorageMigrationReadiness(
+) -> ConversationStorageTransferReadiness:
+    return ConversationStorageTransferReadiness(
         source_backend=source,
         target_backend=target,
         source_generation=generation,
@@ -189,7 +192,7 @@ class ConversationStorageContractTests(unittest.TestCase):
             "inconsistent_services",
             "backend_unavailable",
             "provisioning_needed",
-            "migration_required",
+            "transfer_required",
             "parity_mismatch",
             "activation_state_invalid",
             "activation_state_unsupported",
@@ -219,8 +222,8 @@ class ConversationStorageContractTests(unittest.TestCase):
                 ConversationStorageFailure.PROVISIONING_NEEDED,
             ),
             (
-                ConversationStorageMigrationRequiredError,
-                ConversationStorageFailure.MIGRATION_REQUIRED,
+                ConversationStorageTransferRequiredError,
+                ConversationStorageFailure.TRANSFER_REQUIRED,
             ),
             (
                 ConversationStorageParityError,
@@ -259,7 +262,7 @@ class ConversationStorageContractTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             ConversationStorageError("coordination_failed")  # type: ignore[arg-type]
 
-    def test_preflight_and_migration_readiness_raise_typed_fixed_failures(
+    def test_preflight_and_transfer_readiness_raise_typed_fixed_failures(
         self,
     ) -> None:
         ready = ConversationStoragePreflight(
@@ -308,7 +311,7 @@ class ConversationStorageContractTests(unittest.TestCase):
         for parity, error_type in (
             (
                 ConversationStorageParity.UNVERIFIED,
-                ConversationStorageMigrationRequiredError,
+                ConversationStorageTransferRequiredError,
             ),
             (ConversationStorageParity.MISMATCH, ConversationStorageParityError),
         ):
@@ -471,14 +474,14 @@ class ConversationStorageContractTests(unittest.TestCase):
         }
         event_methods = {
             name
-            for name, member in vars(ConversationEventStore).items()
+            for name, member in vars(CollaborationEventStore).items()
             if not name.startswith("_") and callable(member)
         }
         self.assertEqual(
             catalog_methods,
             {"create", "get", "list", "rename", "archive", "unarchive"},
         )
-        self.assertEqual(event_methods, {"append", "read", "read_context"})
+        self.assertEqual(event_methods, {"append_batch", "read", "read_context"})
         self.assertNotIn("export_archive", catalog_methods | event_methods)
         self.assertNotIn("import_archive", catalog_methods | event_methods)
 
@@ -537,22 +540,22 @@ class ConversationStorageServicesTests(unittest.TestCase):
         self.assertIs(services.event_store, services.event_store_binding.component)
         self.assertIs(services.search, services.search_binding.component)
         self.assertIsInstance(services.catalog, FilesystemConversationCatalog)
-        self.assertIsInstance(services.event_store, FilesystemConversationEventStore)
-        self.assertIsInstance(services.search, ReferenceConversationSearch)
+        self.assertIsInstance(services.event_store, FilesystemCollaborationEventStore)
+        self.assertIsInstance(services.search, ReferenceCollaborationHistorySearch)
         self.assertIs(
             composition_module.FilesystemConversationCatalog,
             filesystem_module.FilesystemConversationCatalog,
         )
         self.assertIs(
-            composition_module.FilesystemConversationEventStore,
-            filesystem_module.FilesystemConversationEventStore,
+            composition_module.FilesystemCollaborationEventStore,
+            filesystem_module.FilesystemCollaborationEventStore,
         )
         self.assertIn(
             filesystem_module.FilesystemConversationCatalog,
             type(services.catalog).__mro__,
         )
         self.assertIn(
-            filesystem_module.FilesystemConversationEventStore,
+            filesystem_module.FilesystemCollaborationEventStore,
             type(services.event_store).__mro__,
         )
         self.assertEqual(
@@ -570,13 +573,8 @@ class ConversationStorageServicesTests(unittest.TestCase):
         other_root = other.root
         other_services = compose_filesystem_conversation_storage(other)
         decoy = other_services.catalog.create("session_a", "Other workspace decoy")
-        other_services.event_store.append(
-            make_append(
-                session_id="session_a",
-                conversation_id=decoy.conversation_id,
-                turn_id="other_turn",
-                content="the pinned needle belongs to the other workspace",
-            )
+        other_services.event_store.append_batch(
+            contract_batches(decoy.conversation_id)["proposal"]
         )
         other_before = _namespace_snapshot(other_root)
 
@@ -585,8 +583,8 @@ class ConversationStorageServicesTests(unittest.TestCase):
         event_store = services.event_store
         search = services.search
         self.assertIsInstance(catalog, FilesystemConversationCatalog)
-        self.assertIsInstance(event_store, FilesystemConversationEventStore)
-        self.assertIsInstance(search, ReferenceConversationSearch)
+        self.assertIsInstance(event_store, FilesystemCollaborationEventStore)
+        self.assertIsInstance(search, ReferenceCollaborationHistorySearch)
 
         workspace.root = other_root
         setattr(catalog, "workspace", Workspace(other_root))
@@ -599,37 +597,25 @@ class ConversationStorageServicesTests(unittest.TestCase):
         self.assertIs(getattr(event_store, "catalog"), catalog)
 
         metadata = catalog.create("session_a", "Pinned workspace witness")
-        user = event_store.append(
-            make_append(
-                session_id="session_a",
-                conversation_id=metadata.conversation_id,
-                turn_id="pinned_turn",
-                content="the pinned needle belongs to workspace A",
-            )
+        receipt = event_store.append_batch(
+            contract_batches(metadata.conversation_id)["proposal"]
         )
-        reply = event_store.append(
-            make_append(
-                session_id="session_a",
-                conversation_id=metadata.conversation_id,
-                turn_id="pinned_turn",
-                kind=ConversationEventKind.AGENT_REPLY,
-                content="acknowledged in workspace A",
-            )
-        )
+        history = event_store.read("session_a", metadata.conversation_id)
         result = search.search(
-            ConversationSearchScope("session_a"),
-            ConversationSearchQuery("pinned needle"),
+            CollaborationHistorySearchScope("session_a"),
+            CollaborationHistorySearchQuery("Consult specialists"),
         )
 
         self.assertEqual(len(result.hits), 1)
         self.assertEqual(
             result.hits[0].citation.conversation_id, metadata.conversation_id
         )
-        self.assertEqual(result.hits[0].citation.sequence, user.sequence)
+        self.assertEqual(result.hits[0].citation.sequence, history[0].sequence)
         self.assertEqual(
             event_store.read("session_a", metadata.conversation_id),
-            (user, reply),
+            history,
         )
+        self.assertEqual(receipt.first_sequence, 1)
         self.assertEqual(
             FilesystemConversationCatalog(Workspace(pinned_root)).get(
                 "session_a",
@@ -645,27 +631,14 @@ class ConversationStorageServicesTests(unittest.TestCase):
         workspace = _initialized_workspace(self)
         services = compose_filesystem_conversation_storage(str(workspace.root))
         metadata = services.catalog.create("session_a", "Harbor timing")
-        user = services.event_store.append(
-            make_append(
-                session_id="session_a",
-                conversation_id=metadata.conversation_id,
-                turn_id="turn_a",
-                content="the hidden needle arrives after dusk",
-            )
+        services.event_store.append_batch(
+            contract_batches(metadata.conversation_id)["proposal"]
         )
-        services.event_store.append(
-            make_append(
-                session_id="session_a",
-                conversation_id=metadata.conversation_id,
-                turn_id="turn_a",
-                kind=ConversationEventKind.AGENT_REPLY,
-                content="acknowledged",
-            )
-        )
+        history = services.event_store.read("session_a", metadata.conversation_id)
 
         result = services.search.search(
-            ConversationSearchScope("session_a"),
-            ConversationSearchQuery("hidden needle"),
+            CollaborationHistorySearchScope("session_a"),
+            CollaborationHistorySearchQuery("Consult specialists"),
         )
 
         self.assertEqual(len(result.hits), 1)
@@ -673,10 +646,10 @@ class ConversationStorageServicesTests(unittest.TestCase):
             result.hits[0].citation.conversation_id,
             metadata.conversation_id,
         )
-        self.assertEqual(result.hits[0].citation.sequence, user.sequence)
+        self.assertEqual(result.hits[0].citation.sequence, history[0].sequence)
         self.assertEqual(
             services.event_store.read("session_a", metadata.conversation_id)[0],
-            user,
+            history[0],
         )
         self.assertFalse(_marker_path(workspace).exists())
 
@@ -701,12 +674,8 @@ class ConversationStorageServicesTests(unittest.TestCase):
             new=recording_borrow,
         ):
             metadata = services.catalog.create("session_a", "Coordinated")
-            services.event_store.append(
-                make_append(
-                    session_id="session_a",
-                    conversation_id=metadata.conversation_id,
-                    turn_id="turn_a",
-                )
+            services.event_store.append_batch(
+                contract_batches(metadata.conversation_id)["proposal"]
             )
             services.catalog.rename(
                 "session_a",
@@ -719,8 +688,7 @@ class ConversationStorageServicesTests(unittest.TestCase):
         self.assertEqual(len(calls), 5)
         self.assertTrue(
             all(
-                coordinator is services.mutation_coordinator
-                and timeout == 30.0
+                coordinator is services.mutation_coordinator and timeout == 30.0
                 for coordinator, timeout in calls
             )
         )
@@ -755,27 +723,21 @@ class ConversationStorageServicesTests(unittest.TestCase):
         self.assertEqual(failures, [])
         self.assertEqual(len(services.catalog.list("session_a")), 1)
 
-    def test_raw_filesystem_adapters_remain_compatible_without_bundle_wrapping(
+    def test_raw_v2_filesystem_adapters_work_without_bundle_wrapping(
         self,
     ) -> None:
         workspace = _initialized_workspace(self)
         catalog = FilesystemConversationCatalog(workspace)
-        event_store = FilesystemConversationEventStore(
+        event_store = FilesystemCollaborationEventStore(
             workspace,
             catalog=catalog,
         )
-        metadata = catalog.create("session_a", "Legacy raw adapter")
-        event = event_store.append(
-            make_append(
-                session_id="session_a",
-                conversation_id=metadata.conversation_id,
-                turn_id="turn_a",
-            )
+        metadata = catalog.create("session_a", "Direct v2 adapter")
+        receipt = event_store.append_batch(
+            contract_batches(metadata.conversation_id)["proposal"]
         )
-        self.assertEqual(
-            event_store.read("session_a", metadata.conversation_id),
-            (event,),
-        )
+        history = event_store.read("session_a", metadata.conversation_id)
+        self.assertEqual(receipt.last_sequence, len(history))
         self.assertFalse(
             workspace.path(CONVERSATION_STORAGE_MUTATION_GUARD_PATH).exists()
         )
@@ -1124,7 +1086,7 @@ class ConversationStorageActivationStateTests(unittest.TestCase):
         for parity, error_type in (
             (
                 ConversationStorageParity.UNVERIFIED,
-                ConversationStorageMigrationRequiredError,
+                ConversationStorageTransferRequiredError,
             ),
             (ConversationStorageParity.MISMATCH, ConversationStorageParityError),
         ):
@@ -1680,7 +1642,7 @@ class ConversationStorageBoundaryTests(unittest.TestCase):
             filesystem_module.__all__,
             [
                 "FilesystemConversationCatalog",
-                "FilesystemConversationEventStore",
+                "FilesystemCollaborationEventStore",
             ],
         )
         self.assertEqual(
@@ -1702,21 +1664,38 @@ class ConversationStorageBoundaryTests(unittest.TestCase):
         )
         expected = set().union(*(module.__all__ for module in owning_modules))
         self.assertEqual(set(storage.__all__), expected)
-        self.assertEqual(len(storage.__all__), 64)
+        self.assertEqual(len(archive_module.__all__), 21)
+        self.assertEqual(len(contracts_module.__all__), 34)
+        self.assertEqual(len(storage.__all__), 63)
+        for old_name in (
+            "ConversationArchiveEvent",
+            "ConversationStorageMigrationReadiness",
+            "ConversationStorageMigrationRequiredError",
+        ):
+            self.assertFalse(hasattr(storage, old_name))
+            self.assertFalse(hasattr(contracts_module, old_name))
+            self.assertNotIn(old_name, storage.__all__)
         for module in owning_modules:
             for name in module.__all__:
                 with self.subTest(module=module.__name__, name=name):
                     self.assertIs(getattr(storage, name), getattr(module, name))
-        self.assertEqual(len(story_writing_agents.__all__), 120)
+        self.assertEqual(len(story_writing_agents.__all__), 104)
         for name in filesystem_module.__all__:
             with self.subTest(filesystem_owner_name=name):
                 self.assertNotIn(name, storage.__all__)
                 self.assertFalse(hasattr(storage, name))
-                self.assertIn(name, story_writing_agents.__all__)
-                self.assertIs(
-                    getattr(story_writing_agents, name),
-                    getattr(filesystem_module, name),
-                )
+        self.assertIn("FilesystemConversationCatalog", story_writing_agents.__all__)
+        self.assertIs(
+            story_writing_agents.FilesystemConversationCatalog,
+            filesystem_module.FilesystemConversationCatalog,
+        )
+        self.assertNotIn(
+            "FilesystemCollaborationEventStore",
+            story_writing_agents.__all__,
+        )
+        self.assertFalse(
+            hasattr(story_writing_agents, "FilesystemCollaborationEventStore")
+        )
         for name in expected:
             with self.subTest(root_name=name):
                 self.assertNotIn(name, story_writing_agents.__all__)
@@ -1745,7 +1724,7 @@ class ConversationStorageBoundaryTests(unittest.TestCase):
             {
                 "conversation_storage/filesystem.py": {
                     "FilesystemConversationCatalog",
-                    "FilesystemConversationEventStore",
+                    "FilesystemCollaborationEventStore",
                 }
             },
         )
@@ -1760,7 +1739,12 @@ class ConversationStorageBoundaryTests(unittest.TestCase):
                 "filesystem",
                 "contracts",
             },
-            filesystem_module: {"conversations", "errors", "workspace.core"},
+            filesystem_module: {
+                "conversations",
+                "conversations.events",
+                "errors",
+                "workspace.core",
+            },
             filesystem_archive_module: {
                 "archive",
                 "contracts",
@@ -1812,16 +1796,19 @@ class ConversationStorageBoundaryTests(unittest.TestCase):
             "expected=(set(archive.__all__) | set(contracts.__all__) | "
             "set(composition.__all__) | set(filesystem_archive.__all__)); "
             "assert set(package.__all__) == expected; "
-            "assert len(archive.__all__) == 22; "
+            "assert len(archive.__all__) == 21; "
             "assert len(filesystem_archive.__all__) == 2; "
             "assert filesystem.__all__ == "
-            "['FilesystemConversationCatalog', 'FilesystemConversationEventStore']; "
-            "assert len(package.__all__) == 64; "
+            "['FilesystemConversationCatalog', "
+            "'FilesystemCollaborationEventStore']; "
+            "assert len(contracts.__all__) == 34; "
+            "assert len(package.__all__) == 63; "
             "assert all(name not in package.__all__ for name in filesystem.__all__); "
             "assert all(not hasattr(package, name) for name in filesystem.__all__); "
             "assert all(getattr(root, name) is getattr(filesystem, name) "
-            "for name in filesystem.__all__); "
-            "assert len(root.__all__) == 120; "
+            "for name in filesystem.__all__[:1]); "
+            "assert not hasattr(root, 'FilesystemCollaborationEventStore'); "
+            "assert len(root.__all__) == 104; "
             "assert all(name not in root.__all__ for name in expected); "
             "assert all(not hasattr(root, name) for name in expected); "
             "assert 'sqlite3' not in sys.modules; "

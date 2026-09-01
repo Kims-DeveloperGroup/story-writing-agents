@@ -2,7 +2,6 @@
 
 from ..conversation_storage.filesystem import (
     FilesystemConversationCatalog as FilesystemConversationCatalog,
-    FilesystemConversationEventStore as FilesystemConversationEventStore,
 )
 from .core import (
     WORKSPACE_DIRECTORIES as WORKSPACE_DIRECTORIES,
@@ -20,5 +19,4 @@ __all__ = [
     "Workspace",
     "initialize_workspace",
     "FilesystemConversationCatalog",
-    "FilesystemConversationEventStore",
 ]

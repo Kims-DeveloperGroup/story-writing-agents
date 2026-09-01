@@ -16,12 +16,9 @@ import unittest
 from collections.abc import Awaitable, Callable
 from dataclasses import MISSING, FrozenInstanceError, fields
 from pathlib import Path
-from types import SimpleNamespace
-from typing import get_type_hints
 from unittest import mock
 
 import story_writing_agents
-from story_writing_agents import agent_context as agent_context_module
 from story_writing_agents import cli as cli_module
 from story_writing_agents.workspace import core as workspace_module
 from story_writing_agents.conversation_storage import (
@@ -29,24 +26,14 @@ from story_writing_agents.conversation_storage import (
 )
 from story_writing_agents import (
     AGENT_SPECS,
-    ConversationEventStore,
-    ConversationMemoryService,
-    ConversationRetrievalProgressSink,
-    ConversationRetrievalResult,
-    ConversationResult,
     DebateContextMode,
     DebateContextRequest,
     DebateFailureKind,
     DebateProgressEvent,
     DebateProgressPhase,
-    DebateResult,
-    DebateStatus,
     InputKind,
     PLOT_ARCHITECT,
     ProgressObserverError,
-    Runtime,
-    RuntimeSession,
-    Session,
     StoryRuntime,
     Workspace,
 )
@@ -59,16 +46,10 @@ from story_writing_agents.conversation_storage import (
     ConversationStorageCapability,
     ConversationStoragePreflight,
     ConversationStorageServices,
-    compose_filesystem_conversation_storage,
     load_conversation_storage_activation_state,
 )
 from story_writing_agents.conversation_storage.selection import (
     ConversationStorageStartup,
-)
-from story_writing_agents.agent_context import service as context_service_module
-from story_writing_agents.agent_context.service import ContextExecutionEventSink
-from story_writing_agents.conversation_rag_runtime import (
-    ConversationRagRuntimeService,
 )
 from story_writing_agents.errors import (
     BackendProtocolError,
@@ -301,15 +282,16 @@ class PackagingTests(unittest.TestCase):
 
 
 class PublicApiTests(unittest.TestCase):
-    def test_all_declared_public_imports_exist_and_runtime_aliases_are_stable(
+    def test_all_declared_public_imports_exist_and_runtime_aliases_are_absent(
         self,
     ) -> None:
-        self.assertEqual(len(story_writing_agents.__all__), 120)
+        self.assertEqual(len(story_writing_agents.__all__), 104)
         for name in story_writing_agents.__all__:
             with self.subTest(name=name):
                 self.assertTrue(hasattr(story_writing_agents, name))
-        self.assertIs(Runtime, StoryRuntime)
-        self.assertIs(Session, RuntimeSession)
+        for removed_name in ("Runtime", "Session"):
+            self.assertNotIn(removed_name, story_writing_agents.__all__)
+            self.assertFalse(hasattr(story_writing_agents, removed_name))
         for removed in (
             "Session" + "LeaseState",
             "Session" + "Summary",
@@ -711,397 +693,6 @@ class PublicApiTests(unittest.TestCase):
                 with self.assertRaises((TypeError, ValueError)):
                     DebateProgressEvent(**common, **values)  # type: ignore[arg-type]
 
-    def test_debate_run_signatures_and_additive_result_shape_are_exact(
-        self,
-    ) -> None:
-        method_cases = (
-            (
-                StoryRuntime.run_prompt,
-                (
-                    "self",
-                    "session_id",
-                    "prompt",
-                    "output_path",
-                    "max_debate_rounds",
-                    "debate_id",
-                    "conversation_context",
-                    "progress_sink",
-                    "context_event_sink",
-                ),
-                3,
-            ),
-            (
-                StoryRuntime.run_draft,
-                (
-                    "self",
-                    "session_id",
-                    "draft",
-                    "output_path",
-                    "max_debate_rounds",
-                    "debate_id",
-                    "conversation_context",
-                    "progress_sink",
-                    "context_event_sink",
-                ),
-                3,
-            ),
-            (
-                RuntimeSession.run_prompt,
-                (
-                    "self",
-                    "prompt",
-                    "output_path",
-                    "max_debate_rounds",
-                    "debate_id",
-                    "conversation_context",
-                    "progress_sink",
-                    "context_event_sink",
-                ),
-                2,
-            ),
-            (
-                RuntimeSession.run_draft,
-                (
-                    "self",
-                    "draft",
-                    "output_path",
-                    "max_debate_rounds",
-                    "debate_id",
-                    "conversation_context",
-                    "progress_sink",
-                    "context_event_sink",
-                ),
-                2,
-            ),
-        )
-        for method, names, positional_count in method_cases:
-            with self.subTest(method=method.__qualname__):
-                signature = inspect.signature(method)
-                self.assertEqual(tuple(signature.parameters), names)
-                parameters = tuple(signature.parameters.values())
-                self.assertTrue(
-                    all(
-                        parameter.kind
-                        is inspect.Parameter.POSITIONAL_OR_KEYWORD
-                        for parameter in parameters[:positional_count]
-                    )
-                )
-                keyword_only = parameters[positional_count:]
-                self.assertTrue(
-                    all(
-                        parameter.kind is inspect.Parameter.KEYWORD_ONLY
-                        for parameter in keyword_only
-                    )
-                )
-                self.assertIs(
-                    keyword_only[0].default,
-                    inspect.Parameter.empty,
-                )
-                self.assertTrue(
-                    all(parameter.default is None for parameter in keyword_only[1:])
-                )
-                self.assertEqual(
-                    get_type_hints(method)["context_event_sink"],
-                    ContextExecutionEventSink | None,
-                )
-        for method, names in (
-            (
-                StoryRuntime.inspect_debate_context,
-                ("self", "session_id", "debate_id"),
-            ),
-            (RuntimeSession.inspect_debate_context, ("self", "debate_id")),
-        ):
-            signature = inspect.signature(method)
-            self.assertEqual(tuple(signature.parameters), names)
-
-        self.assertEqual(
-            tuple(field.name for field in fields(DebateResult)),
-            (
-                "session_id",
-                "debate_id",
-                "input_kind",
-                "status",
-                "revision_id",
-                "rounds_completed",
-                "final_candidate",
-                "latest_candidate",
-                "manuscript_path",
-                "core_updates",
-                "messages",
-                "error",
-                "action_required",
-                "reference_operation_id",
-            ),
-        )
-        legacy = DebateResult(
-            "session_a",
-            "debate_a",
-            InputKind.DRAFT,
-            DebateStatus.DEADLOCK,
-            "r1",
-            1,
-            None,
-            "candidate",
-            None,
-        )
-        self.assertEqual(
-            set(legacy.to_dict()),
-            {
-                "session_id",
-                "debate_id",
-                "input_kind",
-                "status",
-                "revision_id",
-                "rounds_completed",
-                "final_candidate",
-                "latest_candidate",
-                "manuscript_path",
-                "core_updates",
-                "messages",
-                "error",
-                "action_required",
-            },
-        )
-
-    def test_conversation_runtime_signatures_are_exact_and_compatible(self) -> None:
-        constructor = inspect.signature(StoryRuntime)
-        self.assertEqual(
-            tuple(constructor.parameters),
-            (
-                "workspace",
-                "backend",
-                "conversation_event_store",
-                "conversation_storage_services",
-                "conversation_rag_service",
-            ),
-        )
-        self.assertIs(
-            constructor.parameters["workspace"].kind,
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-        )
-        self.assertIs(
-            constructor.parameters["backend"].kind,
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-        )
-        self.assertIsNone(constructor.parameters["backend"].default)
-        collaborator = constructor.parameters["conversation_event_store"]
-        self.assertIs(collaborator.kind, inspect.Parameter.KEYWORD_ONLY)
-        self.assertIsNone(collaborator.default)
-        self.assertEqual(
-            get_type_hints(StoryRuntime.__init__)["conversation_event_store"],
-            ConversationEventStore | None,
-        )
-        services = constructor.parameters["conversation_storage_services"]
-        self.assertIs(services.kind, inspect.Parameter.KEYWORD_ONLY)
-        self.assertIsNone(services.default)
-        self.assertEqual(
-            get_type_hints(StoryRuntime.__init__)[
-                "conversation_storage_services"
-            ],
-            ConversationStorageServices | None,
-        )
-        rag_service = constructor.parameters["conversation_rag_service"]
-        self.assertIs(rag_service.kind, inspect.Parameter.KEYWORD_ONLY)
-        self.assertIsNone(rag_service.default)
-        self.assertEqual(
-            get_type_hints(StoryRuntime.__init__)["conversation_rag_service"],
-            ConversationRagRuntimeService | None,
-        )
-
-        workspace = initialized_workspace(self)
-        bundle = compose_filesystem_conversation_storage(workspace)
-        runtime = StoryRuntime(
-            workspace,
-            conversation_storage_services=bundle,
-        )
-        self.assertIs(runtime.conversation_storage_services, bundle)
-        self.assertIs(runtime.conversation_event_store, bundle.event_store)
-        self.assertIsNone(runtime.conversation_rag_service)
-        legacy = StoryRuntime(workspace)
-        self.assertIsInstance(
-            legacy.conversation_storage_services,
-            ConversationStorageServices,
-        )
-        with self.assertRaises(TypeError):
-            StoryRuntime(
-                workspace,
-                conversation_event_store=bundle.event_store,
-                conversation_storage_services=bundle,
-            )
-
-        cases = (
-            (
-                StoryRuntime.converse,
-                (
-                    "self",
-                    "session_id",
-                    "conversation_id",
-                    "agent_id",
-                    "text",
-                    "context_event_sink",
-                ),
-                5,
-            ),
-            (
-                RuntimeSession.converse,
-                (
-                    "self",
-                    "conversation_id",
-                    "agent_id",
-                    "text",
-                    "context_event_sink",
-                ),
-                4,
-            ),
-        )
-        for method, names, positional_count in cases:
-            with self.subTest(method=method.__qualname__):
-                signature = inspect.signature(method)
-                self.assertEqual(tuple(signature.parameters), names)
-                parameters = tuple(signature.parameters.values())
-                self.assertTrue(all(
-                    parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
-                    and parameter.default is inspect.Parameter.empty
-                    for parameter in parameters[:positional_count]
-                ))
-                self.assertIs(
-                    parameters[-1].kind,
-                    inspect.Parameter.KEYWORD_ONLY,
-                )
-                self.assertIsNone(parameters[-1].default)
-                self.assertIs(
-                    get_type_hints(method)["return"],
-                    ConversationResult,
-                )
-                self.assertEqual(
-                    get_type_hints(method)["context_event_sink"],
-                    ContextExecutionEventSink | None,
-                )
-
-    def test_retrieval_runtime_signatures_exports_and_legacy_compatibility_are_exact(
-        self,
-    ) -> None:
-        cases = (
-            (
-                StoryRuntime.converse_with_retrieval,
-                (
-                    "self",
-                    "session_id",
-                    "conversation_id",
-                    "agent_id",
-                    "text",
-                    "memory_service",
-                    "progress_sink",
-                    "rag_query",
-                    "context_event_sink",
-                ),
-                5,
-            ),
-            (
-                RuntimeSession.converse_with_retrieval,
-                (
-                    "self",
-                    "conversation_id",
-                    "agent_id",
-                    "text",
-                    "memory_service",
-                    "progress_sink",
-                    "rag_query",
-                    "context_event_sink",
-                ),
-                4,
-            ),
-        )
-        for method, names, positional_count in cases:
-            with self.subTest(method=method.__qualname__):
-                signature = inspect.signature(method)
-                self.assertEqual(tuple(signature.parameters), names)
-                parameters = tuple(signature.parameters.values())
-                self.assertTrue(
-                    all(
-                        parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
-                        and parameter.default is inspect.Parameter.empty
-                        for parameter in parameters[:positional_count]
-                    )
-                )
-                memory = signature.parameters["memory_service"]
-                self.assertIs(memory.kind, inspect.Parameter.KEYWORD_ONLY)
-                self.assertIs(memory.default, inspect.Parameter.empty)
-                progress = signature.parameters["progress_sink"]
-                self.assertIs(progress.kind, inspect.Parameter.KEYWORD_ONLY)
-                self.assertIsNone(progress.default)
-                rag_query = signature.parameters["rag_query"]
-                self.assertIs(rag_query.kind, inspect.Parameter.KEYWORD_ONLY)
-                self.assertIsNone(rag_query.default)
-                hints = get_type_hints(method)
-                self.assertIs(hints["memory_service"], ConversationMemoryService)
-                self.assertEqual(
-                    hints["progress_sink"],
-                    ConversationRetrievalProgressSink | None,
-                )
-                self.assertEqual(hints["rag_query"], str | None)
-                self.assertEqual(
-                    hints["context_event_sink"],
-                    ContextExecutionEventSink | None,
-                )
-                self.assertIs(hints["return"], ConversationRetrievalResult)
-
-        required = {
-            "CONVERSATION_RETRIEVAL_POLICY",
-            "ConversationRetrievalAction",
-            "ConversationRetrievalActionHandler",
-            "ConversationRetrievalActionKind",
-            "ConversationRetrievalAnswerAction",
-            "ConversationRetrievalObservation",
-            "ConversationRetrievalPolicy",
-            "ConversationRetrievalProgressEvent",
-            "ConversationRetrievalProgressPhase",
-            "ConversationRetrievalProgressSink",
-            "ConversationRetrievalReadAction",
-            "ConversationRetrievalReadObservation",
-            "ConversationRetrievalReply",
-            "ConversationRetrievalRequest",
-            "ConversationRetrievalResult",
-            "ConversationRetrievalSearchAction",
-            "ConversationRetrievalSearchItem",
-            "ConversationRetrievalSearchObservation",
-            "ConversationRetrievalSource",
-            "ConversationRetrievalTranscriptEvent",
-            "ConversationRetrievalError",
-            "ConversationRetrievalSemanticError",
-            "ConversationRetrievalBudgetError",
-            "ConversationRetrievalObserverError",
-        }
-        self.assertTrue(required.issubset(story_writing_agents.__all__))
-        self.assertFalse(
-            hasattr(
-                story_writing_agents,
-                "serialize_conversation_retrieval_observation",
-            )
-        )
-        self.assertNotIn(
-            "serialize_conversation_retrieval_observation",
-            story_writing_agents.__all__,
-        )
-        for direct_only in (
-            "ConversationRagAttemptOutcome",
-            "ConversationRagContext",
-            "ConversationRagExcerpt",
-            "ConversationRagRuntimeService",
-        ):
-            self.assertNotIn(direct_only, story_writing_agents.__all__)
-            self.assertFalse(hasattr(story_writing_agents, direct_only))
-        for direct_observer_type in (
-            "ContextExecutionEvent",
-            "ContextExecutionEventKind",
-            "ContextExecutionEventSink",
-        ):
-            self.assertIn(direct_observer_type, context_service_module.__all__)
-            self.assertFalse(hasattr(story_writing_agents, direct_observer_type))
-            self.assertFalse(hasattr(agent_context_module, direct_observer_type))
-            self.assertNotIn(direct_observer_type, story_writing_agents.__all__)
-            self.assertNotIn(direct_observer_type, agent_context_module.__all__)
-
     def test_interactive_parser_exports_use_the_supported_package_facade(
         self,
     ) -> None:
@@ -1127,93 +718,32 @@ class PublicApiTests(unittest.TestCase):
     ) -> None:
         from story_writing_agents import conversation_search
 
-        required = set(conversation_search.__all__)
+        direct_only = {
+            "COLLABORATION_READABLE_SOURCE_SCHEMA_ID",
+            "CollaborationHistoryCitation",
+            "CollaborationHistoryPage",
+            "CollaborationHistoryPageCursor",
+            "CollaborationHistorySearchHit",
+            "CollaborationHistorySearchQuery",
+            "CollaborationHistorySearchResult",
+            "CollaborationHistorySearch",
+            "CollaborationHistorySearchScope",
+            "CollaborationHistoryService",
+            "ReferenceCollaborationHistorySearch",
+            "collaboration_readable_document_id",
+            "continue_collaboration_history",
+            "page_collaboration_history",
+            "resolve_collaboration_citation",
+            "search_collaboration_history",
+        }
+        required = set(conversation_search.__all__).difference(direct_only)
         self.assertTrue(required.issubset(story_writing_agents.__all__))
+        self.assertTrue(direct_only.isdisjoint(story_writing_agents.__all__))
         for name in required:
             with self.subTest(name=name):
                 self.assertIs(
                     getattr(story_writing_agents, name),
                     getattr(conversation_search, name),
-                )
-
-
-class RuntimeSessionContextObserverTests(unittest.IsolatedAsyncioTestCase):
-    async def test_all_bound_runtime_forms_forward_the_same_sink_unchanged(self) -> None:
-        runtime = SimpleNamespace(
-            converse=mock.AsyncMock(return_value=mock.sentinel.conversation_result),
-            converse_with_retrieval=mock.AsyncMock(
-                return_value=mock.sentinel.retrieval_result
-            ),
-            run_prompt=mock.AsyncMock(return_value=mock.sentinel.prompt_result),
-            run_draft=mock.AsyncMock(return_value=mock.sentinel.draft_result),
-        )
-        session = RuntimeSession(runtime, "session")  # type: ignore[arg-type]
-        sink = mock.sentinel.context_event_sink
-
-        self.assertIs(
-            await session.converse(
-                "conversation",
-                PLOT_ARCHITECT,
-                "text",
-                context_event_sink=sink,  # type: ignore[arg-type]
-            ),
-            mock.sentinel.conversation_result,
-        )
-        runtime.converse.assert_awaited_once_with(
-            "session",
-            "conversation",
-            PLOT_ARCHITECT,
-            "text",
-            context_event_sink=sink,
-        )
-
-        self.assertIs(
-            await session.converse_with_retrieval(
-                "conversation",
-                PLOT_ARCHITECT,
-                "retrieve",
-                memory_service=mock.sentinel.memory,  # type: ignore[arg-type]
-                progress_sink=mock.sentinel.progress,  # type: ignore[arg-type]
-                rag_query="needle",
-                context_event_sink=sink,  # type: ignore[arg-type]
-            ),
-            mock.sentinel.retrieval_result,
-        )
-        runtime.converse_with_retrieval.assert_awaited_once_with(
-            "session",
-            "conversation",
-            PLOT_ARCHITECT,
-            "retrieve",
-            memory_service=mock.sentinel.memory,
-            progress_sink=mock.sentinel.progress,
-            rag_query="needle",
-            context_event_sink=sink,
-        )
-
-        for method_name, payload, result in (
-            ("run_prompt", "prompt", mock.sentinel.prompt_result),
-            ("run_draft", "draft", mock.sentinel.draft_result),
-        ):
-            with self.subTest(method=method_name):
-                actual = await getattr(session, method_name)(
-                    payload,
-                    output_path="part-01/output.md",
-                    max_debate_rounds=2,
-                    debate_id="debate",
-                    conversation_context=mock.sentinel.context,
-                    progress_sink=mock.sentinel.debate_progress,
-                    context_event_sink=sink,
-                )
-                self.assertIs(actual, result)
-                getattr(runtime, method_name).assert_awaited_once_with(
-                    "session",
-                    payload,
-                    output_path="part-01/output.md",
-                    max_debate_rounds=2,
-                    debate_id="debate",
-                    conversation_context=mock.sentinel.context,
-                    progress_sink=mock.sentinel.debate_progress,
-                    context_event_sink=sink,
                 )
 
 
@@ -1288,7 +818,6 @@ class CliTests(unittest.TestCase):
             "chat",
             "init",
             "directive",
-            "run",
             "inspect",
             "rag",
             "session",
@@ -1297,6 +826,48 @@ class CliTests(unittest.TestCase):
         ):
             with self.subTest(command=command):
                 self.assertIn(command, completed.stdout)
+        self.assertNotIn("{run,", completed.stdout)
+        self.assertNotIn("\n    run ", completed.stdout)
+
+    def test_removed_run_exits_two_before_workspace_provider_storage_or_artifacts(
+        self,
+    ) -> None:
+        parser = build_parser()
+        choices = next(
+            action.choices
+            for action in parser._actions
+            if getattr(action, "dest", None) == "command"
+        )
+        self.assertNotIn("run", choices)
+        stderr = io.StringIO()
+        with (
+            contextlib.redirect_stderr(stderr),
+            mock.patch.object(cli_module, "resolve_workspace") as workspace,
+            mock.patch.object(cli_module, "AgentBackend") as backend,
+            mock.patch.object(
+                cli_module,
+                "activate_configured_conversation_storage",
+            ) as storage,
+            mock.patch.object(cli_module, "InteractiveController") as controller,
+            self.assertRaises(SystemExit) as raised,
+        ):
+            main(
+                [
+                    "run",
+                    "--workspace",
+                    "/private/workspace",
+                    "--prompt",
+                    "private prompt",
+                    "--output",
+                    "part-01/private.md",
+                ]
+            )
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("invalid choice: 'run'", stderr.getvalue())
+        for collaborator in (workspace, backend, storage, controller):
+            collaborator.assert_not_called()
+        self.provider_auth_factory.assert_not_called()
+        self.auth_coordinator_factory.assert_not_called()
 
     def test_bare_chat_and_lifecycle_parser_shapes_have_help(self) -> None:
         parser = build_parser()
@@ -1335,33 +906,7 @@ class CliTests(unittest.TestCase):
                 "codex_timeout": "12.5",
             },
         )
-        run_parsed = parser.parse_args(
-            [
-                "run",
-                "--draft",
-                "draft",
-                "--output",
-                "part-01/draft.md",
-            ]
-        )
-        self.assertEqual(run_parsed.antigravity_executable, "agy")
-        self.assertIsNone(run_parsed.antigravity_model)
-        self.assertIsNone(run_parsed.antigravity_effort)
-        self.assertIsNone(run_parsed.codex_model)
-        self.assertEqual(run_parsed.codex_timeout, 300)
-
-        for arguments in (
-            ["chat", "--codex-reasoning-effort", "high"],
-            [
-                "run",
-                "--draft",
-                "draft",
-                "--output",
-                "part-01/reasoning.md",
-                "--codex-reasoning-effort",
-                "high",
-            ],
-        ):
+        for arguments in (["chat", "--codex-reasoning-effort", "high"],):
             stderr = io.StringIO()
             with (
                 self.subTest(arguments=arguments),
@@ -1385,7 +930,6 @@ class CliTests(unittest.TestCase):
         for arguments in (
             ["--help"],
             ["chat", "--help"],
-            ["run", "--help"],
             ["rag", "--help"],
             ["rag", "status", "--help"],
             ["rag", "enable", "--help"],
@@ -1397,7 +941,7 @@ class CliTests(unittest.TestCase):
             ["session", "reopen", "--help"],
             ["session", "pause", "--help"],
             ["storage", "--help"],
-            ["storage", "migrate", "--help"],
+            ["storage", "transfer", "--help"],
             ["storage", "verify", "--help"],
             ["storage", "use", "--help"],
         ):
@@ -1416,13 +960,25 @@ class CliTests(unittest.TestCase):
                     "--codex-reasoning-effort",
                     completed.stdout,
                 )
-                if arguments[:1] in (["chat"], ["run"]):
+                if arguments[:1] == ["chat"]:
                     for option in (
                         "--antigravity-executable",
                         "--antigravity-model",
                         "--antigravity-effort",
                     ):
                         self.assertIn(option, completed.stdout)
+
+        storage_help = subprocess.run(
+            [sys.executable, "-m", "story_writing_agents", "storage", "--help"],
+            cwd=repository_root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(storage_help.returncode, 0, storage_help.stderr)
+        self.assertIn("transfer", storage_help.stdout)
+        self.assertNotIn("migrate", storage_help.stdout)
 
     def test_non_tty_guard_precedes_input_options_workspace_and_backend(self) -> None:
         cases = (
@@ -1529,7 +1085,9 @@ class CliTests(unittest.TestCase):
                 contextlib.redirect_stderr(stderr),
             ):
                 self.assertEqual(main(["init", str(target)]), 2)
-            self.assertEqual(stderr.getvalue(), "WorkspaceFormatError: initialization failed\n")
+            self.assertEqual(
+                stderr.getvalue(), "WorkspaceFormatError: initialization failed\n"
+            )
             self.assertNotIn("debug_logs/runtime.jsonl", stderr.getvalue())
             initialize.assert_called_once_with(
                 str(target),
@@ -1558,10 +1116,9 @@ class CliTests(unittest.TestCase):
     ) -> None:
         """Exercise the real CLI/workspace boundary through a no-follow race."""
 
-        if (
-            os.rename not in getattr(os, "supports_dir_fd", ())
-            or os.symlink not in getattr(os, "supports_dir_fd", ())
-        ):
+        if os.rename not in getattr(
+            os, "supports_dir_fd", ()
+        ) or os.symlink not in getattr(os, "supports_dir_fd", ()):
             self.skipTest("descriptor-relative rename/symlink is unavailable")
         with tempfile.TemporaryDirectory() as temporary:
             parent = Path(temporary)
@@ -1620,9 +1177,7 @@ class CliTests(unittest.TestCase):
             self.assertTrue(substituted)
             self.assertEqual(stdout.getvalue(), "")
             self.assertTrue(
-                stderr.getvalue().startswith(
-                    ("NotADirectoryError: ", "OSError: ")
-                )
+                stderr.getvalue().startswith(("NotADirectoryError: ", "OSError: "))
             )
             self.assertNotIn('"workspace"', stdout.getvalue())
             self.assertNotIn("debug_logs/runtime.jsonl", stderr.getvalue())
@@ -1669,9 +1224,7 @@ class CliTests(unittest.TestCase):
                 try:
                     root.symlink_to(external, target_is_directory=True)
                 except (NotImplementedError, OSError) as exc:
-                    self.skipTest(
-                        f"directory symlink replacement unavailable: {exc}"
-                    )
+                    self.skipTest(f"directory symlink replacement unavailable: {exc}")
                 substituted = True
                 real_entries(
                     target_workspace,
@@ -1696,9 +1249,7 @@ class CliTests(unittest.TestCase):
             self.assertTrue(substituted)
             self.assertEqual(stdout.getvalue(), "")
             self.assertTrue(
-                stderr.getvalue().startswith(
-                    ("NotADirectoryError: ", "OSError: ")
-                )
+                stderr.getvalue().startswith(("NotADirectoryError: ", "OSError: "))
             )
             self.assertNotIn("debug_logs/runtime.jsonl", stderr.getvalue())
             self.assertTrue(root.is_symlink())
@@ -1762,9 +1313,7 @@ class CliTests(unittest.TestCase):
                         except type(failure) as caught:
                             self.assertIs(caught, failure)
                         else:
-                            self.fail(
-                                f"{type(failure).__name__} did not propagate"
-                            )
+                            self.fail(f"{type(failure).__name__} did not propagate")
                         exit_code = None
 
                 if isinstance(failure, Exception):
@@ -1820,9 +1369,7 @@ class CliTests(unittest.TestCase):
                     self.assertEqual(completed.stdout, "")
                     self.assertEqual(
                         completed.stderr,
-                        expected_interactive_error(
-                            InteractiveErrorCode.TTY_REQUIRED
-                        ),
+                        expected_interactive_error(InteractiveErrorCode.TTY_REQUIRED),
                     )
                     self.assertEqual(tuple(root.iterdir()), before)
 
@@ -1937,12 +1484,8 @@ class CliTests(unittest.TestCase):
                 ):
                     self.assertEqual(main(arguments), 7)
 
-                expected_workspace_option = (
-                    str(workspace.root) if arguments else None
-                )
-                resolve_workspace.assert_called_once_with(
-                    expected_workspace_option
-                )
+                expected_workspace_option = str(workspace.root) if arguments else None
+                resolve_workspace.assert_called_once_with(expected_workspace_option)
                 load_context.assert_called_once_with(workspace)
                 backend_factory.assert_called_once_with(
                     workspace,
@@ -1977,9 +1520,7 @@ class CliTests(unittest.TestCase):
                 )
                 action = terminal.read_main()
                 self.assertEqual((action.kind.value, action.text), ("line", "/status"))
-                main_reader.assert_called_once_with(
-                    "story[lobby]> "
-                )
+                main_reader.assert_called_once_with("story[lobby]> ")
                 self.assertEqual(stdin.readline_calls, 0)
                 controller_value.run_session_lobby.assert_called_once_with(
                     requested_session=requested
@@ -2024,9 +1565,7 @@ class CliTests(unittest.TestCase):
 
         original_validate_executable = cli_module._validate_antigravity_executable
         original_establish = cli_module.establish_default_backend
-        original_load_snapshot = (
-            cli_module.ConfigManager.load_configuration_snapshot
-        )
+        original_load_snapshot = cli_module.ConfigManager.load_configuration_snapshot
         original_routes = cli_module._effective_interactive_providers
         original_activate = cli_module.activate_configured_conversation_storage
         storage_startups: list[ConversationStorageStartup] = []
@@ -2212,7 +1751,7 @@ class CliTests(unittest.TestCase):
     ) -> None:
         custom_summary = "Conversation storage activation could not be completed."
         custom_hint = (
-            "Run story storage use, migrate, or verify as appropriate, then "
+            "Run story storage use, transfer, or verify as appropriate, then "
             "retry after concurrent workspace storage work finishes."
         )
         cases = (
@@ -2459,9 +1998,7 @@ class CliTests(unittest.TestCase):
                 system_before = workspace.path(
                     "config/system_defaults.json"
                 ).read_bytes()
-                agent_before = workspace.path(
-                    "config/agent_configs.json"
-                ).read_bytes()
+                agent_before = workspace.path("config/agent_configs.json").read_bytes()
                 none = provider_snapshot(
                     ProviderAuthState.UNAUTHENTICATED,
                     ProviderAuthState.UNAVAILABLE,
@@ -2531,7 +2068,9 @@ class CliTests(unittest.TestCase):
                     ["welcome", "probe_all", "run"],
                 )
 
-    def test_storage_activation_cas_remains_after_later_provider_interrupt(self) -> None:
+    def test_storage_activation_cas_remains_after_later_provider_interrupt(
+        self,
+    ) -> None:
         workspace = initialized_workspace(self)
         provision(workspace)
         system = workspace.read_json("config/system_defaults.json")
@@ -2689,19 +2228,12 @@ class CliTests(unittest.TestCase):
             self.auth_coordinator_factory.assert_not_called()
             provider_catalog_factory.assert_not_called()
 
-            with contextlib.redirect_stderr(io.StringIO()):
-                self.assertEqual(
-                    main(
-                        [
-                            "run",
-                            "--workspace",
-                            str(workspace_path),
-                            "--output",
-                            "part-01/no-auth.md",
-                        ]
-                    ),
-                    2,
-                )
+            with (
+                contextlib.redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit) as raised,
+            ):
+                main(["run", "--workspace", str(workspace_path)])
+            self.assertEqual(raised.exception.code, 2)
             self.provider_auth_factory.assert_not_called()
             self.auth_coordinator_factory.assert_not_called()
             provider_catalog_factory.assert_not_called()
@@ -2718,92 +2250,6 @@ class CliTests(unittest.TestCase):
         self.provider_auth_factory.assert_not_called()
         provider_catalog_factory.assert_not_called()
         self.auth_coordinator_factory.assert_not_called()
-
-    def test_run_passes_separate_antigravity_options_without_provider_work(
-        self,
-    ) -> None:
-        workspace = initialized_workspace(self)
-        context = CliContext(default_session_id="run-session")
-        backend = mock.Mock()
-        initial_runtime = mock.Mock()
-        provider_runtime = mock.Mock()
-        result = mock.Mock(status=DebateStatus.CONSENSUS)
-        result.to_dict.return_value = {"status": "consensus"}
-        provider_runtime.run_draft = mock.AsyncMock(return_value=result)
-        stdout = io.StringIO()
-
-        with (
-            contextlib.redirect_stdout(stdout),
-            mock.patch.object(
-                cli_module,
-                "resolve_workspace",
-                return_value=workspace,
-            ),
-            mock.patch.object(
-                cli_module,
-                "load_cli_context",
-                return_value=context,
-            ),
-            mock.patch.object(
-                cli_module,
-                "resolve_session",
-                return_value="run-session",
-            ),
-            mock.patch.object(
-                cli_module,
-                "AgentBackend",
-                return_value=backend,
-            ) as backend_factory,
-            mock.patch.object(
-                cli_module,
-                "StoryRuntime",
-                side_effect=(initial_runtime, provider_runtime),
-            ) as runtime_factory,
-        ):
-            exit_code = main(
-                [
-                    "run",
-                    "--workspace",
-                    str(workspace.root),
-                    "--session",
-                    "run-session",
-                    "--backend",
-                    "plot_architect=antigravity",
-                    "--draft",
-                    "draft",
-                    "--output",
-                    "part-01/antigravity.md",
-                    "--antigravity-executable",
-                    "private-agy",
-                    "--antigravity-model",
-                    "agy-model",
-                    "--antigravity-effort",
-                    "low",
-                ]
-            )
-
-        self.assertEqual(exit_code, 0)
-        backend_factory.assert_called_once_with(
-            workspace,
-            model=None,
-            timeout_seconds=300,
-            backend_overrides={"plot_architect": "antigravity"},
-            antigravity_executable="private-agy",
-            antigravity_model="agy-model",
-            antigravity_effort="low",
-        )
-        self.assertEqual(
-            runtime_factory.call_args_list,
-            [mock.call(workspace), mock.call(workspace, backend)],
-        )
-        provider_runtime.run_draft.assert_awaited_once_with(
-            "run-session",
-            "draft",
-            output_path="part-01/antigravity.md",
-            max_debate_rounds=None,
-            debate_id=None,
-        )
-        backend.close.assert_called_once_with()
 
     def test_backend_cleanup_ownership_transfers_only_when_run_begins(self) -> None:
         workspace = initialized_workspace(self)
@@ -2846,9 +2292,7 @@ class CliTests(unittest.TestCase):
                 return main(["chat"]), stderr.getvalue()
 
         unstarted_backend = mock.Mock()
-        constructor_failure = mock.Mock(
-            side_effect=RuntimeError("constructor-secret")
-        )
+        constructor_failure = mock.Mock(side_effect=RuntimeError("constructor-secret"))
         exit_code, stderr = invoke_with(
             unstarted_backend,
             constructor_failure,
@@ -3069,7 +2513,6 @@ class CliTests(unittest.TestCase):
             "build_parser",
             "_parse_backend_overrides",
             "_parse_positive_timeout_seconds",
-            "_resolve_run_input",
             "_interactive_streams_are_terminals",
             "_reject_unexpected_startup_input",
             "_write_interactive_cli_error",
@@ -3218,8 +2661,7 @@ class CliTests(unittest.TestCase):
                     self.assertEqual(stderr.getvalue(), "")
                     self.assertEqual(
                         stdout.getvalue(),
-                        json.dumps({"workspace": str(root.resolve())}, indent=2)
-                        + "\n",
+                        json.dumps({"workspace": str(root.resolve())}, indent=2) + "\n",
                     )
                     logger.assert_called_once()
                     logged_workspace = logger.call_args.args[0]
@@ -3428,9 +2870,9 @@ class CliTests(unittest.TestCase):
         self.assertEqual(json.loads(stdout.getvalue())["session_id"], "record_success")
         records = [
             json.loads(line)
-            for line in workspace.path(
-                "debug_logs/runtime.jsonl"
-            ).read_text(encoding="utf-8").splitlines()
+            for line in workspace.path("debug_logs/runtime.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
         ]
         projected = [
             (
@@ -3575,36 +3017,6 @@ class CliTests(unittest.TestCase):
             str(workspace.root),
         ):
             self.assertNotIn(prohibited, raw_debug_log)
-
-        stderr = io.StringIO()
-        with contextlib.redirect_stderr(stderr):
-            exit_code = main(
-                [
-                    "run",
-                    "--workspace",
-                    str(workspace_path),
-                    "--session",
-                    "cli_session",
-                    "--backend",
-                    "unsafe backend spec",
-                    "--draft",
-                    "neutral draft",
-                    "--output",
-                    "part-01/invalid-backend.md",
-                ]
-            )
-        self.assertEqual(exit_code, 2)
-        self.assertIn("ConfigurationError", stderr.getvalue())
-        self.assertTrue(
-            stderr.getvalue().endswith(
-                "Debug log (if available, workspace-relative): "
-                "debug_logs/runtime.jsonl\n"
-            )
-        )
-        self.assertNotIn(
-            "unsafe backend spec",
-            debug_log.read_text(encoding="utf-8"),
-        )
 
 
 if __name__ == "__main__":

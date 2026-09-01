@@ -30,6 +30,7 @@ from story_writing_agents.conversations import (
     CollaborationInputKind,
     CollaborationInputRevision,
     CollaborationInputState,
+    CollaborationInterruptionPayload,
     CollaborationMessagePayload,
     CollaborationProposal,
     CollaborationProposalBasis,
@@ -101,7 +102,6 @@ COLLABORATION_EVENT_EXPORTS = (
     "CollaborationTerminalOutcomePayload",
     "CollaborationTerminalScope",
     "ConversationEvent",
-    "ConversationEventAppend",
     "ConversationEventKind",
     "collaboration_batch_digest",
     "collaboration_proposal_digest",
@@ -116,14 +116,22 @@ COLLABORATION_EVENT_EXPORTS = (
 )
 
 COLLABORATION_CONTEXT_EXPORTS = (
+    "COLLABORATION_READABLE_CONTEXT_POLICY",
     "CONVERSATION_CONTEXT_POLICY",
+    "CollaborationContextBootstrap",
     "CollaborationEventStore",
     "CollaborationHistoryProjection",
     "CollaborationNextAction",
+    "CollaborationReadableContext",
+    "CollaborationReadableContextPolicy",
+    "CollaborationReadableField",
+    "CollaborationReadableFieldKey",
+    "CollaborationReadableRecord",
     "ConversationContextPolicy",
     "ConversationContextWindow",
-    "ConversationEventStore",
     "project_collaboration_history",
+    "project_collaboration_readable_history",
+    "select_bounded_collaboration_context",
     "select_bounded_conversation_context",
     "validate_collaboration_candidate_batch",
     "validate_collaboration_transition",
@@ -134,6 +142,7 @@ CONVERSATION_FACADE_EXPORTS = (
     "COLLABORATION_EVENT_SCHEMA_VERSION",
     "COLLABORATION_PHYSICAL_CALL_LIMIT",
     "COLLABORATION_ROUND_LIMIT",
+    "COLLABORATION_READABLE_CONTEXT_POLICY",
     "COLLABORATION_VISIBLE_TEXT_MAX_UTF8_BYTES",
     "CONVERSATION_CONTEXT_POLICY",
     "CONVERSATION_EVENT_SCHEMA_VERSION",
@@ -154,6 +163,7 @@ CONVERSATION_FACADE_EXPORTS = (
     "CollaborationBudget",
     "CollaborationConfirmationDecision",
     "CollaborationConfirmationPayload",
+    "CollaborationContextBootstrap",
     "CollaborationDirection",
     "CollaborationEvent",
     "CollaborationEventBatch",
@@ -172,6 +182,11 @@ CONVERSATION_FACADE_EXPORTS = (
     "CollaborationPayload",
     "CollaborationProposal",
     "CollaborationProposalBasis",
+    "CollaborationReadableContext",
+    "CollaborationReadableContextPolicy",
+    "CollaborationReadableField",
+    "CollaborationReadableFieldKey",
+    "CollaborationReadableRecord",
     "CollaborationSideEffect",
     "CollaborationSpecialistReplyPayload",
     "CollaborationStepKind",
@@ -184,9 +199,7 @@ CONVERSATION_FACADE_EXPORTS = (
     "ConversationContextPolicy",
     "ConversationContextWindow",
     "ConversationEvent",
-    "ConversationEventAppend",
     "ConversationEventKind",
-    "ConversationEventStore",
     "ConversationMetadata",
     "ConversationStatus",
     "collaboration_batch_digest",
@@ -201,6 +214,8 @@ CONVERSATION_FACADE_EXPORTS = (
     "encode_collaboration_proposal",
     "normalize_conversation_subject",
     "project_collaboration_history",
+    "project_collaboration_readable_history",
+    "select_bounded_collaboration_context",
     "select_bounded_conversation_context",
     "validate_collaboration_candidate_batch",
     "validate_collaboration_transition",
@@ -708,6 +723,97 @@ def executed_history(
         failed_assignment_id=failed_assignment_id,
     )
     return store_batch(history, batch), proposal, result
+
+
+def retarget_batch(
+    batch: CollaborationEventBatch,
+    conversation_id: str,
+    *,
+    batch_id: str | None = None,
+) -> CollaborationEventBatch:
+    """Return one caller batch addressed to a different conversation."""
+
+    return CollaborationEventBatch(
+        batch_id=batch.batch_id if batch_id is None else batch_id,
+        expected_last_sequence=batch.expected_last_sequence,
+        events=tuple(
+            replace(event, conversation_id=conversation_id) for event in batch.events
+        ),
+    )
+
+
+def contract_batches(
+    conversation_id: str,
+) -> dict[str, CollaborationEventBatch]:
+    """Return the six atomic collaboration families shared by store adapters."""
+
+    awaiting, proposal = awaiting_history()
+    confirmed, _ = confirmed_history(proposal)
+    running, _ = running_history(proposal)
+    executed, _, _ = executed_history(proposal)
+    completion = make_batch(
+        executed,
+        "batch_completed",
+        make_draft(
+            "notice_completed",
+            CollaborationEventKind.MESSAGE,
+            RUNTIME,
+            USER,
+            CollaborationMessagePayload("Visible completed notice."),
+        ),
+        make_draft(
+            "state_completed",
+            CollaborationEventKind.STEP_STATE,
+            RUNTIME,
+            USER,
+            proposal_state(
+                proposal,
+                CollaborationStepState.COMPLETED,
+                execution_result_event_id="execution_result",
+            ),
+        ),
+    )
+    unknown = make_batch(
+        running,
+        "batch_unknown",
+        make_draft(
+            "unknown_interruption",
+            CollaborationEventKind.INTERRUPTION,
+            RUNTIME,
+            USER,
+            CollaborationInterruptionPayload(
+                ATTEMPT_ID,
+                "No authoritative result exists after restart.",
+            ),
+        ),
+        make_draft(
+            "unknown_state",
+            CollaborationEventKind.STEP_STATE,
+            RUNTIME,
+            USER,
+            proposal_state(
+                proposal,
+                CollaborationStepState.OUTCOME_UNKNOWN,
+                execution_attempt_id=ATTEMPT_ID,
+            ),
+        ),
+    )
+    return {
+        "proposal": retarget_batch(
+            batch_from_history(awaiting, "batch_proposal"), conversation_id
+        ),
+        "confirmation": retarget_batch(
+            batch_from_history(confirmed, "batch_confirmation"), conversation_id
+        ),
+        "running": retarget_batch(
+            batch_from_history(running, "batch_running"), conversation_id
+        ),
+        "result": retarget_batch(
+            batch_from_history(executed, "batch_result"), conversation_id
+        ),
+        "completion": retarget_batch(completion, conversation_id),
+        "unknown": retarget_batch(unknown, conversation_id),
+    }
 
 
 def replace_proposal(
